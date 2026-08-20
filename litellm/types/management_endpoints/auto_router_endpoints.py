@@ -3,9 +3,10 @@ Types for auto-router management endpoints
 """
 
 from collections.abc import Mapping
-from typing import Final
+from datetime import datetime, timezone
+from typing import Final, Literal, TypeAlias
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, computed_field, field_validator, model_validator
 
 from litellm.router_strategy.complexity_router.config import ComplexityRouterConfig
 from litellm.types.utils import StandardLoggingRoutingDecision
@@ -21,6 +22,9 @@ class RequestComplexityRouterConfig(ComplexityRouterConfig):
     """
 
     plugins: None = Field(default=None, description="Not settable over HTTP; routing plugins are runtime objects")
+    classifier_plugin: None = Field(  # pyright: ignore[reportIncompatibleVariableOverride]  # narrowing to None is the point: runtime objects are not settable over HTTP
+        default=None, description="Not settable over HTTP; the classifier plugin is a runtime object"
+    )
 
 
 class AutoRouterRoutingTestRequest(BaseModel):
@@ -126,8 +130,8 @@ class AutoRouterBenchmarkGroup(AutoRouterBenchmarkTotals):
         description="Turns per tier, keyed by the tier name the routing decision recorded at "
         "request time (never re-derived at read time, since the tier-to-model mapping is "
         "mutable config). Tier names are scoped to this group's router_type and are not "
-        "comparable across types: a complexity router reports 'simple'/'medium'/'complex'/"
-        "'reasoning', a quality router reports its numeric quality tier, and an adaptive router "
+        "comparable across types: a complexity router reports 'SIMPLE'/'MEDIUM'/'COMPLEX'/"
+        "'REASONING', a quality router reports its numeric quality tier, and an adaptive router "
         "records no tier at all. Turns no tier served (the classifier fell back to default_model) "
         "are absent rather than pooled under a sentinel key, so the values may sum to less than turns",
     )
@@ -141,3 +145,222 @@ class AutoRouterBenchmarksResponse(BaseModel):
     routers_in_scope: int
     totals: AutoRouterBenchmarkTotals
     groups: tuple[AutoRouterBenchmarkGroup, ...]
+
+
+ShadowEvalStatus: TypeAlias = Literal["running", "completed", "stopped"]
+
+ShadowEvalDirection: TypeAlias = Literal["forward", "reverse"]
+
+DEFAULT_SHADOW_EVAL_JUDGE_MODEL: Final[str] = "anthropic/claude-sonnet-5"
+
+
+class StartShadowEvalRequest(BaseModel):
+    """Start duplicating one or more keys' traffic for blind comparison against an auto-router."""
+
+    api_key_ids: tuple[str, ...] = Field(
+        min_length=1,
+        max_length=100,
+        description=(
+            "The hashed virtual keys whose traffic will be shadowed. Shadow evaluation runs ONLY on these "
+            "keys' traffic; requests made with any other key are not sampled. Each key carries its own "
+            "max_turns budget, so one key exhausting its budget leaves the others sampling. At most 100 "
+            "keys per job, which also bounds every read the job's endpoints make."
+        ),
+    )
+    router_name: str = Field(description="The auto-router under evaluation, in either direction")
+    direction: ShadowEvalDirection = Field(
+        default="forward",
+        description=(
+            "forward answers 'should this key adopt router_name': it samples the requests the key did NOT "
+            "route through the router and duplicates them through it. reverse answers 'is the router still "
+            "worth it for a key already on it': it samples the requests the router did serve and duplicates "
+            "them against baseline_model. The response the caller received is always the real arm"
+        ),
+    )
+    baseline_model: str | None = Field(
+        default=None,
+        description=(
+            "Required when direction is reverse and rejected otherwise: the fixed model the router's own "
+            "responses are judged against. Must be a plain model rather than another auto-router"
+        ),
+    )
+    shadow_percentage: float = Field(
+        ge=0.1,
+        le=100.0,
+        description="Percentage of the key's requests to duplicate through the router",
+    )
+    judge_model: str = Field(
+        default=DEFAULT_SHADOW_EVAL_JUDGE_MODEL,
+        description=(
+            "Model used to blindly judge real vs. shadow responses. The judge only compares two answers, so a "
+            "mid-tier model (Claude Sonnet or GPT-4o class) is the sweet spot: small/nano-class models produce "
+            "unreliable or malformed verdicts, while frontier reasoning models add cost without changing outcomes."
+        ),
+    )
+    duration_days: int = Field(
+        default=7,
+        ge=1,
+        le=30,
+        description="How many days the job samples traffic before completing on its own",
+    )
+    max_turns: int = Field(
+        default=200,
+        ge=1,
+        le=2000,
+        description=(
+            "Per-key sample budget: the job judges at most this many turns of EACH scoped key's traffic, "
+            "so a job over N keys judges at most N times max_turns turns. This is also the spend bound; "
+            "expected judge cost is roughly that turn ceiling times one judge call"
+        ),
+    )
+
+    @field_validator("shadow_percentage")
+    @classmethod
+    def _round_percentage(cls, value: float) -> float:
+        return round(value, 2)
+
+    @field_validator("api_key_ids")
+    @classmethod
+    def _dedupe_keys(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        """A key named twice would collide with itself on the one-active-per-(key, direction) index."""
+        return tuple(dict.fromkeys(value))
+
+    @model_validator(mode="after")
+    def _baseline_model_matches_direction(self) -> "StartShadowEvalRequest":
+        if self.direction == "reverse" and self.baseline_model is None:
+            raise ValueError("baseline_model is required when direction is 'reverse'")
+        if self.direction == "forward" and self.baseline_model is not None:
+            raise ValueError("baseline_model is only meaningful when direction is 'reverse'")
+        return self
+
+
+class ShadowEvalSlice(BaseModel):
+    """Judge outcomes for one slice of a job's verdicts (a router tier, or one of the
+    models that served the real arm)."""
+
+    group: str
+    turn_count: int
+    real_win_rate_pct: float = Field(
+        description=(
+            "Share of judged turns the real arm won, meaning the response the caller actually received: "
+            "the key's own model in forward mode, the router's pick in reverse"
+        )
+    )
+    shadow_win_rate_pct: float = Field(
+        description=(
+            "Share of judged turns the shadow arm won, meaning the duplicated response nobody was served: "
+            "the router's pick in forward mode, baseline_model in reverse"
+        )
+    )
+    tie_rate_pct: float
+    avg_judge_confidence: float
+
+
+class ShadowEvalResult(BaseModel):
+    """Stratified results of a shadow-eval job's verdicts so far."""
+
+    by_tier: tuple[ShadowEvalSlice, ...]
+    by_current_model: tuple[ShadowEvalSlice, ...] = Field(
+        description=(
+            "Sliced by the model that served the real arm: the keys' incumbent models in forward mode, "
+            "and in reverse the models the router itself picked"
+        )
+    )
+    by_key: tuple[ShadowEvalSlice, ...] = Field(
+        description=(
+            "One slice per scoped key that has judged verdicts, grouped on the raw key hash. Keys the job "
+            "scopes but has not judged a turn for yet are absent rather than reported as zero"
+        ),
+    )
+    overall_shadow_win_rate_pct: float
+    overall_tie_rate_pct: float
+
+
+class ShadowEvalJobKeyResponse(BaseModel):
+    """One key a job shadows, with its own budget and stop state."""
+
+    api_key_id: str = Field(description="The hashed virtual key whose traffic this entry scopes")
+    max_turns: int = Field(description="This key's own sample budget, independent of its siblings'")
+    stopped_at: datetime | None = Field(
+        default=None,
+        description=(
+            "When this key's slot was stamped free, whether its own budget ran out, the window closed, "
+            "or an operator stopped the job; status is derived, so a spent budget reads completed even "
+            "while this is still unset"
+        ),
+    )
+    attempt_count: int | None = Field(
+        default=None,
+        description=(
+            "This key's sampled attempts so far, judged and errored alike, the same count the sampler "
+            "budgets against max_turns; populated on list and detail responses. Frozen at stopped_at "
+            "once the key is stamped, so in-flight attempts landing after a stop never reclassify it"
+        ),
+    )
+
+    @property
+    def budget_spent(self) -> bool:
+        return self.attempt_count is not None and self.attempt_count >= self.max_turns
+
+    key_alias: str | None = Field(
+        default=None,
+        description="Alias of the shadowed key, resolved from the key row at read time; None when unset or deleted",
+    )
+    key_name: str | None = Field(
+        default=None,
+        description="Masked display name (sk-...) of the shadowed key, resolved at read time like key_alias",
+    )
+
+
+class ShadowEvalJobResponse(BaseModel):
+    """A shadow-eval job over one or more keys, each with its own budget and stop state;
+    status is derived from stopped_by, the keys' stop and budget state, and ends_at,
+    never stored, so no writer anywhere can produce an inconsistent one. Aggregate
+    fields are populated by the detail endpoint only and stay None on list responses."""
+
+    job_id: str
+    keys: tuple[ShadowEvalJobKeyResponse, ...] = Field(
+        min_length=1,
+        description="The keys whose traffic this job evaluates, and only those keys', each with its own budget",
+    )
+    router_name: str
+    direction: ShadowEvalDirection = "forward"
+    baseline_model: str | None = None
+    judge_model: str
+    shadow_percentage: float
+    created_at: datetime
+    ends_at: datetime
+    stopped_by: str | None = Field(
+        default=None,
+        description=(
+            "The operator who stopped the job early, recorded by the stop endpoint; 'unknown' backfilled "
+            "by migration for jobs that displayed stopped when the column arrived; None when the job "
+            "ended on its own. Its presence is what makes a job read stopped rather than completed"
+        ),
+    )
+
+    judged_count: int | None = Field(default=None, description="Verdicts recorded; detail endpoint only")
+    error_count: int | None = Field(default=None, description="Sampled attempts that errored; detail endpoint only")
+    judge_spend: float | None = Field(default=None, description="Judge cost so far; detail endpoint only")
+    last_error: str | None = Field(default=None, description="Most recent attempt error; detail endpoint only")
+    results: ShadowEvalResult | None = Field(default=None, description="Stratified verdicts; detail endpoint only")
+
+    @computed_field
+    @property
+    def status(self) -> ShadowEvalStatus:
+        """Three recorded facts, no history-guessing: a stop is stopped_by (the migration
+        backfills it for every job that displayed stopped when the column arrived, so the
+        pre-column population is closed), completion is the window passing or every key
+        spending its budget, and anything else is running. The all-keys-stamped fallback
+        covers only stops written by pre-column pods during a rolling deploy."""
+        if self.stopped_by is not None:
+            return "stopped"
+        if datetime.now(timezone.utc) >= (
+            self.ends_at if self.ends_at.tzinfo else self.ends_at.replace(tzinfo=timezone.utc)
+        ):
+            return "completed"
+        if all(key.budget_spent for key in self.keys):
+            return "completed"
+        if all(key.stopped_at is not None for key in self.keys):
+            return "stopped"
+        return "running"

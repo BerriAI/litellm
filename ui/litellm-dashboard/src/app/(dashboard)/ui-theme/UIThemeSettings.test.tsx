@@ -1,8 +1,8 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 
 import UIThemeSettings from "./UIThemeSettings";
 
@@ -16,11 +16,6 @@ vi.mock("@/contexts/ThemeContext", () => ({
 vi.mock("@/components/networking", () => ({
   getProxyBaseUrl: () => "",
   getGlobalLitellmHeaderName: () => "Authorization",
-}));
-
-vi.mock("@/components/molecules/notifications_manager", () => ({
-  __esModule: true,
-  default: { success: vi.fn(), fromBackend: vi.fn() },
 }));
 
 const LOGO_PLACEHOLDER = "https://example.com/logo.png";
@@ -74,8 +69,8 @@ describe("UIThemeSettings", () => {
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalled());
 
-    await user.type(screen.getByPlaceholderText(LOGO_PLACEHOLDER), "https://a.test/logo.png");
-    await user.type(screen.getByPlaceholderText(FAVICON_PLACEHOLDER), "https://a.test/fav.ico");
+    fireEvent.change(screen.getByPlaceholderText(LOGO_PLACEHOLDER), { target: { value: "https://a.test/logo.png" } });
+    fireEvent.change(screen.getByPlaceholderText(FAVICON_PLACEHOLDER), { target: { value: "https://a.test/fav.ico" } });
     await user.click(screen.getByRole("button", { name: "Save Changes" }));
 
     await waitFor(() => expect(patchCalls()).toHaveLength(1));
@@ -83,9 +78,7 @@ describe("UIThemeSettings", () => {
       logo_url: "https://a.test/logo.png",
       favicon_url: "https://a.test/fav.ico",
     });
-    await waitFor(() =>
-      expect(NotificationsManager.success).toHaveBeenCalledWith("Theme settings updated successfully!"),
-    );
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith("Theme settings updated successfully!"));
   });
 
   it("should surface a backend failure when saving fails", async () => {
@@ -97,10 +90,8 @@ describe("UIThemeSettings", () => {
 
     await user.click(screen.getByRole("button", { name: "Save Changes" }));
 
-    await waitFor(() =>
-      expect(NotificationsManager.fromBackend).toHaveBeenCalledWith("Failed to update theme settings"),
-    );
-    expect(NotificationsManager.success).not.toHaveBeenCalled();
+    await waitFor(() => expect(toast.fromError).toHaveBeenCalledWith("Failed to update theme settings"));
+    expect(toast.success).not.toHaveBeenCalled();
   });
 
   it("should clear both inputs and persist nulls when resetting to default", async () => {
@@ -123,6 +114,6 @@ describe("UIThemeSettings", () => {
     expect(screen.getByPlaceholderText(FAVICON_PLACEHOLDER)).toHaveValue("");
     expect(setLogoUrl).toHaveBeenLastCalledWith(null);
     expect(setFaviconUrl).toHaveBeenLastCalledWith(null);
-    await waitFor(() => expect(NotificationsManager.success).toHaveBeenCalledWith("Theme settings reset to default!"));
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith("Theme settings reset to default!"));
   });
 });

@@ -4,10 +4,17 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import SpendLogsTable from "./index";
 import { renderWithProviders } from "../../../tests/test-utils";
 
-const { useAuthorizedMock } = vi.hoisted(() => ({ useAuthorizedMock: vi.fn() }));
+const { useAuthorizedMock, useOrganizationsMock } = vi.hoisted(() => ({
+  useAuthorizedMock: vi.fn(),
+  useOrganizationsMock: vi.fn(),
+}));
 
 vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
   default: useAuthorizedMock,
+}));
+
+vi.mock("@/app/(dashboard)/hooks/organizations/useOrganizations", () => ({
+  useOrganizations: useOrganizationsMock,
 }));
 
 vi.mock("./RequestLogsPanel", () => ({
@@ -42,14 +49,20 @@ const defaultProps = {
   premiumUser: false,
 };
 
-const renderAs = (sessionRole: string) => {
-  useAuthorizedMock.mockReturnValue({ userRole: sessionRole });
+const ORG_ADMIN_MEMBERSHIPS = [{ organization_id: "org-1", members: [{ user_id: "user-1", user_role: "org_admin" }] }];
+
+const renderAs = (sessionRole: string, organizations: unknown[] = []) => {
+  useAuthorizedMock.mockReturnValue({ userId: "user-1", userRole: sessionRole });
+  useOrganizationsMock.mockReturnValue({ data: organizations });
   return renderWithProviders(<SpendLogsTable {...defaultProps} userRole={sessionRole} />);
 };
 
+const tabNames = () => screen.getAllByRole("tab").map((tab) => tab.textContent);
+
 describe("SpendLogsTable", () => {
   beforeEach(() => {
-    useAuthorizedMock.mockReturnValue({ userRole: "Admin" });
+    useAuthorizedMock.mockReturnValue({ userId: "user-1", userRole: "Admin" });
+    useOrganizationsMock.mockReturnValue({ data: [] });
   });
 
   it("renders the four log tabs", () => {
@@ -88,6 +101,44 @@ describe("SpendLogsTable", () => {
       expect(screen.queryByTestId("audit-logs-panel")).not.toBeInTheDocument();
       expect(screen.queryByTestId("deleted-teams-page")).not.toBeInTheDocument();
       expect(screen.getByTestId("deleted-keys-page")).toBeInTheDocument();
+    });
+  });
+
+  describe("organization admins", () => {
+    it("shows Deleted Teams to an org admin, whose session role reads as a plain internal user", () => {
+      renderAs("Internal User", ORG_ADMIN_MEMBERSHIPS);
+
+      expect(screen.getByRole("tab", { name: "Deleted Teams" })).toBeInTheDocument();
+      expect(screen.getByTestId("deleted-teams-page")).toBeInTheDocument();
+    });
+
+    it("does not hand an org admin the Audit Logs tab, which the backend still refuses them", () => {
+      renderAs("Internal User", ORG_ADMIN_MEMBERSHIPS);
+
+      expect(tabNames()).toEqual(["Request Logs", "Deleted Keys", "Deleted Teams"]);
+      expect(screen.queryByTestId("audit-logs-panel")).not.toBeInTheDocument();
+    });
+
+    it("keeps an internal user in the same org without an org_admin membership at two tabs", () => {
+      renderAs("Internal User", [
+        { organization_id: "org-1", members: [{ user_id: "user-1", user_role: "internal_user" }] },
+      ]);
+
+      expect(tabNames()).toEqual(["Request Logs", "Deleted Keys"]);
+    });
+
+    it("activates the org admin's selected tab rather than the one at the four-tab index", async () => {
+      const user = userEvent.setup();
+      renderAs("Internal User", ORG_ADMIN_MEMBERSHIPS);
+
+      await user.click(screen.getByRole("tab", { name: "Deleted Teams" }));
+
+      expect(screen.getByRole("tab", { name: "Deleted Teams" })).toHaveAttribute("aria-selected", "true");
+      expect(screen.getByTestId("request-logs-panel")).toHaveTextContent("inactive");
+
+      await user.click(screen.getByRole("tab", { name: "Request Logs" }));
+
+      expect(screen.getByTestId("request-logs-panel")).toHaveTextContent("active");
     });
   });
 
@@ -132,14 +183,14 @@ describe("SpendLogsTable", () => {
       useAuthorizedMock.mockReturnValue({ userRole: "Admin" });
       renderWithProviders(<SpendLogsTable {...defaultProps} accessToken={null} />);
 
-      expect(document.querySelector(".ant-spin")).toBeInTheDocument();
+      expect(document.querySelector('[aria-busy="true"]')).toBeInTheDocument();
       expect(screen.queryByRole("tab", { name: "Request Logs" })).not.toBeInTheDocument();
     });
 
     it("renders the tabs (no spinner) once all credentials are present", () => {
       renderAs("Admin");
 
-      expect(document.querySelector(".ant-spin")).not.toBeInTheDocument();
+      expect(document.querySelector('[aria-busy="true"]')).not.toBeInTheDocument();
       expect(screen.getByRole("tab", { name: "Request Logs" })).toBeInTheDocument();
     });
   });

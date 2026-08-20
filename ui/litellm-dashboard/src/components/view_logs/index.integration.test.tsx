@@ -4,10 +4,17 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import SpendLogsTable from "./index";
 import { renderWithProviders, testQueryClient } from "../../../tests/test-utils";
 
-const { useAuthorizedMock } = vi.hoisted(() => ({ useAuthorizedMock: vi.fn() }));
+const { useAuthorizedMock, useOrganizationsMock } = vi.hoisted(() => ({
+  useAuthorizedMock: vi.fn(),
+  useOrganizationsMock: vi.fn(),
+}));
 
 vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
   default: useAuthorizedMock,
+}));
+
+vi.mock("@/app/(dashboard)/hooks/organizations/useOrganizations", () => ({
+  useOrganizations: useOrganizationsMock,
 }));
 
 vi.mock("./RequestLogsPanel", () => ({
@@ -37,8 +44,16 @@ const defaultProps = {
   premiumUser: true,
 };
 
-const renderAs = (sessionRole: string) => {
-  useAuthorizedMock.mockReturnValue({ accessToken: "sk-test", userRole: sessionRole, premiumUser: true });
+const ORG_ADMIN_MEMBERSHIPS = [{ organization_id: "org-1", members: [{ user_id: "user-1", user_role: "org_admin" }] }];
+
+const renderAs = (sessionRole: string, organizations: unknown[] = []) => {
+  useAuthorizedMock.mockReturnValue({
+    accessToken: "sk-test",
+    userId: "user-1",
+    userRole: sessionRole,
+    premiumUser: true,
+  });
+  useOrganizationsMock.mockReturnValue({ data: organizations });
   return renderWithProviders(<SpendLogsTable {...defaultProps} userRole={sessionRole} />);
 };
 
@@ -46,6 +61,7 @@ describe("SpendLogsTable network access by role", () => {
   beforeEach(() => {
     testQueryClient.clear();
     vi.clearAllMocks();
+    useOrganizationsMock.mockReturnValue({ data: [] });
     fetchMock.mockImplementation(async (url: string) => {
       if (String(url).includes("/audit")) {
         return jsonResponse(emptyAuditLogs);
@@ -71,6 +87,16 @@ describe("SpendLogsTable network access by role", () => {
 
     expect(requestedUrls().filter((url) => url.includes("/audit"))).toEqual([]);
     expect(requestedUrls().filter((url) => url.includes("/v2/team/list"))).toEqual([]);
+  });
+
+  it("fetches the deleted teams an org admin is entitled to, and still no audit logs", async () => {
+    renderAs("Internal User", ORG_ADMIN_MEMBERSHIPS);
+
+    await waitFor(() =>
+      expect(requestedUrls().some((url) => url.includes("/v2/team/list") && url.includes("status=deleted"))).toBe(true),
+    );
+
+    expect(requestedUrls().filter((url) => url.includes("/audit"))).toEqual([]);
   });
 
   it("fetches deleted teams and audit logs for an admin", async () => {

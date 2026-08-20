@@ -21,6 +21,7 @@ from fastapi import (
     UploadFile,
     status,
 )
+from pydantic import TypeAdapter
 
 import litellm
 from litellm import CreateFileRequest, get_secret_str
@@ -41,8 +42,13 @@ from litellm.proxy.common_utils.openai_endpoint_utils import (
     get_custom_llm_provider_from_request_headers,
     get_custom_llm_provider_from_request_query,
 )
+from litellm.proxy.openai_files_endpoints.batch_file_validation import (
+    check_batch_file_upload,
+    raise_batch_file_validation_failure,
+)
 from litellm.proxy.openai_files_endpoints.common_utils import (
     _is_base64_encoded_unified_file_id,
+    add_internal_model_credentials,
     apply_team_provider_credentials,
     encode_file_id_with_model,
     extract_file_creation_params,
@@ -63,6 +69,8 @@ from litellm.types.llms.openai import (
 )
 
 router: Final = APIRouter()
+
+_MAX_BATCH_FILE_SIZE_MB_ADAPTER: Final = TypeAdapter(int | None)
 
 files_config = None
 
@@ -360,17 +368,26 @@ async def create_file(
 
         # Prepare the data for forwarding
 
-        # Replace with:
         valid_purposes: Final = get_args(OpenAIFilesPurpose)
         if purpose not in valid_purposes:
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "error": f"Invalid purpose: {purpose}. Must be one of: {valid_purposes}",
-                },
+            raise ProxyException(
+                message=f"Invalid purpose: {purpose}. Must be one of: {valid_purposes}",
+                type="invalid_request_error",
+                param="purpose",
+                code=400,
             )
         # Cast purpose to OpenAIFilesPurpose type
         purpose = cast(OpenAIFilesPurpose, purpose)
+
+        if purpose == "batch":
+            batch_file_failure: Final = await asyncio.to_thread(
+                check_batch_file_upload,
+                file.filename,
+                file_source,
+                _MAX_BATCH_FILE_SIZE_MB_ADAPTER.validate_python(general_settings.get("max_batch_file_size_mb")),
+            )
+            if batch_file_failure is not None:
+                raise_batch_file_validation_failure(batch_file_failure)
 
         data = {}
 
@@ -551,6 +568,8 @@ async def create_file(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
         verbose_proxy_logger.exception("litellm.proxy.proxy_server.create_file(): Exception occured - %s", e)
+        if isinstance(e, ProxyException):
+            raise e
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "message", str(e.detail)),
@@ -706,6 +725,7 @@ async def get_file_content(
 
             model: Final = cast(str | None, data.get("model"))
             if model:
+                add_internal_model_credentials(data=data, llm_router=llm_router, model_id=model)
                 response = await llm_router.afile_content(
                     **{
                         "model": model,
@@ -1352,7 +1372,7 @@ async def list_files(
 
         if should_route and credentials is not None:
             # Use model-based routing with credentials from config
-            data.update(credentials)
+            prepare_data_with_credentials(data=data, credentials=credentials)
             response = await litellm.afile_list(
                 custom_llm_provider=credentials["custom_llm_provider"],
                 purpose=purpose,

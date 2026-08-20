@@ -1471,3 +1471,229 @@ def test_replay_live_router_model_cost_rebuilds_every_live_router():
     finally:
         litellm.model_cost = saved_model_cost
         _invalidate_model_cost_lowercase_map()
+
+
+def test_strategy_router_alias_pricing_never_enters_model_cost(monkeypatch):
+    """
+    A strategy-router alias is never the deployment actually called or billed,
+    so custom pricing configured on it must not be registered under its
+    model_id - an explicit zero there makes the budget check treat the alias
+    as a genuinely free model while requests bill as a real deployment. The
+    strip must also survive a price-data reload, which rebuilds entries by
+    walking the live routers.
+    """
+    from litellm import utils as litellm_utils
+    monkeypatch.setattr(
+        litellm_utils,
+        "_runtime_registered_model_cost",
+        dict(litellm_utils._runtime_registered_model_cost),
+    )
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "smart-router",
+                "litellm_params": {
+                    "model": "auto_router/complexity_router/smart-router",
+                    "complexity_router_default_model": "paid-model",
+                    "input_cost_per_token": 0.0,
+                    "output_cost_per_token": 0.0,
+                    "complexity_router_config": {"tiers": {"simple": "paid-model"}},
+                },
+                "model_info": {"id": "strategy-alias-id", "max_input_tokens": 128000},
+            },
+            {
+                "model_name": "paid-model",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-fake"},
+                "model_info": {"id": "strategy-alias-paid-id"},
+            },
+        ],
+    )
+
+    def _assert_alias_unpriced():
+        entry = litellm.model_cost.get("strategy-alias-id")
+        assert entry is not None, "Alias metadata should still be registered"
+        assert entry["max_input_tokens"] == 128000
+        assert "input_cost_per_token" not in entry
+        assert "output_cost_per_token" not in entry
+
+    _assert_alias_unpriced()
+
+    saved_model_cost = litellm.model_cost
+    try:
+        _simulate_price_data_reload(
+            {"gpt-4o": {"litellm_provider": "openai", "mode": "chat"}},
+        )
+        _assert_alias_unpriced()
+        assert router.model_list
+    finally:
+        litellm.model_cost = saved_model_cost
+        _invalidate_model_cost_lowercase_map()
+
+
+def test_inherit_builtin_tiered_output_rate_fills_the_backend_flat_rate():
+    """
+    A deployment entry whose custom tiers publish only input rates would bill
+    completions at 0, so the backend model's flat output rate is copied in at
+    registration.
+    """
+    model_info = {"tiered_pricing": [{"range": [0, 3000], "input_cost_per_token": 3.25e-07}]}
+
+    Router._inherit_builtin_tiered_output_rate(
+        model_info=model_info,
+        backend_model="claude-haiku-4-5",
+        custom_llm_provider="anthropic",
+    )
+
+    backend_rate = litellm.get_model_info(model="claude-haiku-4-5", custom_llm_provider="anthropic")[
+        "output_cost_per_token"
+    ]
+    assert backend_rate > 0
+    assert model_info["output_cost_per_token"] == backend_rate
+
+
+def test_inherit_builtin_tiered_output_rate_never_stores_a_synthesized_zero():
+    """
+    Regression: get_model_info reports output_cost_per_token 0 for a backend that
+    only publishes tiered rates (e.g. dashscope/qwen-flash), and storing that zero
+    would mark the deployment as explicitly priced free.
+    """
+    backend_info = litellm.get_model_info(model="qwen-flash", custom_llm_provider="dashscope")
+    assert backend_info["output_cost_per_token"] == 0
+
+    model_info = {"tiered_pricing": [{"range": [0, 3000], "input_cost_per_token": 3.25e-07}]}
+    Router._inherit_builtin_tiered_output_rate(
+        model_info=model_info,
+        backend_model="qwen-flash",
+        custom_llm_provider="dashscope",
+    )
+
+    assert "output_cost_per_token" not in model_info
+
+
+def test_inherit_builtin_tiered_output_rate_leaves_a_user_rate_alone():
+    model_info = {
+        "tiered_pricing": [{"range": [0, 3000], "input_cost_per_token": 3.25e-07}],
+        "output_cost_per_token": 9e-07,
+    }
+
+    Router._inherit_builtin_tiered_output_rate(
+        model_info=model_info,
+        backend_model="claude-haiku-4-5",
+        custom_llm_provider="anthropic",
+    )
+
+    assert model_info["output_cost_per_token"] == 9e-07
+
+
+# --- a config.yaml PTU deployment must not also bill per token ------------------
+
+_PTU_MODEL_INFO = {
+    "team_id": "team-alpha",
+    "ptu_count": 100,
+    "cost_per_ptu_per_hour": 0.02,
+    "ptu_effective_from": "2026-01-01T00:00:00Z",
+}
+
+
+def _ptu_router(model_info=None, litellm_params=None, ptu_enabled=True):
+    """A router built the way loading config.yaml builds one."""
+    with patch.dict(os.environ, {"LITELLM_ENABLE_PTU_COST_ATTRIBUTION": "True" if ptu_enabled else ""}, clear=False):
+        return Router(
+            model_list=[
+                {
+                    "model_name": "gpt-4o-ptu",
+                    "litellm_params": {
+                        "model": "anthropic/claude-sonnet-4-5-20250929",
+                        "api_key": "sk-not-used",
+                        **(litellm_params or {}),
+                    },
+                    "model_info": dict(_PTU_MODEL_INFO if model_info is None else model_info),
+                }
+            ]
+        )
+
+
+def test_a_config_ptu_deployment_bills_nothing_per_token():
+    """Reserved capacity is already billed by the hour, so charging its traffic bills the
+    same tokens twice. Left unset the rate falls back to the public cost map, which makes
+    the double charge the default rather than an opt-in."""
+    router = _ptu_router(litellm_params={"input_cost_per_token": 5e-06, "output_cost_per_token": 1.5e-05})
+    entry = router.model_list[0]
+
+    assert entry["litellm_params"]["input_cost_per_token"] == 0.0
+    assert entry["litellm_params"]["output_cost_per_token"] == 0.0
+    assert entry["model_info"]["input_cost_per_token"] == 0.0
+    assert litellm.model_cost[entry["model_info"]["id"]]["input_cost_per_token"] == 0.0
+
+
+@pytest.mark.parametrize(
+    "backend",
+    ["anthropic/claude-sonnet-4-5-20250929", "azure/gpt-4o", "gemini/gemini-2.5-flash"],
+)
+def test_a_config_ptu_deployment_imports_no_cache_rate_from_its_backend(backend):
+    """The cache back-fill runs whenever input_cost_per_token is set, and 0.0 is set, so a
+    partially zeroed deployment would silently inherit the backend model's real cache rates.
+    Every backend here publishes non-zero ones, which is what makes the assertion mean
+    something."""
+    cache_fields = (
+        "cache_creation_input_token_cost",
+        "cache_creation_input_token_cost_above_1hr",
+        "cache_creation_input_token_cost_above_200k_tokens",
+        "cache_read_input_token_cost",
+        "cache_read_input_token_cost_above_200k_tokens",
+    )
+    builtin = litellm.get_model_info(model=backend)
+    assert any(builtin.get(field) for field in cache_fields), "backend publishes no cache pricing to leak"
+
+    router = _ptu_router(litellm_params={"model": backend})
+    priced = litellm.model_cost[router.model_list[0]["model_info"]["id"]]
+
+    assert [field for field in cache_fields if priced.get(field)] == []
+
+
+def test_zeroing_a_ptu_deployment_leaves_its_backend_model_priced():
+    """A sibling deployment on the same backend must keep billing normally."""
+    backend = "anthropic/claude-sonnet-4-5-20250929"
+    builtin = litellm.get_model_info(model=backend)["input_cost_per_token"]
+    assert builtin > 0
+
+    _ptu_router(litellm_params={"model": backend})
+
+    assert litellm.get_model_info(model=backend)["input_cost_per_token"] == builtin
+
+
+def test_zeroing_does_not_change_the_deployment_id():
+    """The id is a hash of the deployment's params and keys its cooldowns, its budget, and
+    every spend row already written against it."""
+    params = {"input_cost_per_token": 5e-06}
+    priced = _ptu_router(litellm_params=params, ptu_enabled=False).model_list[0]["model_info"]["id"]
+    zeroed = _ptu_router(litellm_params=params).model_list[0]["model_info"]["id"]
+
+    assert priced == zeroed
+
+
+def test_a_database_backed_deployment_is_left_alone():
+    """The write endpoints already zero those, and they answer 400 rather than silently
+    rewriting a rate the caller sent."""
+    entry = _ptu_router(model_info={**_PTU_MODEL_INFO, "db_model": True}).model_list[0]
+
+    assert entry["litellm_params"].get("input_cost_per_token") is None
+
+
+def test_nothing_is_zeroed_while_the_feature_is_off():
+    """No flat cost accrues with the flag off, so zeroing would serve the traffic free."""
+    entry = _ptu_router(litellm_params={"input_cost_per_token": 5e-06}, ptu_enabled=False).model_list[0]
+
+    assert entry["litellm_params"]["input_cost_per_token"] == 5e-06
+
+
+@pytest.mark.parametrize("dropped", ["team_id", "ptu_effective_from"], ids=["no team_id", "no ptu_effective_from"])
+def test_a_deployment_the_rollup_will_not_charge_is_not_zeroed(dropped):
+    """The rollup refuses to price a reservation missing either field, so zeroing on the
+    looser count-and-rate test alone would leave the deployment serving for free with
+    nothing charged in its place."""
+    incomplete = {k: v for k, v in _PTU_MODEL_INFO.items() if k != dropped}
+    entry = _ptu_router(model_info=incomplete, litellm_params={"input_cost_per_token": 5e-06}).model_list[0]
+
+    assert entry["litellm_params"]["input_cost_per_token"] == 5e-06

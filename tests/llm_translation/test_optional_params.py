@@ -1137,7 +1137,7 @@ def test_ollama_pydantic_obj():
     )
 
 
-def test_gemini_frequency_penalty():
+def test_gemini_frequency_penalty_listed_in_vertex_ai_supported_params():
     from litellm.utils import get_supported_openai_params
 
     optional_params = get_supported_openai_params(

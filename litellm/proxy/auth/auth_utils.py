@@ -12,7 +12,12 @@ from pydantic import PositiveInt, TypeAdapter, ValidationError
 import litellm
 from litellm import Router, provider_list
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import MINIMUM_CUSTOM_KEY_LENGTH, STANDARD_CUSTOMER_ID_HEADERS
+from litellm.constants import (
+    BATCH_ENQUEUED_TOKEN_LIMIT_METADATA_KEY,
+    EMPTY_MAPPING,
+    MINIMUM_CUSTOM_KEY_LENGTH,
+    STANDARD_CUSTOMER_ID_HEADERS,
+)
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.litellm_core_utils.url_utils import (
     SSRFError,
@@ -262,6 +267,14 @@ _BANNED_REQUEST_BODY_PARAMS: Final[tuple[str, ...]] = (
     "aws_sts_endpoint",
     "aws_web_identity_token",
     "aws_role_name",
+    # Remaining AWS identity selectors. ``get_credentials`` prefers a named
+    # profile over the deployment's static keys, so a caller-supplied
+    # ``aws_profile_name`` signs Bedrock and S3 requests as any profile
+    # present on the proxy host; the two AssumeRole knobs are banned with it
+    # so the whole identity-selection family lives behind the same opt-in.
+    "aws_profile_name",
+    "aws_session_name",
+    "aws_external_id",
     "vertex_credentials",
     # Azure managed-identity / federated-auth token. The Azure provider
     # transformer reads ``azure_ad_token`` (top-level or via
@@ -1161,10 +1174,50 @@ def enforce_output_token_estimates_are_admin_only(
     )
 
 
+class BatchEnqueuedTokenLimitRequest(Protocol):
+    """The shape of any management request that can carry a batch enqueued-token limit."""
+
+    @property
+    def metadata(self) -> Mapping[str, object] | None: ...
+
+    @property
+    def model_fields_set(self) -> Collection[str]: ...
+
+
+def enforce_batch_enqueued_token_limit_is_admin_only(
+    data: BatchEnqueuedTokenLimitRequest,
+    existing_metadata: Mapping[str, object] | None,
+    user_api_key_dict: UserAPIKeyAuth,
+    entity: Literal["key", "team"],
+) -> None:
+    """Only a proxy admin may change a key or team's batch enqueued-token limit.
+
+    When set, ``batch_enqueued_token_limit`` replaces the standard RPM/TPM checks
+    for batch submissions, so a holder-writable copy would let a caller lift their
+    own batch quota. Gated on the resulting value rather than on presence, so a
+    form resending the stored value stays a no-op.
+    """
+    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
+        return
+    stored: Final[Mapping[str, object]] = existing_metadata or EMPTY_MAPPING
+    requested: Final[Mapping[str, object]] = (
+        (data.metadata or EMPTY_MAPPING) if "metadata" in data.model_fields_set else stored
+    )
+    if requested.get(BATCH_ENQUEUED_TOKEN_LIMIT_METADATA_KEY) == stored.get(BATCH_ENQUEUED_TOKEN_LIMIT_METADATA_KEY):
+        return
+    raise HTTPException(
+        status_code=403,
+        detail={  # mutable-ok: HTTPException.detail has no immutable form
+            "error": f"Only proxy admins can set {BATCH_ENQUEUED_TOKEN_LIMIT_METADATA_KEY} on a {entity}. "
+            "It replaces the standard rate limit checks for batch submissions."
+        },
+    )
+
+
 def get_model_rate_limit_from_metadata(
     user_api_key_dict: UserAPIKeyAuth,
     metadata_accessor_key: Literal["team_metadata", "organization_metadata", "project_metadata"],
-    rate_limit_key: Literal["model_rpm_limit", "model_tpm_limit"],
+    rate_limit_key: Literal["model_rpm_limit", "model_tpm_limit", "model_itpm_limit", "model_otpm_limit"],
 ) -> dict[str, int] | None:
     if getattr(user_api_key_dict, metadata_accessor_key):
         return getattr(user_api_key_dict, metadata_accessor_key).get(rate_limit_key)
@@ -1303,18 +1356,27 @@ def is_pass_through_provider_route(route: str) -> bool:
     return False
 
 
-def _has_user_setup_sso():
+def _has_user_setup_sso() -> bool:
     """
-    Check if the user has set up single sign-on (SSO) by verifying the presence of Microsoft client ID, Google client ID or generic client ID and UI username environment variables.
-    Returns a boolean indicating whether SSO has been set up.
+    Check if the user has set up single sign-on (SSO).
+
+    Covers OAuth providers (Microsoft, Google, generic) and SAML IdP metadata.
+    Used by UI discovery (``sso_configured``) so the login button enables when
+    any supported SSO path is configured — including SAML-only setups.
     """
     microsoft_client_id: Final = os.getenv("MICROSOFT_CLIENT_ID", None)
     google_client_id: Final = os.getenv("GOOGLE_CLIENT_ID", None)
     generic_client_id: Final = os.getenv("GENERIC_CLIENT_ID", None)
+    saml_idp_metadata_url: Final = os.getenv("SAML_IDP_METADATA_URL", None)
+    saml_idp_metadata_xml: Final = os.getenv("SAML_IDP_METADATA_XML", None)
 
-    sso_setup = (microsoft_client_id is not None) or (google_client_id is not None) or (generic_client_id is not None)
-
-    return sso_setup
+    return (
+        microsoft_client_id is not None
+        or google_client_id is not None
+        or generic_client_id is not None
+        or bool(saml_idp_metadata_url)
+        or bool(saml_idp_metadata_xml)
+    )
 
 
 def get_customer_user_header_from_mapping(user_id_mapping) -> list | None:

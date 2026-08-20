@@ -1,6 +1,6 @@
-import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import useIsOrgAdmin from "@/app/(dashboard)/hooks/useIsOrgAdmin";
 import { useHealthReadinessDetails } from "@/app/(dashboard)/hooks/healthReadiness/useHealthReadinessDetails";
 import { useLogout } from "@/app/(dashboard)/hooks/useLogout";
 import { getProxyBaseUrl } from "@/components/networking";
@@ -75,7 +75,6 @@ import {
 } from "../utils/roles";
 import BetaBadge from "./BetaBadge";
 import NewBadge from "./common_components/NewBadge";
-import type { Organization } from "./networking";
 import SidebarAccountMenu from "./SidebarAccountMenu/SidebarAccountMenu";
 import SidebarUsageCard from "./SidebarUsageCard";
 import { MIGRATED_PAGES, migratedHref, legacyPageHref } from "@/utils/migratedPages";
@@ -146,8 +145,20 @@ const menuGroups: MenuGroup[] = [
             icon: <Bot {...ICON} />,
             roles: rolesAllowedToViewWriteScopedPages,
           },
-          { key: "workflows", page: "workflows", label: "Workflow Runs", icon: <Workflow {...ICON} /> },
-          { key: "memory", page: "memory", label: "Memory", icon: <Database {...ICON} /> },
+          {
+            key: "workflows",
+            page: "workflows",
+            label: "Workflow Runs",
+            icon: <Workflow {...ICON} />,
+            roles: rolesWithCapability("viewWorkflowRuns"),
+          },
+          {
+            key: "memory",
+            page: "memory",
+            label: "Memory",
+            icon: <Database {...ICON} />,
+            roles: rolesWithCapability("viewMemory"),
+          },
         ],
       },
       { key: "mcp-servers", page: "mcp-servers", label: "MCP Servers", icon: <Server {...ICON} /> },
@@ -206,7 +217,7 @@ const menuGroups: MenuGroup[] = [
         page: "guardrails-monitor",
         label: "Guardrails Monitor",
         icon: <HeartPulse {...ICON} />,
-        roles: [...all_admin_roles, ...internalUserRoles],
+        roles: rolesWithCapability("viewGuardrailUsage"),
       },
     ],
   },
@@ -289,7 +300,13 @@ const menuGroups: MenuGroup[] = [
             icon: <Tags {...ICON} />,
             roles: all_admin_roles,
           },
-          { key: "4", page: "usage", label: "Old Usage", icon: <BarChart3 {...ICON} /> },
+          {
+            key: "4",
+            page: "usage",
+            label: "Old Usage",
+            icon: <BarChart3 {...ICON} />,
+            roles: rolesWithCapability("viewGlobalSpend"),
+          },
         ],
       },
     ],
@@ -414,7 +431,7 @@ const Sidebar_: React.FC<SidebarProps> = ({
   allowVectorStoresForTeamAdmins,
 }) => {
   const { userId, accessToken, userRole, isViewOnly } = useAuthorized();
-  const { data: organizations } = useOrganizations();
+  const isOrgAdmin = useIsOrgAdmin();
   const { data: teams } = useTeams();
   const { logoUrl } = useTheme();
   const { data: healthData } = useHealthReadinessDetails(accessToken);
@@ -441,13 +458,6 @@ const Sidebar_: React.FC<SidebarProps> = ({
     }
   }
 
-  const isOrgAdmin = useMemo(() => {
-    if (!userId || !organizations) return false;
-    return organizations.some((org: Organization) =>
-      org.members?.some((member) => member.user_id === userId && member.user_role === "org_admin"),
-    );
-  }, [userId, organizations]);
-
   const isTeamAdmin = useMemo(() => isUserTeamAdminForAnyTeam(teams ?? null, userId ?? ""), [teams, userId]);
 
   const filterItemsByRole = (items: MenuItem[]): MenuItem[] => {
@@ -455,6 +465,9 @@ const Sidebar_: React.FC<SidebarProps> = ({
     return items
       .map((item) => ({ ...item, children: item.children ? filterItemsByRole(item.children) : undefined }))
       .filter((item) => {
+        // A parent whose children were all filtered out renders as a leaf link
+        // to its own page id, which is not a real route. Drop it instead.
+        if (item.children && item.children.length === 0) return false;
         if (item.key === "llm-playground" && isViewOnly) return false;
         if (item.key === "organizations" || item.key === "users") {
           const hasRoleAccess = !item.roles || item.roles.includes(userRole) || isOrgAdmin;

@@ -25,12 +25,13 @@ interface PaginatedSearchSelectProps {
   value?: string;
   onValueChange: (value: string) => void;
   onSearchChange: (query: string) => void;
-  onLoadMore: () => void;
+  onLoadMore?: () => void;
   hasNextPage?: boolean;
   isLoading?: boolean;
   isFetchingNextPage?: boolean;
   placeholder?: string;
   emptyText?: string;
+  errorText?: string;
   loadingText?: string;
   disabled?: boolean;
   className?: string;
@@ -50,6 +51,7 @@ export function PaginatedSearchSelect({
   isFetchingNextPage = false,
   placeholder = "Search…",
   emptyText = "No results",
+  errorText,
   loadingText = "Loading…",
   disabled = false,
   className,
@@ -80,7 +82,7 @@ export function PaginatedSearchSelect({
     if (target.scrollHeight === 0) return;
     const ratio = (target.scrollTop + target.clientHeight) / target.scrollHeight;
     if (ratio >= SCROLL_THRESHOLD && hasNextPage && !isFetchingNextPage) {
-      onLoadMore();
+      onLoadMore?.();
     }
   };
 
@@ -104,7 +106,9 @@ export function PaginatedSearchSelect({
         className={`w-full ${className ?? ""}`}
       />
       <ComboboxContent>
-        <ComboboxEmpty>{isLoading ? loadingText : emptyText}</ComboboxEmpty>
+        <ComboboxEmpty className={errorText == null ? undefined : "text-destructive"}>
+          {errorText ?? (isLoading ? loadingText : emptyText)}
+        </ComboboxEmpty>
         <ComboboxList onScroll={handleScroll} data-testid="paginated-search-select-list">
           {(item: SearchSelectOption) => (
             <ComboboxItem key={item.value} value={item}>
