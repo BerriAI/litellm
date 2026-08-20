@@ -3,7 +3,7 @@ import json
 import os
 import sys
 import unittest
-from typing import List, Optional, Tuple
+from typing import TYPE_CHECKING, List, Optional, Tuple
 from unittest.mock import ANY, MagicMock, Mock, patch
 
 import httpx
@@ -16,6 +16,13 @@ import litellm
 from litellm.completion_extras.litellm_responses_transformation.transformation import (
     LiteLLMResponsesTransformationHandler,
 )
+
+if TYPE_CHECKING:
+    from openai.types.responses import ResponseOutputItem
+    from openai.types.responses.response_reasoning_item import ResponseReasoningItem
+
+    from litellm.types.llms.openai import ResponsesAPIResponse
+    from litellm.types.utils import ModelResponse
 
 
 def test_convert_chat_completion_messages_to_responses_api_image_input():
@@ -3487,7 +3494,10 @@ async def test_acompletion_bridge_normalizes_tool_choice_on_the_wire(
     assert request_body["tool_choice"] == expected_wire_tool_choice
 
 
-def _make_incomplete_responses_api_response(incomplete_reason, output):
+def _make_incomplete_responses_api_response(
+    incomplete_reason: Optional[str],
+    output: "List[ResponseOutputItem]",
+) -> "ResponsesAPIResponse":
     from litellm.types.llms.openai import (
         InputTokensDetails,
         OutputTokensDetails,
@@ -3540,7 +3550,7 @@ def _make_incomplete_responses_api_response(incomplete_reason, output):
     )
 
 
-def _make_reasoning_only_output_item():
+def _make_reasoning_only_output_item() -> "ResponseReasoningItem":
     from openai.types.responses.response_reasoning_item import ResponseReasoningItem
 
     return ResponseReasoningItem(
@@ -3553,7 +3563,10 @@ def _make_reasoning_only_output_item():
     )
 
 
-def _call_transform_response(handler, raw_response):
+def _call_transform_response(
+    handler: LiteLLMResponsesTransformationHandler,
+    raw_response: "ResponsesAPIResponse",
+) -> "ModelResponse":
     logging_obj = Mock()
     logging_obj.model_call_details = {}
     return handler.transform_response(
