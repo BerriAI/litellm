@@ -85,6 +85,8 @@ class LiteLLM_Proxy_MCP_Handler:
         follow_up_params = dict(params)
         follow_up_params.pop("litellm_logging_obj", None)
         follow_up_params.pop("litellm_call_id", None)
+        if follow_up_params.get("web_search_options") is None:
+            follow_up_params.pop("web_search_options", None)
 
         nested_params = follow_up_params.get("litellm_params")
         if isinstance(nested_params, dict):

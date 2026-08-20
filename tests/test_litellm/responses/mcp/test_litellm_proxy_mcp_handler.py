@@ -451,6 +451,7 @@ def test_prepare_follow_up_call_params_resets_per_call_logging_state():
         "litellm_logging_obj": object(),
         "litellm_trace_id": "trace-1",
         "tool_choice": "auto",
+        "web_search_options": None,
         "litellm_params": {
             "litellm_call_id": "nested-parent-call",
             "litellm_logging_obj": object(),
@@ -467,6 +468,7 @@ def test_prepare_follow_up_call_params_resets_per_call_logging_state():
     assert follow_up["litellm_trace_id"] == "trace-1"
     assert follow_up["stream"] is True
     assert "tool_choice" not in follow_up
+    assert "web_search_options" not in follow_up
     assert follow_up["litellm_params"]["metadata"] == {"team": "legal"}
     assert original["litellm_call_id"] == "parent-call"
 
