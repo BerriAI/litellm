@@ -221,6 +221,13 @@ def _make_ctx(base_url):
     return click.Context(click.Command("test"), obj={"base_url": base_url})
 
 
+def _make_group_ctx(base_url, api_key):
+    """The context the `lite` group hands down after it already read the token file once."""
+    return click.Context(
+        click.Command("test"), obj={"base_url": base_url, "api_key": api_key, "api_key_from_token_file": True}
+    )
+
+
 def _pkce_record(base_url, seconds_left):
     return {
         "key": "sk-pkce",
@@ -338,6 +345,45 @@ class TestEnsureFreshLogin:
 
         with pytest.raises(UpError, match="Run `lite login --pkce` first"):
             _ensure_fresh_login(_make_ctx("http://proxy-a:4000"))
+
+    def test_trusts_the_key_the_cli_group_already_resolved_instead_of_reading_the_token_file_again(
+        self, monkeypatch
+    ):
+        """The `lite` group renews a --pkce key on the way in, so a second renewal here would hit
+        the proxy twice and, once the refresh token is burned, print the refusal twice."""
+        store = _FakeTokenStore(monkeypatch, _pkce_record("http://proxy-a:4000", seconds_left=86_400), {})
+        login_calls = _capture_login(monkeypatch)
+
+        _ensure_fresh_login(_make_group_ctx("http://proxy-a:4000", api_key="sk-pkce-renewed-by-the-group"))
+
+        assert login_calls == []
+        assert store.key_requests == []
+
+    def test_fails_non_interactively_without_a_second_renewal_when_the_group_could_not_renew(self, monkeypatch):
+        monkeypatch.setattr(up_module.sys.stdin, "isatty", lambda: False)
+        store = _FakeTokenStore(
+            monkeypatch,
+            _pkce_record("http://proxy-a:4000", seconds_left=-10),
+            {"http://proxy-a:4000": "sk-a-second-renewal-would-mint-this"},
+        )
+
+        with pytest.raises(UpError, match="Run `lite login --pkce` first"):
+            _ensure_fresh_login(_make_group_ctx("http://proxy-a:4000", api_key=None))
+
+        assert store.key_requests == []
+
+    def test_re_reads_the_token_file_only_after_the_interactive_login_it_started(self, monkeypatch):
+        monkeypatch.setattr(up_module.sys.stdin, "isatty", lambda: True)
+        store = _FakeTokenStore(monkeypatch, _pkce_record("http://proxy-a:4000", seconds_left=-10), {})
+        login_calls = _capture_login(
+            monkeypatch,
+            on_login=lambda: store.log_in(_pkce_record("http://proxy-a:4000", seconds_left=86_400), "sk-pkce-fresh"),
+        )
+
+        _ensure_fresh_login(_make_group_ctx("http://proxy-a:4000", api_key=None))
+
+        assert login_calls == [("http://proxy-a:4000", True)]
+        assert store.key_requests == ["http://proxy-a:4000"]
 
 
 class TestUpCommand:
