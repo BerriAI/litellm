@@ -671,6 +671,33 @@ class TestMergePromptManagementInputReshape:
         ]
         assert result[1] == {"role": "user", "content": "hi"}
 
+    def test_reshape_returns_copies_and_leaves_hook_output_untouched(self):
+        user_part = {"type": "text", "text": "follow-up"}
+        user_message = {"role": "user", "content": [user_part]}
+        merged = [user_message]
+
+        result = ResponsesAPIRequestUtils.merge_prompt_management_input(
+            original_input="ignored", client_input=[], merged_input=merged
+        )
+
+        assert result == [{"role": "user", "content": [{"type": "input_text", "text": "follow-up"}]}]
+        assert user_part == {"type": "text", "text": "follow-up"}
+        assert user_message == {"role": "user", "content": [user_part]}
+        assert result[0] is not user_message
+
+    def test_reshape_keeps_non_message_items_when_hook_returns_client_objects(self):
+        user_message = {"role": "user", "content": [{"type": "text", "text": "question"}]}
+        reference = {"type": "item_reference", "id": "msg_123"}
+        original_input = [reference, user_message]
+
+        result = ResponsesAPIRequestUtils.merge_prompt_management_input(
+            original_input=original_input, client_input=[user_message], merged_input=[user_message]
+        )
+
+        assert result == [reference, {"role": "user", "content": [{"type": "input_text", "text": "question"}]}]
+        assert result[0] is reference
+        assert user_message["content"] == [{"type": "text", "text": "question"}]
+
     def test_assistant_text_parts_are_left_alone(self):
         merged = [
             {"role": "assistant", "content": [{"type": "text", "text": "earlier answer"}]},

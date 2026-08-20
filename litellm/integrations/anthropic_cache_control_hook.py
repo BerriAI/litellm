@@ -59,10 +59,9 @@ OPENAI_API_BASE_ENV_VARS: Final = ("OPENAI_BASE_URL", "OPENAI_API_BASE")
 
 
 def supports_openai_prompt_cache_breakpoint(model: str) -> bool:
-    if _has_model_map_entry(model):
-        from litellm.utils import supports_prompt_cache_breakpoint
-
-        return supports_prompt_cache_breakpoint(model)
+    model_map_flag: Final = _model_map_prompt_cache_breakpoint_flag(model)
+    if model_map_flag is not None:
+        return model_map_flag
     version_match: Final = _GPT_VERSION_PATTERN.match(model.rsplit("/", 1)[-1].lower())
     if version_match is None:
         return False
@@ -70,10 +69,12 @@ def supports_openai_prompt_cache_breakpoint(model: str) -> bool:
     return version >= OPENAI_PROMPT_CACHE_BREAKPOINT_MIN_GPT_VERSION
 
 
-def _has_model_map_entry(model: str) -> bool:
+def _model_map_prompt_cache_breakpoint_flag(model: str) -> bool | None:
     import litellm
 
-    return model in litellm.model_cost or model.rsplit("/", 1)[-1] in litellm.model_cost
+    entries: Final = (litellm.model_cost.get(key) for key in (model, model.rsplit("/", 1)[-1]))
+    flags: Final = (entry.get("supports_prompt_cache_breakpoint") for entry in entries if isinstance(entry, dict))
+    return next((bool(flag) for flag in flags if flag is not None), None)
 
 
 def targets_openai_api(api_base: object) -> bool:
@@ -150,7 +151,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
             else AnthropicCacheControlHook._targets_openai_prompt_cache_breakpoint(
                 model,
                 non_default_params.get("custom_llm_provider"),
-                non_default_params.get("api_base"),
+                non_default_params.get("api_base") or non_default_params.get("base_url"),
                 non_default_params.get("prompt_cache_options"),
             )
         )
