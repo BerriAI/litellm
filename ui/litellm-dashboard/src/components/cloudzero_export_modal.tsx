@@ -1,5 +1,4 @@
 import React, { useState, useEffect } from "react";
-import { Spin, Select } from "antd";
 import { CircleCheck, FileDown } from "lucide-react";
 import { z } from "zod/v4";
 import { getGlobalLitellmHeaderName } from "@/components/networking";
@@ -10,6 +9,7 @@ import { FieldGroup } from "@/components/shared/form/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { useZodForm } from "@/lib/forms/useZodForm";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -251,13 +251,18 @@ const CloudZeroExportModal: React.FC<CloudZeroExportModalProps> = ({ isOpen, onC
           {/* Export Type Selection */}
           <div>
             <p className="text-sm font-medium mb-2 block">Export Destination</p>
-            <Select
-              value={exportType}
-              onChange={setExportType}
-              options={exportOptions}
-              className="w-full"
-              size="large"
-            />
+            <Select items={exportOptions} value={exportType} onValueChange={(value) => value && setExportType(value)}>
+              <SelectTrigger className="w-full" aria-label="Export Destination">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {exportOptions.map((option) => (
+                  <SelectItem key={option.value} value={option.value}>
+                    {option.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
 
           {/* CloudZero Configuration */}
@@ -265,7 +270,7 @@ const CloudZeroExportModal: React.FC<CloudZeroExportModalProps> = ({ isOpen, onC
             <div>
               {settingsLoading ? (
                 <div className="flex justify-center py-8">
-                  <Spin size="large" />
+                  <UiLoadingSpinner className="size-8" />
                 </div>
               ) : (
                 <>

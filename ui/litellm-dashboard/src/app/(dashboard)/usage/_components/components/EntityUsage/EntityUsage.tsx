@@ -293,13 +293,13 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
       {
         header: "Successful",
         accessorKey: "metrics.successful_requests",
-        meta: { numeric: true, className: "text-green-600" },
+        meta: { numeric: true, className: "text-success" },
         cell: ({ row }) => row.original.metrics.successful_requests.toLocaleString(),
       },
       {
         header: "Failed",
         accessorKey: "metrics.failed_requests",
-        meta: { numeric: true, className: "text-red-600" },
+        meta: { numeric: true, className: "text-destructive" },
         cell: ({ row }) => row.original.metrics.failed_requests.toLocaleString(),
       },
       {
@@ -332,13 +332,13 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
       {
         header: "Successful",
         accessorKey: "successful_requests",
-        meta: { numeric: true, className: "text-green-600" },
+        meta: { numeric: true, className: "text-success" },
         cell: ({ row }) => row.original.successful_requests.toLocaleString(),
       },
       {
         header: "Failed",
         accessorKey: "failed_requests",
-        meta: { numeric: true, className: "text-red-600" },
+        meta: { numeric: true, className: "text-destructive" },
         cell: ({ row }) => row.original.failed_requests.toLocaleString(),
       },
       {
@@ -351,13 +351,13 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
     [],
   );
 
-  const chev = "size-3 text-gray-400";
+  const chev = "size-3 text-muted-foreground/70";
   const expandIcon = showCostBreakdown ? <ChevronDown className={chev} /> : <ChevronRight className={chev} />;
 
   const renderSummaryTile = ({ title, value, className, tooltip, expandable }: SummaryTile) => (
     <ShadcnCard
       key={title}
-      className={expandable ? "cursor-pointer hover:bg-gray-50 transition-colors" : undefined}
+      className={expandable ? "cursor-pointer hover:bg-accent transition-colors" : undefined}
       onClick={expandable ? () => setShowCostBreakdown(!showCostBreakdown) : undefined}
     >
       <CardContent>
@@ -365,7 +365,9 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
           <h3 className="text-lg font-medium text-foreground">{title}</h3>
           {tooltip ? (
             <Tooltip>
-              <TooltipTrigger render={<Info className="size-4 text-gray-400 hover:text-gray-600" />} />
+              <TooltipTrigger
+                render={<Info className="size-4 text-muted-foreground/70 hover:text-muted-foreground" />}
+              />
               <TooltipContent>{tooltip}</TooltipContent>
             </Tooltip>
           ) : null}
@@ -421,24 +423,24 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
                 const requestSpend = data.metrics.spend ?? 0;
                 const flatCost = data.metrics.flat_cost ?? 0;
                 return (
-                  <div className="bg-white p-4 shadow-lg rounded-lg border">
+                  <div className="bg-card p-4 shadow-lg rounded-lg border">
                     <p className="font-bold">{data.date}</p>
                     {showFlatCost ? (
                       <>
-                        <p className="text-cyan-500">Request cost: ${formatNumberWithCommas(requestSpend, 2)}</p>
+                        <p className="text-info">Request cost: ${formatNumberWithCommas(requestSpend, 2)}</p>
                         <p className="text-violet-500">Flat cost: ${formatNumberWithCommas(flatCost, 2)}</p>
                         <p className="font-semibold">
                           Total cost: ${formatNumberWithCommas(requestSpend + flatCost, 2)}
                         </p>
                       </>
                     ) : (
-                      <p className="text-cyan-500">Total Spend: ${formatNumberWithCommas(data.metrics.spend, 2)}</p>
+                      <p className="text-info">Total Spend: ${formatNumberWithCommas(data.metrics.spend, 2)}</p>
                     )}
-                    <p className="text-gray-600">Total Requests: {data.metrics.api_requests}</p>
-                    <p className="text-gray-600">Successful: {data.metrics.successful_requests}</p>
-                    <p className="text-gray-600">Failed: {data.metrics.failed_requests}</p>
-                    <p className="text-gray-600">Total Tokens: {data.metrics.total_tokens}</p>
-                    <p className="text-gray-600">
+                    <p className="text-muted-foreground">Total Requests: {data.metrics.api_requests}</p>
+                    <p className="text-muted-foreground">Successful: {data.metrics.successful_requests}</p>
+                    <p className="text-muted-foreground">Failed: {data.metrics.failed_requests}</p>
+                    <p className="text-muted-foreground">Total Tokens: {data.metrics.total_tokens}</p>
+                    <p className="text-muted-foreground">
                       Total {capitalizedEntityLabel}s: {entityCount}
                     </p>
                     <div className="mt-2 border-t pt-2">
@@ -453,13 +455,15 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
                         .map(([entity, entityData]) => {
                           const metrics = entityData as EntityMetrics;
                           return (
-                            <p key={entity} className="text-sm text-gray-600">
+                            <p key={entity} className="text-sm text-muted-foreground">
                               {getEntityLabel(entity, metrics.metadata)}: $
                               {formatNumberWithCommas(metrics.metrics.spend, 2)}
                             </p>
                           );
                         })}
-                      {entityCount > 5 && <p className="text-sm text-gray-500 italic">...and {entityCount - 5} more</p>}
+                      {entityCount > 5 && (
+                        <p className="text-sm text-muted-foreground italic">...and {entityCount - 5} more</p>
+                      )}
                     </div>
                   </div>
                 );
@@ -476,11 +480,11 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
             <div className="flex flex-col space-y-2">
               <h3 className="text-lg font-medium text-foreground">Spend Per {capitalizedEntityLabel}</h3>
               <p className="text-xs text-muted-foreground">Showing Top 5 by Spend</p>
-              <div className="flex items-center text-sm text-gray-500">
+              <div className="flex items-center text-sm text-muted-foreground">
                 <span>Get Started by Tracking cost per {capitalizedEntityLabel} </span>
                 <a
                   href="https://docs.litellm.ai/docs/proxy/enterprise#spend-tracking"
-                  className="text-blue-500 hover:text-blue-700 ml-1"
+                  className="text-info hover:text-info/80 ml-1"
                 >
                   here
                 </a>
@@ -502,15 +506,13 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
                     if (!active || !payload?.[0]) return null;
                     const data = payload[0].payload;
                     return (
-                      <div className="bg-white p-4 shadow-lg rounded-lg border">
+                      <div className="bg-card p-4 shadow-lg rounded-lg border">
                         <p className="font-bold">{data.metadata.alias}</p>
-                        <p className="text-cyan-500">Spend: ${formatNumberWithCommas(data.metrics.spend, 4)}</p>
-                        <p className="text-gray-600">Requests: {data.metrics.api_requests.toLocaleString()}</p>
-                        <p className="text-green-600">
-                          Successful: {data.metrics.successful_requests.toLocaleString()}
-                        </p>
-                        <p className="text-red-600">Failed: {data.metrics.failed_requests.toLocaleString()}</p>
-                        <p className="text-gray-600">Tokens: {data.metrics.total_tokens.toLocaleString()}</p>
+                        <p className="text-info">Spend: ${formatNumberWithCommas(data.metrics.spend, 4)}</p>
+                        <p className="text-muted-foreground">Requests: {data.metrics.api_requests.toLocaleString()}</p>
+                        <p className="text-success">Successful: {data.metrics.successful_requests.toLocaleString()}</p>
+                        <p className="text-destructive">Failed: {data.metrics.failed_requests.toLocaleString()}</p>
+                        <p className="text-muted-foreground">Tokens: {data.metrics.total_tokens.toLocaleString()}</p>
                       </div>
                     );
                   }}

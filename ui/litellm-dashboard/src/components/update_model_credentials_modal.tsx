@@ -1,4 +1,3 @@
-import { Typography } from "antd";
 import { TriangleAlert } from "lucide-react";
 import { useState } from "react";
 import { z } from "zod/v4";
@@ -12,8 +11,6 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { useZodForm } from "@/lib/forms/useZodForm";
-
-const { Text } = Typography;
 
 const updateCredentialsSchema = z.object({
   api_key: z.string().min(1, "Enter a new API key"),
@@ -77,10 +74,10 @@ export default function UpdateModelCredentialsModal({
         <DialogHeader>
           <DialogTitle>Update API Key</DialogTitle>
         </DialogHeader>
-        <Text className="block mb-4 text-muted-foreground">
+        <span className="block mb-4 text-sm text-muted-foreground">
           Update this model&apos;s API key. Only the new key is sent; the rest of the deployment configuration is left
           untouched.
-        </Text>
+        </span>
         <Alert variant="warning" className="mb-4">
           <TriangleAlert />
           <AlertTitle>

@@ -181,6 +181,22 @@ describe("LoggingSettings", () => {
     expect(source.match(HARDCODED_PALETTE) ?? []).toHaveLength(0);
   });
 
+  it("keeps the remove button destructive on hover instead of the ghost variant's foreground", () => {
+    const initialValue = [
+      {
+        callback_name: "langsmith",
+        callback_type: "success",
+        callback_vars: {},
+      },
+    ];
+
+    renderWithProviders(<LoggingSettings value={initialValue} onChange={vi.fn()} />);
+
+    const remove = screen.getByRole("button", { name: "Remove" });
+    expect(remove).toHaveClass("hover:text-destructive/80");
+    expect(remove).not.toHaveClass("hover:text-foreground");
+  });
+
   it("reports the chosen event type when a different option is picked", async () => {
     const user = userEvent.setup({ delay: null });
     const mockOnChange = vi.fn();

@@ -2,7 +2,7 @@ import React from "react";
 import { MultiSelect } from "@/components/shared/MultiSelect";
 import { useFormContext, useWatch } from "react-hook-form";
 import { Input } from "@/components/ui/input";
-import { antdRequired } from "../common_components/antdFormRules";
+import { requiredRule } from "../common_components/formRules";
 import { labelWithHint } from "@/components/shared/form/LabelWithHint";
 import { MountedFormField, type MountedFormValues } from "../common_components/MountedFormField";
 import { Providers } from "../provider_info_helpers";
@@ -108,7 +108,7 @@ const LiteLLMModelNameField: React.FC<LiteLLMModelNameFieldProps> = ({
         required
         rules={{
           validate: {
-            required: antdRequired(
+            required: requiredRule(
               `Please enter ${selectedProvider === Providers.Azure ? "a deployment name" : "at least one model"}.`,
             ),
           },
@@ -173,7 +173,7 @@ const LiteLLMModelNameField: React.FC<LiteLLMModelNameFieldProps> = ({
         <MountedFormField
           name="custom_model_name"
           required
-          rules={{ validate: { required: antdRequired("Please enter a custom model name.") } }}
+          rules={{ validate: { required: requiredRule("Please enter a custom model name.") } }}
           className="mt-2"
         >
           {(control) => (

@@ -14,6 +14,7 @@ This module has no dependencies on proxy code and can be safely imported at the 
 
 import math
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
@@ -99,6 +100,8 @@ class CliTokenRecord(BaseModel):
     auth_header_name: str = "Authorization"
     jwt_token: str = ""
     timestamp: float = 0.0
+    expires_at: float | None = None
+    refresh_token: str | None = None
 
 
 class CliTokenSecret(BaseModel):
@@ -116,6 +119,9 @@ class CliTokenSecret(BaseModel):
     key: str
     jwt_token: str = ""
     timestamp: float = 0.0
+
+
+CLI_TOKEN_FRESHNESS_BUFFER_SECONDS: Final = 360
 
 
 def get_cli_token_file_path() -> str:
@@ -334,13 +340,25 @@ def get_litellm_gateway_api_key(
     return None if resolved is None else resolved.key
 
 
-def is_cli_token_fresh(token_data: CliTokenRecord, buffer_hours: float = 0.1) -> bool:
+def is_cli_token_fresh(
+    token_data: CliTokenRecord | Mapping[str, object],
+    buffer_hours: float = CLI_TOKEN_FRESHNESS_BUFFER_SECONDS / 3600,
+) -> bool:
     """Check whether a cached CLI token is still within its expiration window.
     Used by `lite auth print-token` to fail fast, without a network round trip,
-    once the cached token is past `LITELLM_CLI_JWT_EXPIRATION_HOURS`."""
+    once the cached token is past `LITELLM_CLI_JWT_EXPIRATION_HOURS`. A `--pkce`
+    credential carries its own `expires_at`, which is authoritative when present."""
     from litellm.constants import CLI_JWT_EXPIRATION_HOURS
 
-    age_hours: Final = (time.time() - token_data.timestamp) / 3600
+    expires_at: Final = (
+        token_data.expires_at if isinstance(token_data, CliTokenRecord) else token_data.get("expires_at")
+    )
+    if isinstance(expires_at, (int, float)):
+        return time.time() < expires_at - buffer_hours * 3600
+    timestamp: Final = token_data.timestamp if isinstance(token_data, CliTokenRecord) else token_data.get("timestamp")
+    if not isinstance(timestamp, (int, float)):
+        return False
+    age_hours: Final = (time.time() - timestamp) / 3600
     return age_hours < (CLI_JWT_EXPIRATION_HOURS - buffer_hours)
 
 

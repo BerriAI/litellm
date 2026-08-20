@@ -278,8 +278,7 @@ class TestReasoningMarkerScoring:
     def test_reasoning_override_applies_at_the_simple_medium_boundary(self, complexity_router):
         """A score sitting exactly on simple_medium is not SIMPLE, so the override still promotes it."""
         prompt = (
-            "Give me the pros and cons, step by step, of moving our checkout service "
-            "to an event-driven architecture."
+            "Give me the pros and cons, step by step, of moving our checkout service to an event-driven architecture."
         )
         tier, score, signals = complexity_router.classify(prompt)
         assert score == complexity_router.config.tier_boundaries["simple_medium"]
@@ -299,8 +298,7 @@ class TestReasoningMarkerScoring:
     def test_floor_defaults_to_simple_medium_and_follows_it(self, mock_router_instance, basic_config):
         """Unset tracks simple_medium, so moving that boundary moves the floor with it."""
         prompt = (
-            "Give me the pros and cons, step by step, of moving our checkout service "
-            "to an event-driven architecture."
+            "Give me the pros and cons, step by step, of moving our checkout service to an event-driven architecture."
         )
         low = ComplexityRouter(
             model_name="test-complexity-router",
@@ -320,8 +318,7 @@ class TestReasoningMarkerScoring:
     def test_explicit_floor_overrides_the_boundary(self, mock_router_instance, basic_config):
         """A configured floor decides the override, not simple_medium."""
         prompt = (
-            "Give me the pros and cons, step by step, of moving our checkout service "
-            "to an event-driven architecture."
+            "Give me the pros and cons, step by step, of moving our checkout service to an event-driven architecture."
         )
         router = ComplexityRouter(
             model_name="test-complexity-router",
@@ -340,8 +337,7 @@ class TestReasoningMarkerScoring:
     def test_configured_floor_is_applied_with_greater_or_equal(self, mock_router_instance, basic_config):
         """A score landing exactly on the configured floor still promotes."""
         prompt = (
-            "Give me the pros and cons, step by step, of moving our checkout service "
-            "to an event-driven architecture."
+            "Give me the pros and cons, step by step, of moving our checkout service to an event-driven architecture."
         )
         router = ComplexityRouter(
             model_name="test-complexity-router",
@@ -2508,6 +2504,169 @@ class TestRouterPreRoutingSharedAliasName:
         assert forwarded["drop_params"] is True
         assert "api_key" not in forwarded and "api_base" not in forwarded
         assert router._forwardable_alias_marker_params(model="gemini-flash", strategy_tags=()) == ()
+
+    @staticmethod
+    def _region_marker_entry() -> dict:
+        return {
+            "model_name": "smart-router",
+            "litellm_params": {
+                "model": "auto_router/complexity_router",
+                "aws_region_name": "eu-west-3",
+                "drop_params": True,
+                "complexity_router_config": {"tiers": {"SIMPLE": "bedrock-tier", "MEDIUM": "bedrock-tier"}},
+                "complexity_router_default_model": "bedrock-tier",
+            },
+        }
+
+    @staticmethod
+    def _bedrock_tier_entry(
+        model_name: str = "bedrock-tier",
+        aws_region_name: str | None = None,
+        model: str = "bedrock/us.anthropic.claude-sonnet-5",
+    ) -> dict:
+        return {
+            "model_name": model_name,
+            "litellm_params": {
+                "model": model,
+                **({"aws_region_name": aws_region_name} if aws_region_name else {}),
+            },
+        }
+
+    @staticmethod
+    async def _routed_call_kwargs(router: Router, **request_params) -> dict:
+        mock_acompletion = AsyncMock(return_value=litellm.ModelResponse(choices=[{"message": {"content": "hi"}}]))
+        with patch.object(litellm, "acompletion", mock_acompletion):
+            await router.acompletion(
+                model="smart-router", messages=[{"role": "user", "content": "hi"}], **request_params
+            )
+        return mock_acompletion.call_args.kwargs
+
+    @pytest.mark.asyncio
+    async def test_tier_deployments_own_params_beat_the_markers_forwarded_params(self):
+        """A marker-level `aws_region_name` only fills the gap for tiers that set none:
+        a tier pinned to its own region must be called there, not in the marker's."""
+        router = Router(model_list=[self._region_marker_entry(), self._bedrock_tier_entry(aws_region_name="us-east-1")])
+
+        sent = await self._routed_call_kwargs(router)
+
+        assert sent["model"] == "bedrock/us.anthropic.claude-sonnet-5"
+        assert sent["aws_region_name"] == "us-east-1"
+        assert sent["drop_params"] is True
+
+    @pytest.mark.asyncio
+    async def test_marker_params_still_fill_the_gaps_a_tier_leaves_open(self):
+        router = Router(model_list=[self._region_marker_entry(), self._bedrock_tier_entry()])
+
+        sent = await self._routed_call_kwargs(router)
+
+        assert sent["aws_region_name"] == "eu-west-3"
+        assert sent["drop_params"] is True
+
+    @pytest.mark.asyncio
+    async def test_request_supplied_param_beats_both_the_marker_and_the_tier(self):
+        router = Router(model_list=[self._region_marker_entry(), self._bedrock_tier_entry(aws_region_name="us-east-1")])
+
+        sent = await self._routed_call_kwargs(router, aws_region_name="ap-south-1")
+
+        assert sent["aws_region_name"] == "ap-south-1"
+
+    @pytest.mark.asyncio
+    async def test_complexity_tier_litellm_params_beat_the_tier_deployments_own_params(self):
+        """Per-tier `litellm_params` are deliberate overrides, not forwarded marker params:
+        they keep winning over the tier deployment's own value."""
+        marker = self._region_marker_entry()
+        marker["litellm_params"]["complexity_router_config"] = {
+            "tiers": {
+                tier: {"model_name": "bedrock-tier", "litellm_params": {"aws_region_name": "us-west-2"}}
+                for tier in ("SIMPLE", "MEDIUM", "COMPLEX", "REASONING")
+            }
+        }
+        router = Router(model_list=[marker, self._bedrock_tier_entry(aws_region_name="us-east-1")])
+
+        sent = await self._routed_call_kwargs(router)
+
+        assert sent["aws_region_name"] == "us-west-2"
+        assert sent["drop_params"] is True
+
+    @pytest.mark.asyncio
+    async def test_a_markers_explicit_flag_beats_the_tiers_pydantic_default(self):
+        """Every deployment materializes `LiteLLM_Params` defaults such as
+        `merge_reasoning_content_in_choices: False`; a default is not the tier setting its own value."""
+        marker = self._region_marker_entry()
+        marker["litellm_params"]["merge_reasoning_content_in_choices"] = True
+        router = Router(model_list=[marker, self._bedrock_tier_entry()])
+
+        sent = await self._routed_call_kwargs(router)
+
+        assert sent["merge_reasoning_content_in_choices"] is True
+
+    @pytest.mark.asyncio
+    async def test_sibling_request_sharing_the_metadata_dict_cannot_unpin_the_tier(self):
+        """`abatch_completion` hands every per-model task the same `metadata` dict; a plain
+        group's routing pass interleaving with the auto-router's must not leak the marker's region."""
+        router = Router(
+            model_list=[
+                self._region_marker_entry(),
+                self._bedrock_tier_entry(aws_region_name="us-east-1"),
+                self._bedrock_tier_entry(
+                    model_name="plain", aws_region_name="us-west-2", model="bedrock/us.anthropic.claude-haiku-5"
+                ),
+            ]
+        )
+        healthy_deployments = router.async_get_healthy_deployments
+
+        async def yield_between_routing_and_dispatch(*args, **kwargs):
+            await asyncio.sleep(0.01)
+            return await healthy_deployments(*args, **kwargs)
+
+        sent: Dict[str, str | None] = {}
+
+        async def record(**kwargs):
+            sent[kwargs["model"]] = kwargs.get("aws_region_name")
+            return litellm.ModelResponse(choices=[{"message": {"content": "hi"}}])
+
+        with (
+            patch.object(router, "async_get_healthy_deployments", yield_between_routing_and_dispatch),
+            patch.object(litellm, "acompletion", AsyncMock(side_effect=record)),
+        ):
+            await router.abatch_completion(
+                models=["smart-router", "plain"],
+                messages=[{"role": "user", "content": "hi"}],
+                metadata={"shared": True},
+            )
+
+        assert sent == {
+            "bedrock/us.anthropic.claude-sonnet-5": "us-east-1",
+            "bedrock/us.anthropic.claude-haiku-5": "us-west-2",
+        }
+
+    @pytest.mark.asyncio
+    async def test_routing_leaves_no_forwarded_keys_record_on_the_provider_call(self):
+        router = Router(model_list=[self._region_marker_entry(), self._bedrock_tier_entry()])
+
+        sent = await self._routed_call_kwargs(router)
+
+        assert not any(key.startswith("_alias_marker") for key in sent)
+
+    def test_forwarded_alias_marker_keys_the_deployment_sets(self):
+        deployment = {"litellm_params": {"model": "bedrock/x", "aws_region_name": "us-east-1", "timeout": None}}
+
+        assert Router._forwarded_alias_marker_keys_the_deployment_sets(
+            deployment=deployment, forwarded_keys=("aws_region_name", "timeout", "drop_params")
+        ) == ("aws_region_name",)
+        assert Router._forwarded_alias_marker_keys_the_deployment_sets(deployment=deployment, forwarded_keys=()) == ()
+        assert Router._forwarded_alias_marker_keys_the_deployment_sets(deployment=deployment, forwarded_keys=None) == ()
+        assert Router._forwarded_alias_marker_keys_the_deployment_sets(deployment={}, forwarded_keys=("x",)) == ()
+
+    def test_deployment_sets_litellm_param(self):
+        params = {"aws_region_name": "us-east-1", "timeout": None, "use_litellm_proxy": False, "custom_flag": False}
+
+        assert Router._deployment_sets_litellm_param(params, "aws_region_name") is True
+        assert Router._deployment_sets_litellm_param(params, "timeout") is False
+        assert Router._deployment_sets_litellm_param(params, "missing") is False
+        assert Router._deployment_sets_litellm_param(params, "use_litellm_proxy") is False
+        assert Router._deployment_sets_litellm_param({"use_litellm_proxy": True}, "use_litellm_proxy") is True
+        assert Router._deployment_sets_litellm_param(params, "custom_flag") is True
 
 
 class TestAdaptiveSoftFloors:
@@ -7307,6 +7466,8 @@ class TestClassificationRubrics:
             },
         )
         assert config.classifier_llm_config.system_prompt == "Grade the data sensitivity of the request."
+
+
 def _custom_tier_config(**overrides) -> Dict:
     """A valid operator-defined tier set: two built-in names plus one custom tier."""
     return {
@@ -8155,6 +8316,8 @@ class TestPlanModeTierFloor:
         assert result.model == "gpt-4o"
         assert result.routing_decision is not None
         assert result.routing_decision["tier"] == "MEDIUM"
+
+
 def test_tier_model_params_are_normalized_without_changing_model_pools():
     config = ComplexityRouterConfig(
         tiers={
@@ -8265,13 +8428,8 @@ async def test_tier_model_params_reach_the_hook_response_and_override_client_val
 async def test_tier_params_mask_credentials_in_routing_decision(route, mock_router_instance):
     params = {"reasoning_effort": "xhigh", "api_key": "secret-tier-key"}
     config = {
-        "tiers": {
-            tier.value: {"model_name": "opus", "litellm_params": params}
-            for tier in ComplexityTier
-        },
-        "keyword_tier_rules": [{"keywords": ["reason carefully"], "tier": "REASONING"}]
-        if route == "keyword"
-        else None,
+        "tiers": {tier.value: {"model_name": "opus", "litellm_params": params} for tier in ComplexityTier},
+        "keyword_tier_rules": [{"keywords": ["reason carefully"], "tier": "REASONING"}] if route == "keyword" else None,
         "session_affinity": route == "session",
     }
     router = ComplexityRouter(

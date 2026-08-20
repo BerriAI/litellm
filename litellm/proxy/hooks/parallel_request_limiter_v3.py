@@ -44,6 +44,13 @@ from litellm.proxy.common_utils.proxy_rate_limit_error import (
     ProxyRateLimitError,
     map_v3_rate_limit_type,
 )
+from litellm.proxy.hooks.batch_enqueued_tokens import (
+    BATCH_ENQUEUED_REFUND_STATUSES,
+    BatchEnqueuedTokenReservation,
+    BatchEnqueuedTokenStore,
+    batch_response_view,
+    canonical_provider_batch_id,
+)
 from litellm.proxy.hooks.rate_limiter_utils import resolve_llm_provider_for_rate_limit
 from litellm.types.caching import RedisPipelineIncrementOperation
 from litellm.types.llms.openai import BaseLiteLLMOpenAIResponseObject, ResponseAPIUsage
@@ -515,6 +522,7 @@ class RequestRateLimiterStash:
     otpm_reserved_window_identities: frozenset[tuple[str, str, Literal["redis", "local"]]] = field(
         default_factory=frozenset
     )
+    batch_enqueued_reservation: BatchEnqueuedTokenReservation | None = None
     reservation_released: bool = False
 
 
@@ -619,6 +627,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
         # Batch rate limiter (lazy loaded)
         self._batch_rate_limiter: CallTypeRateLimiter | None = None
+        self.batch_enqueued_token_store = BatchEnqueuedTokenStore(internal_usage_cache=internal_usage_cache)
 
         # Serializes multi-phase check+increment sequences (batch + dynamic
         # limiters) within this process to close the TOCTOU window between
@@ -4673,6 +4682,32 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         except Exception as e:
             verbose_proxy_logger.exception("Error in rate limit post-call hook: %s", e)
 
+        try:
+            await self._handle_batch_enqueued_post_call(user_api_key_dict=user_api_key_dict, response=response)
+        except Exception as e:  # noqa: BLE001  # post-call batch accounting must never fail the response
+            verbose_proxy_logger.exception("Error in batch enqueued-token post-call hook: %s", e)
+
+    async def _handle_batch_enqueued_post_call(self, user_api_key_dict: UserAPIKeyAuth, response: object) -> None:
+        view: Final = batch_response_view(response)
+        if view is None:
+            return
+        span: Final = user_api_key_dict.parent_otel_span
+        stash: Final = get_request_stash()
+        if stash is not None and stash.batch_enqueued_reservation is not None:
+            await self.batch_enqueued_token_store.save_reservation(
+                batch_id=canonical_provider_batch_id(view.id),
+                reservation=stash.batch_enqueued_reservation,
+                litellm_parent_otel_span=span,
+            )
+            stash.batch_enqueued_reservation = None
+        if view.status.lower() in BATCH_ENQUEUED_REFUND_STATUSES:
+            popped: Final = await self.batch_enqueued_token_store.pop_reservation(
+                batch_id=canonical_provider_batch_id(view.id),
+                litellm_parent_otel_span=span,
+            )
+            if popped is not None:
+                await self.batch_enqueued_token_store.refund(reservation=popped, litellm_parent_otel_span=span)
+
     async def async_post_call_failure_hook(
         self,
         request_data: dict,
@@ -4705,6 +4740,13 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     parent_otel_span=user_api_key_dict.parent_otel_span,
                 )
                 stash.parallel_slot = None
+
+            if stash.batch_enqueued_reservation is not None:
+                await self.batch_enqueued_token_store.refund(
+                    reservation=stash.batch_enqueued_reservation,
+                    litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
+                )
+                stash.batch_enqueued_reservation = None
 
             if stash.reservation_released:
                 return

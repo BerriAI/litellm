@@ -15,11 +15,11 @@ import click
 from pydantic import JsonValue, TypeAdapter, ValidationError
 
 from litellm.litellm_core_utils.cli_keyring import SecretVault
-from litellm.litellm_core_utils.cli_token_utils import is_cli_token_fresh, load_cli_token
+from litellm.litellm_core_utils.cli_token_utils import is_cli_token_fresh
 from litellm.litellm_core_utils.private_json import ensure_private_dir
 
 from .agents import AgentRunError, resolve_api_key, verify_proxy_key
-from .auth import context_secret_vault, login
+from .auth import CliContextObj, context_secret_vault, get_stored_api_key, load_token, login
 from .claude_settings import (
     BACKUP_PATH,
     CLAUDE_SETTINGS_PATH,
@@ -105,28 +105,42 @@ def restore_claude_settings(settings_path: Path | None = None, backup_path: Path
     return record
 
 
-def _has_fresh_login(base_url: str, vault: SecretVault) -> bool:
-    token_data: Final = load_cli_token(vault=vault)
-    if token_data is None or token_data.key is None or token_data.base_url != base_url:
+def _usable_login(api_key: str | None, vault: SecretVault) -> bool:
+    if api_key is None:
         return False
-    return is_cli_token_fresh(token_data)
+    token_data: Final = load_token(vault=vault)
+    return token_data is not None and is_cli_token_fresh(token_data)
+
+
+def _key_resolved_on_the_way_in(ctx_obj: CliContextObj, base_url: str, vault: SecretVault) -> str | None:
+    if ctx_obj.get("api_key_from_token_file"):
+        return ctx_obj.get("api_key")
+    return get_stored_api_key(expected_base_url=base_url, vault=vault)
+
+
+def _stored_login_is_pkce(vault: SecretVault) -> bool:
+    token_data: Final = load_token(vault=vault)
+    return token_data is not None and token_data.get("refresh_token") is not None
 
 
 def _ensure_fresh_login(ctx: click.Context) -> None:
-    base_url: Final = ctx.obj["base_url"].rstrip("/")
+    ctx_obj: Final[CliContextObj] = ctx.obj
+    base_url: Final = ctx_obj["base_url"].rstrip("/")
     vault: Final = context_secret_vault(ctx)
-    if _has_fresh_login(base_url, vault):
+    if _usable_login(_key_resolved_on_the_way_in(ctx_obj, base_url, vault), vault):
         return
 
+    pkce: Final = _stored_login_is_pkce(vault)
+    login_command: Final = "lite login --pkce" if pkce else "lite login"
     if not sys.stdin.isatty():
         raise UpError(
-            "No fresh LiteLLM login found for this proxy. Run `lite login` first (apiKeyHelper "
+            f"No fresh LiteLLM login found for this proxy. Run `{login_command}` first (apiKeyHelper "
             "reads this token on every Claude Code request)."
         )
 
     click.echo("No fresh LiteLLM login found for this proxy; starting login...")
-    ctx.invoke(login)
-    if not _has_fresh_login(base_url, vault):
+    ctx.invoke(login, pkce=pkce)
+    if not _usable_login(get_stored_api_key(expected_base_url=base_url, vault=vault), vault):
         raise UpError("Login did not produce a usable token; cannot start `lite up`.")
 
 

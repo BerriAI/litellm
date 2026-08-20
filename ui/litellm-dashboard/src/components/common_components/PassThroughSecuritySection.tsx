@@ -28,8 +28,8 @@ const PassThroughSecuritySection: React.FC<PassThroughSecuritySectionProps> = ({
             <Switch disabled checked={false} />
             <span className="ml-2 text-sm text-muted-foreground">Authentication (Premium)</span>
           </div>
-          <div className="rounded-lg border border-yellow-200 bg-yellow-50 p-3 dark:border-yellow-900 dark:bg-yellow-950">
-            <p className="text-sm text-yellow-800 dark:text-yellow-300">
+          <div className="rounded-lg border border-warning/20 bg-warning/10 p-3">
+            <p className="text-sm text-warning">
               Setting authentication for pass-through endpoints is a LiteLLM Enterprise feature. Get a trial key{" "}
               <a href="https://www.litellm.ai/#pricing" target="_blank" rel="noopener noreferrer" className="underline">
                 here

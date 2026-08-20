@@ -24,7 +24,6 @@
     "gen:api": "node scripts/gen-api-types.mjs"
   },
   "dependencies": {
-    "@ant-design/cssinjs": "1.24.0",
     "@anthropic-ai/sdk": "0.92.0",
     "@base-ui/react": "^1.6.0",
     "@headlessui/tailwindcss": "0.2.2",
@@ -34,7 +33,6 @@
     "@tanstack/react-query": "5.100.7",
     "@tanstack/react-table": "8.21.3",
     "@types/papaparse": "5.5.2",
-    "antd": "5.29.3",
     "cva": "1.0.0-beta.4",
     "date-fns": "^4.4.0",
     "dayjs": "1.11.19",

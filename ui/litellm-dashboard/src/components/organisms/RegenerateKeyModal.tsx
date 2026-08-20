@@ -230,9 +230,7 @@ export function RegenerateKeyModal({ selectedToken, visible, onClose, onKeyUpdat
                           Current expiry: {selectedToken?.expires ? formatExpiresUtc(selectedToken.expires) : "Never"}
                           {keyIsExpired && " (expired)"}
                         </span>
-                        {newExpiryTime && (
-                          <span className="text-green-600 dark:text-green-400">New expiry: {newExpiryTime}</span>
-                        )}
+                        {newExpiryTime && <span className="text-success">New expiry: {newExpiryTime}</span>}
                       </span>
                     }
                   >

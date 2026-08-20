@@ -278,7 +278,7 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessT
           Back to Agents
         </Button>
         <h1 className="text-2xl font-semibold">{agent.agent_name || "Unnamed Agent"}</h1>
-        <p className="text-sm text-gray-500 font-mono">{agent.agent_id}</p>
+        <p className="text-sm text-muted-foreground font-mono">{agent.agent_id}</p>
       </div>
 
       <Tabs value={activeTab} onValueChange={setActiveTab}>

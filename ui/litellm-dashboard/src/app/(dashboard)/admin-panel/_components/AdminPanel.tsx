@@ -7,7 +7,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/shared/Alert";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Space, Tabs, Typography } from "antd";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Info, TriangleAlert } from "lucide-react";
 import React, { useEffect, useState } from "react";
 import NewBadge from "@/components/common_components/NewBadge";
@@ -34,8 +34,6 @@ import { FormField } from "@/components/shared/form/FormField";
 import { Input } from "@/components/ui/input";
 import { useZodForm } from "@/lib/forms/useZodForm";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-
-const { Title, Paragraph, Text } = Typography;
 
 const allowedIPSchema = z.object({
   ip: z.string().min(1, "Please enter an IP address"),
@@ -223,7 +221,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ proxySettings }) => {
       children: (
         <>
           <Card className="block p-6">
-            <Title level={4}> ✨ Security Settings</Title>
+            <h3 className="mb-2 text-base font-semibold text-foreground">✨ Security Settings</h3>
             <Alert variant="warning">
               <TriangleAlert />
               <AlertTitle>SSO Configuration Deprecated</AlertTitle>
@@ -329,7 +327,9 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ proxySettings }) => {
                 <DialogHeader>
                   <DialogTitle>Confirm Delete</DialogTitle>
                 </DialogHeader>
-                <Text>Are you sure you want to delete the IP address: {ipToDelete}?</Text>
+                <span className="text-sm text-foreground">
+                  Are you sure you want to delete the IP address: {ipToDelete}?
+                </span>
                 <DialogFooter>
                   <Button className="mx-1" onClick={() => confirmDeleteIP()}>
                     Yes
@@ -379,11 +379,10 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ proxySettings }) => {
     {
       key: "ui-settings",
       label: (
-        <Space>
-          <Text>
-            UI Settings <NewBadge />
-          </Text>
-        </Space>
+        <span className="flex items-center gap-1.5">
+          UI Settings
+          <NewBadge />
+        </span>
       ),
       children: (
         <div className="flex flex-col gap-4">
@@ -411,9 +410,22 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ proxySettings }) => {
 
   return (
     <div className="w-full m-2 mt-2 p-8">
-      <Title level={4}>Admin Access </Title>
-      <Paragraph>Go to &apos;Internal Users&apos; page to add other admins.</Paragraph>
-      <Tabs items={tabItems} />
+      <h2 className="mb-2 text-base font-semibold text-foreground">Admin Access</h2>
+      <p className="mb-4 text-sm text-foreground">Go to &apos;Internal Users&apos; page to add other admins.</p>
+      <Tabs defaultValue={tabItems[0].key}>
+        <TabsList variant="line" className="mb-4 h-auto flex-wrap">
+          {tabItems.map((item) => (
+            <TabsTrigger key={item.key} value={item.key} className="flex-none">
+              {item.label}
+            </TabsTrigger>
+          ))}
+        </TabsList>
+        {tabItems.map((item) => (
+          <TabsContent key={item.key} value={item.key}>
+            {item.children}
+          </TabsContent>
+        ))}
+      </Tabs>
     </div>
   );
 };

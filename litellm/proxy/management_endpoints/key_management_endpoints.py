@@ -57,6 +57,7 @@ from litellm.proxy.auth.auth_checks import (
 )
 from litellm.proxy.auth.auth_utils import (
     abbreviate_api_key,
+    enforce_batch_enqueued_token_limit_is_admin_only,
     enforce_output_token_estimates_are_admin_only,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -896,6 +897,12 @@ async def _common_key_generation_helper(
         )
 
     enforce_output_token_estimates_are_admin_only(
+        data=data,
+        existing_metadata=None,
+        user_api_key_dict=user_api_key_dict,
+        entity="key",
+    )
+    enforce_batch_enqueued_token_limit_is_admin_only(
         data=data,
         existing_metadata=None,
         user_api_key_dict=user_api_key_dict,
@@ -2302,6 +2309,14 @@ async def _process_single_key_update(
             prisma_client=prisma_client,
         )
 
+    _existing_row_metadata: Final = getattr(existing_key_row, "metadata", None)
+    enforce_batch_enqueued_token_limit_is_admin_only(
+        data=update_key_request,
+        existing_metadata=_existing_row_metadata if isinstance(_existing_row_metadata, dict) else None,
+        user_api_key_dict=user_api_key_dict,
+        entity="key",
+    )
+
     # Check team member permissions
     if prisma_client is not None:
         await TeamMemberPermissionChecks.can_team_member_execute_key_management_endpoint(
@@ -2559,6 +2574,12 @@ async def _validate_update_key_data(
         )
 
     enforce_output_token_estimates_are_admin_only(
+        data=data,
+        existing_metadata=_existing_metadata if isinstance(_existing_metadata, dict) else None,
+        user_api_key_dict=user_api_key_dict,
+        entity="key",
+    )
+    enforce_batch_enqueued_token_limit_is_admin_only(
         data=data,
         existing_metadata=_existing_metadata if isinstance(_existing_metadata, dict) else None,
         user_api_key_dict=user_api_key_dict,
@@ -4755,6 +4776,12 @@ async def _execute_virtual_key_regeneration(
     if data is not None:
         _existing_key_metadata: Final = getattr(key_in_db, "metadata", None)
         enforce_output_token_estimates_are_admin_only(
+            data=data,
+            existing_metadata=_existing_key_metadata if isinstance(_existing_key_metadata, dict) else None,
+            user_api_key_dict=user_api_key_dict,
+            entity="key",
+        )
+        enforce_batch_enqueued_token_limit_is_admin_only(
             data=data,
             existing_metadata=_existing_key_metadata if isinstance(_existing_key_metadata, dict) else None,
             user_api_key_dict=user_api_key_dict,

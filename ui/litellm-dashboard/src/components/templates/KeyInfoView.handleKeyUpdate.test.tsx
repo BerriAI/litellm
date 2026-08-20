@@ -58,43 +58,6 @@ vi.mock("../shared/errorUtils", () => ({
   parseErrorMessage: (e: any) => String(e),
 }));
 
-// antd bits -> async factory & local React
-vi.mock("antd", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("antd")>();
-
-  const React = await import("react");
-
-  const Form = { useForm: () => [{}] };
-
-  function Input(props: any) {
-    return React.createElement("input", { ...props });
-  }
-  (Input as any).displayName = "AntdInput";
-
-  function InputNumber(props: any) {
-    return React.createElement("input", { ...props });
-  }
-  (InputNumber as any).displayName = "AntdInputNumber";
-
-  function Select(props: any) {
-    return React.createElement("select", { ...props });
-  }
-  (Select as any).displayName = "AntdSelect";
-
-  function Tooltip({ children }: any) {
-    return React.createElement(React.Fragment, null, children);
-  }
-  (Tooltip as any).displayName = "AntdTooltip";
-
-  function Button(props: any) {
-    const { children, onClick, ...rest } = props;
-    return React.createElement("button", { onClick, ...rest }, children);
-  }
-  (Button as any).displayName = "AntdButton";
-
-  return { ...actual, Form, Input, InputNumber, Select, Tooltip, Button };
-});
-
 // Icons -> async factory & local React
 vi.mock("@heroicons/react/outline", async () => {
   const React = await import("react");

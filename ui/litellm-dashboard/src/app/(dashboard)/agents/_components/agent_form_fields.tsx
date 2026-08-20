@@ -131,7 +131,7 @@ const SkillsFieldArray = () => {
           <Button
             type="button"
             variant="ghost"
-            className="mt-4 text-destructive hover:text-destructive"
+            className="mt-4 text-destructive hover:text-destructive/80"
             onClick={() => remove(index)}
           >
             <Trash2 />
@@ -184,7 +184,7 @@ const StaticHeadersFieldArray = () => {
             variant="ghost"
             size="icon"
             aria-label="Remove static header"
-            className="text-destructive hover:text-destructive"
+            className="text-destructive hover:text-destructive/80"
             onClick={() => remove(index)}
           >
             <Trash2 />
