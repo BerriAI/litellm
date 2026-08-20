@@ -2175,7 +2175,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
               </ol>
             </div>
             <div className="rounded-sm border border-purple-200 bg-purple-50 p-3 dark:border-purple-800 dark:bg-purple-950">
-              <p className="text-sm text-purple-800">
+              <p className="text-sm text-purple-800 dark:text-purple-300">
                 <strong>Example:</strong> A &quot;GitHub Read-only&quot; toolset might include only{" "}
                 <code>list_repos</code> and <code>get_file</code> from a GitHub MCP server, preventing agents from
                 making writes.

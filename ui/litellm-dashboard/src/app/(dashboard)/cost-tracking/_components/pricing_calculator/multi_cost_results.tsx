@@ -78,7 +78,7 @@ const SingleModelBreakdown: React.FC<{
               {periodLabel} Total ({formatRequests(periodRequests)} req)
             </p>
             <p
-              className={`text-base font-semibold break-words ${timePeriod === "day" ? "text-success" : "text-purple-600"}`}
+              className={`text-base font-semibold break-words ${timePeriod === "day" ? "text-success" : "text-purple-600 dark:text-purple-300"}`}
             >
               {formatCost(periodCost)}
             </p>
@@ -223,7 +223,7 @@ const MultiCostResults: React.FC<MultiCostResultsProps> = ({ multiResult, timePe
           <div className="min-w-0">
             <span className="text-xs text-muted-foreground">Total {periodLabel}</span>
             <div
-              className={`text-lg font-mono break-words ${timePeriod === "day" ? "text-success" : "text-purple-600"}`}
+              className={`text-lg font-mono break-words ${timePeriod === "day" ? "text-success" : "text-purple-600 dark:text-purple-300"}`}
             >
               {formatCost(timePeriod === "day" ? multiResult.totals.daily_cost : multiResult.totals.monthly_cost)}
             </div>

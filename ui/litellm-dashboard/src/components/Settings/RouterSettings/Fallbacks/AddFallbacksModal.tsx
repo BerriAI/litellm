@@ -21,7 +21,7 @@ export function AddFallbacksModal({ open, onCancel, children }: AddFallbacksModa
           <div className="pb-4 border-b border-border">
             <div className="flex items-center gap-2 text-foreground">
               <div className="p-2 bg-indigo-50 rounded-lg dark:bg-indigo-950">
-                <ArrowRight className="w-5 h-5 text-indigo-600" />
+                <ArrowRight className="w-5 h-5 text-indigo-600 dark:text-indigo-300" />
               </div>
               <div>
                 <DialogTitle className="text-lg font-bold m-0">Configure Model Fallbacks</DialogTitle>
