@@ -24136,6 +24136,11 @@ export interface components {
              */
             maximum_autorouter_session_retention_period?: string | null;
             /**
+             * Maximum Health Check Retention Period
+             * @description Maximum retention period for health-check rows (e.g., '30d'). Rows whose checked_at is older than this are deleted by the spend log cleanup job, on that job's schedule. Unset means rows are never deleted. Set this well above health_check_interval because /health and the UI read the latest row per model.
+             */
+            maximum_health_check_retention_period?: string | null;
+            /**
              * Maximum Spend Logs Cleanup Batch Size
              * @description Rows deleted per DELETE statement by the spend log cleanup job. Defaults to 1000.
              */

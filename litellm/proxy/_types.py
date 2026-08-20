@@ -2551,6 +2551,14 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="Maximum retention period for auto-router benchmark session rollup rows (e.g., '365d'). Rows whose last turn is older than this are deleted by the spend log cleanup job, on that job's schedule. Unset means rollup rows are never deleted.",
     )
+    maximum_health_check_retention_period: str | None = Field(
+        None,
+        description=(
+            "Maximum retention period for health-check rows (e.g., '30d'). Rows whose checked_at is older than this "
+            "are deleted by the spend log cleanup job, on that job's schedule. Unset means rows are never deleted. "
+            "Set this well above health_check_interval because /health and the UI read the latest row per model."
+        ),
+    )
     use_spend_logs_partitioning: bool | None = Field(
         None,
         description="If True and LiteLLM_SpendLogs has been converted to a range-partitioned table (db_scripts/partition_spend_logs.sql), retention cleanup drops expired partitions instead of deleting rows, and pre-creates upcoming partitions. Default is False.",
