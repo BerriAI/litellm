@@ -832,6 +832,26 @@ class _NeverAnsweringKeyringModule(_FakeKeyringModule):
         threading.Event().wait()
 
 
+class _KeychainHeldByABlockedWrite(_NeverAnsweringKeyringModule):
+    """The same keychain, plus what the blocked write does to everything after it: the stuck call
+    holds the keychain, so every later read blocks behind it too."""
+
+    def get_password(self, service_name, username):
+        self.calls.append(("get", service_name, username))
+        if self.blocked.is_set():
+            threading.Event().wait()
+        return self.stored
+
+
+def _answered_within(seconds, call):
+    answers = []
+    worker = threading.Thread(target=lambda: answers.append(call()), daemon=True)
+    worker.start()
+    worker.join(seconds)
+    assert not worker.is_alive(), f"{call.__qualname__} never returned"
+    return answers[0]
+
+
 @pytest.fixture
 def install_fake_keyring(monkeypatch):
     def _install(fake):
@@ -926,6 +946,33 @@ class TestKeyringVault:
         KeyringVault(preflight_timeout_seconds=0.2).write("blob-1")
 
         assert [call[2] for call in fake.calls] == [KEYRING_PREFLIGHT_ACCOUNT]
+
+    def test_a_keychain_that_stopped_answering_is_not_asked_again(self, install_fake_keyring):
+        """The write that timed out is still holding the keychain when we give up on it, so the
+        call after it is the one that hangs, and read has nothing to time out against. Anything
+        resolving the credential more than once in a process hits that: an SDK client built twice
+        pays the pre-flight timeout on the first build and never returns from the second."""
+        install_fake_keyring(_KeychainHeldByABlockedWrite())
+        vault = KeyringVault(preflight_timeout_seconds=0.05)
+
+        assert vault.write("blob-1") == KeyringUnreachable()
+
+        assert _answered_within(5, vault.read) == KeyringUnreachable()
+        assert _answered_within(5, vault.erase) == KeyringUnreachable()
+        assert _answered_within(5, lambda: vault.write("blob-2")) == KeyringUnreachable()
+
+    def test_a_keychain_that_stopped_answering_leaves_the_credential_in_the_file(
+        self, isolated_home, install_fake_keyring
+    ):
+        """The end of the same story: giving up on the keychain has to leave a login that still
+        works, and loading it back must not go asking the keychain that already stopped answering."""
+        install_fake_keyring(_KeychainHeldByABlockedWrite())
+        vault = KeyringVault(preflight_timeout_seconds=0.05)
+
+        outcome = save_cli_token(CliTokenRecord(base_url=SERVER, key="sk-only-copy"), vault=vault)
+
+        assert outcome == KeyringUnreachable()
+        assert _answered_within(5, lambda: load_cli_token(vault=vault)).key == "sk-only-copy"
 
     def test_a_login_survives_a_keychain_that_never_answers(self, isolated_home, install_fake_keyring):
         """The end of the same story: the credential still has to be usable afterwards."""
