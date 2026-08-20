@@ -1,4 +1,5 @@
 import json
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -14,6 +15,7 @@ from litellm._redis import (
 )
 from litellm.constants import REDIS_CLUSTER_HEALTH_CHECK_INTERVAL
 from litellm._redis_credential_provider import (
+    AzureADCredentialProvider,
     GCPIAMCredentialProvider,
     _token_cache,
 )
@@ -910,3 +912,74 @@ def test_url_allowlist_always_carries_socket_timeouts():
     allowed = _get_redis_url_kwargs()
     assert "socket_timeout" in allowed
     assert "socket_connect_timeout" in allowed
+
+
+AZURE_AD_CONNECT_FUNC = {"_azure_credential": object()}
+GCP_IAM_CONNECT_FUNC = {"_gcp_service_account": "projects/-/serviceAccounts/sa@project.iam.gserviceaccount.com"}
+
+
+@pytest.mark.parametrize(
+    "markers, provider_cls",
+    [
+        (AZURE_AD_CONNECT_FUNC, AzureADCredentialProvider),
+        (GCP_IAM_CONNECT_FUNC, GCPIAMCredentialProvider),
+    ],
+    ids=["azure_ad", "gcp_iam"],
+)
+def test_async_url_client_authenticates_through_credential_provider(markers, provider_cls):
+    """A REDIS_URL config with Azure AD or GCP IAM must still reach the server with a credential.
+
+    The async client accepts redis_connect_func as a kwarg but never calls it, so the url
+    branch has to hand the connection a CredentialProvider or it authenticates with nothing.
+    """
+    redis_kwargs = {
+        "url": "rediss://redis-host:6380",
+        "redis_connect_func": SimpleNamespace(**markers),
+    }
+
+    with patch("litellm._redis._get_redis_client_logic", return_value=redis_kwargs):
+        client = get_redis_async_client()
+
+    connection_kwargs = client.connection_pool.connection_kwargs
+    assert isinstance(connection_kwargs.get("credential_provider"), provider_cls)
+    assert "redis_connect_func" not in connection_kwargs
+
+
+@pytest.mark.parametrize(
+    "markers, provider_cls",
+    [
+        (AZURE_AD_CONNECT_FUNC, AzureADCredentialProvider),
+        (GCP_IAM_CONNECT_FUNC, GCPIAMCredentialProvider),
+    ],
+    ids=["azure_ad", "gcp_iam"],
+)
+def test_async_url_connection_pool_authenticates_through_credential_provider(markers, provider_cls):
+    """Same for the pool-based path: every connection the pool hands out needs the provider."""
+    redis_kwargs = {
+        "url": "rediss://redis-host:6380",
+        "redis_connect_func": SimpleNamespace(**markers),
+    }
+
+    with patch("litellm._redis._get_redis_client_logic", return_value=redis_kwargs):
+        pool = get_redis_connection_pool()
+
+    assert isinstance(pool.connection_kwargs.get("credential_provider"), provider_cls)
+    assert "redis_connect_func" not in pool.connection_kwargs
+
+
+def test_async_url_client_drops_username_alongside_credential_provider():
+    """redis-py refuses a connection given both a username and a credential_provider, and
+    AzureADCredentialProvider already carries REDIS_USERNAME, so the username must be dropped.
+    """
+    redis_kwargs = {
+        "url": "rediss://redis-host:6380",
+        "username": "redis-user",
+        "redis_connect_func": SimpleNamespace(**AZURE_AD_CONNECT_FUNC),
+    }
+
+    with patch("litellm._redis._get_redis_client_logic", return_value=redis_kwargs):
+        client = get_redis_async_client()
+
+    pool = client.connection_pool
+    assert "username" not in pool.connection_kwargs
+    pool.connection_class(**pool.connection_kwargs)
