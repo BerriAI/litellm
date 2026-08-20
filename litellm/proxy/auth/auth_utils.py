@@ -311,6 +311,12 @@ _BANNED_REQUEST_BODY_PARAMS: Final[tuple[str, ...]] = (
     # the request away from the admin's pinned configuration.
     "nvcf_function_id",
     "use_ssl",
+    # Per-deployment opt-in that hands the whole call to the Rust core. It is a
+    # deployment decision, not a request one: the Rust path uses its own client
+    # rather than the one the deployment configured, and reports no post_call,
+    # so a caller-supplied value picks a transport and a callback surface the
+    # admin did not choose.
+    "rust",
     # SDK-only field; also rejected outright in is_request_body_safe.
     "model_list",
     "vertex_ai_credentials",
