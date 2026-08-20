@@ -1005,3 +1005,22 @@ def test_async_url_keeps_a_coroutine_connect_func(build_pool):
 
     assert pool.connection_kwargs["redis_connect_func"] is connect
     assert "credential_provider" not in pool.connection_kwargs
+
+
+def test_async_cluster_drops_a_connect_func_it_cannot_pass_on():
+    """redis-py's async RedisCluster has no redis_connect_func parameter, so a connect func that
+    is not translated into a credential provider has to be dropped rather than forwarded.
+    """
+
+    async def connect(connection):
+        return None
+
+    redis_kwargs = {
+        "startup_nodes": [{"host": "cluster-node", "port": 6379}],
+        "redis_connect_func": connect,
+    }
+
+    with patch("litellm._redis._get_redis_client_logic", return_value=redis_kwargs):
+        client = get_redis_async_client()
+
+    assert isinstance(client, async_redis.RedisCluster)
