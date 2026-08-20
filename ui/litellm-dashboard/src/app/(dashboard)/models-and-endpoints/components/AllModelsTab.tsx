@@ -6,7 +6,7 @@ import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import DeleteResourceModal from "@/components/common_components/DeleteResourceModal";
 import ModelSettingsModal from "@/components/model_dashboard/ModelSettingsModal/ModelSettingsModal";
 import { ModelData } from "@/components/model_dashboard/types";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { modelDeleteCall, modelPatchUpdateCall } from "@/components/networking";
 import { useQueryClient } from "@tanstack/react-query";
 import { useDebouncedCallback } from "@tanstack/react-pacer/debouncer";
@@ -104,6 +104,9 @@ const AllModelsTab = ({
     teamIdForQuery,
     sortBy,
     sortOrder,
+    // Auto-routers are routing constructs, not deployments; the sibling Auto-Routers tab
+    // lists and manages them. Excluded server-side so total_count stays honest.
+    true,
   );
   const isLoading = isLoadingModelsInfo || isLoadingModelCostMap;
 
@@ -210,12 +213,12 @@ const AllModelsTab = ({
     try {
       setDeleteLoading(true);
       await modelDeleteCall(accessToken, deleteModalModelId);
-      NotificationsManager.success("Model deleted successfully");
+      toast.success("Model deleted successfully");
       queryClient.invalidateQueries({ queryKey: ["models", "list"] });
       refetchModels();
     } catch (error) {
       console.error("Error deleting model:", error);
-      NotificationsManager.fromBackend(error);
+      toast.fromError(error);
     } finally {
       setDeleteLoading(false);
       setDeleteModalModelId(null);
@@ -228,13 +231,13 @@ const AllModelsTab = ({
       try {
         setPausingModelId(modelId);
         await modelPatchUpdateCall(accessToken, { blocked }, modelId);
-        NotificationsManager.success(blocked ? "Model paused" : "Model resumed");
+        toast.success(blocked ? "Model paused" : "Model resumed");
         // invalidateQueries already schedules a refetch for active observers
         // on this key — no need to also call refetchModels() (would double-fetch).
         queryClient.invalidateQueries({ queryKey: ["models", "list"] });
       } catch (error) {
         console.error("Error toggling model pause state:", error);
-        NotificationsManager.fromBackend(error);
+        toast.fromError(error);
       } finally {
         setPausingModelId(null);
       }
@@ -298,7 +301,7 @@ const AllModelsTab = ({
             {selectedTeamValue === PERSONAL_TEAM_VALUE ? (
               <span>
                 To access these models, create a Virtual Key without selecting a team on the{" "}
-                <a href="/public?login=success&page=api-keys" className="font-medium text-blue-600 hover:underline">
+                <a href="/public?login=success&page=api-keys" className="font-medium text-info hover:underline">
                   Virtual Keys page
                 </a>
                 .
@@ -306,7 +309,7 @@ const AllModelsTab = ({
             ) : (
               <span>
                 To access these models, create a Virtual Key and select Team as &quot;{teamAccessLabel}&quot; on the{" "}
-                <a href="/public?login=success&page=api-keys" className="font-medium text-blue-600 hover:underline">
+                <a href="/public?login=success&page=api-keys" className="font-medium text-info hover:underline">
                   Virtual Keys page
                 </a>
                 .

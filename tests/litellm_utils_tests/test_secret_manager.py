@@ -19,7 +19,8 @@ sys.path.insert(
 import pytest
 import litellm
 from litellm.llms.azure.azure import get_azure_ad_token_from_oidc
-from litellm.llms.bedrock.chat import BedrockConverseLLM, BedrockLLM
+from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+from litellm.llms.bedrock.chat import BedrockConverseLLM
 from litellm.secret_managers.aws_secret_manager_v2 import AWSSecretsManagerV2
 from litellm.secret_managers.main import (
     get_secret,
@@ -160,7 +161,7 @@ def test_oidc_circle_v1_with_amazon():
     aws_role_name = "arn:aws:iam::335785316107:role/litellm-github-unit-tests-circleci-v1-assume-only"
     aws_web_identity_token = "oidc/circleci/"
 
-    bllm = BedrockLLM()
+    bllm = BaseAWSLLM()
     creds = bllm.get_credentials(
         aws_region_name="ca-west-1",
         aws_web_identity_token=aws_web_identity_token,

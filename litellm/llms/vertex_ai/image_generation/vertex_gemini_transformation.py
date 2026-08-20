@@ -1,11 +1,10 @@
 import os
-from typing import TYPE_CHECKING, Any, Optional
-
-from litellm._logging import verbose_logger
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
 import litellm
+from litellm._logging import verbose_logger
 from litellm.llms.base_llm.image_generation.transformation import (
     BaseImageGenerationConfig,
 )
@@ -70,11 +69,11 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
         model: str,
         drop_params: bool,
     ) -> dict:
-        supported_params = self.get_supported_openai_params(model)
+        supported_params: Final = self.get_supported_openai_params(model)
         mapped_params = {}
 
         for k, v in non_default_params.items():
-            if k not in optional_params.keys():
+            if k not in optional_params:
                 if k in supported_params:
                     # Map OpenAI parameters to Gemini format
                     if k == "n":
@@ -101,7 +100,7 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
         """
         Map OpenAI size format to Gemini aspect ratio format
         """
-        aspect_ratio_map = {
+        aspect_ratio_map: Final = {
             "1024x1024": "1:1",
             "1792x1024": "16:9",
             "1024x1792": "9:16",
@@ -110,7 +109,7 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
         }
         return aspect_ratio_map.get(size, "1:1")
 
-    def _resolve_vertex_project(self) -> Optional[str]:
+    def _resolve_vertex_project(self) -> str | None:
         return (
             getattr(self, "_vertex_project", None)
             or os.environ.get("VERTEXAI_PROJECT")
@@ -118,7 +117,7 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
             or get_secret_str("VERTEXAI_PROJECT")
         )
 
-    def _resolve_vertex_location(self) -> Optional[str]:
+    def _resolve_vertex_location(self) -> str | None:
         return (
             getattr(self, "_vertex_location", None)
             or os.environ.get("VERTEXAI_LOCATION")
@@ -128,7 +127,7 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
             or get_secret_str("VERTEX_LOCATION")
         )
 
-    def _resolve_vertex_credentials(self) -> Optional[str]:
+    def _resolve_vertex_credentials(self) -> str | None:
         return (
             getattr(self, "_vertex_credentials", None)
             or os.environ.get("VERTEXAI_CREDENTIALS")
@@ -139,12 +138,12 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         """
         Get the complete URL for Vertex AI Gemini generateContent API
@@ -161,13 +160,13 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
 
         # First check litellm_params (where vertex_ai_project/vertex_ai_location are passed)
         # then fall back to environment variables and other sources
-        vertex_project = self.safe_get_vertex_ai_project(litellm_params) or self._resolve_vertex_project()
-        vertex_location = self.safe_get_vertex_ai_location(litellm_params) or self._resolve_vertex_location()
+        vertex_project: Final = self.safe_get_vertex_ai_project(litellm_params) or self._resolve_vertex_project()
+        vertex_location: Final = self.safe_get_vertex_ai_location(litellm_params) or self._resolve_vertex_location()
 
         if not vertex_project or not vertex_location:
             raise ValueError("vertex_project and vertex_location are required for Vertex AI")
 
-        base_url = get_vertex_base_url(vertex_location)
+        base_url: Final = get_vertex_base_url(vertex_location)
 
         return f"{base_url}/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model_name}:generateContent"
 
@@ -178,20 +177,20 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
         headers = headers or {}
 
         # If a custom api_base is provided, skip credential validation
         # This allows users to use proxies or mock endpoints without needing Vertex AI credentials
-        _api_base = litellm_params.get("api_base") or api_base
+        _api_base: Final = litellm_params.get("api_base") or api_base
         if _api_base is not None:
             return headers
 
         # First check litellm_params (where vertex_ai_project/vertex_ai_credentials are passed)
         # then fall back to environment variables and other sources
-        vertex_project = self.safe_get_vertex_ai_project(litellm_params) or self._resolve_vertex_project()
+        vertex_project: Final = self.safe_get_vertex_ai_project(litellm_params) or self._resolve_vertex_project()
         vertex_credentials = self.safe_get_vertex_ai_credentials(litellm_params) or self._resolve_vertex_credentials()
         access_token, _ = self._ensure_access_token(
             credentials=vertex_credentials,
@@ -214,13 +213,13 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
         Uses generateContent API with responseModalities: ["IMAGE"]
         """
         # Prepare messages with the prompt
-        contents = [{"role": "user", "parts": [{"text": prompt}]}]
+        contents: Final = [{"role": "user", "parts": [{"text": prompt}]}]
 
         # Prepare generation config
-        generation_config: dict[str, Any] = {"responseModalities": ["IMAGE"]}
+        generation_config: Final[dict[str, Any]] = {"responseModalities": ["IMAGE"]}
 
         # Seed from user-supplied imageConfig dict; flat params are overlaid for backward compat.
-        image_config: dict[str, Any] = dict(optional_params.get("imageConfig") or {})
+        image_config: Final[dict[str, Any]] = dict(optional_params.get("imageConfig") or {})
 
         if "aspectRatio" in optional_params:
             image_config["aspectRatio"] = optional_params["aspectRatio"]
@@ -241,7 +240,7 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
         elif "n" in optional_params:
             generation_config["candidateCount"] = optional_params["n"]
 
-        request_body: dict[str, Any] = {
+        request_body: Final[dict[str, Any]] = {
             "contents": contents,
             "generationConfig": generation_config,
         }
@@ -254,11 +253,11 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
         return request_body
 
     def _transform_image_usage(self, usage: dict) -> ImageUsage:
-        input_tokens_details = ImageUsageInputTokensDetails(
+        input_tokens_details: Final = ImageUsageInputTokensDetails(
             image_tokens=0,
             text_tokens=0,
         )
-        tokens_details = usage.get("promptTokensDetails", [])
+        tokens_details: Final = usage.get("promptTokensDetails", [])
         for details in tokens_details:
             if isinstance(details, dict) and (modality := details.get("modality")):
                 token_count = details.get("tokenCount", 0)
@@ -284,14 +283,14 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
         optional_params: dict,
         litellm_params: dict,
         encoding: Any,
-        api_key: Optional[str] = None,
-        json_mode: Optional[bool] = None,
+        api_key: str | None = None,
+        json_mode: bool | None = None,
     ) -> ImageResponse:
         """
         Transform Gemini image generation response to litellm ImageResponse format
         """
         try:
-            response_data = raw_response.json()
+            response_data: Final = raw_response.json()
         except Exception as e:
             raise self.get_error_class(
                 error_message=f"Error transforming image generation response: {e}",
@@ -303,7 +302,7 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
             model_response.data = []
 
         # Gemini image generation models return in candidates format
-        candidates = response_data.get("candidates", [])
+        candidates: Final = response_data.get("candidates", [])
         for candidate in candidates:
             content = candidate.get("content", {})
             parts = content.get("parts", [])
@@ -324,7 +323,7 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
         if usage_metadata := response_data.get("usageMetadata", None):
             model_response.usage = self._transform_image_usage(usage_metadata)
 
-        web_search_requests = get_gemini_image_web_search_requests(response_data)
+        web_search_requests: Final = get_gemini_image_web_search_requests(response_data)
         if web_search_requests and model_response.usage is not None:
             setattr(model_response.usage, "web_search_requests", web_search_requests)
 

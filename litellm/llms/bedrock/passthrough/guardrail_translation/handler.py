@@ -1,4 +1,7 @@
-from typing import TYPE_CHECKING, Any, List, Optional, Tuple, Union
+from collections.abc import Mapping, Sequence
+from typing import TYPE_CHECKING, Any, Final, Optional, Protocol, TypeAlias
+
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
 from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
@@ -14,13 +17,13 @@ if TYPE_CHECKING:
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.utils import ProxyLogging
 
-_CONVERSE_ACTIONS = frozenset({"converse", "converse-stream"})
-_EVENT_STREAM_CONTENT_TYPE = "vnd.amazon.eventstream"
-_EVENT_STREAM_MEDIA_TYPE = "application/vnd.amazon.eventstream"
+_CONVERSE_ACTIONS: Final = frozenset({"converse", "converse-stream"})
+_EVENT_STREAM_CONTENT_TYPE: Final = "vnd.amazon.eventstream"
+_EVENT_STREAM_MEDIA_TYPE: Final = "application/vnd.amazon.eventstream"
 
 
 def _is_converse_endpoint(endpoint: str) -> bool:
-    parts = endpoint.rstrip("/").split("/")
+    parts: Final = endpoint.rstrip("/").split("/")
     return bool(parts) and parts[-1] in _CONVERSE_ACTIONS
 
 
@@ -37,10 +40,10 @@ def _generic_passthrough_handler() -> BaseTranslation:
     return PassThroughEndpointHandler()
 
 
-_StringHolder = Tuple[Any, Union[str, int]]
+_StringHolder = tuple[Any, str | int]
 
 
-def _collect_strings(node: Any, holders: List[_StringHolder]) -> None:
+def _collect_strings(node: object, holders: list[_StringHolder]) -> None:
     """
     Record a (container, key) holder for every non-empty string value nested
     under an arbitrary JSON node, so prompt content a caller hides in fields
@@ -48,7 +51,7 @@ def _collect_strings(node: Any, holders: List[_StringHolder]) -> None:
     and can be written back in place. Iterative to avoid unbounded recursion
     on deeply nested payloads.
     """
-    stack: List[Any] = [node]
+    stack: Final[list[object]] = [node]
     while stack:
         current = stack.pop()
         if isinstance(current, dict):
@@ -67,8 +70,8 @@ def _collect_strings(node: Any, holders: List[_StringHolder]) -> None:
                     stack.append(value)
 
 
-def _collect_block_text(block: dict, holders: List[_StringHolder]) -> None:
-    text = block.get("text")
+def _collect_block_text(block: dict, holders: list[_StringHolder]) -> None:
+    text: Final = block.get("text")
     if isinstance(text, str) and text:
         holders.append((block, "text"))
 
@@ -77,7 +80,7 @@ def _extract_converse_texts(
     body: dict,
     skip_system: bool,
     skip_tool: bool,
-) -> Tuple[List[str], List[_StringHolder]]:
+) -> tuple[list[str], list[_StringHolder]]:
     """
     Walk a Bedrock Converse request body and collect text content.
 
@@ -92,7 +95,7 @@ def _extract_converse_texts(
     message blocks are skipped when tool messages are excluded, but tool
     definitions are always scanned to match the chat-completions guardrail path.
     """
-    holders: List[_StringHolder] = []
+    holders: Final[list[_StringHolder]] = []
 
     if not skip_system:
         for block in body.get("system") or []:
@@ -118,19 +121,19 @@ def _extract_converse_texts(
                         _collect_block_text(inner, holders)
                         _collect_strings(inner.get("json"), holders)
 
-    tool_config = body.get("toolConfig")
+    tool_config: Final = body.get("toolConfig")
     if isinstance(tool_config, dict):
         _collect_strings(tool_config.get("tools"), holders)
 
     _collect_strings(body.get("additionalModelRequestFields"), holders)
 
-    texts = [container[key] for container, key in holders]
+    texts: Final = [container[key] for container, key in holders]
     return texts, holders
 
 
 def _extract_converse_output_texts(
-    content_blocks: List[Any],
-) -> Tuple[List[str], List[_StringHolder]]:
+    content_blocks: Sequence[object],
+) -> tuple[list[str], list[_StringHolder]]:
     """
     Collect user-visible text from Bedrock Converse output content blocks.
 
@@ -139,7 +142,7 @@ def _extract_converse_output_texts(
     ``citationsContent.content[].text`` -- while leaving structural values such
     as reasoning signatures and citation sources untouched.
     """
-    holders: List[_StringHolder] = []
+    holders: Final[list[_StringHolder]] = []
     for block in content_blocks:
         if not isinstance(block, dict):
             continue
@@ -157,13 +160,13 @@ def _extract_converse_output_texts(
             for cited in citations.get("content") or []:
                 if isinstance(cited, dict):
                     _collect_block_text(cited, holders)
-    texts = [container[key] for container, key in holders]
+    texts: Final = [container[key] for container, key in holders]
     return texts, holders
 
 
 def _write_back_texts(
-    guardrailed_texts: List[str],
-    holders: List[_StringHolder],
+    guardrailed_texts: list[str],
+    holders: list[_StringHolder],
 ) -> None:
     if len(guardrailed_texts) < len(holders):
         verbose_proxy_logger.warning(
@@ -178,10 +181,34 @@ def _write_back_texts(
         container[key] = guardrailed_texts[idx]
 
 
-_DeltaHolder = Tuple[Any, Any, Union[str, int]]
+_GroupKey: TypeAlias = str | tuple[str, int]
 
 
-def _collect_stream_delta_text_holders(delta: Any) -> List[_DeltaHolder]:
+class _TextContainer(Protocol):
+    """JSON object whose ``key`` entry holds a guardrailable text string."""
+
+    def __getitem__(self, key: str, /) -> str: ...
+
+    def __setitem__(self, key: str, value: str, /) -> None: ...
+
+
+_DeltaHolder = tuple[_GroupKey, _TextContainer, str]
+
+
+class _StreamFrame(TypedDict):
+    """One raw event-stream frame plus the guardrailable texts it carries."""
+
+    raw: ReadOnly[bytes]
+    texts: ReadOnly[Sequence[tuple[_GroupKey, str]]]
+
+
+def _unpack_uint32(buffer: bytes) -> int:
+    import struct
+
+    return struct.unpack("!I", buffer)[0]
+
+
+def _collect_stream_delta_text_holders(delta: object) -> list[_DeltaHolder]:
     """
     Collect the user-visible text strings a Bedrock Converse ``contentBlockDelta``
     can carry, matching the coverage of the non-streaming output handler.
@@ -193,18 +220,18 @@ def _collect_stream_delta_text_holders(delta: Any) -> List[_DeltaHolder]:
     values such as reasoning signatures, redacted reasoning and citation sources
     are left out so they are never rewritten.
     """
-    holders: List[_DeltaHolder] = []
+    holders: Final[list[_DeltaHolder]] = []
     if not isinstance(delta, dict):
         return holders
     if isinstance(delta.get("text"), str):
         holders.append(("text", delta, "text"))
-    tool_use = delta.get("toolUse")
+    tool_use: Final = delta.get("toolUse")
     if isinstance(tool_use, dict) and isinstance(tool_use.get("input"), str):
         holders.append(("tool", tool_use, "input"))
-    reasoning = delta.get("reasoningContent")
+    reasoning: Final = delta.get("reasoningContent")
     if isinstance(reasoning, dict) and isinstance(reasoning.get("text"), str):
         holders.append(("reasoning", reasoning, "text"))
-    citations = delta.get("citationsContent")
+    citations: Final = delta.get("citationsContent")
     if isinstance(citations, dict):
         for index, cited in enumerate(citations.get("content") or []):
             if isinstance(cited, dict) and isinstance(cited.get("text"), str):
@@ -238,11 +265,11 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
 
         from botocore.eventstream import EventStreamBuffer
 
-        frames: list[dict] = []
+        frames: Final[list[_StreamFrame]] = []
         offset = 0
 
         while offset + 16 <= len(body_bytes):
-            total_length = struct.unpack("!I", body_bytes[offset : offset + 4])[0]
+            total_length = _unpack_uint32(body_bytes[offset : offset + 4])
             if total_length < 16 or offset + total_length > len(body_bytes):
                 break
             frame_raw = body_bytes[offset : offset + total_length]
@@ -263,10 +290,10 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
                 frames.append({"raw": frame_raw, "texts": []})
                 continue
 
-            texts: List[Tuple[Any, str]] = []
+            texts: list[tuple[_GroupKey, str]] = []
             if event_type == "contentBlockDelta":
                 try:
-                    payload_dict = _json.loads(payload_bytes)
+                    payload_dict: dict[str, object] = _json.loads(payload_bytes)
                     texts = [
                         (group_key, container[key])
                         for group_key, container, key in _collect_stream_delta_text_holders(payload_dict.get("delta"))
@@ -280,11 +307,11 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
 
             frames.append({"raw": frame_raw, "texts": texts})
 
-        trailing_bytes = body_bytes[offset:]
+        trailing_bytes: Final = body_bytes[offset:]
 
-        group_order: List[Any] = []
-        group_members: dict[Any, list[Tuple[int, int]]] = {}
-        group_texts: dict[Any, list[str]] = {}
+        group_order: Final[list[_GroupKey]] = []
+        group_members: Final[dict[_GroupKey, list[tuple[int, int]]]] = {}
+        group_texts: Final[dict[_GroupKey, list[str]]] = {}
         for frame_idx, frame in enumerate(frames):
             for local_idx, (group_key, text) in enumerate(frame["texts"]):
                 if group_key not in group_members:
@@ -294,11 +321,11 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
                 group_members[group_key].append((frame_idx, local_idx))
                 group_texts[group_key].append(text)
 
-        active_groups = [gk for gk in group_order if "".join(group_texts[gk])]
+        active_groups: Final = [gk for gk in group_order if "".join(group_texts[gk])]
         if not active_groups:
             return body_bytes
 
-        synthetic_response: dict = {
+        synthetic_response: Final[dict] = {
             "output": {
                 "message": {
                     "role": "assistant",
@@ -308,10 +335,10 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
             "stopReason": "end_turn",
         }
 
-        processed = await proxy_logging_obj.post_call_success_hook(
+        processed: Final = await proxy_logging_obj.post_call_success_hook(
             data=data,
             user_api_key_dict=user_api_key_dict,
-            response=synthetic_response,  # type: ignore[arg-type]
+            response=synthetic_response,
         )
 
         if not isinstance(processed, dict):
@@ -323,12 +350,12 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
             return body_bytes
 
         try:
-            processed_blocks = processed["output"]["message"]["content"]  # type: ignore[index]
-            de_anonymized_texts = [processed_blocks[i]["text"] for i in range(len(active_groups))]
+            processed_blocks: Final = processed["output"]["message"]["content"]
+            de_anonymized_texts: Final = [processed_blocks[i]["text"] for i in range(len(active_groups))]
         except (KeyError, IndexError, TypeError):
             return body_bytes
 
-        new_text_map: dict[Tuple[int, int], str] = {}
+        new_text_map: Final[dict[tuple[int, int], str]] = {}
         for group_key, de_anonymized_text in zip(active_groups, de_anonymized_texts):
             members = group_members[group_key]
             orig_texts = group_texts[group_key]
@@ -343,7 +370,7 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
                     new_text_map[member] = de_anonymized_text[pos:end]
                     pos = end
 
-        result_parts: list[bytes] = []
+        result_parts: Final[list[bytes]] = []
 
         for frame_idx, frame in enumerate(frames):
             if not frame["texts"]:
@@ -351,8 +378,8 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
                 continue
 
             frame_raw = frame["raw"]
-            orig_total = struct.unpack("!I", frame_raw[0:4])[0]
-            orig_hdrs_len = struct.unpack("!I", frame_raw[4:8])[0]
+            orig_total = _unpack_uint32(frame_raw[0:4])
+            orig_hdrs_len = _unpack_uint32(frame_raw[4:8])
             headers_bytes = frame_raw[12 : 12 + orig_hdrs_len]
 
             try:
@@ -386,9 +413,9 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
         data: dict,
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: Optional["LiteLLMLoggingObj"] = None,
-    ) -> Any:
-        endpoint = data.get("endpoint", "")
-        body = data.get("data")
+    ) -> Mapping[str, object]:
+        endpoint: Final = data.get("endpoint", "")
+        body: Final = data.get("data")
 
         if not _is_converse_endpoint(endpoint):
             return await _generic_passthrough_handler().process_input_messages(
@@ -400,27 +427,27 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
         if not isinstance(body, dict) or not isinstance(body.get("messages"), list):
             return data
 
-        skip_system = effective_skip_system_message_for_guardrail(guardrail_to_apply)
-        skip_tool = effective_skip_tool_message_for_guardrail(guardrail_to_apply)
+        skip_system: Final = effective_skip_system_message_for_guardrail(guardrail_to_apply)
+        skip_tool: Final = effective_skip_tool_message_for_guardrail(guardrail_to_apply)
 
         texts, holders = _extract_converse_texts(body, skip_system, skip_tool)
 
         if not texts:
             return data
 
-        inputs = GenericGuardrailAPIInputs(texts=texts)
-        model = data.get("model")
+        inputs: Final = GenericGuardrailAPIInputs(texts=texts)
+        model: Final = data.get("model")
         if model:
             inputs["model"] = model
 
-        guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
+        guardrailed_inputs: Final = await guardrail_to_apply.apply_guardrail(
             inputs=inputs,
             request_data=data,
             input_type="request",
             logging_obj=litellm_logging_obj,
         )
 
-        guardrailed_texts = guardrailed_inputs.get("texts", [])
+        guardrailed_texts: Final = guardrailed_inputs.get("texts", [])
         if guardrailed_texts:
             _write_back_texts(guardrailed_texts, holders)
 
@@ -428,13 +455,13 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
 
     async def process_output_response(
         self,
-        response: Any,
+        response: object,
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: Optional["LiteLLMLoggingObj"] = None,
-        user_api_key_dict: Optional[Any] = None,
-        request_data: Optional[dict] = None,
-    ) -> Any:
-        endpoint = (request_data or {}).get("endpoint", "")
+        user_api_key_dict: Optional["UserAPIKeyAuth"] = None,
+        request_data: dict | None = None,
+    ) -> object:
+        endpoint: Final = (request_data or {}).get("endpoint", "")
         if endpoint and not _is_converse_endpoint(endpoint):
             return await _generic_passthrough_handler().process_output_response(
                 response=response,
@@ -447,10 +474,10 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
         if not isinstance(response, dict):
             return response
 
-        output_message = (
+        output_message: Final = (
             response.get("output", {}).get("message", {}) if isinstance(response.get("output"), dict) else {}
         )
-        content_blocks = output_message.get("content") if isinstance(output_message, dict) else None
+        content_blocks: Final = output_message.get("content") if isinstance(output_message, dict) else None
 
         if not isinstance(content_blocks, list):
             return response
@@ -462,26 +489,26 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
 
         effective_request_data = request_data or {}
         if "litellm_metadata" not in effective_request_data and user_api_key_dict is not None:
-            user_metadata = self.transform_user_api_key_dict_to_metadata(user_api_key_dict)
+            user_metadata: Final = self.transform_user_api_key_dict_to_metadata(user_api_key_dict)
             if user_metadata:
                 effective_request_data = {
                     **effective_request_data,
                     "litellm_metadata": user_metadata,
                 }
 
-        inputs = GenericGuardrailAPIInputs(texts=texts)
-        model = effective_request_data.get("model") if effective_request_data else None
+        inputs: Final = GenericGuardrailAPIInputs(texts=texts)
+        model: Final = effective_request_data.get("model") if effective_request_data else None
         if model:
             inputs["model"] = model
 
-        guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
+        guardrailed_inputs: Final = await guardrail_to_apply.apply_guardrail(
             inputs=inputs,
             request_data=effective_request_data,
             input_type="response",
             logging_obj=litellm_logging_obj,
         )
 
-        guardrailed_texts = guardrailed_inputs.get("texts", [])
+        guardrailed_texts: Final = guardrailed_inputs.get("texts", [])
         if guardrailed_texts:
             _write_back_texts(guardrailed_texts, holders)
 

@@ -26,9 +26,20 @@ interface Props {
  * (no click). Merely visiting the authorize URL is attacker-inducible, so completion has to be a
  * deliberate user action, not a side effect of leaving the page.
  */
+export function isLoopbackOrigin(origin: string | null): boolean {
+  if (!origin) return false;
+  try {
+    const hostname = new URL(origin).hostname.replace(/^\[|\]$/g, "");
+    return hostname === "localhost" || hostname === "::1" || /^127(\.\d{1,3}){3}$/.test(hostname);
+  } catch {
+    return false;
+  }
+}
+
 const ConnectFlowBanner: React.FC<Props> = ({ flowHandle, clientOrigin }) => {
   const action = `${getProxyBaseUrl()}/authorize/complete`;
   const clientLabel = clientOrigin ?? "the application";
+  const loopbackClient = isLoopbackOrigin(clientOrigin);
 
   return (
     <div className="mb-6 rounded-lg border border-primary/30 bg-primary/5 px-5 py-4">
@@ -50,6 +61,12 @@ const ConnectFlowBanner: React.FC<Props> = ({ flowHandle, clientOrigin }) => {
           >
             Finish connecting
           </button>
+          {loopbackClient && (
+            <label className="mt-2 flex items-center gap-2 text-[13px] text-muted-foreground">
+              <input type="checkbox" name="delivery" value="manual" />
+              My client is on a remote or SSH machine
+            </label>
+          )}
         </form>
       </div>
     </div>

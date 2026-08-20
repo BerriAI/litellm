@@ -15,7 +15,7 @@ tests:
           pattern: -litellm$
       - equal:
           path: spec.template.spec.containers[0].image
-          value: ghcr.io/berriai/litellm-database:test
+          value: ghcr.io/berriai/litellm:test
   - it: should work with tolerations
     template: deployment.yaml
     set:
@@ -337,7 +337,7 @@ tests:
     template: deployment.yaml
     set:
       image:
-        repository: ghcr.io/berriai/litellm-database
+        repository: ghcr.io/berriai/litellm
         tag: test
       extraInitContainers:
         - name: init-tpl
@@ -348,7 +348,7 @@ tests:
           path: spec.template.spec.initContainers
           content:
             name: init-tpl
-            image: "ghcr.io/berriai/litellm-database:test"
+            image: "ghcr.io/berriai/litellm:test"
             command: ["echo", "hello"]
   - it: should work with extraContainers
     template: deployment.yaml
@@ -366,7 +366,7 @@ tests:
     template: deployment.yaml
     set:
       image:
-        repository: ghcr.io/berriai/litellm-database
+        repository: ghcr.io/berriai/litellm
         tag: test
       extraContainers:
         - name: sidecar-tpl
@@ -376,12 +376,12 @@ tests:
           path: spec.template.spec.containers
           content:
             name: sidecar-tpl
-            image: "ghcr.io/berriai/litellm-database:test"
+            image: "ghcr.io/berriai/litellm:test"
   - it: should support tpl in podAnnotations
     template: deployment.yaml
     set:
       image:
-        repository: ghcr.io/berriai/litellm-database
+        repository: ghcr.io/berriai/litellm
         tag: test
       # Mirrors the real-world scenario this feature unblocks:
       # user disables the built-in ConfigMap (and its built-in checksum/config
@@ -398,7 +398,7 @@ tests:
           value: "test"
       - equal:
           path: spec.template.metadata.annotations["example.com/some-key"]
-          value: "ghcr.io/berriai/litellm-database"
+          value: "ghcr.io/berriai/litellm"
       - equal:
           path: spec.template.metadata.annotations["example.com/literal"]
           value: "plain-string-value"

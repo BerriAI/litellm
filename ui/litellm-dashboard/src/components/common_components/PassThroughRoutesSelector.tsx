@@ -1,9 +1,9 @@
 import React, { useEffect, useState } from "react";
-import { Select } from "antd";
+import { MultiSelect, type MultiSelectOption } from "@/components/shared/MultiSelect";
 import { getPassThroughEndpointsCall } from "../networking";
 
 interface PassThroughRoutesSelectorProps {
-  onChange: (selectedRoutes: string[]) => void;
+  onChange?: (selectedRoutes: string[]) => void;
   value?: string[];
   className?: string;
   accessToken: string;
@@ -17,6 +17,11 @@ interface PassThroughEndpoint {
   methods?: string[];
 }
 
+const routeOption = (endpoint: PassThroughEndpoint): MultiSelectOption => ({
+  label: endpoint.methods?.length ? `${endpoint.methods.join(", ")} ${endpoint.path}` : endpoint.path,
+  value: endpoint.path,
+});
+
 const PassThroughRoutesSelector: React.FC<PassThroughRoutesSelectorProps> = ({
   onChange,
   value,
@@ -26,7 +31,7 @@ const PassThroughRoutesSelector: React.FC<PassThroughRoutesSelectorProps> = ({
   disabled = false,
   teamId,
 }) => {
-  const [passThroughRoutes, setPassThroughRoutes] = useState<Array<{ label: string; value: string }>>([]);
+  const [passThroughRoutes, setPassThroughRoutes] = useState<MultiSelectOption[]>([]);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
@@ -37,27 +42,7 @@ const PassThroughRoutesSelector: React.FC<PassThroughRoutesSelectorProps> = ({
       try {
         const response = await getPassThroughEndpointsCall(accessToken, teamId);
         if (response.endpoints) {
-          const routes = response.endpoints.flatMap((endpoint: PassThroughEndpoint) => {
-            const path = endpoint.path;
-            const methods = endpoint.methods;
-
-            // If methods are specified, create one entry per method
-            if (methods && methods.length > 0) {
-              return methods.map((method) => ({
-                label: `${method} ${path}`,
-                value: path, // Keep value as path for backward compatibility
-              }));
-            }
-
-            // If no methods specified, show just the path (all methods supported)
-            return [
-              {
-                label: path,
-                value: path,
-              },
-            ];
-          });
-          setPassThroughRoutes(routes);
+          setPassThroughRoutes(response.endpoints.map(routeOption));
         }
       } catch (error) {
         console.error("Error fetching pass through routes:", error);
@@ -70,19 +55,16 @@ const PassThroughRoutesSelector: React.FC<PassThroughRoutesSelectorProps> = ({
   }, [accessToken, teamId]);
 
   return (
-    <Select
-      mode="tags"
-      placeholder={placeholder}
-      onChange={onChange}
-      value={value}
-      loading={loading}
-      className={className}
-      allowClear
+    <MultiSelect
       options={passThroughRoutes}
-      optionFilterProp="label"
-      showSearch
-      style={{ width: "100%" }}
+      value={value}
+      onValueChange={(routes) => onChange?.(routes)}
+      placeholder={placeholder}
+      emptyText="No pass through routes found"
+      loading={loading}
+      allowCustomValues
       disabled={disabled}
+      className={className}
     />
   );
 };
