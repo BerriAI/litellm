@@ -176,6 +176,31 @@ def test_deletion_only_change_still_selects_the_function(repo: Path) -> None:
     assert scope.globs == ("litellm.proxy.auth.auth_checks.x_can_call_model__mutmut_*",)
 
 
+def test_deleting_a_functions_last_statement_still_selects_it(repo: Path) -> None:
+    """The line above the deletion is the anchor, so a trailing deletion stays inside its function."""
+    two_statements = AUTH_CHECKS.replace(
+        "    return model in allowed\n",
+        "    normalized = model.strip()\n    return normalized in allowed\n",
+    )
+    _write(repo, "litellm/proxy/auth/auth_checks.py", two_statements)
+    _commit(repo, "add a statement")
+    _run(repo, "checkout", "-q", "-b", "trailing-removal")
+    _write(repo, "litellm/proxy/auth/auth_checks.py", two_statements.replace("    return normalized in allowed\n", ""))
+    _commit(repo, "drop the return")
+
+    scope = build_scope(repo, "feature", 40)
+
+    assert scope.globs == ("litellm.proxy.auth.auth_checks.x_can_call_model__mutmut_*",)
+
+
+def test_deleting_a_whole_function_does_not_drag_in_its_neighbour(repo: Path) -> None:
+    """Deleted code has nothing to mutate; charging it to whatever moved up would be noise."""
+    _write(repo, "litellm/router.py", ROUTER[ROUTER.index("class Router:") :])
+    _commit(repo)
+
+    assert scope_of(repo).globs == ()
+
+
 def test_module_level_change_selects_no_function(repo: Path) -> None:
     """mutmut only trampolines functions, so a module-level constant has nothing to run."""
     _write(repo, "litellm/proxy/auth/auth_checks.py", AUTH_CHECKS.replace('"user"', '"internal_user"'))

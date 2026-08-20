@@ -103,7 +103,9 @@ def parse_unified_diff(root: Path, diff: str) -> tuple[ChangedFile, ...]:
     Deleted lines have no post-image line of their own, so they are attributed to
     the line they now follow: under ``-U0`` that is the hunk header's ``+`` start,
     which is the surviving line directly above the deletion. Without this, removing
-    a guard clause would leave its function out of scope entirely.
+    a guard clause would leave its function out of scope entirely. A deletion that
+    starts at the top of the file has no such line, and nothing above it to blame,
+    so it is dropped rather than charged to whatever moved up into its place.
     """
 
     def touched_lines() -> Iterator[tuple[str, int]]:
@@ -119,8 +121,8 @@ def parse_unified_diff(root: Path, diff: str) -> tuple[ChangedFile, ...]:
             elif line.startswith("+") and not line.startswith("+++"):
                 yield current, cursor
                 cursor += 1
-            elif line.startswith("-") and not line.startswith("---"):
-                yield current, max(cursor, 1)
+            elif line.startswith("-") and not line.startswith("---") and cursor >= 1:
+                yield current, cursor
 
     touched: Final = tuple(touched_lines())
     return tuple(
