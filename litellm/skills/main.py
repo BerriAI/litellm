@@ -72,7 +72,7 @@ def _azure_skills_api_base(api_base: str | None) -> str | None:
 
 def _native_skill_request(
     operation: str,
-    request_data: dict[str, Any],
+    request_data: dict[str, Any],  # mutable-ok: logging and SDK dispatch consume request data
     custom_llm_provider: str,
     litellm_params: GenericLiteLLMParams,
     logging_obj: LiteLLMLoggingObj,

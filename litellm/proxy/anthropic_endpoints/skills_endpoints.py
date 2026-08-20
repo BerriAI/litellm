@@ -425,7 +425,9 @@ async def delete_skill(
 SkillRouteType = Literal["acreate_skill", "alist_skills", "aget_skill", "adelete_skill"]
 
 
-async def _native_skill_data(request: Request, operation: str) -> dict[str, object]:
+async def _native_skill_data(
+    request: Request, operation: str
+) -> dict[str, object]:  # mutable-ok: proxy processing mutates routing data
     body: Final = await convert_upload_files_to_file_data(await get_request_body(request))
     model: Final = extract_model_param(request, body)
     custom_llm_provider: Final = (
@@ -434,6 +436,7 @@ async def _native_skill_data(request: Request, operation: str) -> dict[str, obje
     data: Final = dict(request.query_params)  # mutable-ok: proxy processing mutates route data
     data.update(body)
     data.update(request.path_params)
+    data.pop("model", None)
     if model:
         data["model"] = model
     data["custom_llm_provider"] = custom_llm_provider
