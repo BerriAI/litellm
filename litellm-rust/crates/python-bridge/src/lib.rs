@@ -1,11 +1,11 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use litellm_ai_gateway::io::audio_transcription::{
-    AudioTranscriptionRequest, audio_transcription as run_audio_transcription,
-};
 use litellm_ai_gateway::io::ocr::{OcrRequest, ocr as run_ocr};
 use litellm_ai_gateway::io::responses_ws::ResponsesWebSocketConnection as RustResponsesWebSocketConnection;
+use litellm_core::audio_transcription::{
+    AudioTranscriptionRequest, audio_transcription as run_audio_transcription,
+};
 use litellm_core::error::CoreError;
 use litellm_core::messages::messages as run_messages;
 use litellm_core::messages::types::{AnthropicMessagesResponse, MessagesRequest};
@@ -289,15 +289,11 @@ fn transcription(
                 extra_headers,
                 optional_params,
                 timeout,
-                callbacks: Vec::new(),
-                guardrails: Vec::new(),
-                request_metadata: Default::default(),
-                litellm_call_id: None,
             },
         ))
     });
     match result {
-        Ok(value) => json_to_py(py, value),
+        Ok(value) => json_to_py(py, value.into_json()),
         Err(err) => Err(core_error_to_pyerr(err)),
     }
 }
@@ -333,14 +329,10 @@ fn atranscription(
             extra_headers,
             optional_params,
             timeout,
-            callbacks: Vec::new(),
-            guardrails: Vec::new(),
-            request_metadata: Default::default(),
-            litellm_call_id: None,
         })
         .await
         .map_err(core_error_to_pyerr)?;
-        Python::attach(|py| json_to_py(py, value))
+        Python::attach(|py| json_to_py(py, value.into_json()))
     })
 }
 

@@ -2,14 +2,16 @@ use std::future::Future;
 use std::pin::Pin;
 
 use litellm_core::CoreResult;
-use litellm_core::audio_transcription::transformation::AudioTranscriptionAuth;
+use litellm_core::audio_transcription::{
+    AudioTranscriptionRequest as CoreAudioTranscriptionRequest,
+    PreparedAudioTranscriptionRequest as CorePreparedAudioTranscriptionRequest,
+    prepare_audio_transcription_request,
+};
 use litellm_core::call_lifecycle::{CallLifecycleContext, CallLifecycleHooks, CallLifecycleTiming};
 use litellm_core::error::CoreError;
 use serde_json::{Map, Value, json};
 
-use super::common_utils::{audio_transcription_provider_config, has_header, string_headers};
-use super::handler::sign_request;
-use super::types::{PreparedAudioTranscriptionRequest, ProviderAudioTranscriptionRequest};
+use super::types::PreparedAudioTranscriptionRequest;
 use crate::integrations::custom_guardrail::{
     CustomGuardrailRunner, GuardrailContext, GuardrailError, GuardrailRequest,
 };
@@ -27,6 +29,7 @@ pub(crate) struct AudioTranscriptionLifecycleHooks {
 }
 
 type AudioFuture<'a, T> = Pin<Box<dyn Future<Output = CoreResult<T>> + Send + 'a>>;
+
 type AudioLogFuture<'a> = Pin<Box<dyn Future<Output = ()> + Send + 'a>>;
 
 impl AudioTranscriptionLifecycleHooks {
@@ -49,28 +52,34 @@ impl AudioTranscriptionLifecycleHooks {
         if self.guardrail_runner.is_empty() {
             return Ok(request);
         }
+
         let (guardrail_request, _) = self
             .guardrail_runner
             .run_pre_call(
                 &guardrail_context(&self.request_metadata),
                 GuardrailRequest::new(json!({
                     "model": request.model,
-                    "custom_llm_provider": request.custom_llm_provider,
+                    "custom_llm_provider":
+                        request.custom_llm_provider,
                     "audio": request.audio,
-                    "optional_params": request.optional_params,
+                    "optional_params":
+                        request.optional_params,
                 })),
             )
             .await
             .map_err(guardrail_error_to_core_error)?;
-        let Value::Object(mut data) = guardrail_request.data else {
+
+        let Value::Object(data) = guardrail_request.data else {
             return Err(CoreError::InvalidRequest(
                 "audio transcription pre_call guardrail must return an object".to_string(),
             ));
         };
-        let audio = data.remove("audio").ok_or_else(|| {
+
+        let audio = data.get("audio").cloned().ok_or_else(|| {
             CoreError::InvalidRequest("audio transcription guardrail removed audio".to_string())
         })?;
-        let optional_params = match data.remove("optional_params") {
+
+        let optional_params = match data.get("optional_params").cloned() {
             Some(Value::Object(value)) => value,
             Some(_) => {
                 return Err(CoreError::InvalidRequest(
@@ -79,6 +88,7 @@ impl AudioTranscriptionLifecycleHooks {
             }
             None => Map::new(),
         };
+
         Ok(PreparedAudioTranscriptionRequest {
             audio,
             optional_params,
@@ -89,78 +99,53 @@ impl AudioTranscriptionLifecycleHooks {
     async fn prepare_provider_request(
         &self,
         request: PreparedAudioTranscriptionRequest,
-    ) -> CoreResult<ProviderAudioTranscriptionRequest> {
-        let config = audio_transcription_provider_config(&request.custom_llm_provider)
-            .ok_or_else(|| CoreError::InvalidProvider(request.custom_llm_provider.clone()))?;
-        let env_lookup = super::handler::environment_lookup;
-        let headers = string_headers(request.extra_headers)?;
-        let url = config.complete_url(
-            request.api_base.as_deref(),
-            &request.model,
-            &request.optional_params,
-            &env_lookup,
-        )?;
-        let filtered_params = config.map_transcription_params(&request.optional_params);
-        let body = config.transform_transcription_request(
-            &request.model,
-            request.audio,
-            filtered_params,
-        )?;
-        let auth = config.auth_strategy(&request.model, &request.optional_params, &env_lookup)?;
-        let mut upstream_headers = headers.into_iter().collect::<Vec<_>>();
-        if matches!(auth, AudioTranscriptionAuth::Bearer)
-            && !has_header(
-                &upstream_headers
-                    .iter()
-                    .cloned()
-                    .collect::<std::collections::BTreeMap<_, _>>(),
-                "authorization",
-            )
-            && let Some(api_key) = request.api_key.as_deref()
-        {
-            upstream_headers.push(("Authorization".to_string(), format!("Bearer {api_key}")));
-        }
-        let provider_request = ProviderAudioTranscriptionRequest {
-            model: request.model,
-            config,
-            url,
-            body: body.body,
-            upstream_headers,
-            timeout: request.timeout,
-        };
-        let provider_request = self.run_during_call_guardrails(provider_request).await?;
-        sign_request(&provider_request, &request.optional_params).await
-    }
+    ) -> CoreResult<CorePreparedAudioTranscriptionRequest> {
+        let provider_request =
+            prepare_audio_transcription_request(CoreAudioTranscriptionRequest {
+                model: &request.model,
+                audio: request.audio,
+                api_key: request.api_key.as_deref(),
+                api_base: request.api_base.as_deref(),
+                custom_llm_provider: Some(&request.custom_llm_provider),
+                extra_headers: request.extra_headers,
+                optional_params: request.optional_params,
+                timeout: request.timeout,
+            })?;
 
-    async fn run_during_call_guardrails(
-        &self,
-        request: ProviderAudioTranscriptionRequest,
-    ) -> CoreResult<ProviderAudioTranscriptionRequest> {
         if self.guardrail_runner.is_empty() {
-            return Ok(request);
+            return Ok(provider_request);
         }
+
         let (guardrail_request, _) = self
             .guardrail_runner
             .run_during_call(
                 &guardrail_context(&self.request_metadata),
                 GuardrailRequest::new(json!({
-                    "model": request.model,
-                    "custom_llm_provider": "bedrock",
-                    "url": request.url,
-                    "body": request.body,
+                    "model":
+                        provider_request.model(),
+                    "custom_llm_provider":
+                        provider_request
+                            .custom_llm_provider(),
+                    "url":
+                        provider_request.url(),
+                    "body":
+                        provider_request.body(),
                 })),
             )
             .await
             .map_err(guardrail_error_to_core_error)?;
-        let Value::Object(mut data) = guardrail_request.data else {
+
+        let Value::Object(data) = guardrail_request.data else {
             return Err(CoreError::InvalidRequest(
                 "audio transcription during_call guardrail must return an object".to_string(),
             ));
         };
-        let body = data.remove("body").ok_or_else(|| {
+
+        let body = data.get("body").cloned().ok_or_else(|| {
             CoreError::InvalidRequest("audio transcription guardrail removed body".to_string())
         })?;
-        Ok(ProviderAudioTranscriptionRequest { body, ..request })
+
+        Ok(provider_request.with_body(body))
     }
 
     fn logging_payload(
@@ -192,11 +177,17 @@ impl AudioTranscriptionLifecycleHooks {
     }
 }
 
-impl CallLifecycleHooks<PreparedAudioTranscriptionRequest, ProviderAudioTranscriptionRequest, Value>
-    for AudioTranscriptionLifecycleHooks
+impl
+    CallLifecycleHooks<
+        PreparedAudioTranscriptionRequest,
+        CorePreparedAudioTranscriptionRequest,
+        Value,
+    > for AudioTranscriptionLifecycleHooks
 {
     type PreCallFuture<'a> = AudioFuture<'a, PreparedAudioTranscriptionRequest>;
-    type DuringCallFuture<'a> = AudioFuture<'a, ProviderAudioTranscriptionRequest>;
+
+    type DuringCallFuture<'a> = AudioFuture<'a, CorePreparedAudioTranscriptionRequest>;
+
     type SuccessFuture<'a> = AudioLogFuture<'a>;
     type FailureFuture<'a> = AudioLogFuture<'a>;
 
@@ -226,6 +217,7 @@ impl CallLifecycleHooks<PreparedAudioTranscriptionRequest, ProviderAudioTranscri
             if self.logger_runner.is_empty() {
                 return;
             }
+
             self.logger_runner
                 .async_log_success_event(
                     &ModelCallDetails::from_standard_logging_payload(
@@ -248,10 +240,12 @@ impl CallLifecycleHooks<PreparedAudioTranscriptionRequest, ProviderAudioTranscri
             if self.logger_runner.is_empty() {
                 return;
             }
+
             let logging_error = LoggingError {
                 message: error.to_string(),
                 kind: core_error_kind(error).to_string(),
             };
+
             self.logger_runner
                 .async_log_failure_event(
                     &ModelCallDetails::from_standard_logging_payload(
@@ -260,7 +254,12 @@ impl CallLifecycleHooks<PreparedAudioTranscriptionRequest, ProviderAudioTranscri
                     .with_failure_error(logging_error.clone()),
                     Some(&CallbackValue::new(
                         "error",
-                        json!({"message": logging_error.message, "kind": logging_error.kind}),
+                        json!({
+                            "message":
+                                logging_error.message,
+                            "kind":
+                                logging_error.kind,
+                        }),
                     )),
                     CallbackTiming::new(timing.start_time, timing.end_time),
                 )
@@ -282,7 +281,7 @@ fn guardrail_context(metadata: &RequestMetadata) -> GuardrailContext {
 }
 
 fn guardrail_error_to_core_error(error: GuardrailError) -> CoreError {
-    CoreError::InvalidRequest(format!("{}: {}", error.kind, error.message))
+    CoreError::InvalidRequest(format!("{}: {}", error.kind, error.message,))
 }
 
 fn core_error_kind(error: &CoreError) -> &'static str {
