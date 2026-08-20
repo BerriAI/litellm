@@ -542,6 +542,7 @@ class StraikerGuardrail(CustomGuardrail):
                 guardrail_name=self.guardrail_name or GUARDRAIL_NAME,
                 message=message,
                 should_wrap_with_default_message=False,
+                blocked_content=True,
             )
         raise ModifyResponseException(
             message=message,

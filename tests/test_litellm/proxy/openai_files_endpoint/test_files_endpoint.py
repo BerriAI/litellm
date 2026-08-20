@@ -3541,8 +3541,8 @@ def _batch_upload(client_, content: bytes, purpose: str = "batch"):
             b'{"custom_id":"r-0","method":"POST","url":"/v1/chat/completions",'
             b'"body":{"model":"gpt-3.5-turbo","messages":[{"role":"user","content":"leak me"}]}}\n',
             "batch",
-            400,
-            "A guardrail changed batch input line 1",
+            200,
+            None,
         ),
         (
             b'{"custom_id":"r-0","method":"POST","url":"/v1/chat/completions",'
@@ -3599,6 +3599,84 @@ def test_batch_upload_runs_guardrails_on_each_record(
         assert resp.status_code == expected_status, resp.text
         if expected_fragment is not None:
             assert expected_fragment in resp.text
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+        ProxyLogging._callback_capabilities_cache.clear()
+
+
+def test_batch_upload_redacts_per_record(monkeypatch, llm_router: Router):
+    """An offending record is submitted masked, matching what the online path does per request."""
+    expected_custom_ids = ["keep-1", "dirty", "keep-2"]
+    import json as _json
+
+    import litellm
+    import litellm.proxy.openai_files_endpoints.files_endpoints as fe
+    import litellm.proxy.proxy_server as ps
+    from litellm.integrations.custom_guardrail import CustomGuardrail
+    from litellm.proxy._types import LitellmUserRoles
+    from litellm.proxy.utils import ProxyLogging
+
+    class _Redactor(CustomGuardrail):
+        async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+            for message in data.get("messages") or []:
+                if isinstance(message.get("content"), str) and "leak" in message["content"]:
+                    message["content"] = message["content"].replace("leak", "***")
+            return data
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", llm_router)
+    setup_proxy_logging_object(monkeypatch, llm_router)
+    monkeypatch.setattr(litellm, "callbacks", [_Redactor(guardrail_name="g", default_on=True)])
+    ProxyLogging._callback_capabilities_cache.clear()
+
+    uploaded = {}
+
+    async def fake_route_create_file(**kwargs):
+        handle = kwargs["_create_file_request"]["file"][1]
+        uploaded["body"] = handle.read() if hasattr(handle, "read") else handle
+        return OpenAIFileObject(
+            id="dummy-id",
+            object="file",
+            bytes=0,
+            created_at=1234567890,
+            filename="batch.jsonl",
+            purpose="batch",
+            status="uploaded",
+        )
+
+    monkeypatch.setattr(fe, "route_create_file", fake_route_create_file)
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="test-user"
+    )
+
+    def _row(custom_id, content):
+        return _json.dumps(
+            {
+                "custom_id": custom_id,
+                "method": "POST",
+                "url": "/v1/chat/completions",
+                "body": {"model": "gpt-3.5-turbo", "messages": [{"role": "user", "content": content}]},
+            }
+        )
+
+    content = ("\n".join([_row("keep-1", "fine"), _row("dirty", "please leak this"), _row("keep-2", "fine")])).encode()
+    try:
+        resp = client.post(
+            "/v1/files",
+            files={"file": ("batch.jsonl", content, "application/jsonl")},
+            data={"purpose": "batch"},
+            headers={"Authorization": "Bearer test-key"},
+        )
+        assert resp.status_code == 200, resp.text
+        rows = [_json.loads(line) for line in uploaded["body"].decode().splitlines()]
+        assert [row["custom_id"] for row in rows] == expected_custom_ids
+        assert rows[1]["body"]["messages"][0]["content"] == "please *** this"
+        report = resp.json()["litellm_batch_guardrail"]
+        assert report["submitted_records"] == 3
+        assert report["modified_records"] == [
+            {"line": 2, "custom_id": "dirty", "action": "redacted", "guardrail": None}
+        ]
     finally:
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
         ProxyLogging._callback_capabilities_cache.clear()
