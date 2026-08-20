@@ -115,7 +115,11 @@ class CerebrasConfig(OpenAIGPTConfig):
         drop_params: bool,
     ) -> dict:
         supported_openai_params: Final = self.get_supported_openai_params(model=model)
-        for param, value in non_default_params.items():
-            if param in supported_openai_params:
-                optional_params[param] = value
+        optional_params.update(
+            {
+                param: value
+                for param, value in non_default_params.items()
+                if param in supported_openai_params
+            }
+        )
         return optional_params
