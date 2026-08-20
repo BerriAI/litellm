@@ -72,6 +72,15 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
              (LiteLLM stores provider-specific response fields there).
           2. Otherwise inject a single space — the minimum value the API accepts.
         """
+        missing_reasoning_content: Final = any(
+            msg.get("role") == "assistant"
+            and not msg.get("reasoning_content")
+            and not (
+                isinstance(provider_fields := msg.get("provider_specific_fields"), dict)
+                and provider_fields.get("reasoning_content")
+            )
+            for msg in messages
+        )
         result: Final[list[AllMessageValues]] = []
         for msg in messages:
             if msg.get("role") == "assistant" and not msg.get("reasoning_content"):
@@ -84,20 +93,21 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
                     cleaned.pop("reasoning_content", None)
                     patched["provider_specific_fields"] = cleaned
                 else:
-                    litellm.verbose_logger.warning(
-                        "DeepSeek thinking mode: assistant message is missing "
-                        "`reasoning_content` and none was saved in "
-                        "`provider_specific_fields`. A single-space placeholder "
-                        "is being injected to satisfy API validation, but the "
-                        "model will receive a blank reasoning chain for this turn, "
-                        "which may silently degrade multi-turn response quality. "
-                        "Preserve `reasoning_content` from the original assistant "
-                        "response when building multi-turn conversation history."
-                    )
                     patched["reasoning_content"] = " "
                 result.append(cast(AllMessageValues, patched))
             else:
                 result.append(msg)
+        if missing_reasoning_content:
+            litellm.verbose_logger.warning(
+                "DeepSeek thinking mode: assistant message is missing "
+                "`reasoning_content` and none was saved in "
+                "`provider_specific_fields`. A single-space placeholder "
+                "is being injected to satisfy API validation, but the "
+                "model will receive a blank reasoning chain for this turn, "
+                "which may silently degrade multi-turn response quality. "
+                "Preserve `reasoning_content` from the original assistant "
+                "response when building multi-turn conversation history."
+            )
         return result
 
     @overload

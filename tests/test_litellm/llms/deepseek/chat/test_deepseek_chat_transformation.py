@@ -103,6 +103,34 @@ async def test_async_transform_request_strips_unsupported_tools_from_body():
     assert body["tools"][0]["function"]["name"] == "shell"
 
 
+def test_fill_reasoning_content_warns_once_per_request_and_preserves_history(caplog):
+    messages = [
+        {"role": "user", "content": "Use both tools."},
+        {"role": "assistant", "content": None, "tool_calls": [{"id": "first"}], "reasoning_content": ""},
+        {"role": "tool", "tool_call_id": "first", "content": "first result"},
+        {"role": "assistant", "content": None, "tool_calls": [{"id": "second"}], "reasoning_content": ""},
+        {"role": "tool", "tool_call_id": "second", "content": "second result"},
+        {"role": "user", "content": "Continue."},
+    ]
+
+    with caplog.at_level("WARNING"):
+        first_result = DeepSeekChatConfig()._fill_reasoning_content(messages)
+        second_result = DeepSeekChatConfig()._fill_reasoning_content(messages)
+
+    warnings = [
+        record
+        for record in caplog.records
+        if "DeepSeek thinking mode: assistant message is missing `reasoning_content`" in record.message
+    ]
+    assert len(warnings) == 2
+    assert first_result[1]["reasoning_content"] == " "
+    assert first_result[3]["reasoning_content"] == " "
+    assert second_result[1]["reasoning_content"] == " "
+    assert second_result[3]["reasoning_content"] == " "
+    assert messages[1]["reasoning_content"] == ""
+    assert messages[3]["reasoning_content"] == ""
+
+
 def test_thinking_mode_active_bool_thinking_returns_false_without_crashing():
     config = DeepSeekChatConfig()
     assert config._thinking_mode_active(model="deepseek-reasoner", optional_params={"thinking": True}) is False
