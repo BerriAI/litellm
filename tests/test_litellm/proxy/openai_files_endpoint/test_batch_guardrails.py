@@ -140,12 +140,26 @@ async def test_records_own_metadata_is_left_out_of_the_scan_and_the_diff():
     seen = []
 
     def _write_bookkeeping(data):
-        seen.append("metadata" in data)
+        seen.append(dict(data.get("metadata") or {}))
         data.setdefault("metadata", {})["applied_guardrails"] = ["g"]
 
-    assert await _scan(_jsonl(record), FakeProxyLogging(_write_bookkeeping)) is None
-    assert seen == [False], "the record's own metadata must not be handed to guardrail dispatch"
+    assert await _scan(_jsonl(record), FakeProxyLogging(_write_bookkeeping), metadata={"tags": ["t"]}) is None
+    assert seen == [{"tags": ["t"]}], "dispatch sees the proxy's metadata, never the record's own"
     assert record["body"]["metadata"] == {"team": "finance"}
+
+
+@pytest.mark.asyncio
+async def test_the_scan_metadata_reaches_guardrails_that_only_read_the_metadata_bag():
+    """noma and aim read `metadata["headers"]`; a record scanned as chat must reach them too."""
+    seen = []
+
+    await _scan(
+        _jsonl(_record("a")),
+        FakeProxyLogging(lambda d: seen.append((d.get("metadata") or {}).get("headers"))),
+        metadata={"guardrails": ["g"], "headers": {"x-noma-application-id": "app-1"}},
+    )
+
+    assert seen == [{"x-noma-application-id": "app-1"}]
 
 
 @pytest.mark.asyncio

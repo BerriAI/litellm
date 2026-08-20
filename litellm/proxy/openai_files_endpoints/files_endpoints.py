@@ -371,6 +371,10 @@ async def create_file(
     )
 
     data: dict = {}
+    # Spools this request owns. Starlette owns the upload handle; anything the guardrail scan
+    # opens is ours, and a batch upload that fails after the scan would otherwise hold the
+    # descriptor and its disk blocks until the collector runs.
+    spools: Final[list[BinaryIO]] = []  # mutable-ok: filled as the scan opens handles
     try:
         # Batch uploads can be gigabytes. Starlette has already spooled the upload
         # to disk, so stream from that handle instead of reading it into memory.
@@ -536,6 +540,10 @@ async def create_file(
             if scan_result is not None and scan_result.changes
             else file_source
         )
+        if scan_result is not None:
+            spools.append(scan_result.redactions)
+        if upload_source is not file_source:
+            spools.append(upload_source)
         file_data: Final = (file.filename, upload_source, file.content_type)
 
         ## check if model is a loadbalanced model
@@ -652,6 +660,9 @@ async def create_file(
                 param=getattr(e, "param", "None"),
                 code=getattr(e, "status_code", 500),
             )
+    finally:
+        for spool in spools:
+            spool.close()
 
 
 @router.get(

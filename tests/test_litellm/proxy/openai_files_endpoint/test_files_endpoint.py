@@ -3680,3 +3680,81 @@ def test_batch_upload_redacts_per_record(monkeypatch, llm_router: Router):
     finally:
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
         ProxyLogging._callback_capabilities_cache.clear()
+
+
+def test_batch_upload_closes_the_spools_it_opened(monkeypatch, llm_router: Router):
+    """The scan and the rewrite each open a spool; the request owns both and must not leak them."""
+    import json as _json
+
+    import litellm
+    import litellm.proxy.openai_files_endpoints.batch_guardrails as bg
+    import litellm.proxy.openai_files_endpoints.files_endpoints as fe
+    import litellm.proxy.proxy_server as ps
+    from litellm.integrations.custom_guardrail import CustomGuardrail
+    from litellm.proxy._types import LitellmUserRoles
+    from litellm.proxy.utils import ProxyLogging
+
+    class _Redactor(CustomGuardrail):
+        async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+            for message in data.get("messages") or []:
+                if "leak" in (message.get("content") or ""):
+                    message["content"] = message["content"].replace("leak", "***")
+            return data
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", llm_router)
+    setup_proxy_logging_object(monkeypatch, llm_router)
+    monkeypatch.setattr(litellm, "callbacks", [_Redactor(guardrail_name="g", default_on=True)])
+    ProxyLogging._callback_capabilities_cache.clear()
+
+    spools = []
+    real = bg.tempfile.SpooledTemporaryFile
+
+    def _tracking(*args, **kwargs):
+        handle = real(*args, **kwargs)
+        spools.append(handle)
+        return handle
+
+    monkeypatch.setattr(bg.tempfile, "SpooledTemporaryFile", _tracking)
+
+    async def fake_route_create_file(**kwargs):
+        return OpenAIFileObject(
+            id="dummy-id",
+            object="file",
+            bytes=0,
+            created_at=1234567890,
+            filename="batch.jsonl",
+            purpose="batch",
+            status="uploaded",
+        )
+
+    monkeypatch.setattr(fe, "route_create_file", fake_route_create_file)
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="test-user"
+    )
+
+    def _row(custom_id, content):
+        return _json.dumps(
+            {
+                "custom_id": custom_id,
+                "method": "POST",
+                "url": "/v1/chat/completions",
+                "body": {"model": "gpt-3.5-turbo", "messages": [{"role": "user", "content": content}]},
+            }
+        )
+
+    content = ("\n".join([_row("keep", "fine"), _row("dirty", "please leak this")])).encode()
+    try:
+        resp = client.post(
+            "/v1/files",
+            files={"file": ("batch.jsonl", content, "application/jsonl")},
+            data={"purpose": "batch"},
+            headers={"Authorization": "Bearer test-key"},
+        )
+        assert resp.status_code == 200, resp.text
+        assert len(spools) == 2, f"expected a scan spool and a rewrite spool, saw {len(spools)}"
+        assert all(handle.closed for handle in spools), "the request must close every spool it opened"
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+        ProxyLogging._callback_capabilities_cache.clear()

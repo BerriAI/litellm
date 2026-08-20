@@ -46,6 +46,7 @@ _CUSTOM_ID_LOG_LIMIT: Final = 128
 _SUMMARY_LIMIT: Final = 50
 
 _SCAN_METADATA_KEY: Final = "litellm_metadata"
+_SCAN_METADATA_BAGS: Final = (_SCAN_METADATA_KEY, "metadata")
 
 # Set by pre_call_hook when a guardrail rerouted the request to a different model.
 _ROUTE_APPLIED_KEY: Final = "sensitive_data_routing_applied"
@@ -361,11 +362,13 @@ async def _scan_record(
     own_injected: Final = MappingProxyType({key: body[key] for key in _INJECTED_KEYS if key in body})
     for injected in _INJECTED_KEYS:
         scan_input.pop(injected, None)
-    # Deep, and per record: `headers` and `tags` are nested containers shared with the upload
-    # request and with every other record in the window, and a guardrail that writes into one in
-    # place would otherwise leak across records and back into the request. The narrowing above
-    # already removed the values that cannot be copied.
-    scan_input[_SCAN_METADATA_KEY] = copy.deepcopy(dict(scan_metadata))  # mutable-ok: guardrails write here
+    # Both bags, because guardrails read whichever one their own route populates and a record
+    # scanned as chat reaches ones that only ever look at `metadata`; both are injected keys, so
+    # neither survives into the record that ships. Deep, and per bag per record, because `headers`
+    # and `tags` are nested containers otherwise shared with the upload request and with every
+    # other record in the window. The narrowing above already removed what cannot be copied.
+    for injected in _SCAN_METADATA_BAGS:
+        scan_input[injected] = copy.deepcopy(dict(scan_metadata))  # mutable-ok: guardrails write here
 
     try:
         # The chain hands back the body it produced, which may be a replacement for the dict it was
