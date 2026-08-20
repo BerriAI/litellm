@@ -123,7 +123,8 @@ def storage_notice(outcome: SecretSave) -> str:
         case CredentialNotSaved(detail=detail):
             return (
                 f"Signed in, but the credential could not be saved to {path}: {detail}. "
-                "Nothing was kept, so run 'lite login' again once that path is writable."
+                "Any login you already had is untouched. Run 'lite login' again once that path is "
+                "writable, or 'lite logout' to clear whatever is stored now."
             )
 
 
@@ -140,7 +141,7 @@ def keychain_unreadable_notice(vault: SecretVault) -> str:
                 f"Your credential is in your OS keychain, which {DISABLE_KEYRING_ENV_VAR} is blocking. "
                 "Unset it, or run 'lite login' to start over."
             )
-        case KeyringUnreachable() | KeyringDiscardsWrites():
+        case KeyringUnreachable():
             return (
                 "Your credential is in your OS keychain, which could not be read. Unlock it, or run "
                 "'lite login' to start over."
@@ -800,7 +801,7 @@ def logout(ctx: click.Context):
         case KeyringDisabled():
             click.echo(UNCHECKED_KEYCHAIN_MESSAGE)
             click.echo(f"Unset {DISABLE_KEYRING_ENV_VAR} and run 'lite logout' again to clear it.")
-        case KeyringUnreachable() | KeyringDiscardsWrites():
+        case KeyringUnreachable():
             click.echo(UNCHECKED_KEYCHAIN_MESSAGE)
             click.echo("Unlock your keychain and run 'lite logout' again to clear it.")
 

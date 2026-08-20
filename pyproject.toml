@@ -79,7 +79,7 @@ proxy = [
 ]
 # Thin client install for the `lite` CLI on developer laptops. The CLI's heavy
 # imports (fastapi, cryptography, ...) are all guarded, so it runs on the base
-# SDK plus just these four; none of the server runtime in `proxy` is pulled in.
+# SDK plus just these five; none of the server runtime in `proxy` is pulled in.
 cli = [
     "rich>=13.9.4,<14.0",
     "pyyaml>=6.0.3,<7.0",
