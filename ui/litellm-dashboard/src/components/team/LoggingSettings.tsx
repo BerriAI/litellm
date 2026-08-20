@@ -278,7 +278,7 @@ const LoggingSettings: React.FC<LoggingSettingsProps> = ({
                   variant="ghost"
                   onClick={() => removeLoggingConfig(index)}
                   size="sm"
-                  className="text-destructive hover:bg-destructive/10"
+                  className="text-destructive hover:bg-destructive/10 hover:text-destructive/80"
                   type="button"
                 >
                   <Trash2 />
