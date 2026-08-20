@@ -13,6 +13,7 @@ from litellm.llms.wavespeed.image_generation.handler import WaveSpeedImageGenera
 from litellm.llms.wavespeed.image_generation.transformation import (
     WaveSpeedImageGenerationConfig,
 )
+from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import ImageResponse
 
 MODEL = "wavespeed-ai/z-image/turbo"
@@ -205,3 +206,136 @@ class TestWaveSpeedImageGenerationConfig:
                 litellm_params={},
                 encoding=None,
             )
+
+
+@pytest.fixture
+def zero_poll_budget(monkeypatch):
+    """Make the polling deadline expire immediately so the timeout path is reachable."""
+    monkeypatch.setattr("litellm.llms.wavespeed.image_generation.handler.DEFAULT_MAX_POLLING_TIME", 0)
+
+
+@respx.mock
+def test_sync_poll_timeout(generate, zero_poll_budget):
+    submit = respx.post(SUBMIT_URL).mock(return_value=httpx.Response(200, json=prediction("created")))
+    poll = respx.get(RESULT_URL).mock(return_value=httpx.Response(200, json=prediction("processing")))
+
+    with pytest.raises(WaveSpeedError) as exc_info:
+        generate()
+
+    assert exc_info.value.status_code == 408
+    assert "did not finish within" in str(exc_info.value)
+    assert submit.call_count == 1
+    assert poll.call_count == 0
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_async_poll_timeout(zero_poll_budget):
+    respx.post(SUBMIT_URL).mock(return_value=httpx.Response(200, json=prediction("created")))
+
+    with pytest.raises(WaveSpeedError) as exc_info:
+        await WaveSpeedImageGeneration().async_image_generation(
+            model=MODEL,
+            prompt="a red panda",
+            model_response=ImageResponse(),
+            optional_params={},
+            litellm_params={"api_key": "sk-test", "api_base": None},
+            logging_obj=MagicMock(),
+            timeout=None,
+        )
+
+    assert exc_info.value.status_code == 408
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_async_submit_is_issued_exactly_once_when_polling_fails():
+    submit = respx.post(SUBMIT_URL).mock(return_value=httpx.Response(200, json=prediction("created")))
+    poll = respx.get(RESULT_URL).mock(side_effect=httpx.ConnectError("connection reset"))
+
+    with pytest.raises(WaveSpeedError) as exc_info:
+        await WaveSpeedImageGeneration().async_image_generation(
+            model=MODEL,
+            prompt="a red panda",
+            model_response=ImageResponse(),
+            optional_params={},
+            litellm_params={"api_key": "sk-test", "api_base": None},
+            logging_obj=MagicMock(),
+            timeout=None,
+        )
+
+    assert submit.call_count == 1
+    assert poll.call_count == 5
+    assert "5 times in a row" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_aimg_generation_flag_dispatches_to_the_async_path():
+    submit = respx.post(SUBMIT_URL).mock(return_value=httpx.Response(200, json=prediction("created")))
+    respx.get(RESULT_URL).mock(return_value=httpx.Response(200, json=prediction("completed", outputs=[OUTPUT_URL])))
+
+    pending = WaveSpeedImageGeneration().image_generation(
+        model=MODEL,
+        prompt="a red panda",
+        model_response=ImageResponse(),
+        optional_params={},
+        litellm_params={"api_key": "sk-test", "api_base": None},
+        logging_obj=MagicMock(),
+        timeout=None,
+        aimg_generation=True,
+    )
+
+    response = await pending
+    assert [image.url for image in response.data] == [OUTPUT_URL]
+    assert submit.call_count == 1
+
+
+@respx.mock
+def test_litellm_params_object_is_accepted(monkeypatch):
+    """images/main.py can hand the handler a GenericLiteLLMParams rather than a dict."""
+    monkeypatch.delenv("WAVESPEED_API_BASE", raising=False)
+    submit = respx.post(SUBMIT_URL).mock(return_value=httpx.Response(200, json=prediction("created")))
+    respx.get(RESULT_URL).mock(return_value=httpx.Response(200, json=prediction("completed", outputs=[OUTPUT_URL])))
+
+    response = WaveSpeedImageGeneration().image_generation(
+        model=MODEL,
+        prompt="a red panda",
+        model_response=ImageResponse(),
+        optional_params={},
+        litellm_params=GenericLiteLLMParams(api_key="sk-test"),
+        logging_obj=MagicMock(),
+        timeout=None,
+    )
+
+    assert [image.url for image in response.data] == [OUTPUT_URL]
+    assert submit.calls[0].request.headers["authorization"] == "Bearer sk-test"
+
+
+@respx.mock
+def test_extra_headers_are_merged_and_cannot_be_dropped(generate):
+    submit = respx.post(SUBMIT_URL).mock(return_value=httpx.Response(200, json=prediction("created")))
+    respx.get(RESULT_URL).mock(return_value=httpx.Response(200, json=prediction("completed", outputs=[OUTPUT_URL])))
+
+    WaveSpeedImageGeneration().image_generation(
+        model=MODEL,
+        prompt="a red panda",
+        model_response=ImageResponse(),
+        optional_params={},
+        litellm_params={"api_key": "sk-test", "api_base": None},
+        logging_obj=MagicMock(),
+        timeout=None,
+        extra_headers={"X-Trace-Id": "abc123"},
+    )
+
+    assert submit.calls[0].request.headers["x-trace-id"] == "abc123"
+    assert submit.calls[0].request.headers["x-client-name"] == "litellm"
+
+
+def test_supported_openai_params_and_error_class():
+    config = WaveSpeedImageGenerationConfig()
+    assert config.get_supported_openai_params(MODEL) == ["n", "size", "response_format"]
+
+    error = config.get_error_class("boom", 503, {})
+    assert isinstance(error, WaveSpeedError)
+    assert error.status_code == 503
