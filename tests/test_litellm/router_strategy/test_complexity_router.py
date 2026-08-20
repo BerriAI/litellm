@@ -2509,6 +2509,94 @@ class TestRouterPreRoutingSharedAliasName:
         assert "api_key" not in forwarded and "api_base" not in forwarded
         assert router._forwardable_alias_marker_params(model="gemini-flash", strategy_tags=()) == ()
 
+    @staticmethod
+    def _region_marker_entry() -> dict:
+        return {
+            "model_name": "smart-router",
+            "litellm_params": {
+                "model": "auto_router/complexity_router",
+                "aws_region_name": "eu-west-3",
+                "drop_params": True,
+                "complexity_router_config": {"tiers": {"SIMPLE": "bedrock-tier", "MEDIUM": "bedrock-tier"}},
+                "complexity_router_default_model": "bedrock-tier",
+            },
+        }
+
+    @staticmethod
+    def _bedrock_tier_entry(model_name: str = "bedrock-tier", aws_region_name: str | None = None) -> dict:
+        return {
+            "model_name": model_name,
+            "litellm_params": {
+                "model": "bedrock/us.anthropic.claude-sonnet-5",
+                **({"aws_region_name": aws_region_name} if aws_region_name else {}),
+            },
+        }
+
+    @staticmethod
+    async def _routed_call_kwargs(router: Router, **request_params) -> dict:
+        mock_acompletion = AsyncMock(return_value=litellm.ModelResponse(choices=[{"message": {"content": "hi"}}]))
+        with patch.object(litellm, "acompletion", mock_acompletion):
+            await router.acompletion(
+                model="smart-router", messages=[{"role": "user", "content": "hi"}], **request_params
+            )
+        return mock_acompletion.call_args.kwargs
+
+    @pytest.mark.asyncio
+    async def test_tier_deployments_own_params_beat_the_markers_forwarded_params(self):
+        """A marker-level `aws_region_name` only fills the gap for tiers that set none:
+        a tier pinned to its own region must be called there, not in the marker's."""
+        router = Router(model_list=[self._region_marker_entry(), self._bedrock_tier_entry(aws_region_name="us-east-1")])
+
+        sent = await self._routed_call_kwargs(router)
+
+        assert sent["model"] == "bedrock/us.anthropic.claude-sonnet-5"
+        assert sent["aws_region_name"] == "us-east-1"
+        assert sent["drop_params"] is True
+
+    @pytest.mark.asyncio
+    async def test_marker_params_still_fill_the_gaps_a_tier_leaves_open(self):
+        router = Router(model_list=[self._region_marker_entry(), self._bedrock_tier_entry()])
+
+        sent = await self._routed_call_kwargs(router)
+
+        assert sent["aws_region_name"] == "eu-west-3"
+        assert sent["drop_params"] is True
+
+    @pytest.mark.asyncio
+    async def test_request_supplied_param_beats_both_the_marker_and_the_tier(self):
+        router = Router(model_list=[self._region_marker_entry(), self._bedrock_tier_entry(aws_region_name="us-east-1")])
+
+        sent = await self._routed_call_kwargs(router, aws_region_name="ap-south-1")
+
+        assert sent["aws_region_name"] == "ap-south-1"
+
+    @pytest.mark.asyncio
+    async def test_forwarded_params_keep_yielding_to_the_deployment_on_later_routing_passes(self):
+        """A retry or fallback re-enters the hook with the first pass's forwarded params
+        already in the kwargs; they must still yield to the next deployment's own values."""
+        router = Router(
+            model_list=[
+                self._region_marker_entry(),
+                self._bedrock_tier_entry(),
+                self._bedrock_tier_entry(model_name="pinned-tier", aws_region_name="us-east-1"),
+            ]
+        )
+        request_kwargs: Dict = {}
+        messages = [{"role": "user", "content": "hi"}]
+
+        await router.async_pre_routing_hook(model="smart-router", request_kwargs=request_kwargs, messages=messages)
+        router._update_kwargs_with_deployment(
+            deployment=router.get_model_list(model_name="bedrock-tier")[0], kwargs=request_kwargs
+        )
+        assert request_kwargs["aws_region_name"] == "eu-west-3"
+
+        await router.async_pre_routing_hook(model="smart-router", request_kwargs=request_kwargs, messages=messages)
+        router._update_kwargs_with_deployment(
+            deployment=router.get_model_list(model_name="pinned-tier")[0], kwargs=request_kwargs
+        )
+        assert "aws_region_name" not in request_kwargs
+        assert request_kwargs["drop_params"] is True
+
 
 class TestAdaptiveSoftFloors:
     def test_adaptive_defaults_use_cost_weighted_cold_policy(self):
