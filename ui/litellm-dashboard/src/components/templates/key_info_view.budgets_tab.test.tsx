@@ -564,6 +564,45 @@ describe("KeyInfoView Budgets tab", () => {
     expect(positions[0]).toBeLessThan(positions[2]);
   });
 
+  it("throttles only the key's own budget, leaving every other scope on that key a real blocker", async () => {
+    const throttledKey: KeyBudgetEntry = {
+      ...UNCONFIGURED_BUDGET,
+      entity_id: "ci-runner",
+      entity_label: "ci-runner",
+      enforcement: "throttled",
+      max_budget: 100,
+      spend: 140,
+      remaining: -40,
+      source: "key.max_budget",
+      status: "exceeded",
+      notes: [{ code: "throttled_instead_of_blocked", severity: "info", text: noteText("throttled") }],
+    };
+    const teamStillBlocks: KeyBudgetEntry = {
+      ...UNCONFIGURED_BUDGET,
+      scope: "team",
+      entity_type: "team",
+      entity_id: "team-123",
+      entity_label: "Platform",
+      max_budget: 500,
+      spend: 600,
+      remaining: -100,
+      source: "team.max_budget",
+      status: "exceeded",
+    };
+    mockBudgets([throttledKey, teamStillBlocks]);
+    const panel = await renderAndOpenBudgetsTab();
+
+    // A throttling key is not a throttling key everywhere: the mode rides on one row, never the key.
+    const blocking = panel.getAllByTestId("key-budget-blocking");
+    expect(blocking).toHaveLength(1);
+    expect(rowFor(panel, "Platform")).toContainElement(blocking[0]);
+
+    const throttledRow = rowFor(panel, "ci-runner");
+    expect(within(throttledRow).getByText("Throttles requests")).toBeInTheDocument();
+    expect(within(throttledRow).queryByTestId("key-budget-blocking")).not.toBeInTheDocument();
+    expect(within(rowFor(panel, "Platform")).getByText("Blocks requests")).toBeInTheDocument();
+  });
+
   it("says a throttled budget slows requests rather than claiming it blocks them", async () => {
     const throttled: KeyBudgetEntry = {
       ...UNCONFIGURED_BUDGET,
