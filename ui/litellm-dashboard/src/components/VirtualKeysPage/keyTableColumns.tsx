@@ -1,6 +1,6 @@
 "use client";
 
-import { InfoCircleOutlined } from "@ant-design/icons";
+import { Info } from "lucide-react";
 import { ColumnDef } from "@tanstack/react-table";
 
 import { DataTableMultiSortHeader, DataTableSortHeader, type DataTableSortField } from "@/components/shared/DataTable";
@@ -119,7 +119,7 @@ const InfoHeader = ({ label, tooltip }: { label: string; tooltip: string }) => (
   <span className="flex items-center gap-1">
     {label}
     <HoverCard>
-      <HoverCardTrigger render={<InfoCircleOutlined className="text-gray-400 text-xs cursor-help" />} />
+      <HoverCardTrigger render={<Info className="size-3 text-gray-400 cursor-help" />} />
       <HoverCardContent className="w-auto">{tooltip}</HoverCardContent>
     </HoverCard>
   </span>

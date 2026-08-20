@@ -93,6 +93,49 @@ describe("MultiSelect", () => {
     expect(await screen.findByText("No options found")).toBeInTheDocument();
   });
 
+  it("splits a comma-separated custom entry into one value per token", async () => {
+    const { onValueChange, input } = renderMultiSelect({ allowCustomValues: true });
+
+    await userEvent.type(input, "udp, kafka ,terraform");
+    await userEvent.click(await screen.findByText('Create "udp, kafka ,terraform"'));
+
+    expect(onValueChange).toHaveBeenCalledWith(["udp", "kafka", "terraform"]);
+  });
+
+  it("leaves an already selected value that contains a comma alone when a later entry is added", async () => {
+    const onValueChange = vi.fn();
+    render(
+      <MultiSelect
+        options={OPTIONS}
+        value={["--filter=a,b"]}
+        onValueChange={onValueChange}
+        allowCustomValues
+        placeholder="Select stores"
+      />,
+    );
+
+    await userEvent.type(screen.getByRole("combobox"), "--verbose");
+    await userEvent.click(await screen.findByText('Create "--verbose"'));
+
+    expect(onValueChange).toHaveBeenCalledWith(["--filter=a,b", "--verbose"]);
+  });
+
+  it("clears every selection at once", async () => {
+    const onValueChange = vi.fn();
+    render(
+      <MultiSelect
+        options={OPTIONS}
+        value={["vs-alpha", "vs-beta"]}
+        onValueChange={onValueChange}
+        placeholder="Select stores"
+      />,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Clear all" }));
+
+    expect(onValueChange).toHaveBeenCalledWith([]);
+  });
+
   it("marks a disabled option as disabled and refuses to select it", async () => {
     const { onValueChange, input } = renderMultiSelect({
       options: [OPTIONS[0], { ...OPTIONS[1], disabled: true }],

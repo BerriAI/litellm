@@ -15,7 +15,6 @@ import { useModelCostMap } from "@/app/(dashboard)/hooks/models/useModelCostMap"
 import { useCredentials } from "@/app/(dashboard)/hooks/credentials/useCredentials";
 import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
-import { vertexCredentialsUploadProps } from "@/app/(dashboard)/models-and-endpoints/vertexCredentialsUpload";
 
 const INITIAL_VALUES: MountedFormValues = { litellm_credential_name: null };
 
@@ -60,9 +59,6 @@ export default function AddModelPanel() {
       providerModels={providerModels}
       setProviderModelsFn={(provider) => setProviderModels(getProviderModels(provider, modelCostMapData))}
       getPlaceholder={getPlaceholder}
-      uploadProps={vertexCredentialsUploadProps({
-        setFieldsValue: (values) => form.setValue("vertex_credentials", values.vertex_credentials),
-      })}
       showAdvancedSettings={showAdvancedSettings}
       setShowAdvancedSettings={setShowAdvancedSettings}
       teams={teams ?? null}
