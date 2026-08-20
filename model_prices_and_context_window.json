@@ -49218,22 +49218,6 @@
         ],
         "supports_audio_output": true
     },
-    "mistral/zai-glm-5-2": {
-        "cache_read_input_token_cost": 1.4e-07,
-        "input_cost_per_token": 1.4e-06,
-        "litellm_provider": "mistral",
-        "max_input_tokens": 1000000,
-        "max_output_tokens": 131072,
-        "max_tokens": 131072,
-        "mode": "chat",
-        "output_cost_per_token": 4.4e-06,
-        "source": "https://docs.mistral.ai/models/model-cards/zai-glm-5-2",
-        "supports_assistant_prefill": true,
-        "supports_function_calling": true,
-        "supports_prompt_caching": true,
-        "supports_response_schema": true,
-        "supports_tool_choice": true
-    },
     "fallback_generalizations": {
         "rules": [
             {
