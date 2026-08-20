@@ -99,6 +99,11 @@
           "minimum": 0,
           "description": "Rate applied once the prompt exceeds the token threshold in the field name."
         },
+        "cache_creation_input_token_cost_above_272k_tokens_flex": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Flex service-tier rate for the same-named base field."
+        },
         "cache_creation_input_token_cost_flex": {
           "type": "number",
           "minimum": 0,
@@ -132,6 +137,11 @@
           "type": "number",
           "minimum": 0,
           "description": "Rate applied once the prompt exceeds the token threshold in the field name."
+        },
+        "cache_read_input_token_cost_above_272k_tokens_flex": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Flex service-tier rate for the same-named base field."
         },
         "cache_read_input_token_cost_above_272k_tokens_priority": {
           "type": "number",
@@ -175,6 +185,14 @@
         },
         "gemini_native_audio": {
           "type": "boolean"
+        },
+        "guardrail_cost_per_unit": {
+          "type": "object",
+          "description": "USD cost per billable guardrail unit, keyed by the provider's usage counter name (e.g. Bedrock's contentPolicyUnits).",
+          "additionalProperties": {
+            "type": "number",
+            "minimum": 0
+          }
         },
         "input_cost_per_audio_per_second": {
           "type": "number",
@@ -262,6 +280,11 @@
           "minimum": 0,
           "description": "Rate applied once the prompt exceeds the token threshold in the field name."
         },
+        "input_cost_per_token_above_272k_tokens_flex": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Flex service-tier rate for the same-named base field."
+        },
         "input_cost_per_token_above_272k_tokens_priority": {
           "type": "number",
           "minimum": 0,
@@ -346,6 +369,7 @@
             "chat",
             "completion",
             "embedding",
+            "guardrail",
             "image_edit",
             "image_generation",
             "moderation",
@@ -434,6 +458,11 @@
           "minimum": 0,
           "description": "Rate applied once the prompt exceeds the token threshold in the field name."
         },
+        "output_cost_per_token_above_272k_tokens_flex": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Flex service-tier rate for the same-named base field."
+        },
         "output_cost_per_token_above_272k_tokens_priority": {
           "type": "number",
           "minimum": 0,
@@ -484,6 +513,11 @@
         "provider_specific_entry": {
           "type": "object",
           "description": "Provider-internal routing hints (e.g. bedrock_invocation_schema)."
+        },
+        "regional_endpoint_uplift_multiplier": {
+          "type": "number",
+          "minimum": 1,
+          "description": "Multiplier applied to all token costs when served from a non-global Vertex AI endpoint (e.g. 1.10 = +10%)."
         },
         "regional_processing_uplift_multiplier_eu": {
           "type": "number",
@@ -630,6 +664,9 @@
         "supports_pdf_input": {
           "type": "boolean"
         },
+        "supports_prompt_cache_breakpoint": {
+          "type": "boolean"
+        },
         "supports_prompt_caching": {
           "type": "boolean"
         },
@@ -649,6 +686,9 @@
           "type": "boolean"
         },
         "supports_tool_choice": {
+          "type": "boolean"
+        },
+        "supports_tool_search": {
           "type": "boolean"
         },
         "supports_url_context": {
@@ -705,6 +745,10 @@
                 "minimum": 0
               },
               "cache_read_input_token_cost": {
+                "type": "number",
+                "minimum": 0
+              },
+              "cache_creation_input_token_cost": {
                 "type": "number",
                 "minimum": 0
               },

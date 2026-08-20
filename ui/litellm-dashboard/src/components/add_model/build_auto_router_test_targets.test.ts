@@ -77,4 +77,46 @@ describe("buildAutoRouterTestTargets", () => {
     });
     expect(targets).toEqual([{ labels: ["SIMPLE"], modelGroup: "gpt-4o-mini", mode: "chat" }]);
   });
+
+  // A pin outside every tier is still a live fallback destination (empty-tier landings, and a
+  // failed LLM classifier routing to it), so a passing test must reach it too or it is only
+  // proving the tiers are reachable, not the router.
+  it("appends the default model as its own target when it is not already in a tier", () => {
+    const targets = buildAutoRouterTestTargets({
+      tiers,
+      semanticMatchingEnabled: false,
+      embeddingModel: undefined,
+      defaultModel: "claude-3-opus",
+    });
+    expect(targets).toEqual([
+      { labels: ["SIMPLE"], modelGroup: "gpt-4o-mini", mode: "chat" },
+      { labels: ["MEDIUM", "COMPLEX"], modelGroup: "claude-sonnet-4", mode: "chat" },
+      { labels: ["REASONING"], modelGroup: "o3", mode: "chat" },
+      { labels: ["Default"], modelGroup: "claude-3-opus", mode: "chat" },
+    ]);
+  });
+
+  it("does not duplicate a default model that a tier already covers", () => {
+    const targets = buildAutoRouterTestTargets({
+      tiers,
+      semanticMatchingEnabled: false,
+      embeddingModel: undefined,
+      defaultModel: "claude-sonnet-4",
+    });
+    expect(targets).toEqual([
+      { labels: ["SIMPLE"], modelGroup: "gpt-4o-mini", mode: "chat" },
+      { labels: ["MEDIUM", "COMPLEX"], modelGroup: "claude-sonnet-4", mode: "chat" },
+      { labels: ["REASONING"], modelGroup: "o3", mode: "chat" },
+    ]);
+  });
+
+  it.each([[undefined], [""], ["   "]])("adds no default target for %o", (defaultModel) => {
+    const targets = buildAutoRouterTestTargets({
+      tiers: { SIMPLE: ["gpt-4o-mini"], MEDIUM: [], COMPLEX: [], REASONING: [] },
+      semanticMatchingEnabled: false,
+      embeddingModel: undefined,
+      defaultModel,
+    });
+    expect(targets).toEqual([{ labels: ["SIMPLE"], modelGroup: "gpt-4o-mini", mode: "chat" }]);
+  });
 });

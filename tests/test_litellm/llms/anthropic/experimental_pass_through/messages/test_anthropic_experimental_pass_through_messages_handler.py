@@ -732,6 +732,61 @@ def test_handler_skips_strip_when_presanitized():
     assert result is not None
 
 
+def test_handler_flattens_replayed_unencrypted_web_search_results():
+    """Synthesized search blocks replayed as history must reach the provider as text."""
+    from litellm.llms.anthropic.experimental_pass_through.messages import handler
+
+    captured = {}
+
+    def fake_base_handler(*args, **kwargs):
+        captured.update(kwargs)
+        return "stub"
+
+    with patch.object(
+        handler.base_llm_http_handler,
+        "anthropic_messages_handler",
+        side_effect=fake_base_handler,
+    ):
+        handler.anthropic_messages_handler(
+            max_tokens=10,
+            messages=[
+                {"role": "user", "content": "latest litellm version?"},
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "server_tool_use",
+                            "id": "srvtoolu_1",
+                            "name": "web_search",
+                            "input": {"query": "latest litellm version"},
+                        },
+                        {
+                            "type": "web_search_tool_result",
+                            "tool_use_id": "srvtoolu_1",
+                            "content": [
+                                {
+                                    "type": "web_search_result",
+                                    "url": "https://github.com/BerriAI/litellm/releases",
+                                    "title": "Releases",
+                                    "page_age": None,
+                                    "encrypted_content": "",
+                                    "snippet": "Latest release v1.95.0",
+                                }
+                            ],
+                        },
+                    ],
+                },
+                {"role": "user", "content": "which version?"},
+            ],
+            model="anthropic/claude-3-5-sonnet-20241022",
+            custom_llm_provider="anthropic",
+        )
+
+    replayed = captured["messages"][1]["content"]
+    assert [b["type"] for b in replayed] == ["text"]
+    assert "Snippet: Latest release v1.95.0" in replayed[0]["text"]
+
+
 def test_presanitized_flag_not_leaked_to_provider_params():
     """The private sentinel must be popped, never forwarded as a request param."""
     from litellm.llms.anthropic.experimental_pass_through.messages import handler
@@ -905,3 +960,40 @@ def test_gate_passthrough_skipped_when_only_chat_completions_supported(monkeypat
     assert result == "translated"
     assert translation_calls["count"] == 1
     assert "config" not in captured
+
+
+def test_first_party_claude_4_8_plus_cost_map_entries_carry_mid_conversation_system_flag():
+    """Regional and provider-prefixed Claude 4.8+/5 entries carry
+    ``supports_mid_conversation_system``, but the bare first-party keys
+    (``claude-opus-4-8``) that a plain ``custom_llm_provider="anthropic"``
+    lookup resolves were missed, so that lookup reports the capability as
+    unset. Every mapped first-party entry the fallback rule matches must
+    carry the flag."""
+    import json
+    import os
+    import re
+
+    import litellm
+
+    cost_map_path = os.path.join(
+        os.path.dirname(litellm.__file__), "model_prices_and_context_window_backup.json"
+    )
+    with open(cost_map_path) as f:
+        cost_map = json.load(f)
+    rules = cost_map["fallback_generalizations"]["rules"]
+    rule_pattern = next(
+        (r["pattern"] for r in rules if r["name"] == "claude-mid-conversation-system"),
+        None,
+    )
+    assert rule_pattern is not None, "claude-mid-conversation-system rule not found in fallback_generalizations"
+    pattern = re.compile(rule_pattern, re.IGNORECASE)
+    missing = [
+        key
+        for key, info in cost_map.items()
+        if isinstance(info, dict)
+        and info.get("litellm_provider") == "anthropic"
+        and "claude" in key
+        and pattern.search(key)
+        and info.get("supports_mid_conversation_system") is not True
+    ]
+    assert missing == []

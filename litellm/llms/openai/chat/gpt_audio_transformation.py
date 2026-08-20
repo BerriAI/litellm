@@ -4,6 +4,8 @@ Support for GPT-4o audio Family
 OpenAI Doc: https://platform.openai.com/docs/guides/audio/quickstart?audio-generation-quickstart-example=audio-in&lang=python
 """
 
+from typing import Final
+
 import litellm
 
 from .gpt_transformation import OpenAIGPTConfig
@@ -24,8 +26,8 @@ class OpenAIGPTAudioConfig(OpenAIGPTConfig):
 
         """
 
-        all_openai_params = super().get_supported_openai_params(model=model)
-        audio_specific_params = ["audio"]
+        all_openai_params: Final = super().get_supported_openai_params(model=model)
+        audio_specific_params: Final = ["audio"]
         return all_openai_params + audio_specific_params
 
     def is_model_gpt_audio_model(self, model: str) -> bool:

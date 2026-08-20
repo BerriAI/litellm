@@ -1,4 +1,4 @@
-import { render, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import CompareUI from "./CompareUI";
@@ -108,10 +108,7 @@ describe("CompareUI", () => {
     let comparisonPanels = container.querySelectorAll('[data-testid^="comparison-panel-"]');
     expect(comparisonPanels).toHaveLength(2);
 
-    const addButtons = Array.from(container.querySelectorAll('button[class*="ant-btn"]'));
-    const addComparisonButton = addButtons.find((btn) => btn.textContent?.includes("Add Comparison"));
-    expect(addComparisonButton).toBeInTheDocument();
-    await user.click(addComparisonButton!);
+    await user.click(screen.getByRole("button", { name: /Add Comparison/i }));
 
     // Wait for the new comparison panel to be added (should have 3 total now)
     await waitFor(() => {
@@ -141,14 +138,14 @@ describe("CompareUI", () => {
     }
 
     await waitFor(() => {
-      expect(queryByTestId("has-attachment")).toBeInTheDocument();
+      expect(getByTestId("has-attachment")).toBeInTheDocument();
     });
 
     const textarea = getByTestId("message-textarea");
-    await user.type(textarea, "Describe this image");
+    fireEvent.change(textarea, { target: { value: "Describe this image" } });
 
     const sendButton = getByTestId("send-button");
-    expect(sendButton).not.toBeDisabled();
+    expect(sendButton).toBeEnabled();
     await user.click(sendButton);
 
     await waitFor(() => {

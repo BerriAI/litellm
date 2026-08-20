@@ -9,6 +9,11 @@ const alertVariants = cva({
     variant: {
       default: "bg-card text-card-foreground",
       destructive: "bg-card text-destructive *:data-[slot=alert-description]:text-destructive/90 *:[svg]:text-current",
+      info: "border-info/20 bg-info/5 text-info *:[svg]:text-current",
+      success: "border-success/20 bg-success/5 text-success *:[svg]:text-current",
+      warning: "border-warning/20 bg-warning/5 text-warning *:[svg]:text-current",
+      error:
+        "border-destructive/20 bg-destructive/10 text-destructive *:data-[slot=alert-description]:text-destructive/90 *:[svg]:text-destructive",
     },
   },
   defaultVariants: {
@@ -18,8 +23,15 @@ const alertVariants = cva({
 
 type AlertProps = React.ComponentProps<"div"> & VariantProps<typeof alertVariants>;
 
-const Alert = React.forwardRef<HTMLDivElement, AlertProps>(({ className, variant, ...props }, ref) => (
-  <div ref={ref} data-slot="alert" role="alert" className={cn(alertVariants({ variant }), className)} {...props} />
+const Alert = React.forwardRef<HTMLDivElement, AlertProps>(({ className, variant = "default", ...props }, ref) => (
+  <div
+    ref={ref}
+    data-slot="alert"
+    data-variant={variant}
+    role="alert"
+    className={cn(alertVariants({ variant }), className)}
+    {...props}
+  />
 ));
 Alert.displayName = "Alert";
 

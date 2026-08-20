@@ -23,7 +23,7 @@ from litellm.llms.anthropic.experimental_pass_through.messages.transformation im
     AnthropicMessagesConfig,
 )
 from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES
-from litellm.types.utils import ServerToolUse
+from litellm.types.utils import ServerToolUse, Usage
 
 
 def test_response_format_transformation_unit_test():
@@ -105,6 +105,108 @@ def test_calculate_usage():
     assert usage._cache_read_input_tokens == 0
 
 
+def test_calculate_usage_aggregates_cache_creation_split_across_iterations():
+    """
+    In the iterations path each iteration can carry the 5m/1h cache_creation
+    breakdown. calculate_usage must aggregate it into cache_creation_token_details
+    so 1h writes are priced at the 1h rate instead of silently falling back to 5m.
+
+    Regression for LIT-4868.
+    """
+    from litellm.llms.anthropic.cost_calculation import cost_per_token
+
+    config = AnthropicConfig()
+    usage_object = {
+        "input_tokens": 0,
+        "output_tokens": 5,
+        "iterations": [
+            {
+                "type": "message",
+                "input_tokens": 0,
+                "output_tokens": 3,
+                "cache_creation_input_tokens": 10000,
+                "cache_read_input_tokens": 0,
+                "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 10000},
+            },
+            {
+                "type": "message",
+                "input_tokens": 0,
+                "output_tokens": 2,
+                "cache_creation_input_tokens": 10000,
+                "cache_read_input_tokens": 0,
+                "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 10000},
+            },
+        ],
+    }
+
+    usage = config.calculate_usage(usage_object=usage_object, reasoning_content=None)
+
+    details = usage.prompt_tokens_details.cache_creation_token_details
+    assert details is not None
+    assert details.ephemeral_5m_input_tokens == 0
+    assert details.ephemeral_1h_input_tokens == 20000
+    assert usage.prompt_tokens_details.cache_creation_tokens == 20000
+
+    info = litellm.get_model_info(model="claude-opus-4-8", custom_llm_provider="anthropic")
+    rate_5m = info["cache_creation_input_token_cost"]
+    rate_1h = info["cache_creation_input_token_cost_above_1hr"]
+    assert rate_1h > rate_5m
+
+    prompt_cost, _ = cost_per_token(model="claude-opus-4-8", usage=usage)
+    assert prompt_cost == pytest.approx(20000 * rate_1h)
+    assert prompt_cost != pytest.approx(20000 * rate_5m)
+
+
+def test_calculate_usage_bills_undetailed_iteration_cache_writes_at_5m_rate():
+    """
+    When only some iterations carry the cache_creation breakdown, the writes
+    without a breakdown must still be billed (at the default 5m rate) instead
+    of silently priced at zero once details exist.
+
+    Regression for the Cursor Bugbot finding on the LIT-4868 fix.
+    """
+    from litellm.llms.anthropic.cost_calculation import cost_per_token
+
+    config = AnthropicConfig()
+    usage_object = {
+        "input_tokens": 0,
+        "output_tokens": 5,
+        "iterations": [
+            {
+                "type": "message",
+                "input_tokens": 0,
+                "output_tokens": 3,
+                "cache_creation_input_tokens": 10000,
+                "cache_read_input_tokens": 0,
+                "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 10000},
+            },
+            {
+                "type": "message",
+                "input_tokens": 0,
+                "output_tokens": 2,
+                "cache_creation_input_tokens": 7000,
+                "cache_read_input_tokens": 0,
+            },
+        ],
+    }
+
+    usage = config.calculate_usage(usage_object=usage_object, reasoning_content=None)
+
+    details = usage.prompt_tokens_details.cache_creation_token_details
+    assert details is not None
+    assert details.ephemeral_5m_input_tokens == 7000
+    assert details.ephemeral_1h_input_tokens == 10000
+    assert usage.prompt_tokens_details.cache_creation_tokens == 17000
+
+    info = litellm.get_model_info(model="claude-opus-4-8", custom_llm_provider="anthropic")
+    rate_5m = info["cache_creation_input_token_cost"]
+    rate_1h = info["cache_creation_input_token_cost_above_1hr"]
+
+    prompt_cost, _ = cost_per_token(model="claude-opus-4-8", usage=usage)
+    assert prompt_cost == pytest.approx(7000 * rate_5m + 10000 * rate_1h)
+    assert prompt_cost != pytest.approx(10000 * rate_1h)
+
+
 def test_calculate_usage_clamps_text_tokens_when_reasoning_estimate_exceeds_output():
     config = AnthropicConfig()
 
@@ -117,6 +219,162 @@ def test_calculate_usage_clamps_text_tokens_when_reasoning_estimate_exceeds_outp
     assert usage.completion_tokens_details is not None
     assert usage.completion_tokens_details.reasoning_tokens == usage.completion_tokens
     assert usage.completion_tokens_details.text_tokens == 0
+
+
+def test_calculate_usage_prefers_provider_reported_thinking_tokens():
+    config = AnthropicConfig()
+
+    usage = config.calculate_usage(
+        usage_object={
+            "input_tokens": 32,
+            "output_tokens": 421,
+            "output_tokens_details": {"thinking_tokens": 372},
+        },
+        reasoning_content="",
+        completion_response={
+            "content": [
+                {"type": "thinking", "thinking": "", "signature": "sig"},
+                {"type": "text", "text": "10"},
+            ]
+        },
+    )
+
+    assert usage.completion_tokens_details is not None
+    assert usage.completion_tokens_details.reasoning_tokens == 372
+    assert usage.completion_tokens_details.text_tokens == 49
+
+
+def test_calculate_usage_provider_thinking_tokens_win_over_visible_reasoning_estimate():
+    config = AnthropicConfig()
+
+    usage = config.calculate_usage(
+        usage_object={
+            "input_tokens": 50,
+            "output_tokens": 811,
+            "output_tokens_details": {"thinking_tokens": 747},
+        },
+        reasoning_content="short visible reasoning that tokenizes to far fewer than 747 tokens",
+    )
+
+    assert usage.completion_tokens_details is not None
+    assert usage.completion_tokens_details.reasoning_tokens == 747
+    assert usage.completion_tokens_details.text_tokens == 64
+
+
+def test_calculate_usage_sums_provider_thinking_tokens_across_iterations():
+    config = AnthropicConfig()
+
+    usage = config.calculate_usage(
+        usage_object={
+            "input_tokens": 10,
+            "output_tokens": 300,
+            "iterations": [
+                {"input_tokens": 5, "output_tokens": 100, "output_tokens_details": {"thinking_tokens": 60}},
+                {"input_tokens": 5, "output_tokens": 200, "output_tokens_details": {"thinking_tokens": 90}},
+            ],
+        },
+        reasoning_content=None,
+    )
+
+    assert usage.completion_tokens == 300
+    assert usage.completion_tokens_details is not None
+    assert usage.completion_tokens_details.reasoning_tokens == 150
+    assert usage.completion_tokens_details.text_tokens == 150
+
+
+def test_calculate_usage_falls_back_when_only_some_iterations_report_thinking_tokens():
+    config = AnthropicConfig()
+
+    usage = config.calculate_usage(
+        usage_object={
+            "input_tokens": 10,
+            "output_tokens": 300,
+            "output_tokens_details": {"thinking_tokens": 240},
+            "iterations": [
+                {"input_tokens": 5, "output_tokens": 100, "output_tokens_details": {"thinking_tokens": 60}},
+                {"input_tokens": 5, "output_tokens": 200},
+            ],
+        },
+        reasoning_content=None,
+    )
+
+    assert usage.completion_tokens == 300
+    assert usage.completion_tokens_details is not None
+    assert usage.completion_tokens_details.reasoning_tokens == 240
+    assert usage.completion_tokens_details.text_tokens == 60
+
+
+def test_calculate_usage_reports_unknown_split_when_only_some_iterations_report_thinking_tokens():
+    config = AnthropicConfig()
+
+    usage = config.calculate_usage(
+        usage_object={
+            "input_tokens": 10,
+            "output_tokens": 300,
+            "iterations": [
+                {"input_tokens": 5, "output_tokens": 100, "output_tokens_details": {"thinking_tokens": 60}},
+                {"input_tokens": 5, "output_tokens": 200},
+            ],
+        },
+        reasoning_content="",
+        completion_response={"content": [{"type": "thinking", "thinking": "", "signature": "sig"}]},
+    )
+
+    assert usage.completion_tokens == 300
+    assert usage.completion_tokens_details is not None
+    assert usage.completion_tokens_details.reasoning_tokens is None
+    assert usage.completion_tokens_details.text_tokens is None
+
+
+def test_calculate_usage_reports_unknown_split_when_thinking_ran_without_a_count():
+    config = AnthropicConfig()
+
+    usage = config.calculate_usage(
+        usage_object={"input_tokens": 32, "output_tokens": 580},
+        reasoning_content="",
+        completion_response={
+            "content": [
+                {"type": "redacted_thinking", "data": "encrypted"},
+                {"type": "text", "text": "10"},
+            ]
+        },
+    )
+
+    assert usage.completion_tokens == 580
+    assert usage.completion_tokens_details is not None
+    assert usage.completion_tokens_details.reasoning_tokens is None
+    assert usage.completion_tokens_details.text_tokens is None
+
+
+def test_calculate_usage_without_thinking_reports_all_output_as_text():
+    config = AnthropicConfig()
+
+    usage = config.calculate_usage(
+        usage_object={"input_tokens": 32, "output_tokens": 171},
+        reasoning_content=None,
+        completion_response={"content": [{"type": "text", "text": "10"}]},
+    )
+
+    assert usage.completion_tokens_details is not None
+    assert usage.completion_tokens_details.reasoning_tokens == 0
+    assert usage.completion_tokens_details.text_tokens == 171
+
+
+def test_calculate_usage_ignores_malformed_provider_thinking_tokens():
+    config = AnthropicConfig()
+
+    usage = config.calculate_usage(
+        usage_object={
+            "input_tokens": 32,
+            "output_tokens": 100,
+            "output_tokens_details": {"thinking_tokens": "not-a-number"},
+        },
+        reasoning_content=None,
+    )
+
+    assert usage.completion_tokens_details is not None
+    assert usage.completion_tokens_details.reasoning_tokens == 0
+    assert usage.completion_tokens_details.text_tokens == 100
 
 
 def test_calculate_usage_handles_mocked_output_tokens_with_reasoning_content():
@@ -5845,3 +6103,41 @@ def test_top_k_forwarded_at_transform_on_models_that_accept_it():
     )
 
     assert result["top_k"] == 40
+
+
+def test_is_anthropic_usage_object_distinguishes_chat_usage():
+    """Chat-shaped Usage mirrors cache_read_input_tokens alongside prompt_tokens that already
+    include the cache tokens, so treating it as Anthropic usage would re-add them and
+    double-count the prompt. Only the Anthropic shape, where input_tokens excludes cache
+    tokens, may take the Anthropic mapping."""
+    assert AnthropicConfig.is_anthropic_usage_object(
+        {"input_tokens": 3, "output_tokens": 5, "cache_read_input_tokens": 4014}
+    )
+    assert AnthropicConfig.is_anthropic_usage_object(
+        {"input_tokens": 3, "output_tokens": 5, "cache_creation_input_tokens": 10}
+    )
+    assert not AnthropicConfig.is_anthropic_usage_object(
+        Usage(
+            prompt_tokens=4017,
+            completion_tokens=5,
+            total_tokens=4022,
+            cache_read_input_tokens=4014,
+        ).model_dump()
+    )
+    assert not AnthropicConfig.is_anthropic_usage_object({"input_tokens": 3, "output_tokens": 5})
+
+
+def test_is_anthropic_usage_object_rejects_responses_api_usage():
+    """completion_cost checks the Anthropic shape before the Responses API shape, so a
+    Responses API usage payload, whose cache reads live in nested input_tokens_details,
+    must never match; matching would route it past the converter that reads the nested
+    field and its cache reads would be billed at the full input rate."""
+    assert not AnthropicConfig.is_anthropic_usage_object(
+        {
+            "input_tokens": 4017,
+            "output_tokens": 5,
+            "total_tokens": 4022,
+            "input_tokens_details": {"cached_tokens": 4014},
+            "output_tokens_details": {"reasoning_tokens": 0},
+        }
+    )
