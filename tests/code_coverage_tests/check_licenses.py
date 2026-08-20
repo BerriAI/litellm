@@ -7,7 +7,7 @@ import re
 import sys
 import time
 import tomllib
-from typing import Callable, Dict, Final, List, Optional, Set, Tuple
+from typing import Callable, Dict, Final, List, Optional, Protocol, Set, Tuple
 
 from packaging.requirements import Requirement
 import requests
@@ -42,6 +42,11 @@ _PYPI_FETCH_ATTEMPTS: Final[int] = 3
 _PYPI_FETCH_BACKOFF_SECONDS: Final[float] = 0.5
 
 
+class _HttpGet(Protocol):
+    def __call__(self, url: str, *, timeout: float) -> requests.Response:
+        ...
+
+
 @dataclass
 class PackageLicense:
     name: str
@@ -55,7 +60,7 @@ class LicenseChecker:
     def __init__(
         self,
         config_file: Path = Path("./tests/code_coverage_tests/liccheck.ini"),
-        http_get: Optional[Callable[..., requests.Response]] = None,
+        http_get: Optional[_HttpGet] = None,
         sleep: Optional[Callable[[float], None]] = None,
     ):
         if not config_file.exists():
@@ -145,31 +150,24 @@ class LicenseChecker:
                     or info.get("license")
                     or self._license_from_classifiers(info.get("classifiers") or [])
                 )
-            except requests.HTTPError as error:
-                status_code = error.response.status_code if error.response is not None else None
-                if status_code != 429 and (status_code is None or status_code < 500):
-                    print(
-                        f"Warning: Failed to fetch license for {package_name} {version}: {str(error)}"
-                    )
-                    return None
-                if attempt == _PYPI_FETCH_ATTEMPTS - 1:
-                    print(
-                        f"Warning: Failed to fetch license for {package_name} {version}: {str(error)}"
-                    )
-                    return None
-                sleep(_PYPI_FETCH_BACKOFF_SECONDS)
-            except (requests.ConnectionError, requests.Timeout) as error:
-                if attempt == _PYPI_FETCH_ATTEMPTS - 1:
-                    print(
-                        f"Warning: Failed to fetch license for {package_name} {version}: {str(error)}"
-                    )
-                    return None
-                sleep(_PYPI_FETCH_BACKOFF_SECONDS)
             except Exception as error:
+                if self._is_retryable_pypi_error(error) and attempt < _PYPI_FETCH_ATTEMPTS - 1:
+                    sleep(_PYPI_FETCH_BACKOFF_SECONDS)
+                    continue
                 print(
                     f"Warning: Failed to fetch license for {package_name} {version}: {str(error)}"
                 )
                 return None
+        return None
+
+    @staticmethod
+    def _is_retryable_pypi_error(error: Exception) -> bool:
+        if isinstance(error, (requests.ConnectionError, requests.Timeout)):
+            return True
+        if not isinstance(error, requests.HTTPError) or error.response is None:
+            return False
+        status_code = error.response.status_code
+        return status_code == 429 or status_code >= 500
 
     @staticmethod
     def _license_from_classifiers(classifiers: List[str]) -> Optional[str]:
