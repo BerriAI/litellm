@@ -48846,6 +48846,56 @@
         ],
         "supports_audio_output": true
     },
+    "bitdeer-ai/moonshotai/Kimi-K3": {
+        "max_tokens": 1048576,
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 131072,
+        "input_cost_per_token": 3e-06,
+        "output_cost_per_token": 1.5e-05,
+        "cache_read_input_token_cost": 3e-07,
+        "litellm_provider": "bitdeer-ai",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_reasoning": true,
+        "supports_vision": true,
+        "supports_prompt_caching": true,
+        "source": "https://www.bitdeer.ai/en/pricing/ai-models"
+    },
+    "bitdeer-ai/zai-org/GLM-5.2": {
+        "max_tokens": 1000000,
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 131072,
+        "input_cost_per_token": 1.4e-06,
+        "output_cost_per_token": 4.4e-06,
+        "cache_read_input_token_cost": 2.6e-07,
+        "litellm_provider": "bitdeer-ai",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_reasoning": true,
+        "supports_prompt_caching": true,
+        "source": "https://www.bitdeer.ai/en/pricing/ai-models"
+    },
+    "bitdeer-ai/deepseek-ai/DeepSeek-V4-Flash": {
+        "supports_prompt_caching": true,
+        "source": "https://www.bitdeer.ai/en/pricing/ai-models"
+    },
+    "bitdeer-ai/deepseek-ai/DeepSeek-V4-Flash": {
+        "max_tokens": 1000000,
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 384000,
+        "input_cost_per_token": 4e-08,
+        "output_cost_per_token": 8e-08,
+        "cache_read_input_token_cost": 1e-08,
+        "litellm_provider": "bitdeer-ai",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_reasoning": true,
+        "supports_prompt_caching": true,
+        "source": "https://www.bitdeer.ai/en/pricing/ai-models"
+    },
     "fallback_generalizations": {
         "rules": [
             {
