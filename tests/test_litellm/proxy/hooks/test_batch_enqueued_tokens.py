@@ -16,6 +16,7 @@ from typing import Final
 import pytest
 
 from litellm.caching.caching import DualCache
+from litellm.constants import BATCH_ENQUEUED_TOKEN_TTL_SECONDS
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.hooks.batch_enqueued_tokens import (
     BatchEnqueuedTokenOverLimit,
@@ -136,6 +137,7 @@ class _SingleKeyRedisFake:
         raise_after_landing_save_keys: frozenset[str] = frozenset(),
     ) -> None:
         self.script_calls: tuple[tuple[str, tuple[str, ...]], ...] = ()
+        self.save_ttls: tuple[int, ...] = ()
         self.counters: Mapping[str, int] = MappingProxyType({})
         self.records: Mapping[str, str] = MappingProxyType({})
         self.fail_reserve_keys = fail_reserve_keys
@@ -180,6 +182,7 @@ class _SingleKeyRedisFake:
             if keys[0] in self.fail_save_keys:
                 raise ConnectionError(f"simulated redis failure for {keys[0]}")
             self.records = MappingProxyType({**self.records, keys[0]: str(args[0])})
+            self.save_ttls = (*self.save_ttls, int(args[1]))
             if keys[0] in self.raise_after_landing_save_keys:
                 raise TimeoutError(f"simulated redis timeout after landing for {keys[0]}")
             return 1
@@ -301,6 +304,23 @@ async def test_local_ghost_left_by_landed_save_never_refunds_twice():
     assert await store.pop_reservation("batch_ghost") is None
     assert isinstance(await store.reserve(tokens=100, scopes=(scope,)), BatchEnqueuedTokenReservation)
     assert fake.counters[f"batch_enqueued_tokens:{scope.key}:{scope.value}"] == 100
+
+
+@pytest.mark.asyncio
+async def test_record_ttl_shrinks_by_elapsed_time_so_stale_records_never_outlive_their_counters():
+    scope = _scope(limit=100)
+    fake = _SingleKeyRedisFake()
+    ticks = iter((1_000.0, 1_030.5))
+    store = BatchEnqueuedTokenStore(
+        internal_usage_cache=InternalUsageCache(DualCache(redis_cache=fake, default_in_memory_ttl=60)),
+        monotonic=lambda: next(ticks),
+    )
+    reservation = await store.reserve(tokens=60, scopes=(scope,))
+    assert isinstance(reservation, BatchEnqueuedTokenReservation)
+    assert reservation.reserved_at_monotonic == 1_000.0
+    await store.save_reservation("batch_ttl_clamp", reservation)
+    assert fake.save_ttls == (BATCH_ENQUEUED_TOKEN_TTL_SECONDS - 31,)
+    assert await store.pop_reservation("batch_ttl_clamp") == reservation
 
 
 @pytest.mark.asyncio

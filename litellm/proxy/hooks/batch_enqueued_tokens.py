@@ -9,9 +9,11 @@ the reservation is refunded when the batch reaches a terminal state
 """
 
 import asyncio
+import math
+import time
 import uuid
-from collections.abc import Awaitable, Mapping, Sequence
-from dataclasses import dataclass
+from collections.abc import Awaitable, Callable, Mapping, Sequence
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Annotated, Final, Literal, Protocol, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
@@ -85,6 +87,7 @@ class BatchEnqueuedTokenReservation:
     scopes: tuple[BatchEnqueuedTokenScope, ...]
     backend: ReservationBackend = "redis"
     owner: str = ""
+    reserved_at_monotonic: float = field(default_factory=time.monotonic, compare=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -180,11 +183,18 @@ class BatchEnqueuedTokenStore:
     granted them, and in-memory grants also remember the granting worker, so a
     refund never debits counters the grant did not charge. Everything expires after
     ``BATCH_ENQUEUED_TOKEN_TTL_SECONDS`` so a crash between submission and the
-    terminal-state refund can never leak tokens forever.
+    terminal-state refund can never leak tokens forever, and reservation records
+    expire no later than the counters they would refund, so a stale record can
+    never debit an allowance re-granted after its counters expired.
     """
 
-    def __init__(self, internal_usage_cache: "InternalUsageCache") -> None:
+    def __init__(
+        self,
+        internal_usage_cache: "InternalUsageCache",
+        monotonic: Callable[[], float] = time.monotonic,
+    ) -> None:
         self.internal_usage_cache = internal_usage_cache
+        self._monotonic: Final = monotonic
         self._lock = asyncio.Lock()
         self._owner_token = uuid.uuid4().hex
         redis_cache = internal_usage_cache.dual_cache.redis_cache
@@ -235,6 +245,7 @@ class BatchEnqueuedTokenStore:
         tokens: int,
         scopes: tuple[BatchEnqueuedTokenScope, ...],
     ) -> BatchEnqueuedTokenOutcome:
+        started: Final = self._monotonic()
         for index, scope in enumerate(scopes):
             result = await self._run_reserve_script(
                 reserve_script,
@@ -246,7 +257,9 @@ class BatchEnqueuedTokenStore:
             if result[0] != 1:
                 await self._rollback_partial_reserve(refund_script, tokens=tokens, scopes=scopes[:index])
                 return BatchEnqueuedTokenOverLimit(scope=scope, enqueued=result[1])
-        return BatchEnqueuedTokenReservation(tokens=tokens, scopes=scopes, backend="redis")
+        return BatchEnqueuedTokenReservation(
+            tokens=tokens, scopes=scopes, backend="redis", reserved_at_monotonic=started
+        )
 
     async def _run_reserve_script(
         self,
@@ -295,6 +308,7 @@ class BatchEnqueuedTokenStore:
         scopes: tuple[BatchEnqueuedTokenScope, ...],
         span: "Span | None",
     ) -> BatchEnqueuedTokenOutcome:
+        started: Final = self._monotonic()
         async with self._lock:
             currents: Final = tuple([await self._get_local_counter(scope, span) for scope in scopes])
             for scope, current in zip(scopes, currents):
@@ -302,7 +316,9 @@ class BatchEnqueuedTokenStore:
                     return BatchEnqueuedTokenOverLimit(scope=scope, enqueued=current)
             for scope, current in zip(scopes, currents):
                 await self._set_local_counter(scope, current + tokens, span)
-        return BatchEnqueuedTokenReservation(tokens=tokens, scopes=scopes, backend="memory", owner=self._owner_token)
+        return BatchEnqueuedTokenReservation(
+            tokens=tokens, scopes=scopes, backend="memory", owner=self._owner_token, reserved_at_monotonic=started
+        )
 
     async def refund(
         self,
@@ -349,11 +365,13 @@ class BatchEnqueuedTokenStore:
         litellm_parent_otel_span: "Span | None" = None,
     ) -> None:
         serialized: Final = _RESERVATION_ADAPTER.dump_json(reservation).decode("utf-8")
+        elapsed: Final = self._monotonic() - reservation.reserved_at_monotonic
+        ttl: Final = max(1, BATCH_ENQUEUED_TOKEN_TTL_SECONDS - math.ceil(elapsed))
         if self._save_script is not None:
             try:
                 await self._save_script(
                     (self._record_key(batch_id),),
-                    (serialized, BATCH_ENQUEUED_TOKEN_TTL_SECONDS),
+                    (serialized, ttl),
                 )
             except Exception as e:  # noqa: BLE001  # any Redis failure must fall back to the in-memory record
                 verbose_proxy_logger.warning(
@@ -364,7 +382,7 @@ class BatchEnqueuedTokenStore:
         await self.internal_usage_cache.async_set_cache(
             key=self._record_key(batch_id),
             value=serialized,
-            ttl=BATCH_ENQUEUED_TOKEN_TTL_SECONDS,
+            ttl=ttl,
             litellm_parent_otel_span=litellm_parent_otel_span,
             local_only=True,
         )
