@@ -168,8 +168,12 @@ def _resolve_secret(record: CliTokenRecord, vault: SecretVault) -> CliTokenRecor
 
 
 def _apply_vault_secret(record: CliTokenRecord, blob: str, vault: SecretVault) -> CliTokenRecord | None:
+    """Resolve the credential when both stores hold one.
+
+    A secret still on disk is the fresher of the two, because it is only left there when the
+    keychain write that should have removed it failed, so it outranks the vault entry.
+    """
     if record.key is not None:
-        # a secret still on disk means the last keychain write failed: the file outranks the vault
         return _migrate_file_secret(record, vault)
     try:
         secret: Final = CliTokenSecret.model_validate_json(blob)
