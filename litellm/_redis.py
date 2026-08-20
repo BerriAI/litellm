@@ -577,8 +577,10 @@ def _init_async_redis_sentinel(redis_kwargs) -> async_redis.Redis:
 
 
 def _async_credential_provider(redis_connect_func: object | None) -> CredentialProvider | None:
-    """Async redis-py never calls ``redis_connect_func``; it authenticates through a
-    ``CredentialProvider``, which it consults per connection so the token refreshes."""
+    """``redis_connect_func`` runs the AUTH exchange with the blocking client API, so on an
+    async connection its ``send_command``/``read_response`` calls return coroutines nobody
+    awaits and every connect fails. Async paths authenticate through a ``CredentialProvider``
+    instead, which redis-py consults per connection so the token stays fresh."""
     gcp_service_account: Final = getattr(redis_connect_func, "_gcp_service_account", None)
     if gcp_service_account is not None:
         return GCPIAMCredentialProvider(gcp_service_account)
