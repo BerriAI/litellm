@@ -3428,3 +3428,104 @@ def test_auto_router_dry_runs_share_model_new_audience(user_role, dry_run_route)
     # Anchor so parity cannot be satisfied by both routes 403ing for everyone
     if user_role == LitellmUserRoles.INTERNAL_USER.value:
         assert outcome(dry_run_route) == "allowed"
+
+
+AGENT_MANAGEMENT_ROUTES = [
+    "/v1/agents",
+    "/v1/agents/abc-123",
+    "/v1/agents/make_public",
+    "/v1/agents/abc-123/make_public",
+]
+
+AGENT_INFERENCE_ROUTES = [
+    "/a2a/abc-123",
+    "/a2a/abc-123/message/send",
+    "/a2a/abc-123/message/stream",
+    "/a2a/abc-123/.well-known/agent-card.json",
+]
+
+
+@pytest.mark.parametrize("route", AGENT_MANAGEMENT_ROUTES)
+def test_agent_management_routes_classified_as_management_not_llm_api(route):
+    """Agent registry CRUD must be management routes, not llm_api routes.
+
+    Regression for the Admin UI Agents tab failing with "LLM API routes are
+    disabled for this instance." on admin nodes that set
+    DISABLE_LLM_API_ENDPOINTS.
+    """
+
+    assert RouteChecks.is_llm_api_route(route=route) is False
+    assert RouteChecks.is_management_route(route=route) is True
+
+
+@pytest.mark.parametrize("route", AGENT_INFERENCE_ROUTES)
+def test_agent_inference_routes_stay_llm_api(route):
+    """A2A invocation stays on the data plane, gated by DISABLE_LLM_API_ENDPOINTS."""
+
+    assert RouteChecks.is_llm_api_route(route=route) is True
+    assert RouteChecks.is_management_route(route=route) is False
+
+
+@pytest.mark.parametrize("route", AGENT_MANAGEMENT_ROUTES + AGENT_INFERENCE_ROUTES)
+def test_agent_routes_union_still_covers_both_halves(route):
+    """Keys configured with allowed_routes=["agent_routes"] must keep both halves."""
+
+    assert (
+        RouteChecks.check_route_access(
+            route=route, allowed_routes=LiteLLMRoutes.agent_routes.value
+        )
+        is True
+    )
+
+
+@pytest.mark.parametrize("route", AGENT_MANAGEMENT_ROUTES)
+@pytest.mark.parametrize("method", ["GET", "POST", "DELETE"])
+def test_virtual_key_llm_api_routes_allows_agent_registry(route, method):
+    """Keys with allowed_routes=["llm_api_routes"] could reach agent CRUD before the
+    inference/management split and must still reach it after.
+
+    Writes remain proxy-admin-only inside agent_endpoints/endpoints.py, so this
+    carve-out is not method-aware.
+    """
+
+    valid_token = UserAPIKeyAuth(user_id="test_user", allowed_routes=["llm_api_routes"])
+
+    assert (
+        RouteChecks.is_virtual_key_allowed_to_call_route(
+            route=route,
+            valid_token=valid_token,
+            request=_mock_request(method),
+        )
+        is True
+    )
+
+
+@pytest.mark.parametrize(
+    "user_role",
+    [
+        LitellmUserRoles.INTERNAL_USER.value,
+        LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value,
+        None,
+    ],
+)
+@pytest.mark.parametrize("method, route", [("GET", "/v1/agents"), ("POST", "/v1/agents")])
+def test_agent_registry_route_gate_open_to_non_admin_roles(user_role, method, route):
+    """Non-admin callers reached agent CRUD through llm_api_routes before the split.
+
+    The route gate must keep letting them through so the handlers can scope the
+    listing by role and 403 non-admin writes themselves.
+    """
+
+    valid_token = UserAPIKeyAuth(user_id="test_user", user_role=user_role)
+    request = MagicMock(spec=Request)
+    request.method = method
+    request.query_params = {}
+
+    RouteChecks.non_proxy_admin_allowed_routes_check(
+        user_obj=LiteLLM_UserTable(user_id="test_user", user_role=user_role),
+        _user_role=user_role,
+        route=route,
+        request=request,
+        valid_token=valid_token,
+        request_data={},
+    )

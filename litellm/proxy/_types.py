@@ -515,15 +515,28 @@ class LiteLLMRoutes(enum.Enum):
     # allowed_routes=["mcp_routes"], which should cover both halves.
     mcp_routes = mcp_inference_routes + mcp_management_routes
 
-    agent_routes = [
-        "/v1/agents",
-        "/v1/agents/{agent_id}",
+    # A2A agent invocation / discovery routes — data-plane. Gated by DISABLE_LLM_API_ENDPOINTS.
+    agent_inference_routes = (
         "/agents",
         "/a2a/{agent_id}",
         "/a2a/{agent_id}/message/send",
         "/a2a/{agent_id}/message/stream",
         "/a2a/{agent_id}/.well-known/agent-card.json",
-    ]
+    )
+
+    # Agent registry CRUD routes — control-plane. Gated by DISABLE_ADMIN_ENDPOINTS.
+    # The handlers in agent_endpoints/endpoints.py enforce proxy-admin on writes and
+    # scope reads by role, so these also appear in self_managed_routes.
+    agent_management_routes = (
+        "/v1/agents",
+        "/v1/agents/{agent_id}",
+        "/v1/agents/make_public",
+        "/v1/agents/{agent_id}/make_public",
+    )
+
+    # Backwards-compat union — virtual keys may be configured with
+    # allowed_routes=["agent_routes"], which should cover both halves.
+    agent_routes = agent_inference_routes + agent_management_routes
 
     google_routes = [
         "/v1beta/models/{model_name:path}:countTokens",
@@ -563,7 +576,7 @@ class LiteLLMRoutes(enum.Enum):
         + apply_guardrail_routes
         + mcp_inference_routes
         + litellm_native_routes
-        + agent_routes
+        + list(agent_inference_routes)
         + model_info_routes
     )
     info_routes = [
@@ -664,6 +677,7 @@ class LiteLLMRoutes(enum.Enum):
         ]
         + key_management_routes
         + mcp_management_routes
+        + list(agent_management_routes)
     )
 
     spend_tracking_routes = [
@@ -836,6 +850,9 @@ class LiteLLMRoutes(enum.Enum):
         # proxy admin, or team admin naming their own team via team_id
         "/auto_router/test_routing",
         "/auto_router/validate_complexity_router_config",
+        # Agent registry - reads are role-scoped and writes are proxy-admin-gated
+        # inside agent_endpoints/endpoints.py
+        *agent_management_routes,
     ]  # routes that manage their own allowed/disallowed logic
 
     ## Org Admin Routes ##
