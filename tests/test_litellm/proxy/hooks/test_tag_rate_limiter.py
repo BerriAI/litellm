@@ -1039,6 +1039,61 @@ async def test_log_success_event_accounts_against_the_key_hash_admission_checked
     assert await limiter.internal_usage_cache.async_get_cache(key=unkeyed_bucket, litellm_parent_otel_span=None) is None
 
 
+@pytest.mark.asyncio
+async def test_log_success_event_charges_the_window_admission_checked_not_a_later_one(time_controller):
+    """
+    Admission classifies its bucket as int(now) // period_seconds at filter
+    time; success accounting used to recompute a fresh now of its own, so a
+    call slow enough to cross a period_seconds boundary between admission and
+    completion got admitted against one window's (still-open) counter but
+    charged into the next window's fresh, empty one -- silently bypassing the
+    limit for calls straddling each rollover. Success must charge the exact
+    window admission classified against, not whatever window happens to be
+    current when the response finishes.
+    """
+    token_limits = {
+        "token_limits": {"limits": [{"name": "per_minute", "tag_id": "end_user_id", "limit": 500, "period_seconds": 60}]}
+    }
+    router = litellm.Router(model_list=[_deployment("grp", "dep-1", token_limits)])
+    limiter = _make_limiter(time_controller)
+    limiter.update_variables(llm_router=router)
+    healthy = router.model_list
+    request_kwargs, kwargs = _call_context(["end_user_id:u1"])
+
+    admission_time = time_controller.now().timestamp()
+    result = await limiter.async_filter_deployments(
+        model="grp", healthy_deployments=healthy, messages=None, request_kwargs=request_kwargs
+    )
+    assert result == healthy
+
+    # The response takes long enough to cross into the next 60s window before
+    # completing.
+    time_controller.advance(61)
+    kwargs["standard_logging_object"] = {
+        "model_group": "grp",
+        "model_id": "dep-1",
+        "total_tokens": 42,
+        "response_cost": 0.01,
+    }
+    await limiter.async_log_success_event(kwargs=kwargs, response_obj=None, start_time=0, end_time=0)
+    await asyncio.sleep(0)
+
+    admitted_window_bucket = _expected_bucket_key("grp", "tokens", "per_minute", "end_user_id", "u1", 60, admission_time)
+    later_window_bucket = _expected_bucket_key(
+        "grp", "tokens", "per_minute", "end_user_id", "u1", 60, time_controller.now().timestamp()
+    )
+    assert (
+        float(
+            await limiter.internal_usage_cache.async_get_cache(key=admitted_window_bucket, litellm_parent_otel_span=None)
+        )
+        == 42.0
+    )
+    assert (
+        await limiter.internal_usage_cache.async_get_cache(key=later_window_bucket, litellm_parent_otel_span=None)
+        is None
+    )
+
+
 # ---------------------------------------------------------------------------
 # concurrency limits -- reserve at admission, release on success/failure
 # ---------------------------------------------------------------------------

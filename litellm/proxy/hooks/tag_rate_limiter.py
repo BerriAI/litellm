@@ -539,6 +539,19 @@ _CONCURRENCY_MIN_SAFETY_TTL_SECONDS: Final = 3600
 # can't be forged or guessed.
 _PENDING_CONCURRENCY_KEYS_FIELD: Final[str] = "_tag_rate_limiter_pending_concurrency_keys"
 
+# The admission-time timestamp a hop's token/dollar checks classified their
+# bucket against, stashed on the same model_call_details object so success
+# accounting recomputes the identical bucket_id (int(now) // period_seconds)
+# instead of a fresh one. A completion can take long enough for a fresh
+# timestamp at success time to land in the *next* window than the one
+# admission actually checked, letting a burst of calls admitted against one
+# (still-under-limit) window get charged entirely into the next window's
+# fresh, unrelated counter -- silently bypassing the limit right around each
+# rollover. Overwritten by each hop's own admission (last-write-wins), which
+# is correct: success only ever fires for whichever hop actually served the
+# request, so its own most recent admission timestamp is the right one.
+_ADMISSION_TIME_FIELD: Final[str] = "_tag_rate_limiter_admission_time"
+
 
 class _TagRateLimitIndex:
     """Rebuilds the limits index when `llm_router.model_list` changes, or at
@@ -764,6 +777,22 @@ def _queue_pending_concurrency_reservations(
         pending = []  # mutable-ok: shared, request-scoped accumulator; see field's own docstring
         model_call_details[_PENDING_CONCURRENCY_KEYS_FIELD] = pending
     pending.extend(reservations)  # mutable-ok: see comment above
+
+
+def _record_admission_time(request_kwargs: Mapping[str, object], now: float) -> None:
+    """Stash this hop's admission timestamp -- see `_ADMISSION_TIME_FIELD`'s
+    docstring for why. Silently a no-op without a real logging object
+    (defensive only; every real request has one): success accounting falls
+    back to its own fresh timestamp, same as before this fix existed."""
+    logging_obj: Final = request_kwargs.get("litellm_logging_obj")
+    model_call_details: Final = getattr(logging_obj, "model_call_details", None)
+    if isinstance(model_call_details, dict):
+        model_call_details[_ADMISSION_TIME_FIELD] = now
+
+
+def _admission_time_or(kwargs: Mapping[str, object], fallback: float) -> float:
+    recorded: Final = kwargs.get(_ADMISSION_TIME_FIELD)
+    return recorded if isinstance(recorded, float) else fallback
 
 
 @dataclass(frozen=True, slots=True)
@@ -996,6 +1025,7 @@ class _PROXY_TagRateLimiter(  # pyright: ignore[reportUnusedClass]  # only refer
         )
 
         now: Final = self._time_provider().timestamp()
+        _record_admission_time(resolved_request_kwargs, now)
         classified: Final = tuple(
             check
             for configured_limit in configured
@@ -1326,7 +1356,7 @@ class _PROXY_TagRateLimiter(  # pyright: ignore[reportUnusedClass]  # only refer
         if not tags:
             return
 
-        now: Final = self._time_provider().timestamp()
+        now: Final = _admission_time_or(kwargs, fallback=self._time_provider().timestamp())
         increment_by_unit: Final[Mapping[_LimitUnit, float]] = MappingProxyType(
             {
                 "tokens": float(standard_logging_object.get("total_tokens") or 0),
