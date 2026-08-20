@@ -1333,14 +1333,20 @@ class _PROXY_TagRateLimiter(  # pyright: ignore[reportUnusedClass]  # only refer
         if not model_group:
             return
 
-        standard_logging_metadata: Final = standard_logging_object.get("metadata") or _EMPTY_MAPPING
-        team_id: Final = standard_logging_metadata.get("user_api_key_team_id")
         # kwargs here is Logging.model_call_details, not the router's flat
         # request kwargs admission sees: metadata/litellm_metadata are never
         # top-level here, only nested under kwargs["litellm_params"] (see
         # Logging.update_environment_variables).
         litellm_params_for_metadata: Final = kwargs.get("litellm_params") or kwargs
         metadata_variable_name: Final = get_metadata_variable_name_from_kwargs(litellm_params_for_metadata)
+        # standard_logging_object.metadata.user_api_key_team_id is built from
+        # whatever litellm_logging.py resolves as "the" metadata dict for the
+        # payload, not necessarily the same metadata_variable_name-authoritative
+        # field admission itself used -- reading straight from kwargs with the
+        # exact same helper admission calls (_extract_team_id) keeps this
+        # bucket identical to the one admission already scoped the check
+        # against, on every route regardless of which field is authoritative.
+        team_id: Final = _extract_team_id(litellm_params_for_metadata, metadata_variable_name)
         # standard_logging_object.metadata.user_api_key_hash is only ever
         # populated when the raw value happens to look like a SHA-256 hash
         # (see litellm_logging.py's get_standard_logging_metadata), so it

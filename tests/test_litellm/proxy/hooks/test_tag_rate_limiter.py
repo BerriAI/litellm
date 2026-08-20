@@ -1146,6 +1146,67 @@ async def test_log_success_event_charges_the_window_admission_checked_not_a_late
     )
 
 
+@pytest.mark.asyncio
+async def test_log_success_event_accounts_against_the_team_id_admission_checked(time_controller):
+    """
+    Admission resolves team_id via `_extract_team_id`, the single
+    metadata_variable_name-authoritative field lookup -- success used to read
+    `standard_logging_object.metadata.user_api_key_team_id` instead, a
+    separately-constructed field that isn't guaranteed to come from the same
+    field admission used (e.g. on LITELLM_METADATA_ROUTES, where
+    `litellm_metadata` is authoritative but `standard_logging_object` may
+    still reflect a different resolution). A mismatched team_id changes
+    team_scope, which is hashed into the bucket key, so success would charge
+    a different bucket than the one admission's team-aliased lookup checked.
+    """
+    deployment = _deployment(
+        "real-model-name",
+        "dep-1",
+        {"token_limits": {"limits": [{"name": "daily", "tag_id": "end_user_id", "limit": 500, "period_seconds": 86400}]}},
+    )
+    deployment["model_info"]["team_id"] = "team-1"
+    deployment["model_info"]["team_public_model_name"] = "team-alias-name"
+    router = litellm.Router(model_list=[deployment])
+    limiter = _make_limiter(time_controller)
+    limiter.update_variables(llm_router=router)
+    healthy = router.model_list
+
+    # LITELLM_METADATA_ROUTES shape: litellm_metadata is the authoritative
+    # field, and team-alias resolution requires the real team_id from it.
+    request_kwargs = {"litellm_metadata": {"tags": ["end_user_id:u1"], "user_api_key_team_id": "team-1"}}
+    result = await limiter.async_filter_deployments(
+        model="team-alias-name", healthy_deployments=healthy, messages=None, request_kwargs=request_kwargs
+    )
+    assert result == healthy
+
+    # standard_logging_object's own team_id deliberately disagrees with the
+    # real one in litellm_params.litellm_metadata, simulating litellm_logging.py
+    # resolving a different field than the one admission used.
+    kwargs = {
+        "litellm_params": {"litellm_metadata": {"tags": ["end_user_id:u1"], "user_api_key_team_id": "team-1"}},
+        "standard_logging_object": {
+            "model_group": "team-alias-name",
+            "model_id": "dep-1",
+            "total_tokens": 42,
+            "response_cost": 0.01,
+            "metadata": {"user_api_key_team_id": None},
+        },
+    }
+    await limiter.async_log_success_event(kwargs=kwargs, response_obj=None, start_time=0, end_time=0)
+    await asyncio.sleep(0)
+
+    now = time_controller.now().timestamp()
+    correct_bucket = _expected_bucket_key(
+        "team-alias-name", "tokens", "daily", "end_user_id", "u1", 86400, now, team_scope="team-1"
+    )
+    wrong_bucket = _expected_bucket_key("team-alias-name", "tokens", "daily", "end_user_id", "u1", 86400, now)
+    assert (
+        float(await limiter.internal_usage_cache.async_get_cache(key=correct_bucket, litellm_parent_otel_span=None))
+        == 42.0
+    )
+    assert await limiter.internal_usage_cache.async_get_cache(key=wrong_bucket, litellm_parent_otel_span=None) is None
+
+
 # ---------------------------------------------------------------------------
 # concurrency limits -- reserve at admission, release on success/failure
 # ---------------------------------------------------------------------------
