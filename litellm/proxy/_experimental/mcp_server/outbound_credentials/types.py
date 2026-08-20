@@ -39,7 +39,7 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.result import (
     Ok,
     Result,
 )
-from litellm.types.mcp import DEFAULT_SUBJECT_TOKEN_TYPE
+from litellm.types.mcp import DEFAULT_OAUTH_TOKEN_HEADER, DEFAULT_SUBJECT_TOKEN_TYPE
 
 
 class AuthSpecKind(str, Enum):
@@ -190,6 +190,10 @@ class ClientCredentialsConfig(BaseModel):
     the client_credentials grant (sent as `audience` in the token request when set).
     `token_endpoint_auth_method` selects how the client authenticates to the token endpoint
     (RFC 6749 section 2.3.1); `None` defaults to `client_secret_post`.
+
+    `token_header` is the upstream header the minted token is written to. It defaults to
+    `Authorization`, and an upstream that reads the minted token beside a static `Authorization`
+    credential of its own configures another header so the two do not collide.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -201,6 +205,7 @@ class ClientCredentialsConfig(BaseModel):
     audience: str | None = None
     upstream_resource: str | None = None
     token_endpoint_auth_method: Literal["client_secret_post", "client_secret_basic"] | None = None
+    token_header: str = DEFAULT_OAUTH_TOKEN_HEADER
 
 
 class TokenExchangeConfig(BaseModel):

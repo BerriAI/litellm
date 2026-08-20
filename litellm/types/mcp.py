@@ -2,7 +2,7 @@ import enum
 from typing import TYPE_CHECKING, Any, Final, Literal
 
 from pydantic import BaseModel
-from typing_extensions import TypedDict
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm.types.llms.base import HiddenParams
 
@@ -222,8 +222,24 @@ class MCPCredentials(TypedDict, total=False):
     top-level request field.
     """
 
+    oauth_token_header: ReadOnly[str | None]
+    """
+    Header the gateway-minted upstream OAuth token is written to. Defaults to ``Authorization``.
+    Set it to another header (e.g. ``x-upstream-oauth``) when the upstream reads the minted token
+    beside a different static ``Authorization`` credential of its own, which would otherwise
+    collide with it. Not a secret; stored unencrypted.
+    """
 
-MCP_ADMIN_CONFIG_CREDENTIAL_KEYS: Final[tuple[str, ...]] = ("upstream_resource",)
+
+DEFAULT_OAUTH_TOKEN_HEADER: Final = "Authorization"
+
+
+def resolve_oauth_token_header(configured: str | None) -> str:
+    """The header a gateway-minted OAuth token is written to, defaulting to ``Authorization``."""
+    return (configured or "").strip() or DEFAULT_OAUTH_TOKEN_HEADER
+
+
+MCP_ADMIN_CONFIG_CREDENTIAL_KEYS: Final[tuple[str, ...]] = ("upstream_resource", "oauth_token_header")
 """Non-secret credential keys returned on read so the admin form can show and clear them. Mirrors
 ``ADMIN_CONFIG_CREDENTIAL_KEYS`` in ``ui/litellm-dashboard/src/components/mcp_tools/types.tsx``."""
 

@@ -51,6 +51,7 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
     ClientCredentialsConfig,
     CredError,
 )
+from litellm.types.mcp import DEFAULT_OAUTH_TOKEN_HEADER
 
 
 class TokenEndpointSuccess(BaseModel):
@@ -326,10 +327,19 @@ class ClientCredentialsBearerAuth(httpx.Auth):
     The initial token was already resolved (so config/IdP failures surfaced as typed errors
     before any upstream request); ``refetch`` is the source's 401-recovery callback. If the
     refetch fails, or the retried request 401s again, the upstream's response stands.
+
+    ``header_name`` is the header the token is written to. It defaults to ``Authorization``;
+    a server whose upstream reads the minted token beside a static ``Authorization`` of its own
+    configures another header, and only that header is touched here so the static one survives.
     """
 
-    def __init__(self, access_token: str, refetch: Callable[[str], Awaitable[str | None]]) -> None:
-        self.header_name = "Authorization"
+    def __init__(
+        self,
+        access_token: str,
+        refetch: Callable[[str], Awaitable[str | None]],
+        header_name: str = DEFAULT_OAUTH_TOKEN_HEADER,
+    ) -> None:
+        self.header_name = header_name
         self._access_token = SecretStr(access_token)
         self._refetch = refetch
 

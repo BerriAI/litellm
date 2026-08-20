@@ -35,7 +35,7 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
     Subject,
     TokenExchangeConfig,
 )
-from litellm.types.mcp import DEFAULT_SUBJECT_TOKEN_TYPE, MCPAuth
+from litellm.types.mcp import DEFAULT_SUBJECT_TOKEN_TYPE, MCPAuth, resolve_oauth_token_header
 
 if TYPE_CHECKING:
     from litellm.proxy._types import UserAPIKeyAuth
@@ -147,6 +147,7 @@ def _client_credentials_spec(server: MCPServer, resource: str) -> ServerSpec:
             audience=server.audience,
             upstream_resource=resolve_upstream_resource(server),
             token_endpoint_auth_method=server.token_endpoint_auth_method,
+            token_header=resolve_oauth_token_header(server.oauth_token_header),
         ),
     )
 

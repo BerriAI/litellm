@@ -307,7 +307,7 @@ class UpstreamCredentialProvider:
         match await self._client_credentials_source.get(server_id, config):
             case Ok(token):
                 refetch: Final = partial(self._client_credentials_source.refetch, server_id, config)
-                return Ok(ClientCredentialsBearerAuth(token.access_token, refetch))
+                return Ok(ClientCredentialsBearerAuth(token.access_token, refetch, header_name=config.token_header))
             case Error(err):
                 return Error(err)
 

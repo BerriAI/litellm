@@ -86,6 +86,10 @@ class MCPServer(BaseModel):
     # today's behavior; "auto" derives the canonical URI from ``url``; any other value is sent
     # verbatim. Resolved by ``oauth_utils.resolve_upstream_resource``.
     upstream_resource: str | None = None
+    # Header the gateway-minted upstream OAuth token is written to. None means ``Authorization``,
+    # today's behavior. A custom header keeps the minted token from colliding with a static
+    # ``Authorization`` the upstream also requires.
+    oauth_token_header: str | None = None
     # AWS SigV4 fields
     aws_access_key_id: str | None = None
     aws_secret_access_key: str | None = None

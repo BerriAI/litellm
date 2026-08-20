@@ -401,6 +401,19 @@ async def test_client_credentials_emits_the_minted_bearer():
 
 
 @pytest.mark.asyncio
+async def test_client_credentials_emits_the_minted_token_on_the_configured_header():
+    source = _FakeM2MSource(Ok(OAuthToken(access_token="m2m-at")))
+    config = _M2M.model_copy(update={"token_header": "esb-oauth"})
+    result = await UpstreamCredentialProvider(client_credentials_source=source).resolve_credentials(
+        _SUBJECT, _spec(config)
+    )
+    assert isinstance(result, Ok)
+    headers, _ = await _emitted_async(result.ok)
+    assert headers["esb-oauth"] == "Bearer m2m-at"
+    assert "Authorization" not in headers
+
+
+@pytest.mark.asyncio
 async def test_client_credentials_ignores_the_subject():
     # The contract's no-user-context clause: every caller shares the one client identity.
     source = _FakeM2MSource(Ok(OAuthToken(access_token="m2m-at")))
