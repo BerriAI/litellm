@@ -6332,7 +6332,9 @@ class ProxyConfig:
         if db_general_settings is None:
             return
         _general_settings: Final = dict(db_general_settings)
-        health_check_settings: Final = frozenset("background_health_checks use_shared_health_check health_check_interval health_check_concurrency health_check_details enable_health_check_routing health_check_staleness_threshold health_check_ignore_transient_errors".split())  # noqa: E501  # keep immutable DB setting key list compact
+        health_check_settings: Final = frozenset(
+            "background_health_checks use_shared_health_check health_check_interval health_check_concurrency health_check_details enable_health_check_routing health_check_staleness_threshold health_check_ignore_transient_errors".split()
+        )  # noqa: E501  # keep immutable DB setting key list compact
 
         def _db_setting_is_active(key: str) -> bool:
             return key in _general_settings and key not in self._yaml_general_settings_keys
