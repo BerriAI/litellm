@@ -12,7 +12,15 @@ import React from "react";
 import { ModelGroup } from "@/components/llm_calls/fetch_models";
 import AdaptiveRoutingConfig from "./AdaptiveRoutingConfig";
 import ClassificationMethodConfig from "./ClassificationMethodConfig";
-import { resolveComplexityDefaultModel, tierOptions } from "./complexity_router_tiers";
+import {
+  ReasoningEffort,
+  TierModelParamsByTier,
+  pruneTierModelParams,
+  resolveComplexityDefaultModel,
+  setTierModelReasoningEffort,
+  tierOptions,
+} from "./complexity_router_tiers";
+import TierModelEffortRows from "./TierModelEffortRows";
 import EscalationKeywords from "./EscalationKeywords";
 import KeywordTierRules, { KeywordTierRule } from "./KeywordTierRules";
 import SemanticKeywordMatching from "./SemanticKeywordMatching";
@@ -153,6 +161,12 @@ export interface ComplexityRouterConfigValue {
    * floor tracks tier_boundaries.simple_medium; an explicit 0 is a real floor that promotes on the markers alone.
    */
   reasoning_override_min_score?: number;
+  /**
+   * Per-(tier, model) litellm_params, serialized to the sibling tier_model_configs key. The full
+   * params object is held, not just reasoning_effort, so keys authored in config.yaml survive an
+   * edit round-trip.
+   */
+  tier_model_params?: TierModelParamsByTier;
 }
 
 interface ComplexityRouterConfigProps {
@@ -237,6 +251,10 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
   const defaultModel = resolveComplexityDefaultModel(value.tiers, value.default_model);
 
   // Embedding models can't serve a chat-completion role, so they're excluded here.
+  const reasoningModels = new Set(
+    modelInfo.filter((model) => model.supports_reasoning).map((model) => model.model_group),
+  );
+
   const modelOptions = modelInfo
     .filter((model) => model.mode !== "embedding")
     .map((model) => ({
@@ -248,6 +266,18 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
     onChange({
       ...value,
       tiers: { ...value.tiers, [tier]: models },
+      tier_model_params: pruneTierModelParams(value.tier_model_params, tier, models),
+    });
+  };
+
+  const handleTierModelEffortChange = (
+    tier: keyof ComplexityTiers,
+    model: string,
+    effort: ReasoningEffort | undefined,
+  ) => {
+    onChange({
+      ...value,
+      tier_model_params: setTierModelReasoningEffort(value.tier_model_params, tier, model, effort),
     });
   };
 
@@ -331,6 +361,13 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
                     placeholder={`Select model(s) for ${label.toLowerCase()} queries`}
                     emptyText="No models found"
                     className={tierMissing ? "w-full border-destructive" : "w-full"}
+                  />
+                  <TierModelEffortRows
+                    tierLabel={label}
+                    models={value.tiers[tier]}
+                    reasoningModels={reasoningModels}
+                    paramsByModel={value.tier_model_params?.[tier]}
+                    onEffortChange={(model, effort) => handleTierModelEffortChange(tier, model, effort)}
                   />
                   {value.tiers[tier].length > 1 && (
                     <span className="text-xs text-muted-foreground">

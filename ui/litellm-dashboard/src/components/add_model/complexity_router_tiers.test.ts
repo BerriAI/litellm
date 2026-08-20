@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 
-import { normalizeTierModels, resolveComplexityDefaultModel } from "./complexity_router_tiers";
+import {
+  hydrateTierModelParams,
+  normalizeTierModels,
+  pruneTierModelParams,
+  resolveComplexityDefaultModel,
+  serializeTierModelConfigs,
+  setTierModelReasoningEffort,
+} from "./complexity_router_tiers";
 
 import type { ComplexityTiers } from "./ComplexityRouterConfig";
 
@@ -68,5 +75,162 @@ describe("resolveComplexityDefaultModel", () => {
 
   it("resolves to nothing when neither a pin nor a tier offers a model", () => {
     expect(resolveComplexityDefaultModel(noTiers)).toBeUndefined();
+  });
+});
+
+// The backend also accepts `{model_name, litellm_params}` entries and splits them into the
+// sibling tier_model_configs key at validation (config.py `_normalize_tier_model_configs`).
+// Before this widening, an object entry was silently dropped here, so opening the edit modal on
+// a yaml-authored config rendered the tier empty and the next save destroyed it.
+describe("normalizeTierModels object entries", () => {
+  it("reads model_name from an object entry the way the backend does", () => {
+    expect(normalizeTierModels([{ model_name: "opus", litellm_params: { reasoning_effort: "high" } }, "mini"])).toEqual(
+      ["opus", "mini"],
+    );
+  });
+
+  it("widens a single object entry to a one-element pool", () => {
+    expect(normalizeTierModels({ model_name: "opus" })).toEqual(["opus"]);
+  });
+
+  it("drops an object without a model_name", () => {
+    expect(normalizeTierModels([{ litellm_params: { reasoning_effort: "high" } }])).toEqual([]);
+  });
+});
+
+describe("hydrateTierModelParams", () => {
+  it("reads the sibling tier_model_configs key", () => {
+    expect(
+      hydrateTierModelParams(
+        { MEDIUM: ["opus"] },
+        { MEDIUM: [{ model_name: "opus", litellm_params: { reasoning_effort: "medium" } }] },
+      ),
+    ).toEqual({ MEDIUM: { opus: { reasoning_effort: "medium" } } });
+  });
+
+  it("reads inline object entries out of tiers", () => {
+    expect(
+      hydrateTierModelParams(
+        { COMPLEX: [{ model_name: "opus", litellm_params: { reasoning_effort: "high" } }] },
+        undefined,
+      ),
+    ).toEqual({ COMPLEX: { opus: { reasoning_effort: "high" } } });
+  });
+
+  // config.py merges the two sources with tier_model_configs winning per (tier, model); hydrating
+  // the other way round would show the operator a value the router never uses.
+  it("lets tier_model_configs beat an inline entry for the same tier and model", () => {
+    expect(
+      hydrateTierModelParams(
+        { MEDIUM: [{ model_name: "opus", litellm_params: { reasoning_effort: "low" } }] },
+        { MEDIUM: [{ model_name: "opus", litellm_params: { reasoning_effort: "medium" } }] },
+      ),
+    ).toEqual({ MEDIUM: { opus: { reasoning_effort: "medium" } } });
+  });
+
+  it("hydrates to undefined when nothing carries params, so an untouched save stays byte-identical", () => {
+    expect(
+      hydrateTierModelParams({ SIMPLE: ["mini"], MEDIUM: [{ model_name: "opus", litellm_params: {} }] }, undefined),
+    ).toBeUndefined();
+  });
+});
+
+describe("serializeTierModelConfigs", () => {
+  const tiers: ComplexityTiers = { SIMPLE: ["mini"], MEDIUM: ["opus"], COMPLEX: ["opus"], REASONING: [] };
+
+  it("emits the sibling wire shape per tier and model", () => {
+    expect(
+      serializeTierModelConfigs(tiers, {
+        MEDIUM: { opus: { reasoning_effort: "medium" } },
+        COMPLEX: { opus: { reasoning_effort: "high" } },
+      }),
+    ).toEqual({
+      MEDIUM: [{ model_name: "opus", litellm_params: { reasoning_effort: "medium" } }],
+      COMPLEX: [{ model_name: "opus", litellm_params: { reasoning_effort: "high" } }],
+    });
+  });
+
+  it("prunes params for a model no longer selected in the tier", () => {
+    expect(
+      serializeTierModelConfigs(tiers, { MEDIUM: { "removed-model": { reasoning_effort: "low" } } }),
+    ).toBeUndefined();
+  });
+
+  // Params authored in config.yaml alongside reasoning_effort must survive an edit round-trip.
+  it("carries params keys this editor has no control for", () => {
+    expect(
+      serializeTierModelConfigs(tiers, { MEDIUM: { opus: { reasoning_effort: "medium", max_tokens: 512 } } }),
+    ).toEqual({
+      MEDIUM: [{ model_name: "opus", litellm_params: { reasoning_effort: "medium", max_tokens: 512 } }],
+    });
+  });
+
+  // This modal renders only the four built-in tiers; params stored under an operator-defined tier
+  // must pass through rather than being dropped the moment the key became managed.
+  it("passes tiers this editor does not render through untouched", () => {
+    expect(serializeTierModelConfigs(tiers, { DEEP_RESEARCH: { opus: { reasoning_effort: "xhigh" } } })).toEqual({
+      DEEP_RESEARCH: [{ model_name: "opus", litellm_params: { reasoning_effort: "xhigh" } }],
+    });
+  });
+
+  it("round-trips what hydration produced", () => {
+    const stored = { MEDIUM: [{ model_name: "opus", litellm_params: { reasoning_effort: "medium" } }] };
+    expect(serializeTierModelConfigs(tiers, hydrateTierModelParams(tiers, stored))).toEqual(stored);
+  });
+
+  it("serializes to undefined when nothing is set", () => {
+    expect(serializeTierModelConfigs(tiers, undefined)).toBeUndefined();
+    expect(serializeTierModelConfigs(tiers, { MEDIUM: {} })).toBeUndefined();
+  });
+});
+
+describe("setTierModelReasoningEffort", () => {
+  it("sets an effort for a tier and model", () => {
+    expect(setTierModelReasoningEffort(undefined, "MEDIUM", "opus", "medium")).toEqual({
+      MEDIUM: { opus: { reasoning_effort: "medium" } },
+    });
+  });
+
+  it("unsetting removes the key and collapses empties back to undefined", () => {
+    const set = setTierModelReasoningEffort(undefined, "MEDIUM", "opus", "medium");
+    expect(setTierModelReasoningEffort(set, "MEDIUM", "opus", undefined)).toBeUndefined();
+  });
+
+  it("unsetting the effort keeps params keys it does not own", () => {
+    expect(
+      setTierModelReasoningEffort(
+        { MEDIUM: { opus: { reasoning_effort: "medium", max_tokens: 512 } } },
+        "MEDIUM",
+        "opus",
+        undefined,
+      ),
+    ).toEqual({ MEDIUM: { opus: { max_tokens: 512 } } });
+  });
+
+  it("leaves other tiers and models alone", () => {
+    expect(
+      setTierModelReasoningEffort({ COMPLEX: { opus: { reasoning_effort: "high" } } }, "MEDIUM", "opus", "low"),
+    ).toEqual({
+      COMPLEX: { opus: { reasoning_effort: "high" } },
+      MEDIUM: { opus: { reasoning_effort: "low" } },
+    });
+  });
+});
+
+describe("pruneTierModelParams", () => {
+  it("drops params for models deselected from the tier", () => {
+    expect(
+      pruneTierModelParams({ MEDIUM: { opus: { reasoning_effort: "medium" } } }, "MEDIUM", ["mini"]),
+    ).toBeUndefined();
+  });
+
+  it("keeps params for models still selected", () => {
+    const current = { MEDIUM: { opus: { reasoning_effort: "medium" } } };
+    expect(pruneTierModelParams(current, "MEDIUM", ["opus", "mini"])).toEqual(current);
+  });
+
+  it("returns the input unchanged when the tier holds no params", () => {
+    const current = { COMPLEX: { opus: { reasoning_effort: "high" } } };
+    expect(pruneTierModelParams(current, "MEDIUM", [])).toBe(current);
   });
 });

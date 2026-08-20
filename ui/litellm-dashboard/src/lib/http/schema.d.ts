@@ -849,11 +849,12 @@ export interface paths {
          *     serve and duplicates them against baseline_model. A key can hold one active job per
          *     direction, so both questions can run at once.
          *
-         *     Shadow responses are never served to users. Each key samples until it has judged
-         *     max_turns turns of its own traffic, the job's window ends, or the job is stopped, so one
-         *     key running out of budget does not end sampling for the others; sampling changes
-         *     propagate to pods within about 10 seconds. Shadow and judge calls bill to the shadowed
-         *     key but are excluded from request counts and auto-router adoption metrics.
+         *     Shadow responses are never served to users. Each key samples until its recorded eval
+         *     spend, the shadow and judge calls' own cost, reaches max_budget dollars, the job's
+         *     window ends, or the job is stopped, so one key running out of budget does not end
+         *     sampling for the others; sampling changes propagate to pods within about 10 seconds.
+         *     Shadow and judge calls bill to the shadowed key but are excluded from request counts
+         *     and auto-router adoption metrics.
          */
         post: operations["start_shadow_eval_auto_router_shadow_eval_start_post"];
         delete?: never;
@@ -33306,10 +33307,20 @@ export interface components {
              */
             key_name?: string | null;
             /**
+             * Max Budget
+             * @description This key's own USD budget for the eval's shadow and judge spend, independent of its siblings'; None on jobs created before spend budgets existed, which max_turns alone bounds
+             */
+            max_budget?: number | null;
+            /**
              * Max Turns
-             * @description This key's own sample budget, independent of its siblings'
+             * @description This key's sample-count ceiling: the whole budget for jobs created before max_budget existed, and the error-loop safety valve otherwise
              */
             max_turns: number;
+            /**
+             * Spend
+             * @description This key's recorded shadow plus judge spend in USD, the same figure the sampler budgets against max_budget; populated on list and detail responses and frozen at stopped_at exactly like attempt_count
+             */
+            spend?: number | null;
             /**
              * Stopped At
              * @description When this key's slot was stamped free, whether its own budget ran out, the window closed, or an operator stopped the job; status is derived, so a spent budget reads completed even while this is still unset
@@ -33626,7 +33637,7 @@ export interface components {
         StartShadowEvalRequest: {
             /**
              * Api Key Ids
-             * @description The hashed virtual keys whose traffic will be shadowed. Shadow evaluation runs ONLY on these keys' traffic; requests made with any other key are not sampled. Each key carries its own max_turns budget, so one key exhausting its budget leaves the others sampling. At most 100 keys per job, which also bounds every read the job's endpoints make.
+             * @description The hashed virtual keys whose traffic will be shadowed. Shadow evaluation runs ONLY on these keys' traffic; requests made with any other key are not sampled. Each key carries its own max_budget spend budget, so one key exhausting its budget leaves the others sampling. At most 100 keys per job, which also bounds every read the job's endpoints make.
              */
             api_key_ids: string[];
             /**
@@ -33654,11 +33665,11 @@ export interface components {
              */
             judge_model: string;
             /**
-             * Max Turns
-             * @description Per-key sample budget: the job judges at most this many turns of EACH scoped key's traffic, so a job over N keys judges at most N times max_turns turns. This is also the spend bound; expected judge cost is roughly that turn ceiling times one judge call
-             * @default 200
+             * Max Budget
+             * @description Per-key USD budget for the eval's own overhead, the shadow-arm and judge calls, priced with the same figures the spend pipeline bills. EACH scoped key samples until its recorded eval spend reaches this, so a job over N keys spends at most about N times max_budget; in-flight samples can overshoot the cap by one sampling cache window
+             * @default 10
              */
-            max_turns: number;
+            max_budget: number;
             /**
              * Router Name
              * @description The auto-router under evaluation, in either direction

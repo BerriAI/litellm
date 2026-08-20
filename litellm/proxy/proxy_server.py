@@ -2994,6 +2994,13 @@ async def _is_spend_counter_cache_warm(counter_key: str) -> bool:
     return spend_counter_cache.in_memory_cache.get_cache(key=counter_key) is not None
 
 
+async def increment_spend_counter(counter_key: str, increment: float):
+    """Public raw-counter increment for budget domains outside the entity scopes (e.g.
+    shadow eval's per-leg spend), sharing the primitive the entity counters use so
+    invalidation and read semantics can never drift."""
+    return await _increment_spend_counter_cache(counter_key=counter_key, increment=increment)
+
+
 async def _increment_spend_counter_cache(counter_key: str, increment: float):
     if spend_counter_cache.redis_cache is not None:
         try:

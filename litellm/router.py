@@ -64,7 +64,11 @@ from litellm.litellm_core_utils.coroutine_checker import coroutine_checker
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
-from litellm.litellm_core_utils.ptu_pricing import zeroed_ptu_pricing
+from litellm.litellm_core_utils.ptu_pricing import (
+    is_ptu_cost_attribution_enabled,
+    ptu_config_error,
+    zeroed_ptu_pricing,
+)
 from litellm.litellm_core_utils.request_timeout_resolver import (
     get_configured_request_timeout,
 )
@@ -7701,9 +7705,11 @@ class Router:
         - None: If the deployment is not active for the current environment (if 'supported_environments' is set in litellm_params)
         """
         try:
-            zeroed_pricing: Final = (
-                zeroed_ptu_pricing(_model_info, _litellm_params) if _model_info.get("db_model") is not True else None
-            )
+            config_sourced: Final = _model_info.get("db_model") is not True
+            ptu_error: Final = ptu_config_error(_model_info, model_name=_model_name) if config_sourced else None
+            if ptu_error is not None and is_ptu_cost_attribution_enabled():
+                raise ValueError(ptu_error)
+            zeroed_pricing: Final = zeroed_ptu_pricing(_model_info, _litellm_params) if config_sourced else None
             litellm_params: Final[LiteLLM_Params] = LiteLLM_Params(
                 **(
                     _litellm_params

@@ -15,46 +15,43 @@ import {
 } from "@/components/ui/dropdown-menu";
 
 const THEMES = [
-  { value: "system", label: "System", Icon: Monitor },
-  { value: "light", label: "Light", Icon: Sun },
-  { value: "dark", label: "Dark", Icon: Moon },
+  { value: "system", label: "System", Icon: Monitor, beta: false },
+  { value: "light", label: "Light", Icon: Sun, beta: false },
+  { value: "dark", label: "Dark", Icon: Moon, beta: true },
 ] as const;
 
 const ThemeToggle: React.FC = () => {
   const { theme, setTheme, resolvedTheme } = useTheme();
-  const isDark = resolvedTheme === "dark";
 
   return (
-    <span className="flex items-center gap-1">
-      {isDark && (
-        <Badge
-          variant="outline"
-          className="px-1.5 py-0 text-[10px] font-medium text-muted-foreground"
-          title="Dark mode is still being rolled out, so some surfaces may not be styled yet"
-        >
-          Experimental
-        </Badge>
-      )}
-      <DropdownMenu>
-        <DropdownMenuTrigger
-          render={
-            <Button variant="ghost" size="icon-sm" aria-label="Theme" title="Theme" className="text-muted-foreground" />
-          }
-        >
-          {isDark ? <Moon /> : <Sun />}
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="w-36">
-          <DropdownMenuRadioGroup value={theme ?? "light"} onValueChange={setTheme}>
-            {THEMES.map(({ value, label, Icon }) => (
-              <DropdownMenuRadioItem key={value} value={value}>
-                <Icon />
-                {label}
-              </DropdownMenuRadioItem>
-            ))}
-          </DropdownMenuRadioGroup>
-        </DropdownMenuContent>
-      </DropdownMenu>
-    </span>
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        render={
+          <Button variant="ghost" size="icon-sm" aria-label="Theme" title="Theme" className="text-muted-foreground" />
+        }
+      >
+        {resolvedTheme === "dark" ? <Moon /> : <Sun />}
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-40">
+        <DropdownMenuRadioGroup value={theme ?? "light"} onValueChange={setTheme}>
+          {THEMES.map(({ value, label, Icon, beta }) => (
+            <DropdownMenuRadioItem key={value} value={value}>
+              <Icon />
+              {label}
+              {beta && (
+                <Badge
+                  variant="secondary"
+                  className="px-1 py-0 text-[10px] font-medium text-muted-foreground"
+                  title="Dark mode is still being rolled out, so some surfaces may not be styled yet"
+                >
+                  Beta
+                </Badge>
+              )}
+            </DropdownMenuRadioItem>
+          ))}
+        </DropdownMenuRadioGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 };
 

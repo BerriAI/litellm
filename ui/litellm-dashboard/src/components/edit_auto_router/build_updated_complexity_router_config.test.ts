@@ -373,3 +373,59 @@ describe("buildUpdatedComplexityRouterConfig plan-mode minimum tier", () => {
     expect(result.plan_mode_min_tier).toBe("MEDIUM");
   });
 });
+
+describe("buildUpdatedComplexityRouterConfig tier model params", () => {
+  const storedWithParams = {
+    ...STORED,
+    tiers: { SIMPLE: ["gpt-4o-mini"], MEDIUM: ["opus"], COMPLEX: ["opus"], REASONING: [] },
+    tier_model_configs: {
+      MEDIUM: [{ model_name: "opus", litellm_params: { reasoning_effort: "medium" } }],
+      COMPLEX: [{ model_name: "opus", litellm_params: { reasoning_effort: "high" } }],
+    },
+  };
+  const formValueWithParams = {
+    ...FORM_VALUE,
+    tiers: storedWithParams.tiers,
+    tier_model_params: {
+      MEDIUM: { opus: { reasoning_effort: "medium" } },
+      COMPLEX: { opus: { reasoning_effort: "high" } },
+    },
+  };
+
+  it("round-trips hydrated params on an untouched save", () => {
+    const result = buildUpdatedComplexityRouterConfig(storedWithParams, formValueWithParams, undefined, hydratedState);
+    expect(result.tier_model_configs).toEqual(storedWithParams.tier_model_configs);
+  });
+
+  // tier_model_configs is managed now that this modal renders a control for it. Before that, the
+  // stale stored key was carried through, so clearing the last effort could never persist.
+  it("drops the stored key entirely when the operator unsets every effort", () => {
+    const result = buildUpdatedComplexityRouterConfig(
+      storedWithParams,
+      { ...formValueWithParams, tier_model_params: undefined },
+      undefined,
+      hydratedState,
+    );
+    expect(result).not.toHaveProperty("tier_model_configs");
+  });
+
+  it("drops params for a model removed from its tier", () => {
+    const result = buildUpdatedComplexityRouterConfig(
+      storedWithParams,
+      {
+        ...formValueWithParams,
+        tiers: { ...storedWithParams.tiers, COMPLEX: ["gpt-4o-mini"] },
+      },
+      undefined,
+      hydratedState,
+    );
+    expect(result.tier_model_configs).toEqual({
+      MEDIUM: [{ model_name: "opus", litellm_params: { reasoning_effort: "medium" } }],
+    });
+  });
+
+  it("emits no tier_model_configs for a config that never had params", () => {
+    const result = buildUpdatedComplexityRouterConfig(STORED, FORM_VALUE, undefined, hydratedState);
+    expect(result).not.toHaveProperty("tier_model_configs");
+  });
+});
