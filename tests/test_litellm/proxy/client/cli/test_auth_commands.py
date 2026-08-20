@@ -1525,6 +1525,58 @@ class TestPkcePrintToken:
         assert "Run 'lite login' again" not in result.output
         save.assert_not_called()
 
+    def test_print_token_through_the_cli_group_renews_once_and_reports_a_refusal_once(self, monkeypatch):
+        monkeypatch.delenv("LITELLM_PROXY_API_KEY", raising=False)
+        monkeypatch.delenv("LITELLM_PROXY_URL", raising=False)
+
+        class _RefusingSession(_FakeSession):
+            def __init__(self):
+                super().__init__()
+                self.response = _FakeHttpResponse(
+                    400, {"error": "invalid_grant", "error_description": "the refresh token was already used"}
+                )
+
+        with (
+            patch(
+                "litellm.proxy.client.cli.commands.auth.load_token",
+                return_value=_pkce_record(expires_at=time.time() - 1),
+            ),
+            patch("litellm.proxy.client.cli.commands.auth.save_token") as save,
+            patch("litellm.proxy.client.cli.commands.auth.requests.Session", _RefusingSession),
+        ):
+            result = self.runner.invoke(cli, ["--base-url", PKCE_BASE_URL, "auth", "print-token"])
+
+        assert result.exit_code == 1
+        assert result.stdout == ""
+        assert sum(len(session.posts) for session in _FakeSession.instances) == 1
+        assert result.output.count("Could not renew the key") == 1
+        assert "Could not renew the key: token request failed with 400: the refresh token was already used" in result.output
+        assert "Key expired. Run 'lite login --pkce' again." in result.output
+        save.assert_not_called()
+
+    def test_print_token_invoked_bare_for_another_server_renews_once(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("USERPROFILE", str(tmp_path))
+        monkeypatch.delenv("LITELLM_PROXY_API_KEY", raising=False)
+        monkeypatch.delenv("LITELLM_PROXY_URL", raising=False)
+
+        class _RefreshingSession(_FakeSession):
+            def __init__(self):
+                super().__init__()
+                self.response = _FakeHttpResponse(200, PKCE_TOKEN_RESPONSE)
+
+        with (
+            patch("litellm.proxy.client.cli.commands.auth.load_token", return_value=_pkce_record()),
+            patch("litellm.proxy.client.cli.commands.auth.save_token") as save,
+            patch("litellm.proxy.client.cli.commands.auth.requests.Session", _RefreshingSession),
+        ):
+            result = self.runner.invoke(cli, ["auth", "print-token"])
+
+        assert result.exit_code == 0, result.output
+        assert result.stdout == "sk-cli-rotated\n"
+        assert sum(len(session.posts) for session in _FakeSession.instances) == 1
+        assert save.call_count == 1
+
     def test_print_token_for_an_expired_classic_token_makes_no_request(self):
         with (
             patch(
