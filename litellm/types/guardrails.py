@@ -563,9 +563,15 @@ class LakeraV2GuardrailConfigModel(BaseModel):
         default=True,
         description="Whether to include developer information in the response",
     )
-    on_flagged: Literal["block", "monitor"] | None = Field(
+    on_flagged: Literal["block", "monitor", "inject_system_message"] | None = Field(
         default="block",
-        description="Action to take when content is flagged: 'block' (raise exception) or 'monitor' (log only)",
+        description="Action to take when content is flagged: 'block' (raise exception), 'monitor' (log only), "
+        "or 'inject_system_message' (append an advisory system message and let the LLM decide)",
+    )
+    advisory_system_message: str | None = Field(
+        default=None,
+        description="Custom advisory message template used when on_flagged='inject_system_message'. "
+        "Must contain a {reason} placeholder. Defaults to a generic advisory message if unset.",
     )
 
 
@@ -983,7 +989,7 @@ class Mode(BaseModel):
     default: str | list[str] | None = Field(default=None, description="Default mode when no tags match")
 
 
-class LitellmParams(
+class LitellmParams(  # pyright: ignore[reportIncompatibleVariableOverride]  # on_flagged literal diverges across mixins
     CiscoAIDefenseGuardrailConfigModel,
     PresidioConfigModel,
     BedrockGuardrailConfigModel,
