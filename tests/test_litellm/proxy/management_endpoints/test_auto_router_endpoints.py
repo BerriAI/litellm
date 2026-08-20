@@ -525,6 +525,7 @@ def _leg_record(**overrides: object) -> MagicMock:
         "ends_at": datetime.now(timezone.utc) + timedelta(days=7),
         "stopped_at": None,
         "stopped_by": None,
+        "released_at": None,
     }
     fields = {**defaults, **overrides}
     record = MagicMock(spec=list(fields))
@@ -586,6 +587,8 @@ def _shadow_prisma(legs=(), agg_rows=None, by_leg_rows=None, known_keys=("key-ha
             current = [row for row in current if row.direction == w["direction"]]
         if "stopped_at" in w:
             current = [row for row in current if row.stopped_at is w["stopped_at"]]
+        if "released_at" in w:
+            current = [row for row in current if row.released_at is w["released_at"]]
         if "group_id" in w:
             wanted = w["group_id"]["in"] if isinstance(w["group_id"], dict) else [w["group_id"]]
             current = [row for row in current if row.group_id in wanted]
@@ -615,6 +618,7 @@ def _shadow_prisma(legs=(), agg_rows=None, by_leg_rows=None, known_keys=("key-ha
             "ends_at",
             "stopped_at",
             "stopped_by",
+            "released_at",
         )
         return {field: getattr(row, field) for field in fields}
 
@@ -668,9 +672,10 @@ async def test_start_shadow_eval_writes_one_leg_per_key_in_one_statement(monkeyp
     response = await start_shadow_eval(_start_request(api_key_ids=("key-hash", "key-hash-2")), ADMIN)
 
     sweep_sql, sweep_keys = prisma.db.execute_raw.call_args.args
-    assert "stopped_at IS NULL" in sweep_sql
+    assert "released_at IS NULL" in sweep_sql
+    assert "SET released_at = (NOW() AT TIME ZONE 'utc')" in sweep_sql
+    assert "SET stopped_at" not in sweep_sql
     assert "j.ends_at <= (NOW() AT TIME ZONE 'utc')" in sweep_sql
-    assert "SET stopped_at = (NOW() AT TIME ZONE 'utc')" in sweep_sql
     assert ">= j.max_turns" in sweep_sql
     assert "j.max_budget IS NOT NULL" in sweep_sql
     assert ">= j.max_budget" in sweep_sql
@@ -760,7 +765,16 @@ async def test_start_shadow_eval_reuses_a_key_whose_previous_job_already_stopped
     that forgets that would strand every key that has ever finished a job."""
     import litellm.proxy.proxy_server as proxy_server
 
-    prisma = _shadow_prisma(legs=[_leg_record(group_id="job-7", stopped_at=datetime.now(timezone.utc))])
+    prisma = _shadow_prisma(
+        legs=[
+            _leg_record(
+                group_id="job-7",
+                stopped_at=datetime.now(timezone.utc),
+                stopped_by="admin",
+                released_at=datetime.now(timezone.utc),
+            )
+        ]
+    )
     monkeypatch.setattr(proxy_server, "prisma_client", prisma)
     monkeypatch.setattr(proxy_server, "llm_router", _shadow_router())
 
@@ -1129,6 +1143,59 @@ def test_a_start_request_still_sending_max_turns_is_rejected_not_silently_defaul
         _start_request(max_turns=200)
 
 
+@pytest.mark.asyncio
+async def test_sweep_released_job_reads_completed_not_stopped(monkeypatch: pytest.MonkeyPatch):
+    """The sweep frees a finished key's slot through released_at and never writes
+    stopped_at, so a budget-completed job stays completed after the sweep runs."""
+    import litellm.proxy.proxy_server as proxy_server
+
+    prisma = _shadow_prisma(
+        legs=[_leg_record(max_budget=1.0, released_at=datetime.now(timezone.utc))]
+    )
+    prisma.attempt_rows = [{"job_id": "leg-1", "attempt_count": 3, "spend": 1.2}]
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+
+    jobs = await list_shadow_eval_jobs(VIEWER, api_key_id=None, limit=50)
+    assert jobs[0].status == "completed"
+    assert all(key.stopped_at is None for key in jobs[0].keys)
+
+
+@pytest.mark.asyncio
+async def test_a_stamped_key_reads_stopped_even_over_budget(monkeypatch: pytest.MonkeyPatch):
+    """stopped_at means a stop, unconditionally: only pre-released_at pods stamp it
+    without an actor, and no spend arithmetic may reclassify their stop as completion."""
+    import litellm.proxy.proxy_server as proxy_server
+
+    prisma = _shadow_prisma(
+        legs=[_leg_record(max_budget=1.0, stopped_at=datetime.now(timezone.utc))]
+    )
+    prisma.attempt_rows = [{"job_id": "leg-1", "attempt_count": 3, "spend": 1.2}]
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+
+    jobs = await list_shadow_eval_jobs(VIEWER, api_key_id=None, limit=50)
+    assert jobs[0].status == "stopped"
+
+
+def test_released_at_migration_moves_slot_stamps_off_stopped_at():
+    """Sweep stamps written before released_at existed were slot bookkeeping, not stops:
+    the migration must move them to the new column, clear actor-less stopped_at, and
+    re-anchor the partial unique index, or every swept job would flip to stopped."""
+    import litellm_proxy_extras
+
+    sql = (
+        Path(litellm_proxy_extras.__file__).parent
+        / "migrations"
+        / "20260820150000_shadow_eval_released_at"
+        / "migration.sql"
+    ).read_text()
+    assert 'ADD COLUMN IF NOT EXISTS "released_at" TIMESTAMP(3)' in sql
+    assert "SET released_at = stopped_at" in sql
+    assert "WHERE stopped_at IS NOT NULL AND released_at IS NULL" in sql
+    assert "SET stopped_at = NULL" in sql
+    assert "WHERE stopped_at IS NOT NULL AND stopped_by IS NULL" in sql
+    assert 'WHERE "released_at" IS NULL' in sql
+
+
 def test_max_budget_migration_is_additive_and_leaves_legacy_rows_null():
     """max_budget stays NULL on pre-migration rows so they keep the turn budget they were
     configured with, and shadow_cost defaults to 0 so old rows price as judge-only."""
@@ -1270,6 +1337,7 @@ async def test_stop_shadow_eval_stops_every_unstopped_leg_and_rejects_non_runnin
     assert stopped.stopped_by == "admin"
     stop_sql, stop_group, stop_operator, stop_stamp = prisma.db.execute_raw.call_args.args
     assert "SET stopped_by = $2, stopped_at = COALESCE(stopped_at, $3::timestamp)" in stop_sql
+    assert "released_at = COALESCE(released_at, $3::timestamp)" in stop_sql
     assert "WHERE group_id = $1 AND stopped_by IS NULL" in stop_sql
     assert "ends_at > (NOW() AT TIME ZONE 'utc')" in stop_sql
     assert ") < k.max_turns" in stop_sql

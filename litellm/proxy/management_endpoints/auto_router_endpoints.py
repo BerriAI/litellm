@@ -567,7 +567,7 @@ async def get_auto_router_benchmarks(
 
 # ---------------------------------------------------------------------------
 # Shadow eval: pre-adoption evaluation of an auto-router against live traffic.
-# The job row is immutable config plus stopped_at; status, counts, spend, and errors
+# The job row is immutable config plus the stop record and released_at slot marker; status, counts, spend, and errors
 # are derived from the append-only attempt rows, so reads here are aggregations
 # bounded by each job's max_turns through the attempt table's job_id index.
 # ---------------------------------------------------------------------------
@@ -667,8 +667,8 @@ _ATTEMPT_AGG_BY_LEG_SQL: Final = "SELECT job_id AS grp," + _ATTEMPT_AGG_SELECT
 # reads the live counter, so admission can stop before a row-based guard would fire (safe
 # direction, and mid-deploy rows from old pods price as judge-only until the deploy ends).
 _SWEEP_FINISHED_JOBS_SQL: Final = """
-UPDATE "LiteLLM_ShadowEvalJob" j SET stopped_at = (NOW() AT TIME ZONE 'utc')
-WHERE j.api_key_id = ANY($1::text[]) AND j.stopped_at IS NULL
+UPDATE "LiteLLM_ShadowEvalJob" j SET released_at = (NOW() AT TIME ZONE 'utc')
+WHERE j.api_key_id = ANY($1::text[]) AND j.released_at IS NULL
   AND (
     j.ends_at <= (NOW() AT TIME ZONE 'utc')
     OR (SELECT COUNT(*) FROM "LiteLLM_ShadowEvalAttempt" a WHERE a.job_id = j.id) >= j.max_turns
@@ -698,7 +698,8 @@ GROUP BY a.job_id
 
 _STOP_JOB_SQL: Final = """
 UPDATE "LiteLLM_ShadowEvalJob"
-SET stopped_by = $2, stopped_at = COALESCE(stopped_at, $3::timestamp)
+SET stopped_by = $2, stopped_at = COALESCE(stopped_at, $3::timestamp),
+    released_at = COALESCE(released_at, $3::timestamp)
 WHERE group_id = $1 AND stopped_by IS NULL
   AND ends_at > (NOW() AT TIME ZONE 'utc')
   AND EXISTS (
@@ -981,7 +982,7 @@ async def start_shadow_eval(
         where={  # mutable-ok: Prisma filter
             "api_key_id": {"in": requested},  # mutable-ok: Prisma filter
             "direction": data.direction,
-            "stopped_at": None,
+            "released_at": None,
         },
     )
     if claimed:

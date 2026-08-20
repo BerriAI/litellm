@@ -1509,6 +1509,7 @@ model LiteLLM_ShadowEvalJob {
   ends_at           DateTime
   stopped_at        DateTime?
   stopped_by        String?  // operator who stopped it early; null when it ended on its own
+  released_at       DateTime? // frees the key's slot in the partial unique index; stops and sweeps both set it, only stops set stopped_at
 
   @@index([group_id])
   @@index([api_key_id])

@@ -386,7 +386,8 @@ class ShadowEvalJobResponse(BaseModel):
         description=(
             "The operator who stopped the job early, recorded by the stop endpoint; 'unknown' backfilled "
             "by migration for jobs that displayed stopped when the column arrived; None when the job "
-            "ended on its own. Its presence is what makes a job read stopped rather than completed"
+            "ended on its own. Budget and window completion never write the stop record: slot "
+            "bookkeeping lives in an internal column instead"
         ),
     )
 
@@ -399,19 +400,20 @@ class ShadowEvalJobResponse(BaseModel):
     @computed_field
     @property
     def status(self) -> ShadowEvalStatus:
-        """Three recorded facts, no history-guessing: a stop is stopped_by (the migration
-        backfills it for every job that displayed stopped when the column arrived, so the
-        pre-column population is closed), completion is the window passing or every key
-        spending its budget, and anything else is running. The all-keys-stamped fallback
-        covers only stops written by pre-column pods during a rolling deploy."""
+        """Recorded facts only, no history-guessing. A key's stopped_at now means exactly
+        one thing, a stop: budget and window completion free the key's slot through the
+        internal released_at column and never touch it, so every key stamped, even by an
+        actor-less pre-released_at pod mid-deploy, reads stopped and no spend or count
+        arithmetic can reclassify it. Completion is the window passing or every key
+        spending its budget; spend is only ever consulted for unstamped keys."""
         if self.stopped_by is not None:
             return "stopped"
         if datetime.now(timezone.utc) >= (
             self.ends_at if self.ends_at.tzinfo else self.ends_at.replace(tzinfo=timezone.utc)
         ):
             return "completed"
-        if all(key.budget_spent for key in self.keys):
-            return "completed"
         if all(key.stopped_at is not None for key in self.keys):
             return "stopped"
+        if all(key.budget_spent for key in self.keys):
+            return "completed"
         return "running"

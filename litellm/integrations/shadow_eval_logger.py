@@ -595,6 +595,7 @@ class ShadowEvalLogger(CustomLogger):
             records: Final = await prisma.db.litellm_shadowevaljob.find_many(
                 where={  # mutable-ok: Prisma filter
                     "stopped_at": None,
+                    "released_at": None,
                     "ends_at": {"gt": datetime.now(timezone.utc)},  # mutable-ok: Prisma filter
                 },
             )
