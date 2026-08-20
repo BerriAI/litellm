@@ -2384,6 +2384,21 @@ VERTEX_LIVE_UNCONFIGURED_CLOSE_REASON: Final = (
 
 VERTEX_PUBLISHER_MODEL_PREFIX: Final = "publishers/google/models/"
 
+VERTEX_PUBLISHERS_SEGMENT: Final = "publishers/"
+
+
+def _vertex_publisher_model_suffix(model: str) -> str:
+    """
+    Turn whatever the client named into the ``publishers/<publisher>/models/<id>`` tail of a Vertex resource name.
+
+    Clients send bare ids, LiteLLM ids (``vertex_ai/gemini-live-2.5-flash``), and the Live SDK's ``models/<id>``,
+    and a publisher model id never contains a slash, so anything ahead of the last one is addressing, not identity
+    """
+    publishers_at: Final = model.find(VERTEX_PUBLISHERS_SEGMENT)
+    if publishers_at != -1:
+        return model[publishers_at:]
+    return f"{VERTEX_PUBLISHER_MODEL_PREFIX}{model.rsplit('/', 1)[-1]}"
+
 
 def _get_llm_router() -> "Router | None":
     from litellm.proxy.proxy_server import llm_router
@@ -2397,8 +2412,12 @@ def _resolve_vertex_live_credentials(
     model: str | None,
 ) -> VertexPassThroughCredentials | None:
     """
-    Resolution order: an explicit project/location registration or ``default_vertex_config``, then any DB model
-    entry flagged ``use_in_pass_through``, then the ``DEFAULT_VERTEXAI_*`` env vars
+    Resolution order: an explicit project/location registration, then ``default_vertex_config`` (which the proxy
+    fills from the ``DEFAULT_VERTEXAI_*`` env vars whenever the yaml leaves it out), then any DB model entry
+    flagged ``use_in_pass_through``.
+
+    DB entries come last on purpose: an operator who set a global default already said which project
+    pass-through traffic should bill to, and this route silently ignoring that would be the worse surprise
     """
     keyed: Final = passthrough_endpoint_router.get_vertex_credentials(
         project_id=vertex_project,
@@ -2436,22 +2455,23 @@ def _build_vertex_live_setup_model_rewriter(
         if setup_model.startswith("projects/"):
             return setup_model
         aliased: Final = _resolve_alias_to_upstream_model(setup_model, llm_router)
-        return (
-            f"projects/{vertex_project}/locations/{vertex_location}/"
-            f"{VERTEX_PUBLISHER_MODEL_PREFIX}{aliased.removeprefix(VERTEX_PUBLISHER_MODEL_PREFIX)}"
-        )
+        return f"projects/{vertex_project}/locations/{vertex_location}/{_vertex_publisher_model_suffix(aliased)}"
 
     return rewrite
 
 
 def _resolve_alias_to_upstream_model(setup_model: str, llm_router: "Router | None") -> str:
+    """
+    The Live SDK wraps whatever the caller typed as ``models/<name>``, so a gateway alias arrives prefixed
+    """
     if llm_router is None:
         return setup_model
+    candidates: Final = (setup_model, setup_model.rsplit("/", 1)[-1])
     upstream: Final = next(
         (
-            deployment["litellm_params"]["model"]
+            deployment["litellm_params"].get("model")
             for deployment in (llm_router.get_model_list() or ())
-            if deployment.get("model_name") == setup_model
+            if deployment.get("model_name") in candidates
         ),
         None,
     )
@@ -2500,9 +2520,7 @@ async def vertex_ai_live_websocket_passthrough(
         vertex_credentials_config.vertex_location if vertex_credentials_config is not None else None
     )
     credentials_value: Final = (
-        str(vertex_credentials_config.vertex_credentials)
-        if vertex_credentials_config is not None and vertex_credentials_config.vertex_credentials is not None
-        else None
+        vertex_credentials_config.vertex_credentials if vertex_credentials_config is not None else None
     )
 
     try:

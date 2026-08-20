@@ -5243,6 +5243,38 @@ async def test_websocket_passthrough_leaves_full_resource_setup_model_untouched(
     )
 
 
+@pytest.mark.asyncio
+async def test_websocket_passthrough_does_not_close_twice_when_success_logging_fails():
+    from websockets.exceptions import ConnectionClosedError
+    from websockets.frames import Close
+
+    upstream_reason = "Publisher Model `projects/p/locations/global/publishers/google/models/nope` was not found"
+    upstream_ws = ClosingUpstreamWebSocket(
+        ConnectionClosedError(rcvd=Close(1008, upstream_reason), sent=Close(1008, ""), rcvd_then_sent=True)
+    )
+    websocket = _client_websocket(_pending_receive)
+
+    with (
+        _patched_websocket_passthrough_environment(upstream_ws),
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints."
+            "GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue",
+            side_effect=RuntimeError("logging worker down"),
+        ),
+    ):
+        await websocket_passthrough_request(
+            websocket=websocket,
+            target="wss://aiplatform.googleapis.com/ws/google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent",
+            custom_headers={"Authorization": "Bearer token"},
+            user_api_key_dict=UserAPIKeyAuth(),
+            forward_headers=False,
+            endpoint="/vertex_ai/live",
+            accept_websocket=False,
+        )
+
+    websocket.close.assert_awaited_once_with(code=1008, reason=upstream_reason)
+
+
 def _passthrough_kwargs_for_reservation(
     user_api_key_dict: UserAPIKeyAuth, parsed_body: Optional[dict] = None
 ) -> dict:

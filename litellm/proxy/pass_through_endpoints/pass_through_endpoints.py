@@ -32,7 +32,7 @@ from websockets.exceptions import (
     ConnectionClosedOK,
     InvalidStatus,
 )
-from websockets.frames import EXTERNAL_CLOSE_CODES, Close
+from websockets.frames import Close, CloseCode
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -1928,11 +1928,26 @@ def _truncated_close_reason(reason: str) -> str:
     return encoded[:WEBSOCKET_CLOSE_REASON_MAX_BYTES].decode("utf-8", errors="ignore")
 
 
+SENDABLE_CLOSE_CODES: Final = frozenset(CloseCode) - frozenset(
+    {CloseCode.NO_STATUS_RCVD, CloseCode.ABNORMAL_CLOSURE, CloseCode.TLS_HANDSHAKE}
+)
+
+
+def _client_socket_is_open(websocket: WebSocket) -> bool:
+    """
+    Starlette tracks the two halves separately and raises on a second close, so both have to still be live
+    """
+    return (
+        websocket.client_state != WebSocketState.DISCONNECTED
+        and websocket.application_state != WebSocketState.DISCONNECTED
+    )
+
+
 def _upstream_close_to_relay(task_results: Iterable[object]) -> Close | None:
     """
     The upstream close worth telling the client about: anything other than a plain, reasonless normal close.
 
-    Codes outside ``EXTERNAL_CLOSE_CODES`` and the private range never travel on the wire (1006 for a socket that
+    Codes outside ``SENDABLE_CLOSE_CODES`` and the private range never travel on the wire (1006 for a socket that
     died without a close frame, 1005 for one that sent no code), so relaying them would build an invalid frame
     """
     upstream_close: Final = next((result for result in task_results if isinstance(result, Close)), None)
@@ -1940,7 +1955,7 @@ def _upstream_close_to_relay(task_results: Iterable[object]) -> Close | None:
         return None
     if upstream_close.code == 1000 and upstream_close.reason == "":
         return None
-    if upstream_close.code not in EXTERNAL_CLOSE_CODES and not 3000 <= upstream_close.code < 5000:
+    if upstream_close.code not in SENDABLE_CLOSE_CODES and not 3000 <= upstream_close.code < 5000:
         return None
     return upstream_close
 
@@ -2268,7 +2283,7 @@ async def websocket_passthrough_request(
                     raise exception
 
             upstream_close: Final = _upstream_close_to_relay(task.result() for task in done)
-            if upstream_close is not None and websocket.application_state != WebSocketState.DISCONNECTED:
+            if upstream_close is not None and _client_socket_is_open(websocket):
                 await websocket.close(
                     code=upstream_close.code,
                     reason=_truncated_close_reason(upstream_close.reason),
@@ -2359,7 +2374,7 @@ async def websocket_passthrough_request(
             ),
         )
 
-        if websocket.client_state != WebSocketState.DISCONNECTED:
+        if _client_socket_is_open(websocket):
             await websocket.close(
                 code=getattr(exc, "status_code", 1011),
                 reason="Upstream connection rejected",
@@ -2387,13 +2402,10 @@ async def websocket_passthrough_request(
             ),
         )
 
-        if websocket.client_state != WebSocketState.DISCONNECTED:
+        if _client_socket_is_open(websocket):
             await websocket.close(code=1011, reason="WebSocket passthrough error")
     finally:
-        if (
-            websocket.client_state != WebSocketState.DISCONNECTED
-            and websocket.application_state != WebSocketState.DISCONNECTED
-        ):
+        if _client_socket_is_open(websocket):
             await websocket.close()
 
 

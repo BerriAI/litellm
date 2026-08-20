@@ -293,6 +293,59 @@ def test_vertex_without_hint_falls_back_when_deployments_share_a_target():
     assert resolved is not None and resolved.vertex_project == "proj-one"
 
 
+def test_vertex_without_hint_refuses_to_guess_between_service_accounts():
+    llm_router = litellm.Router(
+        model_list=[
+            _vertex_deployment(
+                "gemini-flash",
+                "vertex_ai/gemini-2.5-flash",
+                vertex_project="proj-one",
+                vertex_location="global",
+                vertex_credentials='{"client_email": "flash@proj-one.iam"}',
+            ),
+            _vertex_deployment(
+                "gemini-live",
+                "vertex_ai/gemini-live-2.5-flash",
+                vertex_project="proj-one",
+                vertex_location="global",
+                vertex_credentials='{"client_email": "live@proj-one.iam"}',
+            ),
+        ]
+    )
+    passthrough_router = _passthrough_router(llm_router)
+
+    assert passthrough_router.get_vertex_credentials_from_router_deployments(model=None) is None
+
+
+def test_vertex_named_credential_keeps_dict_service_account():
+    service_account = {"type": "service_account", "client_email": "live@proj-db.iam"}
+    CredentialAccessor.upsert_credentials(
+        [
+            _vertex_credential(
+                "cred_gcp_dict",
+                {
+                    "vertex_project": "proj-db",
+                    "vertex_location": "global",
+                    "vertex_credentials": service_account,
+                },
+            )
+        ]
+    )
+    llm_router = litellm.Router(
+        model_list=[
+            _vertex_deployment(
+                "gemini-live", "vertex_ai/gemini-live-2.5-flash", litellm_credential_name="cred_gcp_dict"
+            )
+        ]
+    )
+    passthrough_router = _passthrough_router(llm_router)
+
+    resolved = passthrough_router.get_vertex_credentials_from_router_deployments(model=None)
+
+    assert resolved is not None
+    assert resolved.vertex_credentials == service_account
+
+
 def test_no_flagged_vertex_deployment_returns_none():
     llm_router = litellm.Router(
         model_list=[
