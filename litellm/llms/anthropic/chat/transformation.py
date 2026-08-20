@@ -1,7 +1,7 @@
 import json
 import re
 import time
-from typing import TYPE_CHECKING, Any, Final, NoReturn, cast
+from typing import TYPE_CHECKING, Any, Final, NoReturn, Optional, cast
 
 import httpx
 
