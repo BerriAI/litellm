@@ -85,7 +85,10 @@ from litellm.proxy.auth.auth_checks import (
     get_team_object,
     get_user_object,
 )
-from litellm.proxy.auth.auth_utils import enforce_output_token_estimates_are_admin_only
+from litellm.proxy.auth.auth_utils import (
+    enforce_batch_enqueued_token_limit_is_admin_only,
+    enforce_output_token_estimates_are_admin_only,
+)
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.callback_utils import encrypt_callback_vars
 from litellm.proxy.common_utils.json_merge_patch import apply_json_merge_patch
@@ -1304,6 +1307,12 @@ async def new_team(
             user_api_key_dict=user_api_key_dict,
             entity="team",
         )
+        enforce_batch_enqueued_token_limit_is_admin_only(
+            data=data,
+            existing_metadata=None,
+            user_api_key_dict=user_api_key_dict,
+            entity="team",
+        )
 
         # Check if license is over limit
         total_teams: Final = await _team_db(prisma_client).count()
@@ -2003,6 +2012,12 @@ async def update_team(
 
         _existing_team_metadata: Final[object] = getattr(existing_team_row, "metadata", None)
         enforce_output_token_estimates_are_admin_only(
+            data=data,
+            existing_metadata=_existing_team_metadata if isinstance(_existing_team_metadata, dict) else None,
+            user_api_key_dict=user_api_key_dict,
+            entity="team",
+        )
+        enforce_batch_enqueued_token_limit_is_admin_only(
             data=data,
             existing_metadata=_existing_team_metadata if isinstance(_existing_team_metadata, dict) else None,
             user_api_key_dict=user_api_key_dict,

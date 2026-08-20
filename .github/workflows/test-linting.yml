@@ -132,6 +132,11 @@ jobs:
         run: |
           uv run --no-sync python scripts/type_discipline_gate.py --base "$GATE_BASE_SHA"
 
+      - name: Check test-quality budget (zero-assert / mock-echo tests, sys.path.insert, raw env writes, litellm global mutation, credential-gated skips, delta vs base)
+        if: steps.changes.outputs.decision != 'skip'
+        run: |
+          uv run --no-sync python scripts/test_quality_gate.py --base "$GATE_BASE_SHA"
+
       - name: Print OpenAI version
         if: steps.changes.outputs.decision != 'skip'
         run: |
@@ -223,7 +228,7 @@ jobs:
 
       - name: Run secret scan test
         run: |
-          uv run --no-project --with 'pytest==9.0.2' pytest tests/litellm/test_no_hardcoded_secrets.py -v
+          uv run --no-project --with 'pytest==9.0.2' pytest tests/code_coverage_tests/test_no_hardcoded_secrets.py -v
 
       - name: Run ggshield secret scan
         env:

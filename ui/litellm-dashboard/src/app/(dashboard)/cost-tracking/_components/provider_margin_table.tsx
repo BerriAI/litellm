@@ -138,7 +138,7 @@ const ProviderMarginTable: React.FC<ProviderMarginTableProps> = ({
                         autoFocus
                       />
                       <span className="text-muted-foreground">%</span>
-                      <span className="text-muted-foreground/70">+</span>
+                      <span className="text-muted-foreground">+</span>
                       <span className="text-muted-foreground">$</span>
                       <Input
                         value={editFixedAmount}
@@ -152,7 +152,7 @@ const ProviderMarginTable: React.FC<ProviderMarginTableProps> = ({
                       size="icon-sm"
                       aria-label={`Save margin for ${displayName}`}
                       onClick={() => handleSaveEdit(row.provider)}
-                      className="cursor-pointer text-success hover:text-success"
+                      className="cursor-pointer text-success hover:text-success/80"
                     >
                       <Check className="size-5" />
                     </Button>
@@ -174,7 +174,7 @@ const ProviderMarginTable: React.FC<ProviderMarginTableProps> = ({
                       size="icon-sm"
                       aria-label={`Edit margin for ${displayName}`}
                       onClick={() => handleStartEdit(row.provider, row.margin)}
-                      className="cursor-pointer text-info hover:text-info"
+                      className="cursor-pointer text-info hover:text-info/80"
                     >
                       <SquarePen className="size-5" />
                     </Button>

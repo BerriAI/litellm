@@ -21,6 +21,8 @@ import {
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { coy } from "react-syntax-highlighter/dist/esm/styles/prism";
+
+import { useSyntaxTheme } from "@/hooks/useSyntaxTheme";
 import { v4 as uuidv4 } from "uuid";
 import useCan from "@/app/(dashboard)/hooks/useCan";
 import GuardrailSelector from "@/components/guardrails/GuardrailSelector";
@@ -123,6 +125,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
   simplified = false,
   fixedModel,
 }) => {
+  const syntaxTheme = useSyntaxTheme(coy);
   const canViewPolicies = useCan("viewPolicies");
   const [mcpServers, setMCPServers] = useState<MCPServer[]>([]);
   const [mcpToolsets, setMCPToolsets] = useState<MCPToolset[]>([]);
@@ -1395,7 +1398,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                                 type="button"
                                 variant="ghost"
                                 size="icon-xs"
-                                className="cursor-not-allowed text-muted-foreground/70"
+                                className="cursor-not-allowed text-muted-foreground"
                                 disabled
                                 aria-label="Model Settings unavailable"
                               />
@@ -1484,7 +1487,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                           />
                         }
                       >
-                        <Info className="size-3.5 cursor-pointer text-muted-foreground/70" />
+                        <Info className="size-3.5 cursor-pointer text-muted-foreground" />
                       </TooltipTrigger>
                       <TooltipContent className="max-w-xs">
                         {endpointType === EndpointType.MCP
@@ -1615,7 +1618,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                                   </span>
                                   <button
                                     type="button"
-                                    className="text-xs text-muted-foreground/70 underline hover:text-info"
+                                    className="text-xs text-muted-foreground underline hover:text-info"
                                     onClick={() => setByokModalServer(server)}
                                   >
                                     Reconnect
@@ -1625,7 +1628,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                                 <Button
                                   type="button"
                                   size="xs"
-                                  className="rounded-lg bg-info px-3 py-1 text-xs font-medium text-white hover:bg-info"
+                                  className="rounded-lg bg-info px-3 py-1 text-xs font-medium text-info-foreground hover:bg-info/80"
                                   onClick={() => setByokModalServer(server)}
                                 >
                                   Connect
@@ -1643,7 +1646,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                     <Database className="mr-1 size-4" aria-hidden="true" /> Vector Store
                     <Tooltip>
                       <TooltipTrigger aria-label="About vector stores">
-                        <Info className="size-3.5 text-muted-foreground/70" />
+                        <Info className="size-3.5 text-muted-foreground" />
                       </TooltipTrigger>
                       <TooltipContent className="max-w-xs">
                         Select vector store(s) to use for this LLM API call. You can set up your vector store{" "}
@@ -1667,7 +1670,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                     <Shield className="mr-1 size-4" aria-hidden="true" /> Guardrails
                     <Tooltip>
                       <TooltipTrigger aria-label="About guardrails">
-                        <Info className="size-3.5 text-muted-foreground/70" />
+                        <Info className="size-3.5 text-muted-foreground" />
                       </TooltipTrigger>
                       <TooltipContent className="max-w-xs">
                         Select guardrail(s) to use for this LLM API call. You can set up your guardrails{" "}
@@ -1692,7 +1695,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                       <Shield className="mr-1 size-4" aria-hidden="true" /> Policies
                       <Tooltip>
                         <TooltipTrigger aria-label="About policies">
-                          <Info className="size-3.5 text-muted-foreground/70" />
+                          <Info className="size-3.5 text-muted-foreground" />
                         </TooltipTrigger>
                         <TooltipContent className="max-w-xs">
                           Select policy/policies to apply to this LLM API call. Policies define which guardrails are
@@ -1756,7 +1759,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                 </div>
                 <div className="min-h-0 min-w-0 flex-1 overflow-auto p-3 pb-0 sm:p-4 sm:pb-0">
                   {chatHistory.length === 0 && (
-                    <div className="flex h-full flex-col items-center justify-center text-muted-foreground/70">
+                    <div className="flex h-full flex-col items-center justify-center text-muted-foreground">
                       <Bot className="mb-4 size-12" aria-hidden="true" />
                       <p className="text-sm">Start a conversation, generate an image, or handle audio</p>
                     </div>
@@ -1816,7 +1819,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                     <div className="mb-4">
                       {uploadedImages.length === 0 ? (
                         <label
-                          className="flex cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed border-border bg-muted px-4 py-8 text-center hover:border-border"
+                          className="flex cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed border-border bg-muted px-4 py-8 text-center hover:border-ring"
                           onDragOver={(event) => event.preventDefault()}
                           onDrop={(event) => {
                             event.preventDefault();
@@ -1869,7 +1872,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                               </Button>
                             </div>
                           ))}
-                          <label className="flex h-32 w-32 cursor-pointer flex-col items-center justify-center rounded-md border-2 border-dashed border-border hover:border-border">
+                          <label className="flex h-32 w-32 cursor-pointer flex-col items-center justify-center rounded-md border-2 border-dashed border-border hover:border-ring">
                             <ImageIcon className="size-6 text-muted-foreground" aria-hidden="true" />
                             <p className="mt-1 text-xs text-muted-foreground">Add more</p>
                             <input
@@ -1892,7 +1895,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                     <div className="mb-4">
                       {!uploadedAudio ? (
                         <label
-                          className="flex cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed border-border bg-muted px-4 py-8 text-center hover:border-border"
+                          className="flex cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed border-border bg-muted px-4 py-8 text-center hover:border-ring"
                           onDragOver={(event) => event.preventDefault()}
                           onDrop={(event) => {
                             event.preventDefault();
@@ -1956,7 +1959,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
 
                   {endpointType === EndpointType.RESPONSES && codeInterpreter.enabled && (
                     <div className="mb-2 space-y-2">
-                      <div className="flex items-center justify-between rounded-lg border border-info/20 bg-linear-to-r from-blue-50 to-purple-50 px-3 py-2">
+                      <div className="flex items-center justify-between rounded-lg border border-info/20 bg-linear-to-r from-blue-50 to-purple-50 px-3 py-2 dark:from-blue-950 dark:to-purple-950">
                         <div className="flex items-center gap-2">
                           {isLoading ? (
                             <>
@@ -1972,7 +1975,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                         </div>
                         <button
                           type="button"
-                          className="text-xs text-info hover:text-info"
+                          className="text-xs text-info hover:text-info/80"
                           onClick={() => codeInterpreter.setEnabled(false)}
                         >
                           Disable
@@ -2126,7 +2129,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
           </div>
           <SyntaxHighlighter
             language="python"
-            style={coy as Record<string, React.CSSProperties>}
+            style={syntaxTheme}
             wrapLines={true}
             wrapLongLines={true}
             className="rounded-md"
@@ -2174,8 +2177,8 @@ const ChatUI: React.FC<ChatUIProps> = ({
                 <li>The tool call is routed to the correct underlying MCP server automatically.</li>
               </ol>
             </div>
-            <div className="rounded-sm border border-purple-200 bg-purple-50 p-3">
-              <p className="text-sm text-purple-800">
+            <div className="rounded-sm border border-purple-200 bg-purple-50 p-3 dark:border-purple-800 dark:bg-purple-950">
+              <p className="text-sm text-purple-800 dark:text-purple-300">
                 <strong>Example:</strong> A &quot;GitHub Read-only&quot; toolset might include only{" "}
                 <code>list_repos</code> and <code>get_file</code> from a GitHub MCP server, preventing agents from
                 making writes.

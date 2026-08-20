@@ -652,7 +652,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                       <span className="text-sm font-medium text-foreground flex items-center">
                         MCP Server Name
                         <SimpleTooltip content="Best practice: Use a descriptive name that indicates the server's purpose (e.g., 'GitHub_MCP', 'Email_Service'). Cannot contain spaces or hyphens; use underscores instead. Names must comply with SEP-986 and will be rejected if invalid (https://modelcontextprotocol.io/specification/2025-11-25/server/tools#tool-names).">
-                          <Info className="ml-2 size-4 text-info hover:text-info cursor-help" />
+                          <Info className="ml-2 size-4 text-info hover:text-info/80 cursor-help" />
                         </SimpleTooltip>
                       </span>
                     }
@@ -673,7 +673,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                       <span className="text-sm font-medium text-foreground flex items-center">
                         Alias
                         <SimpleTooltip content="A short, unique identifier for this server. Defaults to the server name if not provided. Cannot contain spaces or hyphens; use underscores instead.">
-                          <Info className="ml-2 size-4 text-info hover:text-info cursor-help" />
+                          <Info className="ml-2 size-4 text-info hover:text-info/80 cursor-help" />
                         </SimpleTooltip>
                       </span>
                     }
@@ -792,7 +792,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                       <span className="text-sm font-medium text-foreground flex items-center">
                         Max Concurrent Requests (optional)
                         <SimpleTooltip content="Maximum number of tool calls LiteLLM will run against this server at the same time. Additional calls wait for a free slot. Leave blank for no limit.">
-                          <Info className="ml-2 size-4 text-info hover:text-info cursor-help" />
+                          <Info className="ml-2 size-4 text-info hover:text-info/80 cursor-help" />
                         </SimpleTooltip>
                       </span>
                     }
@@ -859,7 +859,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                               <span className="text-sm font-medium text-foreground flex items-center">
                                 Authentication Value
                                 <SimpleTooltip content="Token, password, or header value to send with each request for the selected auth type.">
-                                  <Info className="ml-2 size-4 text-info hover:text-info cursor-help" />
+                                  <Info className="ml-2 size-4 text-info hover:text-info/80 cursor-help" />
                                 </SimpleTooltip>
                               </span>
                             }

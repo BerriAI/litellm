@@ -351,7 +351,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
     [],
   );
 
-  const chev = "size-3 text-muted-foreground/70";
+  const chev = "size-3 text-muted-foreground";
   const expandIcon = showCostBreakdown ? <ChevronDown className={chev} /> : <ChevronRight className={chev} />;
 
   const renderSummaryTile = ({ title, value, className, tooltip, expandable }: SummaryTile) => (
@@ -365,9 +365,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
           <h3 className="text-lg font-medium text-foreground">{title}</h3>
           {tooltip ? (
             <Tooltip>
-              <TooltipTrigger
-                render={<Info className="size-4 text-muted-foreground/70 hover:text-muted-foreground" />}
-              />
+              <TooltipTrigger render={<Info className="size-4 text-muted-foreground hover:text-foreground" />} />
               <TooltipContent>{tooltip}</TooltipContent>
             </Tooltip>
           ) : null}
@@ -484,7 +482,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
                 <span>Get Started by Tracking cost per {capitalizedEntityLabel} </span>
                 <a
                   href="https://docs.litellm.ai/docs/proxy/enterprise#spend-tracking"
-                  className="text-info hover:text-info ml-1"
+                  className="text-info hover:text-info/80 ml-1"
                 >
                   here
                 </a>

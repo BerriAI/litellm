@@ -2,6 +2,8 @@ import React, { useEffect, useState } from "react";
 import { Code, Download, FileImage, FileText, Loader2 } from "lucide-react";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { coy } from "react-syntax-highlighter/dist/esm/styles/prism";
+
+import { useSyntaxTheme } from "@/hooks/useSyntaxTheme";
 import { getProxyBaseUrl, getGlobalLitellmHeaderName } from "@/components/networking";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
@@ -33,6 +35,7 @@ function isImageFilename(filename: string | undefined): boolean {
 }
 
 const CodeInterpreterOutput: React.FC<CodeInterpreterOutputProps> = ({ code, annotations = [], accessToken }) => {
+  const syntaxTheme = useSyntaxTheme(coy);
   const [imageUrls, setImageUrls] = useState<Record<string, string>>({});
   const [loadingImages, setLoadingImages] = useState<Record<string, boolean>>({});
   const [codeOpen, setCodeOpen] = useState(false);
@@ -147,7 +150,7 @@ const CodeInterpreterOutput: React.FC<CodeInterpreterOutputProps> = ({ code, ann
             <div className="border-t border-border p-2">
               <SyntaxHighlighter
                 language="python"
-                style={coy}
+                style={syntaxTheme}
                 customStyle={{
                   margin: 0,
                   borderRadius: "6px",
@@ -186,7 +189,7 @@ const CodeInterpreterOutput: React.FC<CodeInterpreterOutputProps> = ({ code, ann
                   type="button"
                   variant="ghost"
                   size="xs"
-                  className="h-auto gap-1 px-1 py-0 text-xs text-info hover:text-info"
+                  className="h-auto gap-1 px-1 py-0 text-xs text-info hover:text-info/80"
                   onClick={() => void handleDownload(annotation)}
                 >
                   <Download className="size-3" />
@@ -196,7 +199,7 @@ const CodeInterpreterOutput: React.FC<CodeInterpreterOutputProps> = ({ code, ann
             </div>
           ) : (
             <div className="flex items-center justify-center bg-muted p-4">
-              <span className="text-sm text-muted-foreground/70">Image not available</span>
+              <span className="text-sm text-muted-foreground">Image not available</span>
             </div>
           )}
         </div>
@@ -215,7 +218,7 @@ const CodeInterpreterOutput: React.FC<CodeInterpreterOutputProps> = ({ code, ann
             >
               <FileText className="size-4 text-info" aria-hidden="true" />
               <span className="text-sm">{annotation.filename}</span>
-              <Download className="size-3 text-muted-foreground/70" aria-hidden="true" />
+              <Download className="size-3 text-muted-foreground" aria-hidden="true" />
             </Button>
           ))}
         </div>

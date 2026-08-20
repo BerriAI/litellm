@@ -82,7 +82,7 @@ export function BudgetWindowsEditor({ value, onChange }: BudgetWindowsEditorProp
               <Button
                 variant="ghost"
                 size="sm"
-                className="px-1 text-destructive hover:text-destructive"
+                className="px-1 text-destructive hover:text-destructive/80"
                 onClick={() => removeWindow(idx)}
               >
                 ✕

@@ -204,7 +204,7 @@ const LLMJudgeFields: React.FC<LLMJudgeFieldsProps> = ({ availableModels, contro
                 variant="ghost"
                 size="sm"
                 aria-label="Remove criterion"
-                className="mb-1 text-destructive hover:text-destructive"
+                className="mb-1 text-destructive hover:text-destructive/80"
                 onClick={() => setCriteria(criteria.filter((_, position) => position !== index))}
               >
                 <X className="size-4" />
