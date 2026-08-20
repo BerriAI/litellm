@@ -1321,6 +1321,10 @@ class DBHealthCache(TypedDict):
 
 db_health_cache: DBHealthCache = {"status": "unknown", "last_updated": datetime.now()}
 
+# Bounds each DB round-trip on the probe path so a hung connection during a
+# failover cannot make the probe fail by timeout (k8s default timeoutSeconds: 5).
+DB_READINESS_CHECK_TIMEOUT_SECONDS: Final = 2.0
+
 
 async def _db_health_readiness_check():
     from litellm.proxy.proxy_server import prisma_client
@@ -1336,7 +1340,7 @@ async def _db_health_readiness_check():
             db_health_cache = {"status": "disconnected", "last_updated": datetime.now()}
             return db_health_cache
 
-        await prisma_client.health_check()
+        await asyncio.wait_for(prisma_client.health_check(), timeout=DB_READINESS_CHECK_TIMEOUT_SECONDS)
         db_health_cache = {"status": "connected", "last_updated": datetime.now()}
         return db_health_cache
     except Exception as e:
@@ -1345,7 +1349,10 @@ async def _db_health_readiness_check():
             try:
                 verbose_proxy_logger.warning("_db_health_readiness_check: health_check failed, attempting reconnect")
                 await prisma_client.attempt_db_reconnect(reason="health_readiness_check")
-                await prisma_client.health_check()
+                await asyncio.wait_for(
+                    prisma_client.health_check(),
+                    timeout=DB_READINESS_CHECK_TIMEOUT_SECONDS,
+                )
                 verbose_proxy_logger.info("_db_health_readiness_check: reconnect succeeded")
                 db_health_cache = {
                     "status": "connected",
@@ -1529,7 +1536,14 @@ async def _get_health_readiness_details(
             # serve requests that depend on persisted state (keys, budgets,
             # spend logs). Return 503 so orchestrators take this pod out of
             # rotation; "Not connected" (no DB configured at all) stays 200.
-            if response is not None and db_health_status["status"] != "connected":
+            # With allow_requests_on_db_unavailable the proxy keeps serving
+            # during a DB outage, so the pod must stay in rotation (200) and
+            # report the DB state through the body instead.
+            if (
+                response is not None
+                and db_health_status["status"] != "connected"
+                and not PrismaDBExceptionHandler.should_allow_request_on_db_unavailable()
+            ):
                 response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
             return {
                 "status": "healthy",
@@ -1620,7 +1634,10 @@ async def _resolve_public_readiness_db(response: Response) -> str:
         return "Not connected"
 
     db_health_status: Final = await _db_health_readiness_check()
-    if db_health_status["status"] != "connected":
+    if (
+        db_health_status["status"] != "connected"
+        and not PrismaDBExceptionHandler.should_allow_request_on_db_unavailable()
+    ):
         response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
     return db_health_status["status"]
 

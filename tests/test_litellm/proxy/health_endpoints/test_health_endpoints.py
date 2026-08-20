@@ -1,3 +1,4 @@
+import asyncio
 import os
 import sys
 import time
@@ -2298,6 +2299,115 @@ async def test_health_readiness_returns_503_when_db_disconnected():
 
     assert response.status_code == 503
     assert result == {"status": "healthy", "db": "disconnected"}
+
+
+@pytest.mark.asyncio
+async def test_health_readiness_returns_200_when_db_down_and_allow_requests_on_db_unavailable():
+    """
+    Regression test for https://github.com/BerriAI/litellm/issues/34934.
+
+    allow_requests_on_db_unavailable keeps the proxy serving through a DB
+    outage, so the readiness probe must keep the pod in rotation (200) and
+    report the DB state through the body, not the status code. Otherwise
+    K8s pulls every replica before the request-layer fail-open can run.
+    """
+    from fastapi import Response
+
+    from litellm.proxy.health_endpoints._health_endpoints import health_readiness
+
+    mock_prisma = MagicMock()
+    mock_prisma.health_check = AsyncMock(side_effect=PrismaError("nope"))
+    mock_prisma.attempt_db_reconnect = AsyncMock(side_effect=Exception("still nope"))
+
+    _health_endpoints_module.db_health_cache = {
+        "status": "unknown",
+        "last_updated": datetime.now() - timedelta(seconds=60),
+    }
+
+    response = Response()
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+        patch.dict(
+            "litellm.proxy.proxy_server.general_settings",
+            {"allow_requests_on_db_unavailable": True},
+        ),
+    ):
+        result = await health_readiness(response=response)
+
+    assert response.status_code == 200
+    assert result == {"status": "healthy", "db": "disconnected"}
+
+
+@pytest.mark.asyncio
+async def test_health_readiness_details_returns_200_when_db_down_and_allow_requests_on_db_unavailable():
+    """
+    The detailed readiness payload (public via
+    allow_public_health_readiness_details, or /health/readiness/details)
+    must honor the same flag so probes pointed at it also stay 200.
+    """
+    from fastapi import Response
+
+    from litellm.proxy.health_endpoints._health_endpoints import (
+        _get_health_readiness_details,
+    )
+
+    mock_prisma = MagicMock()
+    mock_prisma.health_check = AsyncMock(side_effect=PrismaError("nope"))
+    mock_prisma.attempt_db_reconnect = AsyncMock(side_effect=Exception("still nope"))
+
+    _health_endpoints_module.db_health_cache = {
+        "status": "unknown",
+        "last_updated": datetime.now() - timedelta(seconds=60),
+    }
+
+    response = Response()
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+        patch.dict(
+            "litellm.proxy.proxy_server.general_settings",
+            {"allow_requests_on_db_unavailable": True},
+        ),
+    ):
+        result = await _get_health_readiness_details(response=response)
+
+    assert response.status_code == 200
+    assert result["db"] == "disconnected"
+
+
+@pytest.mark.asyncio
+async def test_db_health_readiness_check_bounds_hung_health_check():
+    """
+    A connection that hangs mid-failover must not stall the probe past the
+    kubelet's timeoutSeconds; the DB round-trip is bounded and reported as
+    disconnected instead.
+    """
+    from litellm.proxy.health_endpoints._health_endpoints import (
+        _db_health_readiness_check,
+    )
+
+    async def hang():
+        await asyncio.sleep(60)
+
+    mock_prisma = MagicMock()
+    mock_prisma.health_check = hang
+    mock_prisma.attempt_db_reconnect = AsyncMock(side_effect=Exception("still down"))
+
+    _health_endpoints_module.db_health_cache = {
+        "status": "unknown",
+        "last_updated": datetime.now() - timedelta(seconds=60),
+    }
+
+    with patch(
+        "litellm.proxy.health_endpoints._health_endpoints.DB_READINESS_CHECK_TIMEOUT_SECONDS",
+        0.05,
+    ):
+        start = time.monotonic()
+        with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
+            result = await _db_health_readiness_check()
+        elapsed = time.monotonic() - start
+
+    assert result["status"] == "disconnected"
+    assert elapsed < 5
 
 
 @pytest.mark.asyncio
