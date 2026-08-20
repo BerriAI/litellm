@@ -48,6 +48,16 @@ _GRPC_KINDS: Final = ("otlp_grpc", "grpc")
 # evicted providers so their threads are reclaimed.
 _MAX_CACHED_PROVIDERS: Final = 256
 
+# Cap on providers evicted from the cache while still holding open spans, which
+# are kept alive to drain instead of being shut down under them. Their only
+# other bound is the logger's open-call map (10k), so without this a caller
+# cycling unique credential sets across long-lived calls could pin far more
+# live providers, and exporter threads, than the cache cap allows. Past this
+# many, the stalest retiree is shut down, dropping whatever it was draining: by
+# then a span from a route evicted long ago that never closed. Total live
+# providers is therefore ``_MAX_CACHED_PROVIDERS + _MAX_RETIRED_PROVIDERS``.
+_MAX_RETIRED_PROVIDERS: Final = 64
+
 _HeaderItems: TypeAlias = tuple[tuple[str, str], ...]
 
 _NO_HEADERS: Final[Mapping[str, str]] = MappingProxyType({})
@@ -118,7 +128,8 @@ class TenantTracerCache:
         self._lock: Final = threading.Lock()
         self._providers: OrderedDict[tuple[_HeaderItems, _HeaderItems], TracerProvider] = OrderedDict()
         self._open_span_counts: dict[TracerProvider, int] = {}  # mutable-ok: live refcount state
-        self._retired: set[TracerProvider] = set()  # mutable-ok: evicted providers draining open spans
+        # Oldest-first so an overflow of draining providers sheds the stalest.
+        self._retired: OrderedDict[TracerProvider, None] = OrderedDict()  # mutable-ok: draining evicted providers
         self._project_routable = any(
             spec.owner == callback_name and spec.kind.lower() not in (*_NON_OTLP_KINDS, *_GRPC_KINDS)
             for spec in config.exporters
@@ -142,7 +153,7 @@ class TenantTracerCache:
                 return
             self._open_span_counts.pop(provider, None)
             drained: Final = provider in self._retired
-            self._retired.discard(provider)
+            self._retired.pop(provider, None)
         if drained:
             _shutdown_provider(provider)
 
@@ -203,18 +214,22 @@ class TenantTracerCache:
 
         A provider with open spans is retired to drain instead: stopping its
         processors while a span opened at ``pre_call`` is still live would
-        silently drop that span at end instead of exporting it. A retired
-        provider is pinned only by its open spans, and the logger's open-call
-        map is itself bounded, so a request that never reaches a close callback
-        still releases it eventually.
+        silently drop that span at end instead of exporting it. Retirees are
+        themselves capped, so the stalest one is shut down (and its open-span
+        count dropped, making its eventual ``release`` a no-op) once too many
+        pile up rather than letting them accumulate a thread each.
         """
         if len(self._providers) <= _MAX_CACHED_PROVIDERS:
             return None
         _, evicted = self._providers.popitem(last=False)
-        if self._open_span_counts.get(evicted, 0) > 0:
-            self._retired.add(evicted)
+        if self._open_span_counts.get(evicted, 0) == 0:
+            return evicted
+        self._retired[evicted] = None
+        if len(self._retired) <= _MAX_RETIRED_PROVIDERS:
             return None
-        return evicted
+        overflowed, _ = self._retired.popitem(last=False)
+        self._open_span_counts.pop(overflowed, None)
+        return overflowed
 
     def _project_headers(self, auth_metadata: Mapping[str, str] | None) -> Mapping[str, str]:
         """The per-request project-routing headers, if this cache can apply them.

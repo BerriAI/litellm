@@ -326,6 +326,41 @@ def test_eviction_defers_shutdown_while_a_span_is_open(monkeypatch):
     assert shut_down == [route_a.provider]
 
 
+def test_retired_providers_are_capped(monkeypatch):
+    # Retiring an evicted provider keeps it, and its exporter thread, alive
+    # while a span is open, so retirees need a cap of their own: a caller
+    # cycling unique credential sets across calls that never close would
+    # otherwise pin one live provider per open call, far past the cache bound.
+    # Past the cap the stalest retiree is shut down and its later release is a
+    # no-op, while the ones still within the cap keep draining.
+    from litellm.integrations.otel.plumbing import routing as routing_mod
+
+    monkeypatch.setattr(routing_mod, "_MAX_CACHED_PROVIDERS", 1)
+    monkeypatch.setattr(routing_mod, "_MAX_RETIRED_PROVIDERS", 2)
+    shut_down = []
+    monkeypatch.setattr(
+        routing_mod, "_shutdown_provider", lambda p: shut_down.append(p)
+    )
+    cache = _cache("arize")
+    default = NoOpTracer()
+
+    # Every route stays held (no release), so each one evicts and retires its
+    # predecessor instead of shutting it down.
+    routes = [
+        cache.route_for(default, {"arize_space_id": str(i), "arize_api_key": "K"})
+        for i in range(5)
+    ]
+
+    assert len(cache._providers) == 1
+    assert len(cache._retired) == 2  # capped, not one retiree per open call
+    assert shut_down == [routes[0].provider, routes[1].provider]
+
+    cache.release(routes[0].provider)  # already shut down: no second shutdown
+    assert shut_down == [routes[0].provider, routes[1].provider]
+    cache.release(routes[2].provider)  # still draining: drains and shuts down
+    assert shut_down[-1] is routes[2].provider
+
+
 def test_release_without_eviction_keeps_provider_alive(monkeypatch):
     from litellm.integrations.otel.plumbing import routing as routing_mod
 
