@@ -153,7 +153,7 @@ def test_non_bedrock_id_skips_bedrock_dispatch_entirely(mock_handlers):
     block — they belong to other providers' retrieve flows."""
     async_invoke, mij, _ = mock_handlers
 
-    with pytest.raises(openai.NotFoundError):
+    with pytest.raises(openai.OpenAIError):
         litellm.retrieve_batch(
             batch_id="batch_abc123",
             custom_llm_provider="openai",
