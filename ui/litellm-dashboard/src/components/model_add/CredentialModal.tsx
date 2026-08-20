@@ -1,5 +1,6 @@
 import { Input } from "@/components/ui/input";
-import { Select as AntdSelect, Tooltip, Typography } from "antd";
+import { SearchSelect, type SearchSelectOption } from "@/components/shared/SearchSelect";
+import { SimpleTooltip } from "@/components/ui/tooltip";
 import { Button } from "@/components/ui/button";
 import { useState } from "react";
 import { FormProvider, useForm } from "react-hook-form";
@@ -19,7 +20,11 @@ import { Logo } from "@/components/molecules/logo/Logo";
 import { resetCredentialFormOnProviderChange } from "./credential_form_helpers";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
-const { Link } = Typography;
+const providerOptions: SearchSelectOption[] = Object.entries(Providers).map(([providerEnum, providerDisplayName]) => ({
+  label: providerDisplayName,
+  value: providerEnum,
+  icon: <Logo provider={providerEnum} label={providerDisplayName} className="w-5 h-5" />,
+}));
 
 interface CredentialModalProps {
   open: boolean;
@@ -122,34 +127,27 @@ export default function CredentialModal({
                 className="mb-4"
               >
                 {(control) => (
-                  <AntdSelect
-                    id={control.id}
-                    showSearch
-                    value={control.value as string | undefined}
-                    onBlur={control.onBlur}
-                    onChange={(value) => {
+                  <SearchSelect
+                    inputId={control.id}
+                    placeholder="Select a provider"
+                    options={providerOptions}
+                    value={(control.value as string | undefined) ?? ""}
+                    onValueChange={(value) => {
                       control.onChange(value);
                       resetCredentialFormOnProviderChange(formAdapter, value as Providers, setSelectedProvider);
                     }}
-                  >
-                    {Object.entries(Providers).map(([providerEnum, providerDisplayName]) => (
-                      <AntdSelect.Option key={providerEnum} value={providerEnum}>
-                        <div className="flex items-center space-x-2">
-                          <Logo provider={providerEnum} label={providerDisplayName} className="w-5 h-5" />
-                          <span>{providerDisplayName}</span>
-                        </div>
-                      </AntdSelect.Option>
-                    ))}
-                  </AntdSelect>
+                  />
                 )}
               </MountedFormField>
 
               <ProviderSpecificFields selectedProvider={selectedProvider} />
 
               <div className="flex justify-between items-center">
-                <Tooltip title="Get help on our github">
-                  <Link href="https://github.com/BerriAI/litellm/issues">Need Help?</Link>
-                </Tooltip>
+                <SimpleTooltip content="Get help on our github">
+                  <a href="https://github.com/BerriAI/litellm/issues" className="text-sm text-primary hover:underline">
+                    Need Help?
+                  </a>
+                </SimpleTooltip>
 
                 <div>
                   <Button variant="outline" className="mr-2.5" onClick={closeAndReset}>
