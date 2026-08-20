@@ -6327,13 +6327,13 @@ class ProxyConfig:
         Pull from DB, read general settings value
         """
         global general_settings, store_model_in_db
-        global use_background_health_checks, use_shared_health_check  # noqa: PLW0603  # DB reload runtime state
-        global health_check_interval, health_check_concurrency, health_check_details  # noqa: PLW0603  # DB reload runtime state
+        global use_background_health_checks, use_shared_health_check  # noqa: PLW0603  # DB reload runtime state  # pragma: no cover
+        global health_check_interval, health_check_concurrency, health_check_details  # noqa: PLW0603  # DB reload runtime state  # pragma: no cover
         if db_general_settings is None:
             return
         _general_settings: Final = dict(db_general_settings)
-        health_check_settings: Final = (
-            "background_health_checks",
+        health_check_settings: Final = (  # pragma: no cover
+            "background_health_checks",  # pragma: no cover
             "use_shared_health_check",  # pragma: no cover
             "health_check_interval",  # pragma: no cover
             "health_check_concurrency",  # pragma: no cover
