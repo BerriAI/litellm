@@ -15,7 +15,7 @@ from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.llms.xai.common_utils import XAIModelInfo
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.llms.vertex_ai import VERTEX_CREDENTIALS_TYPES
+from litellm.types.llms.vertex_ai import VERTEX_CREDENTIALS_TYPES, VertexAccessTokenResolver
 from litellm.types.realtime import (
     RealtimeClientSecretRequest,
     RealtimeExpiresAfter,
@@ -43,6 +43,7 @@ openai_realtime: Final = OpenAIRealtime()
 bedrock_realtime: Final = BedrockRealtime()
 xai_realtime: Final = XAIRealtime()
 vertex_llm_base: Final = VertexBase()
+vertex_access_token_resolver: Final[VertexAccessTokenResolver] = vertex_llm_base._ensure_access_token_async
 base_llm_http_handler = BaseLLMHTTPHandler()
 
 
@@ -290,20 +291,22 @@ async def arealtime_calls(
 async def _resolve_vertex_access_token_bounded(
     credentials: VERTEX_CREDENTIALS_TYPES | None,
     project_id: str | None,
+    resolver: VertexAccessTokenResolver,
+    timeout_seconds: float,
 ) -> tuple[str, str]:
     try:
         return await asyncio.wait_for(
-            vertex_llm_base._ensure_access_token_async(
+            resolver(
                 credentials=credentials,
                 project_id=project_id,
                 custom_llm_provider="vertex_ai",
             ),
-            timeout=REALTIME_CREDENTIAL_RESOLUTION_TIMEOUT_SECONDS,
+            timeout=timeout_seconds,
         )
     except asyncio.TimeoutError as e:
         raise ValueError(
             "Vertex AI realtime: timed out fetching Google OAuth access token after "
-            f"{REALTIME_CREDENTIAL_RESOLUTION_TIMEOUT_SECONDS}s; check network egress from the proxy "
+            f"{timeout_seconds}s; check network egress from the proxy "
             "to the OAuth token endpoint (oauth2.googleapis.com)"
         ) from e
 
@@ -508,6 +511,8 @@ async def _arealtime(
         ) = await _resolve_vertex_access_token_bounded(
             credentials=vertex_credentials,
             project_id=vertex_project,
+            resolver=vertex_access_token_resolver,
+            timeout_seconds=REALTIME_CREDENTIAL_RESOLUTION_TIMEOUT_SECONDS,
         )
 
         vertex_realtime_config: Final = VertexAIRealtimeConfig(
@@ -588,6 +593,8 @@ async def _realtime_health_check(
         ) = await _resolve_vertex_access_token_bounded(
             credentials=VertexBase.safe_get_vertex_ai_credentials(vertex_model_params),
             project_id=VertexBase.safe_get_vertex_ai_project(vertex_model_params),
+            resolver=vertex_access_token_resolver,
+            timeout_seconds=REALTIME_CREDENTIAL_RESOLUTION_TIMEOUT_SECONDS,
         )
         vertex_realtime_config: Final = VertexAIRealtimeConfig(
             access_token=access_token,
