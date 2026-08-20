@@ -809,8 +809,6 @@ class LiteLLMRoutes(enum.Enum):
         "/model/new",
         "/model/update",
         "/model/delete",
-        # Read-only dry-run of the /model/new complexity-router validator; same audience as /model/new
-        "/auto_router/validate_complexity_router_config",
         "/user/daily/activity",
         "/user/daily/activity/aggregated",
         # Endpoint restricts results to organizations the caller is ORG_ADMIN
