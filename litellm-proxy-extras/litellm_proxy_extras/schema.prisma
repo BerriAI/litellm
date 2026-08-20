@@ -1502,7 +1502,8 @@ model LiteLLM_ShadowEvalJob {
   baseline_model    String?  // reverse only: the fixed model the router is judged against
   judge_model       String
   shadow_percentage Float
-  max_turns         Int      // this key's sample budget: judge at most this many turns
+  max_turns         Int      // sample-count ceiling: the whole budget on pre-max_budget jobs, the error-loop valve otherwise
+  max_budget        Float?   // per-key USD cap on the eval's own shadow + judge spend; null on jobs from before spend budgets
   created_at        DateTime @default(now())
   created_by        String?
   ends_at           DateTime
@@ -1525,6 +1526,7 @@ model LiteLLM_ShadowEvalAttempt {
   shadow_model String?
   confidence   Float?
   judge_cost   Float    @default(0)
+  shadow_cost  Float    @default(0)
   error        String?
   created_at   DateTime @default(now())
 
