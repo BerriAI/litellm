@@ -2143,10 +2143,13 @@ def test_raise_on_model_repetition(
     chunks = _build_chunks(chunks_pattern, len(chunks_pattern))
 
     if should_raise:
-        with pytest.raises(litellm.InternalServerError) as exc_info:
+        def _feed():
             for chunk in chunks:
                 wrapper.chunks.append(chunk)
                 wrapper.raise_on_model_repetition()
+
+        with pytest.raises(litellm.InternalServerError) as exc_info:
+            _feed()
         assert "repeating the same chunk" in str(exc_info.value)
     else:
         for chunk in chunks:
@@ -3616,9 +3619,12 @@ async def test_transport_read_error_before_finish_reason_raises(logging_obj: Log
     )
 
     received = []
-    with pytest.raises(MidStreamFallbackError):
+    async def _drain():
         async for chunk in response:
             received.append(chunk)
+
+    with pytest.raises(MidStreamFallbackError):
+        await _drain()
 
     fabricated_finish_reasons = [
         chunk.choices[0].finish_reason

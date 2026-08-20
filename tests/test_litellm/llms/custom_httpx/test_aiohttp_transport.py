@@ -127,9 +127,12 @@ async def test_client_payload_error_mid_stream_raises_read_error():
     stream = AiohttpResponseStream(mock_response)  # type: ignore
     received_chunks = []
 
-    with pytest.raises(httpx.ReadError):
+    async def _drain():
         async for chunk in stream:
             received_chunks.append(chunk)
+
+    with pytest.raises(httpx.ReadError):
+        await _drain()
 
     assert received_chunks == [b"chunk1"]
     assert mock_response.closed is True
@@ -151,9 +154,12 @@ async def test_client_payload_error_before_first_chunk_raises_read_error():
     stream = AiohttpResponseStream(mock_response)  # type: ignore
     received_chunks = []
 
-    with pytest.raises(httpx.ReadError):
+    async def _drain():
         async for chunk in stream:
             received_chunks.append(chunk)
+
+    with pytest.raises(httpx.ReadError):
+        await _drain()
 
     assert received_chunks == []
     assert mock_response.closed is True
@@ -171,9 +177,12 @@ async def test_connection_closed_runtime_error_raises_read_error():
     stream = AiohttpResponseStream(mock_response)  # type: ignore
     received_chunks = []
 
-    with pytest.raises(httpx.ReadError):
+    async def _drain():
         async for chunk in stream:
             received_chunks.append(chunk)
+
+    with pytest.raises(httpx.ReadError):
+        await _drain()
 
     assert received_chunks == [b"data1"]
     assert mock_response.closed is True
@@ -209,9 +218,12 @@ async def test_transfer_encoding_error_raises_read_error():
     stream = AiohttpResponseStream(mock_response)  # type: ignore
     received_chunks = []
 
-    with pytest.raises(httpx.ReadError):
+    async def _drain():
         async for chunk in stream:
             received_chunks.append(chunk)
+
+    with pytest.raises(httpx.ReadError):
+        await _drain()
 
     assert received_chunks == [b"data1"]
     assert mock_response.closed is True
@@ -254,9 +266,12 @@ async def test_timeout_exception_gets_mapped():
     received_chunks = []
 
     # This should raise httpx.TimeoutException (mapped from aiohttp.ServerTimeoutError)
-    with pytest.raises(httpx.TimeoutException):
+    async def _drain():
         async for chunk in stream:
             received_chunks.append(chunk)
+
+    with pytest.raises(httpx.TimeoutException):
+        await _drain()
 
     # Should have received the first chunk before the error
     assert received_chunks == [b"chunk1"]
