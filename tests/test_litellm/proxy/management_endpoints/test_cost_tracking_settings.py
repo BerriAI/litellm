@@ -741,9 +741,11 @@ class TestBlockRequestsForModelsWithoutPricing:
             assert litellm.block_requests_for_models_without_pricing is True
 
     @pytest.mark.asyncio
-    async def test_periodic_db_sync_applies_flag_to_peer_worker(self):
+    @pytest.mark.parametrize("loads_config_overrides", [True, False])
+    async def test_periodic_db_sync_applies_flag_to_peer_worker(self, loads_config_overrides):
         """The ~10s reconcile loop runs _init_non_llm_objects_in_db on every worker; it must apply
-        the persisted flag so peers converge without a restart."""
+        the persisted flag so peers converge without a restart, including when supported_db_objects
+        leaves config_overrides out."""
         from types import SimpleNamespace
 
         from litellm.proxy.proxy_server import ProxyConfig
@@ -756,7 +758,7 @@ class TestBlockRequestsForModelsWithoutPricing:
             patch.object(
                 ProxyConfig,
                 "_should_load_db_object",
-                side_effect=lambda object_type: object_type == "config_overrides",
+                side_effect=lambda object_type: loads_config_overrides and object_type == "config_overrides",
             ),
             patch.object(ProxyConfig, "_init_hashicorp_vault_config_override", AsyncMock()),
             patch("litellm.proxy.proxy_server.get_config_param", AsyncMock(return_value=config_record)),
