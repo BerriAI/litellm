@@ -126,7 +126,7 @@ BudgetScope = Literal[
     "end_user_model",
 ]
 
-BudgetEnforcement = Literal["hard", "soft"]
+BudgetEnforcement = Literal["hard", "soft", "throttled"]
 
 BudgetComparison = Literal[">=", ">"]
 

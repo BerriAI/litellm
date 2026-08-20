@@ -196,15 +196,36 @@ def test_templated_route_matching_does_not_widen_unrelated_key_routes():
     assert RouteChecks.is_info_route("/key/some-hash/budgets") is True
 
 
-def test_info_route_matching_is_cached_without_answering_for_the_wrong_route():
-    """Pattern matching runs per request off the end-user budget check, so it is memoised; the cache must not blur routes."""
-    RouteChecks.is_info_route.cache_clear()
+def test_info_route_matching_answers_exactly_what_the_generic_matcher_would():
+    """
+    This runs per request off the end-user budget check, so it matches precomputed sets instead of
+    rebuilding 25 regexes. That is only safe while it agrees with the generic matcher on every route.
+    """
+    corpus = {
+        entry
+        for member in LiteLLMRoutes
+        if isinstance(member.value, list)
+        for entry in member.value
+        if isinstance(entry, str)
+    } | {
+        "/key/hash-a/budgets",
+        "/key/budgets",
+        "/key/hash-a/regenerate",
+        "/chat/completions",
+        "/v1/responses/resp_9f2",
+        "/key//budgets",
+        "/key/a/b/budgets",
+        "/keyX/a/budgets",
+        "/key/a/budgetsX",
+        "",
+        "/",
+    }
 
-    assert RouteChecks.is_info_route("/key/hash-a/budgets") is True
-    assert RouteChecks.is_info_route("/key/hash-a/regenerate") is False
-    assert RouteChecks.is_info_route("/chat/completions") is False
-    assert RouteChecks.is_info_route("/key/hash-b/budgets") is True
-    assert RouteChecks.is_info_route.cache_info().hits == 0, "four distinct routes cannot share an answer"
-
-    assert RouteChecks.is_info_route("/key/hash-a/regenerate") is False
-    assert RouteChecks.is_info_route.cache_info().hits == 1
+    disagreements = {
+        route
+        for route in corpus
+        if RouteChecks.is_info_route(route)
+        != RouteChecks.check_route_access(route=route, allowed_routes=LiteLLMRoutes.info_routes.value)
+    }
+    assert disagreements == set()
+    assert len(corpus) > 100, "a corpus this small would not have exercised the templated entry"

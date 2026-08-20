@@ -157,8 +157,11 @@ _USER_ON_TEAM_KEY_NOTE: Final = KeyBudgetNote(
 )
 _THROTTLE_NOTE: Final = KeyBudgetNote(
     code="throttled_instead_of_blocked",
-    severity="warning",
-    text="this key opted into throttle_on_budget_exceeded, so exceeding it slows requests instead of blocking",
+    severity="info",
+    text=(
+        "past the limit the key's own tpm and rpm limits are scaled down by "
+        "litellm.budget_exceeded_throttle_percentage; no other budget on this key throttles"
+    ),
 )
 
 
@@ -516,10 +519,10 @@ def _effective_comparison(plan: _PlannedBudget, reservation_enabled: bool) -> Bu
     Reservation runs ahead of the read-time check and blocks once spend reaches the cap, so for
     every scope it covers it, not the read-time comparison, decides when a request stops going through.
 
-    It builds no counter at all for a non-positive cap, though, which leaves the read-time operator
-    in charge there and is the one case where reporting the tightened one would invent a denial.
+    It builds no counter at all for a non-positive cap, and it releases the one it built for a key
+    that throttles instead of blocking, so neither of those is tightened by it.
     """
-    if plan.enforcement == "soft" or not reservation_enabled:
+    if plan.enforcement != "hard" or not reservation_enabled:
         return plan.comparison
     if plan.max_budget is None or plan.max_budget <= 0:
         return plan.comparison
@@ -855,18 +858,19 @@ def _plan_key(context: _KeyBudgetContext) -> tuple[_PlannedBudget, ...]:
     from litellm.proxy.auth.budget_throttle import should_throttle_budget_exceeded
 
     token: Final = context.valid_token
+    throttled: Final = should_throttle_budget_exceeded(token)
     hard: Final = _PlannedBudget(
         scope="key",
         entity_id=token.key_alias,
         entity_label=token.key_alias,
-        enforcement="hard",
+        enforcement="throttled" if throttled else "hard",
         max_budget=token.max_budget,
         comparison=">=",
         source=_key_max_budget_source(context),
         spend_source=_CounterSpend(counter_key=key_spend_counter(token.token), fallback_spend=token.spend or 0.0),
         budget_duration=token.budget_duration,
         budget_reset_at=token.budget_reset_at,
-        notes=(_THROTTLE_NOTE,) if should_throttle_budget_exceeded(token) else (),
+        notes=(_THROTTLE_NOTE,) if throttled else (),
     )
     soft: Final = _PlannedBudget(
         scope="key",

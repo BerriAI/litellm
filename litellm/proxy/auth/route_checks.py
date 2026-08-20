@@ -1,5 +1,4 @@
 import re
-from functools import lru_cache
 from typing import Final
 
 from fastapi import HTTPException, Request, status
@@ -15,6 +14,26 @@ from litellm.proxy._types import (
 )
 
 from .auth_checks_organization import _user_is_org_admin
+
+
+def _placeholder_to_regex(match: "re.Match[str]") -> str:
+    placeholder: Final = match.group(0).strip("{}")
+    if placeholder.endswith(":path"):
+        # allow "/" in the placeholder value, but don't eat the route suffix after ":"
+        return r"[^:]+"
+    return r"[^/]+"
+
+
+def _route_pattern_regex(pattern: str) -> str:
+    """Anchored regex for a route template, so a precompiled copy cannot drift from the live matcher."""
+    expanded: Final = re.sub(r"\{[^}]+\}", _placeholder_to_regex, pattern)
+    return f"^{expanded}$"
+
+
+_EXACT_INFO_ROUTES: Final = frozenset(LiteLLMRoutes.info_routes.value)
+_TEMPLATED_INFO_ROUTE_PATTERNS: Final = tuple(
+    re.compile(_route_pattern_regex(route)) for route in LiteLLMRoutes.info_routes.value if "{" in route
+)
 
 # Management write routes denied to PROXY_ADMIN_VIEW_ONLY. Adding a new write
 # endpoint to a management router REQUIRES adding it here too — the surrounding
@@ -438,7 +457,6 @@ class RouteChecks:
         return RouteChecks.check_route_access(route=route, allowed_routes=LiteLLMRoutes.management_routes.value)
 
     @staticmethod
-    @lru_cache(maxsize=2048)
     def is_info_route(route: str) -> bool:
         """
         Check if route is an info route
@@ -446,11 +464,15 @@ class RouteChecks:
         Pattern-aware, like ``is_management_route``, so an info route carrying a path parameter is as
         reachable as one without: the incoming route holds a resolved id, never the ``{...}`` template.
 
-        Cached because this runs per request off ``_check_end_user_budget`` and the allowlist is a
-        module constant, so an uncached call rebuilds and matches 25 regexes to answer the same
-        question. ``normalize_request_route`` in ``auth_utils`` is bounded the same way.
+        Matched off the precomputed sets rather than ``check_route_access`` because this runs per
+        request off ``_check_end_user_budget``, and rebuilding 25 regexes to answer a question whose
+        allowlist is a module constant costs more than the answer is worth. Caching instead would key
+        on a route that carries resolved ids, so its working set is unbounded on exactly the traffic
+        that needs it most.
         """
-        return RouteChecks.check_route_access(route=route, allowed_routes=LiteLLMRoutes.info_routes.value)
+        return route in _EXACT_INFO_ROUTES or any(
+            pattern.match(route) is not None for pattern in _TEMPLATED_INFO_ROUTE_PATTERNS
+        )
 
     @staticmethod
     def _is_azure_openai_route(route: str) -> bool:
@@ -490,17 +512,7 @@ class RouteChecks:
         if not isinstance(route, str):
             return False
 
-        def _placeholder_to_regex(match: re.Match) -> str:
-            placeholder: Final = match.group(0).strip("{}")
-            if placeholder.endswith(":path"):
-                # allow "/" in the placeholder value, but don't eat the route suffix after ":"
-                return r"[^:]+"
-            return r"[^/]+"
-
-        pattern = re.sub(r"\{[^}]+\}", _placeholder_to_regex, pattern)
-        # Anchor the pattern to match the entire string
-        pattern = f"^{pattern}$"
-        if re.match(pattern, route):
+        if re.match(_route_pattern_regex(pattern), route):
             return True
         return False
 

@@ -16463,7 +16463,9 @@ from litellm.proxy._types import LiteLLM_ProjectTableCachedObj  # noqa: E402
 from litellm.proxy.auth.auth_checks import TeamMemberBudget  # noqa: E402
 from litellm.proxy.management_endpoints.key_budget_resolver import (  # noqa: E402
     _match_model_budget_key,
+    _RecordedSpend as _BudgetsRecordedSpend,
     _MODEL_BUDGET_COLD_NOTE,
+    _THROTTLE_NOTE,
     _read_end_user_model_spend,
     _read_key_model_spend,
     _request_models,
@@ -17237,6 +17239,104 @@ async def test_key_budgets_call_an_unreadable_counter_unreadable_rather_than_rep
     assert project_entry.spend_state == "live", "the recorded-spend scopes do not go through the counter"
 
 
+@pytest.mark.asyncio
+async def test_key_budgets_say_a_throttling_key_throttles_rather_than_calling_it_a_blocker():
+    """`hard` plus a note meant every client that skipped the prose reported a denial that never happened."""
+    token = _budgets_token(
+        tpm_limit=1000,
+        metadata={"tags": ["prod"], "throttle_on_budget_exceeded": True},
+    )
+    world = _fully_populated_world()
+    world["team_member"] = TeamMemberBudget(max_budget=50.0, recorded_spend=8.0, source="budget_table:budget-member")
+    with patch("litellm.budget_exceeded_throttle_percentage", 0.5), _budgets_world(**world):
+        budgets = await resolve_key_budgets(
+            valid_token=token,
+            end_user_id=None,
+            deps=_budgets_deps(
+                read_spend=_RecordingSpendReader(_BUDGETS_SPEND_AT_LIMIT),
+                general_settings={"apply_user_budget_to_team_keys": True},
+            ),
+        )
+
+    key_entry = next(e for e in budgets if e.scope == "key" and e.enforcement != "soft")
+    assert key_entry.enforcement == "throttled"
+    assert key_entry.status == "exceeded", "spend really is past the cap; what changes is what happens next"
+    assert key_entry.comparison == ">=", "throttling starts at the same point a block would have"
+    assert _THROTTLE_NOTE in key_entry.notes
+
+
+@pytest.mark.parametrize(
+    ("enforcement", "expected"),
+    [("hard", ">="), ("soft", ">"), ("throttled", ">")],
+)
+def test_key_budgets_apply_the_reservation_operator_only_to_budgets_that_block(enforcement, expected):
+    """
+    The reservation only decides when a request stops going through for a budget that denies one. It
+    never runs for a soft budget and it releases the entry it built for a throttling key, so neither
+    can be reported as blocking earlier than the read-time check does.
+    """
+    from litellm.proxy.management_endpoints.key_budget_resolver import _effective_comparison, _PlannedBudget
+
+    plan = _PlannedBudget(
+        scope="key",
+        entity_id="k",
+        entity_label=None,
+        enforcement=enforcement,
+        max_budget=100.0,
+        comparison=">",
+        source="key.max_budget",
+        spend_source=_BudgetsRecordedSpend(0.0),
+    )
+
+    assert _effective_comparison(plan=plan, reservation_enabled=True) == expected
+
+
+@pytest.mark.asyncio
+async def test_key_budgets_keep_every_other_scope_blocking_on_a_throttling_key():
+    """Only the key's own counter is released for a throttling key; the rest still raise."""
+    token = _budgets_token(
+        tpm_limit=1000,
+        metadata={"tags": ["prod"], "throttle_on_budget_exceeded": True},
+    )
+    world = _fully_populated_world()
+    world["team_member"] = TeamMemberBudget(max_budget=50.0, recorded_spend=8.0, source="budget_table:budget-member")
+    with patch("litellm.budget_exceeded_throttle_percentage", 0.5), _budgets_world(**world):
+        budgets = await resolve_key_budgets(
+            valid_token=token,
+            end_user_id="end-user-budgets",
+            deps=_budgets_deps(
+                read_spend=_RecordingSpendReader(_BUDGETS_SPEND_AT_LIMIT),
+                general_settings={"apply_user_budget_to_team_keys": True},
+            ),
+        )
+
+    throttled = {e.scope for e in budgets if e.enforcement == "throttled"}
+    assert throttled == {"key"}
+    for scope in ("key_window", "team", "team_member", "user", "organization", "tag", "end_user"):
+        entry = next(e for e in budgets if e.scope == scope and e.enforcement != "soft")
+        assert entry.enforcement == "hard", scope
+
+
+@pytest.mark.asyncio
+async def test_key_budgets_call_a_key_hard_when_throttling_cannot_actually_engage():
+    """The flag alone does nothing: without a rate limit to scale or a configured percentage it still blocks."""
+    flagged = _budgets_token(tpm_limit=1000, metadata={"throttle_on_budget_exceeded": True})
+
+    with patch("litellm.budget_exceeded_throttle_percentage", None), _budgets_world(**_fully_populated_world()):
+        without_percentage = await resolve_key_budgets(valid_token=flagged, end_user_id=None, deps=_budgets_deps())
+
+    no_rate_limit = _budgets_token(metadata={"throttle_on_budget_exceeded": True})
+    with patch("litellm.budget_exceeded_throttle_percentage", 0.5), _budgets_world(**_fully_populated_world()):
+        without_rate_limit = await resolve_key_budgets(
+            valid_token=no_rate_limit, end_user_id=None, deps=_budgets_deps()
+        )
+
+    for budgets in (without_percentage, without_rate_limit):
+        entry = next(e for e in budgets if e.scope == "key" and e.enforcement != "soft")
+        assert entry.enforcement == "hard"
+        assert entry.notes == ()
+
+
 def test_key_budgets_classify_every_note_code_and_leave_none_to_a_default():
     """
     Severity is the only thing a client has for a code its build predates, so every code is classified
@@ -17256,13 +17356,13 @@ def test_key_budgets_classify_every_note_code_and_leave_none_to_a_default():
         "rolling_window": "info",
         "user_budget_not_applied_to_team_key": "info",
         "model_budget_fails_open": "info",
+        "throttled_instead_of_blocked": "info",
         # only the note states it
         "custom_auth_may_override_end_user_cap": "warning",
         "end_user_route_only": "warning",
         "per_model_counters": "warning",
         "project_spend_not_tracked": "warning",
         "request_tags_add_budgets": "warning",
-        "throttled_instead_of_blocked": "warning",
     }
 
 
