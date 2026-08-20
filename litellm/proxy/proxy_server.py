@@ -6315,7 +6315,8 @@ class ProxyConfig:
         # Schedule new job if retention period is set (not None)
         retention_period: Final = general_settings.get("maximum_spend_logs_retention_period")
         autorouter_retention: Final = general_settings.get("maximum_autorouter_session_retention_period")
-        if retention_period is not None or autorouter_retention is not None:
+        health_check_retention: Final = general_settings.get("maximum_health_check_retention_period")
+        if retention_period is not None or autorouter_retention is not None or health_check_retention is not None:
             from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import (
                 SpendLogCleanup,
             )
@@ -6468,6 +6469,13 @@ class ProxyConfig:
             new_session_value: Final = _general_settings["maximum_autorouter_session_retention_period"]
             general_settings["maximum_autorouter_session_retention_period"] = new_session_value
             if old_session_value != new_session_value:
+                await self._reschedule_spend_log_cleanup_job()
+
+        if "maximum_health_check_retention_period" in _general_settings:
+            old_health_check_value: Final = general_settings.get("maximum_health_check_retention_period")
+            new_health_check_value: Final = _general_settings["maximum_health_check_retention_period"]
+            general_settings["maximum_health_check_retention_period"] = new_health_check_value
+            if old_health_check_value != new_health_check_value:
                 await self._reschedule_spend_log_cleanup_job()
 
         ## SPEND LOG CLEANUP BOUNDS ##
@@ -9085,6 +9093,7 @@ class ProxyStartupEvent:
         if (
             general_settings.get("maximum_spend_logs_retention_period") is not None
             or general_settings.get("maximum_autorouter_session_retention_period") is not None
+            or general_settings.get("maximum_health_check_retention_period") is not None
         ):
             spend_log_cleanup: Final = SpendLogCleanup()
             cleanup_cron: Final = general_settings.get("maximum_spend_logs_cleanup_cron")
@@ -15820,6 +15829,7 @@ _GENERAL_SETTINGS_CONFIG_LIST_FIELD_TYPES: Final[Mapping[str, str]] = MappingPro
         "store_model_in_db": "Boolean",
         "store_prompts_in_spend_logs": "Boolean",
         "maximum_spend_logs_retention_period": "String",
+        "maximum_health_check_retention_period": "String",
         "maximum_spend_logs_cleanup_batch_size": "Integer",
         "maximum_spend_logs_cleanup_max_batches": "Integer",
         "maximum_spend_logs_cleanup_run_budget": "String",
