@@ -1238,6 +1238,53 @@ async def test_validate_config_returns_the_write_gates_verdict_without_saving():
 
 
 @pytest.mark.asyncio
+async def test_routing_test_never_confirms_models_the_caller_cannot_use(monkeypatch: pytest.MonkeyPatch):
+    """routed_model_configured must not be an existence oracle for the whole proxy: a team
+    admin probing a guessed global model name reads False unless the named team could
+    actually use that model, and True once the team grants it."""
+    from litellm.proxy import proxy_server
+
+    def _team_prisma(team_id: str, models: list[str]) -> MagicMock:
+        row_data = {
+            "team_id": team_id,
+            "members_with_roles": [{"role": "admin", "user_id": "team-admin"}],
+            "models": models,
+        }
+        team_row = MagicMock()
+        team_row.model_dump.return_value = row_data
+        team_row.dict.return_value = row_data
+        prisma = MagicMock()
+        prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=team_row)
+        return prisma
+
+    def _request(team_id: str) -> AutoRouterRoutingTestRequest:
+        return AutoRouterRoutingTestRequest.model_validate(
+            {
+                "prompt": "what is 2+2",
+                "complexity_router_config": {"tiers": TIERS, "classifier_type": "heuristic"},
+                "team_id": team_id,
+            }
+        )
+
+    monkeypatch.setattr(proxy_server, "premium_user", True)
+    monkeypatch.setattr(proxy_server, "llm_router", _router())
+
+    team_admin: Final = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER, api_key="sk-team", user_id="team-admin"
+    )
+
+    monkeypatch.setattr(proxy_server, "prisma_client", _team_prisma("team-probe", models=["mid-model"]))
+    probing = await preview_auto_router_routing(data=_request("team-probe"), user_api_key_dict=team_admin)
+    assert probing.routed_model == "cheap-model"
+    assert probing.routed_model_configured is False
+
+    monkeypatch.setattr(proxy_server, "prisma_client", _team_prisma("team-grant", models=["cheap-model"]))
+    granted = await preview_auto_router_routing(data=_request("team-grant"), user_api_key_dict=team_admin)
+    assert granted.routed_model == "cheap-model"
+    assert granted.routed_model_configured is True
+
+
+@pytest.mark.asyncio
 async def test_validate_config_gates_like_the_write_it_rehearses(monkeypatch: pytest.MonkeyPatch):
     """A caller who could not save the router must not get the dry run either: matching
     /model/new, a team admin passes only when naming their own team, and a caller who is

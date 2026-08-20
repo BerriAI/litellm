@@ -303,7 +303,15 @@ async def preview_auto_router_routing(
     }
     ```
     """
-    from litellm.proxy.proxy_server import llm_router
+    from litellm.proxy.proxy_server import (
+        general_settings,
+        llm_router,
+        prisma_client,
+        proxy_logging_obj,
+        user_api_key_cache,
+        user_model,
+    )
+    from litellm.proxy.utils import get_available_models_for_user
 
     await _authorize_router_dry_run(user_api_key_dict=user_api_key_dict, team_id=data.team_id)
 
@@ -360,9 +368,19 @@ async def preview_auto_router_routing(
             },
         )
 
+    available_models: Final = await get_available_models_for_user(
+        user_api_key_dict=user_api_key_dict,
+        llm_router=llm_router,
+        general_settings=general_settings,
+        user_model=user_model,
+        prisma_client=prisma_client,
+        proxy_logging_obj=proxy_logging_obj,
+        team_id=data.team_id,
+        user_api_key_cache=user_api_key_cache,
+    )
     return AutoRouterRoutingTestResponse(
         routed_model=hook_response.model,
-        routed_model_configured=hook_response.model in frozenset(llm_router.get_model_names()),
+        routed_model_configured=hook_response.model in frozenset(available_models),
         routing_decision=hook_response.routing_decision,
     )
 

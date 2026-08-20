@@ -76,7 +76,7 @@ class AutoRouterRoutingTestResponse(BaseModel):
 
     routed_model: str = Field(description="The model group the router picked")
     routed_model_configured: bool = Field(
-        description="Whether routed_model is a model group this proxy actually serves",
+        description="Whether routed_model is a model group available to the caller, scoped to team_id when given. Never confirms models the caller could not use",
     )
     routing_decision: StandardLoggingRoutingDecision = Field(
         description="The decision record this request would have written to its log row",
