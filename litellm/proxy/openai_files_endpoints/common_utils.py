@@ -1288,6 +1288,25 @@ def batch_cost_poller_is_active() -> bool:
         return False
 
 
+def _completed_batch_safe_to_retire(response) -> bool:
+    """Whether a "completed" batch may be retired from cost recovery.
+
+    ``batch_processed=True`` is the sole re-pickup gate for CheckBatchCost's
+    cost-recovery poller, so setting it retires the batch permanently. A batch can
+    reach ``status="completed"`` while ``output_file_id`` is still ``None`` (the
+    provider response briefly lags before the output id populates). Retiring in that
+    window loses the spend record forever. Retire only once we can prove there is
+    nothing left to recover: the output file has actually arrived, or the provider
+    reports no successful request lines. When counts are unknown, stay eligible so
+    the next poller pass revisits it. (#37713)
+    """
+    if getattr(response, "output_file_id", None) is not None:
+        return True
+    request_counts = getattr(response, "request_counts", None)
+    completed = getattr(request_counts, "completed", None)
+    return completed == 0
+
+
 async def update_batch_in_database(
     batch_id: str,
     unified_batch_id: str | Literal[False],
@@ -1369,7 +1388,7 @@ async def update_batch_in_database(
         }
 
         poller_owns: Final = batch_cost_poller_is_active() if poller_owns_accounting is None else poller_owns_accounting
-        if db_status == "complete" and not poller_owns:
+        if db_status == "complete" and not poller_owns and _completed_batch_safe_to_retire(response):
             update_data["batch_processed"] = True
 
         try:
