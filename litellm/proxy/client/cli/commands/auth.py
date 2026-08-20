@@ -17,7 +17,9 @@ from litellm.litellm_core_utils.cli_keyring import (
     KeyringDisabled,
     KeyringNotInstalled,
     KeyringUnreachable,
+    SecretErased,
     SecretStored,
+    SecretStranded,
     SecretVault,
     SecretWrite,
 )
@@ -80,12 +82,16 @@ class CliAuthResult(TypedDict):
     team_id: str | None
 
 
-KEYCHAIN_UNREACHABLE_MESSAGE: Final = (
-    "Your credential is stored in your OS keychain, which could not be read. Unlock it and retry, "
-    "install the keyring package with: pip install 'litellm[cli]', or run 'lite login'."
+KEYRING_INSTALL_HINT: Final = "pip install 'litellm[cli]'"
+
+STRANDED_CREDENTIAL_MESSAGE: Final = (
+    "Logged out locally, but your credential is still in the OS keychain and could not be removed."
 )
 
-KEYRING_INSTALL_HINT: Final = "pip install 'litellm[cli]'"
+KEYCHAIN_UNREACHABLE_MESSAGE: Final = (
+    "Your credential is stored in your OS keychain, which could not be read. Unlock it, or install "
+    f"the keyring package with: {KEYRING_INSTALL_HINT}. Run 'lite login' to start over."
+)
 
 
 def storage_notice(outcome: SecretWrite) -> str:
@@ -742,11 +748,18 @@ def login(ctx: click.Context, config_claude: bool):
 @click.pass_context
 def logout(ctx: click.Context):
     """Logout and clear stored authentication"""
-    if clear_cli_token(vault=context_secret_vault(ctx)):
-        click.echo("Logged out successfully. Authentication token cleared.")
-        return
-    click.echo("Logged out. The local token file is gone, but the OS keychain entry could not be removed.")
-    click.echo("Unlock your keychain and run 'lite logout' again to clear it.")
+    match clear_cli_token(vault=context_secret_vault(ctx)):
+        case SecretErased():
+            click.echo("Logged out successfully. Authentication token cleared.")
+        case KeyringNotInstalled():
+            click.echo(STRANDED_CREDENTIAL_MESSAGE)
+            click.echo(f"Install the keyring package with: {KEYRING_INSTALL_HINT}, then run 'lite logout' again.")
+        case KeyringDisabled():
+            click.echo(STRANDED_CREDENTIAL_MESSAGE)
+            click.echo(f"Unset {DISABLE_KEYRING_ENV_VAR} and run 'lite logout' again to clear it.")
+        case SecretStranded() | KeyringUnreachable():
+            click.echo(STRANDED_CREDENTIAL_MESSAGE)
+            click.echo("Unlock your keychain and run 'lite logout' again to clear it.")
 
 
 @click.command(name="print-token")

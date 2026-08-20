@@ -46,6 +46,12 @@ def _write_home_json(home: Path, filename: str, payload: dict[str, object]) -> N
     (litellm_dir / filename).write_text(json.dumps(payload))
 
 
+def _write_token_file(home: Path, *, key: str | None) -> None:
+    """A stored login: `key=None` is the metadata half of a keychain-backed pair, a key is a file-backed one."""
+    payload: dict[str, object] = {"base_url": "https://test.example.com", "user_id": "u-1", "timestamp": time.time()}
+    _write_home_json(home, "token.json", payload if key is None else {**payload, "key": key})
+
+
 def _secret_blob(base_url: str, key: str) -> str:
     return json.dumps({"base_url": base_url, "key": key, "jwt_token": ""})
 
@@ -427,14 +433,62 @@ class TestLogoutCommand:
         """Setup for each test"""
         self.runner = CliRunner()
 
-    def test_logout_success(self):
+    def test_logout_success(self, isolated_home, secret_vault_factory):
         """Test successful logout"""
-        with patch("litellm.proxy.client.cli.commands.auth.clear_cli_token") as mock_clear:
-            result = self.runner.invoke(logout)
+        vault = secret_vault_factory(blob=_secret_blob("https://test.example.com", "sk-stored"))
+        _write_token_file(isolated_home, key=None)
 
-            assert result.exit_code == 0
-            assert "Logged out successfully" in result.output
-            mock_clear.assert_called_once()
+        result = self.runner.invoke(logout, obj={"secret_vault": vault})
+
+        assert result.exit_code == 0
+        assert "Logged out successfully" in result.output
+        assert vault.blob is None
+        assert not (isolated_home / ".litellm" / "token.json").exists()
+
+    def test_logout_without_the_keyring_package_does_not_claim_the_keychain_is_clear(
+        self, isolated_home, secret_vault_factory
+    ):
+        """Logging out from an install without the cli extra cannot touch an entry a keychain-backed
+        login left behind, so it must point at the package rather than report a clean logout."""
+        _write_token_file(isolated_home, key=None)
+
+        result = self.runner.invoke(
+            logout, obj={"secret_vault": secret_vault_factory(available=False, failure=KeyringNotInstalled())}
+        )
+
+        assert result.exit_code == 0
+        assert "Logged out successfully" not in result.output
+        assert "still in the OS keychain" in result.output
+        assert "pip install 'litellm[cli]'" in result.output
+
+    def test_logout_warns_when_the_keychain_refuses_to_release_the_entry(
+        self, isolated_home, secret_vault_factory
+    ):
+        """A locked keychain leaves a live credential behind that the user believes is gone."""
+        vault = secret_vault_factory(
+            blob=_secret_blob("https://test.example.com", "sk-stored"), erasable=False
+        )
+        _write_token_file(isolated_home, key=None)
+
+        result = self.runner.invoke(logout, obj={"secret_vault": vault})
+
+        assert result.exit_code == 0
+        assert "Logged out successfully" not in result.output
+        assert "still in the OS keychain" in result.output
+        assert "Unlock your keychain" in result.output
+
+    def test_logout_from_a_file_only_login_stays_quiet(self, isolated_home, secret_vault_factory):
+        """The credential never went to a keychain, so removing the file is the whole logout and
+        warning about a keychain entry would send the user chasing one that cannot exist."""
+        _write_token_file(isolated_home, key="sk-in-file")
+
+        result = self.runner.invoke(
+            logout, obj={"secret_vault": secret_vault_factory(available=False, failure=KeyringNotInstalled())}
+        )
+
+        assert result.exit_code == 0
+        assert "Logged out successfully" in result.output
+        assert "still in the OS keychain" not in result.output
 
 
 class TestWhoamiCommand:

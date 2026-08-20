@@ -25,9 +25,12 @@ from litellm.litellm_core_utils.cli_keyring import (
     KeyringDisabled,
     KeyringNotInstalled,
     KeyringUnreachable,
+    SecretErase,
+    SecretErased,
     SecretFound,
     SecretMissing,
     SecretStored,
+    SecretStranded,
     SecretVault,
     SecretWrite,
 )
@@ -84,7 +87,7 @@ def load_cli_token(*, vault: SecretVault = SYSTEM_KEYRING) -> CliTokenRecord | N
 
 
 def save_cli_token(record: CliTokenRecord, *, vault: SecretVault = SYSTEM_KEYRING) -> SecretWrite:
-    """Store a freshly minted credential. Reports whether the keychain took the secret, and why not"""
+    """Store a freshly minted credential. Reports where its secret material ended up, and why"""
     outcome: Final = (
         SecretStored()
         if record.key is None
@@ -94,11 +97,33 @@ def save_cli_token(record: CliTokenRecord, *, vault: SecretVault = SYSTEM_KEYRIN
     return outcome
 
 
-def clear_cli_token(*, vault: SecretVault = SYSTEM_KEYRING) -> bool:
-    """Remove the credential from both stores. Returns whether the keychain is now free of it"""
-    erased: Final = vault.erase()
+def clear_cli_token(*, vault: SecretVault = SYSTEM_KEYRING) -> SecretErase:
+    """Remove the credential from both stores. Reports whether the keychain is now free of it"""
+    outcome: Final = vault.erase()
+    settled: Final = _nothing_left_behind(outcome)
     Path(get_cli_token_file_path()).unlink(missing_ok=True)
-    return erased
+    return SecretErased() if settled else outcome
+
+
+def _nothing_left_behind(outcome: SecretErase) -> bool:
+    """Whether the keychain can be trusted to hold no credential of ours once the file is gone"""
+    match outcome:
+        case SecretErased():
+            return True
+        case SecretStranded():
+            return False
+        case KeyringNotInstalled() | KeyringDisabled() | KeyringUnreachable():
+            return not _secret_lives_in_keychain()
+
+
+def _secret_lives_in_keychain() -> bool:
+    """Whether the token file is the metadata half of a pair whose secret half went to a keychain.
+
+    A file that still carries its own secret rules one out, which keeps `lite logout` quiet on the
+    machines that never had a keychain to begin with.
+    """
+    record: Final = _read_token_file()
+    return record is not None and record.key is None and not record.jwt_token
 
 
 def get_litellm_gateway_api_key(
@@ -200,10 +225,22 @@ def _migrate_file_secret(record: CliTokenRecord, vault: SecretVault) -> CliToken
 
 
 def _scrub_file_secret(record: CliTokenRecord) -> None:
+    """Leave no secret material in the token file once the vault holds it.
+
+    A file that cannot be rewritten without the secret is removed instead. Signing in again costs
+    the user one command; a live credential left behind in cleartext costs them the credential.
+    """
     if record.key is None and not record.jwt_token:
         return
-    with contextlib.suppress(OSError):
+    try:
         _write_token_file(_without_secret(record))
+    except OSError:
+        _discard_token_file()
+
+
+def _discard_token_file() -> None:
+    with contextlib.suppress(OSError):
+        Path(get_cli_token_file_path()).unlink(missing_ok=True)
 
 
 def _without_secret(record: CliTokenRecord) -> CliTokenRecord:

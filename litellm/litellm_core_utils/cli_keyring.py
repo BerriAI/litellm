@@ -37,6 +37,16 @@ class SecretStored:
 
 
 @dataclass(frozen=True, slots=True)
+class SecretErased:
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class SecretStranded:
+    pass
+
+
+@dataclass(frozen=True, slots=True)
 class KeyringNotInstalled:
     pass
 
@@ -54,6 +64,7 @@ class KeyringUnreachable:
 KeyringUnusable: TypeAlias = KeyringNotInstalled | KeyringDisabled | KeyringUnreachable
 SecretRead: TypeAlias = SecretFound | SecretMissing | KeyringUnusable
 SecretWrite: TypeAlias = SecretStored | KeyringUnusable
+SecretErase: TypeAlias = SecretErased | SecretStranded | KeyringUnusable
 
 
 class SecretVault(Protocol):
@@ -63,7 +74,7 @@ class SecretVault(Protocol):
 
     def write(self, blob: str) -> SecretWrite: ...
 
-    def erase(self) -> bool: ...
+    def erase(self) -> SecretErase: ...
 
 
 class KeyringApi(Protocol):
@@ -117,33 +128,31 @@ class KeyringVault:
             return KeyringUnreachable()
         return SecretStored()
 
-    def erase(self) -> bool:
-        """Whether the keychain is guaranteed to hold no credential afterwards.
+    def erase(self) -> SecretErase:
+        """Remove our entry, reporting whether the keychain is guaranteed to be free of it.
 
-        An uninstalled `keyring` package can never have stored one. A kill switch set after
-        a credential was stored leaves that entry out of reach, so erasure cannot be promised.
+        A keychain out of reach is never an erasure: the entry belongs to the OS, not to this
+        install, so it outlives an uninstalled `keyring` package and a kill switch set after login.
+        Those cases are reported apart from a confirmed entry that would not delete, because only
+        the caller knows whether this machine ever put a secret in a keychain.
         """
-        if _import_keyring() is None:
-            return True
-        if _keyring_disabled():
-            return False
         match self.read():
-            case KeyringNotInstalled() | KeyringDisabled() | KeyringUnreachable():
-                return False
+            case KeyringNotInstalled() | KeyringDisabled() | KeyringUnreachable() as unusable:
+                return unusable
             case SecretMissing():
-                return True
+                return SecretErased()
             case SecretFound():
                 return self._delete()
 
-    def _delete(self) -> bool:
+    def _delete(self) -> SecretErase:
         api: Final = _keyring_api()
         if isinstance(api, (KeyringNotInstalled, KeyringDisabled)):
-            return False
+            return api
         try:
             api.delete_password(KEYRING_SERVICE, KEYRING_ACCOUNT)
         except Exception:  # noqa: BLE001  # report the failure as a value so `lite logout` can warn
-            return False
-        return True
+            return SecretStranded()
+        return SecretErased()
 
 
 SYSTEM_KEYRING: Final[SecretVault] = KeyringVault()
