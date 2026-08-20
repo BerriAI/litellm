@@ -2,7 +2,7 @@ import copy
 import hashlib
 import json
 from collections.abc import AsyncIterator, Iterator, Mapping
-from typing import TYPE_CHECKING, Any, Final, Literal, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, TypeVar, cast
 
 from litellm.llms.anthropic.experimental_pass_through.utils import (
     is_reasoning_auto_summary_enabled,
@@ -61,6 +61,7 @@ from openai.types.chat.chat_completion_chunk import Choice as OpenAIStreamingCho
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     parse_tool_call_arguments,
+    with_prompt_cache_breakpoint,
 )
 from litellm.litellm_core_utils.prompt_templates.factory import (
     THOUGHT_SIGNATURE_SEPARATOR,
@@ -245,6 +246,9 @@ class AnthropicAdapter:
         return anthropic_wrapper.anthropic_sse_wrapper()
 
 
+_BlockT: Final = TypeVar("_BlockT", bound=Mapping[str, object])
+
+
 class LiteLLMAnthropicMessagesAdapter:
     def __init__(self):
         pass
@@ -308,6 +312,12 @@ class LiteLLMAnthropicMessagesAdapter:
                 # Fallback for non-dict objects (shouldn't happen in practice)
                 cast(dict[str, object], target)["cache_control"] = cache_control
 
+    @staticmethod
+    def _add_prompt_cache_breakpoint_if_present(source: object, target: _BlockT) -> _BlockT:
+        if isinstance(source, dict) and "prompt_cache_breakpoint" in source:
+            return with_prompt_cache_breakpoint(target, source["prompt_cache_breakpoint"])
+        return target
+
     def translatable_anthropic_params(self) -> list[str]:
         """
         Which anthropic params, we need to translate to the openai format.
@@ -368,7 +378,9 @@ class LiteLLMAnthropicMessagesAdapter:
                         if content.get("type") == "text":
                             text_obj = ChatCompletionTextObject(type="text", text=content.get("text", ""))
                             self._add_cache_control_if_applicable(content, text_obj, model)
-                            new_user_content_list.append(text_obj)
+                            new_user_content_list.append(
+                                self._add_prompt_cache_breakpoint_if_present(content, text_obj)
+                            )
                         elif content.get("type") == "image":
                             # Convert Anthropic image format to OpenAI format
                             source = content.get("source", {})
@@ -378,7 +390,9 @@ class LiteLLMAnthropicMessagesAdapter:
                                 image_url_obj = ChatCompletionImageUrlObject(url=openai_image_url)
                                 image_obj = ChatCompletionImageObject(type="image_url", image_url=image_url_obj)
                                 self._add_cache_control_if_applicable(content, image_obj, model)
-                                new_user_content_list.append(image_obj)
+                                new_user_content_list.append(
+                                    self._add_prompt_cache_breakpoint_if_present(content, image_obj)
+                                )
                         elif content.get("type") == "document":
                             # Convert Anthropic document format (PDF, etc.) to OpenAI format
                             source = content.get("source", {})
@@ -869,7 +883,7 @@ class LiteLLMAnthropicMessagesAdapter:
                 continue
             text_obj = ChatCompletionTextObject(type="text", text=text)
             self._add_cache_control_if_applicable(block, text_obj, model)
-            text_parts.append(text_obj)
+            text_parts.append(self._add_prompt_cache_breakpoint_if_present(block, text_obj))
         return ChatCompletionSystemMessage(role="system", content=text_parts) if text_parts else None
 
     def _add_system_message_to_messages(
@@ -900,7 +914,7 @@ class LiteLLMAnthropicMessagesAdapter:
                         "text": block.get("text", ""),
                     }
                     self._add_cache_control_if_applicable(block, text_block, model_name)
-                    openai_system_content.append(text_block)
+                    openai_system_content.append(self._add_prompt_cache_breakpoint_if_present(block, text_block))
             if openai_system_content:
                 new_messages.insert(
                     0,

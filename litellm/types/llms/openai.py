@@ -71,6 +71,7 @@ from pydantic import (
 )
 from typing_extensions import (
     NotRequired,
+    ReadOnly,
     Required,
     TypedDict,
     override,
@@ -508,6 +509,15 @@ class ChatCompletionDeltaToolCallChunk(TypedDict, total=False):
 class ChatCompletionCachedContent(TypedDict):
     type: Literal["ephemeral"]
     ttl: NotRequired[Literal["5m", "1h"]]
+
+
+class PromptCacheBreakpoint(TypedDict):
+    mode: ReadOnly[Literal["explicit"]]
+
+
+class PromptCacheOptions(TypedDict, total=False):
+    mode: ReadOnly[Literal["implicit", "explicit"]]
+    ttl: ReadOnly[Literal["30m"]]
 
 
 class ChatCompletionThinkingBlock(TypedDict, total=False):
@@ -1148,6 +1158,7 @@ class ResponsesAPIOptionalRequestParams(TypedDict, total=False):
     max_tool_calls: int | None
     prompt_cache_key: str | None
     prompt_cache_retention: str | None
+    prompt_cache_options: ReadOnly[PromptCacheOptions | None]
     stream_options: ResponsesAPIStreamOptions | None
     top_logprobs: int | None
     partial_images: int | None  # Number of partial images to generate (1-3) for streaming image generation
