@@ -54,6 +54,12 @@ def test_prepare_completion_kwargs_skips_prompt_cache_key_without_provider_suppo
     assert "prompt_cache_key" not in completion_kwargs
 
 
+def test_prepare_completion_kwargs_skips_prompt_cache_key_for_chained_litellm_proxy():
+    completion_kwargs = _prepare("litellm_proxy/xai", {"custom_llm_provider": "litellm_proxy"})
+    assert completion_kwargs["user"] == "session-abc"
+    assert "prompt_cache_key" not in completion_kwargs
+
+
 def test_prepare_completion_kwargs_keeps_prompt_cache_key_through_responses_reroute():
     completion_kwargs = _prepare(
         "openai/gpt-5.6-luna",

@@ -15,6 +15,7 @@ from litellm.llms.anthropic.experimental_pass_through.utils import (
 OPENAI_MAX_TOOL_NAME_LENGTH: Final = 64
 TOOL_NAME_HASH_LENGTH: Final = 8
 TOOL_NAME_PREFIX_LENGTH: Final = OPENAI_MAX_TOOL_NAME_LENGTH - TOOL_NAME_HASH_LENGTH - 1  # 55
+PROVIDERS_PROXYING_AN_UNKNOWN_BACKEND: Final = frozenset({"litellm_proxy"})
 
 
 def truncate_tool_name(name: str) -> str:
@@ -915,6 +916,8 @@ class LiteLLMAnthropicMessagesAdapter:
     @staticmethod
     def _supports_prompt_cache_key(model: str | None, custom_llm_provider: str | None) -> bool:
         if not model or not custom_llm_provider:
+            return False
+        if custom_llm_provider in PROVIDERS_PROXYING_AN_UNKNOWN_BACKEND:
             return False
         supported_params: Final = litellm.get_supported_openai_params(
             model=model, custom_llm_provider=custom_llm_provider
