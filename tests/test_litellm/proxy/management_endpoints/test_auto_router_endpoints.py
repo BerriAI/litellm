@@ -1193,14 +1193,14 @@ async def test_validate_config_returns_the_write_gates_verdict_without_saving():
     """The dry-run endpoint must agree with the write gate exactly, so a form showing its
     verdict inline can never pass a config the save would then reject."""
     from litellm.proxy.management_endpoints.auto_router_endpoints import (
-        validate_auto_router_config,
+        validate_complexity_router_config,
     )
     from litellm.types.management_endpoints.auto_router_endpoints import (
-        AutoRouterConfigValidationRequest,
+        ComplexityRouterConfigValidationRequest,
     )
 
-    valid = await validate_auto_router_config(
-        AutoRouterConfigValidationRequest(
+    valid = await validate_complexity_router_config(
+        ComplexityRouterConfigValidationRequest(
             complexity_router_config={
                 "tiers": {"CASUAL": "m1", "AUDIT": "m2"},
                 "tier_definitions": [
@@ -1216,8 +1216,8 @@ async def test_validate_config_returns_the_write_gates_verdict_without_saving():
     assert valid.valid is True
     assert valid.error is None
 
-    rejected = await validate_auto_router_config(
-        AutoRouterConfigValidationRequest(
+    rejected = await validate_complexity_router_config(
+        ComplexityRouterConfigValidationRequest(
             complexity_router_config={
                 "tiers": {"CASUAL": "m1", "AUDIT": "m2"},
                 "tier_definitions": [

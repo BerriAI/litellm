@@ -945,7 +945,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/auto_router/validate_config": {
+    "/auto_router/validate_complexity_router_config": {
         parameters: {
             query?: never;
             header?: never;
@@ -955,14 +955,14 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Validate Auto Router Config
+         * Validate Complexity Router Config
          * @description Validate a complexity-router config without saving it.
          *
          *     Runs the same check every write path runs (the router's own pydantic model), so a form can
          *     show the backend's exact verdict while the operator is still editing rather than after a
          *     rejected save. Nothing is created, routed, or billed.
          */
-        post: operations["validate_auto_router_config_auto_router_validate_config_post"];
+        post: operations["validate_complexity_router_config_auto_router_validate_complexity_router_config_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -22042,24 +22042,6 @@ export interface components {
             system_prompt: string;
         };
         /**
-         * AutoRouterConfigValidationRequest
-         * @description A complexity-router config to validate without saving, so a form can surface the
-         *     backend's own verdict inline instead of a raw 400 at write time.
-         */
-        AutoRouterConfigValidationRequest: {
-            /** Complexity Router Config */
-            complexity_router_config: {
-                [key: string]: unknown;
-            };
-        };
-        /** AutoRouterConfigValidationResponse */
-        AutoRouterConfigValidationResponse: {
-            /** Error */
-            error?: string | null;
-            /** Valid */
-            valid: boolean;
-        };
-        /**
          * AutoRouterRoutingTestRequest
          * @description A single prompt to classify against a complexity-router config that need not be saved yet.
          */
@@ -23814,6 +23796,24 @@ export interface components {
              * @description Timezone for date handling
              */
             timezone?: string | null;
+        };
+        /**
+         * ComplexityRouterConfigValidationRequest
+         * @description A complexity-router config to validate without saving, so a form can surface the
+         *     backend's own verdict inline instead of a raw 400 at write time.
+         */
+        ComplexityRouterConfigValidationRequest: {
+            /** Complexity Router Config */
+            complexity_router_config: {
+                [key: string]: unknown;
+            };
+        };
+        /** ComplexityRouterConfigValidationResponse */
+        ComplexityRouterConfigValidationResponse: {
+            /** Error */
+            error?: string | null;
+            /** Valid */
+            valid: boolean;
         };
         /**
          * ComplexityScorerDefaults
@@ -38207,7 +38207,7 @@ export interface operations {
             };
         };
     };
-    validate_auto_router_config_auto_router_validate_config_post: {
+    validate_complexity_router_config_auto_router_validate_complexity_router_config_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -38216,7 +38216,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["AutoRouterConfigValidationRequest"];
+                "application/json": components["schemas"]["ComplexityRouterConfigValidationRequest"];
             };
         };
         responses: {
@@ -38226,7 +38226,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["AutoRouterConfigValidationResponse"];
+                    "application/json": components["schemas"]["ComplexityRouterConfigValidationResponse"];
                 };
             };
             /** @description Validation Error */

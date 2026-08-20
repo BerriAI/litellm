@@ -2,6 +2,7 @@
 AUTO ROUTER MANAGEMENT ENDPOINTS
 
 POST /auto_router/test_routing - Route one prompt through an unsaved complexity-router config
+POST /auto_router/validate_complexity_router_config - Dry-run the complexity-router write gate without saving
 """
 
 from collections.abc import Mapping, Sequence
@@ -41,10 +42,10 @@ from litellm.types.management_endpoints.auto_router_endpoints import (
     AutoRouterBenchmarkTotals,
     AutoRouterCacheBucket,
     AutoRouterCacheStats,
-    AutoRouterConfigValidationRequest,
-    AutoRouterConfigValidationResponse,
     AutoRouterRoutingTestRequest,
     AutoRouterRoutingTestResponse,
+    ComplexityRouterConfigValidationRequest,
+    ComplexityRouterConfigValidationResponse,
     RequestComplexityRouterConfig,
     ShadowEvalDirection,
     ShadowEvalJobKeyResponse,
@@ -241,13 +242,15 @@ async def _authorize_models_this_test_can_call(
 
 
 @router.post(
-    "/auto_router/validate_config",
+    "/auto_router/validate_complexity_router_config",
     tags=["model management"],  # mutable-ok: fastapi's decorator signature types tags as a list
     dependencies=[Depends(user_api_key_auth)],  # mutable-ok: fastapi's decorator signature types dependencies as a list
-    response_model=AutoRouterConfigValidationResponse,
+    response_model=ComplexityRouterConfigValidationResponse,
     status_code=status.HTTP_200_OK,
 )
-async def validate_auto_router_config(data: AutoRouterConfigValidationRequest) -> AutoRouterConfigValidationResponse:
+async def validate_complexity_router_config(
+    data: ComplexityRouterConfigValidationRequest,
+) -> ComplexityRouterConfigValidationResponse:
     """
     Validate a complexity-router config without saving it.
 
@@ -260,7 +263,7 @@ async def validate_auto_router_config(data: AutoRouterConfigValidationRequest) -
     )
 
     error: Final = validate_complexity_router_config_write(data.complexity_router_config)
-    return AutoRouterConfigValidationResponse(valid=error is None, error=error)
+    return ComplexityRouterConfigValidationResponse(valid=error is None, error=error)
 
 
 @router.post(
