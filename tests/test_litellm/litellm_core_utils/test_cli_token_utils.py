@@ -1,7 +1,9 @@
+import errno
 import json
 import os
 import stat
 import sys
+import tempfile
 import threading
 import time
 
@@ -80,6 +82,25 @@ def _write_metadata_only_file(home):
 
 def _blob(base_url=SERVER, key="sk-vault", jwt_token=""):
     return json.dumps({"base_url": base_url, "key": key, "jwt_token": jwt_token})
+
+
+_REAL_MKSTEMP = tempfile.mkstemp
+
+
+class _MkstempThatNeedsTheOldFileGone:
+    """A disk with exactly one token file's worth of room left on it.
+
+    Staging a replacement needs room for a second file, which is what a full disk refuses. Removing
+    the file already there is what gives that room back.
+    """
+
+    def __init__(self, path):
+        self.path = path
+
+    def __call__(self, *args, **kwargs):
+        if self.path.exists():
+            raise OSError(errno.ENOSPC, "No space left on device")
+        return _REAL_MKSTEMP(*args, **kwargs)
 
 
 _REAL_REPLACE = os.replace
@@ -553,7 +574,7 @@ class TestClearCliToken:
         assert load_cli_token(vault=vault) is None
 
     @pytest.mark.parametrize(
-        "failure", [KeyringDisabled(), KeyringUnreachable(), KeyringDiscardsWrites()]
+        "failure", [KeyringDisabled(), KeyringUnreachable(), KeyringNotInstalled()]
     )
     def test_a_secret_in_the_file_is_no_evidence_about_a_keychain_that_exists(
         self, isolated_home, secret_vault_factory, failure
@@ -561,7 +582,10 @@ class TestClearCliToken:
         """Store a secret in the keychain, sign in again while the keychain is unusable so the new
         secret lands in the file, then log out while it is still unusable. The file now carries its
         own secret and the first login's entry is still there, so reading the file as proof of a
-        clean keychain reports a logout that did not happen."""
+        clean keychain reports a logout that did not happen.
+
+        The three unusable states are the whole of what an erase can answer besides erased and
+        stranded; a backend that keeps nothing it is given is something only a write finds out."""
         _write_legacy_file(isolated_home)
         vault = secret_vault_factory(available=False, failure=failure)
 
@@ -702,6 +726,30 @@ class TestClearCliToken:
             assert clear_cli_token(vault=vault) == KeyringUnreachable()
         finally:
             path.parent.chmod(0o700)
+
+        assert json.loads(path.read_text()).get("key") is None
+
+    @pytest.mark.skipif(os.geteuid() == 0, reason="root ignores file permissions")
+    def test_a_note_the_logout_had_to_remove_is_written_again_for_the_next_one(
+        self, isolated_home, secret_vault_factory, monkeypatch
+    ):
+        """A full disk refuses the replacement file and a read-only token file refuses the rewrite
+        in place, so the only way left to get the secret off disk is to remove the file carrying it.
+        That file was also the note saying the keychain went unchecked, and its absence is what the
+        next logout would read as a keychain already known to be clean.
+
+        Removing it is what frees the room the replacement was refused for, so the note is written
+        again on the way out and the logout after this one still warns."""
+        path = _write_legacy_file(isolated_home)
+        path.chmod(0o400)
+        monkeypatch.setattr(
+            "litellm.litellm_core_utils.private_json.tempfile.mkstemp",
+            _MkstempThatNeedsTheOldFileGone(path),
+        )
+        vault = secret_vault_factory(available=False, failure=KeyringUnreachable())
+
+        assert clear_cli_token(vault=vault) == KeyringUnreachable()
+        assert clear_cli_token(vault=vault) == KeyringUnreachable()
 
         assert json.loads(path.read_text()).get("key") is None
 
