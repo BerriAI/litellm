@@ -5,7 +5,9 @@ This is an enterprise feature and requires a premium license.
 """
 
 import re
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
+from dataclasses import dataclass
+from functools import partial
 from itertools import chain
 from typing import TYPE_CHECKING, Final, NamedTuple, Protocol, overload
 
@@ -198,7 +200,6 @@ class UserProvisionerHelpers:
             user_id=new_user_request.user_id,
             existing_teams=existing_user.teams or [],
             new_teams=new_teams,
-            raise_on_error=True,
         )
 
         updated_user: Final = await _table(UserRepository(prisma_client)).update(
@@ -715,9 +716,12 @@ async def _handle_team_membership_changes(
     user_id: str,
     existing_teams: list[str],
     new_teams: list[str],
-    raise_on_error: bool = False,
 ) -> None:
-    """Handle adding/removing user from teams based on changes."""
+    """Handle adding/removing user from teams based on changes.
+
+    Roster write failures propagate so the SCIM endpoint returns an error the IdP
+    retries, instead of persisting a ``teams`` array the roster never received.
+    """
     existing_teams_set: Final = set(existing_teams)
     new_teams_set: Final = set(new_teams)
 
@@ -729,7 +733,7 @@ async def _handle_team_membership_changes(
             user_id=user_id,
             teams_ids_to_add_user_to=list(teams_to_add),
             teams_ids_to_remove_user_from=list(teams_to_remove),
-            raise_on_error=raise_on_error,
+            raise_on_error=True,
         )
 
 
@@ -1852,6 +1856,87 @@ def _is_user_not_in_team_error(exc: HTTPException) -> bool:
     return isinstance(detail, dict) and detail.get("error") == "User not found in team"
 
 
+@dataclass(frozen=True, slots=True)
+class RosterWriteFailure:
+    description: str
+    status_code: int
+
+
+def _roster_write_status(exc: Exception) -> int:
+    if isinstance(exc, HTTPException):
+        return exc.status_code
+    if isinstance(exc, ProxyException):
+        return int(exc.code) if exc.code.isdigit() else 500
+    return 500
+
+
+class SCIMRosterSyncError(Exception):
+    """Every roster write in the batch was attempted; these are the ones that did not land.
+
+    Rolling the successful ones back is not safe, since the compensating write can fail
+    too and can strip a membership that pre-dated the push. Naming the exact failures
+    instead lets the IdP's next push, which is idempotent, close the gap. handle_exception_on_proxy
+    reads ``status_code`` off this, so a unanimous failure keeps its own status and a mixed
+    batch reports 500.
+    """
+
+    def __init__(self, failures: tuple[RosterWriteFailure, ...], attempted: int) -> None:
+        statuses: Final = frozenset(failure.status_code for failure in failures)
+        self.failures: Final[tuple[RosterWriteFailure, ...]] = failures
+        self.status_code: Final[int] = next(iter(statuses)) if len(statuses) == 1 else 500
+        super().__init__(
+            f"SCIM roster sync failed on {len(failures)} of {attempted} team membership writes, "
+            f"leaving the roster partially updated. Retry the push to reconcile it. "
+            f"Failed writes: {'; '.join(failure.description for failure in failures)}"
+        )
+
+
+async def _attempt_roster_write(label: str, write: Callable[[], Awaitable[object]]) -> tuple[RosterWriteFailure, ...]:
+    """Run one roster write and return what failed, so the caller can keep going."""
+    try:
+        await write()
+    except SCIMRosterSyncError as e:
+        return e.failures
+    except Exception as e:  # noqa: BLE001  # this boundary turns any write failure into a value so the batch continues
+        verbose_proxy_logger.exception("SCIM roster write failed (%s): %s", label, e)
+        return (RosterWriteFailure(description=f"{label}: {e}", status_code=_roster_write_status(e)),)
+    return ()
+
+
+async def _collect_roster_write_failures(
+    writes: Sequence[tuple[str, Callable[[], Awaitable[object]]]],
+) -> tuple[RosterWriteFailure, ...]:
+    per_write: Final = tuple([await _attempt_roster_write(label, write) for label, write in writes])
+    return tuple(chain.from_iterable(per_write))
+
+
+async def _add_user_to_team(user_id: str, team_id: str) -> None:
+    try:
+        await team_member_add(
+            data=TeamMemberAddRequest(
+                team_id=team_id,
+                member=Member(user_id=user_id, role="user"),
+            ),
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+    except ProxyException as e:
+        if e.type != ProxyErrorTypes.team_member_already_in_team:
+            raise
+        verbose_proxy_logger.debug("User %s is already in team %s, skipping add", user_id, team_id)
+
+
+async def _remove_user_from_team(user_id: str, team_id: str) -> None:
+    try:
+        await team_member_delete(
+            data=TeamMemberDeleteRequest(team_id=team_id, user_id=user_id),
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+    except HTTPException as e:
+        if not _is_user_not_in_team_error(e):
+            raise
+        verbose_proxy_logger.debug("User %s is not in team %s, skipping remove", user_id, team_id)
+
+
 async def patch_team_membership(
     user_id: str,
     teams_ids_to_add_user_to: list[str],
@@ -1865,49 +1950,26 @@ async def patch_team_membership(
     A user already being in a team (on add) or already absent from it (on
     remove) is treated as a no-op, not an error.
 
-    When ``raise_on_error`` is True a genuine add or remove failure (anything
-    other than those idempotent no-ops) propagates instead of being swallowed,
-    so a caller can avoid persisting a teams array the roster never received.
+    Every team is attempted before anything is reported, so one failing team cannot
+    strand the others unattempted. When ``raise_on_error`` is True the writes that did
+    not land are reported together, instead of a teams array the roster never received
+    being persisted as a success.
     """
-    for _team_id in teams_ids_to_add_user_to:
-        try:
-            await team_member_add(
-                data=TeamMemberAddRequest(
-                    team_id=_team_id,
-                    member=Member(user_id=user_id, role="user"),
-                ),
-                user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
-            )
-        except ProxyException as e:
-            # Handle duplicate membership gracefully - this is idempotent
-            if e.type == ProxyErrorTypes.team_member_already_in_team:
-                verbose_proxy_logger.debug("User %s is already in team %s, skipping add", user_id, _team_id)
-            elif raise_on_error:
-                raise
-            else:
-                verbose_proxy_logger.exception("Error adding user to team %s: %s", _team_id, e)
-        except Exception as e:
-            if raise_on_error:
-                raise
-            verbose_proxy_logger.exception("Error adding user to team %s: %s", _team_id, e)
-
-    for _team_id in teams_ids_to_remove_user_from:
-        try:
-            await team_member_delete(
-                data=TeamMemberDeleteRequest(team_id=_team_id, user_id=user_id),
-                user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
-            )
-        except HTTPException as e:
-            if _is_user_not_in_team_error(e):
-                verbose_proxy_logger.debug("User %s is not in team %s, skipping remove", user_id, _team_id)
-            elif raise_on_error:
-                raise
-            else:
-                verbose_proxy_logger.exception("Error removing user from team %s: %s", _team_id, e)
-        except Exception as e:
-            if raise_on_error:
-                raise
-            verbose_proxy_logger.exception("Error removing user from team %s: %s", _team_id, e)
+    writes: Final = tuple(
+        chain(
+            (
+                (f"add {user_id} to {team_id}", partial(_add_user_to_team, user_id, team_id))
+                for team_id in teams_ids_to_add_user_to
+            ),
+            (
+                (f"remove {user_id} from {team_id}", partial(_remove_user_from_team, user_id, team_id))
+                for team_id in teams_ids_to_remove_user_from
+            ),
+        )
+    )
+    failures: Final = await _collect_roster_write_failures(writes)
+    if failures and raise_on_error:
+        raise SCIMRosterSyncError(failures, attempted=len(writes))
 
     return True
 
@@ -2370,28 +2432,52 @@ async def _apply_group_patch_updates(group_id: str, update_data: dict[str, objec
     return await TeamRepository(prisma_client).table.find_unique(where={"team_id": group_id})
 
 
-async def _handle_group_membership_changes(group_id: str, current_members: set[str], final_members: set[str]):
-    """Handle adding/removing members from the group."""
-    members_to_add: Final = final_members - current_members
-    members_to_remove: Final = current_members - final_members
+async def _handle_group_membership_changes(group_id: str, current_members: set[str], final_members: set[str]) -> None:
+    """Reconcile the group roster, attempting every member before reporting failures.
+
+    Aborting on the first failure would leave the remaining members unattempted on top
+    of unrolled-back, so every member is written and the ones that failed are named for
+    the IdP's next push to reconcile.
+    """
+    members_to_add: Final = sorted(final_members - current_members)
+    members_to_remove: Final = sorted(current_members - final_members)
 
     verbose_proxy_logger.debug("members_to_add: %s", members_to_add)
     verbose_proxy_logger.debug("members_to_remove: %s", members_to_remove)
 
-    # Use existing helper functions for team membership changes
-    for member_id in members_to_add:
-        await patch_team_membership(
-            user_id=member_id,
-            teams_ids_to_add_user_to=[group_id],
-            teams_ids_to_remove_user_from=[],
+    writes: Final = tuple(
+        chain(
+            (
+                (
+                    f"add {member_id} to {group_id}",
+                    partial(
+                        patch_team_membership,
+                        user_id=member_id,
+                        teams_ids_to_add_user_to=[group_id],
+                        teams_ids_to_remove_user_from=[],
+                        raise_on_error=True,
+                    ),
+                )
+                for member_id in members_to_add
+            ),
+            (
+                (
+                    f"remove {member_id} from {group_id}",
+                    partial(
+                        patch_team_membership,
+                        user_id=member_id,
+                        teams_ids_to_add_user_to=[],
+                        teams_ids_to_remove_user_from=[group_id],
+                        raise_on_error=True,
+                    ),
+                )
+                for member_id in members_to_remove
+            ),
         )
-
-    for member_id in members_to_remove:
-        await patch_team_membership(
-            user_id=member_id,
-            teams_ids_to_add_user_to=[],
-            teams_ids_to_remove_user_from=[group_id],
-        )
+    )
+    failures: Final = await _collect_roster_write_failures(writes)
+    if failures:
+        raise SCIMRosterSyncError(failures, attempted=len(writes))
 
 
 @scim_router.patch(
