@@ -17410,6 +17410,32 @@
         ],
         "supports_vision": true
     },
+    "fal_ai/gpt-image-2": {
+        "litellm_provider": "fal_ai",
+        "metadata": {
+            "notes": "Alias of fal_ai/openai/gpt-image-2, which litellm also accepts without the openai/ prefix. Same rate, see that entry for the size and quality caveat"
+        },
+        "mode": "image_generation",
+        "output_cost_per_image": 0.145,
+        "source": "https://fal.ai/models/openai/gpt-image-2",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/openai/gpt-image-2/edit": {
+        "litellm_provider": "fal_ai",
+        "metadata": {
+            "notes": "Editing endpoint of gpt-image-2 on fal.ai. Same rate as fal_ai/openai/gpt-image-2, see that entry for the size and quality caveat"
+        },
+        "mode": "image_generation",
+        "output_cost_per_image": 0.145,
+        "source": "https://fal.ai/models/openai/gpt-image-2/edit",
+        "supported_endpoints": [
+            "/v1/images/edits"
+        ],
+        "supports_vision": true
+    },
     "featherless_ai/featherless-ai/Qwerky-72B": {
         "litellm_provider": "featherless_ai",
         "max_input_tokens": 32768,
