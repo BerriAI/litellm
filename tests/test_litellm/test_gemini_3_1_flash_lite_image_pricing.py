@@ -12,9 +12,6 @@ values in both the primary price map and the ``litellm/`` backup, and verify
 
 import json
 import os
-import sys
-
-sys.path.insert(0, os.path.abspath("../.."))
 
 import litellm
 from litellm import completion_cost
