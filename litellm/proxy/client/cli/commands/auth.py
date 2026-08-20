@@ -867,7 +867,7 @@ def whoami(ctx: click.Context):
         click.echo("Not authenticated. Run 'lite login' to authenticate.")
         return
 
-    click.echo("Authenticated")
+    click.echo("Authenticated" if token_data.key is not None else "Signed in, but the credential cannot be read")
     click.echo(f"User Email: {token_data.user_email or 'Unknown'}")
     click.echo(f"User ID: {token_data.user_id or 'Unknown'}")
     click.echo(f"User Role: {token_data.user_role or 'Unknown'}")
