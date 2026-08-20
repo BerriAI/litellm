@@ -1,0 +1,15 @@
+{
+  "anthropic_version": "bedrock-2023-05-31",
+  "max_tokens": 256,
+  "messages": [
+    {
+      "content": [
+        {
+          "text": "Reply in JSON: capital of France?",
+          "type": "text"
+        }
+      ],
+      "role": "user"
+    }
+  ]
+}

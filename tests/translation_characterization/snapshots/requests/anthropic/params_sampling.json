@@ -1,0 +1,24 @@
+{
+  "max_tokens": 128,
+  "messages": [
+    {
+      "content": [
+        {
+          "text": "What is the capital of France?",
+          "type": "text"
+        }
+      ],
+      "role": "user"
+    }
+  ],
+  "metadata": {
+    "user_id": "char-user-1234"
+  },
+  "model": "claude-sonnet-4-20250514",
+  "stop_sequences": [
+    "\n\n",
+    "END"
+  ],
+  "temperature": 0.2,
+  "top_p": 0.9
+}

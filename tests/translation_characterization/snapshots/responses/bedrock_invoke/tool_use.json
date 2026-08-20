@@ -1,0 +1,54 @@
+{
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "message": {
+        "content": "I'll check the weather.",
+        "function_call": null,
+        "provider_specific_fields": {
+          "citations": null,
+          "thinking_blocks": null
+        },
+        "role": "assistant",
+        "tool_calls": [
+          {
+            "function": {
+              "arguments": "{\"city\": \"Paris\"}",
+              "name": "get_weather"
+            },
+            "id": "toolu_bdrk_01CharWeather",
+            "index": 1,
+            "type": "function"
+          }
+        ]
+      }
+    }
+  ],
+  "created": 1718064000,
+  "id": "chatcmpl-00000000-0000-0000-0000-000000000001",
+  "model": "claude-3-5-sonnet-20240620",
+  "object": "chat.completion",
+  "system_fingerprint": null,
+  "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "completion_tokens": 60,
+    "completion_tokens_details": {
+      "reasoning_tokens": 0,
+      "text_tokens": 60
+    },
+    "inference_geo": null,
+    "prompt_tokens": 410,
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_creation_tokens": 0,
+      "cached_tokens": 0,
+      "image_tokens": null,
+      "text_tokens": 410,
+      "video_tokens": null
+    },
+    "speed": null,
+    "total_tokens": 470
+  }
+}

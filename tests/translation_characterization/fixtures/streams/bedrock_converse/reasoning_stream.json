@@ -1,0 +1,11 @@
+[
+  {"role": "assistant"},
+  {"contentBlockIndex": 0, "delta": {"reasoningContent": {"text": "The user asks for the capital of France."}}},
+  {"contentBlockIndex": 0, "delta": {"reasoningContent": {"text": " That is Paris."}}},
+  {"contentBlockIndex": 0, "delta": {"reasoningContent": {"signature": "char-converse-stream-signature"}}},
+  {"contentBlockIndex": 0},
+  {"contentBlockIndex": 1, "delta": {"text": "Paris."}},
+  {"contentBlockIndex": 1},
+  {"stopReason": "end_turn"},
+  {"usage": {"inputTokens": 40, "outputTokens": 31, "totalTokens": 71}, "metrics": {"latencyMs": 1290}}
+]

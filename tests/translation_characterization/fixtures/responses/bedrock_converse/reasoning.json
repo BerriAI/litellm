@@ -1,0 +1,14 @@
+{
+  "metrics": {"latencyMs": 1290},
+  "output": {
+    "message": {
+      "role": "assistant",
+      "content": [
+        {"reasoningContent": {"reasoningText": {"text": "The user asks for the capital of France. That is Paris.", "signature": "char-converse-signature"}}},
+        {"text": "Paris."}
+      ]
+    }
+  },
+  "stopReason": "end_turn",
+  "usage": {"inputTokens": 40, "outputTokens": 31, "totalTokens": 71}
+}

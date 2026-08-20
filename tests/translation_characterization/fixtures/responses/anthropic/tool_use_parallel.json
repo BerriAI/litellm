@@ -1,0 +1,14 @@
+{
+  "id": "msg_01CharToolUse0000000001",
+  "type": "message",
+  "role": "assistant",
+  "model": "claude-sonnet-4-20250514",
+  "content": [
+    {"type": "text", "text": "I'll check both for you."},
+    {"type": "tool_use", "id": "toolu_01CharWeather01", "name": "get_weather", "input": {"city": "Paris"}},
+    {"type": "tool_use", "id": "toolu_01CharTime00001", "name": "get_time", "input": {"tz": "Europe/Paris"}}
+  ],
+  "stop_reason": "tool_use",
+  "stop_sequence": null,
+  "usage": {"input_tokens": 412, "output_tokens": 87}
+}

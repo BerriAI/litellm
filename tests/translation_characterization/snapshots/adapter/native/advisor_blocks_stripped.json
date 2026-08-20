@@ -1,0 +1,23 @@
+{
+  "max_tokens": 512,
+  "messages": [
+    {
+      "content": "Weather in Paris?",
+      "role": "user"
+    },
+    {
+      "content": [
+        {
+          "text": "I'll check the weather.",
+          "type": "text"
+        }
+      ],
+      "role": "assistant"
+    },
+    {
+      "content": "Go ahead.",
+      "role": "user"
+    }
+  ],
+  "model": "claude-sonnet-4-20250514"
+}

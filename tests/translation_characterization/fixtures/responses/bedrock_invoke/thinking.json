@@ -1,0 +1,13 @@
+{
+  "id": "msg_bdrk_01CharInvokeThink1",
+  "type": "message",
+  "role": "assistant",
+  "model": "claude-3-7-sonnet-20250219",
+  "content": [
+    {"type": "thinking", "thinking": "The user asks for the capital of France. That is Paris.", "signature": "char-invoke-signature"},
+    {"type": "text", "text": "Paris."}
+  ],
+  "stop_reason": "end_turn",
+  "stop_sequence": null,
+  "usage": {"input_tokens": 40, "output_tokens": 31}
+}

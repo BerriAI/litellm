@@ -1,0 +1,24 @@
+{
+  "anthropic_version": "bedrock-2023-05-31",
+  "max_tokens": 128,
+  "messages": [
+    {
+      "content": [
+        {
+          "text": "What is the capital of France?",
+          "type": "text"
+        }
+      ],
+      "role": "user"
+    }
+  ],
+  "metadata": {
+    "user_id": "char-user-1234"
+  },
+  "stop_sequences": [
+    "\n\n",
+    "END"
+  ],
+  "temperature": 0.2,
+  "top_p": 0.9
+}

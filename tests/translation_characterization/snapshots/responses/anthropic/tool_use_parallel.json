@@ -1,0 +1,63 @@
+{
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "message": {
+        "content": "I'll check both for you.",
+        "function_call": null,
+        "provider_specific_fields": {
+          "citations": null,
+          "thinking_blocks": null
+        },
+        "role": "assistant",
+        "tool_calls": [
+          {
+            "function": {
+              "arguments": "{\"city\": \"Paris\"}",
+              "name": "get_weather"
+            },
+            "id": "toolu_01CharWeather01",
+            "index": 1,
+            "type": "function"
+          },
+          {
+            "function": {
+              "arguments": "{\"tz\": \"Europe/Paris\"}",
+              "name": "get_time"
+            },
+            "id": "toolu_01CharTime00001",
+            "index": 2,
+            "type": "function"
+          }
+        ]
+      }
+    }
+  ],
+  "created": 1718064000,
+  "id": "chatcmpl-00000000-0000-0000-0000-000000000001",
+  "model": "claude-sonnet-4-20250514",
+  "object": "chat.completion",
+  "system_fingerprint": null,
+  "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "completion_tokens": 87,
+    "completion_tokens_details": {
+      "reasoning_tokens": 0,
+      "text_tokens": 87
+    },
+    "inference_geo": null,
+    "prompt_tokens": 412,
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_creation_tokens": 0,
+      "cached_tokens": 0,
+      "image_tokens": null,
+      "text_tokens": 412,
+      "video_tokens": null
+    },
+    "speed": null,
+    "total_tokens": 499
+  }
+}

@@ -1,0 +1,160 @@
+[
+  {
+    "choices": [
+      {
+        "delta": {
+          "audio": null,
+          "content": "",
+          "function_call": null,
+          "provider_specific_fields": null,
+          "role": "assistant",
+          "tool_calls": [
+            {
+              "function": {
+                "arguments": "",
+                "name": "get_weather"
+              },
+              "id": "toolu_bdrk_01CharStream",
+              "index": 0,
+              "type": "function"
+            }
+          ]
+        },
+        "finish_reason": null,
+        "index": 0,
+        "logprobs": null
+      }
+    ],
+    "citations": null,
+    "created": 1718064000,
+    "id": "chatcmpl-00000000-0000-0000-0000-000000000001",
+    "model": "invoke/anthropic.claude-3-7-sonnet-20250219-v1:0",
+    "object": "chat.completion.chunk",
+    "provider_specific_fields": null,
+    "system_fingerprint": null
+  },
+  {
+    "choices": [
+      {
+        "delta": {
+          "audio": null,
+          "content": "",
+          "function_call": null,
+          "provider_specific_fields": null,
+          "role": null,
+          "tool_calls": [
+            {
+              "function": {
+                "arguments": "{\"ci",
+                "name": null
+              },
+              "id": null,
+              "index": 0,
+              "type": "function"
+            }
+          ]
+        },
+        "finish_reason": null,
+        "index": 0,
+        "logprobs": null
+      }
+    ],
+    "citations": null,
+    "created": 1718064000,
+    "id": "chatcmpl-00000000-0000-0000-0000-000000000001",
+    "model": "invoke/anthropic.claude-3-7-sonnet-20250219-v1:0",
+    "object": "chat.completion.chunk",
+    "provider_specific_fields": null,
+    "system_fingerprint": null
+  },
+  {
+    "choices": [
+      {
+        "delta": {
+          "audio": null,
+          "content": "",
+          "function_call": null,
+          "provider_specific_fields": null,
+          "role": null,
+          "tool_calls": [
+            {
+              "function": {
+                "arguments": "ty\": \"Par",
+                "name": null
+              },
+              "id": null,
+              "index": 0,
+              "type": "function"
+            }
+          ]
+        },
+        "finish_reason": null,
+        "index": 0,
+        "logprobs": null
+      }
+    ],
+    "citations": null,
+    "created": 1718064000,
+    "id": "chatcmpl-00000000-0000-0000-0000-000000000001",
+    "model": "invoke/anthropic.claude-3-7-sonnet-20250219-v1:0",
+    "object": "chat.completion.chunk",
+    "provider_specific_fields": null,
+    "system_fingerprint": null
+  },
+  {
+    "choices": [
+      {
+        "delta": {
+          "audio": null,
+          "content": "",
+          "function_call": null,
+          "provider_specific_fields": null,
+          "role": null,
+          "tool_calls": [
+            {
+              "function": {
+                "arguments": "is\"}",
+                "name": null
+              },
+              "id": null,
+              "index": 0,
+              "type": "function"
+            }
+          ]
+        },
+        "finish_reason": null,
+        "index": 0,
+        "logprobs": null
+      }
+    ],
+    "citations": null,
+    "created": 1718064000,
+    "id": "chatcmpl-00000000-0000-0000-0000-000000000001",
+    "model": "invoke/anthropic.claude-3-7-sonnet-20250219-v1:0",
+    "object": "chat.completion.chunk",
+    "provider_specific_fields": null,
+    "system_fingerprint": null
+  },
+  {
+    "choices": [
+      {
+        "delta": {
+          "audio": null,
+          "content": null,
+          "function_call": null,
+          "role": null,
+          "tool_calls": null
+        },
+        "finish_reason": "tool_calls",
+        "index": 0,
+        "logprobs": null
+      }
+    ],
+    "created": 1718064000,
+    "id": "chatcmpl-00000000-0000-0000-0000-000000000001",
+    "model": "invoke/anthropic.claude-3-7-sonnet-20250219-v1:0",
+    "object": "chat.completion.chunk",
+    "provider_specific_fields": null,
+    "system_fingerprint": null
+  }
+]

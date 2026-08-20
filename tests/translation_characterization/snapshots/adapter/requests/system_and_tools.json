@@ -1,0 +1,42 @@
+{
+  "openai_request": {
+    "max_tokens": 512,
+    "messages": [
+      {
+        "content": "You are a terse geographer.",
+        "role": "system"
+      },
+      {
+        "content": "Weather in Paris?",
+        "role": "user"
+      }
+    ],
+    "model": "gpt-4o",
+    "stop_sequences": [
+      "END"
+    ],
+    "temperature": 0.2,
+    "tool_choice": "auto",
+    "tools": [
+      {
+        "function": {
+          "description": "Get current weather for a city.",
+          "name": "get_weather",
+          "parameters": {
+            "properties": {
+              "city": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "city"
+            ],
+            "type": "object"
+          }
+        },
+        "type": "function"
+      }
+    ]
+  },
+  "tool_name_mapping": {}
+}

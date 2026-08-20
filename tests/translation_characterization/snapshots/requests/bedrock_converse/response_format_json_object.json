@@ -1,0 +1,18 @@
+{
+  "additionalModelRequestFields": {
+    "stream": false
+  },
+  "inferenceConfig": {
+    "maxTokens": 256
+  },
+  "messages": [
+    {
+      "content": [
+        {
+          "text": "Reply in JSON: capital of France?"
+        }
+      ],
+      "role": "user"
+    }
+  ]
+}

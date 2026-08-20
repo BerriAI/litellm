@@ -1,0 +1,24 @@
+{
+  "content": [
+    {
+      "signature": null,
+      "thinking": "The user asks for the capital of France. That is Paris.",
+      "type": "thinking"
+    },
+    {
+      "text": "Paris.",
+      "type": "text"
+    }
+  ],
+  "id": "chatcmpl-char-adapter-cache-0001",
+  "model": "gpt-oss-120b",
+  "role": "assistant",
+  "stop_reason": "end_turn",
+  "stop_sequence": null,
+  "type": "message",
+  "usage": {
+    "cache_read_input_tokens": 2048,
+    "input_tokens": 1030,
+    "output_tokens": 35
+  }
+}
