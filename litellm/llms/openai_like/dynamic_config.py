@@ -89,6 +89,11 @@ def create_config_class(provider: SimpleProviderConfig):
 
             return api_base
 
+        def _model_in_cost_map(self, model: str) -> bool:
+            import litellm
+
+            return model in litellm.model_cost or f"{provider.slug}/{model}" in litellm.model_cost
+
         def get_supported_openai_params(self, model: str) -> list:
             """Get supported OpenAI params, excluding tool-related params for models
             that don't support function calling."""
@@ -96,7 +101,9 @@ def create_config_class(provider: SimpleProviderConfig):
 
             supported_params: Final = super().get_supported_openai_params(model=model)
 
-            _supports_fc: Final = supports_function_calling(model=model, custom_llm_provider=provider.slug)
+            _supports_fc: Final = supports_function_calling(model=model, custom_llm_provider=provider.slug) or (
+                provider.default_capabilities.get("function_calling") is True and not self._model_in_cost_map(model)
+            )
 
             if not _supports_fc:
                 tool_params: Final = [

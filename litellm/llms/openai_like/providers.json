@@ -37,6 +37,16 @@
       "max_completion_tokens": "max_tokens"
     }
   },
+  "sference": {
+    "base_url": "https://api.sference.com/v1",
+    "api_key_env": "SFERENCE_API_KEY",
+    "api_base_env": "SFERENCE_API_BASE",
+    "base_class": "openai_gpt",
+    "supported_endpoints": ["/v1/chat/completions", "/v1/messages"],
+    "default_capabilities": {
+      "function_calling": true
+    }
+  },
   "apertis": {
     "base_url": "https://api.stima.tech/v1",
     "api_key_env": "STIMA_API_KEY",

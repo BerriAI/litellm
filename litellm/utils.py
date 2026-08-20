@@ -6285,6 +6285,11 @@ def validate_environment(
                 keys_in_environment = True
             else:
                 missing_keys.append("TENCENT_API_KEY")
+        elif custom_llm_provider == "sference":
+            if "SFERENCE_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("SFERENCE_API_KEY")
         elif custom_llm_provider == "mistral":
             if "MISTRAL_API_KEY" in os.environ:
                 keys_in_environment = True
