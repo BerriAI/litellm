@@ -600,3 +600,4 @@ class AgentRegistry:
 
 
 global_agent_registry: Final = AgentRegistry()
+AGENT_RECONCILE_LOCK: Final = asyncio.Lock()

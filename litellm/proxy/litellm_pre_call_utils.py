@@ -16,6 +16,7 @@ import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm._service_logger import ServiceLogging
 from litellm.constants import (
+    CONSUMED_REQUEST_TAGS_METADATA_KEY,
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
     LITELLM_PROXY_MASTER_KEY_ALIAS,
     PRE_CALL_EXECUTED_GUARDRAILS_KEY,
@@ -37,6 +38,8 @@ from litellm.proxy._types import (
     CommonProxyErrors,
     LitellmDataForBackendLLMCall,
     LitellmUserRoles,
+    ProxyErrorTypes,
+    ProxyException,
     SpecialHeaders,
     TeamCallbackMetadata,
     UserAPIKeyAuth,
@@ -206,6 +209,7 @@ _UNTRUSTED_ROOT_CONTROL_FIELDS: Final = (
     "applied_guardrails",
     "applied_policies",
     "policy_sources",
+    "guardrail_scan_ids",
     "routing_decision",
     "pillar_response_headers",
     "_guardrail_pipelines",
@@ -259,8 +263,10 @@ _UNTRUSTED_METADATA_CONTROL_FIELDS: Final = (
     "applied_guardrails",
     "applied_policies",
     "policy_sources",
+    "guardrail_scan_ids",
     "routing_decision",
     SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
+    CONSUMED_REQUEST_TAGS_METADATA_KEY,
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
     "standard_logging_object",
     "proxy_server_request",
@@ -272,7 +278,7 @@ _UNTRUSTED_METADATA_CONTROL_FIELDS: Final = (
     PRE_CALL_EXECUTED_GUARDRAILS_KEY,
 )
 
-_UNTRUSTED_REQUEST_HEADER_CONTROL_FIELDS: Final = frozenset(
+UNTRUSTED_REQUEST_HEADER_CONTROL_FIELDS: Final = frozenset(
     {
         "litellm-disable-message-redaction",
     }
@@ -290,7 +296,10 @@ _ALLOW_CLIENT_MESSAGE_REDACTION_OPT_OUT_METADATA_KEY: Final = "allow_client_mess
 _CLIENT_PRICING_CONTROL_FIELDS: Final = frozenset(CustomPricingLiteLLMParams.model_fields.keys())
 # ``model_info`` carries the same pricing fields when read by
 # ``use_custom_pricing_for_model``; strip from metadata for the same reason.
-_CLIENT_PRICING_METADATA_FIELDS: Final = frozenset({"model_info"})
+# ``standard_logging_guardrail_information`` is proxy-written telemetry summed
+# into response_cost and spend; a client seeding it forges (even negative)
+# guardrail cost.
+_CLIENT_PRICING_METADATA_FIELDS: Final = frozenset({"model_info", "standard_logging_guardrail_information"})
 _ALLOW_CLIENT_PRICING_OVERRIDE_METADATA_KEY: Final = "allow_client_pricing_override"
 
 # Request fields whose value, when URL-valued, becomes the outbound destination
@@ -344,6 +353,36 @@ def reject_url_valued_destination(field: str, value: str) -> None:
         )
 
 
+_METADATA_JSON_TYPE_NAMES: Final[Mapping[type, str]] = MappingProxyType(
+    {bool: "a boolean", int: "an integer", float: "a number", str: "a string", list: "an array"}
+)
+
+
+def _invalid_metadata_type_error(field: str, value: object) -> ProxyException:
+    received_type: Final = _METADATA_JSON_TYPE_NAMES.get(type(value), f"a {type(value).__name__}")
+    return ProxyException(
+        message=f"Invalid type for '{field}': expected an object, but got {received_type} instead.",
+        type=ProxyErrorTypes.bad_request_error,
+        param=field,
+        code=400,
+    )
+
+
+def _normalized_metadata_object(field: str, value: object) -> Mapping[str, Any]:
+    """Return ``value`` as a metadata object or raise a 400 like OpenAI does.
+
+    A JSON string that parses to an object is accepted because multipart/form-data
+    and ``extra_body`` callers can only send metadata as a string. The caller pops
+    the raw value from the request body before validating so the failure-logging
+    hooks that inspect the body afterwards don't crash on it and mask the 400 as a 500.
+    """
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str) and isinstance((parsed := safe_json_loads(value)), dict):
+        return parsed
+    raise _invalid_metadata_type_error(field=field, value=value)
+
+
 def _strip_untrusted_request_header_controls(
     headers: Any,
     *,
@@ -353,7 +392,7 @@ def _strip_untrusted_request_header_controls(
         return
 
     for header_name in list(headers.keys()):
-        if isinstance(header_name, str) and header_name.lower() in _UNTRUSTED_REQUEST_HEADER_CONTROL_FIELDS:
+        if isinstance(header_name, str) and header_name.lower() in UNTRUSTED_REQUEST_HEADER_CONTROL_FIELDS:
             if allow_client_message_redaction_opt_out:
                 continue
             headers.pop(header_name, None)
@@ -1267,8 +1306,15 @@ class LiteLLMProxyRequestSetup:
         )
         if user_api_key_dict.budget_reservation is not None:
             data[_metadata_variable_name]["user_api_key_budget_reservation"] = user_api_key_dict.budget_reservation
-        # Add the full UserAPIKeyAuth object for MCP server access control
-        data[_metadata_variable_name]["user_api_key_auth"] = user_api_key_dict
+        # UserAPIKeyAuth object for MCP server access control
+        data[_metadata_variable_name]["user_api_key_auth"] = user_api_key_dict.model_copy(
+            update={
+                "metadata": strip_callback_config(user_api_key_dict.metadata),
+                "team_metadata": strip_callback_config(user_api_key_dict.team_metadata),
+                "project_metadata": strip_callback_config(user_api_key_dict.project_metadata),
+                "organization_metadata": strip_callback_config(user_api_key_dict.organization_metadata),
+            }
+        )
         return data
 
     @staticmethod
@@ -1290,10 +1336,11 @@ class LiteLLMProxyRequestSetup:
         )
 
         # ignore any special fields
-        added_metadata: Final = {}
-        for k, v in management_endpoint_metadata.items():
-            if k not in (LiteLLM_ManagementEndpoint_MetadataFields_Premium + LiteLLM_ManagementEndpoint_MetadataFields):
-                added_metadata[k] = v
+        added_metadata: Final = {
+            k: v
+            for k, v in (strip_callback_config(management_endpoint_metadata) or {}).items()
+            if k not in (LiteLLM_ManagementEndpoint_MetadataFields_Premium + LiteLLM_ManagementEndpoint_MetadataFields)
+        }
         if data[_metadata_variable_name].get("user_api_key_auth_metadata") is None:
             data[_metadata_variable_name]["user_api_key_auth_metadata"] = {}
         data[_metadata_variable_name]["user_api_key_auth_metadata"].update(added_metadata)
@@ -1568,6 +1615,13 @@ async def add_litellm_data_to_request(
             continue
         data.pop(_internal_key, None)
     _reject_url_valued_destinations(data)
+    _raw_metadata_by_field: Final = {
+        _metadata_field: data.pop(_metadata_field)
+        for _metadata_field in ("metadata", "litellm_metadata")
+        if data.get(_metadata_field) is not None
+    }
+    for _metadata_field, _raw_metadata in _raw_metadata_by_field.items():
+        data[_metadata_field] = _normalized_metadata_object(_metadata_field, _raw_metadata)
     # Strip spoofable auth metadata from user-supplied metadata dict
     _user_metadata = data.get("metadata")
     if isinstance(_user_metadata, dict):
@@ -1707,29 +1761,10 @@ async def add_litellm_data_to_request(
 
     verbose_proxy_logger.debug("receiving data: %s", data)
 
-    # Parse metadata if it's a string (e.g., from multipart/form-data)
-    if "metadata" in data and data["metadata"] is not None:
-        if isinstance(data["metadata"], str):
-            data["metadata"] = safe_json_loads(data["metadata"])
-            if not isinstance(data["metadata"], dict):
-                verbose_proxy_logger.warning(
-                    "Failed to parse 'metadata' as JSON dict. Received value: %s", data["metadata"]
-                )
-        # requester_metadata is snapshotted AFTER the strip below so
-        # downstream consumers (e.g. PANW guardrail reading user_ip /
-        # profile_id) don't see attacker-injected admin slots preserved in
-        # the deepcopy.
-
-    # Parse litellm_metadata if it's a string (e.g., from multipart/form-data or extra_body)
-    if "litellm_metadata" in data and data["litellm_metadata"] is not None:
-        if isinstance(data["litellm_metadata"], str):
-            parsed_litellm_metadata: Final = safe_json_loads(data["litellm_metadata"])
-            if not isinstance(parsed_litellm_metadata, dict):
-                verbose_proxy_logger.warning(
-                    "Failed to parse 'litellm_metadata' as JSON dict. Received value: %s", data["litellm_metadata"]
-                )
-            else:
-                data["litellm_metadata"] = parsed_litellm_metadata
+    # requester_metadata is snapshotted AFTER the strip below so
+    # downstream consumers (e.g. PANW guardrail reading user_ip /
+    # profile_id) don't see attacker-injected admin slots preserved in
+    # the deepcopy.
 
     # Strip internal pipeline state and admin-injection slots from user input.
     # Runs AFTER the string-to-dict parse above so JSON-string metadata (sent

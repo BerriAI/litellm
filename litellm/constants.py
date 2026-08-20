@@ -1,5 +1,6 @@
 import os
 import sys
+from types import MappingProxyType
 from typing import Final, Literal
 
 from litellm.litellm_core_utils.env_utils import get_env_int, get_env_int_or_none
@@ -141,6 +142,8 @@ LITELLM_UI_ALLOW_HEADERS: Final = [
     "x-litellm-semantic-filter",
     "x-litellm-semantic-filter-tools",
     "x-litellm-adaptive-router-model",
+    "x-litellm-applied-guardrails",
+    "x-litellm-guardrail-scan-id",
 ]
 
 # Gemini model-specific minimal thinking budget constants
@@ -240,6 +243,12 @@ AIOHTTP_NEEDS_CLEANUP_CLOSED: Final = (3, 13, 0) <= sys.version_info < (
 # https://github.com/openai/openai-agents-python/blob/cf1b933660e44fd37b4350c41febab8221801409/src/agents/realtime/openai_realtime.py#L235
 _max_size_env: Final = os.getenv("REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES")
 REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES: Final = int(_max_size_env) if _max_size_env is not None else None
+REALTIME_CREDENTIAL_RESOLUTION_TIMEOUT_SECONDS: Final = float(
+    os.getenv("REALTIME_CREDENTIAL_RESOLUTION_TIMEOUT_SECONDS", "20.0")
+)
+
+# RFC 6455 caps the close frame payload at 125 bytes, 2 of which carry the status code
+WEBSOCKET_CLOSE_REASON_MAX_BYTES: Final = 123
 
 # SSL/TLS cipher configuration for faster handshakes
 # Strategy: Strongly prefer fast modern ciphers, but allow fallback to commonly supported ones
@@ -472,6 +481,8 @@ EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE: Final = float(
 ### ANTHROPIC CONSTANTS ###
 ANTHROPIC_TOKEN_COUNTING_BETA_VERSION = os.getenv("ANTHROPIC_TOKEN_COUNTING_BETA_VERSION", "token-counting-2024-11-01")
 ANTHROPIC_SKILLS_API_BETA_VERSION: Final = "skills-2025-10-02"
+ANTHROPIC_BATCHES_ROUTE: Final = "/v1/messages/batches"
+VERTEX_BATCH_PREDICTION_JOBS_ROUTE: Final = "batchPredictionJobs"
 ANTHROPIC_WEB_SEARCH_TOOL_MAX_USES: Final = {
     "low": 1,
     "medium": 5,
@@ -1323,6 +1334,7 @@ LITELLM_METADATA_FIELD: Final = "litellm_metadata"
 OLD_LITELLM_METADATA_FIELD: Final = "metadata"
 RETURN_RAW_MODEL_NAME_METADATA_KEY: Final = "_complexity_router_return_raw_model_name"
 SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY: Final = "_session_deployment_affinity_ttl"
+CONSUMED_REQUEST_TAGS_METADATA_KEY: Final = "_consumed_request_tags"
 INTERNAL_CALL_ORIGIN_METADATA_KEY: Final = "internal_call_origin"
 LITELLM_TRUNCATED_PAYLOAD_FIELD: Final = "litellm_truncated"
 LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE: Final = (
@@ -1482,17 +1494,22 @@ WEEKLY_SPEND_REPORT_JOB_ID: Final = "weekly_spend_report_job"
 MONTHLY_SPEND_REPORT_JOB_ID: Final = "monthly_spend_report_job"
 PROMETHEUS_FALLBACK_STATS_JOB_ID: Final = "prometheus_fallback_stats_job"
 SLACK_DAILY_REPORT_LOCK_ID: Final = "slack_daily_report"
+SLACK_MODEL_DEPRECATION_LOCK_ID: Final = "slack_model_deprecation_warning"
 SPEND_LOG_RUN_LOOPS: Final = int(os.getenv("SPEND_LOG_RUN_LOOPS", 500))
 SPEND_LOG_CLEANUP_BATCH_SIZE: Final = int(os.getenv("SPEND_LOG_CLEANUP_BATCH_SIZE", 1000))
 SPEND_LOG_CLEANUP_MAX_CONSECUTIVE_BATCH_FAILURES = int(os.getenv("SPEND_LOG_CLEANUP_MAX_CONSECUTIVE_BATCH_FAILURES", 3))
 SPEND_LOG_CLEANUP_BATCH_FAILURE_BACKOFF_SECONDS: Final = float(
     os.getenv("SPEND_LOG_CLEANUP_BATCH_FAILURE_BACKOFF_SECONDS", 0.5)
 )
+SPEND_LOG_CLEANUP_RUN_BUDGET_SECONDS: Final = float(os.getenv("SPEND_LOG_CLEANUP_RUN_BUDGET_SECONDS", "300"))
+SPEND_LOG_CLEANUP_BATCH_TIMEOUT_SECONDS: Final = float(os.getenv("SPEND_LOG_CLEANUP_BATCH_TIMEOUT_SECONDS", "30"))
+SPEND_LOG_CLEANUP_REMAINING_COUNT_CAP: Final = int(os.getenv("SPEND_LOG_CLEANUP_REMAINING_COUNT_CAP", "100000"))
 TOOL_SPEND_TOP_TOOLS: Final = 100
 SPEND_LOG_PARTITION_INTERVAL: Final = os.getenv("SPEND_LOG_PARTITION_INTERVAL", "day")
 SPEND_LOG_PARTITION_PRECREATE_AHEAD: Final = int(os.getenv("SPEND_LOG_PARTITION_PRECREATE_AHEAD", 7))
 SPEND_LOG_WRITE_BATCH_MAX_BYTES: Final = max(1, int(os.getenv("SPEND_LOG_WRITE_BATCH_MAX_BYTES", 2_000_000)))
 SPEND_LOG_QUEUE_SIZE_THRESHOLD: Final = int(os.getenv("SPEND_LOG_QUEUE_SIZE_THRESHOLD", 100))
+SPEND_LOG_QUEUE_MAX_BYTES: Final = max(1, int(os.getenv("SPEND_LOG_QUEUE_MAX_BYTES", "64000000")))
 SPEND_LOG_QUEUE_POLL_INTERVAL: Final = float(os.getenv("SPEND_LOG_QUEUE_POLL_INTERVAL", 2.0))
 SPEND_COUNTER_RESEED_LOCKS_MAX_SIZE: Final = int(os.getenv("SPEND_COUNTER_RESEED_LOCKS_MAX_SIZE", 10000))
 DEFAULT_CRON_JOB_LOCK_TTL_SECONDS: Final = int(os.getenv("DEFAULT_CRON_JOB_LOCK_TTL_SECONDS", 60))  # 1 minute
@@ -1526,6 +1543,10 @@ APSCHEDULER_REPLACE_EXISTING: Final = os.getenv("APSCHEDULER_REPLACE_EXISTING", 
     "true",
     "1",
 ]  # always replace existing jobs
+
+# Width of the window scheduled background jobs are spread across, so they do not all fire
+# on one instant on every replica. Tunable per deployment via general_settings.
+DEFAULT_STAGGER_WINDOW_SECONDS: Final = 300
 
 # The number of tag entries are higher than number of user, team entries. This leads to a higher QPS.
 # This will run tag spcific tasks at a later time to smooth QPS
@@ -1580,6 +1601,13 @@ DEFAULT_MCP_ACCESS_GROUP_NEGATIVE_CACHE_TTL: Final = 10
 # in a single ``/{name1,name2,...}/mcp`` URL. Bounds the per-request DB / cache
 # fan-out an authenticated caller can trigger by stuffing the path with tokens.
 DEFAULT_MCP_NAMESPACE_CSV_MAX_TOKENS: Final = 16
+# Ceilings on the cached auth registries; larger tables fall back to per-row lookups
+# instead of holding an unbounded id set in every worker.
+TAG_REGISTRY_MAX_SIZE: Final = 5000
+END_USER_RESTRICTED_REGISTRY_MAX_SIZE: Final = 5000
+# How long a failed registry load is remembered as "unusable", so a degraded Postgres
+# is not re-scanned on every request on top of the per-id lookups it falls back to.
+REGISTRY_ERROR_NEGATIVE_CACHE_TTL: Final = 30
 
 # Sentry Scrubbing Configuration
 SENTRY_DENYLIST: Final = [
@@ -1735,8 +1763,26 @@ PTU_ROLLUP_LOCK_TTL_SECONDS: Final[int] = 900
 # Furthest back the catch-up pass looks for unpriced PTU days when a deployment
 # declares no ptu_effective_from, bounding the scan for an open-ended window.
 PTU_ROLLUP_MAX_BACKFILL_DAYS: Final[int] = 90
+# Deployments named in the lapsed-window alert before it is truncated, so a fleet-wide
+# expiry cannot produce an alert too large for the channel delivering it.
+PTU_LAPSED_ALERT_LIMIT: Final[int] = 10
 # Slack allowed when deciding a sentinel row is stale. The row's updated_at and the
 # run's cutoff are stamped by different hosts, so clock skew between them must not let
 # one run delete a charge another just wrote. A stale row is hours old and a concurrent
 # one is seconds old, so a few minutes separates them.
 PTU_PRUNE_SKEW_GRACE_SECONDS: Final[int] = 300
+
+# How long enqueued-token reservations for batches live without a refund. Providers
+# complete or expire batches within their completion window (24h for OpenAI), so a
+# reservation still unrefunded after 8 days belongs to a batch whose terminal state
+# was never observed (e.g. proxy restart); expiry returns the tokens to the caller.
+BATCH_ENQUEUED_TOKEN_TTL_SECONDS: Final[int] = 8 * 24 * 60 * 60
+
+# Key/team metadata field that opts batches into enqueued-token limiting. Only proxy
+# admins may write it: when present it replaces the standard RPM/TPM checks for
+# batch submissions.
+BATCH_ENQUEUED_TOKEN_LIMIT_METADATA_KEY: Final = "batch_enqueued_token_limit"
+
+# Shared read-only empty mapping, for defaulting optional Mapping parameters without
+# constructing a fresh mutable dict at each call site.
+EMPTY_MAPPING: Final = MappingProxyType({})
