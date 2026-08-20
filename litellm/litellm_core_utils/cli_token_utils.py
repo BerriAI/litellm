@@ -145,7 +145,7 @@ def save_cli_token(record: CliTokenRecord, *, vault: SecretVault = SYSTEM_KEYRIN
     keychain has already taken the new secret, and it reports itself as such rather than claiming
     the previous login survived.
     """
-    stamped: Final = _stamped_past_the_login_on_disk(record)
+    stamped: Final = _stamped_past_every_stored_login(record, vault)
     staged: Final = _stage_token_file(_without_secret(stamped))
     if isinstance(staged, CredentialNotSaved):
         return staged
@@ -156,18 +156,42 @@ def save_cli_token(record: CliTokenRecord, *, vault: SecretVault = SYSTEM_KEYRIN
     return _keep_the_secret_in_the_file(stamped, outcome)
 
 
-def _stamped_past_the_login_on_disk(record: CliTokenRecord) -> CliTokenRecord:
-    """Keep a sign-in's stamp ahead of the one it replaces, whatever the clock did in between.
+def _stamped_past_every_stored_login(record: CliTokenRecord, vault: SecretVault) -> CliTokenRecord:
+    """Keep a sign-in's stamp ahead of every login already stored, whatever the clock did in between.
 
     The stamp is what decides a keychain secret against one still on disk, so a clock that stepped
     backwards between two logins would hand the older of them the win and put a superseded
-    credential back in use. The file already names the login being replaced, and pinning the new
-    stamp just past it costs one read that changes nothing on a clock that only moves forwards.
+    credential back in use. Pinning the new stamp just past the highest one either store holds costs
+    one read each and changes nothing on a clock that only moves forwards.
+    """
+    highest: Final = _highest_stamp_already_stored(record.base_url, vault)
+    if highest < record.timestamp:
+        return record
+    return record.model_copy(update=MappingProxyType({"timestamp": math.nextafter(highest, math.inf)}))
+
+
+def _highest_stamp_already_stored(base_url: str, vault: SecretVault) -> float:
+    """When the latest login either store still holds was made, or minus infinity when neither has one.
+
+    Both are asked because the file names the login being replaced only while the two agree. A login
+    the keychain took but the file could not record afterwards leaves the keychain holding the later
+    of the two, and reading only the file would stamp the next sign-in below it.
     """
     previous: Final = _read_token_file()
-    if previous is None or previous.timestamp < record.timestamp:
-        return record
-    return record.model_copy(update=MappingProxyType({"timestamp": math.nextafter(previous.timestamp, math.inf)}))
+    secret: Final = _stored_secret(base_url, vault)
+    return max(
+        -math.inf if previous is None else previous.timestamp,
+        -math.inf if secret is None else secret.timestamp,
+    )
+
+
+def _stored_secret(base_url: str, vault: SecretVault) -> CliTokenSecret | None:
+    """The keychain's secret for this server, when it holds one this login may be compared against"""
+    match vault.read():
+        case SecretFound(blob=blob):
+            return _decode_secret(blob, base_url)
+        case SecretMissing() | KeyringNotInstalled() | KeyringDisabled() | KeyringUnreachable():
+            return None
 
 
 def _keep_the_secret_in_the_file(record: CliTokenRecord, outcome: SecretWrite) -> SecretSave:
