@@ -21,8 +21,12 @@ test_paths:
       - tests/documentation_tests/test_requests_lib_usage.py
       - tests/documentation_tests/test_standard_logging_payload.py
   - reason: >-
-      Sibling files here are executed by name from the code-quality workflow; this one is referenced
-      by no job
+      Named like a test but shaped like a benchmark: it fetches live image URLs, times aiohttp
+      against httpx, prints the ratio, and asserts nothing, so pytest cannot collect it (its
+      functions take arguments, not fixtures) and running it beside its siblings in the
+      code-quality workflow would add a network dependency for a number nothing reads. Exempt
+      as a script rather than as an unresolved gap; revisit by deleting it once the aiohttp
+      choice it informed is settled
     paths:
       - tests/code_coverage_tests/test_aio_http_image_conversion.py
   - reason: >-
@@ -124,14 +128,13 @@ test_paths:
       - tests/integration/test_oci_integration.py
       - tests/integration/test_oci_proxy_integration.py
   - reason: >-
-      Two prompt-factory tests sitting at the top level of tests/ instead of under the
-      tests/test_litellm mirror the shards enumerate; they need moving rather than a shard entry
-    paths:
-      - tests/litellm_core_utils/test_anthropic_dedup_factory.py
-      - tests/litellm_core_utils/test_bedrock_converse_dedup_factory.py
-  - reason: >-
-      A unit test for the proxy-extras package that no job invokes, while the package's other tests
-      live under tests/proxy_migration_tests
+      A unit test for the proxy-extras package that no job invokes, while the package's other
+      tests live under tests/proxy_migration_tests. Measured 2026-08-20: 24 of its 28 tests pass
+      and the 4 in TestMigrationSQLIdempotency fail, because nine migrations from 2026-04 onward
+      use bare CREATE TABLE, ADD COLUMN and CREATE INDEX rather than the guarded forms this file
+      requires. Wiring it up means deciding what to do about those migrations first, and they
+      cannot simply be edited: Prisma checksums an applied migration, so a changed one breaks
+      migrate deploy for existing installs
     paths:
       - tests/litellm-proxy-extras/test_litellm_proxy_extras_utils.py
 
