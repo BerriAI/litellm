@@ -156,6 +156,17 @@ describe("CacheLeakageCard", () => {
     ).toBeInTheDocument();
   });
 
+  it("keeps the streaming note off while a fresh range loads over the previous range's rows", () => {
+    const day = dayWithKeys("2026-07-12", {
+      "hash-leaky": key("leaky-key", { prompt_tokens: 10000, cache_read_input_tokens: 0 }),
+    });
+    const { queryByText } = renderWith([day], { loading: true });
+
+    expect(
+      queryByText("Data is still loading; rows and totals will update as the rest of the range arrives."),
+    ).not.toBeInTheDocument();
+  });
+
   it("drops the streaming note once the range has settled", () => {
     const day = dayWithKeys("2026-07-12", {
       "hash-leaky": key("leaky-key", { prompt_tokens: 10000, cache_read_input_tokens: 0 }),

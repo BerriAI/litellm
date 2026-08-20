@@ -11,12 +11,6 @@ interface PaginationStatusAlertsProps {
   subject?: string;
 }
 
-/**
- * The fetching-progress and partial-data banners shown while a daily activity
- * range streams in page by page. Rendered wherever usePaginatedDailyActivity
- * falls back to pagination; both banners stay hidden on the single-shot
- * aggregated path because it never sets isFetchingMore or cancelled.
- */
 const PaginationStatusAlerts = ({
   isFetchingMore,
   cancelled,

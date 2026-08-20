@@ -123,7 +123,7 @@ const CacheLeakageCard: React.FC<CacheLeakageCardProps> = ({ activity }) => {
           </Tabs>
         </CardHeader>
         <CardContent>
-          {rows.length > 0 && (loading || isFetchingMore) && (
+          {rows.length > 0 && isFetchingMore && (
             <p className="mb-2 text-sm text-muted-foreground">
               Data is still loading; rows and totals will update as the rest of the range arrives.
             </p>
