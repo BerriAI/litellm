@@ -26,7 +26,9 @@ Not allowed:
 - Filesystem, database, or cache access.
 - Config file reading or rollout state; the host resolves those and passes them
   in. Env reads are limited to credential fallback in a route's `prepare.rs`.
-- Logging callbacks, tracing spans, spend writes, or customer callbacks.
+- Logging callbacks, tracing spans, spend writes, or customer callbacks, except
+  the `logging` module's debug sink, which owns the renderer env vars and stderr
+  output.
 - Provider-specific branching that belongs in `providers`.
 - Panics for user/provider-controlled input.
 

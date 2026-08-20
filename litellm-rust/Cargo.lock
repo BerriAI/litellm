@@ -557,6 +557,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0c9ea0ac24bc397ab3c98583a3c9ba74fa56b09a4449bbe172b9b1ddb016027a"
 
 [[package]]
+name = "colored_json"
+version = "5.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e35980a1b846f8e3e359fd18099172a0857140ba9230affc4f71348081e039b6"
+dependencies = [
+ "serde",
+ "serde_json",
+ "yansi",
+]
+
+[[package]]
 name = "const-oid"
 version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1242,6 +1253,9 @@ dependencies = [
  "aws-sigv4",
  "aws-smithy-runtime-api",
  "aws-types",
+ "bytes",
+ "colored_json",
+ "futures-util",
  "rand 0.8.7",
  "reqwest",
  "serde",
@@ -2574,6 +2588,12 @@ name = "xmlparser"
 version = "0.13.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "66fee0b777b0f5ac1c69bb06d361268faafa61cd4682ae064a171c16c433e9e4"
+
+[[package]]
+name = "yansi"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cfe53a6657fd280eaa890a3bc59152892ffa3e30101319d168b781ed6529b049"
 
 [[package]]
 name = "yoke"
