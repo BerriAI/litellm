@@ -80,7 +80,9 @@ const job = (overrides: Partial<ShadowEvalJob> = {}): ShadowEvalJob => ({
   keys: [
     {
       api_key_id: "hashed-key-abc",
-      max_turns: 200,
+      max_turns: 10000,
+      max_budget: 10,
+      spend: 3.21,
       stopped_at: null,
       key_alias: "prod-alpha",
       key_name: "sk-...alpha",
@@ -133,7 +135,9 @@ const keyEntry = (
   overrides: Partial<ShadowEvalJob["keys"][number]> = {},
 ): ShadowEvalJob["keys"][number] => ({
   api_key_id,
-  max_turns: 200,
+  max_turns: 10000,
+  max_budget: 10,
+  spend: 0,
   stopped_at: null,
   attempt_count: null,
   key_alias: null,
@@ -321,6 +325,21 @@ describe("ShadowEvalSection", () => {
     expect(screen.getByText(/ends in 3 days/)).toBeInTheDocument();
   });
 
+  it("shows recorded eval spend against the job's dollar budget", () => {
+    const j = job();
+    mockHooks({ jobs: [j], detailsById: { "job-1": j } });
+    render(<ShadowEvalSection />);
+    expect(screen.getByText(/\$3\.21 of \$10\.00 eval spend/)).toBeInTheDocument();
+  });
+
+  it("shows spend without a budget cap for a job from before spend budgets existed", () => {
+    const j = job({ keys: [keyEntry("hashed-key-abc", { max_budget: null, spend: 3.21 })] });
+    mockHooks({ jobs: [j], detailsById: { "job-1": j } });
+    render(<ShadowEvalSection />);
+    expect(screen.getByText(/\$3\.21 eval spend/)).toBeInTheDocument();
+    expect(screen.queryByText(/of \$/)).not.toBeInTheDocument();
+  });
+
   it("flags rows with fewer than 30 judged turns as low sample", () => {
     const j = job();
     mockHooks({ jobs: [j], detailsById: { "job-1": j } });
@@ -388,7 +407,7 @@ describe("ShadowEvalSection", () => {
       direction: "forward",
       shadow_percentage: 10,
       duration_days: 7,
-      max_turns: 200,
+      max_budget: 10,
       judge_model: "anthropic/claude-sonnet-5",
     };
     expect(start.mutate).toHaveBeenCalledWith(expectedBody);
@@ -425,7 +444,7 @@ describe("ShadowEvalSection", () => {
       baseline_model: "prod-claude",
       shadow_percentage: 10,
       duration_days: 7,
-      max_turns: 200,
+      max_budget: 10,
       judge_model: "anthropic/claude-sonnet-5",
     };
     expect(start.mutate).toHaveBeenCalledWith(expectedBody);
@@ -463,8 +482,8 @@ describe("ShadowEvalSection", () => {
         job({
           judged_count: 205,
           keys: [
-            keyEntry("hash-spent", { max_turns: 200, stopped_at: "2026-08-08T00:00:00Z" }),
-            keyEntry("hash-hungry", { max_turns: 500 }),
+            keyEntry("hash-spent", { max_budget: 2, spend: 1.5, stopped_at: "2026-08-08T00:00:00Z" }),
+            keyEntry("hash-hungry", { max_budget: 5, spend: 0.2 }),
           ],
           results: {
             by_tier: [],
@@ -492,25 +511,26 @@ describe("ShadowEvalSection", () => {
     if (!spent || !hungry) throw new Error("expected a table row per scoped key");
 
     expect(within(spent).getByText("stopped")).toBeInTheDocument();
-    expect(within(spent).getByText("200 / 200")).toBeInTheDocument();
+    expect(within(spent).getByText("$1.50 / $2.00")).toBeInTheDocument();
     expect(within(spent).getByText("60.0%")).toBeInTheDocument();
 
     expect(within(hungry).getByText("running")).toBeInTheDocument();
-    expect(within(hungry).getByText("0 / 500")).toBeInTheDocument();
+    expect(within(hungry).getByText("$0.2000 / $5.00")).toBeInTheDocument();
     expect(within(hungry).getByText("No verdicts yet")).toBeInTheDocument();
 
-    expect(screen.getByText(/205 of 700 turns judged/)).toBeInTheDocument();
+    expect(screen.getByText(/205 turns judged/)).toBeInTheDocument();
     expect(screen.getByText(/Shadowing 10% of/)).toBeInTheDocument();
     expect(screen.getByText("2 keys")).toBeInTheDocument();
   });
 
   it("reads a key that spent its budget as completed even before the sweep stamps it", () => {
+    const legacyTurnBudgetLeg = { max_budget: null, spend: 0.5, max_turns: 500, attempt_count: 3 };
     mockHooks({
       jobs: [
         job({
           keys: [
-            keyEntry("hash-spent", { max_turns: 200, attempt_count: 200 }),
-            keyEntry("hash-hungry", { max_turns: 500, attempt_count: 3 }),
+            keyEntry("hash-spent", { max_budget: 2, spend: 2, attempt_count: 40 }),
+            keyEntry("hash-hungry", legacyTurnBudgetLeg),
           ],
         }),
       ],
@@ -521,9 +541,9 @@ describe("ShadowEvalSection", () => {
     const hungry = screen.getByText("hash-hungr…").closest("tr");
     if (!spent || !hungry) throw new Error("expected a table row per scoped key");
     expect(within(spent).getByText("completed")).toBeInTheDocument();
-    expect(within(spent).getByText("200 / 200")).toBeInTheDocument();
+    expect(within(spent).getByText("$2.00 / $2.00")).toBeInTheDocument();
     expect(within(hungry).getByText("running")).toBeInTheDocument();
-    expect(within(hungry).getByText("3 / 500")).toBeInTheDocument();
+    expect(within(hungry).getByText("3 / 500 turns")).toBeInTheDocument();
   });
 
   it("shows the per-key table while a multi-key job is still collecting, before any verdicts exist", () => {
@@ -533,8 +553,8 @@ describe("ShadowEvalSection", () => {
           judged_count: 0,
           results: null,
           keys: [
-            keyEntry("hash-spent", { max_turns: 2, attempt_count: 2 }),
-            keyEntry("hash-hungry", { max_turns: 500, attempt_count: 1 }),
+            keyEntry("hash-spent", { max_budget: 0.5, spend: 0.5, attempt_count: 2 }),
+            keyEntry("hash-hungry", { max_budget: 5, spend: 0.01, attempt_count: 1 }),
           ],
         }),
       ],
@@ -544,7 +564,7 @@ describe("ShadowEvalSection", () => {
     const spent = screen.getByText("hash-spent…").closest("tr");
     if (!spent) throw new Error("expected a per-key row before verdicts exist");
     expect(within(spent).getByText("completed")).toBeInTheDocument();
-    expect(within(spent).getByText("2 / 2")).toBeInTheDocument();
+    expect(within(spent).getByText("$0.5000 / $0.5000")).toBeInTheDocument();
     expect(screen.getByText("Budget used")).toBeInTheDocument();
     expect(screen.queryByText("Judged turns")).not.toBeInTheDocument();
     expect(screen.getByText(/Collecting verdicts/)).toBeInTheDocument();

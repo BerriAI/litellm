@@ -20,6 +20,7 @@ from litellm.constants import (
     RESET_BUDGET_JOB_NAME,
 )
 from litellm.proxy._types import (
+    DB_RETRY_SAFE_ERROR_TYPES,
     LiteLLM_BudgetTableFull,
     LiteLLM_EndUserTable,
     LiteLLM_TeamTable,
@@ -33,6 +34,7 @@ from litellm.proxy.common_utils.timezone_utils import (
 )
 from litellm.proxy.common_utils.user_api_key_cache import tag_cache_key
 from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
+from litellm.proxy.db.exception_handler import call_with_db_reconnect_retry
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.repositories.organization_repository import OrganizationRepository
 from litellm.repositories.prisma_protocols import ReadOnlyTable, SpendLinkedTable
@@ -243,6 +245,7 @@ class _WindowSource:
     id_column: str
     counter_prefix: str
     log_subject: str
+    retry_subject: str
     write: Callable[[PrismaClient, str, str], Awaitable[None]]
 
     def page_query(self) -> str:
@@ -266,6 +269,7 @@ _WINDOW_SOURCES: Final[tuple[_WindowSource, ...]] = (
         id_column="token",
         counter_prefix="spend:key",
         log_subject="keys",
+        retry_subject="key",
         write=_write_key_windows,
     ),
     _WindowSource(
@@ -273,6 +277,7 @@ _WINDOW_SOURCES: Final[tuple[_WindowSource, ...]] = (
         id_column="team_id",
         counter_prefix="spend:team",
         log_subject="teams",
+        retry_subject="team",
         write=_write_team_windows,
     ),
 )
@@ -380,6 +385,24 @@ class ResetBudgetJob:
             if lease is _Lease.LEADER and self.pod_lock_manager is not None:
                 await self.pod_lock_manager.release_lock(cronjob_id=RESET_BUDGET_JOB_NAME)
 
+    async def _with_db_retry(self, operation: Callable[[], Awaitable[_RowT]], *, reason: str) -> _RowT:
+        """Reconnect and retry once on a transport error, so a dropped connection
+        costs one retry instead of the whole tick.
+        """
+        return await call_with_db_reconnect_retry(self.prisma_client, operation, reason=reason)
+
+    async def _with_db_write_retry(self, operation: Callable[[], Awaitable[_RowT]], *, reason: str) -> _RowT:
+        """Same, for writes: only replay when the statements provably never
+        reached the database. A reset zeroes spend unconditionally, so replaying
+        an ambiguous commit would erase spend accrued since it landed.
+        """
+        return await call_with_db_reconnect_retry(
+            self.prisma_client,
+            operation,
+            reason=reason,
+            retry_safe_error_types=DB_RETRY_SAFE_ERROR_TYPES,
+        )
+
     @staticmethod
     async def _invalidate_spend_counter(counter_key: str) -> None:
         """Zero a spend counter so a DB-row reset takes effect immediately.
@@ -445,16 +468,24 @@ class ResetBudgetJob:
         """Read the rows the cascade will zero, so their counters can be
         invalidated once the transaction commits."""
         try:
-            return tuple(await table.find_many(where=where))
+            return tuple(
+                await self._with_db_retry(
+                    lambda: table.find_many(where=where),
+                    reason=f"reset_budget_read_{log_subject.replace(' ', '_')}_failure",
+                )
+            )
         except Exception as e:
             verbose_proxy_logger.warning("Failed to fetch %s for counter invalidation: %s", log_subject, e)
             return ()
 
     async def _collect_endusers_to_reset(self, budget_ids: Sequence[str]) -> tuple[_EndUserRow, ...]:
-        linked: Final[Sequence[_EndUserRow] | None] = await self.prisma_client.get_data(
-            table_name="enduser",
-            query_type="find_all",
-            budget_id_list=list(budget_ids),
+        linked: Final[Sequence[_EndUserRow] | None] = await self._with_db_retry(
+            lambda: self.prisma_client.get_data(
+                table_name="enduser",
+                query_type="find_all",
+                budget_id_list=list(budget_ids),
+            ),
+            reason="reset_budget_read_endusers_failure",
         )
         if litellm.max_end_user_budget_id is None or litellm.max_end_user_budget_id not in budget_ids:
             return tuple(linked or ())
@@ -528,6 +559,12 @@ class ResetBudgetJob:
         if not cascade.budget_ids:
             return
 
+        await self._with_db_write_retry(
+            lambda: self._commit_budget_cascade_once(cascade),
+            reason="reset_budget_write_budget_cascade_failure",
+        )
+
+    async def _commit_budget_cascade_once(self, cascade: _BudgetCascade) -> None:
         enduser_ids: Final = tuple(row.user_id for row in cascade.endusers)
         async with budget_cascade_unit_of_work(self.prisma_client.db.batch_) as uow:
             uow.team_memberships.queue_spend_zero(where=_budget_link_where(cascade.budget_ids))
@@ -548,11 +585,14 @@ class ResetBudgetJob:
     async def _reset_expired_budget_cascade(self) -> _BudgetCascadeCommitted | _BudgetCascadeFailed:
         now: Final = datetime.now(timezone.utc)
         try:
-            budgets_to_reset: Final[Sequence[LiteLLM_BudgetTableFull] | None] = await self.prisma_client.get_data(
-                table_name="budget",
-                query_type="find_all",
-                reset_at=now,
-                limit=RESET_BUDGET_JOB_BATCH_SIZE,
+            budgets_to_reset: Final[Sequence[LiteLLM_BudgetTableFull] | None] = await self._with_db_retry(
+                lambda: self.prisma_client.get_data(
+                    table_name="budget",
+                    query_type="find_all",
+                    reset_at=now,
+                    limit=RESET_BUDGET_JOB_BATCH_SIZE,
+                ),
+                reason="reset_budget_read_budgets_failure",
             )
             cascade: Final = await self._collect_budget_cascade(budgets_to_reset or ())
         except Exception as e:
@@ -636,11 +676,14 @@ class ResetBudgetJob:
         in-memory during auth checks.
         """
         table: Final[ReadOnlyTable] = EndUserRepository(self.prisma_client).table
-        rows: Final = await table.find_many(
-            where={
-                "budget_id": None,
-                "spend": {"gt": 0},
-            },
+        rows: Final = await self._with_db_retry(
+            lambda: table.find_many(
+                where={
+                    "budget_id": None,
+                    "spend": {"gt": 0},
+                },
+            ),
+            reason="reset_budget_read_endusers_without_budget_id_failure",
         )
         return [LiteLLM_EndUserTable.model_validate(row.dict()) for row in rows]
 
@@ -655,6 +698,12 @@ class ResetBudgetJob:
         aborts the entire batch — silently leaving spend over the cap and
         budget_reset_at unchanged forever.
         """
+        await self._with_db_write_retry(
+            lambda: self._write_key_reset_updates_once(updated_keys),
+            reason="reset_budget_write_keys_failure",
+        )
+
+    async def _write_key_reset_updates_once(self, updated_keys: list[LiteLLM_VerificationToken]) -> None:
         async with spend_reset_unit_of_work(self.prisma_client.db.batch_) as uow:
             for k in updated_keys:
                 if k.token is None:
@@ -669,6 +718,12 @@ class ResetBudgetJob:
         that trips Prisma's DataError on rows carrying unrecognised fields
         (see #27730).
         """
+        await self._with_db_write_retry(
+            lambda: self._write_user_reset_updates_once(updated_users),
+            reason="reset_budget_write_users_failure",
+        )
+
+    async def _write_user_reset_updates_once(self, updated_users: list[LiteLLM_UserTable]) -> None:
         async with spend_reset_unit_of_work(self.prisma_client.db.batch_) as uow:
             for u in updated_users:
                 uow.users.queue_spend_reset(user_id=u.user_id, budget_reset_at=u.budget_reset_at)
@@ -681,6 +736,12 @@ class ResetBudgetJob:
         that trips Prisma's DataError on rows carrying unrecognised fields
         (see #27730).
         """
+        await self._with_db_write_retry(
+            lambda: self._write_team_reset_updates_once(updated_teams),
+            reason="reset_budget_write_teams_failure",
+        )
+
+    async def _write_team_reset_updates_once(self, updated_teams: list[LiteLLM_TeamTable]) -> None:
         async with spend_reset_unit_of_work(self.prisma_client.db.batch_) as uow:
             for t in updated_teams:
                 uow.teams.queue_spend_reset(team_id=t.team_id, budget_reset_at=t.budget_reset_at)
@@ -723,12 +784,15 @@ class ResetBudgetJob:
         start_time: Final = time.time()
         keys_to_reset: list[LiteLLM_VerificationToken] | None = None
         try:
-            keys_to_reset = await self.prisma_client.get_data(
-                table_name="key",
-                query_type="find_all",
-                expires=now,
-                reset_at=now,
-                limit=RESET_BUDGET_JOB_BATCH_SIZE,
+            keys_to_reset = await self._with_db_retry(
+                lambda: self.prisma_client.get_data(
+                    table_name="key",
+                    query_type="find_all",
+                    expires=now,
+                    reset_at=now,
+                    limit=RESET_BUDGET_JOB_BATCH_SIZE,
+                ),
+                reason="reset_budget_read_keys_failure",
             )
             verbose_proxy_logger.debug("Keys to reset %s", _LazyJson(keys_to_reset))
             updated_keys: Final[list[LiteLLM_VerificationToken]] = []
@@ -823,11 +887,14 @@ class ResetBudgetJob:
         start_time: Final = time.time()
         users_to_reset: list[LiteLLM_UserTable] | None = None
         try:
-            users_to_reset = await self.prisma_client.get_data(
-                table_name="user",
-                query_type="find_all",
-                reset_at=now,
-                limit=RESET_BUDGET_JOB_BATCH_SIZE,
+            users_to_reset = await self._with_db_retry(
+                lambda: self.prisma_client.get_data(
+                    table_name="user",
+                    query_type="find_all",
+                    reset_at=now,
+                    limit=RESET_BUDGET_JOB_BATCH_SIZE,
+                ),
+                reason="reset_budget_read_users_failure",
             )
             updated_users: Final[list[LiteLLM_UserTable]] = []
             failed_users: Final = []
@@ -929,11 +996,14 @@ class ResetBudgetJob:
         start_time: Final = time.time()
         teams_to_reset: list[LiteLLM_TeamTable] | None = None
         try:
-            teams_to_reset = await self.prisma_client.get_data(
-                table_name="team",
-                query_type="find_all",
-                reset_at=now,
-                limit=RESET_BUDGET_JOB_BATCH_SIZE,
+            teams_to_reset = await self._with_db_retry(
+                lambda: self.prisma_client.get_data(
+                    table_name="team",
+                    query_type="find_all",
+                    reset_at=now,
+                    limit=RESET_BUDGET_JOB_BATCH_SIZE,
+                ),
+                reason="reset_budget_read_teams_failure",
             )
             updated_teams: Final[list[LiteLLM_TeamTable]] = []
             failed_teams: Final = []
@@ -1103,7 +1173,10 @@ class ResetBudgetJob:
         spend_counter_cache: DualCache,
     ) -> str | None:
         """Reset one page of windows; return the next cursor, or None when drained."""
-        rows: Final = await self.prisma_client.db.query_raw(source.page_query(), cursor, RESET_BUDGET_JOB_BATCH_SIZE)
+        rows: Final = await self._with_db_retry(
+            lambda: self.prisma_client.db.query_raw(source.page_query(), cursor, RESET_BUDGET_JOB_BATCH_SIZE),
+            reason=f"reset_budget_read_{source.retry_subject}_windows_failure",
+        )
         for row in rows:
             raw = row["budget_limits"]
             if not raw:
@@ -1122,7 +1195,10 @@ class ResetBudgetJob:
                 ):
                     changed = True
             if changed:
-                await source.write(self.prisma_client, row_id, json.dumps(windows))
+                await self._with_db_write_retry(
+                    lambda: source.write(self.prisma_client, row_id, json.dumps(windows)),
+                    reason=f"reset_budget_write_{source.retry_subject}_windows_failure",
+                )
 
         if len(rows) < RESET_BUDGET_JOB_BATCH_SIZE:
             return None
