@@ -634,6 +634,7 @@ class ModelGroupInfo(BaseModel):
     supports_web_search: bool = Field(default=False)
     supports_url_context: bool = Field(default=False)
     supports_reasoning: bool = Field(default=False)
+    supports_xhigh_reasoning_effort: bool = Field(default=False)
     supports_function_calling: bool = Field(default=False)
     supported_openai_params: list[str] | None = Field(default=[])
     configurable_clientside_auth_params: CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS = None

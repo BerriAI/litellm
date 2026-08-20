@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { normalizeTierModels, resolveComplexityDefaultModel } from "./complexity_router_tiers";
+import {
+  extractTierModelParams,
+  normalizeTierModels,
+  resolveComplexityDefaultModel,
+  serializeTierConfig,
+} from "./complexity_router_tiers";
 
 import type { ComplexityTiers } from "./ComplexityRouterConfig";
 
@@ -28,6 +33,48 @@ describe("normalizeTierModels", () => {
 
   it.each([[undefined], [null], [{}], [42]])("returns no models for %s", (value) => {
     expect(normalizeTierModels(value)).toEqual([]);
+  });
+
+  it("widens a single object entry", () => {
+    expect(normalizeTierModels({ model_name: "o3", litellm_params: { reasoning_effort: "high" } })).toEqual(["o3"]);
+  });
+
+  it("widens mixed string and object entries", () => {
+    expect(
+      normalizeTierModels(["gpt-4o-mini", { model_name: "o3", litellm_params: { reasoning_effort: "high" } }]),
+    ).toEqual(["gpt-4o-mini", "o3"]);
+  });
+
+  it("extracts per-model params while preserving unrelated request params", () => {
+    expect(
+      extractTierModelParams([
+        "gpt-4o-mini",
+        { model_name: "o3", litellm_params: { reasoning_effort: "high", max_tokens: 1000 } },
+      ]),
+    ).toEqual({ o3: { reasoning_effort: "high", max_tokens: 1000 } });
+  });
+
+  it("serializes unset entries as strings and configured entries as objects", () => {
+    expect(
+      serializeTierConfig(
+        { SIMPLE: ["gpt-4o-mini", "o3"], REASONING: ["o3"] },
+        { SIMPLE: { o3: { reasoning_effort: "high" } } },
+      ),
+    ).toEqual({
+      SIMPLE: ["gpt-4o-mini", { model_name: "o3", litellm_params: { reasoning_effort: "high" } }],
+      REASONING: ["o3"],
+    });
+  });
+
+  it("round-trips a stored single object entry with unknown params", () => {
+    const stored = {
+      model_name: "o3",
+      litellm_params: { reasoning_effort: "xhigh", custom_request_param: "preserve-me" },
+    };
+    const tiers = { REASONING: normalizeTierModels(stored) };
+    const params = { REASONING: extractTierModelParams(stored) };
+
+    expect(serializeTierConfig(tiers, params)).toEqual({ REASONING: [stored] });
   });
 });
 

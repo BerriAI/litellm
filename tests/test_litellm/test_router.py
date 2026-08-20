@@ -1751,6 +1751,40 @@ def test_model_group_info_db_fallback_with_stringified_cost_values():
     assert isinstance(result.output_cost_per_token, float)
 
 
+def test_model_group_info_aggregates_xhigh_reasoning_support():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "reasoning-model",
+                "litellm_params": {"model": "openai/reasoning-one"},
+                "model_info": {"id": "deployment-one"},
+            },
+            {
+                "model_name": "reasoning-model",
+                "litellm_params": {"model": "openai/reasoning-two"},
+                "model_info": {"id": "deployment-two"},
+            },
+        ]
+    )
+
+    def _model_info(model_id: str, model_name: str):
+        return {
+            "key": model_name,
+            "litellm_provider": "openai",
+            "mode": "chat",
+            "supports_xhigh_reasoning_effort": model_id == "deployment-two",
+        }
+
+    with patch.object(router, "get_deployment_model_info", side_effect=_model_info):
+        result = router._set_model_group_info(
+            model_group="reasoning-model",
+            user_facing_model_group_name="reasoning-model",
+        )
+
+    assert result is not None
+    assert result.supports_xhigh_reasoning_effort is True
+
+
 def test_get_model_access_groups_caching():
     """
     Test that get_model_access_groups caches the no-args result

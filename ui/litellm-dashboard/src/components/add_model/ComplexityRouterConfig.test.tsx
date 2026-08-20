@@ -1,5 +1,6 @@
 import { fireEvent, renderWithProviders, screen, within } from "../../../tests/test-utils";
 import userEvent from "@testing-library/user-event";
+import { useState } from "react";
 import { vi } from "vitest";
 import ComplexityRouterConfig, { ComplexityRouterConfigValue } from "./ComplexityRouterConfig";
 vi.mock(
@@ -58,6 +59,84 @@ describe("ComplexityRouterConfig", () => {
     expect(screen.getByText(/Explain how REST APIs work/)).toBeInTheDocument();
     expect(screen.getByText(/Design a microservices architecture/)).toBeInTheDocument();
     expect(screen.getByText(/Think step by step/)).toBeInTheDocument();
+  });
+
+  it("shows reasoning controls only for capable models and gates xhigh", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(
+      <ComplexityRouterConfig
+        {...baseProps}
+        modelInfo={[
+          {
+            model_group: "reasoning-model",
+            mode: "chat",
+            supports_reasoning: true,
+            supports_xhigh_reasoning_effort: true,
+          },
+          {
+            model_group: "reasoning-basic",
+            mode: "chat",
+            supports_reasoning: true,
+            supports_xhigh_reasoning_effort: false,
+          },
+          { model_group: "chat-model", mode: "chat", supports_reasoning: false },
+        ]}
+        value={{
+          ...defaultValue,
+          tiers: {
+            ...defaultValue.tiers,
+            REASONING: ["reasoning-model", "reasoning-basic", "chat-model"],
+          },
+        }}
+      />,
+    );
+
+    const xhighControl = screen.getByRole("combobox", { name: "Reasoning effort for reasoning-model" });
+    const basicControl = screen.getByRole("combobox", { name: "Reasoning effort for reasoning-basic" });
+    expect(xhighControl).toBeInTheDocument();
+    expect(basicControl).toBeInTheDocument();
+    expect(screen.queryByLabelText("Reasoning effort for chat-model")).not.toBeInTheDocument();
+    await user.click(xhighControl);
+    expect(screen.getByText("xhigh")).toBeInTheDocument();
+    await user.click(screen.getByText("xhigh"));
+    await user.click(basicControl);
+    expect(screen.queryByRole("option", { name: "xhigh" })).not.toBeInTheDocument();
+  });
+
+  it("prunes tier params when a model is removed", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    const Wrapper = () => {
+      const [value, setValue] = useState<ComplexityRouterConfigValue>({
+        ...defaultValue,
+        tiers: { ...defaultValue.tiers, REASONING: ["reasoning-model"] },
+        tier_model_params: {},
+      });
+      return (
+        <ComplexityRouterConfig
+          {...baseProps}
+          modelInfo={[{ model_group: "reasoning-model", mode: "chat", supports_reasoning: true }]}
+          value={value}
+          onChange={(nextValue) => {
+            setValue(nextValue);
+            onChange(nextValue);
+          }}
+        />
+      );
+    };
+
+    renderWithProviders(<Wrapper />);
+    await user.click(screen.getByRole("combobox", { name: "Reasoning effort for reasoning-model" }));
+    await user.click(screen.getByText("high"));
+    await user.click(screen.getByRole("combobox", { name: "Select model(s) for reasoning queries" }));
+    await user.keyboard("{Backspace}");
+
+    expect(onChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        tiers: expect.objectContaining({ REASONING: [] }),
+        tier_model_params: {},
+      }),
+    );
   });
 
   it("should display the how classification works section", () => {

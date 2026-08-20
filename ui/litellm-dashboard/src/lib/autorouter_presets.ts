@@ -14,6 +14,7 @@ import { KeywordTierRule } from "@/components/add_model/KeywordTierRules";
 import { hydrateKeywordTierRules } from "@/components/add_model/complexity_router_keywords";
 import { DEFAULT_ESCALATION_KEYWORDS } from "@/components/add_model/EscalationKeywords";
 import { DEFAULT_MATCH_THRESHOLD } from "@/components/add_model/SemanticKeywordMatching";
+import { normalizeTierModels } from "@/components/add_model/complexity_router_tiers";
 import presetsRaw from "@/autorouter_presets.json";
 
 // `key` is the stable JSON object key (e.g. "anthropic_family"); `label` is display text and
@@ -44,10 +45,10 @@ export const getRequiredModels = (
 ): Set<string> => {
   const { tiers, classifier_llm_config: classifier, embedding_model: embedding, default_model: pinned } = config;
   const models = [
-    ...tiers.SIMPLE,
-    ...tiers.MEDIUM,
-    ...tiers.COMPLEX,
-    ...tiers.REASONING,
+    ...normalizeTierModels(tiers.SIMPLE),
+    ...normalizeTierModels(tiers.MEDIUM),
+    ...normalizeTierModels(tiers.COMPLEX),
+    ...normalizeTierModels(tiers.REASONING),
     classifier?.model,
     embedding,
     pinned,
@@ -251,7 +252,8 @@ export const buildPresetPrefill = (
   availability: ModelAvailability,
 ): PresetPrefill => {
   const resolve = (model: string): string => resolveAvailableModel(model, availability) ?? model;
-  const resolveTier = (models: string[]): string[] => models.map(resolve);
+  const resolveTier = (models: ComplexityRouterConfigPayload["tiers"]["SIMPLE"]): string[] =>
+    normalizeTierModels(models).map(resolve);
 
   return {
     complexityRouterConfig: {

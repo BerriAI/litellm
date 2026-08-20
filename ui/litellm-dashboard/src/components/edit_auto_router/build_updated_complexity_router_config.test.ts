@@ -45,6 +45,64 @@ describe("buildUpdatedComplexityRouterConfig keyword matching", () => {
     expect(result.some_future_backend_key).toEqual({ nested: true });
   });
 
+  it("preserves stored tier request params when saving an edit", () => {
+    const stored = {
+      ...STORED,
+      tiers: {
+        SIMPLE: {
+          model_name: "gpt-4o-mini",
+          litellm_params: { reasoning_effort: "high", custom_request_param: "preserve-me" },
+        },
+        MEDIUM: [],
+        COMPLEX: [],
+        REASONING: [],
+      },
+    };
+    const value = {
+      ...FORM_VALUE,
+      tiers: { SIMPLE: ["gpt-4o-mini"], MEDIUM: [], COMPLEX: [], REASONING: [] },
+      tier_model_params: {
+        SIMPLE: {
+          "gpt-4o-mini": { reasoning_effort: "high", custom_request_param: "preserve-me" },
+        },
+      },
+    };
+
+    expect(buildUpdatedComplexityRouterConfig(stored, value, undefined, hydratedState).tiers).toEqual({
+      ...stored.tiers,
+      SIMPLE: [stored.tiers.SIMPLE],
+    });
+  });
+
+  it("keeps plain tier lists unchanged and widens a stored bare string tier", () => {
+    const stored = {
+      ...STORED,
+      tiers: {
+        SIMPLE: "gpt-4o-mini",
+        MEDIUM: ["gpt-4o"],
+        COMPLEX: ["claude-sonnet-4"],
+        REASONING: ["o1-preview"],
+      },
+    };
+
+    const formValue = {
+      ...FORM_VALUE,
+      tiers: {
+        SIMPLE: ["gpt-4o-mini"],
+        MEDIUM: ["gpt-4o"],
+        COMPLEX: ["claude-sonnet-4"],
+        REASONING: ["o1-preview"],
+      },
+    };
+
+    expect(buildUpdatedComplexityRouterConfig(stored, formValue, undefined, hydratedState).tiers).toEqual({
+      SIMPLE: ["gpt-4o-mini"],
+      MEDIUM: ["gpt-4o"],
+      COMPLEX: ["claude-sonnet-4"],
+      REASONING: ["o1-preview"],
+    });
+  });
+
   it("persists an edited keyword rule", () => {
     const result = buildUpdatedComplexityRouterConfig(STORED, FORM_VALUE, undefined, {
       ...hydratedState,

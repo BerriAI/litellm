@@ -9479,6 +9479,11 @@ class Router:
                 if model_info.get("supports_reasoning", None) is not None and model_info["supports_reasoning"] is True:
                     model_group_info.supports_reasoning = True
                 if (
+                    model_info.get("supports_xhigh_reasoning_effort", None) is not None
+                    and model_info["supports_xhigh_reasoning_effort"] is True
+                ):
+                    model_group_info.supports_xhigh_reasoning_effort = True
+                if (
                     model_info.get("supported_openai_params", None) is not None
                     and model_info["supported_openai_params"] is not None
                 ):
