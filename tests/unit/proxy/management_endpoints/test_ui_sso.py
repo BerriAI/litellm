@@ -9771,3 +9771,50 @@ async def test_cli_sso_login_never_serves_the_admin_login_form_on_a_ui_disabled_
     body = response.body.decode()
     assert "Admin UI is Disabled" in body
     assert 'name="username"' not in body
+
+
+@pytest.mark.asyncio
+async def test_fetch_cli_sso_team_details_orders_by_alias_then_id():
+    """CLI SSO team choices must come back in a stable order.
+
+    The consent page preselects the first team, so an arbitrary DB order can
+    silently bind a user who takes the default to a team they did not mean to
+    pick. Teams must be ordered by alias case-insensitively, then team_id as a
+    deterministic tiebreaker. Regression for the CLI login consent page.
+    """
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from litellm.proxy.management_endpoints import ui_sso as ui_sso_mod
+
+    def _row(team_id, alias):
+        row = MagicMock()
+        row.model_dump.return_value = {
+            "team_id": team_id,
+            "team_alias": alias,
+            "models": [],
+        }
+        return row
+
+    # Deliberately scrambled DB order, mixed case, plus an alias-less team.
+    rows = [
+        _row("35551", "forge-team-b-35551"),
+        _row("10000", "Forge-Team-A-35551"),
+        _row("99999", None),
+    ]
+    repo = MagicMock()
+    repo.find_many = AsyncMock(return_value=rows)
+
+    with patch.object(ui_sso_mod, "TeamRepository", return_value=MagicMock()), patch.object(
+        ui_sso_mod, "_team_detail_db", return_value=repo
+    ):
+        result = await ui_sso_mod.fetch_cli_sso_team_details(
+            prisma_client=MagicMock(), teams=["35551", "10000", "99999"]
+        )
+
+    assert result is not None
+    # None alias sorts first (""), then case-insensitive "Forge-Team-A" < "forge-team-b".
+    assert [d.team_alias for d in result] == [
+        None,
+        "Forge-Team-A-35551",
+        "forge-team-b-35551",
+    ]
