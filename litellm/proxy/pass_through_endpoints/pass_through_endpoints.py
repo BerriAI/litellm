@@ -32,7 +32,7 @@ from websockets.exceptions import (
     ConnectionClosedOK,
     InvalidStatus,
 )
-from websockets.frames import Close
+from websockets.frames import EXTERNAL_CLOSE_CODES, Close
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -1930,12 +1930,17 @@ def _truncated_close_reason(reason: str) -> str:
 
 def _upstream_close_to_relay(task_results: Iterable[object]) -> Close | None:
     """
-    The upstream close worth telling the client about: anything other than a plain, reasonless normal close
+    The upstream close worth telling the client about: anything other than a plain, reasonless normal close.
+
+    Codes outside ``EXTERNAL_CLOSE_CODES`` and the private range never travel on the wire (1006 for a socket that
+    died without a close frame, 1005 for one that sent no code), so relaying them would build an invalid frame
     """
     upstream_close: Final = next((result for result in task_results if isinstance(result, Close)), None)
     if upstream_close is None:
         return None
     if upstream_close.code == 1000 and upstream_close.reason == "":
+        return None
+    if upstream_close.code not in EXTERNAL_CLOSE_CODES and not 3000 <= upstream_close.code < 5000:
         return None
     return upstream_close
 

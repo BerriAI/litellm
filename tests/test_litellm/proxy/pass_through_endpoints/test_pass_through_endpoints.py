@@ -5189,6 +5189,49 @@ async def test_websocket_passthrough_rewrites_gateway_alias_setup_model():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("rcvd_close", [None, "abnormal", "no_status"])
+async def test_websocket_passthrough_does_not_relay_unsendable_upstream_close(rcvd_close):
+    from websockets.exceptions import ConnectionClosedError
+    from websockets.frames import Close
+
+    rcvd = {
+        None: None,
+        "abnormal": Close(1006, "connection died"),
+        "no_status": Close(1005, ""),
+    }[rcvd_close]
+    upstream_ws = ClosingUpstreamWebSocket(
+        ConnectionClosedError(rcvd=rcvd, sent=None, rcvd_then_sent=None)
+    )
+    websocket = _client_websocket(_pending_receive)
+
+    with _patched_websocket_passthrough_environment(upstream_ws):
+        await websocket_passthrough_request(
+            websocket=websocket,
+            target="wss://aiplatform.googleapis.com/ws/google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent",
+            custom_headers={"Authorization": "Bearer token"},
+            user_api_key_dict=UserAPIKeyAuth(),
+            forward_headers=False,
+            endpoint="/vertex_ai/live",
+            accept_websocket=False,
+        )
+
+    websocket.close.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_rewrites_alias_of_unrecognised_upstream_model():
+    llm_router = MagicMock()
+    llm_router.get_model_list.return_value = [
+        {"model_name": "gemini-live", "litellm_params": {"model": "self-hosted-live-endpoint"}}
+    ]
+
+    sent_frame = await _run_setup_rewrite_passthrough("gemini-live", llm_router=llm_router)
+
+    sent_setup = json.loads(sent_frame)["setup"]
+    assert sent_setup["model"] == "projects/proj-db/locations/global/publishers/google/models/self-hosted-live-endpoint"
+
+
+@pytest.mark.asyncio
 async def test_websocket_passthrough_leaves_full_resource_setup_model_untouched():
     full_resource = "projects/other/locations/us-central1/publishers/google/models/gemini-2.0-flash-live-preview-04-09"
 
