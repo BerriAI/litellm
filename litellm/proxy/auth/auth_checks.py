@@ -445,9 +445,7 @@ def _has_ptu_flat_cost(model: str, llm_router: "Router") -> bool:
 def _is_cost_explicitly_configured(model: str, llm_router: "Router") -> bool:
     """
     Check if any deployment in the model group has cost fields explicitly
-    set in its litellm_params or its litellm.model_cost entry, on any billed
-    metric. An explicit zero counts: pricing a model at 0 is a deliberate
-    admin choice, distinct from a model missing from the cost map.
+    set in its litellm.model_cost entry.
 
     When Router._create_deployment() registers a model not in the global
     cost map, it creates a sparse entry like {"id": "<hash>"} with no cost
@@ -457,8 +455,6 @@ def _is_cost_explicitly_configured(model: str, llm_router: "Router") -> bool:
     for deployment in llm_router.model_list:
         if deployment.get("model_name") != model:
             continue
-        if _entry_has_explicit_cost_key(deployment.get("litellm_params") or _EMPTY_COST_ENTRY):
-            return True
         model_id = deployment.get("model_info", {}).get("id")
         if model_id is None:
             continue
@@ -475,13 +471,6 @@ def _is_positive_cost(value: object) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0
 
 
-def _entry_has_explicit_cost_key(entry: Mapping[str, object]) -> bool:
-    return any(
-        "cost_per" in key and isinstance(value, (int, float)) and not isinstance(value, bool)
-        for key, value in entry.items()
-    )
-
-
 def _entry_has_priced_metric(entry: Mapping[str, object]) -> bool:
     for key, value in entry.items():
         if "cost_per" not in key:
@@ -493,15 +482,20 @@ def _entry_has_priced_metric(entry: Mapping[str, object]) -> bool:
     return False
 
 
+def _entry_declares_price(entry: Mapping[str, object]) -> bool:
+    return any("cost_per" in key for key in entry)
+
+
 def _model_group_has_pricing(model: str, llm_router: "Router") -> bool:
     """
-    Check every deployment behind a model group for a positive price on any billed
-    metric (tokens, characters, seconds, pages, images, queries, ...), so models that
-    are billed by a non-token metric are not treated as unpriced.
+    A model group counts as priced when a deployment overrides any *cost_per* field in its
+    litellm_params, even at zero, or when its resolved model info carries a positive price on
+    any billed metric (tokens, characters, seconds, pages, images, queries, ...), so models
+    billed by a non-token metric are not treated as unpriced.
     """
     for deployment in llm_router.get_model_list(model_name=model) or ():
         litellm_params = deployment.get("litellm_params") or _EMPTY_COST_ENTRY
-        if _entry_has_priced_metric(litellm_params):
+        if _entry_declares_price(litellm_params):
             return True
 
         model_id = (deployment.get("model_info") or _EMPTY_COST_ENTRY).get("id")

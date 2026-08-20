@@ -6635,7 +6635,7 @@ def test_model_has_no_cost_mapping_non_token_price_from_litellm_params_is_false(
             {
                 "model_name": "custom-tts",
                 "litellm_params": {
-                    "model": UNPRICED_UNDERLYING_MODEL,
+                    "model": f"{UNPRICED_UNDERLYING_MODEL}-per-second",
                     "api_key": "sk-test",
                     "input_cost_per_second": 0.0001,
                 },
@@ -6646,8 +6646,8 @@ def test_model_has_no_cost_mapping_non_token_price_from_litellm_params_is_false(
     assert model_has_no_cost_mapping(model="custom-tts", llm_router=router) is False
 
 
-@pytest.mark.parametrize("zero_cost_key", ["input_cost_per_second", "input_cost_per_token"])
-def test_model_has_no_cost_mapping_explicit_zero_price_is_false(zero_cost_key):
+@pytest.mark.parametrize("cost_field", ["input_cost_per_second", "input_cost_per_token"])
+def test_model_has_no_cost_mapping_explicit_zero_price_is_false(cost_field):
     from litellm.proxy.auth.auth_checks import model_has_no_cost_mapping
     from litellm.router import Router
 
@@ -6656,9 +6656,9 @@ def test_model_has_no_cost_mapping_explicit_zero_price_is_false(zero_cost_key):
             {
                 "model_name": "free-group",
                 "litellm_params": {
-                    "model": UNPRICED_UNDERLYING_MODEL,
+                    "model": f"{UNPRICED_UNDERLYING_MODEL}-{cost_field}",
                     "api_key": "sk-test",
-                    zero_cost_key: 0.0,
+                    cost_field: 0,
                 },
             }
         ]
