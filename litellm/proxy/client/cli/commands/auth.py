@@ -23,6 +23,7 @@ from .claude_settings import (
     write_claude_settings,
 )
 from .pkce_login import (
+    Http,
     PkceFailure,
     fresh_api_key,
     pkce_token_record,
@@ -672,12 +673,26 @@ def _finish_login(base_url: str, api_key: str, config_claude: bool) -> None:
     show_commands()
 
 
+def _replace_stored_token(record: CliTokenData, http: Http) -> None:
+    previous: Final = load_token()
+    save_token(record)
+    if previous is None:
+        return
+    revocation: Final = revoke_stored_credential(previous, http)
+    if revocation is not None:
+        click.echo(
+            f"Could not revoke the previous login's refresh token on the proxy ({revocation.reason}); "
+            "it expires on its own."
+        )
+
+
 def _pkce_login(base_url: str, config_claude: bool) -> None:
-    credential: Final = run_pkce_login(base_url, requests.Session(), echo=click.echo)
+    http: Final = requests.Session()
+    credential: Final = run_pkce_login(base_url, http, echo=click.echo)
     if isinstance(credential, PkceFailure):
         click.echo(f"Authentication failed: {credential.reason}")
         return
-    save_token(pkce_token_record(base_url, credential))
+    _replace_stored_token(pkce_token_record(base_url, credential), http)
     _finish_login(base_url, credential.access_token, config_claude)
 
 
@@ -739,7 +754,7 @@ def login(ctx: click.Context, config_claude: bool, pkce: bool) -> None:
 
             # Save token data. base_url is stored so we can verify origin
             # before reusing the key on a subsequent CLI invocation.
-            save_token(
+            _replace_stored_token(
                 {
                     "base_url": base_url.rstrip("/"),
                     "key": api_key,
@@ -749,7 +764,8 @@ def login(ctx: click.Context, config_claude: bool, pkce: bool) -> None:
                     "auth_header_name": "Authorization",
                     "jwt_token": "",
                     "timestamp": time.time(),
-                }
+                },
+                requests.Session(),
             )
 
             _finish_login(base_url, api_key, config_claude)
