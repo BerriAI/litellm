@@ -12,6 +12,20 @@ export const usd = (value: number): string => {
 
 export const pct = (ratio: number): string => `${formatNumberWithCommas(ratio * 100, 1)}%`;
 
+export const shortDate = (iso: string): string =>
+  new Date(`${iso}T00:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+
+export const compressionOf = (m: SpendMetrics): number => m.compression_savings_spend ?? 0;
+export const cachingOf = (m: SpendMetrics): number => m.prompt_caching_savings_spend ?? 0;
+export const autorouterOf = (m: SpendMetrics): number => m.autorouter_savings_spend ?? 0;
+export const savedTokensOf = (m: SpendMetrics): number => m.compression_saved_tokens ?? 0;
+
+// prompt_tokens already counts tokens served from cache, so reads over prompt tokens is the
+// share of input that came from cache. Shared with the per-key tab so the two surfaces cannot
+// drift onto different denominators and report different hit rates for the same key.
+export const cacheHitRatio = (cacheReadTokens: number, promptTokens: number): number =>
+  promptTokens > 0 ? cacheReadTokens / promptTokens : 0;
+
 export type CacheLeakageDimension = "key" | "model";
 
 export interface CacheLeakageRow {
@@ -118,7 +132,7 @@ export const computeCacheLeakage = (
         label: dimension === "model" ? id : a.alias ?? `${id.slice(0, 8)}...`,
         sublabel: dimension === "model" ? null : a.teamId,
         uncachedPromptTokens,
-        cacheHitRatio: a.promptTokens > 0 ? a.cacheReadTokens / a.promptTokens : 0,
+        cacheHitRatio: cacheHitRatio(a.cacheReadTokens, a.promptTokens),
         potentialSavings: rate != null ? uncachedPromptTokens * rate : null,
       };
     })

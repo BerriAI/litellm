@@ -1,32 +1,35 @@
 "use client";
 
 import React, { useEffect, useMemo, useState } from "react";
-import { Info } from "lucide-react";
 
 import { AreaChart, BarChart, CustomLegend, DonutChart, SEQUENTIAL_COLOR_RAMP } from "@/components/shared/charts";
 import AdvancedDatePicker from "@/components/shared/advanced_date_picker";
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import useCan from "@/app/(dashboard)/hooks/useCan";
 import { getToolSpend, ToolSpendResponse } from "@/components/networking";
-import { SpendMetrics } from "@/components/UsagePage/types";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import {
+  autorouterOf,
   buildDailyToolSeries,
+  cachingOf,
+  compressionOf,
   formatRangeLabel,
   localIsoDay,
   MAX_POINTS_WITH_DOTS,
+  savedTokensOf,
   SAVINGS_COLORS,
   SAVINGS_DRIVERS,
   SAVINGS_SERIES,
   SavingsAccumulation,
   SavingsPoint,
+  shortDate,
   toCumulative,
   topToolsBySpend,
   usd,
   withStartAnchor,
 } from "./costOptimizationUtils";
+import SummaryCard from "@/components/shared/SummaryCard";
 import { DailyActivityRange } from "./useDailyActivityRange";
 
 interface UsageTabProps {
@@ -41,41 +44,7 @@ const EMPTY_TOOL_SPEND: ToolSpendResponse = {
   end_date: null,
 };
 
-const shortDate = (iso: string): string =>
-  new Date(`${iso}T00:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric" });
-
 const isoDay = (d: Date): string => d.toISOString().slice(0, 10);
-
-const compressionOf = (m: SpendMetrics): number => m.compression_savings_spend ?? 0;
-const cachingOf = (m: SpendMetrics): number => m.prompt_caching_savings_spend ?? 0;
-const autorouterOf = (m: SpendMetrics): number => m.autorouter_savings_spend ?? 0;
-const savedTokensOf = (m: SpendMetrics): number => m.compression_saved_tokens ?? 0;
-
-const SummaryCard = ({ label, value, hint, info }: { label: string; value: string; hint?: string; info?: string }) => (
-  <Card>
-    <CardHeader className="flex flex-row items-center justify-between space-y-0">
-      <CardTitle className="text-sm font-medium text-muted-foreground">{label}</CardTitle>
-      {info && (
-        <Popover>
-          <PopoverTrigger
-            aria-label={`How ${label.toLowerCase()} is calculated`}
-            data-testid={`summary-card-info-${label.toLowerCase().replace(/\s+/g, "-")}`}
-            className="cursor-pointer text-muted-foreground hover:text-foreground"
-          >
-            <Info className="size-3.5" />
-          </PopoverTrigger>
-          <PopoverContent align="end" className="w-64 text-sm text-muted-foreground">
-            {info}
-          </PopoverContent>
-        </Popover>
-      )}
-    </CardHeader>
-    <CardContent>
-      <p className="text-2xl font-semibold text-foreground">{value}</p>
-      {hint && <p className="mt-1 text-xs text-muted-foreground">{hint}</p>}
-    </CardContent>
-  </Card>
-);
 
 const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
   const { dateValue, onDateChange, results, loading, isFetchingMore } = activity;

@@ -14,6 +14,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { EntityLink } from "@/components/shared/EntityLink";
 import { teamDetailHref } from "@/utils/entityLinks";
 import { KeyInfoHeader } from "./KeyInfoHeader";
+import KeySavingsTab from "./KeySavingsTab";
 import { useEffect, useState } from "react";
 import { isProxyAdminRole, isUserTeamAdminForSingleTeam, rolesWithWriteAccess } from "../../utils/roles";
 import { mapDisplayToInternalNames, mapInternalToDisplayNames } from "../callback_info_helpers";
@@ -603,6 +604,9 @@ export default function KeyInfoView({
           <TabsTrigger value="overview" className="flex-none rounded-none px-4 py-2">
             Overview
           </TabsTrigger>
+          <TabsTrigger value="savings" className="flex-none rounded-none px-4 py-2">
+            Savings
+          </TabsTrigger>
           <TabsTrigger value="settings" className="flex-none rounded-none px-4 py-2">
             Settings
           </TabsTrigger>
@@ -736,6 +740,17 @@ export default function KeyInfoView({
                 variant="card"
               />
             </div>
+          </TabsContent>
+
+          {/* Savings Panel. No keepMounted: this tab sweeps the daily rollup, and mounting it
+              eagerly would fire that on every key page open for people who never look at it. */}
+          <TabsContent value="savings">
+            <KeySavingsTab
+              accessToken={accessToken}
+              keyToken={currentKeyData.token}
+              userId={userID}
+              userRole={userRole}
+            />
           </TabsContent>
 
           {/* Settings Panel */}

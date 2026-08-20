@@ -1407,6 +1407,7 @@ export const userDailyActivityCall = async (
   page: number = 1,
   userId: string | null = null,
   includeCurrentUtcDay: boolean = false,
+  apiKey: string | null = null,
 ) => {
   /**
    * Get daily user activity on proxy
@@ -1420,6 +1421,7 @@ export const userDailyActivityCall = async (
     extraQueryParams: {
       user_id: userId,
       include_current_utc_day: includeCurrentUtcDay ? "true" : undefined,
+      api_key: apiKey,
     },
   });
 };
@@ -2502,12 +2504,12 @@ export const userDailyActivityAggregatedCall = async (
   accessToken: string,
   startTime: Date,
   endTime: Date,
-  ...options: [userId?: string | null, includeCurrentUtcDay?: boolean]
+  ...options: [userId?: string | null, includeCurrentUtcDay?: boolean, apiKey?: string | null]
 ) => {
   /**
    * Get aggregated daily user activity (no pagination)
    */
-  const [userId = null, includeCurrentUtcDay = false] = options;
+  const [userId = null, includeCurrentUtcDay = false, apiKey = null] = options;
   try {
     const formatDate = (date: Date) => {
       const year = date.getFullYear();
@@ -2523,6 +2525,7 @@ export const userDailyActivityAggregatedCall = async (
         timezone: new Date().getTimezoneOffset().toString(),
         user_id: userId || undefined,
         include_current_utc_day: includeCurrentUtcDay ? "true" : undefined,
+        api_key: apiKey || undefined,
       },
     });
   } catch (error) {
