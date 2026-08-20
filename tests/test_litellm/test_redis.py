@@ -1024,3 +1024,36 @@ def test_async_cluster_drops_a_connect_func_it_cannot_pass_on():
         client = get_redis_async_client()
 
     assert isinstance(client, async_redis.RedisCluster)
+
+
+@pytest.mark.parametrize(
+    "markers, provider_cls",
+    [
+        (AZURE_AD_CONNECT_FUNC, AzureADCredentialProvider),
+        (GCP_IAM_CONNECT_FUNC, GCPIAMCredentialProvider),
+    ],
+    ids=["azure_ad", "gcp_iam"],
+)
+def test_async_sentinel_keeps_the_credential_provider_off_the_monitors(markers, provider_cls):
+    """The Sentinel monitors authenticate with their own password, and redis-py refuses a password
+    passed alongside a credential provider, so only the data node may carry the provider.
+    """
+    redis_kwargs = {
+        "sentinel_nodes": [("sentinel-1", 26379)],
+        "sentinel_password": "sentinel-secret",
+        "service_name": "mymaster",
+        "redis_connect_func": SimpleNamespace(**markers),
+    }
+
+    with patch("litellm._redis.async_redis.Sentinel") as mock_sentinel_cls:
+        with patch("litellm._redis._get_redis_client_logic", return_value=redis_kwargs):
+            get_redis_async_client()
+
+    sentinel_kwargs = mock_sentinel_cls.call_args[1]["sentinel_kwargs"]
+    assert sentinel_kwargs["password"] == "sentinel-secret"
+    assert "credential_provider" not in sentinel_kwargs
+    async_redis.Connection(host="sentinel-1", port=26379, **sentinel_kwargs)
+
+    master_kwargs = mock_sentinel_cls.return_value.master_for.call_args[1]
+    assert isinstance(master_kwargs["credential_provider"], provider_cls)
+    assert "password" not in master_kwargs
