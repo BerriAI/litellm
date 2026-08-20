@@ -3496,6 +3496,7 @@ def test_generic_cost_per_token_azure_gpt_5_6_cache_write_tokens(
     write_cost_priority: float,
     write_cost_above_272k: float,
     write_cost_above_272k_priority,
+    _local_model_cost_map,
 ):
     """
     Azure Foundry bills GPT-5.6 prompt-cache writes at the rates published on
@@ -3505,9 +3506,6 @@ def test_generic_cost_per_token_azure_gpt_5_6_cache_write_tokens(
     list, not OpenAI's post-cut $0.25. Long+priority writes on the four global
     entries are inferred (Azure publishes no long+priority cell).
     """
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-    litellm.model_cost = litellm.get_model_cost_map(url="")
-
     info = litellm.get_model_info(model=model, custom_llm_provider="azure")
     assert info["cache_creation_input_token_cost"] == pytest.approx(write_cost)
     assert info["cache_creation_input_token_cost_priority"] == pytest.approx(write_cost_priority)
@@ -3555,14 +3553,12 @@ def test_generic_cost_per_token_azure_gpt_5_6_cache_write_tokens(
     "model",
     ["azure/us/gpt-5.6", "azure/us/gpt-5.6-sol", "azure/eu/gpt-5.6", "azure/eu/gpt-5.6-sol"],
 )
-def test_azure_data_zone_gpt56_priority_matches_azure_list(model):
+def test_azure_data_zone_gpt56_priority_matches_azure_list(model, _local_model_cost_map):
     """Azure data-zone gpt-5.6/-sol priority is $11 prompt / $13.75 write per 1M.
 
     The map previously stored $13.75 as the priority input (2.5x of $5.50 instead
     of Azure's 2x) and derived writes as 1.25x of that, producing $17.1875.
     """
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-    litellm.model_cost = litellm.get_model_cost_map(url="")
     info = litellm.get_model_info(model=model, custom_llm_provider="azure")
     assert info["input_cost_per_token_priority"] == pytest.approx(1.1e-05)
     assert info["cache_read_input_token_cost_priority"] == pytest.approx(1.1e-06)
@@ -3570,16 +3566,13 @@ def test_azure_data_zone_gpt56_priority_matches_azure_list(model):
     assert info["cache_creation_input_token_cost_priority"] == pytest.approx(1.375e-05)
 
 
-def test_generic_cost_per_token_openai_gpt_5_6_cache_write_service_tiers():
+def test_generic_cost_per_token_openai_gpt_5_6_cache_write_service_tiers(_local_model_cost_map):
     """
     OpenAI gpt-5.6 publishes flex and priority rates for prompt-cache writes
     (cache_creation_input_token_cost_flex / _priority). Cache-write tokens on
     flex/priority requests must be billed at those tier rates rather than the
     standard cache-write rate.
     """
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-    litellm.model_cost = litellm.get_model_cost_map(url="")
-
     model = "gpt-5.6"
     usage = Usage(
         prompt_tokens=1000,
