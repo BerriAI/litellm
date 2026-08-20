@@ -918,6 +918,7 @@ async def test_mcp_get_prompt_success():
         mcp_auth_header={"Authorization": "token"},
         extra_headers={"X-Test": "1"},
         raw_headers=None,
+        user_api_key_auth=user_api_key_auth,
     )
     assert result is prompt_result
 
@@ -979,8 +980,58 @@ async def test_mcp_read_resource_success():
         mcp_auth_header={"Authorization": "token"},
         extra_headers={"X-Test": "1"},
         raw_headers=None,
+        user_api_key_auth=user_api_key_auth,
     )
     assert result is read_result
+
+
+@pytest.mark.asyncio
+async def test_prompt_and_resource_manager_paths_pass_user_api_key_auth():
+    """Regression for GitHub #37497: prompt/resource clients get the same auth context as tools."""
+    try:
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            MCPServerManager,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    from pydantic import AnyUrl
+
+    manager = MCPServerManager()
+    server = MCPServer(
+        server_id="protected-mcp",
+        name="protected-mcp",
+        server_name="protected-mcp",
+        url="https://mcp.example.com/mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        oauth2_flow="authorization_code",
+    )
+    sentinel = UserAPIKeyAuth(api_key="sk-test", user_id="user-1")
+
+    mock_client = MagicMock()
+    mock_client.list_prompts = AsyncMock(return_value=[])
+    mock_client.list_resources = AsyncMock(return_value=[])
+    mock_client.list_resource_templates = AsyncMock(return_value=[])
+    mock_client.get_prompt = AsyncMock(return_value=MagicMock())
+    mock_client.read_resource = AsyncMock(return_value=MagicMock())
+
+    with patch.object(
+        manager, "_create_mcp_client", new=AsyncMock(return_value=mock_client)
+    ) as create_mock:
+        await manager.get_prompts_from_server(server=server, user_api_key_auth=sentinel)
+        await manager.get_resources_from_server(server=server, user_api_key_auth=sentinel)
+        await manager.get_resource_templates_from_server(server=server, user_api_key_auth=sentinel)
+        await manager.get_prompt_from_server(server=server, prompt_name="hello", user_api_key_auth=sentinel)
+        await manager.read_resource_from_server(
+            server=server,
+            url=AnyUrl("https://example.com/r"),
+            user_api_key_auth=sentinel,
+        )
+
+    assert create_mock.await_count == 5
+    for call in create_mock.await_args_list:
+        assert call.kwargs["user_api_key_auth"] is sentinel
 
 
 def test_normalize_resource_contents_passes_metadata():
