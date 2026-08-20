@@ -245,9 +245,9 @@ def _moderation_result() -> dict[str, object]:
 
 
 async def moderations(request: Request) -> Response:
-    body = await _parse_body(request)
-    raw_input = body.get("input", "")
-    count = len(raw_input) if isinstance(raw_input, list) else 1
+    body: Final = await _parse_body(request)
+    raw_input: Final = body.get("input", "")
+    count: Final = len(raw_input) if isinstance(raw_input, list) else 1
     return JSONResponse(
         {
             "id": f"modr-{uuid.uuid4().hex[:24]}",
