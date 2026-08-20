@@ -262,6 +262,28 @@ class TestEnsureFreshLogin:
 
         assert login_calls == ["http://proxy-b:4000"]
 
+    def test_forces_a_fresh_login_when_the_cached_token_has_no_readable_key(self, monkeypatch):
+        monkeypatch.setattr(up_module.sys.stdin, "isatty", lambda: True)
+        tokens = iter(
+            [
+                _token(None, "http://proxy-a:4000"),
+                _token("sk-a", "http://proxy-a:4000"),
+            ]
+        )
+        monkeypatch.setattr(up_module, "load_cli_token", lambda **_: next(tokens))
+        monkeypatch.setattr(up_module, "is_cli_token_fresh", lambda token_data: True)
+        login_calls = []
+
+        @click.pass_context
+        def fake_login(ctx):
+            login_calls.append(ctx.obj["base_url"])
+
+        monkeypatch.setattr(up_module, "login", fake_login)
+
+        _ensure_fresh_login(_make_ctx("http://proxy-a:4000"))
+
+        assert login_calls == ["http://proxy-a:4000"]
+
     def test_fails_cleanly_non_interactively_when_only_a_different_proxys_token_is_cached(self, monkeypatch):
         monkeypatch.setattr(up_module.sys.stdin, "isatty", lambda: False)
         monkeypatch.setattr(up_module, "load_cli_token", lambda **_: _token("sk-a", "http://proxy-a:4000"))
