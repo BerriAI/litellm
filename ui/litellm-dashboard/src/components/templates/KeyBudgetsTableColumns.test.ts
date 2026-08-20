@@ -216,7 +216,7 @@ describe("custom auth skipping read-time checks", () => {
       { ...UNCONFIGURED_BUDGET, notes: [CUSTOM_AUTH_SKIPS_NOTE] },
     ];
     expect(rows.map(cannotTrip)).toStrictEqual([false, false, false]);
-    expect(rows.map(rowRank)).toStrictEqual([0, 2, 3]);
+    expect(rows.map(rowRank)).toStrictEqual([0, 3, 4]);
     expect(isBlockingRow(rows[0])).toBe(true);
   });
 
@@ -268,6 +268,43 @@ describe("isBlockingRow", () => {
     const overButDead: KeyBudgetEntry = { ...INERT, spend: 900, remaining: -600, status: "exceeded" };
     expect(overButDead.status).toBe("exceeded");
     expect(isBlockingRow(overButDead)).toBe(false);
+  });
+});
+
+const ENTITY_UNAVAILABLE_NOTE = {
+  code: "entity_unavailable",
+  severity: "warning",
+  text: noteText("entity_unavailable"),
+} as const;
+
+// The scope applies to the key, but the lookup behind it failed: no cap and no spend, which is the
+// same shape as a scope with nothing configured and must never be ranked or read as one.
+const UNRESOLVED: KeyBudgetEntry = {
+  ...UNCONFIGURED_BUDGET,
+  scope: "team",
+  entity_id: "team-budgets",
+  spend: null,
+  spend_state: "unavailable",
+  source: "unavailable",
+  status: "unknown",
+  notes: [ENTITY_UNAVAILABLE_NOTE],
+};
+
+describe("a scope the server could not resolve", () => {
+  it("is not dead, since the budget it hides can be the one denying every request", () => {
+    expect(cannotTrip(UNRESOLVED)).toBe(false);
+  });
+
+  it("is not blamed for the denial either, because no number on it supports that", () => {
+    expect(isBlockingRow(UNRESOLVED)).toBe(false);
+    expect(budgetThresholdRule(UNRESOLVED)).toBeNull();
+  });
+
+  it("outranks every row known to be under its limit, and never sinks to an unlimited one", () => {
+    expect(rowRank(UNRESOLVED)).toBeGreaterThan(rowRank(BLOCKING));
+    expect(rowRank(UNRESOLVED)).toBeLessThan(rowRank(HEALTHY));
+    expect(rowRank(UNRESOLVED)).toBeLessThan(rowRank(UNCONFIGURED_BUDGET));
+    expect(rowRank(UNRESOLVED)).toBeLessThan(rowRank(INERT));
   });
 });
 

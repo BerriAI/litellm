@@ -155,6 +155,14 @@ _CUSTOM_AUTH_SKIPS_CHECKS_NOTE: Final = KeyBudgetNote(
         "at request time for the requests it authenticates; only the reservation layer still applies"
     ),
 )
+_ENTITY_UNAVAILABLE_NOTE: Final = KeyBudgetNote(
+    code="entity_unavailable",
+    severity="warning",
+    text=(
+        "this entity could not be read, so its budgets are unknown rather than unset; nothing on this "
+        "scope can be ruled out until it can be read again"
+    ),
+)
 _USER_ON_TEAM_KEY_NOTE: Final = KeyBudgetNote(
     code="user_budget_not_applied_to_team_key",
     severity="info",
@@ -280,6 +288,19 @@ class KeyBudgetResolverDeps:
 
 
 @dataclass(frozen=True, slots=True)
+class _Unavailable:
+    """An entity that could not be read, which is not the same as an entity that is not there."""
+
+
+_UNAVAILABLE: Final = _Unavailable()
+
+
+@dataclass(frozen=True, slots=True)
+class _UnknownSpend:
+    """Stands in for the counter of an entity that could not be read, so no number is invented for it."""
+
+
+@dataclass(frozen=True, slots=True)
 class _CounterSpend:
     counter_key: str
     fallback_spend: float
@@ -308,7 +329,7 @@ class _EndUserModelSpend:
     budget_config: BudgetConfig
 
 
-_SpendSource = _CounterSpend | _RecordedSpend | _KeyModelSpend | _EndUserModelSpend
+_SpendSource = _CounterSpend | _RecordedSpend | _KeyModelSpend | _EndUserModelSpend | _UnknownSpend
 
 
 @dataclass(frozen=True, slots=True)
@@ -480,16 +501,17 @@ class _KeyBudgetContext:
     request_models: tuple[str, ...]
     match_model_budget_key: ModelBudgetKeyMatcher
     general_settings: Mapping[str, object]
-    proxy: _ProxyBudget | None
+    proxy: _ProxyBudget | _Unavailable | None
     team: LiteLLM_TeamTable | None
     user: LiteLLM_UserTable | None
     project: LiteLLM_ProjectTableCachedObj | None
     organization: LiteLLM_OrganizationTable | None
     team_member: TeamMemberBudget | None
-    tags: tuple[tuple[str, LiteLLM_TagTable | None], ...]
+    tags: tuple[tuple[str, LiteLLM_TagTable | _Unavailable | None], ...]
     end_user: LiteLLM_EndUserTable | None
     default_end_user_budget: LiteLLM_BudgetTable | None
     budget_meta: Mapping[str, _BudgetRowMeta]
+    unresolved: Mapping[BudgetScope, str | None]
 
 
 async def resolve_key_budgets(
@@ -553,6 +575,8 @@ async def _read_spend(plan: _PlannedBudget, deps: KeyBudgetResolverDeps) -> _Spe
     source: Final = plan.spend_source
     try:
         match source:
+            case _UnknownSpend():
+                return _SpendReading(value=None, state="unavailable")
             case _RecordedSpend():
                 return _SpendReading(value=source.value, state="live")
             case _CounterSpend():
@@ -611,6 +635,22 @@ def _entry_notes(
     return (*tightened, *plan.notes, *proxy_notes)
 
 
+def _status(plan: _PlannedBudget, spend: float | None, exceeded: bool) -> BudgetStatus:
+    """
+    A row nobody could evaluate reports ``unknown``, never ``unlimited``.
+
+    Reading it as unset is the failure this endpoint exists to prevent: an unreadable entity and an
+    unreadable counter both leave a budget that may well be the one blocking the key.
+    """
+    if isinstance(plan.spend_source, _UnknownSpend):
+        return "unknown"
+    if plan.max_budget is None:
+        return "unlimited"
+    if spend is None:
+        return "unknown"
+    return "exceeded" if exceeded else "ok"
+
+
 def _to_entry(
     plan: _PlannedBudget,
     reading: _SpendReading,
@@ -624,7 +664,7 @@ def _to_entry(
         and spend is not None
         and (spend >= plan.max_budget if comparison == ">=" else spend > plan.max_budget)
     )
-    status: Final[BudgetStatus] = "unlimited" if plan.max_budget is None else ("exceeded" if exceeded else "ok")
+    status: Final[BudgetStatus] = _status(plan=plan, spend=spend, exceeded=exceeded)
     return KeyBudgetEntry(
         scope=plan.scope,
         entity_type=_ENTITY_TYPE_BY_SCOPE[plan.scope],
@@ -651,7 +691,7 @@ async def _load_context(
     deps: KeyBudgetResolverDeps,
 ) -> _KeyBudgetContext:
     token_inputs: Final = _token_budget_inputs(valid_token)
-    proxy, team, user, project, tags, end_user = await asyncio.gather(
+    loaded_proxy, loaded_team, loaded_user, loaded_project, tags, loaded_end_user = await asyncio.gather(
         _load_proxy_budget(deps),
         _load_team(valid_token.team_id, deps),
         _load_user(valid_token.user_id, deps),
@@ -659,11 +699,17 @@ async def _load_context(
         _load_tags(token_inputs.tags, deps),
         _load_end_user(end_user_id, deps),
     )
-    organization, team_member, default_end_user_budget = await asyncio.gather(
-        _load_organization(resolve_budget_org_id(valid_token=valid_token, team_object=team), deps),
+    team: Final = _resolved(loaded_team)
+    org_id: Final = resolve_budget_org_id(valid_token=valid_token, team_object=team)
+    loaded_organization, loaded_team_member, loaded_default_end_user_budget = await asyncio.gather(
+        _load_organization(org_id, deps),
         _load_team_member(valid_token=valid_token, team=team, deps=deps),
         _load_default_end_user_budget(deps),
     )
+    project: Final = _resolved(loaded_project)
+    organization: Final = _resolved(loaded_organization)
+    end_user: Final = _resolved(loaded_end_user)
+    default_end_user_budget: Final = _resolved(loaded_default_end_user_budget)
     budget_ids: Final = _referenced_budget_ids(
         organization=organization,
         project=project,
@@ -683,23 +729,90 @@ async def _load_context(
         request_models=_request_models(token_inputs.models),
         match_model_budget_key=deps.match_model_budget_key,
         general_settings=deps.general_settings,
-        proxy=proxy,
+        proxy=loaded_proxy,
         team=team,
-        user=user,
+        user=_resolved(loaded_user),
         project=project,
         organization=organization,
-        team_member=team_member,
+        team_member=_resolved(loaded_team_member),
         tags=tags,
         end_user=end_user,
         default_end_user_budget=default_end_user_budget,
         budget_meta=await _load_budget_meta(budget_ids, deps),
+        unresolved=_unresolved_scopes(
+            valid_token=valid_token,
+            end_user_id=end_user_id,
+            org_id=org_id,
+            loaded_team=loaded_team,
+            loaded_user=loaded_user,
+            loaded_project=loaded_project,
+            loaded_organization=loaded_organization,
+            loaded_team_member=loaded_team_member,
+            loaded_end_user=loaded_end_user,
+            loaded_default_end_user_budget=loaded_default_end_user_budget,
+        ),
     )
+
+
+def _resolved(value: _T | _Unavailable | None) -> _T | None:
+    return None if isinstance(value, _Unavailable) else value
+
+
+def _unresolved_scopes(
+    valid_token: UserAPIKeyAuth,
+    end_user_id: str | None,
+    org_id: str | None,
+    loaded_team: LiteLLM_TeamTable | _Unavailable | None,
+    loaded_user: LiteLLM_UserTable | _Unavailable | None,
+    loaded_project: LiteLLM_ProjectTableCachedObj | _Unavailable | None,
+    loaded_organization: LiteLLM_OrganizationTable | _Unavailable | None,
+    loaded_team_member: TeamMemberBudget | _Unavailable | None,
+    loaded_end_user: LiteLLM_EndUserTable | _Unavailable | None,
+    loaded_default_end_user_budget: LiteLLM_BudgetTable | _Unavailable | None,
+) -> Mapping[BudgetScope, str | None]:
+    """
+    The scopes whose budgets could not be read, mapped to the entity they belong to.
+
+    A failed lookup reaches the planners as an absent entity, which would drop the scope from the
+    report or leave it looking unconfigured, so each one is recorded here and reported on its own row.
+    A team carries three scopes and is also where an organization is inherited from, so losing it
+    leaves all four unknown.
+    """
+    team_unavailable: Final = isinstance(loaded_team, _Unavailable)
+    end_user_object: Final = _resolved(loaded_end_user)
+    candidates: Final[tuple[tuple[BudgetScope, bool, str | None], ...]] = (
+        ("team", team_unavailable, valid_token.team_id),
+        ("team_window", team_unavailable, valid_token.team_id),
+        (
+            "team_member",
+            isinstance(loaded_team_member, _Unavailable) or (team_unavailable and valid_token.user_id is not None),
+            f"{valid_token.user_id}:{valid_token.team_id}",
+        ),
+        ("user", isinstance(loaded_user, _Unavailable), valid_token.user_id),
+        (
+            "organization",
+            isinstance(loaded_organization, _Unavailable) or (team_unavailable and valid_token.org_id is None),
+            org_id,
+        ),
+        ("project", isinstance(loaded_project, _Unavailable), valid_token.project_id),
+        (
+            "end_user",
+            isinstance(loaded_end_user, _Unavailable)
+            or (
+                end_user_id is not None
+                and isinstance(loaded_default_end_user_budget, _Unavailable)
+                and (end_user_object is None or end_user_object.budget_id is None)
+            ),
+            end_user_id,
+        ),
+    )
+    return MappingProxyType({scope: entity_id for scope, unavailable, entity_id in candidates if unavailable})
 
 
 def _referenced_budget_ids(
     organization: LiteLLM_OrganizationTable | None,
     project: LiteLLM_ProjectTableCachedObj | None,
-    tags: Sequence[tuple[str, LiteLLM_TagTable | None]],
+    tags: Sequence[tuple[str, LiteLLM_TagTable | _Unavailable | None]],
     end_user: LiteLLM_EndUserTable | None,
     default_end_user_budget: LiteLLM_BudgetTable | None,
     key_budget_id: str | None,
@@ -710,7 +823,7 @@ def _referenced_budget_ids(
         project.budget_id if project is not None else None,
         end_user.budget_id if end_user is not None else None,
         default_end_user_budget.budget_id if default_end_user_budget is not None else None,
-        *(tag.budget_id for _, tag in tags if tag is not None),
+        *(tag.budget_id for _, tag in tags if isinstance(tag, LiteLLM_TagTable)),
     )
     return frozenset(budget_id for budget_id in candidates if budget_id is not None)
 
@@ -740,12 +853,12 @@ async def _load_budget_meta(
     )
 
 
-async def _load_proxy_budget(deps: KeyBudgetResolverDeps) -> _ProxyBudget | None:
+async def _load_proxy_budget(deps: KeyBudgetResolverDeps) -> _ProxyBudget | _Unavailable | None:
     try:
         row: Final = await UserRepository(deps.prisma_client).find_by_id(LITELLM_PROXY_BUDGET_NAME)
     except Exception:  # noqa: BLE001  # every entity load degrades to "unknown" rather than failing the report
         verbose_proxy_logger.exception("Unable to load the proxy budget row")
-        return None
+        return _UNAVAILABLE
     if row is None:
         return None
     return _ProxyBudget(
@@ -755,7 +868,7 @@ async def _load_proxy_budget(deps: KeyBudgetResolverDeps) -> _ProxyBudget | None
     )
 
 
-async def _load_team(team_id: str | None, deps: KeyBudgetResolverDeps) -> LiteLLM_TeamTable | None:
+async def _load_team(team_id: str | None, deps: KeyBudgetResolverDeps) -> LiteLLM_TeamTable | _Unavailable | None:
     if team_id is None:
         return None
     try:
@@ -767,10 +880,10 @@ async def _load_team(team_id: str | None, deps: KeyBudgetResolverDeps) -> LiteLL
         )
     except Exception:  # noqa: BLE001  # see _load_proxy_budget
         verbose_proxy_logger.exception("Unable to load team %s for budget resolution", team_id)
-        return None
+        return _UNAVAILABLE
 
 
-async def _load_user(user_id: str | None, deps: KeyBudgetResolverDeps) -> LiteLLM_UserTable | None:
+async def _load_user(user_id: str | None, deps: KeyBudgetResolverDeps) -> LiteLLM_UserTable | _Unavailable | None:
     if user_id is None:
         return None
     try:
@@ -783,10 +896,12 @@ async def _load_user(user_id: str | None, deps: KeyBudgetResolverDeps) -> LiteLL
         )
     except Exception:  # noqa: BLE001  # see _load_proxy_budget
         verbose_proxy_logger.exception("Unable to load user %s for budget resolution", user_id)
-        return None
+        return _UNAVAILABLE
 
 
-async def _load_project(project_id: str | None, deps: KeyBudgetResolverDeps) -> LiteLLM_ProjectTableCachedObj | None:
+async def _load_project(
+    project_id: str | None, deps: KeyBudgetResolverDeps
+) -> LiteLLM_ProjectTableCachedObj | _Unavailable | None:
     if project_id is None:
         return None
     try:
@@ -798,10 +913,12 @@ async def _load_project(project_id: str | None, deps: KeyBudgetResolverDeps) -> 
         )
     except Exception:  # noqa: BLE001  # see _load_proxy_budget
         verbose_proxy_logger.exception("Unable to load project %s for budget resolution", project_id)
-        return None
+        return _UNAVAILABLE
 
 
-async def _load_organization(org_id: str | None, deps: KeyBudgetResolverDeps) -> LiteLLM_OrganizationTable | None:
+async def _load_organization(
+    org_id: str | None, deps: KeyBudgetResolverDeps
+) -> LiteLLM_OrganizationTable | _Unavailable | None:
     if org_id is None:
         return None
     try:
@@ -814,13 +931,13 @@ async def _load_organization(org_id: str | None, deps: KeyBudgetResolverDeps) ->
         )
     except Exception:  # noqa: BLE001  # see _load_proxy_budget
         verbose_proxy_logger.exception("Unable to load organization %s for budget resolution", org_id)
-        return None
+        return _UNAVAILABLE
 
 
 async def _load_tags(
     tag_names: Sequence[str],
     deps: KeyBudgetResolverDeps,
-) -> tuple[tuple[str, LiteLLM_TagTable | None], ...]:
+) -> tuple[tuple[str, LiteLLM_TagTable | _Unavailable | None], ...]:
     if not tag_names:
         return ()
     try:
@@ -832,11 +949,13 @@ async def _load_tags(
         )
     except Exception:  # noqa: BLE001  # see _load_proxy_budget
         verbose_proxy_logger.exception("Unable to load tags %s for budget resolution", tag_names)
-        return tuple((tag_name, None) for tag_name in tag_names)
+        return tuple((tag_name, _UNAVAILABLE) for tag_name in tag_names)
     return tuple((tag_name, tag_objects.get(tag_name)) for tag_name in tag_names)
 
 
-async def _load_end_user(end_user_id: str | None, deps: KeyBudgetResolverDeps) -> LiteLLM_EndUserTable | None:
+async def _load_end_user(
+    end_user_id: str | None, deps: KeyBudgetResolverDeps
+) -> LiteLLM_EndUserTable | _Unavailable | None:
     if end_user_id is None:
         return None
     try:
@@ -848,10 +967,10 @@ async def _load_end_user(end_user_id: str | None, deps: KeyBudgetResolverDeps) -
         )
     except Exception:  # noqa: BLE001  # see _load_proxy_budget
         verbose_proxy_logger.exception("Unable to load end user %s for budget resolution", end_user_id)
-        return None
+        return _UNAVAILABLE
 
 
-async def _load_default_end_user_budget(deps: KeyBudgetResolverDeps) -> LiteLLM_BudgetTable | None:
+async def _load_default_end_user_budget(deps: KeyBudgetResolverDeps) -> LiteLLM_BudgetTable | _Unavailable | None:
     try:
         return await get_default_end_user_budget(
             prisma_client=deps.prisma_client,
@@ -859,14 +978,14 @@ async def _load_default_end_user_budget(deps: KeyBudgetResolverDeps) -> LiteLLM_
         )
     except Exception:  # noqa: BLE001  # see _load_proxy_budget
         verbose_proxy_logger.exception("Unable to load the default end user budget")
-        return None
+        return _UNAVAILABLE
 
 
 async def _load_team_member(
     valid_token: UserAPIKeyAuth,
     team: LiteLLM_TeamTable | None,
     deps: KeyBudgetResolverDeps,
-) -> TeamMemberBudget | None:
+) -> TeamMemberBudget | _Unavailable | None:
     if team is None or valid_token.user_id is None:
         return None
     try:
@@ -879,7 +998,7 @@ async def _load_team_member(
         )
     except Exception:  # noqa: BLE001  # see _load_proxy_budget
         verbose_proxy_logger.exception("Unable to resolve the team-member budget for team %s", team.team_id)
-        return None
+        return _UNAVAILABLE
 
 
 def _plan_budgets(context: _KeyBudgetContext) -> tuple[_PlannedBudget, ...]:
@@ -896,7 +1015,40 @@ def _plan_budgets(context: _KeyBudgetContext) -> tuple[_PlannedBudget, ...]:
         *_plan_project(context),
         *_plan_tags(context),
         *_plan_end_user(context),
+        *_unresolved_plans(context),
     )
+
+
+_UNRESOLVED_COMPARISON: Final[Mapping[BudgetScope, BudgetComparison]] = MappingProxyType(
+    {
+        "team": ">",
+        "team_window": ">=",
+        "team_member": ">=",
+        "user": ">=",
+        "organization": ">=",
+        "project": ">",
+        "tag": ">",
+        "end_user": ">",
+    }
+)
+
+
+def _unresolved_plan(scope: BudgetScope, entity_id: str | None) -> _PlannedBudget:
+    return _PlannedBudget(
+        scope=scope,
+        entity_id=entity_id,
+        entity_label=None,
+        enforcement="hard",
+        max_budget=None,
+        comparison=_UNRESOLVED_COMPARISON[scope],
+        source="unavailable",
+        spend_source=_UnknownSpend(),
+        notes=(_ENTITY_UNAVAILABLE_NOTE,),
+    )
+
+
+def _unresolved_plans(context: _KeyBudgetContext) -> tuple[_PlannedBudget, ...]:
+    return tuple(_unresolved_plan(scope, entity_id) for scope, entity_id in context.unresolved.items())
 
 
 def _budget_meta(context: _KeyBudgetContext, budget_id: str | None) -> _BudgetRowMeta:
@@ -907,20 +1059,37 @@ def _budget_meta(context: _KeyBudgetContext, budget_id: str | None) -> _BudgetRo
 
 def _plan_proxy(context: _KeyBudgetContext) -> tuple[_PlannedBudget, ...]:
     proxy: Final = context.proxy
-    return (
-        _PlannedBudget(
-            scope="proxy",
-            entity_id=None,
-            entity_label=None,
-            enforcement="hard",
-            max_budget=litellm.max_budget if litellm.max_budget > 0 else None,
-            comparison=">",
-            source="litellm_settings.max_budget",
-            spend_source=_RecordedSpend(proxy.spend if proxy is not None else 0.0),
-            budget_duration=proxy.budget_duration if proxy is not None else None,
-            budget_reset_at=proxy.budget_reset_at if proxy is not None else None,
-        ),
-    )
+    max_budget: Final = litellm.max_budget if litellm.max_budget > 0 else None
+    match proxy:
+        case _Unavailable():
+            return (
+                _PlannedBudget(
+                    scope="proxy",
+                    entity_id=None,
+                    entity_label=None,
+                    enforcement="hard",
+                    max_budget=max_budget,
+                    comparison=">",
+                    source="litellm_settings.max_budget",
+                    spend_source=_UnknownSpend(),
+                    notes=(_ENTITY_UNAVAILABLE_NOTE,),
+                ),
+            )
+        case _:
+            return (
+                _PlannedBudget(
+                    scope="proxy",
+                    entity_id=None,
+                    entity_label=None,
+                    enforcement="hard",
+                    max_budget=max_budget,
+                    comparison=">",
+                    source="litellm_settings.max_budget",
+                    spend_source=_RecordedSpend(proxy.spend if proxy is not None else 0.0),
+                    budget_duration=proxy.budget_duration if proxy is not None else None,
+                    budget_reset_at=proxy.budget_reset_at if proxy is not None else None,
+                ),
+            )
 
 
 def _key_max_budget_source(context: _KeyBudgetContext) -> str:
@@ -1207,35 +1376,36 @@ def _plan_project(context: _KeyBudgetContext) -> tuple[_PlannedBudget, ...]:
 
 
 def _plan_tags(context: _KeyBudgetContext) -> tuple[_PlannedBudget, ...]:
-    return tuple(
-        _PlannedBudget(
-            scope="tag",
-            entity_id=tag_name,
-            entity_label=None,
-            enforcement="hard",
-            max_budget=(
-                tag.litellm_budget_table.max_budget
-                if tag is not None and tag.litellm_budget_table is not None
-                else None
-            ),
-            comparison=">",
-            source=f"budget_table:{tag.budget_id}" if tag is not None and tag.budget_id else "tag.budget_id",
-            spend_source=_CounterSpend(
-                counter_key=tag_spend_counter(tag_name),
-                fallback_spend=(tag.spend or 0.0) if tag is not None else 0.0,
-                fallback_authoritative=True,
-            ),
-            budget_duration=_budget_meta(context, tag.budget_id if tag is not None else None).budget_duration,
-            budget_reset_at=_budget_meta(context, tag.budget_id if tag is not None else None).budget_reset_at,
-            notes=(_TAG_NOTE,),
-        )
-        for tag_name, tag in context.tags
+    return tuple(_plan_tag(context, tag_name, tag) for tag_name, tag in context.tags)
+
+
+def _plan_tag(context: _KeyBudgetContext, tag_name: str, tag: LiteLLM_TagTable | _Unavailable | None) -> _PlannedBudget:
+    if isinstance(tag, _Unavailable):
+        return _unresolved_plan("tag", tag_name)
+    return _PlannedBudget(
+        scope="tag",
+        entity_id=tag_name,
+        entity_label=None,
+        enforcement="hard",
+        max_budget=(
+            tag.litellm_budget_table.max_budget if tag is not None and tag.litellm_budget_table is not None else None
+        ),
+        comparison=">",
+        source=f"budget_table:{tag.budget_id}" if tag is not None and tag.budget_id else "tag.budget_id",
+        spend_source=_CounterSpend(
+            counter_key=tag_spend_counter(tag_name),
+            fallback_spend=(tag.spend or 0.0) if tag is not None else 0.0,
+            fallback_authoritative=True,
+        ),
+        budget_duration=_budget_meta(context, tag.budget_id if tag is not None else None).budget_duration,
+        budget_reset_at=_budget_meta(context, tag.budget_id if tag is not None else None).budget_reset_at,
+        notes=(_TAG_NOTE,),
     )
 
 
 def _plan_end_user(context: _KeyBudgetContext) -> tuple[_PlannedBudget, ...]:
     end_user_id: Final = context.end_user_id
-    if end_user_id is None:
+    if end_user_id is None or "end_user" in context.unresolved:
         return ()
     end_user: Final = context.end_user
     budget: Final = end_user.litellm_budget_table if end_user is not None else context.default_end_user_budget

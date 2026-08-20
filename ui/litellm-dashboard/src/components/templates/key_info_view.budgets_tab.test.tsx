@@ -237,7 +237,13 @@ const assertServerCouldEmit = (budgets: readonly KeyBudgetEntry[]): void => {
       // compared against. Only a failed read has no number at all.
       expect(budget.spend_state === "unavailable").toBe(budget.spend === null);
     }
-    expect(budget.status === "unlimited").toBe(budget.max_budget === null);
+    // A row nobody could resolve has no cap to call unlimited and no spend to compare, so it is the
+    // one case where a null cap is not an unlimited budget.
+    if (budget.status === "unknown") {
+      expect(budget.spend).toBeNull();
+    } else {
+      expect(budget.status === "unlimited").toBe(budget.max_budget === null);
+    }
     if (budget.spend == null || budget.max_budget == null) {
       expect(budget.remaining).toBeNull();
     } else {
@@ -349,18 +355,58 @@ describe("KeyInfoView Budgets tab", () => {
       spend_state: "unavailable",
       remaining: null,
       source: "budget_table:b-tag",
-      status: "ok",
+      status: "unknown",
     };
     mockBudgets([unreadable]);
     const panel = await renderAndOpenBudgetsTab();
 
     const row = rowFor(panel, "prod");
     expect(row).toHaveTextContent("Unknown of $1,000.00");
+    expect(cellUnder(panel, row, "Status")).toHaveTextContent("Unknown");
+    expect(within(row).queryByText("Within budget")).not.toBeInTheDocument();
     expect(row).not.toHaveTextContent("$0.00");
     // The meter is the part that lies loudest: drawn at 0% it reads as untouched headroom.
     expect(within(row).queryByRole("meter")).not.toBeInTheDocument();
     expect(cellUnder(panel, row, "Remaining")).toHaveTextContent("-");
     expect(row).toHaveTextContent("Blocks at ≥ $1,000.00");
+  });
+
+  // A lookup that fails leaves the scope unresolved: no cap, no spend, and a warning note. The trap
+  // is that it looks exactly like a scope with nothing configured, which is the one reading that lets
+  // someone rule out the budget that is blocking them.
+  const UNRESOLVED_TEAM: KeyBudgetEntry = {
+    ...UNCONFIGURED_BUDGET,
+    scope: "team",
+    entity_type: "team",
+    entity_id: "team-123",
+    entity_label: null,
+    spend: null,
+    spend_state: "unavailable",
+    comparison: ">",
+    source: "unavailable",
+    status: "unknown",
+    notes: [{ code: "entity_unavailable", severity: "warning", text: noteText("entity_unavailable") }],
+  };
+
+  it("never reads a scope it could not resolve as an unlimited budget", async () => {
+    mockBudgets([UNRESOLVED_TEAM, KEY_UNLIMITED]);
+    const panel = await renderAndOpenBudgetsTab();
+
+    const row = rowFor(panel, "team-123");
+    expect(cellUnder(panel, row, "Status")).toHaveTextContent("Unknown");
+    expect(within(row).queryByText("Unlimited")).not.toBeInTheDocument();
+    expect(within(row).queryByText("Within budget")).not.toBeInTheDocument();
+    expect(within(row).queryByText("Cannot trip")).not.toBeInTheDocument();
+    expect(cellUnder(panel, row, "Remaining")).toHaveTextContent("-");
+    expect(row).toHaveTextContent(noteText("entity_unavailable"));
+  });
+
+  it("sorts a budget it could not read above the ones it could, since only that row needs chasing", async () => {
+    mockBudgets([KEY_UNLIMITED, USER_WITHIN_BUDGET, UNRESOLVED_TEAM]);
+    const panel = await renderAndOpenBudgetsTab();
+
+    const [, ...dataRows] = panel.getAllByRole("row");
+    expect(dataRows[0]).toHaveTextContent("team-123");
   });
 
   // The resolver reports a cold counter as the 0.0 it will be enforced as, and always attaches the

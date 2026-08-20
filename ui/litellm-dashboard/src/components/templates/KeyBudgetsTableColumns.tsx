@@ -54,6 +54,7 @@ const CODE_KILLS_ROW: Readonly<Record<KeyBudgetNoteCode, boolean>> = {
   custom_auth_may_override_end_user_cap: false,
   custom_auth_skips_read_time_checks: false,
   end_user_route_only: false,
+  entity_unavailable: false,
   per_model_counters: false,
   project_spend_not_tracked: true,
   request_tags_add_budgets: false,
@@ -78,13 +79,19 @@ const canDeny = (entry: KeyBudgetEntry): boolean => !isAlertOnly(entry) && !cann
 
 export const isBlockingRow = (entry: KeyBudgetEntry): boolean => entry.status === "exceeded" && canDeny(entry);
 
-/** Ascending relevance to "what stopped my request", so a row that cannot answer it sorts last. */
+/**
+ * Ascending relevance to "what stopped my request", so a row that cannot answer it sorts last.
+ *
+ * A budget nobody could read outranks one known to be under its limit: it is still a candidate for
+ * the denial being chased, and it is the only row on the table that needs someone to go look.
+ */
 export const rowRank = (entry: KeyBudgetEntry): number => {
-  if (entry.status === "unlimited") return 3;
-  if (cannotTrip(entry)) return 4;
+  if (entry.status === "unlimited") return 4;
+  if (cannotTrip(entry)) return 5;
   if (isBlockingRow(entry)) return 0;
   if (entry.status === "exceeded") return 1;
-  return 2;
+  if (entry.status === "unknown") return 2;
+  return 3;
 };
 
 /**
@@ -116,6 +123,8 @@ export const budgetThresholdRule = (entry: KeyBudgetEntry): string | null => {
 
 const statusPresentation = (entry: KeyBudgetEntry): { tone: StatusTone; label: string } => {
   if (entry.status === "unlimited") return { tone: "neutral", label: "Unlimited" };
+  // Before the exceeded branch: a row nobody could read has no numbers to be within or over.
+  if (entry.status === "unknown") return { tone: "warning", label: "Unknown" };
   if (cannotTrip(entry)) return { tone: "neutral", label: "Cannot trip" };
   if (entry.status !== "exceeded") return { tone: "success", label: "Within budget" };
   if (isAlertOnly(entry)) return { tone: "warning", label: "Exceeded (alert only)" };
@@ -185,6 +194,12 @@ function EnforcementCell({ entry }: { entry: KeyBudgetEntry }) {
   return <StatusBadge tone={tone} label={label} tooltip={tooltip} />;
 }
 
+/** What sits beside an unreadable spend: the cap when there is one, and never "Unlimited" without one. */
+const unreadableSpendLimit = (entry: KeyBudgetEntry): string => {
+  if (entry.max_budget != null) return `of $${formatNumberWithCommas(entry.max_budget, 2)}`;
+  return entry.status === "unknown" ? "· of an unknown limit" : "· Unlimited";
+};
+
 function SpendCell({ entry }: { entry: KeyBudgetEntry }) {
   const rule = budgetThresholdRule(entry);
   return (
@@ -194,9 +209,7 @@ function SpendCell({ entry }: { entry: KeyBudgetEntry }) {
       ) : (
         <span className="whitespace-nowrap text-xs">
           <span className="font-medium text-amber-600">Unknown</span>{" "}
-          <span className="text-muted-foreground">
-            {entry.max_budget == null ? "· Unlimited" : `of $${formatNumberWithCommas(entry.max_budget, 2)}`}
-          </span>
+          <span className="text-muted-foreground">{unreadableSpendLimit(entry)}</span>
         </span>
       )}
       {rule && <span className="whitespace-nowrap text-xs tabular-nums text-muted-foreground">{rule}</span>}
@@ -205,7 +218,9 @@ function SpendCell({ entry }: { entry: KeyBudgetEntry }) {
 }
 
 function RemainingCell({ entry }: { entry: KeyBudgetEntry }) {
-  const unlimited = entry.max_budget == null;
+  // A missing cap reads as unlimited only when the row knows there is none; on an unresolved row it
+  // means nobody could read one, and printing "Unlimited" there is the answer this table must not give.
+  const unlimited = entry.max_budget == null && entry.status !== "unknown";
   return (
     <MoneyCell
       value={unlimited ? null : entry.remaining}

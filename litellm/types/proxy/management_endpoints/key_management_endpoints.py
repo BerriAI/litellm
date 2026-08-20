@@ -130,13 +130,14 @@ BudgetEnforcement = Literal["hard", "soft", "throttled"]
 
 BudgetComparison = Literal[">=", ">"]
 
-BudgetStatus = Literal["unlimited", "ok", "exceeded"]
+BudgetStatus = Literal["unlimited", "ok", "exceeded", "unknown"]
 
 BudgetNoteCode = Literal[
     "alert_only",
     "custom_auth_may_override_end_user_cap",
     "custom_auth_skips_read_time_checks",
     "end_user_route_only",
+    "entity_unavailable",
     "per_model_counters",
     "project_spend_not_tracked",
     "request_tags_add_budgets",
@@ -171,7 +172,13 @@ class KeyBudgetNote(BaseModel):
 
 
 class KeyBudgetEntry(BaseModel):
-    """One budget that can gate requests made with a key, with its live spend."""
+    """
+    One budget that can gate requests made with a key, with its live spend.
+
+    ``status`` is ``unknown`` when the row could not be evaluated, either because the entity behind it
+    was unreadable or because its spend was, and it is never ``unlimited`` in that case: an unreadable
+    scope is not a scope the reader may rule out.
+    """
 
     scope: BudgetScope
     entity_type: Litellm_EntityType

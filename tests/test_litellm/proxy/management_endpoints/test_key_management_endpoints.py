@@ -17393,10 +17393,108 @@ async def test_key_budgets_call_an_unreadable_counter_unreadable_rather_than_rep
     assert key_entry.spend is None
     assert key_entry.spend_state == "unavailable"
     assert key_entry.remaining is None
+    assert key_entry.status == "unknown", "a cap whose spend nobody could read is not a cap known to be under"
     assert "unavailable" not in [note.code for note in key_entry.notes], "a failed read is not a caveat"
 
     project_entry = next(e for e in budgets if e.scope == "project" and e.enforcement == "hard")
     assert project_entry.spend_state == "live", "the recorded-spend scopes do not go through the counter"
+
+
+_BUDGETS_LOOKUP_BY_SCOPE = (
+    ("team", "get_team_object"),
+    ("user", "get_user_object"),
+    ("project", "get_project_object"),
+    ("organization", "get_org_object"),
+    ("end_user", "get_end_user_object"),
+    ("team_member", "resolve_team_member_budget"),
+    ("tag", "get_tag_objects_batch"),
+)
+
+
+async def _budgets_with_failed_lookup(lookup):
+    async def _explode(*args, **kwargs):
+        raise RuntimeError(f"{lookup} is down")
+
+    with _budgets_world(**_fully_populated_world()):
+        with patch(f"{_BUDGETS_RESOLVER}.{lookup}", _explode):
+            return await resolve_key_budgets(
+                valid_token=_budgets_token(),
+                end_user_id="end-user-budgets",
+                deps=_budgets_deps(),
+            )
+
+
+@pytest.mark.parametrize("scope, lookup", _BUDGETS_LOOKUP_BY_SCOPE)
+@pytest.mark.asyncio
+async def test_key_budgets_report_a_scope_it_could_not_read_instead_of_dropping_it(scope, lookup):
+    """
+    A lookup that fails reaches the planners as an absent entity, which is the one lie this endpoint
+    cannot tell: the scope would either vanish from the report or sit there reading unlimited, and
+    either way the reader rules out the budget that may be the one blocking the key.
+    """
+    budgets = await _budgets_with_failed_lookup(lookup)
+
+    entry = next(e for e in budgets if e.scope == scope)
+    assert entry.status == "unknown", scope
+    assert entry.max_budget is None, scope
+    assert entry.spend is None, scope
+    assert entry.spend_state == "unavailable", scope
+    assert "entity_unavailable" in [note.code for note in entry.notes], scope
+
+
+@pytest.mark.parametrize("scope, lookup", _BUDGETS_LOOKUP_BY_SCOPE)
+@pytest.mark.asyncio
+async def test_key_budgets_name_the_entity_of_a_scope_it_could_not_read(scope, lookup):
+    """An unknown row with no entity on it cannot be chased down, which is the whole point of reporting it."""
+    budgets = await _budgets_with_failed_lookup(lookup)
+
+    entity_id = next(e for e in budgets if e.scope == scope).entity_id
+    assert entity_id == {
+        "team": "team-budgets",
+        "user": "user-budgets",
+        "project": "project-budgets",
+        "organization": "org-budgets",
+        "end_user": "end-user-budgets",
+        "team_member": "user-budgets:team-budgets",
+        "tag": "prod",
+    }[scope], scope
+
+
+@pytest.mark.asyncio
+async def test_key_budgets_keep_every_scope_a_team_carries_when_the_team_cannot_be_read():
+    """A team is three scopes plus the organization it is inherited from, so one failed read hides four budgets."""
+    budgets = await _budgets_with_failed_lookup("get_team_object")
+
+    unknown = {entry.scope for entry in budgets if entry.status == "unknown"}
+    assert {"team", "team_window", "team_member", "organization"} <= unknown
+
+
+@pytest.mark.asyncio
+async def test_key_budgets_report_the_proxy_budget_as_unknown_when_its_spend_row_cannot_be_read():
+    """The global cap comes from config, so the row still names it, but nobody may read it as unspent."""
+    repository = MagicMock()
+    repository.return_value.find_by_id = AsyncMock(side_effect=RuntimeError("postgres is down"))
+
+    with _budgets_world(**_fully_populated_world()):
+        with patch(f"{_BUDGETS_RESOLVER}.UserRepository", repository), patch("litellm.max_budget", 1000.0):
+            budgets = await resolve_key_budgets(
+                valid_token=_budgets_token(), end_user_id=None, deps=_budgets_deps()
+            )
+
+    entry = next(e for e in budgets if e.scope == "proxy")
+    assert entry.max_budget == 1000.0
+    assert entry.spend is None
+    assert entry.status == "unknown"
+    assert "entity_unavailable" in [note.code for note in entry.notes]
+
+
+@pytest.mark.asyncio
+async def test_key_budgets_do_not_duplicate_a_scope_they_could_not_read():
+    """The unknown row replaces the scope's rows; emitting both would put two verdicts on one budget."""
+    budgets = await _budgets_with_failed_lookup("get_end_user_object")
+
+    assert len([entry for entry in budgets if entry.scope == "end_user"]) == 1
+    assert not [entry for entry in budgets if entry.scope == "end_user_model"]
 
 
 @pytest.mark.asyncio
@@ -17523,6 +17621,8 @@ def test_key_budgets_classify_every_note_code_and_leave_none_to_a_default():
         "per_model_counters": "warning",
         "project_spend_not_tracked": "warning",
         "request_tags_add_budgets": "warning",
+        # `status` carries it too, but only as a value no client built before this endpoint can know
+        "entity_unavailable": "warning",
     }
 
 
