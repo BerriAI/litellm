@@ -59,8 +59,57 @@ def test_triggers_reads_every_shape_the_on_key_takes(raw, expected):
 
 
 def test_the_repo_as_it_stands_holds_only_workflows_in_the_workflow_dir():
-    assert [f.subject for f in hygiene._strays()] == []
+    assert [f.subject for f in hygiene._strays(hygiene.WORKFLOW_DIR)] == []
 
 
 def test_the_repo_as_it_stands_names_every_reusable_workflow_with_the_prefix():
-    assert [f.subject for f in hygiene._misnamed()] == []
+    assert [f.subject for f in hygiene._misnamed(hygiene.WORKFLOW_DIR)] == []
+
+
+def test_the_repo_as_it_stands_spells_every_workflow_yml():
+    assert [f.subject for f in hygiene._misspelled(hygiene.WORKFLOW_DIR)] == []
+
+
+_WORKFLOW: Final = "name: ci\non: [push]\njobs:\n  a:\n    runs-on: ubuntu-latest\n    steps: [{run: 'true'}]\n"
+
+
+def _populate(directory, files):
+    for name, body in files.items():
+        target = directory / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(body, encoding="utf-8")
+    return directory
+
+
+def _findings(directory):
+    return [
+        (f.subject, f.code)
+        for f in hygiene._strays(directory) + hygiene._misspelled(directory) + hygiene._misnamed(directory)
+    ]
+
+
+def test_a_script_at_the_top_level_is_a_stray(tmp_path):
+    directory = _populate(tmp_path, {"ci.yml": _WORKFLOW, "render.py": "print(1)\n"})
+    assert _findings(directory) == [("render.py", "WF001")]
+
+
+def test_a_script_inside_a_subdirectory_is_left_alone(tmp_path):
+    directory = _populate(tmp_path, {"ci.yml": _WORKFLOW, "helpers/render.py": "print(1)\n"})
+    assert _findings(directory) == []
+
+
+def test_a_yaml_workflow_is_a_naming_finding_not_a_stray(tmp_path):
+    directory = _populate(tmp_path, {"test-model-map.yaml": _WORKFLOW})
+    assert _findings(directory) == [("test-model-map.yaml", "WF004")]
+
+
+def test_the_yaml_message_names_the_rename_and_not_the_scripts_directory(tmp_path):
+    directory = _populate(tmp_path, {"test-model-map.yaml": _WORKFLOW})
+    detail = hygiene._misspelled(directory)[0].detail
+    assert "test-model-map.yml" in detail
+    assert hygiene.SCRIPT_HOME not in detail
+
+
+def test_a_yaml_workflow_is_still_held_to_the_prefix_rules(tmp_path):
+    directory = _populate(tmp_path, {"deploy.yaml": "on: {workflow_call: null}\njobs: {}\n"})
+    assert _findings(directory) == [("deploy.yaml", "WF004"), ("deploy.yaml", "WF002")]
