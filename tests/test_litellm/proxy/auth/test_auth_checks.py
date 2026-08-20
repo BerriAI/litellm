@@ -13,7 +13,7 @@ from datetime import datetime, timedelta, timezone
 
 import httpx
 import pytest
-from fastapi import status
+from fastapi import Request, status
 
 import litellm
 from litellm.proxy._types import (
@@ -2760,11 +2760,9 @@ async def test_common_checks_metadata_route_keeps_key_tags_out_of_provider_metad
     assert "metadata" not in request_body
 
 
-def _pass_through_request() -> "Request":
+def _pass_through_request() -> Request:
     """A Request whose FastAPI-resolved endpoint carries the pass-through marker,
     i.e. the request was dispatched to a user-defined pass-through handler."""
-    from fastapi import Request
-
     from litellm.types.passthrough_endpoints.pass_through_endpoints import (
         LITELLM_PASS_THROUGH_ENDPOINT_MARKER,
     )
@@ -2776,10 +2774,9 @@ def _pass_through_request() -> "Request":
     return Request(scope={"type": "http", "headers": [], "endpoint": pass_through_endpoint})
 
 
-def _builtin_request() -> "Request":
+def _builtin_request() -> Request:
     """A Request dispatched to a built-in (non-pass-through) handler, e.g. what a
     custom path colliding with a core route actually resolves to."""
-    from fastapi import Request
 
     def chat_completions():
         ...
