@@ -18,7 +18,7 @@ throwaway value, because a keychain can answer neither way and block forever.
 import os
 import threading
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Final, Protocol, TypeAlias
 
 KEYRING_SERVICE: Final = "litellm-cli"
@@ -152,11 +152,20 @@ def _forget_the_preflight(api: KeyringApi) -> None:
 
 @dataclass(frozen=True, slots=True)
 class KeyringVault:
-    """The OS keychain, reached through the optional `keyring` package."""
+    """The OS keychain, reached through the optional `keyring` package.
+
+    A keychain that let the pre-flight time out is not asked anything else for the rest of the
+    process. The probe that timed out is still sitting in the keychain on a thread of its own, and
+    it holds the keychain against every later call, so the read after it would block on the main
+    thread with no timeout to save it. One silence is answer enough.
+    """
 
     preflight_timeout_seconds: float = _PREFLIGHT_TIMEOUT_SECONDS
+    stopped_answering: threading.Event = field(default_factory=threading.Event, compare=False, repr=False)
 
     def read(self) -> SecretRead:
+        if self.stopped_answering.is_set():
+            return KeyringUnreachable()
         api: Final = _keyring_api()
         if isinstance(api, (KeyringNotInstalled, KeyringDisabled)):
             return api
@@ -177,10 +186,13 @@ class KeyringVault:
         The keychain is pre-flighted first, because one that blocks rather than answering would
         otherwise hang `lite login` outright.
         """
+        if self.stopped_answering.is_set():
+            return KeyringUnreachable()
         api: Final = _keyring_api()
         if isinstance(api, (KeyringNotInstalled, KeyringDisabled)):
             return api
         if not _answers_a_write(api, self.preflight_timeout_seconds):
+            self.stopped_answering.set()
             return KeyringUnreachable()
         _forget_the_preflight(api)
         try:
