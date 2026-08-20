@@ -6,6 +6,7 @@ import { modelAvailableCall, modelHubCall } from "@/components/networking";
 export interface ModelGroup {
   model_group: string;
   mode?: string;
+  supports_reasoning?: boolean;
 }
 
 interface AvailableModel {
@@ -13,6 +14,7 @@ interface AvailableModel {
   model_name?: string | null;
   id?: string | null;
   mode?: string | null;
+  supports_reasoning?: boolean | null;
 }
 
 export const fetchAvailableModelsForTeam = async (accessToken: string, teamId: string): Promise<ModelGroup[]> => {
@@ -36,6 +38,7 @@ export const fetchAvailableModels = async (accessToken: string): Promise<ModelGr
         .map((item: AvailableModel) => ({
           model_group: item.model_group || item.id || item.model_name || "",
           mode: item.mode || undefined,
+          supports_reasoning: item.supports_reasoning === true || undefined,
         }))
         .filter((model: ModelGroup) => model.model_group !== "");
 

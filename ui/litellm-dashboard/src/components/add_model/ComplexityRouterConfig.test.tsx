@@ -8,9 +8,9 @@ vi.mock(
 );
 
 const mockModelInfo = [
-  { model_group: "gpt-4", mode: "chat" },
+  { model_group: "gpt-4", mode: "chat", supports_reasoning: true },
   { model_group: "gpt-3.5-turbo", mode: "chat" },
-  { model_group: "claude-3-opus", mode: "chat" },
+  { model_group: "claude-3-opus", mode: "chat", supports_reasoning: true },
   { model_group: "text-embedding-3-small", mode: "embedding" },
 ] as any[];
 
@@ -403,7 +403,7 @@ describe("ComplexityRouterConfig", () => {
     renderWithProviders(<ComplexityRouterConfig {...baseProps} />);
 
     const simpleTierSection = screen.getByText("Simple Tier").closest(".mb-4") as HTMLElement;
-    const combobox = within(simpleTierSection).getByRole("combobox");
+    const combobox = within(simpleTierSection).getByRole("combobox", { name: "Select model(s) for simple queries" });
     await user.click(combobox);
 
     expect((await screen.findAllByText("gpt-3.5-turbo")).length).toBeGreaterThan(0);
@@ -872,5 +872,74 @@ describe("plan-mode override", () => {
     );
     openPanel();
     expect(await screen.findByRole("switch", { name: switchName })).toHaveAttribute("aria-disabled", "true");
+  });
+});
+
+describe("ComplexityRouterConfig per-model reasoning effort", () => {
+  it("renders one effort select per selected model, defaulting to Default", () => {
+    renderWithProviders(<ComplexityRouterConfig {...baseProps} />);
+    const select = screen.getByRole("combobox", { name: "Reasoning effort for gpt-4 in the Complex tier" });
+    expect(select).toHaveTextContent("Default");
+  });
+
+  it("shows the hydrated effort for a model that has one stored", () => {
+    renderWithProviders(
+      <ComplexityRouterConfig
+        {...baseProps}
+        value={{ ...defaultValue, tier_model_params: { COMPLEX: { "gpt-4": { reasoning_effort: "high" } } } }}
+      />,
+    );
+    const select = screen.getByRole("combobox", { name: "Reasoning effort for gpt-4 in the Complex tier" });
+    expect(select).toHaveTextContent("high");
+  });
+
+  it("emits tier_model_params scoped to the tier and model when an effort is picked", async () => {
+    const onChange = vi.fn();
+    renderWithProviders(<ComplexityRouterConfig {...baseProps} onChange={onChange} />);
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("combobox", { name: "Reasoning effort for gpt-4 in the Complex tier" }));
+    await user.click(await screen.findByRole("option", { name: "high" }));
+    expect(onChange).toHaveBeenCalledWith({
+      ...defaultValue,
+      tier_model_params: { COMPLEX: { "gpt-4": { reasoning_effort: "high" } } },
+    });
+  });
+
+  it("picking Default removes the stored effort", async () => {
+    const onChange = vi.fn();
+    renderWithProviders(
+      <ComplexityRouterConfig
+        {...baseProps}
+        value={{ ...defaultValue, tier_model_params: { COMPLEX: { "gpt-4": { reasoning_effort: "high" } } } }}
+        onChange={onChange}
+      />,
+    );
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("combobox", { name: "Reasoning effort for gpt-4 in the Complex tier" }));
+    await user.click(await screen.findByRole("option", { name: "Default" }));
+    expect(onChange).toHaveBeenCalledWith({ ...defaultValue, tier_model_params: undefined });
+  });
+});
+
+describe("ComplexityRouterConfig reasoning effort gating", () => {
+  it("offers no effort select for a model group without reasoning support", () => {
+    renderWithProviders(<ComplexityRouterConfig {...baseProps} />);
+    expect(
+      screen.queryByRole("combobox", { name: "Reasoning effort for gpt-3.5-turbo in the Simple tier" }),
+    ).not.toBeInTheDocument();
+  });
+
+  // A stored effort on a model the group info calls non-reasoning must stay visible, or the
+  // operator has no way to clear it.
+  it("keeps the select for a non-reasoning model that already has a stored effort", () => {
+    renderWithProviders(
+      <ComplexityRouterConfig
+        {...baseProps}
+        value={{ ...defaultValue, tier_model_params: { SIMPLE: { "gpt-3.5-turbo": { reasoning_effort: "low" } } } }}
+      />,
+    );
+    expect(
+      screen.getByRole("combobox", { name: "Reasoning effort for gpt-3.5-turbo in the Simple tier" }),
+    ).toHaveTextContent("low");
   });
 });
