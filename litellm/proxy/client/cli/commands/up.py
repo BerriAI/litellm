@@ -14,10 +14,12 @@ from typing import IO, Final
 import click
 from pydantic import JsonValue, TypeAdapter, ValidationError
 
+from litellm.litellm_core_utils.cli_keyring import SecretVault
 from litellm.litellm_core_utils.cli_token_utils import is_cli_token_fresh
+from litellm.litellm_core_utils.private_json import ensure_private_dir
 
 from .agents import AgentRunError, resolve_api_key, verify_proxy_key
-from .auth import CliContextObj, get_stored_api_key, load_token, login
+from .auth import CliContextObj, context_secret_vault, get_stored_api_key, load_token, login
 from .claude_settings import (
     BACKUP_PATH,
     CLAUDE_SETTINGS_PATH,
@@ -66,7 +68,7 @@ def secure_create(path: Path) -> Iterator[IO[str]]:
 
 def write_backup(record: BackupRecord, backup_path: Path | None = None) -> None:
     path: Final = backup_path if backup_path is not None else BACKUP_PATH
-    path.parent.mkdir(exist_ok=True)
+    ensure_private_dir(path.parent)
     with secure_create(path) as f:
         json.dump({"existed": record.existed, "content": record.content}, f, indent=2)
 
@@ -103,31 +105,32 @@ def restore_claude_settings(settings_path: Path | None = None, backup_path: Path
     return record
 
 
-def _usable_login(api_key: str | None) -> bool:
+def _usable_login(api_key: str | None, vault: SecretVault) -> bool:
     if api_key is None:
         return False
-    token_data: Final = load_token()
+    token_data: Final = load_token(vault=vault)
     return token_data is not None and is_cli_token_fresh(token_data)
 
 
-def _key_resolved_on_the_way_in(ctx_obj: CliContextObj, base_url: str) -> str | None:
+def _key_resolved_on_the_way_in(ctx_obj: CliContextObj, base_url: str, vault: SecretVault) -> str | None:
     if ctx_obj.get("api_key_from_token_file"):
         return ctx_obj.get("api_key")
-    return get_stored_api_key(expected_base_url=base_url)
+    return get_stored_api_key(expected_base_url=base_url, vault=vault)
 
 
-def _stored_login_is_pkce() -> bool:
-    token_data: Final = load_token()
-    return token_data is not None and "refresh_token" in token_data
+def _stored_login_is_pkce(vault: SecretVault) -> bool:
+    token_data: Final = load_token(vault=vault)
+    return token_data is not None and token_data.get("refresh_token") is not None
 
 
 def _ensure_fresh_login(ctx: click.Context) -> None:
     ctx_obj: Final[CliContextObj] = ctx.obj
     base_url: Final = ctx_obj["base_url"].rstrip("/")
-    if _usable_login(_key_resolved_on_the_way_in(ctx_obj, base_url)):
+    vault: Final = context_secret_vault(ctx)
+    if _usable_login(_key_resolved_on_the_way_in(ctx_obj, base_url, vault), vault):
         return
 
-    pkce: Final = _stored_login_is_pkce()
+    pkce: Final = _stored_login_is_pkce(vault)
     login_command: Final = "lite login --pkce" if pkce else "lite login"
     if not sys.stdin.isatty():
         raise UpError(
@@ -137,7 +140,7 @@ def _ensure_fresh_login(ctx: click.Context) -> None:
 
     click.echo("No fresh LiteLLM login found for this proxy; starting login...")
     ctx.invoke(login, pkce=pkce)
-    if not _usable_login(get_stored_api_key(expected_base_url=base_url)):
+    if not _usable_login(get_stored_api_key(expected_base_url=base_url, vault=vault), vault):
         raise UpError("Login did not produce a usable token; cannot start `lite up`.")
 
 

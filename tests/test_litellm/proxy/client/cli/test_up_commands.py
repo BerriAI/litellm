@@ -246,10 +246,10 @@ class _FakeTokenStore:
         self.keys_by_base_url = keys_by_base_url
         self.rotated_to = rotated_to
         self.key_requests = []
-        monkeypatch.setattr(up_module, "load_token", lambda: self.record)
+        monkeypatch.setattr(up_module, "load_token", lambda **_: self.record)
         monkeypatch.setattr(up_module, "get_stored_api_key", self.get_stored_api_key)
 
-    def get_stored_api_key(self, expected_base_url=None):
+    def get_stored_api_key(self, expected_base_url=None, **_):
         self.key_requests.append(expected_base_url)
         key = self.keys_by_base_url.get(expected_base_url)
         if key is not None and self.rotated_to is not None:
@@ -301,6 +301,19 @@ class TestEnsureFreshLogin:
 
         assert login_calls == [("http://proxy-b:4000", False)]
         assert store.key_requests == ["http://proxy-b:4000", "http://proxy-b:4000"]
+
+    def test_forces_a_fresh_login_when_the_cached_token_has_no_readable_key(self, monkeypatch):
+        monkeypatch.setattr(up_module.sys.stdin, "isatty", lambda: True)
+        store = _FakeTokenStore(monkeypatch, {"base_url": "http://proxy-a:4000"}, {})
+        monkeypatch.setattr(up_module, "is_cli_token_fresh", lambda token_data: True)
+        login_calls = _capture_login(
+            monkeypatch,
+            on_login=lambda: store.log_in({"key": "sk-a", "base_url": "http://proxy-a:4000"}, "sk-a"),
+        )
+
+        _ensure_fresh_login(_make_ctx("http://proxy-a:4000"))
+
+        assert login_calls == [("http://proxy-a:4000", False)]
 
     def test_fails_cleanly_non_interactively_when_only_a_different_proxys_token_is_cached(self, monkeypatch):
         monkeypatch.setattr(up_module.sys.stdin, "isatty", lambda: False)

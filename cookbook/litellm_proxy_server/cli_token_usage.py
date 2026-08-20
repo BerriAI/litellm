@@ -60,4 +60,4 @@ if __name__ == "__main__":
     print("\n💡 Tips:")
     print("1. Run 'litellm-proxy login' to authenticate first")
     print("2. Replace 'https://your-proxy.com' with your actual proxy URL")
-    print("3. The token is stored locally at ~/.litellm/token.json")
+    print("3. The token is stored in your OS keychain, or in ~/.litellm/token.json when there is none")
