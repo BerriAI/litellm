@@ -776,9 +776,8 @@ class PrometheusMetricLabels:
 
     litellm_check_batch_cost_last_run_timestamp: list[str] = []
 
-    # Database connection pool saturation. Deliberately unlabelled: the pool is a
-    # per-worker resource, and any key/team/user label would both be meaningless
-    # here and blow up cardinality on a metric scraped from every pod.
+    # Unlabelled: the pool is per-worker, so key/team/user labels would only add
+    # cardinality.
     litellm_db_pool_connections_max: tuple[str, ...] = ()
     litellm_db_pool_connections_busy: tuple[str, ...] = ()
     litellm_db_pool_connections_idle: tuple[str, ...] = ()

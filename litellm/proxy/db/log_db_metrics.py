@@ -20,12 +20,10 @@ if TYPE_CHECKING:
     from litellm.integrations.prometheus import PrometheusLogger
     from litellm.proxy.db.db_pool_metrics import SupportsPoolSample
 
-# Marks a P2024 that has already been counted, so nested decorated helpers do
-# not each count the same timeout.
+# Marks a P2024 already counted, so nested decorated helpers do not recount it.
 _POOL_TIMEOUT_COUNTED: Final = "_litellm_db_pool_timeout_counted"
 
-# One sampler per process. The pool it reads is per-process too, so there is
-# nothing to key this by.
+# One sampler per process; the pool it reads is per-process too.
 _pool_metrics_sampler: Final = DBPoolMetricsSampler()
 
 
@@ -127,11 +125,8 @@ def log_db_metrics(func):
             end_time: datetime = datetime.now()
             from litellm.proxy.proxy_server import proxy_logging_obj
 
-            # Dispatched, never awaited. Awaiting here would add a suspension
-            # point after the query already succeeded, so a client disconnect in
-            # that window would discard a completed result and skip the success
-            # hook below. The claim is atomic, so a burst spawns one task rather
-            # than one per caller.
+            # Never awaited: a suspension point here would let a client
+            # disconnect discard a query that already succeeded.
             if _pool_metrics_sampler.try_claim():
                 asyncio.create_task(_sample_db_pool_metrics())
 
@@ -207,9 +202,8 @@ async def _handle_logging_db_exception(
 ) -> None:
     from litellm.proxy.proxy_server import proxy_logging_obj
 
-    # Counted before the DB-relatedness gate below: a pool timeout is the proxy
-    # running out of connections, so it must be recorded whether or not the
-    # failure is classified as a DB service failure.
+    # Counted before the DB-relatedness gate: a pool timeout is this proxy out of
+    # connections, however the failure is later classified.
     _record_db_pool_timeout_if_exhausted(e)
 
     # don't log this as a DB Service Failure, if the DB did not raise an exception
