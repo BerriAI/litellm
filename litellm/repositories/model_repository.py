@@ -36,7 +36,7 @@ class _ProxyModelActions(Protocol):
 class ModelRepository(BaseRepository[LiteLLM_ProxyModelTable]):
     """Repository for proxy model database operations with encryption support."""
 
-    def __init__(self, prisma_client: object, encryption_key: str | None = None):
+    def __init__(self, prisma_client: object, encryption_key: str | None = None) -> None:
         super().__init__(prisma_client)
         self._encryption_key = encryption_key
 

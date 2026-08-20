@@ -3552,7 +3552,9 @@ class PrometheusLogger(CustomLogger):
         except Exception as e:
             verbose_logger.exception("Error initializing user/team count metrics: %s", e)
 
-    async def _set_key_list_budget_metrics(self, keys: list[str | UserAPIKeyAuth | LiteLLM_DeletedVerificationToken]):
+    async def _set_key_list_budget_metrics(
+        self, keys: list[str | UserAPIKeyAuth | LiteLLM_DeletedVerificationToken]
+    ) -> None:
         """Helper function to set budget metrics for a list of keys"""
         for key in keys:
             if isinstance(key, UserAPIKeyAuth):
