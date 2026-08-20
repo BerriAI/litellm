@@ -1279,12 +1279,6 @@ def test_inline_data_backward_compatibility_text_only():
 
 
 def test_tools_transformation_parameters_field():
-    """FunctionDeclaration.parameters must survive the generate_content -> completion bridge.
-
-    The google-genai SDKs serialize tool schemas to `parameters`; only gemini-cli
-    sends `parametersJsonSchema`. Reading just the latter silently dropped the
-    schema, so the upstream model received a function with no arguments.
-    """
     from litellm.google_genai.adapters.transformation import GoogleGenAIAdapter
 
     adapter = GoogleGenAIAdapter()
@@ -1322,7 +1316,6 @@ def test_tools_transformation_parameters_field():
 
 
 def test_tools_transformation_prefers_parameters_json_schema():
-    """When both fields are present, parametersJsonSchema wins."""
     from litellm.google_genai.adapters.transformation import GoogleGenAIAdapter
 
     adapter = GoogleGenAIAdapter()
