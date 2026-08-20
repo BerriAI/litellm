@@ -3741,3 +3741,59 @@ def test_tool_result_plain_text_unchanged_by_openai_transform():
     assert len(tool_messages) == 1
     assert tool_messages[0]["content"] == "42 files found"
     assert _image_urls_in_user_messages(result) == []
+
+
+def test_translate_anthropic_to_openai_carries_prompt_cache_breakpoint_on_system_and_user_blocks():
+    explicit = {"mode": "explicit"}
+    openai_request, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
+        anthropic_message_request={
+            "model": "gpt-5.6",
+            "max_tokens": 64,
+            "system": [{"type": "text", "text": "sys", "prompt_cache_breakpoint": explicit}],
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "hi", "prompt_cache_breakpoint": explicit},
+                        {
+                            "type": "image",
+                            "source": {"type": "url", "url": "https://example.com/a.png"},
+                            "prompt_cache_breakpoint": explicit,
+                        },
+                    ],
+                }
+            ],
+        }
+    )
+    assert openai_request["messages"][0] == {
+        "role": "system",
+        "content": [{"type": "text", "text": "sys", "prompt_cache_breakpoint": explicit}],
+    }
+    user_content = openai_request["messages"][1]["content"]
+    assert user_content[0] == {"type": "text", "text": "hi", "prompt_cache_breakpoint": explicit}
+    assert user_content[1]["type"] == "image_url"
+    assert user_content[1]["prompt_cache_breakpoint"] == explicit
+
+
+def test_translate_anthropic_to_openai_without_prompt_cache_breakpoint_adds_nothing():
+    openai_request, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
+        anthropic_message_request={
+            "model": "gpt-5.6",
+            "max_tokens": 64,
+            "system": [{"type": "text", "text": "sys"}],
+            "messages": [{"role": "user", "content": [{"type": "text", "text": "hi"}]}],
+        }
+    )
+    assert openai_request["messages"][0] == {"role": "system", "content": [{"type": "text", "text": "sys"}]}
+    assert openai_request["messages"][1]["content"] == [{"type": "text", "text": "hi"}]
+
+
+def test_translate_anthropic_messages_to_openai_carries_midturn_system_prompt_cache_breakpoint():
+    explicit = {"mode": "explicit"}
+    result = LiteLLMAnthropicMessagesAdapter().translate_anthropic_messages_to_openai(
+        messages=[{"role": "system", "content": [{"type": "text", "text": "fix", "prompt_cache_breakpoint": explicit}]}],
+        model="gpt-5.6",
+    )
+    assert result == [
+        {"role": "system", "content": [{"type": "text", "text": "fix", "prompt_cache_breakpoint": explicit}]}
+    ]
