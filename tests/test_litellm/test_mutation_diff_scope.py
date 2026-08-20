@@ -94,6 +94,35 @@ def coerce(value: str) -> str:
     return value
 '''
 
+REDIS = '''\
+def get_redis_client(url: str) -> str:
+    return url
+'''
+
+OVERLOADED = '''\
+from typing import overload
+
+
+@overload
+def embedding(
+    model: str,
+    stream: bool,
+) -> str: ...
+
+
+@overload
+def embedding(
+    model: str,
+) -> str: ...
+
+
+def embedding(
+    model: str,
+    stream: bool = False,
+) -> str:
+    return model
+'''
+
 
 def _run(root: Path, *args: str) -> None:
     subprocess.run(("git", *args), cwd=root, check=True, capture_output=True)
@@ -116,6 +145,11 @@ def repo(tmp_path: Path) -> Path:
     _write(root, "litellm/router.py", ROUTER)
     _write(root, "litellm/proxy/auth/auth_checks.py", AUTH_CHECKS)
     _write(root, "litellm/types/utils.py", TYPES)
+    _write(root, "litellm/_redis.py", REDIS)
+    _write(root, "litellm/_unmapped.py", REDIS)
+    _write(root, "litellm/main.py", OVERLOADED)
+    _write(root, "tests/test_litellm/test_redis.py", "def test_redis(): pass\n")
+    _write(root, "tests/test_litellm/test_main.py", "def test_main(): pass\n")
     _write(root, "tests/test_litellm/test_router.py", "def test_router(): pass\n")
     _write(root, "tests/test_litellm/proxy/auth/test_auth_checks.py", "def test_auth(): pass\n")
     _write(root, "tests/e2e/test_live_proxy.py", "def test_live(): pass\n")
@@ -236,6 +270,32 @@ def test_test_selection_is_the_mirrored_file_plus_changed_unit_tests(repo: Path)
         "tests/test_litellm/proxy/auth/test_auth_checks.py",
         "tests/test_litellm/test_router.py",
     )
+
+
+def test_private_module_maps_to_its_test_file_without_the_underscore(repo: Path) -> None:
+    """`litellm/_redis.py` is covered by `test_redis.py`, not `test__redis.py`."""
+    _write(repo, "litellm/_redis.py", REDIS.replace("return url", "return url.strip()"))
+    _commit(repo)
+
+    assert scope_of(repo).tests == ("tests/test_litellm/test_redis.py",)
+
+
+def test_an_unmapped_top_level_module_never_selects_the_whole_unit_suite(repo: Path) -> None:
+    """Falling back to tests/test_litellm would run every unit test once per mutant."""
+    _write(repo, "litellm/_unmapped.py", REDIS.replace("return url", "return url.strip()"))
+    _commit(repo)
+
+    scope = scope_of(repo)
+    assert scope.globs, "the changed function still has to be reported"
+    assert scope.tests == ()
+
+
+def test_overloaded_function_is_requested_once(repo: Path) -> None:
+    """@overload stubs share the implementation's mangled name, so repeating it just burns the cap."""
+    _write(repo, "litellm/main.py", OVERLOADED.replace("    model: str,", "    model: str | None,"))
+    _commit(repo)
+
+    assert scope_of(repo).globs == ("litellm.main.x_embedding__mutmut_*",)
 
 
 def test_e2e_tests_are_excluded_from_the_selection(repo: Path) -> None:

@@ -143,13 +143,24 @@ def changed_test_files(root: Path, diff: str) -> tuple[str, ...]:
 
 
 def mapped_tests(root: Path, path: str) -> tuple[str, ...]:
-    """Find the tests mirroring a production file, per tests/test_litellm/readme.md."""
+    """Find the tests mirroring a production file, per tests/test_litellm/readme.md.
+
+    A private module drops its leading underscores on the way to a test name, so
+    ``litellm/_redis.py`` is covered by ``test_redis.py``. Missing that spelling used
+    to fall through to the directory, and for a module at the top of ``litellm/`` the
+    directory is the entire unit suite: every mutant would run all of it.
+    """
     relative: Final = Path(path).relative_to("litellm")
     mirror_dir: Final = Path(TEST_MIRROR_ROOT) / relative.parent
-    named: Final = tuple(sorted(str(p.relative_to(root)) for p in (root / mirror_dir).glob(f"test_{relative.stem}*.py")))
+    stems: Final = (relative.stem, relative.stem.lstrip("_"))
+    named: Final = tuple(
+        sorted({str(p.relative_to(root)) for stem in stems for p in (root / mirror_dir).glob(f"test_{stem}*.py")})
+    )
     if named:
         return named
-    return (str(mirror_dir),) if (root / mirror_dir).is_dir() else ()
+    if mirror_dir == Path(TEST_MIRROR_ROOT) or not (root / mirror_dir).is_dir():
+        return ()
+    return (str(mirror_dir),)
 
 
 def trampoline_units(source: str) -> tuple[TrampolineUnit, ...]:
@@ -200,7 +211,8 @@ def build_scope(root: Path, base: str, max_functions: int) -> Scope:
     merge_base: Final = _git(root, "merge-base", base, "HEAD").strip()
     diff: Final = _git(root, "diff", "-U0", merge_base, "--", ".")
     files: Final = parse_unified_diff(root, diff)
-    all_globs: Final = tuple(glob for changed in files for glob in globs_for(root, changed))
+    # `@overload` stubs repeat their implementation's name, and mutmut mangles them all the same way.
+    all_globs: Final = tuple(dict.fromkeys(glob for changed in files for glob in globs_for(root, changed)))
     tests: Final = tuple(
         sorted({*(t for changed in files for t in mapped_tests(root, changed.path)), *changed_test_files(root, diff)})
     )
