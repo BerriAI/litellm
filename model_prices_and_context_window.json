@@ -44068,6 +44068,7 @@
     "max_tokens": 32768,
     "source": "https://cloud.near.ai/models",
     "supports_function_calling": true,
+    "supports_sampling_params": false,
     "supports_tool_choice": true,
     "supports_vision": true,
     "supports_system_messages": true
@@ -44154,7 +44155,7 @@
   "nearai/black-forest-labs/FLUX.2-klein-4B": {
     "litellm_provider": "nearai",
     "mode": "image_generation",
-    "output_cost_per_image": 0.012,
+    "input_cost_per_image": 0.012,
     "max_input_tokens": 128000,
     "max_output_tokens": 1,
     "max_tokens": 1,
@@ -44524,8 +44525,7 @@
   "nearai/openai/whisper-large-v3": {
     "litellm_provider": "nearai",
     "mode": "audio_transcription",
-    "input_cost_per_token": 1e-08,
-    "output_cost_per_token": 1e-08,
+    "input_cost_per_second": 1e-08,
     "max_input_tokens": 448,
     "max_output_tokens": 448,
     "max_tokens": 448,

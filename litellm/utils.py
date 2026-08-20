@@ -7890,7 +7890,10 @@ class ProviderConfigManager:
             return VercelAIGatewayEmbeddingConfig()
         elif litellm.LlmProviders.GIGACHAT == provider:
             return litellm.GigaChatEmbeddingConfig()
-        elif litellm.LlmProviders.HOSTED_VLLM == provider:
+        elif provider in (
+            litellm.LlmProviders.HOSTED_VLLM,
+            litellm.LlmProviders.NEARAI,
+        ):
             return litellm.HostedVLLMEmbeddingConfig()
         elif litellm.LlmProviders.SAGEMAKER == provider:
             from litellm.llms.sagemaker.embedding.transformation import (
@@ -7924,7 +7927,13 @@ class ProviderConfigManager:
             litellm.LlmProviders.HOSTED_VLLM,
             litellm.LlmProviders.NEARAI,
         ):
-            return litellm.HostedVLLMRerankConfig()
+            from litellm.llms.nearai.rerank.transformation import NearAIRerankConfig
+
+            rerank_configs = {
+                litellm.LlmProviders.HOSTED_VLLM: litellm.HostedVLLMRerankConfig,
+                litellm.LlmProviders.NEARAI: NearAIRerankConfig,
+            }
+            return rerank_configs[provider]()
         elif litellm.LlmProviders.HUGGINGFACE == provider:
             return litellm.HuggingFaceRerankConfig()
         elif litellm.LlmProviders.DEEPINFRA == provider:
@@ -8574,6 +8583,12 @@ class ProviderConfigManager:
             )
 
             return get_dashscope_image_generation_config(model)
+        elif LlmProviders.NEARAI == provider:
+            from litellm.llms.openai.image_generation import (
+                get_openai_image_generation_config,
+            )
+
+            return get_openai_image_generation_config(model)
         elif LlmProviders.MODELSCOPE == provider:
             from litellm.llms.modelscope.image_generation import (
                 get_modelscope_image_generation_config,
@@ -8727,6 +8742,12 @@ class ProviderConfigManager:
             )
 
             return get_openrouter_image_edit_config(model)
+        elif LlmProviders.NEARAI == provider:
+            from litellm.llms.nearai.image_edit.transformation import (
+                NearAIImageEditConfig,
+            )
+
+            return NearAIImageEditConfig()
         return None
 
     @staticmethod

@@ -759,7 +759,7 @@ openai_compatible_providers: List = [
     "chutes",  # Chutes - JSON-configured provider
     "parasail",  # Parasail - JSON-configured provider
     "libertai",  # LibertAI - JSON-configured provider
-    "nearai",  # NEAR AI Cloud - JSON-configured provider
+    "nearai",
     "featherless_ai",
     "nscale",
     "nebius",
