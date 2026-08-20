@@ -548,7 +548,12 @@ async def test_handle_existing_user_by_email_no_existing_user(mocker):
 
 @pytest.mark.asyncio
 async def test_handle_existing_user_by_email_existing_user_updated(mocker):
-    """Should rename the existing user, sync team roster, and return SCIMUser"""
+    """Should keep the existing user_id, sync team roster, and return SCIMUser
+
+    Regression: a SCIM userName differing from the matched row's user_id used to
+    re-key the user row, orphaning virtual keys, team rosters, memberships and
+    spend logs that still referenced the old id.
+    """
     existing_user = mocker.MagicMock()
     existing_user.user_id = "old-user-id"
     existing_user.user_email = "test@example.com"
@@ -557,7 +562,7 @@ async def test_handle_existing_user_by_email_existing_user_updated(mocker):
     existing_user.metadata = {"old": "data"}
 
     updated_user = {
-        "user_id": "new-user-id",
+        "user_id": "old-user-id",
         "user_email": "test@example.com",
         "user_alias": "New Name",
         "teams": ["new-team"],
@@ -566,8 +571,8 @@ async def test_handle_existing_user_by_email_existing_user_updated(mocker):
 
     mock_scim_user = SCIMUser(
         schemas=["urn:ietf:params:scim:schemas:core:2.0:User"],
-        id="new-user-id",
-        userName="new-user-id",
+        id="old-user-id",
+        userName="test@example.com",
         name=SCIMUserName(familyName="Name", givenName="New"),
         emails=[SCIMUserEmail(value="test@example.com")],
     )
@@ -605,13 +610,9 @@ async def test_handle_existing_user_by_email_existing_user_updated(mocker):
     mock_prisma_client.db.litellm_usertable.find_first.assert_called_once_with(where={"user_email": "test@example.com"})
 
     update_calls = mock_prisma_client.db.litellm_usertable.update.call_args_list
-    assert len(update_calls) == 2
+    assert len(update_calls) == 1
     assert update_calls[0].kwargs == {
         "where": {"user_id": "old-user-id"},
-        "data": {"user_id": "new-user-id"},
-    }
-    assert update_calls[1].kwargs == {
-        "where": {"user_id": "new-user-id"},
         "data": {
             "user_email": "test@example.com",
             "user_alias": "New Name",
@@ -621,13 +622,64 @@ async def test_handle_existing_user_by_email_existing_user_updated(mocker):
     }
 
     mock_membership.assert_awaited_once_with(
-        user_id="new-user-id",
+        user_id="old-user-id",
         existing_teams=["old-team"],
         new_teams=["new-team"],
         raise_on_error=True,
     )
 
     mock_transform.assert_called_once_with(updated_user)
+
+
+@pytest.mark.asyncio
+async def test_handle_existing_user_by_email_roster_changes_use_existing_user_id(mocker):
+    """Roster add/remove must be issued for the matched row's user_id, not the SCIM userName.
+
+    Regression: the rename made removals run against the new id, so a roster still
+    holding the old id reported "User not found in team" and the stale entry survived.
+    """
+    existing_user = mocker.MagicMock()
+    existing_user.user_id = "oidc-sub-123"
+    existing_user.user_email = "member@example.com"
+    existing_user.user_alias = "Member"
+    existing_user.teams = ["old-team"]
+    existing_user.metadata = {}
+
+    mock_prisma_client = mocker.MagicMock()
+    mock_prisma_client.db = mocker.MagicMock()
+    mock_prisma_client.db.litellm_usertable = mocker.MagicMock()
+    mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(return_value=existing_user)
+    mock_prisma_client.db.litellm_usertable.update = AsyncMock(return_value={})
+
+    mock_team_member_add = mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2.team_member_add",
+        AsyncMock(),
+    )
+    mock_team_member_delete = mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2.team_member_delete",
+        AsyncMock(),
+    )
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2.ScimTransformations.transform_litellm_user_to_scim_user",
+        AsyncMock(return_value=None),
+    )
+
+    new_user_request = NewUserRequest(
+        user_id="scim-username",
+        user_email="member@example.com",
+        user_alias="Member",
+        teams=["new-team"],
+        metadata={},
+        auto_create_key=False,
+    )
+
+    await UserProvisionerHelpers.handle_existing_user_by_email(
+        prisma_client=mock_prisma_client, new_user_request=new_user_request
+    )
+
+    assert mock_team_member_add.await_args.kwargs["data"].member.user_id == "oidc-sub-123"
+    assert mock_team_member_delete.await_args.kwargs["data"].user_id == "oidc-sub-123"
+    assert mock_prisma_client.db.litellm_usertable.update.await_args.kwargs["where"] == {"user_id": "oidc-sub-123"}
 
 
 @pytest.mark.asyncio
