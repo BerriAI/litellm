@@ -835,7 +835,7 @@ export default function CompareUI({ accessToken, disabledPersonalKeyCreation }: 
                       <div className="text-xs text-muted-foreground">{isUploadedFilePdf ? "PDF" : "Image"}</div>
                     </div>
                     <button
-                      className="flex items-center justify-center w-6 h-6 text-muted-foreground hover:text-muted-foreground hover:bg-accent rounded-full transition-colors"
+                      className="flex items-center justify-center w-6 h-6 text-muted-foreground hover:text-foreground hover:bg-accent rounded-full transition-colors"
                       onClick={handleRemoveFile}
                       aria-label="Remove attachment"
                     >

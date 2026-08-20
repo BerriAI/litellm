@@ -88,7 +88,7 @@ export const HelpIcon: React.FC<HelpIconProps> = ({ content, learnMoreHref, lear
     <div className="relative inline-block ml-1.5">
       <button
         type="button"
-        className="inline-flex items-center justify-center w-4 h-4 text-muted-foreground hover:text-muted-foreground transition-colors cursor-help focus:outline-hidden focus:ring-2 focus:ring-ring rounded-full"
+        className="inline-flex items-center justify-center w-4 h-4 text-muted-foreground hover:text-foreground transition-colors cursor-help focus:outline-hidden focus:ring-2 focus:ring-ring rounded-full"
         onMouseEnter={() => setShowTooltip(true)}
         onMouseLeave={() => setShowTooltip(false)}
         onFocus={() => setShowTooltip(true)}

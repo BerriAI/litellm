@@ -87,7 +87,7 @@ export const ByokCredentialModal: React.FC<ByokCredentialModalProps> = ({ server
               <div className={`w-2 h-2 rounded-full ${step === 1 ? "bg-info" : "bg-border"}`} />
               <div className={`w-2 h-2 rounded-full ${step === 2 ? "bg-info" : "bg-border"}`} />
             </div>
-            <button onClick={handleClose} className="text-muted-foreground hover:text-muted-foreground">
+            <button onClick={handleClose} className="text-muted-foreground hover:text-foreground">
               <X className="size-4" />
             </button>
           </div>
@@ -158,7 +158,7 @@ export const ByokCredentialModal: React.FC<ByokCredentialModalProps> = ({ server
               </button>
               <button
                 onClick={handleClose}
-                className="mt-3 w-full text-muted-foreground hover:text-muted-foreground text-sm py-2"
+                className="mt-3 w-full text-muted-foreground hover:text-foreground text-sm py-2"
               >
                 Cancel
               </button>

@@ -161,7 +161,7 @@ interface MCPEventPanelProps {
 function MCPEventPanel({ title, open, onOpenChange, children }: MCPEventPanelProps) {
   return (
     <Collapsible open={open} onOpenChange={onOpenChange}>
-      <CollapsibleTrigger className="relative flex min-h-5 w-full items-center gap-1 pl-5 text-left text-sm font-normal leading-5 text-muted-foreground hover:text-muted-foreground">
+      <CollapsibleTrigger className="relative flex min-h-5 w-full items-center gap-1 pl-5 text-left text-sm font-normal leading-5 text-muted-foreground hover:text-foreground">
         <ChevronRight
           className={cn(
             "absolute left-0.5 top-0.5 size-4 text-muted-foreground transition-transform",

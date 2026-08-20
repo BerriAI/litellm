@@ -365,9 +365,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
           <h3 className="text-lg font-medium text-foreground">{title}</h3>
           {tooltip ? (
             <Tooltip>
-              <TooltipTrigger
-                render={<Info className="size-4 text-muted-foreground hover:text-muted-foreground" />}
-              />
+              <TooltipTrigger render={<Info className="size-4 text-muted-foreground hover:text-foreground" />} />
               <TooltipContent>{tooltip}</TooltipContent>
             </Tooltip>
           ) : null}

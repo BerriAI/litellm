@@ -367,7 +367,11 @@ function MCPServerCard({ server, onApprove, onReject, requiredFields }: MCPServe
                 allPassed ? "bg-success" : "bg-destructive"
               }`}
             >
-              {allPassed ? <CheckIcon className="h-4 w-4 text-white" /> : <XIcon className="h-4 w-4 text-white" />}
+              {allPassed ? (
+                <CheckIcon className="h-4 w-4 text-success-foreground" />
+              ) : (
+                <XIcon className="h-4 w-4 text-destructive-foreground" />
+              )}
             </div>
             <div className="flex-1 min-w-0">
               <div className={`text-sm font-semibold leading-tight ${allPassed ? "text-success" : "text-destructive"}`}>

@@ -325,7 +325,7 @@ const MultiCostResults: React.FC<MultiCostResultsProps> = ({ multiResult, timePe
                           aria-expanded={isExpanded}
                           aria-label={`${isExpanded ? "Hide" : "Show"} cost breakdown for ${record.model}`}
                           onClick={() => toggleExpanded(record.id)}
-                          className="text-muted-foreground hover:text-muted-foreground"
+                          className="text-muted-foreground hover:text-foreground"
                         >
                           {isExpanded ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}
                         </Button>

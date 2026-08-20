@@ -255,7 +255,7 @@ const UsageAIChatPanel: React.FC<UsageAIChatPanelProps> = ({ open, onClose, acce
           </div>
           <button
             onClick={handleClose}
-            className="text-muted-foreground hover:text-muted-foreground transition-colors p-1 rounded-md hover:bg-accent"
+            className="text-muted-foreground hover:text-foreground transition-colors p-1 rounded-md hover:bg-accent"
           >
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -383,7 +383,7 @@ const UsageAIChatPanel: React.FC<UsageAIChatPanelProps> = ({ open, onClose, acce
         <div className="flex justify-between items-center mt-2">
           <button
             onClick={handleClear}
-            className="text-xs text-muted-foreground hover:text-muted-foreground transition-colors"
+            className="text-xs text-muted-foreground hover:text-foreground transition-colors"
             disabled={messages.length === 0}
           >
             Clear chat

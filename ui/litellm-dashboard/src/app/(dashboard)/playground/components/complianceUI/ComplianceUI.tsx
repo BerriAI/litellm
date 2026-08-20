@@ -773,7 +773,7 @@ export default function ComplianceUI({
                           <div
                             className={`w-4 h-4 rounded-sm border flex items-center justify-center shrink-0 ${selectedGuardrails.includes(g.id) ? "bg-info border-info" : "border-border"}`}
                           >
-                            {selectedGuardrails.includes(g.id) && <Check className="w-3 h-3 text-white" />}
+                            {selectedGuardrails.includes(g.id) && <Check className="w-3 h-3 text-info-foreground" />}
                           </div>
                           <div className="min-w-0">
                             <div className="text-foreground">{g.name}</div>
@@ -1254,10 +1254,10 @@ export default function ComplianceUI({
                   {quickTestMessages.map((msg) => (
                     <div key={msg.id} className={`flex ${msg.type === "user" ? "justify-end" : "justify-start"}`}>
                       <div
-                        className={`max-w-[85%] rounded-lg px-3 py-2 ${msg.type === "user" ? "bg-info text-success-foreground" : msg.result === "blocked" ? "bg-destructive/10 border border-destructive/15" : "bg-success/10 border border-success/15"}`}
+                        className={`max-w-[85%] rounded-lg px-3 py-2 ${msg.type === "user" ? "bg-info text-info-foreground" : msg.result === "blocked" ? "bg-destructive/10 border border-destructive/15" : "bg-success/10 border border-success/15"}`}
                       >
                         <p
-                          className={`text-xs leading-relaxed ${msg.type === "user" ? "text-white" : msg.result === "blocked" ? "text-destructive" : "text-success"}`}
+                          className={`text-xs leading-relaxed ${msg.type === "user" ? "text-info-foreground" : msg.result === "blocked" ? "text-destructive" : "text-success"}`}
                         >
                           {msg.type === "system" && (
                             <span className="inline-flex items-center gap-1 font-semibold mr-1">
@@ -1497,7 +1497,7 @@ export default function ComplianceUI({
                                         return next;
                                       });
                                     }}
-                                    className="shrink-0 p-0.5 text-muted-foreground hover:text-muted-foreground"
+                                    className="shrink-0 p-0.5 text-muted-foreground hover:text-foreground"
                                     aria-label={isExpanded ? "Collapse" : "Expand"}
                                   >
                                     {isExpanded ? (

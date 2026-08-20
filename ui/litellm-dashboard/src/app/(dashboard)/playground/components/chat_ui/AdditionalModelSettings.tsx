@@ -118,7 +118,7 @@ const AdditionalModelSettings: React.FC<AdditionalModelSettingsProps> = ({
           </label>
           <Tooltip>
             <TooltipTrigger aria-label="Help: Stream responses">
-              <Info className="size-3 shrink-0 cursor-pointer text-muted-foreground hover:text-muted-foreground" />
+              <Info className="size-3 shrink-0 cursor-pointer text-muted-foreground hover:text-foreground" />
             </TooltipTrigger>
             <TooltipContent className="max-w-xs">
               Streams the answer token by token. Uncheck to send a non-streaming request and render the full response at
@@ -155,7 +155,7 @@ const AdditionalModelSettings: React.FC<AdditionalModelSettingsProps> = ({
           </label>
           <Popover>
             <PopoverTrigger aria-label="Help: Simulate failure to test fallbacks">
-              <Info className="size-3 shrink-0 cursor-pointer text-muted-foreground hover:text-muted-foreground" />
+              <Info className="size-3 shrink-0 cursor-pointer text-muted-foreground hover:text-foreground" />
             </PopoverTrigger>
             <PopoverContent side="right" className="max-w-[340px] gap-2 p-3 text-sm">
               <p>
