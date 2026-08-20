@@ -16,6 +16,13 @@ describe("SearchSelect", () => {
     expect(screen.getByPlaceholderText("Select Team…")).toBeInTheDocument();
   });
 
+  it("names the field from aria-label so callers can label it independently of the placeholder", () => {
+    render(
+      <SearchSelect options={OPTIONS} onValueChange={vi.fn()} placeholder="Select Team…" aria-label="Default model" />,
+    );
+    expect(screen.getByRole("combobox", { name: "Default model" })).toBeInTheDocument();
+  });
+
   it("shows the selected option's label in the field", () => {
     render(<SearchSelect options={OPTIONS} value="team-2" onValueChange={vi.fn()} />);
     expect(screen.getByRole("combobox")).toHaveValue("Growth");

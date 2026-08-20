@@ -8,7 +8,7 @@ import { FieldGroup } from "@/components/shared/form/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { Skeleton, Space } from "antd";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
 import { CircleHelp } from "lucide-react";
 import React, { useEffect, useMemo } from "react";
@@ -101,7 +101,11 @@ const ModelSettingsModal: React.FC<ModelSettingsModalProps> = ({ isVisible, onCa
               >
                 {({ id, value, onChange, onBlur }) =>
                   isLoadingConfig ? (
-                    <Skeleton.Input active block />
+                    <Skeleton
+                      role="status"
+                      aria-label="Loading model settings"
+                      className="h-[18.4px] w-8 rounded-full"
+                    />
                   ) : (
                     <Switch
                       id={id}
@@ -117,18 +121,16 @@ const ModelSettingsModal: React.FC<ModelSettingsModalProps> = ({ isVisible, onCa
           </form>
         </TooltipProvider>
         <DialogFooter>
-          <Space>
-            <Button variant="outline" onClick={handleCancel} disabled={isPending || isLoadingConfig}>
-              Cancel
-            </Button>
-            <Button
-              disabled={isPending || isLoadingConfig}
-              aria-busy={isPending}
-              onClick={() => void form.handleSubmit(handleFormSubmit)()}
-            >
-              {isPending ? "Saving..." : "Save Settings"}
-            </Button>
-          </Space>
+          <Button variant="outline" onClick={handleCancel} disabled={isPending || isLoadingConfig}>
+            Cancel
+          </Button>
+          <Button
+            disabled={isPending || isLoadingConfig}
+            aria-busy={isPending}
+            onClick={() => void form.handleSubmit(handleFormSubmit)()}
+          >
+            {isPending ? "Saving..." : "Save Settings"}
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
