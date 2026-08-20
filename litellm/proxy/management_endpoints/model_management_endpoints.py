@@ -24,6 +24,13 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.constants import LITELLM_PROXY_ADMIN_NAME
+from litellm.litellm_core_utils.ptu_pricing import (
+    CUSTOM_PRICING_FIELDS,
+    PTU_EMPTIED_PRICING_FIELDS,
+    PTU_ZEROED_PRICING_FIELDS,
+    PTU_ZEROED_TABLE_FIELDS,
+    SEARCH_CONTEXT_SIZES,
+)
 from litellm.proxy._types import (
     BlockModelRequest,
     CommonProxyErrors,
@@ -89,7 +96,6 @@ from litellm.types.router import (
     ModelInfo,
     updateDeployment,
 )
-from litellm.types.utils import CustomPricingLiteLLMParams
 from litellm.utils import get_utc_datetime
 
 router: Final = APIRouter()
@@ -114,13 +120,14 @@ class UpdatePublicModelGroupsRequest(BaseModel):
 class _ProxyModelRow(Protocol):
     model_id: str
     model_name: str
+    litellm_params: Mapping[str, object]
     model_info: Mapping[str, object] | None
 
     def model_dump_json(self, *, exclude_none: bool = False) -> str: ...
 
 
 class _ProxyModelTable(Protocol):
-    def find_unique(self, *, where: Mapping[str, object]) -> Awaitable[_ProxyModelRow | None]: ...
+    def find_unique(self, *, where: Mapping[str, object]) -> Awaitable[BaseModel | None]: ...
 
     def find_many(self, *, where: Mapping[str, object]) -> Awaitable[Sequence[_ProxyModelRow]]: ...
 
@@ -182,10 +189,7 @@ def _model_alias_table(prisma_client: PrismaClient) -> _ModelAliasTable:
 
 
 async def get_db_model(model_id: str, prisma_client: PrismaClient) -> Deployment | None:
-    db_model: Final = cast(
-        BaseModel | None,
-        await _proxy_model_table(prisma_client).find_unique(where={"model_id": model_id}),
-    )
+    db_model: Final = await _proxy_model_table(prisma_client).find_unique(where={"model_id": model_id})
 
     if not db_model:
         return None
@@ -348,12 +352,8 @@ def _validate_ptu_model_info(model_info: Mapping[str, object]) -> None:
 # tiered_pricing is the one mirrored field that is a table of ranges, not a rate, so it is stored
 # empty (see _PTU_EMPTIED_PRICING_FIELDS): its tiers outrank the zeros written beside them, so
 # dropping it would leave the cost map's tiers billing the traffic the reserved capacity covers.
-_PTU_ZEROED_PRICING_FIELDS: Final = tuple(f for f in SPECIAL_MODEL_INFO_PARAMS if f != "tiered_pricing") + (
-    "cache_creation_input_token_cost_above_1hr",
-    "cache_creation_input_token_cost_above_200k_tokens",
-    "cache_read_input_token_cost_above_200k_tokens",
-)
-_PTU_EMPTIED_PRICING_FIELDS: Final = frozenset({"tiered_pricing"})
+_PTU_ZEROED_PRICING_FIELDS: Final = PTU_ZEROED_PRICING_FIELDS
+_PTU_EMPTIED_PRICING_FIELDS: Final = PTU_EMPTIED_PRICING_FIELDS
 _PTU_ZEROED_PRICING: Final[Mapping[str, float | tuple[()]]] = MappingProxyType(
     {
         **dict.fromkeys(_PTU_ZEROED_PRICING_FIELDS, 0.0),
@@ -365,13 +365,13 @@ _EMPTY_MODEL_INFO: Final[Mapping[str, object]] = _NO_PRICING_OVERRIDE
 # Rate fields only. CustomPricingLiteLLMParams also carries settings that are not charges
 # (an embedding's output_vector_size, the regional uplift multipliers), and zeroing one of
 # those would destroy the deployment's configuration rather than stop a charge.
-_CUSTOM_PRICING_FIELDS: Final = frozenset(f for f in CustomPricingLiteLLMParams.model_fields if "cost" in f)
+_CUSTOM_PRICING_FIELDS: Final = CUSTOM_PRICING_FIELDS
 # search_context_cost_per_query holds its rates in a table keyed by context size, and an absent
 # table means the provider's own default rate rather than free (litellm/llms/gemini/cost_calculator
 # falls back to $0.035), so it is zeroed in place rather than emptied like tiered_pricing, and
 # written on every PTU deployment rather than only where a table is already stored.
-_PTU_ZEROED_TABLE_FIELDS: Final = frozenset({"search_context_cost_per_query"})
-_SEARCH_CONTEXT_SIZES: Final = ("search_context_size_low", "search_context_size_medium", "search_context_size_high")
+_PTU_ZEROED_TABLE_FIELDS: Final = PTU_ZEROED_TABLE_FIELDS
+_SEARCH_CONTEXT_SIZES: Final = SEARCH_CONTEXT_SIZES
 
 
 def _is_nonzero_rate(value: object) -> bool:
@@ -1577,7 +1577,7 @@ async def delete_model(
                 },
             )
 
-        model_in_db: Final = await ModelRepository(prisma_client).table.find_unique(where={"model_id": model_info.id})
+        model_in_db: Final = await _proxy_model_table(prisma_client).find_unique(where={"model_id": model_info.id})
         if model_in_db is None:
             raise HTTPException(
                 status_code=400,
@@ -1914,7 +1914,7 @@ async def update_model(
             )
 
         _model_id: str | None = None
-        _model_info: Final = getattr(model_params, "model_info", None)
+        _model_info: Final[ModelInfo | None] = getattr(model_params, "model_info", None)
         if _model_info is None:
             raise Exception("model_info not provided")
 

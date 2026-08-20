@@ -6,7 +6,7 @@
 import { Plus, Wallet } from "lucide-react";
 import React, { useCallback, useState } from "react";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
-import { PageHeader } from "@/components/shared/PageHeader";
+import { LegacyPageHeader } from "@/components/shared/LegacyPageHeader";
 import { ToolbarSeparator } from "@/components/shared/ToolbarSeparator";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -76,7 +76,7 @@ const BudgetPanel: React.FC<BudgetSettingsPageProps> = ({ accessToken }) => {
 
   return (
     <div className="flex h-full flex-col gap-4 p-6 px-12">
-      <PageHeader
+      <LegacyPageHeader
         icon={<Wallet className="size-5" />}
         title="Budgets"
         subtitle="Spend, TPM and RPM limits you can assign to customers."
@@ -101,7 +101,7 @@ const BudgetPanel: React.FC<BudgetSettingsPageProps> = ({ accessToken }) => {
             </TabsTrigger>
           </TabsList>
         </div>
-        <TabsContent value="budgets" className="flex min-h-0 flex-1 flex-col">
+        <TabsContent value="budgets" className="flex min-h-0 flex-1 flex-col" keepMounted>
           <div className="flex min-h-0 flex-1 flex-col pt-6">
             <BudgetModal isModalVisible={isCreateModelVisible} setIsModalVisible={setIsCreateModelVisible} />
             {selectedBudget && (
@@ -134,7 +134,7 @@ const BudgetPanel: React.FC<BudgetSettingsPageProps> = ({ accessToken }) => {
             />
           </div>
         </TabsContent>
-        <TabsContent value="examples" className="min-h-0 flex-1 overflow-y-auto">
+        <TabsContent value="examples" className="min-h-0 flex-1 overflow-y-auto" keepMounted>
           <div className="pt-6">
             <p className="text-base text-muted-foreground">How to use budget id</p>
             <Tabs defaultValue="assign-budget">
@@ -149,13 +149,13 @@ const BudgetPanel: React.FC<BudgetSettingsPageProps> = ({ accessToken }) => {
                   Test it (OpenAI SDK)
                 </TabsTrigger>
               </TabsList>
-              <TabsContent value="assign-budget">
+              <TabsContent value="assign-budget" keepMounted>
                 <SyntaxHighlighter language="bash">{CREATE_END_USER_CURL_COMMAND}</SyntaxHighlighter>
               </TabsContent>
-              <TabsContent value="curl">
+              <TabsContent value="curl" keepMounted>
                 <SyntaxHighlighter language="bash">{CHAT_COMPLETIONS_CURL_COMMAND}</SyntaxHighlighter>
               </TabsContent>
-              <TabsContent value="openai-sdk">
+              <TabsContent value="openai-sdk" keepMounted>
                 <SyntaxHighlighter language="python">{OPENAI_SDK_PYTHON_CODE}</SyntaxHighlighter>
               </TabsContent>
             </Tabs>

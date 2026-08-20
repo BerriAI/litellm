@@ -2,16 +2,16 @@ import type { Validate } from "react-hook-form";
 
 import type { MountedFormValues } from "./MountedFormField";
 
-interface AntdRuleForm {
+interface ValidatorRuleForm {
   getFieldValue: (name: string) => unknown;
   isFieldTouched?: (name: string) => boolean;
 }
 
-interface AntdRule {
+interface ValidatorRule {
   validator: (rule: never, value: never) => Promise<void>;
 }
 
-type AntdRuleSource = AntdRule | ((form: AntdRuleForm) => AntdRule);
+type ValidatorRuleSource = ValidatorRule | ((form: ValidatorRuleForm) => ValidatorRule);
 
 type MountedValidate = Validate<unknown, MountedFormValues>;
 
@@ -19,17 +19,17 @@ const isBlank = (value: unknown): boolean => value === undefined || value === nu
 
 const isEmptyList = (value: unknown): boolean => Array.isArray(value) && value.length === 0;
 
-export const antdRequired =
+export const requiredRule =
   (message: string): MountedValidate =>
   (value) =>
     isBlank(value) || isEmptyList(value) ? message : true;
 
 const toMessage = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
-export const antdRules = (...rules: readonly AntdRuleSource[]): Record<string, MountedValidate> =>
+export const validatorRules = (...rules: readonly ValidatorRuleSource[]): Record<string, MountedValidate> =>
   Object.fromEntries(
     rules.map((rule, index) => [
-      `antd_${index}`,
+      `rule_${index}`,
       async (value: unknown, values: MountedFormValues) => {
         const resolved = typeof rule === "function" ? rule({ getFieldValue: (name) => values[name] }) : rule;
         const validator = resolved.validator as (rule: unknown, value: unknown) => Promise<void>;

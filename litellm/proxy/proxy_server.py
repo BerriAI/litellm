@@ -384,6 +384,10 @@ from litellm.proxy.db.gateway_request_tracking import (
     GatewayRequestAccumulator,
     flush_gateway_requests,
 )
+from litellm.proxy.db.proxy_worker_heartbeat import (
+    PROXY_WORKER_HEARTBEAT_INTERVAL_SECONDS,
+    ProxyWorkerHeartbeat,
+)
 from litellm.proxy.db.spend_counter_reseed import SpendCounterReseed
 from litellm.proxy.discovery_endpoints import ui_discovery_endpoints_router
 from litellm.proxy.fine_tuning_endpoints.endpoints import router as fine_tuning_router
@@ -635,6 +639,7 @@ from litellm.secret_managers.main import (
     get_secret_bool,
     get_secret_str,
     normalize_nonempty_secret_str,
+    secret_manager_would_be_consulted,
     str_to_bool,
 )
 from litellm.types.integrations.slack_alerting import AlertType, SlackAlertingArgs
@@ -874,9 +879,11 @@ async def _flush_spend_logs_queue_on_shutdown() -> None:
         verbose_proxy_logger.exception("Error flushing spend logs queue on shutdown: %s", e)
 
 
-async def proxy_shutdown_event() -> None:
+async def proxy_shutdown_event(worker_heartbeat: ProxyWorkerHeartbeat | None = None) -> None:
     global prisma_client, master_key, user_custom_auth, user_custom_key_generate, user_custom_key_update
     verbose_proxy_logger.info("Shutting down LiteLLM Proxy Server")
+    if worker_heartbeat is not None and prisma_client:
+        await worker_heartbeat.deregister()
     if prisma_client:
         # Drain the SGR fold first: it lives in memory, so an un-drained interval
         # is lost, and a write attempted after disconnect raises
@@ -1210,7 +1217,7 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[None, None]:
     )
 
     ### START BATCH WRITING DB + CHECKING NEW MODELS###
-    if prisma_client is not None:
+    worker_heartbeat: Final = (
         await ProxyStartupEvent.initialize_scheduled_background_jobs(
             general_settings=general_settings,
             prisma_client=prisma_client,
@@ -1219,7 +1226,10 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[None, None]:
             proxy_batch_write_at=proxy_batch_write_at,
             proxy_logging_obj=proxy_logging_obj,
         )
-
+        if prisma_client is not None
+        else None
+    )
+    if prisma_client is not None:
         await ProxyStartupEvent._update_default_team_member_budget()
 
         ## SYNC UI SETTINGS ##
@@ -1290,7 +1300,7 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[None, None]:
 
     await proxy_config.stop_auth_cache_invalidation_subscriber()
 
-    await proxy_shutdown_event()
+    await proxy_shutdown_event(worker_heartbeat=worker_heartbeat)
 
 
 def _generate_stable_operation_id(route: "APIRoute") -> str:
@@ -4120,6 +4130,31 @@ def _swap_in_model_cost_map(new_model_cost_map: dict) -> int:
     return fetched_model_count
 
 
+def should_load_db_object(object_type: str | SupportedDBObjectType) -> bool:
+    """
+    Check if an object type should be loaded from the database based on general_settings.supported_db_objects.
+
+    Args:
+        object_type: Type of object to check (e.g., SupportedDBObjectType.MODELS, "models", etc.)
+
+    Returns:
+        True if the object should be loaded, False otherwise
+    """
+    supported_db_objects: Final = general_settings.get("supported_db_objects", None)
+
+    if supported_db_objects is None:
+        return True
+
+    if not isinstance(supported_db_objects, list):
+        verbose_proxy_logger.warning(
+            "supported_db_objects is not a list, got %s. Loading all objects.", type(supported_db_objects)
+        )
+        return True
+
+    object_type_str: Final = str(object_type)
+    return any(str(obj) == object_type_str for obj in supported_db_objects)
+
+
 class ProxyConfig:
     """
     Abstraction class on top of config loading/updating logic. Gives us one place to control all config updating logic.
@@ -4346,8 +4381,54 @@ class ProxyConfig:
                         item = self._check_for_os_environ_vars(config=item, depth=depth + 1, max_depth=max_depth)
             # if the value is a string and starts with "os.environ/" - then it's an environment variable
             elif isinstance(value, str) and value.startswith("os.environ/"):
-                config[key] = get_secret(value)
+                resolved = get_secret(value)
+                if resolved is None and secret_manager_would_be_consulted(value):
+                    verbose_proxy_logger.warning("%s is absent from the configured secret manager", value)
+                config[key] = resolved
         return config
+
+    def _initialize_secret_manager_from_raw_config(
+        self, config: Mapping[str, object], config_file_path: str | None
+    ) -> None:
+        """
+        Bring the secret manager up before `os.environ/<KEY>` references are resolved.
+
+        `_check_for_os_environ_vars` writes whatever it resolves back into the config, so a key
+        held only by the secret manager would otherwise become a permanent `None` that the later
+        fallbacks in `load_config` can no longer recover from.
+
+        `get_config` also runs on management-endpoint request paths, so this returns early once a
+        manager exists rather than rebuilding the client on every request.
+
+        The manager's own settings can only come from real environment variables, so they are
+        resolved against a throwaway copy and the config is left untouched for the main pass.
+        """
+        if litellm.secret_manager_client is not None:
+            return
+
+        general_settings: Final = config.get("general_settings")
+        if not isinstance(general_settings, dict):
+            return
+
+        raw_system: Final = general_settings.get("key_management_system")
+        key_management_system: Final = (
+            get_secret(raw_system)
+            if isinstance(raw_system, str) and raw_system.startswith("os.environ/")
+            else raw_system
+        )
+        if not isinstance(key_management_system, str):
+            return
+
+        raw_settings: Final = general_settings.get("key_management_settings")
+        if isinstance(raw_settings, dict):
+            litellm._key_management_settings = KeyManagementSettings(
+                **self._check_for_os_environ_vars(config=copy.deepcopy(raw_settings))
+            )
+
+        self.initialize_secret_manager(
+            key_management_system=key_management_system,
+            config_file_path=config_file_path,
+        )
 
     def _get_team_config(self, team_id: str, all_teams_config: list[dict]) -> dict:
         team_config: dict = {}
@@ -4518,6 +4599,8 @@ class ProxyConfig:
         ## PRINT YAML FOR CONFIRMING IT WORKS
         printed_yaml: Final = copy.deepcopy(config)
         printed_yaml.pop("environment_variables", None)
+
+        self._initialize_secret_manager_from_raw_config(config=config, config_file_path=config_file_path)
 
         config = self._check_for_os_environ_vars(config=config)
 
@@ -4952,6 +5035,7 @@ class ProxyConfig:
                     )
                 elif key == "audit_log_callbacks":
                     from litellm.proxy.management_helpers.audit_logs import (
+                        is_audit_logging_enabled,
                         reset_audit_log_callback_cache,
                     )
 
@@ -4970,14 +5054,14 @@ class ProxyConfig:
                             litellm.audit_log_callbacks.append(callback)
 
                     _store_audit_logs = litellm_settings.get("store_audit_logs", litellm.store_audit_logs)
-                    if _store_audit_logs:
+                    if is_audit_logging_enabled(store_audit_logs=_store_audit_logs):
                         print(  # noqa: T201
                             f"{blue_color_code} Initialized Audit Log Callbacks - {litellm.audit_log_callbacks} {reset_color_code}"
                         )
                     else:
                         verbose_proxy_logger.warning(
-                            "'audit_log_callbacks' is configured but 'store_audit_logs' is not enabled. "
-                            "Audit log callbacks will not fire until 'store_audit_logs: true' is added to litellm_settings."
+                            "'audit_log_callbacks' is configured but audit logging is not enabled. "
+                            "Audit log callbacks will not fire."
                         )
                 elif key == "cache_params":
                     # this is set in the cache branch
@@ -5089,17 +5173,14 @@ class ProxyConfig:
                 key: general_settings[key] for key in SPEND_LOG_CLEANUP_BOUND_SETTINGS if key in general_settings
             }
 
-            ### LOAD KEY MANAGEMENT SETTINGS FIRST (needed for custom secret manager) ###
+            ### LOAD KEY MANAGEMENT SETTINGS ###
+            # The secret manager itself is brought up by get_config(), which runs before the
+            # `os.environ/` references in this config were resolved. Re-reading the settings here
+            # picks up any of them that were themselves secret-manager backed.
             key_management_settings: Final = general_settings.get("key_management_settings", None)
             if key_management_settings is not None:
                 litellm._key_management_settings = KeyManagementSettings(**key_management_settings)
 
-            ### LOAD SECRET MANAGER ###
-            key_management_system: Final = general_settings.get("key_management_system", None)
-            self.initialize_secret_manager(
-                key_management_system=key_management_system,
-                config_file_path=config_file_path,
-            )
             ### [DEPRECATED] LOAD FROM GOOGLE KMS ### old way of loading from google kms
             use_google_kms: Final = general_settings.get("use_google_kms", False)
             load_google_kms(use_google_kms=use_google_kms)
@@ -6291,6 +6372,9 @@ class ProxyConfig:
         if "global_max_parallel_requests" in _general_settings:
             general_settings["global_max_parallel_requests"] = _general_settings["global_max_parallel_requests"]
 
+        if "max_batch_file_size_mb" not in self._yaml_general_settings_keys:
+            general_settings["max_batch_file_size_mb"] = _general_settings.get("max_batch_file_size_mb")
+
         ## ALERTING ARGS ##
         if "alerting_args" in _general_settings:
             general_settings["alerting_args"] = _general_settings["alerting_args"]
@@ -6522,36 +6606,7 @@ class ProxyConfig:
         return config
 
     def _should_load_db_object(self, object_type: str | SupportedDBObjectType) -> bool:
-        """
-        Check if an object type should be loaded from the database based on general_settings.supported_db_objects.
-
-        Args:
-            object_type: Type of object to check (e.g., SupportedDBObjectType.MODELS, "models", etc.)
-
-        Returns:
-            True if the object should be loaded, False otherwise
-        """
-        global general_settings
-
-        # Get the supported_db_objects configuration
-        supported_db_objects: Final = general_settings.get("supported_db_objects", None)
-
-        # If supported_db_objects is not set, load all objects (default behavior)
-        if supported_db_objects is None:
-            return True
-
-        # If supported_db_objects is set, only load specified objects
-        if not isinstance(supported_db_objects, list):
-            verbose_proxy_logger.warning(
-                "supported_db_objects is not a list, got %s. Loading all objects.", type(supported_db_objects)
-            )
-            return True
-
-        # Convert object_type to string for comparison (handles both str and enum)
-        object_type_str: Final = str(object_type)
-
-        # Check if the object type is in the list (supports both str and enum values)
-        return any(str(obj) == object_type_str for obj in supported_db_objects)
+        return should_load_db_object(object_type=object_type)
 
     async def _get_models_from_db(self, prisma_client: PrismaClient) -> list | None:
         """
@@ -7094,38 +7149,40 @@ class ProxyConfig:
 
     async def _init_guardrails_in_db(self, prisma_client: PrismaClient):
         from litellm.proxy.guardrails.guardrail_registry import (
+            GUARDRAIL_RECONCILE_LOCK,
             IN_MEMORY_GUARDRAIL_HANDLER,
             Guardrail,
             GuardrailRegistry,
         )
 
         try:
-            guardrails_in_db: Final[list[Guardrail]] = await GuardrailRegistry.get_all_guardrails_from_db(
-                prisma_client=prisma_client
-            )
-            verbose_proxy_logger.debug("guardrails from the DB %s", str(guardrails_in_db))
-            db_guardrail_ids: Final[set] = set()
-            for guardrail in guardrails_in_db:
-                guardrail_id = guardrail.get("guardrail_id")
-                if guardrail_id:
-                    db_guardrail_ids.add(guardrail_id)
-                try:
-                    IN_MEMORY_GUARDRAIL_HANDLER.sync_guardrail_from_db(
-                        guardrail=cast(Guardrail, guardrail),
-                    )
-                except Exception as e:  # noqa: BLE001  # one unloadable row must not stop the remaining guardrails
-                    verbose_proxy_logger.error(
-                        "litellm.proxy.proxy_server.py::ProxyConfig:_init_guardrails_in_db - "
-                        "skipping guardrail '%s' (ID: %s): %s: %s",
-                        guardrail.get("guardrail_name"),
-                        guardrail_id,
-                        type(e).__name__,
-                        e,
-                    )
+            async with GUARDRAIL_RECONCILE_LOCK:
+                guardrails_in_db: Final[list[Guardrail]] = await GuardrailRegistry.get_all_guardrails_from_db(
+                    prisma_client=prisma_client
+                )
+                verbose_proxy_logger.debug("guardrails from the DB %s", str(guardrails_in_db))
+                db_guardrail_ids: Final[set] = set()
+                for guardrail in guardrails_in_db:
+                    guardrail_id = guardrail.get("guardrail_id")
+                    if guardrail_id:
+                        db_guardrail_ids.add(guardrail_id)
+                    try:
+                        IN_MEMORY_GUARDRAIL_HANDLER.sync_guardrail_from_db(
+                            guardrail=cast(Guardrail, guardrail),
+                        )
+                    except Exception as e:  # noqa: BLE001  # one unloadable row must not stop the remaining guardrails
+                        verbose_proxy_logger.error(
+                            "litellm.proxy.proxy_server.py::ProxyConfig:_init_guardrails_in_db - "
+                            "skipping guardrail '%s' (ID: %s): %s: %s",
+                            guardrail.get("guardrail_name"),
+                            guardrail_id,
+                            type(e).__name__,
+                            e,
+                        )
 
-            # Drop in-memory DB-backed entries whose row was deleted on another
-            # pod. Config-loaded entries are never touched.
-            IN_MEMORY_GUARDRAIL_HANDLER.reconcile_db_guardrails(db_guardrail_ids=db_guardrail_ids)
+                # Drop in-memory DB-backed entries whose row was deleted on another
+                # pod. Config-loaded entries are never touched.
+                IN_MEMORY_GUARDRAIL_HANDLER.reconcile_db_guardrails(db_guardrail_ids=db_guardrail_ids)
         except Exception as e:
             verbose_proxy_logger.exception("litellm.proxy.proxy_server.py::ProxyConfig:_init_guardrails_in_db - %s", e)
 
@@ -7279,12 +7336,16 @@ class ProxyConfig:
 
     async def _init_agents_in_db(self, prisma_client: PrismaClient):
         from litellm.proxy.agent_endpoints.agent_registry import (
+            AGENT_RECONCILE_LOCK,
+        )
+        from litellm.proxy.agent_endpoints.agent_registry import (
             global_agent_registry as AGENT_REGISTRY,
         )
 
         try:
-            db_agents: Final = await AGENT_REGISTRY.get_all_agents_from_db(prisma_client=prisma_client)
-            AGENT_REGISTRY.load_agents_from_db_and_config(db_agents=db_agents)
+            async with AGENT_RECONCILE_LOCK:
+                db_agents: Final = await AGENT_REGISTRY.get_all_agents_from_db(prisma_client=prisma_client)
+                AGENT_REGISTRY.load_agents_from_db_and_config(db_agents=db_agents)
         except Exception as e:
             verbose_proxy_logger.exception("litellm.proxy.proxy_server.py::ProxyConfig:_init_agents_in_db - %s", e)
 
@@ -8731,7 +8792,7 @@ class ProxyStartupEvent:
         proxy_budget_rescheduler_max_time: int,
         proxy_batch_write_at: int,
         proxy_logging_obj: ProxyLogging,
-    ):
+    ) -> ProxyWorkerHeartbeat:
         """Initializes scheduled background jobs"""
         global store_model_in_db, scheduler
 
@@ -8775,6 +8836,18 @@ class ProxyStartupEvent:
 
         # Ensure minimum interval of 30 seconds for batch writing to prevent memory issues
         batch_writing_interval: Final = proxy_batch_write_at + random.randint(0, 5)
+
+        ### PROXY WORKER HEARTBEAT ###
+        worker_heartbeat: Final = ProxyWorkerHeartbeat(prisma_client=prisma_client)
+        await worker_heartbeat.beat()
+        scheduler.add_job(
+            worker_heartbeat.beat,
+            "interval",
+            seconds=PROXY_WORKER_HEARTBEAT_INTERVAL_SECONDS,
+            id="proxy_worker_heartbeat_job",
+            replace_existing=True,
+            misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
+        )
 
         ### RESET BUDGET ###
         if general_settings.get("disable_reset_budget", False) is False:
@@ -9115,6 +9188,7 @@ class ProxyStartupEvent:
             "APScheduler started with memory leak prevention settings: removed jitter, increased intervals, misfire_grace_time=%s",
             APSCHEDULER_MISFIRE_GRACE_TIME,
         )
+        return worker_heartbeat
 
     @classmethod
     async def _initialize_spend_tracking_background_jobs(cls, scheduler: AsyncIOScheduler):
@@ -12990,9 +13064,9 @@ async def _filter_models_by_team_id(
 async def _find_model_by_id(
     model_id: str,
     search: str | None,
-    llm_router,
-    prisma_client,
-    proxy_config,
+    llm_router: Router | None,
+    prisma_client: PrismaClient | None,
+    proxy_config: "ProxyConfig",
 ) -> tuple[list, int | None]:
     """Find a model by its ID and optionally filter by search term."""
     found_model = None
@@ -15687,6 +15761,7 @@ _GENERAL_SETTINGS_CONFIG_LIST_FIELD_TYPES: Final[Mapping[str, str]] = MappingPro
         "max_parallel_requests": "Integer",
         "global_max_parallel_requests": "Integer",
         "max_request_size_mb": "Integer",
+        "max_batch_file_size_mb": "Integer",
         "max_response_size_mb": "Integer",
         "proxy_config_reload_interval_seconds": "Integer",
         "pass_through_endpoints": "PydanticModel",

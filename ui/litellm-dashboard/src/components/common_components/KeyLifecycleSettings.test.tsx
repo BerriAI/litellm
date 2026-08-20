@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import { Controller, useForm } from "react-hook-form";
 import userEvent, { PointerEventsCheckLevel } from "@testing-library/user-event";
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { renderWithProviders, screen, waitFor } from "../../../tests/test-utils";
+import { fireEvent, renderWithProviders, screen, waitFor } from "../../../tests/test-utils";
 import KeyLifecycleSettings from "./KeyLifecycleSettings";
 
 const CREATE_PLACEHOLDER = "e.g., 30d or leave empty to never expire";
@@ -87,7 +87,7 @@ describe("KeyLifecycleSettings", () => {
       const onFinish = vi.fn();
       renderWithProviders(<Harness onFinish={onFinish} />);
 
-      await user.type(getDurationInput(), "1d");
+      fireEvent.change(getDurationInput(), { target: { value: "1d" } });
       await user.click(screen.getByRole("button", { name: "submit" }));
 
       await waitFor(() => expect(onFinish).toHaveBeenCalledTimes(1));
@@ -98,7 +98,7 @@ describe("KeyLifecycleSettings", () => {
       const user = userEvent.setup();
       renderWithProviders(<Harness />);
 
-      await user.type(getDurationInput(), "1d");
+      fireEvent.change(getDurationInput(), { target: { value: "1d" } });
       expect(getDurationInput().value).toBe("1d");
 
       await user.click(screen.getByRole("button", { name: "reset" }));
@@ -112,7 +112,7 @@ describe("KeyLifecycleSettings", () => {
       renderWithProviders(<Harness onFinish={onFinish} />);
 
       // First create: type "1d" and submit -> "1d" is sent.
-      await user.type(getDurationInput(), "1d");
+      fireEvent.change(getDurationInput(), { target: { value: "1d" } });
       await user.click(screen.getByRole("button", { name: "submit" }));
       await waitFor(() => expect(onFinish).toHaveBeenCalledTimes(1));
       expect(onFinish.mock.calls[0][0]).toMatchObject({ duration: "1d" });
@@ -135,7 +135,7 @@ describe("KeyLifecycleSettings", () => {
       const onFinish = vi.fn();
       renderWithProviders(<Harness isCreateMode={false} onFinish={onFinish} />);
 
-      await user.type(getDurationInput(false), "30d");
+      fireEvent.change(getDurationInput(false), { target: { value: "30d" } });
       expect(getDurationInput(false).value).toBe("30d");
 
       await user.click(screen.getByRole("checkbox", { name: /never expire/i }));
@@ -200,7 +200,7 @@ describe("KeyLifecycleSettings", () => {
       await user.click(await screen.findByText("Custom interval"));
 
       const customInput = await screen.findByPlaceholderText("e.g., 1s, 5m, 2h, 14d");
-      await user.type(customInput, "14d");
+      fireEvent.change(customInput, { target: { value: "14d" } });
 
       await waitFor(() => expect(screen.getByTestId("rotation-interval-value")).toHaveTextContent("14d"));
       expect((customInput as HTMLInputElement).value).toBe("14d");
@@ -216,7 +216,7 @@ describe("KeyLifecycleSettings", () => {
       await user.click(screen.getByRole("combobox"));
       await user.click(await screen.findByText("Custom interval"));
       const customInput = await screen.findByPlaceholderText("e.g., 1s, 5m, 2h, 14d");
-      await user.type(customInput, "14d");
+      fireEvent.change(customInput, { target: { value: "14d" } });
       await waitFor(() => expect(screen.getByTestId("rotation-interval-value")).toHaveTextContent("14d"));
 
       await user.click(screen.getByRole("combobox"));

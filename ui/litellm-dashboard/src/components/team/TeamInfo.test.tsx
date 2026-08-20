@@ -3,7 +3,7 @@ import * as networking from "@/components/networking";
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { renderWithProviders, testQueryClient } from "../../../tests/test-utils";
+import { chooseSelectOption, renderWithProviders, testQueryClient } from "../../../tests/test-utils";
 import TeamInfoView from "./TeamInfo";
 
 const authState = vi.hoisted(() => ({ userRole: "Admin" }));
@@ -993,8 +993,7 @@ describe("TeamInfoView", () => {
       const user = userEvent.setup({ delay: null });
       const resetBudgetSelect = await openSettingsEditorForTeam(user, { budget_duration: "30d" });
 
-      await user.click(resetBudgetSelect);
-      await user.click(await screen.findByText("Never resets"));
+      await chooseSelectOption(user, resetBudgetSelect, "Never resets");
 
       await waitFor(() => {
         expect(resetBudgetSelect).toHaveTextContent("Never resets");
@@ -1028,8 +1027,7 @@ describe("TeamInfoView", () => {
       const user = userEvent.setup({ delay: null });
       const resetBudgetSelect = await openSettingsEditorForTeam(user, { budget_duration: null });
 
-      await user.click(resetBudgetSelect);
-      await user.click(await screen.findByText("weekly"));
+      await chooseSelectOption(user, resetBudgetSelect, "weekly");
 
       await user.click(screen.getByRole("button", { name: /save changes/i }));
 
@@ -1236,7 +1234,7 @@ describe("TeamInfoView", () => {
       expect(screen.getAllByPlaceholderText("Value")[0]).toHaveValue("CC-OLD");
 
       await user.clear(screen.getAllByPlaceholderText("Value")[0]);
-      await user.type(screen.getAllByPlaceholderText("Value")[0], "CC-NEW");
+      fireEvent.change(screen.getAllByPlaceholderText("Value")[0], { target: { value: "CC-NEW" } });
       await user.click(screen.getByRole("button", { name: /save changes/i }));
 
       await waitFor(() => {

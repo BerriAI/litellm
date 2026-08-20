@@ -1,5 +1,5 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
+import userEvent, { PointerEventsCheckLevel } from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { CreateUserButton } from "./CreateUserButton";
@@ -79,7 +79,7 @@ describe("CreateUserButton", () => {
     });
 
     it("should open the invite modal when invite user button is clicked", async () => {
-      const user = userEvent.setup();
+      const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
       renderWithProviders(<CreateUserButton {...defaultProps} />);
       await waitFor(() => {
         expect(screen.getByRole("button", { name: /\+ invite user/i })).toBeInTheDocument();
@@ -107,7 +107,7 @@ describe("CreateUserButton", () => {
     });
 
     it("should close modal when cancel is clicked in standalone mode", async () => {
-      const user = userEvent.setup();
+      const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
       renderWithProviders(<CreateUserButton {...defaultProps} />);
 
       await waitFor(() => {
@@ -124,7 +124,7 @@ describe("CreateUserButton", () => {
 
   describe("embedded mode submission", () => {
     it("should call userCreateCall when form is submitted in embedded mode", async () => {
-      const user = userEvent.setup();
+      const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
       mockUserCreateCall.mockResolvedValue({ data: { user_id: "new-user-123" } });
       mockInvitationCreateCall.mockResolvedValue({
         id: "inv-1",
@@ -158,7 +158,7 @@ describe("CreateUserButton", () => {
     });
 
     it("should call onUserCreated callback when user is created in embedded mode", async () => {
-      const user = userEvent.setup();
+      const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
       const onUserCreated = vi.fn();
       mockUserCreateCall.mockResolvedValue({ data: { user_id: "new-user-456" } });
 
@@ -182,7 +182,7 @@ describe("CreateUserButton", () => {
     });
 
     it("should show error notification when user creation fails", async () => {
-      const user = userEvent.setup();
+      const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
       mockUserCreateCall.mockRejectedValue({ response: { data: { detail: "Email already exists" } } });
 
       renderWithProviders(
@@ -204,7 +204,7 @@ describe("CreateUserButton", () => {
     });
 
     it("should show info notification when making API call", async () => {
-      const user = userEvent.setup();
+      const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
       mockUserCreateCall.mockResolvedValue({ data: { user_id: "new-user" } });
       mockInvitationCreateCall.mockResolvedValue({
         id: "inv-3",
@@ -233,7 +233,7 @@ describe("CreateUserButton", () => {
 
   describe("standalone mode submission", () => {
     it("should show success notification when user is created successfully in standalone mode", async () => {
-      const user = userEvent.setup();
+      const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
       mockUserCreateCall.mockResolvedValue({ data: { user_id: "new-user-789" } });
       mockInvitationCreateCall.mockResolvedValue({
         id: "inv-2",
@@ -262,7 +262,7 @@ describe("CreateUserButton", () => {
     });
 
     it("should show onboarding modal when user is created and SSO is disabled", async () => {
-      const user = userEvent.setup();
+      const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
       mockUserCreateCall.mockResolvedValue({ data: { user_id: "sso-user" } });
       mockInvitationCreateCall.mockResolvedValue({
         id: "inv-sso",
@@ -302,7 +302,7 @@ describe("CreateUserButton", () => {
         isLoading: false,
       } as any);
 
-      const user = userEvent.setup();
+      const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
       mockUserCreateCall.mockResolvedValue({ data: { user_id: "org-user" } });
       mockInvitationCreateCall.mockResolvedValue({
         id: "inv-org",
@@ -349,7 +349,7 @@ describe("CreateUserButton", () => {
         isLoading: false,
       } as any);
 
-      const user = userEvent.setup();
+      const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
       mockUserCreateCall.mockResolvedValue({ data: { user_id: "no-member-add-user" } });
       mockInvitationCreateCall.mockResolvedValue({
         id: "inv-nma",
@@ -381,7 +381,7 @@ describe("CreateUserButton", () => {
 
   describe("send invitation email toggle", () => {
     it("should send send_invite_email true by default in embedded mode", async () => {
-      const user = userEvent.setup();
+      const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
       mockUserCreateCall.mockResolvedValue({ data: { user_id: "default-on-user" } });
 
       renderWithProviders(
@@ -409,7 +409,7 @@ describe("CreateUserButton", () => {
     });
 
     it("should send send_invite_email false when the checkbox is unchecked in embedded mode", async () => {
-      const user = userEvent.setup();
+      const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
       mockUserCreateCall.mockResolvedValue({ data: { user_id: "unchecked-user" } });
 
       renderWithProviders(
@@ -438,7 +438,7 @@ describe("CreateUserButton", () => {
     });
 
     it("should send send_invite_email true by default in standalone mode", async () => {
-      const user = userEvent.setup();
+      const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
       mockUserCreateCall.mockResolvedValue({ data: { user_id: "standalone-default-user" } });
       mockInvitationCreateCall.mockResolvedValue({
         id: "inv-default",
@@ -473,7 +473,7 @@ describe("CreateUserButton", () => {
     });
 
     it("should send send_invite_email false when the checkbox is unchecked in standalone mode", async () => {
-      const user = userEvent.setup();
+      const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
       mockUserCreateCall.mockResolvedValue({ data: { user_id: "standalone-off-user" } });
       mockInvitationCreateCall.mockResolvedValue({
         id: "inv-off",
@@ -509,7 +509,7 @@ describe("CreateUserButton", () => {
     });
 
     it("should keep the checkbox checked by default when the modal is opened in standalone mode", async () => {
-      const user = userEvent.setup();
+      const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
 
       renderWithProviders(
         <CreateUserButton {...defaultProps} possibleUIRoles={{ proxy_user: { ui_label: "User", description: "" } }} />,
@@ -539,7 +539,7 @@ describe("CreateUserButton", () => {
     const submittedPayload = () => mockUserCreateCall.mock.calls[0][2];
 
     it("should send exactly seven keys from the standalone modal, with the untouched ones undefined", async () => {
-      const user = userEvent.setup();
+      const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
       mockUserCreateCall.mockResolvedValue({ data: { user_id: "u1" } });
       mockInvitationCreateCall.mockResolvedValue({ id: "i1", user_id: "u1", has_user_setup_sso: false } as any);
 
@@ -575,7 +575,7 @@ describe("CreateUserButton", () => {
     });
 
     it("should send exactly six keys from the embedded form, with no organization_ids", async () => {
-      const user = userEvent.setup();
+      const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
       mockUserCreateCall.mockResolvedValue({ data: { user_id: "u2" } });
 
       renderWithProviders(<CreateUserButton {...defaultProps} possibleUIRoles={ROLES} isEmbedded />);
@@ -607,7 +607,7 @@ describe("CreateUserButton", () => {
     });
 
     it("should not default models to no-default-models for a proxy admin", async () => {
-      const user = userEvent.setup();
+      const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
       mockUserCreateCall.mockResolvedValue({ data: { user_id: "u3" } });
 
       renderWithProviders(<CreateUserButton {...defaultProps} possibleUIRoles={ROLES} isEmbedded />);
@@ -637,7 +637,7 @@ describe("CreateUserButton", () => {
         isLoading: false,
       } as any);
 
-      const user = userEvent.setup();
+      const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
       mockUserCreateCall.mockResolvedValue({ data: { user_id: "u4" } });
       mockInvitationCreateCall.mockResolvedValue({ id: "i4", user_id: "u4", has_user_setup_sso: false } as any);
 
@@ -668,7 +668,7 @@ describe("CreateUserButton", () => {
     });
 
     it("should send metadata as the raw string the user typed", async () => {
-      const user = userEvent.setup();
+      const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
       mockUserCreateCall.mockResolvedValue({ data: { user_id: "u5" } });
 
       renderWithProviders(<CreateUserButton {...defaultProps} possibleUIRoles={ROLES} isEmbedded />);
@@ -685,7 +685,7 @@ describe("CreateUserButton", () => {
       expect(submittedPayload().metadata).toBe('{"a":1}');
     });
     it("should leave models out entirely for a proxy admin created from the standalone modal", async () => {
-      const user = userEvent.setup();
+      const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
       mockUserCreateCall.mockResolvedValue({ data: { user_id: "u6" } });
       mockInvitationCreateCall.mockResolvedValue({ id: "i6", user_id: "u6", has_user_setup_sso: false } as any);
 
@@ -711,9 +711,7 @@ describe("CreateUserButton", () => {
     });
 
     it("should discard models picked in the personal key section once it is collapsed again", async () => {
-      // antd paints its Select placeholder with pointer-events: none, so the
-      // default check would reject the very click a real user makes on it.
-      const user = userEvent.setup({ pointerEventsCheck: 0 });
+      const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
       mockUserCreateCall.mockResolvedValue({ data: { u: "u7" } });
       mockInvitationCreateCall.mockResolvedValue({ id: "i7", user_id: "u7", has_user_setup_sso: false } as any);
 
@@ -725,11 +723,7 @@ describe("CreateUserButton", () => {
       await user.click(screen.getByText("User"));
 
       await user.click(within(dialog).getByText("Personal Key Creation"));
-      // antd Select exposes no accessible name here, the migrated combobox does,
-      // so the same test has to reach the control either way.
-      const modelsSelect =
-        within(dialog).queryByRole("combobox", { name: /select models/i }) ??
-        (await within(dialog).findByText("Select models"));
+      const modelsSelect = within(dialog).getByRole("combobox", { name: /select models/i });
       await user.click(modelsSelect);
       await user.click(await screen.findByText("All Proxy Models"));
       await user.click(within(dialog).getByText("Personal Key Creation"));

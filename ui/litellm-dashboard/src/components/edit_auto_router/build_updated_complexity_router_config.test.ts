@@ -313,6 +313,42 @@ describe("buildUpdatedComplexityRouterConfig scorer knobs", () => {
   it("never invents knobs for a router that never had them", () => {
     expect(buildUpdatedComplexityRouterConfig(STORED, FORM_VALUE)).not.toHaveProperty("tier_boundaries");
   });
+
+  // 0 is an unconditional reasoning override. Treating it as unset here would quietly retune the router
+  // back to tracking simple_medium on the next save.
+  it("round-trips a stored reasoning override floor of 0", () => {
+    const result = buildUpdatedComplexityRouterConfig(
+      { ...STORED, reasoning_override_min_score: 0 },
+      { ...FORM_VALUE, reasoning_override_min_score: 0 },
+    );
+    expect(result.reasoning_override_min_score).toBe(0);
+  });
+
+  it("writes a newly set reasoning override floor over the stored one", () => {
+    const result = buildUpdatedComplexityRouterConfig(
+      { ...STORED, reasoning_override_min_score: 0 },
+      { ...FORM_VALUE, reasoning_override_min_score: 0.5 },
+    );
+    expect(result.reasoning_override_min_score).toBe(0.5);
+  });
+
+  it("drops a stored reasoning override floor when the operator resets it", () => {
+    const result = buildUpdatedComplexityRouterConfig({ ...STORED, reasoning_override_min_score: 0.5 }, FORM_VALUE);
+
+    expect(result).not.toHaveProperty("reasoning_override_min_score");
+    expect(result.some_future_backend_key).toEqual({ nested: true });
+  });
+
+  it("drops the reasoning override floor on a router whose scorer never runs", () => {
+    const neverScores = {
+      ...FORM_VALUE,
+      reasoning_override_min_score: 0,
+      classifier_type: "llm" as const,
+      classifier_fallback: "default_model" as const,
+    };
+    const result = buildUpdatedComplexityRouterConfig({ ...STORED, reasoning_override_min_score: 0 }, neverScores);
+    expect(result).not.toHaveProperty("reasoning_override_min_score");
+  });
 });
 
 describe("buildUpdatedComplexityRouterConfig plan-mode minimum tier", () => {

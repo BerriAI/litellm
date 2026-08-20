@@ -106,7 +106,7 @@ const UsageExportHeader: React.FC<UsageExportHeaderProps> = ({
         <div className={`grid ${hasFilters ? "grid-cols-[1fr_auto]" : "grid-cols-[auto]"} items-end gap-4`}>
           {hasFilters && (
             <div>
-              {filterLabel && <label className="text-sm font-medium text-gray-700 block mb-2">{filterLabel}</label>}
+              {filterLabel && <label className="text-sm font-medium text-foreground block mb-2">{filterLabel}</label>}
               {filterSlot ?? builtInFilter}
             </div>
           )}

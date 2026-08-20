@@ -236,7 +236,7 @@ const legacyBuild = (values: Record<string, any>, ui: EditServerUiState) => {
     allow_all_keys: Boolean(allowAllKeysRaw ?? mcpServer.allow_all_keys),
     available_on_public_internet: Boolean(availableOnPublicInternetRaw ?? mcpServer.available_on_public_internet),
     // ``delegate_auth_to_upstream`` is only honored server-side for
-    // ``auth_type=oauth2`` (PKCE passthrough). The Form.Item is
+    // ``auth_type=oauth2`` (PKCE passthrough). The field is
     // conditionally rendered so the value drops out of the form on
     // auth_type change; force false for any other configuration to avoid
     // persisting a stale ``true`` that would silently re-activate if the
@@ -258,7 +258,7 @@ const legacyBuild = (values: Record<string, any>, ui: EditServerUiState) => {
       return isNoneAuth && hasAuthorizationHeader ? Boolean(oauthPassthroughRaw ?? mcpServer.oauth_passthrough) : false;
     })(),
     // ``dcr_bridge`` is only meaningful for the client-forwarded token
-    // modes (true_passthrough / oauth_delegate). The Form.Item is
+    // modes (true_passthrough / oauth_delegate). The field is
     // conditionally rendered so the value drops out of the form on
     // auth_type change; force false for any other configuration to avoid
     // persisting a stale ``true`` that would silently re-activate if the

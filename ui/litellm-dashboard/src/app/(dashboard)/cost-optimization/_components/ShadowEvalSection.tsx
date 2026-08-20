@@ -24,6 +24,7 @@ import {
   useStartShadowEval,
   useStopShadowEval,
   type ShadowEvalJob,
+  type ShadowEvalJobKey,
   type ShadowEvalSlice,
 } from "./useShadowEval";
 
@@ -50,19 +51,24 @@ const routerMatchedOrBeatPct = (
     ? 100 - results.overall_shadow_win_rate_pct
     : results.overall_shadow_win_rate_pct + results.overall_tie_rate_pct;
 
-export const shadowedKeyLabel = (job: ShadowEvalJob): string =>
-  job.key_alias || job.key_name || `${job.api_key_id.slice(0, 10)}…`;
+export const shadowedKeyLabel = (key: ShadowEvalJobKey): string =>
+  key.key_alias || key.key_name || `${key.api_key_id.slice(0, 10)}…`;
+
+const shadowedKeysLabel = (job: ShadowEvalJob): string =>
+  job.keys.length === 1 ? shadowedKeyLabel(job.keys[0]) : `${job.keys.length} keys`;
+
+const totalBudget = (job: ShadowEvalJob): number => job.keys.reduce((sum, key) => sum + key.max_turns, 0);
 
 const jobHeadline = (job: ShadowEvalJob): React.ReactNode =>
   job.direction === "reverse" ? (
     <>
       Comparing <span className="font-mono text-xs">{job.router_name}</span> to{" "}
       <span className="font-mono text-xs">{job.baseline_model}</span> on {job.shadow_percentage}% of{" "}
-      <span className="font-mono text-xs">{shadowedKeyLabel(job)}</span> traffic
+      <span className="font-mono text-xs">{shadowedKeysLabel(job)}</span> traffic
     </>
   ) : (
     <>
-      Shadowing {job.shadow_percentage}% of <span className="font-mono text-xs">{shadowedKeyLabel(job)}</span> traffic
+      Shadowing {job.shadow_percentage}% of <span className="font-mono text-xs">{shadowedKeysLabel(job)}</span> traffic
       via <span className="font-mono text-xs">{job.router_name}</span>
     </>
   );
@@ -79,8 +85,8 @@ const endsIn = (endsAt: string | null | undefined): string | null => {
 };
 
 const STATUS_STYLES: Record<string, string> = {
-  running: "bg-blue-50 text-blue-700",
-  completed: "bg-emerald-50 text-emerald-700",
+  running: "bg-info/10 text-info",
+  completed: "bg-success/10 text-success",
   stopped: "bg-secondary text-muted-foreground",
 };
 
@@ -140,8 +146,8 @@ const VerdictBar: React.FC<{ direction: ShadowEvalDirection; results: NonNullabl
       ? Math.max(0, 100 - results.overall_shadow_win_rate_pct - ties)
       : results.overall_shadow_win_rate_pct;
   const segments = [
-    { label: "Router won", value: routerWins, fill: "bg-emerald-500" },
-    { label: "Tie", value: ties, fill: "bg-emerald-200" },
+    { label: "Router won", value: routerWins, fill: "bg-success" },
+    { label: "Tie", value: ties, fill: "bg-success/20" },
     {
       label: `${otherArmLabel(direction)} won`,
       value: Math.max(0, 100 - routerWins - ties),
@@ -178,7 +184,8 @@ const emptyResultsText = (job: ShadowEvalJob, resultsError: boolean): string => 
 
 const ResultsBody: React.FC<{ job: ShadowEvalJob; resultsError?: boolean }> = ({ job, resultsError = false }) => {
   const results = job.results;
-  if (!results || (results.by_tier.length === 0 && results.by_current_model.length === 0)) {
+  const stratifications = results ? [results.by_tier, results.by_current_model, results.by_key] : [];
+  if (!results || stratifications.every((slices) => slices.length === 0)) {
     return <p className="px-6 py-8 text-center text-sm text-muted-foreground">{emptyResultsText(job, resultsError)}</p>;
   }
   return (
@@ -224,7 +231,7 @@ const JobResults: React.FC<{
           <div>
             <p className="text-sm font-medium text-foreground">{jobHeadline(job)}</p>
             <p className="text-xs text-muted-foreground">
-              {(job.judged_count ?? 0).toLocaleString()} of {job.max_turns.toLocaleString()} turns judged ·{" "}
+              {(job.judged_count ?? 0).toLocaleString()} of {totalBudget(job).toLocaleString()} turns judged ·{" "}
               {(job.error_count ?? 0).toLocaleString()} errored · {usd(job.judge_spend ?? 0)} judge spend
               {active && remaining ? ` · ${remaining}` : ""}
             </p>
@@ -237,7 +244,7 @@ const JobResults: React.FC<{
         )}
       </div>
       {(job.error_count ?? 0) > 0 && job.last_error != null && (
-        <p className="border-b bg-red-50 px-6 py-2 text-xs text-destructive">
+        <p className="border-b bg-destructive/10 px-6 py-2 text-xs text-destructive">
           Last failure: <span className="font-mono">{job.last_error}</span>
         </p>
       )}
@@ -386,14 +393,13 @@ const StartForm: React.FC = () => {
   const percentageValid = parsedPct >= 0.1 && parsedPct <= 100;
   const parsedMaxTurns = Number.parseInt(maxTurns, 10);
   const maxTurnsValid = parsedMaxTurns >= 1 && parsedMaxTurns <= 2000;
-  const filled =
-    [apiKeyId, routerName, judgeModel].every((field) => field !== "") &&
-    (direction === "forward" || baselineModel !== "");
+  const baselinePicked = direction === "forward" || baselineModel !== "";
+  const filled = [apiKeyId, routerName, judgeModel].every((field) => field !== "") && baselinePicked;
   const boundsValid = percentageValid && maxTurnsValid;
   const valid = Boolean(accessToken) && filled && boundsValid;
   const handleStart = () => {
     const startBody = {
-      api_key_id: apiKeyId,
+      api_key_ids: [apiKeyId],
       router_name: routerName,
       direction,
       ...(direction === "reverse" ? { baseline_model: baselineModel } : {}),

@@ -56,7 +56,7 @@ const ChatImageUpload: React.FC<ChatImageUploadProps> = ({ chatUploadedImage, on
               size="icon-sm"
               disabled={disabled}
               aria-label="Attach image or PDF"
-              className="text-gray-400 hover:text-gray-600"
+              className="text-muted-foreground/70 hover:text-muted-foreground"
               onClick={() => inputRef.current?.click()}
             />
           }
