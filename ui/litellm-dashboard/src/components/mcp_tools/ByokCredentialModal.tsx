@@ -87,7 +87,7 @@ export const ByokCredentialModal: React.FC<ByokCredentialModalProps> = ({ server
               <div className={`w-2 h-2 rounded-full ${step === 1 ? "bg-info" : "bg-border"}`} />
               <div className={`w-2 h-2 rounded-full ${step === 2 ? "bg-info" : "bg-border"}`} />
             </div>
-            <button onClick={handleClose} className="text-muted-foreground/70 hover:text-muted-foreground">
+            <button onClick={handleClose} className="text-muted-foreground hover:text-foreground">
               <X className="size-4" />
             </button>
           </div>
@@ -99,7 +99,7 @@ export const ByokCredentialModal: React.FC<ByokCredentialModalProps> = ({ server
                 <div className="w-14 h-14 rounded-xl bg-linear-to-br from-teal-400 to-cyan-600 flex items-center justify-center text-white font-bold text-xl shadow-sm">
                   L
                 </div>
-                <ArrowRight className="size-4.5 text-muted-foreground/70" />
+                <ArrowRight className="size-4.5 text-muted-foreground" />
                 <div className="w-14 h-14 rounded-xl bg-linear-to-br from-blue-600 to-indigo-800 flex items-center justify-center text-white font-bold text-xl shadow-sm">
                   {firstLetter}
                 </div>
@@ -158,7 +158,7 @@ export const ByokCredentialModal: React.FC<ByokCredentialModalProps> = ({ server
               </button>
               <button
                 onClick={handleClose}
-                className="mt-3 w-full text-muted-foreground/70 hover:text-muted-foreground text-sm py-2"
+                className="mt-3 w-full text-muted-foreground hover:text-foreground text-sm py-2"
               >
                 Cancel
               </button>
@@ -223,7 +223,7 @@ export const ByokCredentialModal: React.FC<ByokCredentialModalProps> = ({ server
               <button
                 onClick={handleAuthorize}
                 disabled={loading}
-                className="w-full bg-info hover:bg-info/80 disabled:opacity-60 text-white font-medium py-3 px-6 rounded-xl flex items-center justify-center gap-2 transition-colors"
+                className="w-full bg-info hover:bg-info/80 disabled:opacity-60 text-info-foreground font-medium py-3 px-6 rounded-xl flex items-center justify-center gap-2 transition-colors"
               >
                 <Lock className="size-4" /> Connect &amp; Authorize
               </button>

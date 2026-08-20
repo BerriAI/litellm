@@ -223,7 +223,7 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({ userID, use
                     ) : (
                       <div className="py-16 px-6 text-center">
                         <svg
-                          className="mx-auto h-12 w-12 text-muted-foreground/70 mb-4"
+                          className="mx-auto h-12 w-12 text-muted-foreground mb-4"
                           fill="none"
                           stroke="currentColor"
                           viewBox="0 0 24 24"
@@ -278,7 +278,7 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({ userID, use
                 ) : (
                   <div className="py-16 px-6 text-center">
                     <svg
-                      className="mx-auto h-12 w-12 text-muted-foreground/70 mb-4"
+                      className="mx-auto h-12 w-12 text-muted-foreground mb-4"
                       fill="none"
                       stroke="currentColor"
                       viewBox="0 0 24 24"

@@ -262,7 +262,7 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
       <div className="inline-flex items-center gap-2 mb-4">
         <h4 className="m-0 text-xl font-semibold text-foreground">Complexity Tier Configuration</h4>
         <SimpleTooltip content="Map each complexity tier to one or more models. Simple queries use cheaper/faster models, complex queries use more capable models.">
-          <Info className="size-4 text-muted-foreground/70" />
+          <Info className="size-4 text-muted-foreground" />
         </SimpleTooltip>
       </div>
 
@@ -291,7 +291,7 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
                   <div className="flex items-center gap-2 mb-2">
                     <strong className="text-base font-semibold">{label} Tier</strong>
                     <SimpleTooltip content={tierInfo.description}>
-                      <Info className="size-4 text-muted-foreground/70" />
+                      <Info className="size-4 text-muted-foreground" />
                     </SimpleTooltip>
                     <span className="text-xs text-muted-foreground">
                       Tier {index + 1} of {TIER_KEYS.length} &middot; {tier}
@@ -342,7 +342,7 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
             <div className="flex items-center gap-2 mb-2">
               <strong className="text-base font-semibold">Default Model</strong>
               <SimpleTooltip content="Leave empty to follow the tiers. A model chosen here is pinned: it stays the default however the tiers change.">
-                <Info className="size-4 text-muted-foreground/70" />
+                <Info className="size-4 text-muted-foreground" />
               </SimpleTooltip>
             </div>
             <SearchSelect

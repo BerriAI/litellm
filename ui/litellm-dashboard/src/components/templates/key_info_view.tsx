@@ -695,7 +695,7 @@ export default function KeyInfoView({
                           <Badge variant="secondary" className="min-w-0 break-words">
                             {policy}
                           </Badge>
-                          {loadingPolicies && <p className="text-xs text-muted-foreground/70">Loading guardrails...</p>}
+                          {loadingPolicies && <p className="text-xs text-muted-foreground">Loading guardrails...</p>}
                         </div>
                         {!loadingPolicies && policyGuardrails[policy] && policyGuardrails[policy].length > 0 && (
                           <div className="ml-4 pl-3 border-l-2 border-border">
@@ -883,7 +883,7 @@ export default function KeyInfoView({
                         {Object.entries(currentKeyData.budget_fallbacks).map(([model, fallbacks]) => (
                           <div key={model} className="text-xs text-muted-foreground">
                             <span className="font-medium">{model}</span>
-                            <span className="mx-1 text-muted-foreground/70">-&gt;</span>
+                            <span className="mx-1 text-muted-foreground">-&gt;</span>
                             {fallbacks.join(", ")}
                           </div>
                         ))}

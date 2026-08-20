@@ -40,7 +40,7 @@ export default function RoleMappings({ roleMappings }: { roleMappings: RoleMappi
             ))}
           </div>
         ) : (
-          <span className="text-muted-foreground/70 italic">No groups mapped</span>
+          <span className="text-muted-foreground italic">No groups mapped</span>
         ),
     },
   ];
@@ -48,7 +48,7 @@ export default function RoleMappings({ roleMappings }: { roleMappings: RoleMappi
     <Card>
       <CardContent>
         <div className="flex items-center gap-3">
-          <Users className="w-6 h-6 text-muted-foreground/70 mb-2" />
+          <Users className="w-6 h-6 text-muted-foreground mb-2" />
           <h3 className="mb-2 text-2xl font-semibold text-foreground">Role Mappings</h3>
         </div>
         <div className="space-y-8">

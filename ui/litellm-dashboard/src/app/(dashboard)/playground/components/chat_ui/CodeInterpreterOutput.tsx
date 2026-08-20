@@ -196,7 +196,7 @@ const CodeInterpreterOutput: React.FC<CodeInterpreterOutputProps> = ({ code, ann
             </div>
           ) : (
             <div className="flex items-center justify-center bg-muted p-4">
-              <span className="text-sm text-muted-foreground/70">Image not available</span>
+              <span className="text-sm text-muted-foreground">Image not available</span>
             </div>
           )}
         </div>
@@ -215,7 +215,7 @@ const CodeInterpreterOutput: React.FC<CodeInterpreterOutputProps> = ({ code, ann
             >
               <FileText className="size-4 text-info" aria-hidden="true" />
               <span className="text-sm">{annotation.filename}</span>
-              <Download className="size-3 text-muted-foreground/70" aria-hidden="true" />
+              <Download className="size-3 text-muted-foreground" aria-hidden="true" />
             </Button>
           ))}
         </div>

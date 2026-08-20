@@ -183,15 +183,15 @@ export function LogViewer({
                     >
                       {config.label}
                     </span>
-                    <span className="text-xs text-muted-foreground/70">{log.timestamp}</span>
-                    <span className="text-xs text-muted-foreground/70">·</span>
+                    <span className="text-xs text-muted-foreground">{log.timestamp}</span>
+                    <span className="text-xs text-muted-foreground">·</span>
                     {log.model && (
                       <span className="min-w-0 text-xs break-words text-muted-foreground">{log.model}</span>
                     )}
                   </div>
                   <p className="text-sm text-foreground truncate">{log.input_snippet ?? log.input ?? "—"}</p>
                 </div>
-                <ChevronDown className="w-4 h-4 text-muted-foreground/70 shrink-0 mt-1" />
+                <ChevronDown className="w-4 h-4 text-muted-foreground shrink-0 mt-1" />
               </button>
             );
           })}

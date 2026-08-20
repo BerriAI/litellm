@@ -68,7 +68,7 @@ const ComplianceCard = ({
           ) : error ? (
             <TooltipProvider>
               <Tooltip>
-                <TooltipTrigger render={<span className="text-muted-foreground/70 text-sm" />}>--</TooltipTrigger>
+                <TooltipTrigger render={<span className="text-muted-foreground text-sm" />}>--</TooltipTrigger>
                 <TooltipContent>{error}</TooltipContent>
               </Tooltip>
             </TooltipProvider>
@@ -120,7 +120,7 @@ const ComplianceCard = ({
                   <div className="min-w-0">
                     <div className="flex items-center gap-2">
                       <span className="text-sm font-medium text-foreground">{check.check_name}</span>
-                      <span className="text-[10px] font-mono text-muted-foreground/70">{check.article}</span>
+                      <span className="text-[10px] font-mono text-muted-foreground">{check.article}</span>
                     </div>
                     <p className="text-xs text-muted-foreground mt-0.5">{check.detail}</p>
                   </div>

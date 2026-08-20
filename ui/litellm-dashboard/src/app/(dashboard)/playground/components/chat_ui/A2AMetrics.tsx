@@ -161,7 +161,7 @@ const A2AMetrics: React.FC<A2AMetricsProps> = ({ a2aMetadata, timeToFirstToken, 
             >
               <FileText className="size-3" />
               Task: {truncateId(taskId)}
-              <Copy className="size-3 text-muted-foreground/70" />
+              <Copy className="size-3 text-muted-foreground" />
             </TooltipTrigger>
             <TooltipContent>Click to copy: {taskId}</TooltipContent>
           </Tooltip>
@@ -184,7 +184,7 @@ const A2AMetrics: React.FC<A2AMetricsProps> = ({ a2aMetadata, timeToFirstToken, 
             >
               <Link className="size-3" />
               Session: {truncateId(contextId)}
-              <Copy className="size-3 text-muted-foreground/70" />
+              <Copy className="size-3 text-muted-foreground" />
             </TooltipTrigger>
             <TooltipContent>Click to copy: {contextId}</TooltipContent>
           </Tooltip>
@@ -233,7 +233,7 @@ const A2AMetrics: React.FC<A2AMetricsProps> = ({ a2aMetadata, timeToFirstToken, 
                   type="button"
                   variant="ghost"
                   size="icon-xs"
-                  className="ml-2 text-muted-foreground/70 hover:text-info"
+                  className="ml-2 text-muted-foreground hover:text-info"
                   onClick={() => copyToClipboard(taskId)}
                   aria-label={`Copy task ID ${taskId}`}
                 >
@@ -252,7 +252,7 @@ const A2AMetrics: React.FC<A2AMetricsProps> = ({ a2aMetadata, timeToFirstToken, 
                   type="button"
                   variant="ghost"
                   size="icon-xs"
-                  className="ml-2 text-muted-foreground/70 hover:text-info"
+                  className="ml-2 text-muted-foreground hover:text-info"
                   onClick={() => copyToClipboard(contextId)}
                   aria-label={`Copy session ID ${contextId}`}
                 >
