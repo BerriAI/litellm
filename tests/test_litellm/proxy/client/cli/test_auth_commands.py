@@ -13,6 +13,11 @@ import pytest
 from click.testing import CliRunner
 
 from litellm.constants import CLI_JWT_EXPIRATION_HOURS
+from litellm.litellm_core_utils.cli_keyring import (
+    DISABLE_KEYRING_ENV_VAR,
+    KeyringDisabled,
+    KeyringNotInstalled,
+)
 from litellm.litellm_core_utils.cli_token_utils import CliTokenRecord, save_cli_token
 from litellm.proxy.client.cli import cli
 from litellm.proxy.client.cli.commands.auth import (
@@ -930,6 +935,29 @@ class TestKeychainBackedCommands:
         assert "No OS keychain available" in result.output
         assert str(token_file) in result.output
         assert json.loads(token_file.read_text())["key"] == "sk-minted"
+
+    def test_login_points_a_user_missing_the_keyring_package_at_the_install(
+        self, isolated_home, secret_vault_factory
+    ):
+        """`lite` ships with every install, the keyring package only with the cli extra. Telling
+        that user their machine has no keychain sends them looking for a problem they do not have."""
+        result = self._login(secret_vault_factory(available=False, failure=KeyringNotInstalled()))
+
+        token_file = isolated_home / ".litellm" / "token.json"
+        assert result.exit_code == 0
+        assert "pip install 'litellm[cli]'" in result.output
+        assert "No OS keychain available" not in result.output
+        assert json.loads(token_file.read_text())["key"] == "sk-minted"
+
+    def test_login_names_the_kill_switch_instead_of_blaming_the_machine(
+        self, isolated_home, secret_vault_factory
+    ):
+        result = self._login(secret_vault_factory(available=False, failure=KeyringDisabled()))
+
+        assert result.exit_code == 0
+        assert DISABLE_KEYRING_ENV_VAR in result.output
+        assert "No OS keychain available" not in result.output
+        assert json.loads((isolated_home / ".litellm" / "token.json").read_text())["key"] == "sk-minted"
 
     def test_whoami_and_print_token_read_through_the_keychain(self, isolated_home, secret_vault_factory):
         vault = secret_vault_factory()

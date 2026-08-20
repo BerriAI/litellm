@@ -11,7 +11,16 @@ from rich.table import Table
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm.constants import CLI_JWT_EXPIRATION_HOURS
-from litellm.litellm_core_utils.cli_keyring import SYSTEM_KEYRING, SecretVault
+from litellm.litellm_core_utils.cli_keyring import (
+    DISABLE_KEYRING_ENV_VAR,
+    SYSTEM_KEYRING,
+    KeyringDisabled,
+    KeyringNotInstalled,
+    KeyringUnreachable,
+    SecretStored,
+    SecretVault,
+    SecretWrite,
+)
 from litellm.litellm_core_utils.cli_token_utils import (
     CliTokenRecord,
     clear_cli_token,
@@ -72,8 +81,28 @@ class CliAuthResult(TypedDict):
 
 
 KEYCHAIN_UNREACHABLE_MESSAGE: Final = (
-    "Your credential is stored in your OS keychain, which could not be read. Unlock it and retry, or run 'lite login'."
+    "Your credential is stored in your OS keychain, which could not be read. Unlock it and retry, "
+    "install the keyring package with: pip install 'litellm[cli]', or run 'lite login'."
 )
+
+KEYRING_INSTALL_HINT: Final = "pip install 'litellm[cli]'"
+
+
+def storage_notice(outcome: SecretWrite) -> str:
+    """Tell the user where the credential ended up, and how to get keychain storage if it did not."""
+    path: Final = get_cli_token_file_path()
+    match outcome:
+        case SecretStored():
+            return "Credential stored in your OS keychain."
+        case KeyringNotInstalled():
+            return (
+                f"Credential stored in {path} (owner-only). "
+                f"For OS keychain storage, install the keyring package with: {KEYRING_INSTALL_HINT}"
+            )
+        case KeyringDisabled():
+            return f"Keychain storage is off ({DISABLE_KEYRING_ENV_VAR}). Credential stored in {path} (owner-only)."
+        case KeyringUnreachable():
+            return f"No OS keychain available. Credential stored in {path} (owner-only)."
 
 
 def context_secret_vault(ctx: click.Context) -> SecretVault:
@@ -675,15 +704,11 @@ def login(ctx: click.Context, config_claude: bool):
                 jwt_token="",
                 timestamp=time.time(),
             )
-            in_keychain: Final = save_cli_token(record, vault=context_secret_vault(ctx))
+            stored: Final = save_cli_token(record, vault=context_secret_vault(ctx))
 
             click.echo("\nLogin successful!")
             click.echo(f"JWT Token: {api_key[:20]}...")
-            click.echo(
-                "Credential stored in your OS keychain."
-                if in_keychain
-                else f"No OS keychain available; credential stored in {get_cli_token_file_path()} (owner-only)."
-            )
+            click.echo(storage_notice(stored))
             click.echo("You can now use the CLI without specifying --api-key")
 
             if config_claude:

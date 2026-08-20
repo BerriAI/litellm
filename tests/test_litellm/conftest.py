@@ -23,10 +23,13 @@ from litellm import router as litellm_router_module
 from litellm import utils as litellm_utils_module
 from litellm._logging import ALL_LOGGERS
 from litellm.litellm_core_utils.cli_keyring import (
+    KeyringUnreachable,
+    KeyringUnusable,
     SecretFound,
     SecretMissing,
     SecretRead,
-    SecretUnavailable,
+    SecretStored,
+    SecretWrite,
 )
 from litellm.litellm_core_utils.prompt_templates import (
     image_handling as image_handling_module,
@@ -125,7 +128,8 @@ class FakeSecretVault:
     """In-memory stand-in for the OS keychain, injected wherever CLI credential storage is exercised.
 
     `available=False` models a keychain that is locked or has no backend, `writable=False` one that
-    refuses to store, and `erasable=False` one that will not release what it already holds.
+    refuses to store, `erasable=False` one that will not release what it already holds, and `failure`
+    picks which unusable state those report.
     """
 
     def __init__(
@@ -135,11 +139,13 @@ class FakeSecretVault:
         available: bool = True,
         writable: bool = True,
         erasable: bool = True,
+        failure: KeyringUnusable = KeyringUnreachable(),
     ) -> None:
         self.blob: str | None = blob
         self.available: bool = available
         self.writable: bool = writable
         self.erasable: bool = erasable
+        self.failure: KeyringUnusable = failure
         self.reads: int = 0
         self.writes: list[str] = []
         self.erases: int = 0
@@ -147,15 +153,15 @@ class FakeSecretVault:
     def read(self) -> SecretRead:
         self.reads += 1
         if not self.available:
-            return SecretUnavailable()
+            return self.failure
         return SecretMissing() if self.blob is None else SecretFound(self.blob)
 
-    def write(self, blob: str) -> bool:
+    def write(self, blob: str) -> SecretWrite:
         self.writes.append(blob)
         if not (self.available and self.writable):
-            return False
+            return self.failure
         self.blob = blob
-        return True
+        return SecretStored()
 
     def erase(self) -> bool:
         self.erases += 1

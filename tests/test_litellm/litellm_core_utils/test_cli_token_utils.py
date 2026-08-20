@@ -13,7 +13,10 @@ from litellm.litellm_core_utils.cli_keyring import (
     KeyringVault,
     SecretFound,
     SecretMissing,
-    SecretUnavailable,
+    KeyringDisabled,
+    KeyringNotInstalled,
+    KeyringUnreachable,
+    SecretStored,
 )
 from litellm.litellm_core_utils.cli_token_utils import (
     CliTokenRecord,
@@ -253,7 +256,7 @@ class TestSaveCliToken:
             vault=vault,
         )
 
-        assert stored is True
+        assert stored == SecretStored()
         assert "sk-new" not in _token_file(isolated_home).read_text()
         assert json.loads(vault.blob)["key"] == "sk-new"
         assert load_cli_token(vault=vault).key == "sk-new"
@@ -265,7 +268,7 @@ class TestSaveCliToken:
         )
 
         path = _token_file(isolated_home)
-        assert stored is False
+        assert stored == KeyringUnreachable()
         assert json.loads(path.read_text())["key"] == "sk-new"
         assert stat.S_IMODE(path.stat().st_mode) == 0o600
         assert list(path.parent.glob(".tmp-*")) == []
@@ -379,7 +382,7 @@ class TestKeyringVault:
         fake = install_fake_keyring(_FakeKeyringModule())
         vault = KeyringVault()
 
-        assert vault.write("blob-1") is True
+        assert vault.write("blob-1") == SecretStored()
         assert vault.read() == SecretFound("blob-1")
         assert vault.erase() is True
         assert vault.read() == SecretMissing()
@@ -393,8 +396,8 @@ class TestKeyringVault:
         monkeypatch.setenv(DISABLE_KEYRING_ENV_VAR, "1")
         vault = KeyringVault()
 
-        assert vault.read() == SecretUnavailable()
-        assert vault.write("blob-1") is False
+        assert vault.read() == KeyringDisabled()
+        assert vault.write("blob-1") == KeyringDisabled()
         assert vault.erase() is False
 
     def test_an_uninstalled_keyring_library_degrades_to_the_file(self, monkeypatch):
@@ -404,19 +407,19 @@ class TestKeyringVault:
         monkeypatch.setitem(sys.modules, "keyring", None)
         vault = KeyringVault()
 
-        assert vault.read() == SecretUnavailable()
-        assert vault.write("blob-1") is False
+        assert vault.read() == KeyringNotInstalled()
+        assert vault.write("blob-1") == KeyringNotInstalled()
         assert vault.erase() is True
 
     def test_a_locked_keychain_is_reported_not_raised(self, install_fake_keyring):
         install_fake_keyring(_FakeKeyringModule(get_error=RuntimeError("keyring is locked")))
 
-        assert KeyringVault().read() == SecretUnavailable()
+        assert KeyringVault().read() == KeyringUnreachable()
 
     def test_a_refused_write_is_reported_not_raised(self, install_fake_keyring):
         install_fake_keyring(_FakeKeyringModule(set_error=RuntimeError("no backend")))
 
-        assert KeyringVault().write("blob-1") is False
+        assert KeyringVault().write("blob-1") == KeyringUnreachable()
 
     def test_a_refused_delete_is_reported_so_logout_can_warn(self, install_fake_keyring):
         install_fake_keyring(_FakeKeyringModule(stored="blob-1", delete_error=RuntimeError("locked")))

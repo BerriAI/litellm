@@ -5,9 +5,9 @@ SDK-level access to the OS keychain (macOS Keychain, Windows Credential Manager,
 Linux Secret Service) that holds the credential minted by `lite login`.
 
 The `keyring` package is optional and imported lazily, so importing this module
-never pulls it in. Every failure is returned as a value: a machine with no
-keychain, or one whose keychain is locked, must degrade to the token file rather
-than break `lite` or the SDK.
+never pulls it in. Every failure is returned as a value, naming which of the
+three ways the keychain can be out of reach applies, so callers can degrade to
+the token file and tell the user what to do about it.
 """
 
 import os
@@ -32,11 +32,28 @@ class SecretMissing:
 
 
 @dataclass(frozen=True, slots=True)
-class SecretUnavailable:
+class SecretStored:
     pass
 
 
-SecretRead: TypeAlias = SecretFound | SecretMissing | SecretUnavailable
+@dataclass(frozen=True, slots=True)
+class KeyringNotInstalled:
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class KeyringDisabled:
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class KeyringUnreachable:
+    pass
+
+
+KeyringUnusable: TypeAlias = KeyringNotInstalled | KeyringDisabled | KeyringUnreachable
+SecretRead: TypeAlias = SecretFound | SecretMissing | KeyringUnusable
+SecretWrite: TypeAlias = SecretStored | KeyringUnusable
 
 
 class SecretVault(Protocol):
@@ -44,7 +61,7 @@ class SecretVault(Protocol):
 
     def read(self) -> SecretRead: ...
 
-    def write(self, blob: str) -> bool: ...
+    def write(self, blob: str) -> SecretWrite: ...
 
     def erase(self) -> bool: ...
 
@@ -69,8 +86,11 @@ def _import_keyring() -> KeyringApi | None:
     return keyring
 
 
-def _keyring_api() -> KeyringApi | None:
-    return None if _keyring_disabled() else _import_keyring()
+def _keyring_api() -> KeyringApi | KeyringNotInstalled | KeyringDisabled:
+    if _keyring_disabled():
+        return KeyringDisabled()
+    api: Final = _import_keyring()
+    return KeyringNotInstalled() if api is None else api
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,23 +99,23 @@ class KeyringVault:
 
     def read(self) -> SecretRead:
         api: Final = _keyring_api()
-        if api is None:
-            return SecretUnavailable()
+        if isinstance(api, (KeyringNotInstalled, KeyringDisabled)):
+            return api
         try:
             blob: Final = api.get_password(KEYRING_SERVICE, KEYRING_ACCOUNT)
         except Exception:  # noqa: BLE001  # backends raise outside keyring.errors; never break the SDK
-            return SecretUnavailable()
+            return KeyringUnreachable()
         return SecretMissing() if blob is None else SecretFound(blob)
 
-    def write(self, blob: str) -> bool:
+    def write(self, blob: str) -> SecretWrite:
         api: Final = _keyring_api()
-        if api is None:
-            return False
+        if isinstance(api, (KeyringNotInstalled, KeyringDisabled)):
+            return api
         try:
             api.set_password(KEYRING_SERVICE, KEYRING_ACCOUNT, blob)
         except Exception:  # noqa: BLE001  # a keychain that refuses the write falls back to the token file
-            return False
-        return True
+            return KeyringUnreachable()
+        return SecretStored()
 
     def erase(self) -> bool:
         """Whether the keychain is guaranteed to hold no credential afterwards.
@@ -108,7 +128,7 @@ class KeyringVault:
         if _keyring_disabled():
             return False
         match self.read():
-            case SecretUnavailable():
+            case KeyringNotInstalled() | KeyringDisabled() | KeyringUnreachable():
                 return False
             case SecretMissing():
                 return True
@@ -117,7 +137,7 @@ class KeyringVault:
 
     def _delete(self) -> bool:
         api: Final = _keyring_api()
-        if api is None:
+        if isinstance(api, (KeyringNotInstalled, KeyringDisabled)):
             return False
         try:
             api.delete_password(KEYRING_SERVICE, KEYRING_ACCOUNT)

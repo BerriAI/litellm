@@ -22,10 +22,14 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 
 from litellm.litellm_core_utils.cli_keyring import (
     SYSTEM_KEYRING,
+    KeyringDisabled,
+    KeyringNotInstalled,
+    KeyringUnreachable,
     SecretFound,
     SecretMissing,
-    SecretUnavailable,
+    SecretStored,
     SecretVault,
+    SecretWrite,
 )
 from litellm.litellm_core_utils.private_json import ensure_private_dir, write_private_json
 
@@ -79,13 +83,15 @@ def load_cli_token(*, vault: SecretVault = SYSTEM_KEYRING) -> CliTokenRecord | N
     return _resolve_secret(record, vault)
 
 
-def save_cli_token(record: CliTokenRecord, *, vault: SecretVault = SYSTEM_KEYRING) -> bool:
-    """Store a freshly minted credential. Returns whether the keychain took the secret"""
-    if record.key is None or not vault.write(_encode_secret(record.base_url, record.key, record.jwt_token)):
-        _write_token_file(record)
-        return False
-    _write_token_file(_without_secret(record))
-    return True
+def save_cli_token(record: CliTokenRecord, *, vault: SecretVault = SYSTEM_KEYRING) -> SecretWrite:
+    """Store a freshly minted credential. Reports whether the keychain took the secret, and why not"""
+    outcome: Final = (
+        SecretStored()
+        if record.key is None
+        else vault.write(_encode_secret(record.base_url, record.key, record.jwt_token))
+    )
+    _write_token_file(_without_secret(record) if isinstance(outcome, SecretStored) else record)
+    return outcome
 
 
 def clear_cli_token(*, vault: SecretVault = SYSTEM_KEYRING) -> bool:
@@ -163,7 +169,7 @@ def _resolve_secret(record: CliTokenRecord, vault: SecretVault) -> CliTokenRecor
             return _apply_vault_secret(record, blob, vault)
         case SecretMissing():
             return _migrate_file_secret(record, vault)
-        case SecretUnavailable():
+        case KeyringNotInstalled() | KeyringDisabled() | KeyringUnreachable():
             return record
 
 
@@ -188,7 +194,7 @@ def _apply_vault_secret(record: CliTokenRecord, blob: str, vault: SecretVault) -
 def _migrate_file_secret(record: CliTokenRecord, vault: SecretVault) -> CliTokenRecord | None:
     if record.key is None:
         return None
-    if vault.write(_encode_secret(record.base_url, record.key, record.jwt_token)):
+    if isinstance(vault.write(_encode_secret(record.base_url, record.key, record.jwt_token)), SecretStored):
         _scrub_file_secret(record)
     return record
 

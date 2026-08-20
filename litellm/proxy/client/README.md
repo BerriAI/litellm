@@ -377,7 +377,7 @@ The key itself goes into the OS keychain (macOS Keychain, Windows Credential Man
 }
 ```
 
-Headless boxes and CI runners usually have no keychain. There the key stays in the same `0600` file alongside the metadata, exactly as it did before, and `lite login` tells you which of the two happened. Set `LITELLM_CLI_DISABLE_KEYRING=1` to force the file even where a keychain exists. A `token.json` written by an older `lite` keeps working and is moved into the keychain, and scrubbed from the file, the first time a keychain-capable `lite` reads it.
+Keychain storage needs the `keyring` package, which ships with `pip install 'litellm[cli]'`. Headless boxes and CI runners usually have no keychain either. In all of those cases the key stays in the same `0600` file alongside the metadata, exactly as it did before, and `lite login` names which one applies: the package is missing, the machine has no keychain, or you set `LITELLM_CLI_DISABLE_KEYRING=1` to force the file even where a keychain exists. A `token.json` written by an older `lite` keeps working and is moved into the keychain, and scrubbed from the file, the first time a keychain-capable `lite` reads it.
 
 `lite logout` clears both stores. If the keychain is locked at that moment it says so, and re-running it once the keychain is unlocked finishes the job.
 
