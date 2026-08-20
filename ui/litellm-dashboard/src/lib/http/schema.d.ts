@@ -23800,6 +23800,15 @@ export interface components {
          * @enum {string}
          */
         ComplexityTier: "SIMPLE" | "MEDIUM" | "COMPLEX" | "REASONING";
+        /** ComplexityTierModel */
+        ComplexityTierModel: {
+            /** Litellm Params */
+            litellm_params?: {
+                [key: string]: unknown;
+            };
+            /** Model Name */
+            model_name: string;
+        };
         /**
          * ComplianceCheckRequest
          * @description Request payload for compliance check endpoints.
@@ -32556,6 +32565,10 @@ export interface components {
             tier_labels?: {
                 [key: string]: string;
             };
+            /** Tier Model Configs */
+            tier_model_configs?: {
+                [key: string]: components["schemas"]["ComplexityTierModel"][];
+            };
             /**
              * Tiers
              * @description Mapping of complexity tiers to a model or model pool. A list is randomly picked from when adaptive=False, and used as a soft-floor home pool when adaptive=True
@@ -33540,6 +33553,10 @@ export interface components {
             tier_boundaries?: components["schemas"]["StandardLoggingRoutingDecisionTierBoundaries"];
             /** Tier Label */
             tier_label?: string;
+            /** Tier Litellm Params */
+            tier_litellm_params?: {
+                [key: string]: unknown;
+            };
         };
         /**
          * StandardLoggingRoutingDecisionTierBoundaries
