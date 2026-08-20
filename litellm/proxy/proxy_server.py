@@ -3709,7 +3709,9 @@ async def _run_background_health_check():
         await asyncio.sleep(health_check_interval)
 
 
-async def _reconcile_background_health_check_task() -> None:  # pragma: no cover  # async lifecycle covered by integration tests
+async def _reconcile_background_health_check_task() -> (
+    None
+):  # pragma: no cover  # async lifecycle covered by integration tests
     global background_health_check_task, background_health_check_loop_active  # noqa: PLW0603  # reload reconciliation updates module task state
 
     if use_background_health_checks:
