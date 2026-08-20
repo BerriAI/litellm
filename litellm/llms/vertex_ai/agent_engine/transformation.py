@@ -10,6 +10,7 @@ API Reference:
 """
 
 import json
+from collections.abc import Iterator, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, Optional, Union, cast
 
 import httpx
@@ -237,23 +238,53 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
         headers.update(auth_headers)
         return headers
 
-    def _extract_text_from_response(self, response_data: dict) -> str:
-        """Extract text content from the response."""
-        # Try to get from content.parts
+    def _extract_text_from_response(self, response_data: Mapping[str, Any]) -> str:
+        """A part flagged as a thought is the model's scratchpad, not part of the answer."""
         content: Final = response_data.get("content", {})
         parts: Final = content.get("parts", [])
-        for part in parts:
-            if "text" in part:
-                return part["text"]
+        return "".join(
+            part["text"]
+            for part in parts
+            if isinstance(part, dict) and isinstance(part.get("text"), str) and not part.get("thought")
+        )
 
-        # Try actions.state_delta
-        actions: Final = response_data.get("actions", {})
-        state_delta: Final = actions.get("state_delta", {})
-        for key, value in state_delta.items():
-            if isinstance(value, str) and value:
-                return value
+    def _iter_finalised_events(self, response_text: str) -> Iterator[Mapping[str, Any]]:
+        """An agent emits one event per step. A partial is repeated in full by the event
+        that finalises it, for its text and for its counts alike, so yielding it too
+        would duplicate the answer and bill the same model call twice."""
+        for line in response_text.strip().split("\n"):
+            line = line.strip()
+            if not line:
+                continue
 
-        return ""
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+
+            if isinstance(event, dict) and not event.get("partial"):
+                yield event
+
+    def _usage_from_metadata(self, usage_metadatas: Sequence[Mapping[str, Any]]) -> Usage | None:
+        """Every model call in a run reports its own counts, and the caller is billed for all of them."""
+        if not usage_metadatas:
+            return None
+
+        prompt_tokens: Final = sum(usage.get("prompt_token_count", 0) for usage in usage_metadatas)
+        completion_tokens: Final = sum(usage.get("candidates_token_count", 0) for usage in usage_metadatas)
+        total_tokens: Final = sum(
+            usage.get("total_token_count")
+            or usage.get("prompt_token_count", 0) + usage.get("candidates_token_count", 0)
+            for usage in usage_metadatas
+        )
+        if not (prompt_tokens or completion_tokens or total_tokens):
+            return None
+
+        return Usage(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=total_tokens,
+        )
 
     def _calculate_usage(self, model: str, messages: list[AllMessageValues], content: str) -> Usage | None:
         """Calculate token usage using LiteLLM's token counter."""
@@ -301,21 +332,11 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
             response_text: Final = raw_response.text
             verbose_logger.debug("Response (first 500 chars): %s", response_text[:500])
 
-            # Extract content from SSE stream
-            content = ""
-            for line in response_text.strip().split("\n"):
-                line = line.strip()
-                if not line:
-                    continue
-
-                try:
-                    data = json.loads(line)
-                    if isinstance(data, dict):
-                        text = self._extract_text_from_response(data)
-                        if text:
-                            content = text  # Use the last non-empty text
-                except json.JSONDecodeError:
-                    continue
+            events: Final = tuple(self._iter_finalised_events(response_text))
+            content: Final = "".join(self._extract_text_from_response(event) for event in events)
+            usage_metadatas: Final = tuple(
+                event["usage_metadata"] for event in events if isinstance(event.get("usage_metadata"), dict)
+            )
 
             # Create the message
             message: Final = Message(content=content, role="assistant")
@@ -327,10 +348,10 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
             model_response.choices = [choice]
             model_response.model = model
 
-            # Calculate usage
-            calculated_usage: Final = self._calculate_usage(model, messages, content)
-            if calculated_usage:
-                setattr(model_response, "usage", calculated_usage)
+            # A gpt-3.5 tokenizer over a Gemini backend misreports spend, so only estimate as a fallback.
+            usage: Final = self._usage_from_metadata(usage_metadatas) or self._calculate_usage(model, messages, content)
+            if usage:
+                setattr(model_response, "usage", usage)
 
             return model_response
 
