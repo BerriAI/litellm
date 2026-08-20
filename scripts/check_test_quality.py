@@ -88,6 +88,7 @@ import re
 import sys
 import tokenize
 from collections.abc import Iterable, Iterator, Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
 from typing import Final, NamedTuple
@@ -202,50 +203,110 @@ def iter_assertions(function: FunctionNode) -> Iterator[ast.stmt | ast.Call]:
             yield node
 
 
-def _local_callee_name(func: ast.expr) -> str:
-    """The bare name of a call that could resolve to a function in this module."""
+class CallTarget(NamedTuple):
+    """A call that might resolve to a function defined in this module: either a bare
+    name, looked up among the module-level functions, or a `self.` attribute, looked
+    up among the enclosing class's own methods."""
+
+    through_self: bool
+    name: str
+
+
+@dataclass(frozen=True, slots=True)
+class Scope:
+    """What one function can reach by name. Keeping methods per-class is what stops
+    two same-named helpers in different classes from resolving to each other."""
+
+    module_level: Mapping[str, FunctionNode]
+    methods: Mapping[str, FunctionNode]
+
+    def resolve(self, target: CallTarget) -> FunctionNode | None:
+        source: Final = self.methods if target.through_self else self.module_level
+        return source.get(target.name)
+
+
+def _call_target(func: ast.expr) -> CallTarget | None:
     if isinstance(func, ast.Name):
-        return func.id
+        return CallTarget(through_self=False, name=func.id)
     if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name) and func.value.id == "self":
-        return func.attr
-    return ""
+        return CallTarget(through_self=True, name=func.attr)
+    return None
 
 
-def _called_local_names(function: FunctionNode) -> frozenset[str]:
+def _call_targets(function: FunctionNode) -> frozenset[CallTarget]:
     return frozenset(
-        name
+        target
         for node in ast.walk(function)
         if isinstance(node, ast.Call)
-        for name in (_local_callee_name(node.func),)
-        if name
+        for target in (_call_target(node.func),)
+        if target is not None
     )
 
 
-def module_functions(tree: ast.Module) -> Mapping[str, FunctionNode]:
-    """Every function defined anywhere in the module, keyed by its bare name."""
+def _functions_in(body: Iterable[ast.stmt]) -> Mapping[str, FunctionNode]:
     return MappingProxyType({
         node.name: node
-        for node in ast.walk(tree)
+        for node in body
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
     })
 
 
-def _asserts_through_helpers(
-    name: str,
-    defs: Mapping[str, FunctionNode],
-    direct: frozenset[str],
-    seen: frozenset[str],
+def build_scopes(tree: ast.Module) -> Mapping[FunctionNode, Scope]:
+    """Every function in the module paired with what it can reach by name. A
+    module-level function sees only module-level functions; a method also sees its
+    own class's methods, and no other class's."""
+    module_level: Final = _functions_in(tree.body)
+    module_scope: Final = Scope(module_level=module_level, methods=MappingProxyType({}))
+    class_scopes: Final = tuple(
+        (node, Scope(module_level=module_level, methods=_functions_in(node.body)))
+        for node in tree.body
+        if isinstance(node, ast.ClassDef)
+    )
+    return MappingProxyType({
+        **{function: module_scope for function in module_level.values()},
+        **{
+            function: scope
+            for node, scope in class_scopes
+            for function in scope.methods.values()
+        },
+    })
+
+
+def _reaches_assertion(
+    function: FunctionNode,
+    scopes: Mapping[FunctionNode, Scope],
+    seen: frozenset[FunctionNode],
 ) -> bool:
-    """Whether `name` reaches an assertion through calls to other functions in this
-    module. Extracting the assertions into a shared helper is good factoring, not a
-    test that pins nothing, so following one is what keeps TQ001 honest."""
-    if name in direct:
+    if function in seen:
+        return False
+    if any(iter_assertions(function)):
         return True
-    if name in seen or name not in defs:
+    scope: Final = scopes.get(function)
+    if scope is None:
         return False
     return any(
-        _asserts_through_helpers(callee, defs, direct, seen | frozenset((name,)))
-        for callee in _called_local_names(defs[name])
+        _reaches_assertion(callee, scopes, seen | frozenset((function,)))
+        for target in _call_targets(function)
+        for callee in (scope.resolve(target),)
+        if callee is not None
+    )
+
+
+def asserts_through_helpers(
+    function: FunctionNode, scopes: Mapping[FunctionNode, Scope]
+) -> bool:
+    """Whether the test reaches an assertion through a function defined in this
+    module, followed transitively. Extracting the assertions into a shared helper is
+    good factoring rather than a test that pins nothing, so following one is what
+    keeps TQ001 honest."""
+    scope: Final = scopes.get(function)
+    if scope is None:
+        return False
+    return any(
+        _reaches_assertion(callee, scopes, frozenset((function,)))
+        for target in _call_targets(function)
+        for callee in (scope.resolve(target),)
+        if callee is not None
     )
 
 
@@ -287,16 +348,10 @@ def _only_inspects_a_mock(node: ast.stmt | ast.Call) -> bool:
 
 
 def iter_assertion_violations(path: Path, tree: ast.Module) -> Iterator[Violation]:
-    defs: Final = module_functions(tree)
-    asserting: Final = frozenset(
-        name for name, function in defs.items() if any(iter_assertions(function))
-    )
+    scopes: Final = build_scopes(tree)
     for function in iter_test_functions(tree):
         assertions: Final = tuple(iter_assertions(function))
-        if not assertions and any(
-            _asserts_through_helpers(callee, defs, asserting, frozenset((function.name,)))
-            for callee in _called_local_names(function)
-        ):
+        if not assertions and asserts_through_helpers(function, scopes):
             continue
         if not assertions:
             yield Violation(

@@ -15,6 +15,8 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 _MODULE_PATH = _REPO_ROOT / "scripts" / "check_test_quality.py"
 _spec = importlib.util.spec_from_file_location("check_test_quality", _MODULE_PATH)
 checker = importlib.util.module_from_spec(_spec)
+# @dataclass(slots=True) rebuilds its class through sys.modules[__module__], so the
+# module has to be registered before exec_module runs or Scope fails to construct.
 sys.modules[_spec.name] = checker
 _spec.loader.exec_module(checker)
 
@@ -74,6 +76,57 @@ def test_helper_chain_is_followed_transitively(tmp_path):
         "    _outer(1)\n"
     )
     assert _codes(tmp_path, source) == []
+
+
+def test_a_same_named_helper_in_another_class_does_not_clear_the_rule(tmp_path):
+    source = (
+        "class TestAsserting:\n"
+        "    def _check(self):\n"
+        "        assert compute() == 3\n"
+        "\n"
+        "    def test_ok(self):\n"
+        "        self._check()\n"
+        "\n"
+        "\n"
+        "class TestNotAsserting:\n"
+        "    def _check(self):\n"
+        "        compute()\n"
+        "\n"
+        "    def test_nothing(self):\n"
+        "        self._check()\n"
+    )
+    assert _codes(tmp_path, source) == ["TQ001"]
+
+
+def test_self_call_resolves_to_the_enclosing_class(tmp_path):
+    source = (
+        "class TestOne:\n"
+        "    def _check(self):\n"
+        "        assert compute() == 3\n"
+        "\n"
+        "    def test_ok(self):\n"
+        "        self._check()\n"
+    )
+    assert _codes(tmp_path, source) == []
+
+
+def test_a_method_named_like_a_module_helper_does_not_shadow_it(tmp_path):
+    source = (
+        "def _check():\n"
+        "    assert compute() == 3\n"
+        "\n"
+        "\n"
+        "class TestThing:\n"
+        "    def _check(self):\n"
+        "        compute()\n"
+        "\n"
+        "    def test_bare_name_uses_the_module_helper(self):\n"
+        "        _check()\n"
+        "\n"
+        "    def test_self_uses_the_method(self):\n"
+        "        self._check()\n"
+    )
+    assert _codes(tmp_path, source) == ["TQ001"]
 
 
 def test_helper_without_assertions_does_not_clear_the_rule(tmp_path):

@@ -14,6 +14,8 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 _MODULE_PATH = _REPO_ROOT / "scripts" / "test_quality_gate.py"
 _spec = importlib.util.spec_from_file_location("test_quality_gate", _MODULE_PATH)
 gate = importlib.util.module_from_spec(_spec)
+# @dataclass(slots=True) rebuilds its class through sys.modules[__module__], so the
+# module has to be registered before exec_module runs or Scope fails to construct.
 sys.modules[_spec.name] = gate
 _spec.loader.exec_module(gate)
 
