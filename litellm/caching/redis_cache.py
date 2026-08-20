@@ -217,6 +217,16 @@ def _record_swallowed_redis_failure(breaker: RedisCircuitBreaker, exc: BaseExcep
     _swallowed_redis_failures.set(_swallowed_redis_failures.get() + 1)
 
 
+def swallowed_redis_failure_count() -> int:
+    """Redis failures this task has swallowed so far.
+
+    Several methods catch their own connection errors and return a default, so a
+    caller that needs to tell "Redis did not answer" from an ordinary negative
+    result compares this across the call.
+    """
+    return _swallowed_redis_failures.get()
+
+
 async def _run_under_circuit_breaker(
     breaker: RedisCircuitBreaker,
     name: str,

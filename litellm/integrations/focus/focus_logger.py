@@ -150,6 +150,8 @@ class FocusLogger(CustomLogger):
         trigger_kwargs: Final = focus_logger._build_scheduler_trigger()
         scheduler.add_job(
             focus_logger.initialize_focus_export_job,
+            id=FOCUS_USAGE_DATA_JOB_NAME,
+            replace_existing=True,
             **trigger_kwargs,
         )
 

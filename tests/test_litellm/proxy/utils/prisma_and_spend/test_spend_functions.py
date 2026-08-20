@@ -581,3 +581,29 @@ def test_raise_failed_update_spend_exception_raises_original_error() -> None:
 
     with pytest.raises(ValueError, match="specific"):
         asyncio.run(_runner())
+
+
+@pytest.mark.asyncio
+async def test_update_spend_reports_no_item_count():
+    """The spend-log queue is drained by _monitor_spend_logs_queue too, so any
+    count derived from queue depth here would attribute that task's work to this
+    job, or hide work this job did when the queue refilled. Reporting nothing is
+    the honest option until a job can report a count it owns."""
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from litellm.proxy.utils import update_spend
+
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.db_spend_update_writer.db_update_spend_transaction_handler = AsyncMock()
+
+    with (
+        patch("litellm.proxy.utils._total_queued_spend_transactions", AsyncMock(return_value=10)),
+        patch("litellm.proxy.utils.update_spend_logs_job", AsyncMock()),
+    ):
+        result = await update_spend(
+            prisma_client=MagicMock(),
+            db_writer_client=None,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+    assert result is None, "a count that cannot be attributed to this job must not be published"

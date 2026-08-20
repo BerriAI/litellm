@@ -456,3 +456,100 @@ async def test_acquire_lock_own_lock_not_reentrant(pod_lock_manager, mock_redis)
 
     assert await pod_lock_manager.acquire_lock(cronjob_id="test_job", allow_reentrant=False) is False
     assert await pod_lock_manager.acquire_lock(cronjob_id="test_job") is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "redis_cache, granted, expected_result",
+    [
+        (None, None, "no_redis"),
+        ("present", True, "acquired"),
+        ("present", False, "not_acquired"),
+    ],
+)
+async def test_every_lock_outcome_is_recorded_under_its_own_result(redis_cache, granted, expected_result):
+    """no_redis is a different operational state from losing the race: one means
+    no pod can ever be elected, the other means another pod won."""
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
+
+    cache = None
+    if redis_cache == "present":
+        cache = MagicMock()
+        cache.async_set_cache = AsyncMock(return_value=granted)
+        cache.async_get_cache = AsyncMock(return_value="some-other-pod")
+
+    manager = PodLockManager(redis_cache=cache)
+    logger = MagicMock()
+
+    with patch("litellm.integrations.prometheus.PrometheusLogger.get_instance", return_value=logger):
+        await manager.acquire_lock(cronjob_id="db_spend_update_job")
+
+    logger.record_cronjob_lock_attempt.assert_called_once_with("db_spend_update_job", expected_result)
+
+
+@pytest.mark.asyncio
+async def test_recording_the_lock_outcome_never_blocks_the_job():
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
+
+    cache = MagicMock()
+    cache.async_set_cache = AsyncMock(return_value=True)
+    manager = PodLockManager(redis_cache=cache)
+
+    with patch(
+        "litellm.integrations.prometheus.PrometheusLogger.get_instance",
+        side_effect=RuntimeError("metrics down"),
+    ):
+        assert await manager.acquire_lock(cronjob_id="db_spend_update_job") is True
+
+
+@pytest.mark.asyncio
+async def test_a_swallowed_redis_outage_is_not_reported_as_losing_the_election():
+    """RedisCache catches connection errors and returns None rather than raising,
+    and None is also how redis reports SET NX losing the race. Without the
+    swallowed-failure marker every outage publishes as ordinary contention,
+    which is the distinction this metric exists to make."""
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from litellm.caching.redis_cache import _record_swallowed_redis_failure
+    from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
+    from litellm.types.integrations.prometheus import LockAttemptResult
+
+    breaker = MagicMock()
+
+    async def swallowing_set(*args, **kwargs):
+        _record_swallowed_redis_failure(breaker, ConnectionError("redis down"))
+        return None
+
+    cache = MagicMock()
+    cache.async_set_cache = swallowing_set
+    cache.async_get_cache = AsyncMock(return_value=None)
+    manager = PodLockManager(redis_cache=cache)
+    logger = MagicMock()
+
+    with patch("litellm.integrations.prometheus.PrometheusLogger.get_instance", return_value=logger):
+        assert await manager.acquire_lock(cronjob_id="db_spend_update_job") is False
+
+    logger.record_cronjob_lock_attempt.assert_called_once_with("db_spend_update_job", LockAttemptResult.ERROR)
+
+
+@pytest.mark.asyncio
+async def test_a_redis_failure_is_not_reported_as_losing_the_election():
+    """not_acquired means another pod won. An attempt that errored is a
+    different operational state and must not be read as healthy contention."""
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
+
+    cache = MagicMock()
+    cache.async_set_cache = AsyncMock(side_effect=ConnectionError("redis down"))
+    manager = PodLockManager(redis_cache=cache)
+    logger = MagicMock()
+
+    with patch("litellm.integrations.prometheus.PrometheusLogger.get_instance", return_value=logger):
+        assert await manager.acquire_lock(cronjob_id="db_spend_update_job") is False
+
+    logger.record_cronjob_lock_attempt.assert_called_once_with("db_spend_update_job", "error")
