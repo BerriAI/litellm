@@ -27,6 +27,7 @@ from litellm.proxy.common_request_processing import (
     _extract_error_from_sse_chunk,
     _get_cost_breakdown_from_logging_obj,
     _has_attribute_error_in_chain,
+    _log_llm_api_exception,
     _is_azure_model_router_request,
     _UpstreamClosingStreamingResponse,
     open_sse_before_first_byte,
@@ -2656,6 +2657,89 @@ class TestHasAttributeErrorInChain:
         exc_a.__context__ = exc_b
         exc_b.__context__ = exc_a  # circular
         assert _has_attribute_error_in_chain(exc_a) is False
+
+
+class TestLogLLMApiException:
+    def test_logs_call_id_without_request_data(self):
+        error = TimeoutError("upstream timed out")
+
+        with patch("litellm.proxy.common_request_processing.verbose_proxy_logger.exception") as log_exception:
+            _log_llm_api_exception(error, litellm_call_id="call-a")
+
+        log_exception.assert_called_once_with(
+            "litellm.proxy.proxy_server._handle_llm_api_exception(): "
+            "Exception occured - %s, litellm_call_id=%s",
+            error,
+            "call-a",
+        )
+
+    def test_preserves_log_format_when_call_id_is_missing(self):
+        error = ValueError("upstream failed")
+
+        with patch("litellm.proxy.common_request_processing.verbose_proxy_logger.exception") as log_exception:
+            _log_llm_api_exception(error)
+
+        log_exception.assert_called_once_with(
+            "litellm.proxy.proxy_server._handle_llm_api_exception(): Exception occured - %s", error
+        )
+
+    def test_logs_distinct_call_ids_for_concurrent_failures(self):
+        first_error = TimeoutError("first request timed out")
+        second_error = TimeoutError("second request timed out")
+
+        with patch("litellm.proxy.common_request_processing.verbose_proxy_logger.exception") as log_exception:
+            _log_llm_api_exception(first_error, litellm_call_id="call-first")
+            _log_llm_api_exception(second_error, litellm_call_id="call-second")
+
+        assert [call.args[-1] for call in log_exception.call_args_list] == ["call-first", "call-second"]
+
+    def test_logs_call_id_for_client_disconnect(self):
+        error = HTTPException(status_code=499, detail="Client disconnected the request")
+
+        with patch("litellm.proxy.common_request_processing.verbose_proxy_logger.info") as log_info:
+            _log_llm_api_exception(error, litellm_call_id="call-disconnected")
+
+        log_info.assert_called_once_with(
+            "litellm.proxy.proxy_server._handle_llm_api_exception(): "
+            "client disconnected, upstream LLM request cancelled, litellm_call_id=%s",
+            "call-disconnected",
+        )
+
+    def test_preserves_client_disconnect_log_format_when_call_id_is_missing(self):
+        error = HTTPException(status_code=499, detail="Client disconnected the request")
+
+        with patch("litellm.proxy.common_request_processing.verbose_proxy_logger.info") as log_info:
+            _log_llm_api_exception(error)
+
+        log_info.assert_called_once_with(
+            "litellm.proxy.proxy_server._handle_llm_api_exception(): "
+            "client disconnected, upstream LLM request cancelled"
+        )
+
+    @pytest.mark.asyncio
+    async def test_handler_passes_request_call_id_without_request_body(self):
+        error = TimeoutError("upstream timed out")
+        processor = ProxyBaseLLMRequestProcessing(
+            data={"litellm_call_id": "call-b", "messages": [{"content": "do-not-log"}]}
+        )
+        proxy_logging_obj = MagicMock(spec=ProxyLogging)
+        proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
+        proxy_logging_obj.post_call_response_headers_hook = AsyncMock(return_value={})
+
+        with patch("litellm.proxy.common_request_processing.verbose_proxy_logger.exception") as log_exception:
+            with pytest.raises(ProxyException):
+                await processor._handle_llm_api_exception(
+                    e=error,
+                    user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-test"),
+                    proxy_logging_obj=proxy_logging_obj,
+                )
+
+        log_exception.assert_called_once_with(
+            "litellm.proxy.proxy_server._handle_llm_api_exception(): "
+            "Exception occured - %s, litellm_call_id=%s",
+            error,
+            "call-b",
+        )
 
 
 @pytest.mark.asyncio
