@@ -61,11 +61,11 @@ def _azure_params(model: str) -> LiteLLMParamsBody:
     )
 
 
-def _vertex_params(model: str) -> LiteLLMParamsBody:
+def _vertex_params(model: str, location: str) -> LiteLLMParamsBody:
     return LiteLLMParamsBody(
         model=model,
         vertex_project="os.environ/VERTEXAI_PROJECT",
-        vertex_location="global",
+        vertex_location=location,
     )
 
 
@@ -300,8 +300,16 @@ class TestAzureFoundryMidConversationSystem:
 
 
 class TestVertexMidConversationSystem:
+    """The unflagged test pins a single region because the global endpoint serves the
+    prompt cache per region: a chunk written seconds earlier can still be missing from
+    the region the reminder turn lands on, which reads exactly like the hoist regression
+    (system prefix read back, first user turn re-created). The flagged model has quota
+    only on the global endpoint, so its test keeps that location."""
+
     FLAGGED_MODEL = "vertex_ai/claude-opus-4-8"
+    FLAGGED_LOCATION = "global"
     UNFLAGGED_MODEL = "vertex_ai/claude-sonnet-4-6"
+    UNFLAGGED_LOCATION = "us-east5"
 
     @pytest.mark.skip(reason=MID_CONVERSATION_CACHE_SKIP_REASON)
     @pytest.mark.covers(
@@ -311,7 +319,9 @@ class TestVertexMidConversationSystem:
     def test_flagged_model_keeps_prompt_cache_across_system_reminder(
         self, endpoints_client: EndpointsClient, resources: ResourceManager
     ) -> None:
-        _assert_flagged_model_keeps_cache(endpoints_client, resources, _vertex_params(self.FLAGGED_MODEL))
+        _assert_flagged_model_keeps_cache(
+            endpoints_client, resources, _vertex_params(self.FLAGGED_MODEL, self.FLAGGED_LOCATION)
+        )
 
     @pytest.mark.covers(
         "llm.messages.vertex.mid_conversation_system.nonstream.works",
@@ -321,5 +331,5 @@ class TestVertexMidConversationSystem:
         self, endpoints_client: EndpointsClient, resources: ResourceManager
     ) -> None:
         _assert_unflagged_model_converts_and_succeeds(
-            endpoints_client, resources, _vertex_params(self.UNFLAGGED_MODEL)
+            endpoints_client, resources, _vertex_params(self.UNFLAGGED_MODEL, self.UNFLAGGED_LOCATION)
         )
