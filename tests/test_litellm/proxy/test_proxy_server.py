@@ -6869,6 +6869,23 @@ async def test_update_general_settings_updates_router_health_options(monkeypatch
     assert fake_router.health_check_ignore_transient_errors is True
 
 
+@pytest.mark.asyncio
+async def test_reconcile_background_health_check_task_starts_enabled_task(monkeypatch):
+    from litellm.proxy import proxy_server as ps
+
+    async def _noop_background_health_check():
+        return None
+
+    monkeypatch.setattr(ps, "use_background_health_checks", True)
+    monkeypatch.setattr(ps, "background_health_check_task", None)
+    monkeypatch.setattr(ps, "_run_background_health_check", _noop_background_health_check)
+
+    await ps._reconcile_background_health_check_task()
+
+    assert ps.background_health_check_task is not None
+    await ps.background_health_check_task
+
+
 # store_model_in_db DB Config Override Tests
 # ============================================================================
 
