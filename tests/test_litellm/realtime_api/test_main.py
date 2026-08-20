@@ -1,6 +1,8 @@
 import asyncio
 import os
 import sys
+import time
+from unittest.mock import MagicMock
 
 sys.path.insert(0, os.path.abspath("../../.."))
 
@@ -89,6 +91,67 @@ def test_client_secret_session_model_takes_priority_over_top_level(monkeypatch):
     )
     assert captured["model"] == "gpt-realtime-session"
     assert captured["request_data"]["session"]["model"] == "gpt-realtime-session"
+
+
+@pytest.mark.asyncio
+async def test_arealtime_vertex_hung_credential_resolution_raises_promptly(monkeypatch):
+    """Regression for the realtime accept-then-silence hang: a stalled Google
+    OAuth token refresh used to block _arealtime's vertex branch unbounded
+    (minutes of zero frames for the client). It must instead raise a clear,
+    prompt error naming the credential-resolution timeout."""
+
+    async def hanging_token_refresh(**kwargs):
+        await asyncio.sleep(30)
+
+    def mock_get_llm_provider(model, api_base, api_key):
+        return model, "vertex_ai", None, api_base
+
+    monkeypatch.setattr(realtime_main, "get_llm_provider", mock_get_llm_provider)
+    monkeypatch.setattr(realtime_main.vertex_llm_base, "_ensure_access_token_async", hanging_token_refresh)
+    monkeypatch.setattr(realtime_main, "REALTIME_CREDENTIAL_RESOLUTION_TIMEOUT_SECONDS", 0.05)
+
+    start = time.monotonic()
+    with pytest.raises(ValueError, match="timed out fetching Google OAuth access token"):
+        await realtime_main._arealtime.__wrapped__(
+            model="gemini-live-2.5-flash",
+            websocket=MagicMock(),
+            litellm_logging_obj=FakeLogging(),
+            vertex_credentials="fake-credentials",
+            vertex_project="fake-project",
+            vertex_location="us-central1",
+        )
+    assert time.monotonic() - start < 5
+
+
+@pytest.mark.asyncio
+async def test_arealtime_vertex_credential_timeout_survives_thread_offloaded_refresh(monkeypatch):
+    """The real stall is a blocking google-auth refresh that runs in a worker
+    thread via asyncify, not a plain awaitable sleep. A timeout that only bounds
+    cancellable awaits would leave that shape hanging, so bound the shape the
+    proxy actually runs."""
+    from litellm.litellm_core_utils.asyncify import asyncify
+
+    async def thread_offloaded_hanging_refresh(**kwargs):
+        return await asyncify(time.sleep)(30)
+
+    def mock_get_llm_provider(model, api_base, api_key):
+        return model, "vertex_ai", None, api_base
+
+    monkeypatch.setattr(realtime_main, "get_llm_provider", mock_get_llm_provider)
+    monkeypatch.setattr(realtime_main.vertex_llm_base, "_ensure_access_token_async", thread_offloaded_hanging_refresh)
+    monkeypatch.setattr(realtime_main, "REALTIME_CREDENTIAL_RESOLUTION_TIMEOUT_SECONDS", 0.05)
+
+    start = time.monotonic()
+    with pytest.raises(ValueError, match="timed out fetching Google OAuth access token"):
+        await realtime_main._arealtime.__wrapped__(
+            model="gemini-live-2.5-flash",
+            websocket=MagicMock(),
+            litellm_logging_obj=FakeLogging(),
+            vertex_credentials="fake-credentials",
+            vertex_project="fake-project",
+            vertex_location="us-central1",
+        )
+    assert time.monotonic() - start < 5
 
 
 def test_client_secret_forwards_nested_transcription_model_untouched(monkeypatch):
