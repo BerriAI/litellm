@@ -407,6 +407,8 @@ def image_generation(
                 client=client,
             )
         elif custom_llm_provider == "wavespeed":
+            litellm_params_dict["api_key"] = api_key or dynamic_api_key
+            litellm_params_dict["api_base"] = api_base or litellm.api_base
             return wavespeed_image_generation.image_generation(
                 model=model,
                 prompt=prompt,

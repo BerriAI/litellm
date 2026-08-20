@@ -339,3 +339,30 @@ def test_supported_openai_params_and_error_class():
     error = config.get_error_class("boom", 503, {})
     assert isinstance(error, WaveSpeedError)
     assert error.status_code == 503
+
+
+@respx.mock
+def test_poll_requests_honour_the_caller_timeout(generate):
+    """A short caller timeout must not be replaced by the client's multi-minute default."""
+    respx.post(SUBMIT_URL).mock(return_value=httpx.Response(200, json=prediction("created")))
+    poll = respx.get(RESULT_URL).mock(
+        return_value=httpx.Response(200, json=prediction("completed", outputs=[OUTPUT_URL]))
+    )
+
+    WaveSpeedImageGeneration().image_generation(
+        model=MODEL,
+        prompt="a red panda",
+        model_response=ImageResponse(),
+        optional_params={},
+        litellm_params={"api_key": "sk-test", "api_base": None},
+        logging_obj=MagicMock(),
+        timeout=2.5,
+    )
+
+    assert poll.call_count == 1
+    assert poll.calls[0].request.extensions.get("timeout") == {
+        "connect": 2.5,
+        "read": 2.5,
+        "write": 2.5,
+        "pool": 2.5,
+    }

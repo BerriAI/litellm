@@ -29,13 +29,8 @@ from httpx._types import RequestFiles
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
+from litellm.litellm_core_utils.url_utils import async_safe_get, safe_get
 from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
-from litellm.llms.custom_httpx.http_handler import (
-    AsyncHTTPHandler,
-    HTTPHandler,
-    _get_httpx_client,  # pyright: ignore[reportPrivateUsage]  # the shared sync client factory litellm providers use
-    get_async_httpx_client,
-)
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.videos.main import VideoCreateOptionalRequestParams, VideoObject
 from litellm.types.videos.utils import (
@@ -55,6 +50,7 @@ from ..common_utils import (
     map_status_to_openai,
     optional_entry,
     optional_pair,
+    to_reference_uri,
     to_request_payload,
     unwrap_envelope,
 )
@@ -143,7 +139,7 @@ class WaveSpeedVideoConfig(BaseVideoConfig):
         return to_request_payload(
             (
                 *((k, v) for k, v in video_create_optional_params.items() if k not in supported),
-                *optional_pair("image", input_reference),
+                *optional_pair("image", to_reference_uri(input_reference) if input_reference else None),
                 *optional_pair("size", mapped_size),
                 *optional_pair("duration", seconds),
             )
@@ -248,8 +244,7 @@ class WaveSpeedVideoConfig(BaseVideoConfig):
         logging_obj: LiteLLMLoggingObj,
     ) -> bytes:
         output_url: Final = self._extract_output_url(raw_response)
-        httpx_client: Final[HTTPHandler] = _get_httpx_client()
-        video_response: Final = httpx_client.get(output_url)
+        video_response: Final = safe_get(litellm.module_level_client, output_url)
         video_response.raise_for_status()
         return video_response.content
 
@@ -259,8 +254,7 @@ class WaveSpeedVideoConfig(BaseVideoConfig):
         logging_obj: LiteLLMLoggingObj,
     ) -> bytes:
         output_url: Final = self._extract_output_url(raw_response)
-        async_client: Final[AsyncHTTPHandler] = get_async_httpx_client(llm_provider=litellm.LlmProviders.WAVESPEED)
-        video_response: Final = await async_client.get(output_url)
+        video_response: Final = await async_safe_get(litellm.module_level_aclient, output_url)
         video_response.raise_for_status()
         return video_response.content
 

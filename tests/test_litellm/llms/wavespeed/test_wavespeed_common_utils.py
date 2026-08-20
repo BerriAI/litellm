@@ -1,9 +1,12 @@
 """Unit tests for the WaveSpeed AI envelope parsing and URL helpers."""
 
+import base64
+
 import httpx
 import pytest
 
 from litellm.llms.wavespeed.common_utils import (
+    CHAT_API_BASE,
     DEFAULT_API_BASE,
     WaveSpeedError,
     build_headers,
@@ -16,6 +19,7 @@ from litellm.llms.wavespeed.common_utils import (
     optional_entry,
     optional_pair,
     poll_outcome,
+    to_reference_uri,
     to_request_payload,
     unwrap_envelope,
 )
@@ -146,3 +150,78 @@ class TestPayloadHelpers:
         assert optional_pair("a", None) == ()
         assert dict(optional_entry("a", 1)) == {"a": 1}
         assert dict(optional_entry("a", None)) == {}
+
+
+class TestApiBaseIsolation:
+    """Chat and media share the provider slug but not the host."""
+
+    def test_the_chat_base_never_builds_a_prediction_url(self, monkeypatch):
+        monkeypatch.delenv("WAVESPEED_API_BASE", raising=False)
+        assert get_api_base(CHAT_API_BASE) == DEFAULT_API_BASE
+        assert get_api_base(CHAT_API_BASE + "/") == DEFAULT_API_BASE
+
+    def test_the_chat_base_in_the_env_does_not_break_media(self, monkeypatch):
+        monkeypatch.setenv("WAVESPEED_API_BASE", CHAT_API_BASE)
+        assert build_submit_url(None, "wavespeed-ai/z-image/turbo") == (
+            f"{DEFAULT_API_BASE}/api/v3/wavespeed-ai/z-image/turbo"
+        )
+
+    def test_a_self_hosted_base_is_still_honored(self, monkeypatch):
+        monkeypatch.delenv("WAVESPEED_API_BASE", raising=False)
+        assert get_api_base("https://wavespeed.internal.corp") == "https://wavespeed.internal.corp"
+
+
+class TestReferenceNormalization:
+    """WaveSpeed submits JSON, so a reference has to be a URL or a data URI."""
+
+    PNG = b"\x89PNG\r\n\x1a\n" + b"rest-of-the-png"
+
+    def test_urls_and_data_uris_pass_through(self):
+        assert to_reference_uri("https://example.com/a.png") == "https://example.com/a.png"
+        assert to_reference_uri("data:image/png;base64,AAAA") == "data:image/png;base64,AAAA"
+
+    def test_bytes_are_inlined_with_a_sniffed_media_type(self):
+        assert to_reference_uri(self.PNG).startswith("data:image/png;base64,")
+        assert to_reference_uri(b"\xff\xd8\xffrest").startswith("data:image/jpeg;base64,")
+        assert to_reference_uri(b"GIF89arest").startswith("data:image/gif;base64,")
+        assert to_reference_uri(b"RIFF1234WEBPrest").startswith("data:image/webp;base64,")
+
+    def test_bytes_round_trip(self):
+        encoded = to_reference_uri(self.PNG).split(",", 1)[1]
+        assert base64.b64decode(encoded) == self.PNG
+
+    def test_a_path_uses_its_extension_for_the_media_type(self, tmp_path):
+        path = tmp_path / "frame.png"
+        path.write_bytes(self.PNG)
+        assert to_reference_uri(path).startswith("data:image/png;base64,")
+
+    def test_a_binary_file_handle_is_read(self, tmp_path):
+        path = tmp_path / "frame.png"
+        path.write_bytes(self.PNG)
+        with open(path, "rb") as handle:
+            assert to_reference_uri(handle).startswith("data:image/png;base64,")
+
+    def test_a_named_tuple_reference_uses_the_filename(self):
+        assert to_reference_uri(("frame.jpg", self.PNG)).startswith("data:image/jpeg;base64,")
+
+    def test_unsniffable_bytes_are_rejected_with_an_actionable_message(self):
+        with pytest.raises(WaveSpeedError, match="Pass a URL, a data URI, or a named file"):
+            to_reference_uri(b"not-a-known-format")
+
+    def test_a_text_mode_handle_is_rejected(self, tmp_path):
+        path = tmp_path / "frame.txt"
+        path.write_text("hello")
+        with open(path) as handle:
+            with pytest.raises(WaveSpeedError, match="binary mode"):
+                to_reference_uri(handle)
+
+    def test_a_short_tuple_is_rejected(self):
+        with pytest.raises(WaveSpeedError, match="missing its content"):
+            to_reference_uri(("frame.png",))
+
+    def test_a_tuple_wrapping_a_url_keeps_the_url(self):
+        assert to_reference_uri(("frame.png", "https://example.com/a.png")) == "https://example.com/a.png"
+
+    def test_an_unsupported_type_is_rejected(self):
+        with pytest.raises(WaveSpeedError, match="Unsupported reference type"):
+            to_reference_uri(object())

@@ -11,6 +11,9 @@ Both responses are wrapped in the platform envelope ``{"code": ..., "message": .
 API Reference: https://wavespeed.ai/docs
 """
 
+import base64
+import mimetypes
+import os
 from collections.abc import Iterable, Mapping, Sequence
 from types import MappingProxyType
 from typing import Final, Literal, TypedDict
@@ -29,6 +32,7 @@ class WaveSpeedError(BaseLLMException):
 
 
 DEFAULT_API_BASE: Final = "https://api.wavespeed.ai"
+CHAT_API_BASE: Final = "https://llm.wavespeed.ai/v1"
 DEFAULT_POLLING_INTERVAL: Final = 1.0
 DEFAULT_MAX_POLLING_TIME: Final = 600
 MAX_CONSECUTIVE_POLL_FAILURES: Final = 5
@@ -76,6 +80,64 @@ def optional_entry(key: str, value: object) -> Mapping[str, object]:
     return MappingProxyType({key: value}) if value is not None else MappingProxyType({})
 
 
+_MAGIC_BYTE_MIME_TYPES: Final = (
+    (b"\x89PNG\r\n\x1a\n", "image/png"),
+    (b"\xff\xd8\xff", "image/jpeg"),
+    (b"GIF87a", "image/gif"),
+    (b"GIF89a", "image/gif"),
+)
+
+
+def _sniff_mime_type(payload: bytes) -> str:
+    if payload[:4] == b"RIFF" and payload[8:12] == b"WEBP":
+        return "image/webp"
+    for magic, mime_type in _MAGIC_BYTE_MIME_TYPES:
+        if payload.startswith(magic):
+            return mime_type
+    raise WaveSpeedError(
+        status_code=400,
+        message="Could not determine the media type of the reference. Pass a URL, a data URI, or a named file.",
+    )
+
+
+def _to_data_uri(payload: bytes, filename: str | None) -> str:
+    guessed: Final = mimetypes.guess_type(filename)[0] if filename else None
+    mime_type: Final = guessed or _sniff_mime_type(payload)
+    return f"data:{mime_type};base64,{base64.b64encode(payload).decode()}"
+
+
+def to_reference_uri(reference: object) -> str:
+    """Normalize an OpenAI ``input_reference`` into something a JSON body can carry.
+
+    The shared video contract accepts URLs, raw bytes, paths, file handles and
+    ``(filename, content)`` tuples, but WaveSpeed submits predictions as JSON, so
+    anything that is not already a URL or data URI has to be inlined as one.
+    """
+    if isinstance(reference, str):
+        return reference
+    if isinstance(reference, (bytes, bytearray)):
+        return _to_data_uri(bytes(reference), None)
+    if isinstance(reference, os.PathLike):
+        path: Final = os.fspath(reference)
+        with open(path, "rb") as handle:
+            return _to_data_uri(handle.read(), str(path))
+    if isinstance(reference, tuple):
+        filename, content = (reference[0], reference[1]) if len(reference) >= 2 else (None, None)
+        if content is None:
+            raise WaveSpeedError(status_code=400, message="Reference tuple is missing its content")
+        inner: Final = to_reference_uri(content)
+        if inner.startswith("data:") and filename:
+            return _to_data_uri(base64.b64decode(inner.split(",", 1)[1]), str(filename))
+        return inner
+    read: Final = getattr(reference, "read", None)
+    if callable(read):
+        payload: Final = read()
+        if not isinstance(payload, bytes):
+            raise WaveSpeedError(status_code=400, message="Reference file handle must be opened in binary mode")
+        return _to_data_uri(payload, getattr(reference, "name", None))
+    raise WaveSpeedError(status_code=400, message=f"Unsupported reference type: {type(reference).__name__}")
+
+
 def get_api_key(api_key: str | None) -> str:
     resolved: Final = api_key or get_secret_str("WAVESPEED_API_KEY")
     if not resolved:
@@ -87,7 +149,15 @@ def get_api_key(api_key: str | None) -> str:
 
 
 def get_api_base(api_base: str | None) -> str:
-    return (api_base or get_secret_str("WAVESPEED_API_BASE") or DEFAULT_API_BASE).rstrip("/")
+    """Resolve the base URL for the prediction API.
+
+    Chat and media live on different hosts but share the ``wavespeed`` provider slug, so
+    provider resolution and ``WAVESPEED_API_BASE`` can both hand this the chat base. That
+    value would build an unreachable prediction URL, so it falls back to the media default.
+    A self-hosted base is any other value and is honored as-is.
+    """
+    resolved: Final = (api_base or get_secret_str("WAVESPEED_API_BASE") or DEFAULT_API_BASE).rstrip("/")
+    return DEFAULT_API_BASE if resolved == CHAT_API_BASE else resolved
 
 
 def build_headers(api_key: str | None) -> Mapping[str, str]:

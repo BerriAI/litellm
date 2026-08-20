@@ -1,5 +1,7 @@
 """Tests for WaveSpeed AI video generation transformation."""
 
+import json
+
 from unittest.mock import Mock
 
 import httpx
@@ -8,6 +10,7 @@ import respx
 
 import litellm
 
+from litellm.litellm_core_utils.url_utils import SSRFError
 from litellm.llms.wavespeed.common_utils import WaveSpeedError
 from litellm.llms.wavespeed.videos.transformation import WaveSpeedVideoConfig
 from litellm.types.router import GenericLiteLLMParams
@@ -234,3 +237,125 @@ class TestWaveSpeedVideoMisc:
     def test_unsupported_surfaces_raise_not_implemented(self, call):
         with pytest.raises(NotImplementedError):
             call(self.config)
+
+
+class TestWaveSpeedVideoContentSSRF:
+    """The output URL comes from the upstream response, so it is untrusted input.
+
+    A deployment pointed at a WaveSpeed-compatible endpoint could have that endpoint
+    hand back an internal address, and /videos/{id}/content would relay the response
+    back to the caller. Every fetch goes through the repo's safe_get helpers, which
+    validate the resolved IP and re-validate each redirect hop.
+    """
+
+    def setup_method(self):
+        self.config = WaveSpeedVideoConfig()
+        self.logging_obj = Mock()
+
+    @pytest.mark.parametrize(
+        "internal_url",
+        [
+            "http://169.254.169.254/latest/meta-data/iam/security-credentials/",
+            "https://169.254.169.254/latest/meta-data/",
+            "http://127.0.0.1:8080/admin",
+            "http://10.0.0.5/internal",
+            "http://192.168.1.1/router",
+            "http://172.16.0.1/internal",
+            "https://[::1]/admin",
+            "file:///etc/passwd",
+        ],
+    )
+    @respx.mock
+    def test_internal_output_url_is_rejected(self, internal_url):
+        leak = respx.get(internal_url).mock(return_value=httpx.Response(200, content=b"secret"))
+
+        with pytest.raises(SSRFError):
+            self.config.transform_video_content_response(
+                raw_response=httpx.Response(200, json=prediction("completed", outputs=[internal_url])),
+                logging_obj=self.logging_obj,
+            )
+
+        assert leak.call_count == 0
+
+    @respx.mock
+    def test_redirect_to_the_metadata_service_is_rejected(self):
+        """A public first hop that 302s to link-local must not be followed."""
+        public_url = "https://93.184.216.34/video.mp4"
+        metadata_url = "http://169.254.169.254/latest/meta-data/"
+
+        first_hop = respx.get(public_url).mock(return_value=httpx.Response(302, headers={"location": metadata_url}))
+        leak = respx.get(metadata_url).mock(return_value=httpx.Response(200, content=b"secret"))
+
+        with pytest.raises(SSRFError):
+            self.config.transform_video_content_response(
+                raw_response=httpx.Response(200, json=prediction("completed", outputs=[public_url])),
+                logging_obj=self.logging_obj,
+            )
+
+        assert first_hop.call_count == 1
+        assert leak.call_count == 0
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_async_internal_output_url_is_rejected(self, monkeypatch):
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        metadata_url = "http://169.254.169.254/latest/meta-data/"
+        leak = respx.get(metadata_url).mock(return_value=httpx.Response(200, content=b"secret"))
+
+        with pytest.raises(SSRFError):
+            await self.config.async_transform_video_content_response(
+                raw_response=httpx.Response(200, json=prediction("completed", outputs=[metadata_url])),
+                logging_obj=self.logging_obj,
+            )
+
+        assert leak.call_count == 0
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_async_redirect_to_the_metadata_service_is_rejected(self, monkeypatch):
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        public_url = "https://93.184.216.34/video.mp4"
+        metadata_url = "http://169.254.169.254/latest/meta-data/"
+
+        respx.get(public_url).mock(return_value=httpx.Response(302, headers={"location": metadata_url}))
+        leak = respx.get(metadata_url).mock(return_value=httpx.Response(200, content=b"secret"))
+
+        with pytest.raises(SSRFError):
+            await self.config.async_transform_video_content_response(
+                raw_response=httpx.Response(200, json=prediction("completed", outputs=[public_url])),
+                logging_obj=self.logging_obj,
+            )
+
+        assert leak.call_count == 0
+
+    @respx.mock
+    def test_a_public_output_url_still_downloads(self):
+        public_url = "https://93.184.216.34/video.mp4"
+        download = respx.get(public_url).mock(return_value=httpx.Response(200, content=b"mp4-bytes"))
+
+        content = self.config.transform_video_content_response(
+            raw_response=httpx.Response(200, json=prediction("completed", outputs=[public_url])),
+            logging_obj=self.logging_obj,
+        )
+
+        assert content == b"mp4-bytes"
+        assert download.call_count == 1
+
+
+class TestWaveSpeedVideoReferenceInputs:
+    def setup_method(self):
+        self.config = WaveSpeedVideoConfig()
+
+    def test_a_binary_reference_is_inlined_so_the_json_body_stays_serializable(self, tmp_path):
+        path = tmp_path / "frame.png"
+        path.write_bytes(b"\x89PNG\r\n\x1a\nrest")
+
+        with open(path, "rb") as handle:
+            mapped = self.config.map_openai_params({"input_reference": handle}, MODEL, False)
+
+        assert mapped["image"].startswith("data:image/png;base64,")
+        json.dumps(mapped)
+
+    def test_a_url_reference_is_left_alone(self):
+        mapped = self.config.map_openai_params({"input_reference": "https://example.com/frame.png"}, MODEL, False)
+        assert mapped["image"] == "https://example.com/frame.png"

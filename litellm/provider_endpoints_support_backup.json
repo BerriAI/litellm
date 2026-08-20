@@ -2258,7 +2258,8 @@
         "moderations": false,
         "batches": false,
         "rerank": false,
-        "a2a": false
+        "a2a": false,
+        "video_generations": true
       }
     },
     "watsonx_text": {

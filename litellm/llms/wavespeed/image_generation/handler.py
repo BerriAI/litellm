@@ -103,7 +103,7 @@ class WaveSpeedImageGeneration:
         consecutive_failures = 0  # rebind-ok: counts consecutive poll transport failures
         while time.time() < deadline:
             try:
-                poll_response = sync_client.get(url=result_url, headers=poll_headers)
+                poll_response = sync_client.get(url=result_url, headers=poll_headers, timeout=timeout)
             except Exception as e:  # noqa: BLE001  # any transport failure is retried, never the billable submit
                 consecutive_failures = _record_poll_failure(consecutive_failures, prediction_id, e)
                 time.sleep(DEFAULT_POLLING_INTERVAL)
@@ -149,7 +149,7 @@ class WaveSpeedImageGeneration:
         consecutive_failures = 0  # rebind-ok: counts consecutive poll transport failures
         while time.time() < deadline:
             try:
-                poll_response = await async_client.get(url=result_url, headers=poll_headers)
+                poll_response = await async_client.get(url=result_url, headers=poll_headers, timeout=timeout)
             except Exception as e:  # noqa: BLE001  # any transport failure is retried, never the billable submit
                 consecutive_failures = _record_poll_failure(consecutive_failures, prediction_id, e)
                 await asyncio.sleep(DEFAULT_POLLING_INTERVAL)
