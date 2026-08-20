@@ -1,19 +1,18 @@
 import inspect
 import os
+import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import click
-import fastapi
 import pytest
 
 sys.path.insert(
     0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system-path
 
-import builtins
 import types
 import urllib.parse as urlparse
 
@@ -1553,8 +1552,6 @@ class TestProxyInitializationHelpers:
     @patch("builtins.print")
     def test_run_server_no_config_passed(self, mock_print, mock_uvicorn_run):
         """Test that run_server properly handles the case when no config is passed"""
-        import asyncio
-
         from click.testing import CliRunner
 
         from litellm.proxy.proxy_cli import run_server
@@ -1725,6 +1722,239 @@ class TestQueryEngineReaperWiring:
 
 class TestRunServerDbSetup:
     """Tests for run_server's prisma setup_database behavior."""
+
+    def test_is_prisma_client_generated_returns_true_when_importable(self):
+        """Prisma generation check returns true when the client import works."""
+        from litellm.proxy import proxy_cli
+
+        prisma_module = types.ModuleType("prisma")
+        prisma_module.Prisma = object
+
+        with patch.dict(sys.modules, {"prisma": prisma_module}):
+            assert proxy_cli._is_prisma_client_generated() is True
+
+    def test_is_prisma_client_generated_returns_false_when_import_fails(self):
+        """Prisma generation check returns false for missing/generated errors."""
+        from litellm.proxy import proxy_cli
+
+        prisma_module = types.ModuleType("prisma")
+
+        with patch.dict(sys.modules, {"prisma": prisma_module}):
+            assert proxy_cli._is_prisma_client_generated() is False
+            assert "prisma" not in sys.modules
+
+    @patch("subprocess.run")
+    @patch("atexit.register")
+    @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database")
+    @patch("litellm.proxy.db.check_migration.check_prisma_schema_diff")
+    @patch("litellm.proxy.db.prisma_client.should_update_prisma_schema")
+    def test_database_startup_generates_prisma_client(
+        self,
+        mock_should_update_schema,
+        mock_check_schema_diff,
+        mock_setup_database,
+        mock_atexit_register,
+        mock_subprocess_run,
+    ):
+        """DATABASE_URL startup generates the Prisma client before setup."""
+        from litellm.proxy import proxy_cli
+        from litellm.proxy.proxy_cli import run_server
+
+        mock_subprocess_run.return_value = MagicMock(returncode=0)
+        mock_should_update_schema.return_value = True
+        mock_setup_database.return_value = True
+
+        mock_proxy_module = MagicMock(
+            app=MagicMock(),
+            ProxyConfig=MagicMock(),
+            KeyManagementSettings=MagicMock(),
+            save_worker_config=MagicMock(),
+        )
+
+        clean_env = {
+            k: v
+            for k, v in os.environ.items()
+            if k not in ("DATABASE_URL", "DIRECT_URL")
+        }
+        clean_env["DATABASE_URL"] = "postgresql://test:test@localhost:5432/test"
+
+        with (
+            patch(
+                "litellm.proxy.proxy_cli._is_prisma_client_generated",
+                return_value=False,
+            ),
+            patch.dict(os.environ, clean_env, clear=True),
+            patch.dict(
+                "sys.modules",
+                {
+                    "proxy_server": mock_proxy_module,
+                    "litellm.proxy.proxy_server": mock_proxy_module,
+                    "prisma": types.ModuleType("prisma"),
+                    "prisma.client": types.ModuleType("prisma.client"),
+                },
+            ),
+            patch(
+                "litellm.proxy.proxy_cli.ProxyInitializationHelpers._get_default_unvicorn_init_args"
+            ) as mock_get_args,
+        ):
+            mock_get_args.return_value = {
+                "app": "litellm.proxy.proxy_server:app",
+                "host": "localhost",
+                "port": 8000,
+            }
+
+            run_server.main(["--local", "--skip_server_startup"], standalone_mode=False)
+            assert "prisma" not in sys.modules
+            assert "prisma.client" not in sys.modules
+
+        schema_path = str(Path(proxy_cli.__file__).parent / "schema.prisma")
+        mock_subprocess_run.assert_any_call(
+            ("prisma", "generate", "--schema", schema_path),
+            capture_output=True,
+            check=True,
+        )
+
+    @patch("subprocess.run")
+    @patch("atexit.register")
+    @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database")
+    @patch("litellm.proxy.db.check_migration.check_prisma_schema_diff")
+    @patch("litellm.proxy.db.prisma_client.should_update_prisma_schema")
+    def test_database_startup_handles_prisma_generate_failure(
+        self,
+        mock_should_update_schema,
+        mock_check_schema_diff,
+        mock_setup_database,
+        mock_atexit_register,
+        mock_subprocess_run,
+        capsys,
+    ):
+        """DATABASE_URL startup does not crash when Prisma generation fails."""
+        from litellm.proxy import proxy_cli
+        from litellm.proxy.proxy_cli import run_server
+
+        def subprocess_run_side_effect(args, *_, **__):
+            if args[:2] == ("prisma", "generate"):
+                raise subprocess.CalledProcessError(returncode=1, cmd=args)
+            return MagicMock(returncode=0)
+
+        mock_subprocess_run.side_effect = subprocess_run_side_effect
+        mock_should_update_schema.return_value = True
+
+        mock_proxy_module = MagicMock(
+            app=MagicMock(),
+            ProxyConfig=MagicMock(),
+            KeyManagementSettings=MagicMock(),
+            save_worker_config=MagicMock(),
+        )
+
+        clean_env = {
+            k: v
+            for k, v in os.environ.items()
+            if k not in ("DATABASE_URL", "DIRECT_URL")
+        }
+        clean_env["DATABASE_URL"] = "postgresql://test:test@localhost:5432/test"
+
+        with (
+            patch(
+                "litellm.proxy.proxy_cli._is_prisma_client_generated",
+                return_value=False,
+            ),
+            patch.dict(os.environ, clean_env, clear=True),
+            patch.dict(
+                "sys.modules",
+                {
+                    "proxy_server": mock_proxy_module,
+                    "litellm.proxy.proxy_server": mock_proxy_module,
+                },
+            ),
+            patch(
+                "litellm.proxy.proxy_cli.ProxyInitializationHelpers._get_default_unvicorn_init_args"
+            ) as mock_get_args,
+        ):
+            mock_get_args.return_value = {
+                "app": "litellm.proxy.proxy_server:app",
+                "host": "localhost",
+                "port": 8000,
+            }
+
+            run_server.main(["--local", "--skip_server_startup"], standalone_mode=False)
+
+        output = capsys.readouterr().out
+        assert "`prisma generate` failed" in output
+        assert "prisma package was not found" not in output
+
+        schema_path = str(Path(proxy_cli.__file__).parent / "schema.prisma")
+        mock_subprocess_run.assert_any_call(
+            ("prisma", "generate", "--schema", schema_path),
+            capture_output=True,
+            check=True,
+        )
+        mock_setup_database.assert_not_called()
+
+    @patch("subprocess.run")
+    @patch("atexit.register")
+    @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database")
+    @patch("litellm.proxy.db.check_migration.check_prisma_schema_diff")
+    @patch("litellm.proxy.db.prisma_client.should_update_prisma_schema")
+    def test_database_startup_skips_prisma_generate_when_client_exists(
+        self,
+        mock_should_update_schema,
+        mock_check_schema_diff,
+        mock_setup_database,
+        mock_atexit_register,
+        mock_subprocess_run,
+    ):
+        """DATABASE_URL startup avoids runtime writes when Prisma is generated."""
+        from litellm.proxy.proxy_cli import run_server
+
+        mock_subprocess_run.return_value = MagicMock(returncode=0)
+        mock_should_update_schema.return_value = True
+        mock_setup_database.return_value = True
+
+        mock_proxy_module = MagicMock(
+            app=MagicMock(),
+            ProxyConfig=MagicMock(),
+            KeyManagementSettings=MagicMock(),
+            save_worker_config=MagicMock(),
+        )
+
+        clean_env = {
+            k: v
+            for k, v in os.environ.items()
+            if k not in ("DATABASE_URL", "DIRECT_URL")
+        }
+        clean_env["DATABASE_URL"] = "postgresql://test:test@localhost:5432/test"
+
+        with (
+            patch(
+                "litellm.proxy.proxy_cli._is_prisma_client_generated", return_value=True
+            ),
+            patch.dict(os.environ, clean_env, clear=True),
+            patch.dict(
+                "sys.modules",
+                {
+                    "proxy_server": mock_proxy_module,
+                    "litellm.proxy.proxy_server": mock_proxy_module,
+                },
+            ),
+            patch(
+                "litellm.proxy.proxy_cli.ProxyInitializationHelpers._get_default_unvicorn_init_args"
+            ) as mock_get_args,
+        ):
+            mock_get_args.return_value = {
+                "app": "litellm.proxy.proxy_server:app",
+                "host": "localhost",
+                "port": 8000,
+            }
+
+            run_server.main(["--local", "--skip_server_startup"], standalone_mode=False)
+
+        generate_calls = [
+            call
+            for call in mock_subprocess_run.call_args_list
+            if call.args and call.args[0][:2] == ("prisma", "generate")
+        ]
+        assert generate_calls == []
 
     @patch("subprocess.run")
     @patch("atexit.register")
