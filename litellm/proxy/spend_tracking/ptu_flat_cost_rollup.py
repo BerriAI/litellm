@@ -724,6 +724,22 @@ async def _deliver_alert(alert: "Callable[[str], Awaitable[None]] | None", messa
         verbose_proxy_logger.error("PTU rollup: could not deliver the failed-charge alert: %s", exc)
 
 
+def _prune_filter(*, date_str: str, cutoff: datetime, chunk: "tuple[str, ...] | None") -> "dict[str, object]":
+    """One delete statement's predicate. An absent chunk leaves the sweep unbounded.
+
+    Returns a plain dict because the query builder serialises the mapping it is handed and
+    rejects a read-only view of one.
+    """
+    predicate: Final = {  # mutable-ok: prisma delete filter
+        "date": date_str,
+        "api_key": PTU_SENTINEL_API_KEY,
+        "updated_at": {"lt": cutoff},  # mutable-ok: prisma comparison filter
+    }
+    if chunk is not None:
+        predicate["model"] = {"in": chunk}  # mutable-ok: prisma membership filter
+    return predicate
+
+
 async def _prune_unrefreshed_sentinel_rows(
     prisma_client: "PrismaClient",
     *,
@@ -752,27 +768,15 @@ async def _prune_unrefreshed_sentinel_rows(
     that many deployments would otherwise hit every night with no handler above here.
     """
     cutoff: Final = run_started - timedelta(seconds=PTU_PRUNE_SKEW_GRACE_SECONDS)
-    unbounded: Final = {  # mutable-ok: prisma delete filter
-        "date": date_str,
-        "api_key": PTU_SENTINEL_API_KEY,
-        "updated_at": {"lt": cutoff},  # mutable-ok: prisma comparison filter
-    }
     ordered: Final = () if scanned_ids is None else tuple(sorted(scanned_ids))
-    filters: Final = (
-        (unbounded,)
+    chunks: Final = (
+        (None,)
         if scanned_ids is None
         else tuple(
-            MappingProxyType(
-                {
-                    **unbounded,
-                    "model": {  # mutable-ok: prisma membership filter
-                        "in": ordered[start : start + _PRUNE_ID_CHUNK_SIZE]
-                    },
-                }
-            )
-            for start in range(0, len(ordered), _PRUNE_ID_CHUNK_SIZE)
+            ordered[start : start + _PRUNE_ID_CHUNK_SIZE] for start in range(0, len(ordered), _PRUNE_ID_CHUNK_SIZE)
         )
     )
+    filters: Final = tuple(_prune_filter(date_str=date_str, cutoff=cutoff, chunk=chunk) for chunk in chunks)
     deletions: Final = tuple(
         [await prisma_client.db.litellm_dailyteamspend.delete_many(where=where) for where in filters]
     )
