@@ -1,7 +1,7 @@
 """
 Tests for model-cost-map loading: the model-count integrity check (which must
-count actual model entries, not reserved meta keys) and the extraction of the
-``fallback_generalizations`` block out of the raw map.
+count actual model entries, not reserved meta keys) and the installation of the
+fallback generalization rules that ships alongside every map load.
 """
 
 import json
@@ -17,6 +17,9 @@ from litellm.litellm_core_utils.fallback_generalizations import (
     match_capability_generalizations,
     match_routing_generalization,
     set_fallback_generalizations,
+)
+from litellm.litellm_core_utils.get_fallback_generalizations import (
+    load_local_fallback_generalizations,
 )
 from litellm.litellm_core_utils.get_model_cost_map import (
     FALLBACK_GENERALIZATIONS_KEY,
@@ -94,14 +97,18 @@ def test_validation_rejects_significant_shrink_vs_backup():
     )
 
 
-def test_finalize_pops_key_and_installs_rules():
+def test_finalize_drops_a_stale_block_and_installs_the_standalone_rules(monkeypatch):
+    """The rules moved to their own file, so a block left in an older remote map is
+    discarded rather than read: it must not become a model entry, and it must not
+    beat the standalone file that is actually installed."""
+    monkeypatch.setenv("LITELLM_LOCAL_FALLBACK_GENERALIZATIONS", "True")
     previous = list(get_fallback_generalization_rules())
     try:
         raw = _make_models(2)
         raw[FALLBACK_GENERALIZATIONS_KEY] = {
             "rules": [
                 {
-                    "name": "rule",
+                    "name": "stale",
                     "pattern": r"^widget-",
                     "model_info": {"litellm_provider": "openai"},
                 }
@@ -109,15 +116,17 @@ def test_finalize_pops_key_and_installs_rules():
         }
         finalized = _finalize_model_cost_map(raw)
 
-        # The reserved key is removed from the returned model map ...
         assert FALLBACK_GENERALIZATIONS_KEY not in finalized
-        # ... and its rules are installed into the generalizations module.
-        assert match_routing_generalization("widget-9") == "openai"
+        assert match_routing_generalization("widget-9") is None
+        assert tuple(get_fallback_generalization_rules()) == load_local_fallback_generalizations()
     finally:
         set_fallback_generalizations(previous)
 
 
-def test_finalize_with_no_block_clears_rules():
+def test_finalize_replaces_previously_installed_rules(monkeypatch):
+    """Every map load reinstalls the current rule file, so a reload cannot leave a
+    rule behind that the file no longer carries."""
+    monkeypatch.setenv("LITELLM_LOCAL_FALLBACK_GENERALIZATIONS", "True")
     previous = list(get_fallback_generalization_rules())
     try:
         set_fallback_generalizations(
@@ -130,11 +139,10 @@ def test_finalize_with_no_block_clears_rules():
 
 
 def test_shipped_backup_carries_the_claude_routing_rules():
-    """The bundled backup must ship the Claude routing rules so a fresh install
+    """The bundled rules file must ship the Claude routing rules so a fresh install
     (or an offline fallback) routes unknown Claude models without code changes.
     Bedrock-syntax ids must hit the bedrock rule before the bare-id Anthropic rule."""
-    backup = GetModelCostMap.load_local_model_cost_map()
-    rules = backup.get(FALLBACK_GENERALIZATIONS_KEY, {}).get("rules", [])
+    rules = list(load_local_fallback_generalizations())
     names = [r.get("name") for r in rules]
     assert names.index("bedrock-claude-ids") < names.index("anthropic-claude-ids")
 
@@ -155,8 +163,7 @@ def test_shipped_routing_rules_never_match_through_an_unrecognized_namespace():
     ``bedrockz/anthropic.claude-...`` resolve to bedrock and slip through a
     ``bedrock/*`` key, so every shipped routing rule must anchor to the start of
     the name and never match an id carrying an unrecognized namespace prefix."""
-    backup = GetModelCostMap.load_local_model_cost_map()
-    rules = backup[FALLBACK_GENERALIZATIONS_KEY]["rules"]
+    rules = list(load_local_fallback_generalizations())
 
     routing_rules = [r for r in rules if "litellm_provider" in r["model_info"]]
     assert routing_rules
@@ -195,7 +202,7 @@ def test_shipped_backup_marks_claude_4_6_plus_adaptive_not_4_0():
     baseline block is never duplicated across rules and no rule needs ``extends``."""
     backup = GetModelCostMap.load_local_model_cost_map()
 
-    rules = backup[FALLBACK_GENERALIZATIONS_KEY]["rules"]
+    rules = list(load_local_fallback_generalizations())
     baseline_rule = next(r for r in rules if r.get("name") == "claude-family-baseline")
     adaptive_rule = next(r for r in rules if r.get("name") == "claude-adaptive-thinking")
     assert "supports_adaptive_thinking" not in baseline_rule["model_info"]

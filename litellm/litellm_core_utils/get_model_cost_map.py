@@ -25,8 +25,8 @@ from litellm.constants import (
     MODEL_COST_MAP_MAX_SHRINK_RATIO,
     MODEL_COST_MAP_MIN_MODEL_COUNT,
 )
-from litellm.litellm_core_utils.fallback_generalizations import (
-    set_fallback_generalizations,
+from litellm.litellm_core_utils.get_fallback_generalizations import (
+    install_fallback_generalizations,
 )
 
 FALLBACK_GENERALIZATIONS_KEY: Final = "fallback_generalizations"
@@ -412,14 +412,15 @@ def _expand_model_aliases(model_cost: dict) -> dict:
 
 
 def _finalize_model_cost_map(model_cost: dict) -> dict:
-    """Extract fallback generalizations out of the raw map, then expand aliases.
+    """Install the fallback generalizations, then expand aliases.
 
-    The ``fallback_generalizations`` block is installed into the generalizations
-    module and removed from the map so it is never treated as a model entry.
+    The rules ship in their own file now, so a ``fallback_generalizations`` block
+    left in an older remote map is dropped rather than read, keeping it out of the
+    model entries. Installing here keeps the rules refreshing with every cost map
+    load and reload, as they did when they lived in the same file.
     """
-    raw: Final = model_cost.pop(FALLBACK_GENERALIZATIONS_KEY, None)
-    rules: Final = raw.get("rules") if isinstance(raw, dict) else None
-    set_fallback_generalizations(rules)
+    model_cost.pop(FALLBACK_GENERALIZATIONS_KEY, None)
+    install_fallback_generalizations()
     return _expand_model_aliases(model_cost)
 
 

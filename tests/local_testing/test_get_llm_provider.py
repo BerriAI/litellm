@@ -485,7 +485,7 @@ def test_get_llm_provider_use_proxy_arg_true_with_direct_args():
 
 @pytest.fixture
 def shipped_generalizations():
-    """Install the rules shipped in the bundled backup, then restore.
+    """Install the rules shipped in the bundled rules file, then restore.
 
     The remote-fetched cost map pinned to ``main`` may not yet carry the rule
     added on this branch, so these tests install the rule the branch actually
@@ -495,11 +495,12 @@ def shipped_generalizations():
         get_fallback_generalization_rules,
         set_fallback_generalizations,
     )
-    from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
+    from litellm.litellm_core_utils.get_fallback_generalizations import (
+        load_local_fallback_generalizations,
+    )
 
     previous = list(get_fallback_generalization_rules())
-    backup = GetModelCostMap.load_local_model_cost_map()
-    rules = backup.get("fallback_generalizations", {}).get("rules", [])
+    rules = list(load_local_fallback_generalizations())
     set_fallback_generalizations(rules)
     try:
         yield rules

@@ -2535,7 +2535,11 @@ def test_bedrock_claude_4_8_plus_cost_map_entries_carry_mid_conversation_system_
     cost_map_path = os.path.join(os.path.dirname(litellm.__file__), "model_prices_and_context_window_backup.json")
     with open(cost_map_path) as f:
         cost_map = json.load(f)
-    rules = cost_map["fallback_generalizations"]["rules"]
+    from litellm.litellm_core_utils.get_fallback_generalizations import (
+        load_local_fallback_generalizations,
+    )
+
+    rules = list(load_local_fallback_generalizations())
     pattern = re.compile(
         next(r["pattern"] for r in rules if r["name"] == "claude-mid-conversation-system"),
         re.IGNORECASE,

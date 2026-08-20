@@ -11,7 +11,7 @@ REPO_ROOT = Path(__file__).parent.parent
 PRICES_PATH = REPO_ROOT / "model_prices_and_context_window.json"
 SCHEMA_PATH = REPO_ROOT / "model_prices_and_context_window.schema.json"
 
-SPECIAL_ROOT_KEYS = frozenset({"sample_spec", "fallback_generalizations"})
+SPECIAL_ROOT_KEYS = frozenset({"sample_spec"})
 
 JsonSchema = dict
 
@@ -244,7 +244,7 @@ def build_schema(prices: dict) -> JsonSchema:
         "description": (
             "Schema for LiteLLM's model price and context window registry "
             "(https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json). "
-            "Every top-level key except 'sample_spec' and 'fallback_generalizations' is a model id, "
+            "Every top-level key except 'sample_spec' is a model id, "
             "optionally prefixed with its provider (e.g. 'azure/gpt-5.4'), mapping to a model entry. "
             "All costs are USD per unit. New optional fields are added regularly, so consumers should "
             "ignore unknown fields rather than reject them."
@@ -257,26 +257,6 @@ def build_schema(prices: dict) -> JsonSchema:
                     "Documentation placeholder illustrating the entry shape; not a real model and not "
                     "schema-conformant (several values are prose)."
                 ),
-            },
-            "fallback_generalizations": {
-                "type": "object",
-                "description": "Regex rules that generalize unknown model ids to known families; not a model entry.",
-                "properties": {
-                    "rules": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "name": STRING,
-                                "pattern": STRING,
-                                "description": STRING,
-                            },
-                            "required": ["name", "pattern"],
-                            "additionalProperties": True,
-                        },
-                    }
-                },
-                "additionalProperties": False,
             },
         },
         "additionalProperties": {"$ref": "#/$defs/modelEntry"},

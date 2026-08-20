@@ -417,6 +417,10 @@ blog_posts_url: str = os.getenv(
     "LITELLM_BLOG_POSTS_URL",
     "https://docs.litellm.ai/blog/rss.xml",
 )
+fallback_generalizations_url: str = os.getenv(
+    "LITELLM_FALLBACK_GENERALIZATIONS_URL",
+    "https://raw.githubusercontent.com/BerriAI/litellm/main/litellm/fallback_generalizations.json",
+)
 anthropic_beta_headers_url: str = os.getenv(
     "LITELLM_ANTHROPIC_BETA_HEADERS_URL",
     "https://raw.githubusercontent.com/BerriAI/litellm/main/litellm/anthropic_beta_headers_config.json",
