@@ -39,6 +39,7 @@ from litellm.llms.anthropic.cost_calculation import (
 from litellm.llms.azure.cost_calculation import (
     cost_per_token as azure_openai_cost_per_token,
 )
+from litellm.llms.azure_ai.cost_calculator import _is_azure_model_router
 from litellm.llms.azure_ai.cost_calculator import (
     cost_per_token as azure_ai_cost_per_token,
 )
@@ -1592,7 +1593,11 @@ def completion_cost(
                 )
 
                 # Get additional costs from provider (e.g., routing fees, infrastructure costs)
-                if custom_llm_provider == "azure_ai":
+                token_path_billed_router: Final = custom_llm_provider == "azure_ai" and (
+                    _is_azure_model_router(model)
+                    or (request_model_for_cost is not None and _is_azure_model_router(request_model_for_cost))
+                )
+                if custom_llm_provider == "azure_ai" and not token_path_billed_router:
                     model_for_additional_costs = request_model_for_cost
                     if completion_response is not None:
                         hidden_params = getattr(completion_response, "_hidden_params", None) or {}

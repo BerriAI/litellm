@@ -377,25 +377,11 @@ class TestAzureModelRouterCostBreakdown:
             litellm_logging_obj=logging_obj,
         )
 
-        # Check that cost breakdown contains additional_costs
-        assert hasattr(logging_obj, "cost_breakdown")
-        assert logging_obj.cost_breakdown is not None
-        assert "additional_costs" in logging_obj.cost_breakdown
-        assert isinstance(logging_obj.cost_breakdown["additional_costs"], dict)
-
-        # Check that the Azure Model Router flat cost is in additional_costs
-        additional_costs = logging_obj.cost_breakdown["additional_costs"]
-        assert "Azure Model Router Flat Cost" in additional_costs
-
-        # Verify the flat cost value
-        expected_flat_cost = (
-            5000 * AZURE_MODEL_ROUTER_FLAT_COST_PER_M_INPUT_TOKENS / 1_000_000
-        )
-        actual_flat_cost = additional_costs["Azure Model Router Flat Cost"]
-        assert actual_flat_cost == pytest.approx(expected_flat_cost, rel=1e-9)
-
-        print(f"Additional costs in breakdown: {additional_costs}")
-        print(f"Azure Model Router Flat Cost: ${actual_flat_cost:.6f}")
+        # For a pure model-router response (no underlying model pricing) the flat fee is
+        # billed once, through the token-cost path, so the total equals a single flat fee.
+        # It must not also be summed via additional_costs, which would double-bill it.
+        expected_flat_cost = 5000 * AZURE_MODEL_ROUTER_FLAT_COST_PER_M_INPUT_TOKENS / 1_000_000
+        assert cost == pytest.approx(expected_flat_cost, rel=1e-9)
 
     def test_additional_costs_when_response_has_actual_model_via_hidden_params(self):
         """additional_costs populated when response has actual model but request was via model router (hidden_params)."""
