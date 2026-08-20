@@ -70,7 +70,7 @@ def test_container_files_api():
                 custom_llm_provider="openai",
                 api_key=api_key,
             )
-            assert False, "Should have raised error for non-existent file"
+            pytest.fail("Should have raised error for non-existent file")
         except Exception as e:
             assert "not found" in str(e).lower() or "invalid" in str(e).lower()
             print(f"   Got expected error ✓")
@@ -84,7 +84,7 @@ def test_container_files_api():
                 custom_llm_provider="openai",
                 api_key=api_key,
             )
-            assert False, "Should have raised error for non-existent file content"
+            pytest.fail("Should have raised error for non-existent file content")
         except Exception as e:
             print(f"   Got expected error ✓")
 
@@ -97,7 +97,7 @@ def test_container_files_api():
                 custom_llm_provider="openai",
                 api_key=api_key,
             )
-            assert False, "Should have raised error for non-existent file"
+            pytest.fail("Should have raised error for non-existent file")
         except Exception as e:
             # Delete returns 400 for non-existent files
             print(f"   Got expected error ✓")

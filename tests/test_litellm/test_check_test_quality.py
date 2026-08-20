@@ -397,3 +397,154 @@ def test_a_none_comparison_reads_as_absence(tmp_path):
 def test_a_membership_test_without_the_negation_is_left_alone(tmp_path):
     source = _MEMBERSHIP_GATE.replace('"ACME_API_KEY" not in os.environ', '"ACME_API_KEY" in os.environ')
     assert _codes(tmp_path, source) == []
+
+
+_SNAPSHOT_CONFTEST = """import litellm
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def restore_globals():
+    original_state = {}
+    original_state["drop_params"] = litellm.drop_params
+    for attr in ("api_base", "num_retries"):
+        original_state[attr] = getattr(litellm, attr)
+    yield
+    for attr, value in original_state.items():
+        setattr(litellm, attr, value)
+"""
+
+
+def _conftest_codes(tmp_path, source, name="conftest.py"):
+    snippet = tmp_path / name
+    snippet.write_text(source, encoding="utf-8")
+    return [v.code for v in checker.check_file(snippet)]
+
+
+def test_every_snapshotted_global_is_counted_once(tmp_path):
+    assert _conftest_codes(tmp_path, _SNAPSHOT_CONFTEST) == ["TQ007", "TQ007", "TQ007"]
+
+
+def test_the_names_come_from_the_loop_tuple_as_well_as_the_direct_keys(tmp_path):
+    snippet = tmp_path / "conftest.py"
+    snippet.write_text(_SNAPSHOT_CONFTEST, encoding="utf-8")
+    reported = [v.message.split("`")[1] for v in checker.check_file(snippet)]
+    assert sorted(reported) == ["litellm.api_base", "litellm.drop_params", "litellm.num_retries"]
+
+
+def test_the_same_global_saved_twice_counts_once(tmp_path):
+    source = _SNAPSHOT_CONFTEST.replace(
+        '("api_base", "num_retries")', '("api_base", "num_retries", "drop_params")'
+    )
+    assert _conftest_codes(tmp_path, source) == ["TQ007", "TQ007", "TQ007"]
+
+
+def test_the_rule_only_looks_at_conftest_files(tmp_path):
+    assert _conftest_codes(tmp_path, _SNAPSHOT_CONFTEST, name="test_snapshot.py") == []
+
+
+def test_a_conftest_that_snapshots_nothing_is_clean(tmp_path):
+    source = "import pytest\n\n\n@pytest.fixture\ndef client():\n    return object()\n"
+    assert _conftest_codes(tmp_path, source) == []
+
+
+def test_a_snapshot_entry_is_suppressible_with_a_reason(tmp_path):
+    source = _SNAPSHOT_CONFTEST.replace(
+        'original_state["drop_params"] = litellm.drop_params',
+        'original_state["drop_params"] = litellm.drop_params  # test-quality-ok: owned by the SDK config surface',
+    )
+    assert _conftest_codes(tmp_path, source) == ["TQ007", "TQ007"]
+
+
+_NAMED_MAPPING_CONFTEST = """import litellm
+import pytest
+
+_SCALAR_DEFAULTS = {
+    "num_retries": None,
+    "set_verbose": False,
+}
+_EXTRA_ATTRS = ("api_base", "drop_params")
+
+
+@pytest.fixture(autouse=True)
+def restore_globals():
+    original_state = {}
+    for attr in _SCALAR_DEFAULTS:
+        original_state[attr] = getattr(litellm, attr)
+    for attr in _EXTRA_ATTRS:
+        original_state[attr] = getattr(litellm, attr)
+    yield
+    for attr, value in original_state.items():
+        setattr(litellm, attr, value)
+"""
+
+
+def test_a_save_loop_over_a_module_level_dict_counts_its_keys(tmp_path):
+    # The two largest inventories in the repo name their list instead of spelling it
+    # out, so a rule that only reads literal iterables sees neither.
+    reported = [v.message.split("`")[1] for v in checker.check_file(_written(tmp_path, _NAMED_MAPPING_CONFTEST))]
+    assert sorted(reported) == [
+        "litellm.api_base",
+        "litellm.drop_params",
+        "litellm.num_retries",
+        "litellm.set_verbose",
+    ]
+
+
+def test_a_named_iterable_that_is_not_a_module_constant_is_skipped_quietly(tmp_path):
+    source = _NAMED_MAPPING_CONFTEST.replace("for attr in _EXTRA_ATTRS:", "for attr in dir(litellm):")
+    reported = [v.message.split("`")[1] for v in checker.check_file(_written(tmp_path, source))]
+    assert sorted(reported) == ["litellm.num_retries", "litellm.set_verbose"]
+
+
+def _written(tmp_path, source, name="conftest.py"):
+    path = tmp_path / name
+    path.write_text(source, encoding="utf-8")
+    return path
+
+
+_HELPER_DICT_CONFTEST = """import litellm
+import pytest
+
+_CALLBACK_ATTRS = ("callbacks", "success_callback")
+
+
+def _copy_litellm_state():
+    state = {}
+    for attr in _CALLBACK_ATTRS:
+        if hasattr(litellm, attr):
+            value = getattr(litellm, attr)
+            state[attr] = value.copy() if isinstance(value, list) else value
+    return state
+
+
+@pytest.fixture(autouse=True)
+def restore_globals():
+    saved = _copy_litellm_state()
+    yield
+    for attr, value in saved.items():
+        setattr(litellm, attr, value)
+"""
+
+
+def test_a_snapshot_built_in_a_helper_under_any_dict_name_is_counted(tmp_path):
+    # Two conftests build their inventory inside a helper and call the dict `state`,
+    # so a rule keyed on blessed dict names sees neither.
+    reported = [v.message.split("`")[1] for v in checker.check_file(_written(tmp_path, _HELPER_DICT_CONFTEST))]
+    assert sorted(reported) == ["litellm.callbacks", "litellm.success_callback"]
+
+
+def test_the_read_may_sit_a_statement_above_the_store(tmp_path):
+    # `val = getattr(litellm, attr)` then `state[attr] = val.copy()` is the common
+    # shape; requiring the store itself to read litellm loses every one of them.
+    source = _HELPER_DICT_CONFTEST.replace(
+        "            state[attr] = value.copy() if isinstance(value, list) else value",
+        "            state[attr] = list(value)",
+    )
+    reported = [v.message.split("`")[1] for v in checker.check_file(_written(tmp_path, source))]
+    assert sorted(reported) == ["litellm.callbacks", "litellm.success_callback"]
+
+
+def test_a_loop_storing_under_a_key_that_is_not_the_loop_variable_is_not_an_inventory(tmp_path):
+    source = _HELPER_DICT_CONFTEST.replace("state[attr] =", 'state["fixed"] =')
+    assert [v.code for v in checker.check_file(_written(tmp_path, source))] == []
