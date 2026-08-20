@@ -1,15 +1,6 @@
-import os
-import sys
-
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../../.."))
-
-os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-
 import litellm
-
-litellm.model_cost = litellm.get_model_cost_map(url="")
 from litellm.llms.fal_ai.cost_calculator import cost_calculator
 from litellm.llms.fal_ai.image_generation import (
     FalAIGPTImage2Config,
@@ -136,7 +127,8 @@ def test_transform_image_generation_request():
     ) == {"prompt": "a red bicycle", "quality": "high", "num_images": 2}
 
 
-def test_cost_calculator_uses_registry_price():
+def test_cost_calculator_uses_registry_price(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
     response = ImageResponse(
         data=[
             ImageObject(url="https://v3b.fal.media/files/b/one.png"),
