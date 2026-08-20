@@ -98,10 +98,14 @@ class KeyringVault:
         return True
 
     def erase(self) -> bool:
+        """Whether the keychain is guaranteed to hold no credential afterwards.
+
+        An uninstalled `keyring` package can never have stored one. A kill switch set after
+        a credential was stored leaves that entry out of reach, so erasure cannot be promised.
+        """
         if _import_keyring() is None:
             return True
         if _keyring_disabled():
-            # a credential stored before the kill switch was set may still be in the keychain
             return False
         match self.read():
             case SecretUnavailable():

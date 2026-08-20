@@ -76,7 +76,6 @@ KEYCHAIN_UNREACHABLE_MESSAGE: Final = (
 )
 
 
-# Token storage utilities
 def context_secret_vault(ctx: click.Context) -> SecretVault:
     """Where this invocation reads and writes secret material; injectable through ctx.obj for tests"""
     ctx_obj: Final[CliContextObj | None] = ctx.obj
@@ -666,8 +665,6 @@ def login(ctx: click.Context, config_claude: bool):
             api_key: Final = auth_result["api_key"]
             user_id: Final = auth_result["user_id"]
 
-            # base_url is stored so we can verify origin before reusing the
-            # key on a subsequent CLI invocation.
             record: Final = CliTokenRecord(
                 base_url=base_url.rstrip("/"),
                 key=api_key,
