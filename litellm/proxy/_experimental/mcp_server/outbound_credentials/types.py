@@ -168,6 +168,9 @@ class AuthorizationCodeConfig(BaseModel):
     (RFC 7591), so the common case carries none of the fields below; they are optional manual
     overrides for IdPs without discovery / DCR. The per-user token is read from the token store
     at resolve time, not held here.
+
+    `token_header` is the upstream header the user's token is written to, defaulting to
+    `Authorization`; see `ClientCredentialsConfig.token_header`.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -177,6 +180,7 @@ class AuthorizationCodeConfig(BaseModel):
     client_secret: SecretStr | None = None
     authorization_url: str | None = None
     token_url: str | None = None
+    token_header: str = DEFAULT_OAUTH_TOKEN_HEADER
 
 
 class ClientCredentialsConfig(BaseModel):
@@ -225,6 +229,9 @@ class TokenExchangeConfig(BaseModel):
     `audience` (rfc8693 only) is optional and sent only when the operator configured one, since both
     `audience` and `resource` are optional in RFC 8693 and the authorization server applies its own
     default when neither is sent (fabricating one risks `invalid_target`).
+
+    `token_header` is the upstream header the exchanged token is written to, defaulting to
+    `Authorization`; see `ClientCredentialsConfig.token_header`.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -237,6 +244,7 @@ class TokenExchangeConfig(BaseModel):
     client_secret: SecretStr | None = None
     token_endpoint_auth_method: Literal["client_secret_basic", "client_secret_post"] | None = None
     scopes: tuple[str, ...] = ()
+    token_header: str = DEFAULT_OAUTH_TOKEN_HEADER
 
 
 class PrivateKeyJwtAuth(BaseModel):
@@ -268,6 +276,9 @@ class IdJagConfig(BaseModel):
     the upstream resource AS (`resource_token_endpoint`) that swaps the assertion for the access
     token. The gateway authenticates to both endpoints as `client_id` via `client_auth`. Required
     fields are enforced at construction so a half-configured server cannot reach the arm.
+
+    `token_header` is the upstream header the minted access token is written to, defaulting to
+    `Authorization`; see `ClientCredentialsConfig.token_header`.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -280,6 +291,7 @@ class IdJagConfig(BaseModel):
     audience: str | None = None
     resource: str | None = None
     scopes: tuple[str, ...] = ()
+    token_header: str = DEFAULT_OAUTH_TOKEN_HEADER
 
 
 class SharedKey(BaseModel):
