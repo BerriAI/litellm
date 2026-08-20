@@ -38,6 +38,7 @@ class ExporterOwner(str, Enum):
     LANGFUSE_OTEL = "langfuse_otel"
     WEAVE_OTEL = "weave_otel"
     LEVO = "levo"
+    OPENLAYER = "openlayer"
     AGENTOPS = "agentops"
 
 

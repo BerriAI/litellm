@@ -4140,6 +4140,31 @@ def _init_custom_logger_compatible_class(
             _arize_phoenix_otel_logger: Final = ArizePhoenixLogger(config=otel_config, callback_name="arize_phoenix")
             _in_memory_loggers.append(_arize_phoenix_otel_logger)
             return _arize_phoenix_otel_logger
+        elif logging_integration == "openlayer":
+            _v2 = _maybe_construct_otel_v2("openlayer", _in_memory_loggers)
+            if _v2 is not None:
+                return _v2
+            from litellm.integrations.openlayer.openlayer import OpenlayerLogger
+            from litellm.integrations.opentelemetry import (
+                OpenTelemetry,
+                OpenTelemetryConfig,
+            )
+
+            openlayer_config: Final = OpenlayerLogger.get_openlayer_config()
+            otel_config = OpenTelemetryConfig(
+                exporter=openlayer_config.protocol,
+                endpoint=openlayer_config.endpoint,
+                headers=openlayer_config.otlp_auth_headers,
+            )
+
+            # Check if OpenlayerLogger instance already exists
+            for callback in _in_memory_loggers:
+                if isinstance(callback, OpenlayerLogger) and callback.callback_name == "openlayer":
+                    return callback
+
+            _openlayer_otel_logger: Final = OpenlayerLogger(config=otel_config, callback_name="openlayer")
+            _in_memory_loggers.append(_openlayer_otel_logger)
+            return _openlayer_otel_logger
         elif logging_integration == "levo":
             _v2 = _maybe_construct_otel_v2("levo", _in_memory_loggers)
             if _v2 is not None:

@@ -21,6 +21,7 @@ from litellm.integrations.otel.presets.langfuse import (
 )
 from litellm.integrations.otel.presets.langtrace import langtrace_preset
 from litellm.integrations.otel.presets.levo import levo_preset
+from litellm.integrations.otel.presets.openlayer import openlayer_preset
 from litellm.integrations.otel.presets.phoenix import (
     phoenix_preset,
     phoenix_project_headers,
@@ -37,6 +38,7 @@ PRESET_BY_CALLBACK: Final[dict[str, Preset]] = {
     "langfuse_otel": langfuse_preset,
     "langtrace": langtrace_preset,
     "levo": levo_preset,
+    "openlayer": openlayer_preset,
     "weave_otel": weave_preset,
 }
 
@@ -109,6 +111,7 @@ __all__ = [
     "langfuse_preset",
     "langtrace_preset",
     "levo_preset",
+    "openlayer_preset",
     "phoenix_preset",
     "project_routing_headers",
     "weave_preset",

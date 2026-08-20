@@ -161,6 +161,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "vantage",
     "posthog",
     "levo",
+    "openlayer",
     "compression_interception",
     "newrelic",
 ]
