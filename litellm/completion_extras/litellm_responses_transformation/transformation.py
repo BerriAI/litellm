@@ -786,7 +786,9 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             handle_raw_dict_callback=self._handle_raw_dict_response_item,
         )
 
-        choices: Final = converted_choices or [_empty_incomplete_choice(raw_response, output_items)]
+        choices: Final = converted_choices or [  # mutable-ok: ModelResponse.choices expects a mutable list
+            _empty_incomplete_choice(raw_response, output_items)
+        ]
 
         setattr(model_response, "choices", choices)
 
@@ -1426,11 +1428,12 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                 if isinstance(item, dict)
             )
 
-            incomplete_details: Final = (response_data.get("incomplete_details") or {}) if response_data else {}
+            incomplete_details: Final = response_data.get("incomplete_details") if response_data else None
+            incomplete_reason: Final = (
+                incomplete_details.get("reason") if isinstance(incomplete_details, dict) else None
+            )
             terminal_finish_reason: Final = (
-                "stop"
-                if event_type == "response.completed"
-                else _incomplete_reason_to_finish_reason(incomplete_details.get("reason"))
+                "stop" if event_type == "response.completed" else _incomplete_reason_to_finish_reason(incomplete_reason)
             )
             finish_reason: Final = "tool_calls" if has_function_calls else terminal_finish_reason
 
