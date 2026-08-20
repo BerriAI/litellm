@@ -2022,7 +2022,7 @@ def prepare_metadata_fields(data: BaseModel, non_default_values: dict, existing_
             if k in LiteLLM_ManagementEndpoint_MetadataFields_Premium:
                 from litellm.proxy.utils import _premium_user_check
 
-                if v:
+                if v and v != existing_metadata.get(k):
                     _premium_user_check(k)
                 casted_metadata[k] = v
 
@@ -2061,6 +2061,7 @@ async def prepare_key_update_data(
                 object_data=data,
                 field_name=field,
                 value=getattr(data, field),
+                existing_metadata=existing_key_row.metadata,
             )
     for k, v in data_json.items():
         if k in LiteLLM_ManagementEndpoint_MetadataFields or k in LiteLLM_ManagementEndpoint_MetadataFields_Premium:

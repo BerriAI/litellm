@@ -2075,6 +2075,76 @@ async def test_prepare_key_update_data_disable_global_guardrails_true_premium_pe
 
 
 @pytest.mark.asyncio
+async def test_prepare_key_update_data_unchanged_premium_field_no_premium(monkeypatch):
+    """
+    Regression #15230: the UI echoes a key's stored premium fields back on every save,
+    so editing an unrelated field on a key that already carries tags or guardrails must
+    not 403 a non-premium user, and the stored values must survive the update.
+    """
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", False)
+    existing_key = LiteLLM_VerificationToken(
+        token="hashed",
+        metadata={"tags": ["prod"], "guardrails": ["pii-guard"]},
+    )
+    data = UpdateKeyRequest(
+        key="sk-1",
+        max_budget=10.0,
+        tags=["prod"],
+        guardrails=["pii-guard"],
+    )
+
+    result = await prepare_key_update_data(data=data, existing_key_row=existing_key)
+
+    assert result["metadata"]["tags"] == ["prod"]
+    assert result["metadata"]["guardrails"] == ["pii-guard"]
+    assert result["max_budget"] == 10.0
+
+
+@pytest.mark.asyncio
+async def test_prepare_key_update_data_changed_premium_field_requires_premium(monkeypatch):
+    """Control: changing a stored premium value without a license still 403s."""
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", False)
+    existing_key = LiteLLM_VerificationToken(token="hashed", metadata={"tags": ["prod"]})
+    data = UpdateKeyRequest(key="sk-1", tags=["prod", "eu"])
+
+    with pytest.raises(HTTPException) as exc_info:
+        await prepare_key_update_data(data=data, existing_key_row=existing_key)
+
+    assert exc_info.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_prepare_key_update_data_new_premium_field_requires_premium(monkeypatch):
+    """Control: setting a premium field a key does not have yet still 403s."""
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", False)
+    existing_key = LiteLLM_VerificationToken(token="hashed", metadata={})
+    data = UpdateKeyRequest(key="sk-1", tags=["prod"])
+
+    with pytest.raises(HTTPException) as exc_info:
+        await prepare_key_update_data(data=data, existing_key_row=existing_key)
+
+    assert exc_info.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_prepare_key_update_data_unchanged_premium_field_keeps_later_metadata(monkeypatch):
+    """
+    Regression #15230: prepare_metadata_fields swallows the premium HTTPException, so the
+    gate firing on an unchanged field aborted the loop and silently dropped every metadata
+    field ordered after it. Editing enforced_params on a key that already carries tags must
+    persist enforced_params.
+    """
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", False)
+    existing_key = LiteLLM_VerificationToken(token="hashed", metadata={"tags": ["prod"]})
+    data = UpdateKeyRequest(key="sk-1", tags=["prod"], enforced_params=["user"])
+
+    result = await prepare_key_update_data(data=data, existing_key_row=existing_key)
+
+    assert result["metadata"]["enforced_params"] == ["user"]
+    assert result["metadata"]["tags"] == ["prod"]
+
+
+@pytest.mark.asyncio
 async def test_validate_team_id_used_in_service_account_request_requires_team_id():
     """
     Test that validate_team_id_used_in_service_account_request raises HTTPException

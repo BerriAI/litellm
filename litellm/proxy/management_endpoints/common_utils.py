@@ -1,4 +1,5 @@
 import math
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final, Optional, Union
 
 from fastapi import HTTPException, status
@@ -410,6 +411,7 @@ def _set_object_metadata_field(
     ],
     field_name: str,
     value: Any,
+    existing_metadata: Mapping[str, object] | None = None,
 ) -> None:
     """
     Helper function to set metadata fields that require premium user checks
@@ -418,8 +420,12 @@ def _set_object_metadata_field(
         object_data: The team/key/organization/project data object to modify
         field_name: Name of the metadata field to set
         value: Value to set for the field
+        existing_metadata: Stored metadata on update flows. When the submitted value
+            already matches what is stored, the premium check is skipped so that
+            re-submitting an unchanged field is not treated as enabling the feature.
     """
-    if field_name in LiteLLM_ManagementEndpoint_MetadataFields_Premium and value:
+    is_new_value: Final = existing_metadata is None or existing_metadata.get(field_name) != value
+    if field_name in LiteLLM_ManagementEndpoint_MetadataFields_Premium and value and is_new_value:
         _premium_user_check(field_name)
 
     object_data.metadata = object_data.metadata or {}
