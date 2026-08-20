@@ -61,7 +61,7 @@ try:
             documented_keys.update(doc_key_pattern.findall(table_content))
 except Exception as e:
     raise Exception(
-        f"Error reading documentation: {e}, \n repo base - {os.listdir(repo_base)}"
+        f"Error reading documentation: {e}, \n repo base - {os.listdir(_repo_root)}"
     )
 
 
