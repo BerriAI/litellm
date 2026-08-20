@@ -2397,8 +2397,8 @@ def _resolve_vertex_live_credentials(
     model: str | None,
 ) -> VertexPassThroughCredentials | None:
     """
-    Resolution order: credentials registered for the requested project/location, then any DB model entry
-    flagged ``use_in_pass_through``, then ``default_vertex_config`` and the ``DEFAULT_VERTEXAI_*`` env vars
+    Resolution order: an explicit project/location registration or ``default_vertex_config``, then any DB model
+    entry flagged ``use_in_pass_through``, then the ``DEFAULT_VERTEXAI_*`` env vars
     """
     keyed: Final = passthrough_endpoint_router.get_vertex_credentials(
         project_id=vertex_project,
@@ -2457,7 +2457,10 @@ def _resolve_alias_to_upstream_model(setup_model: str, llm_router: "Router | Non
     )
     if upstream is None:
         return setup_model
-    _, provider, _, _ = litellm.get_llm_provider(model=upstream)
+    try:
+        _, provider, _, _ = litellm.get_llm_provider(model=upstream)
+    except litellm.exceptions.BadRequestError:
+        return upstream
     return upstream.removeprefix(f"{provider}/")
 
 
