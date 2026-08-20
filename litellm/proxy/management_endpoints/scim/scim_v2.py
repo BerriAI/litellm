@@ -164,6 +164,12 @@ class UserProvisionerHelpers:
         """
         Check if a user with the given email already exists and update them if found.
 
+        The matched row keeps its existing user_id even when the SCIM userName differs.
+        Virtual keys, team rosters, team/organization memberships and spend logs all
+        reference that id, so re-keying the user row would strand every one of them and
+        make removals against rosters holding the old id no-op. SCIM ids are opaque to
+        the client, which reads the stable id back from the response.
+
         When admin_group is configured the resolved global role on new_user_request
         is persisted too, so re-upserting an existing email demotes a user who is no
         longer in the admin group instead of leaving the stale role.
@@ -189,20 +195,22 @@ class UserProvisionerHelpers:
         new_teams: Final = list(dict.fromkeys(new_user_request.teams or []))
 
         if new_user_request.user_id != existing_user.user_id:
-            await _table(UserRepository(prisma_client)).update(
-                where={"user_id": existing_user.user_id},
-                data={"user_id": new_user_request.user_id},
+            verbose_proxy_logger.info(
+                "SCIM: email %s already provisioned as user_id=%s, keeping that id instead of re-keying to %s",
+                new_user_request.user_email,
+                existing_user.user_id,
+                new_user_request.user_id,
             )
 
         await _handle_team_membership_changes(
-            user_id=new_user_request.user_id,
+            user_id=existing_user.user_id,
             existing_teams=existing_user.teams or [],
             new_teams=new_teams,
             raise_on_error=True,
         )
 
         updated_user: Final = await _table(UserRepository(prisma_client)).update(
-            where={"user_id": new_user_request.user_id},
+            where={"user_id": existing_user.user_id},
             data={
                 "user_email": new_user_request.user_email,
                 "user_alias": new_user_request.user_alias,
