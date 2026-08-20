@@ -7,6 +7,7 @@ import { useDisableShowPrompts } from "@/app/(dashboard)/hooks/useDisableShowPro
 import { emitLocalStorageChange, removeLocalStorageItem, setLocalStorageItem } from "@/utils/localStorageUtils";
 import { navAccountDisplayName } from "@/components/Navbar/navDisplayName";
 import CopyButton from "@/components/shared/CopyButton";
+import ThemeToggle from "@/components/ThemeToggle/ThemeToggle";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -220,6 +221,10 @@ const SidebarAccountMenu: React.FC<SidebarAccountMenuProps> = ({ onLogout, colla
         <Separator />
 
         <div className="py-1">
+          <div className="flex h-[38px] items-center justify-between gap-3 px-3">
+            <span className="text-[13px] text-foreground">Theme</span>
+            <ThemeToggle />
+          </div>
           {toggles.map((toggle) => (
             <div key={toggle.key} className="flex h-[38px] items-center justify-between gap-3 px-3">
               <span className="text-[13px] text-foreground">{toggle.label}</span>

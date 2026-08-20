@@ -17,6 +17,7 @@ import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import CopyButton from "@/components/shared/CopyButton";
+import ThemeToggle from "@/components/ThemeToggle/ThemeToggle";
 import { cn } from "@/lib/cva.config";
 import React, { useEffect, useState } from "react";
 
@@ -119,6 +120,10 @@ const UserDropdown: React.FC<UserDropdownProps> = ({ onLogout, variant = "navbar
         <span>{userRole}</span>
       </div>
       <Separator className="my-2" />
+      <div className="flex w-full items-center justify-between gap-2">
+        <span className="text-muted-foreground">Theme</span>
+        <ThemeToggle />
+      </div>
       <div className="flex w-full items-center justify-between gap-2">
         <span className="text-muted-foreground">Hide New Feature Indicators</span>
         <Switch
