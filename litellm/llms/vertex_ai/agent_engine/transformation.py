@@ -10,6 +10,7 @@ API Reference:
 """
 
 import json
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, Final, Optional, Union, cast
 
 import httpx
@@ -174,6 +175,13 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
         """Get session ID if provided."""
         return optional_params.get("session_id")
 
+    def _build_prompt(self, messages: Sequence[AllMessageValues], session_id: str | None) -> str:
+        """A session holds the history server side; without one it has nowhere to live but the prompt."""
+        if session_id or len(messages) == 1:
+            return convert_content_list_to_str(messages[-1])
+
+        return "\n\n".join(f"{message.get('role')}: {convert_content_list_to_str(message)}" for message in messages)
+
     def transform_request(
         self,
         model: str,
@@ -195,12 +203,9 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
             }
         }
         """
-        # Use the last message content as the prompt
-        prompt: Final = convert_content_list_to_str(messages[-1])
-
-        # Get user_id and session_id
         user_id: Final = self._get_user_id(optional_params)
         session_id: Final = self._get_session_id(optional_params)
+        prompt: Final = self._build_prompt(messages, session_id)
 
         # Build the input
         input_data: Final[dict[str, Any]] = {
