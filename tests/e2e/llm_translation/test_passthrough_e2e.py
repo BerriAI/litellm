@@ -13,8 +13,8 @@ A passthrough call returning non-2xx fails hard (never a skip); once it returns
 
 import pytest
 
-from e2e_config import unique_marker
-from e2e_http import StreamingResponse, require_successful_call
+from e2e_config import CHEAP_OPENAI_MODEL, unique_marker
+from e2e_http import StreamingResponse, require_successful_call, unwrap
 from lifecycle import ResourceManager
 from models import KeyGenerateBody, SpendLogRow
 from passthrough_client import (
@@ -24,7 +24,10 @@ from passthrough_client import (
     JsonSchema,
     JsonSchemaProperty,
     PassthroughClient,
+    completed_responses_object,
 )
+
+EMBEDDING_MODEL = "text-embedding-3-small"
 
 pytestmark = pytest.mark.e2e
 
@@ -209,4 +212,121 @@ class TestPassthroughModelAllowlist:
         assert result.status_code == 403, (
             "a key restricted to gemini-2.5-flash must be denied a claude passthrough call, "
             f"got {result.status_code}: {result.body[:300]}"
+        )
+
+
+class TestOpenAIPassthroughPrefix:
+    """The dedicated `/openai_passthrough` prefix must reach OpenAI, not be
+    swallowed by the provider-scoped `/{provider}/v1/...` routes.
+
+    The customer fronts OpenAI's own file and batch APIs through this prefix
+    precisely to opt out of the gateway's managed-file handling. `/v1/files` and
+    `/v1/batches` also answer `/{provider}/v1/files` and `/{provider}/v1/batches`,
+    so `openai_passthrough` used to bind as a provider name and the request died
+    inside the gateway with a provider-lookup error, never reaching OpenAI.
+    """
+
+    @pytest.mark.covers("llm.files.openai.passthrough.nonstream.works")
+    def test_passthrough_prefix_uploads_a_file_to_openai(
+        self, client: PassthroughClient, resources: ResourceManager, scoped_key: str
+    ) -> None:
+        content = f'{{"marker":"{unique_marker()}"}}\n'.encode()
+        uploaded = unwrap(
+            client.openai_passthrough_upload_file(
+                scoped_key, content=content, filename="e2e-passthrough-batch.jsonl"
+            )
+        )
+        resources.defer(
+            lambda: client.openai_passthrough_delete_file(scoped_key, uploaded.id)
+        )
+
+        assert uploaded.object == "file", (
+            f"/openai_passthrough/v1/files did not relay OpenAI's file object: {uploaded}"
+        )
+        assert uploaded.purpose == "batch"
+        assert uploaded.bytes == len(content)
+
+    @pytest.mark.covers("llm.batches.openai.passthrough.nonstream.works")
+    def test_passthrough_prefix_lists_batches_from_openai(
+        self, client: PassthroughClient, scoped_key: str
+    ) -> None:
+        listed = unwrap(client.openai_passthrough_list_batches(scoped_key))
+
+        assert listed.object == "list", (
+            f"/openai_passthrough/v1/batches did not relay OpenAI's batch page: {listed}"
+        )
+
+
+class TestOpenAIPassthroughSpend:
+    """A call relayed to OpenAI's own endpoints must still be costed.
+
+    The customer routes native OpenAI traffic through `/openai_passthrough` and
+    budgets against it, so a call that returns 200 while logging no spend is money
+    the gateway never sees and a budget that never trips. Streamed Responses calls
+    and embeddings each used to land exactly that way, on separate code paths.
+    """
+
+    @pytest.mark.covers("llm.responses.openai.passthrough.stream.cost_logged")
+    def test_streamed_responses_call_logs_its_cost(
+        self, client: PassthroughClient, scoped_key: str
+    ) -> None:
+        result = client.openai_passthrough_responses(
+            scoped_key,
+            CHEAP_OPENAI_MODEL,
+            f"Say hi in one word. {unique_marker()}",
+            stream=True,
+        )
+        require_successful_call(result)
+        assert result.chunks > 0, "streamed responses passthrough produced no events"
+
+        completed = completed_responses_object(result)
+        assert completed is not None, (
+            f"the stream never delivered a response.completed frame, so there is no "
+            f"provider id to reconcile against: last events {result.stream_events[-3:]}"
+        )
+        assert completed.usage is not None, (
+            f"the completed response carried no usage to price from: {completed}"
+        )
+
+        rows = client.proxy.poll_logs_for_request_id(
+            completed.id, predicate=lambda rows: (rows[0].spend or 0) > 0
+        )
+        assert rows, (
+            f"no spend row for the response the customer was served ({completed.id}); "
+            "a streamed passthrough call OpenAI bills them for is invisible to the "
+            "gateway's own spend and budgets"
+        )
+        row = rows[0]
+        assert (row.spend or 0) > 0, f"streamed responses passthrough was not costed: {row}"
+        assert row.prompt_tokens == completed.usage.input_tokens, (
+            f"logged {row.prompt_tokens} prompt tokens, the response the customer read "
+            f"reported {completed.usage.input_tokens}"
+        )
+        assert row.completion_tokens == completed.usage.output_tokens, (
+            f"logged {row.completion_tokens} completion tokens, the response the customer "
+            f"read reported {completed.usage.output_tokens}"
+        )
+
+    @pytest.mark.covers("llm.embeddings.openai.passthrough.nonstream.cost_logged")
+    def test_embeddings_call_logs_its_cost(
+        self, client: PassthroughClient, scoped_key: str
+    ) -> None:
+        result = client.openai_passthrough_embed(
+            scoped_key, EMBEDDING_MODEL, f"cost this sentence {unique_marker()}"
+        )
+        require_successful_call(result)
+        assert result.call_id, "embeddings passthrough returned no x-litellm-call-id"
+
+        rows = client.proxy.poll_logs_for_request_id(
+            result.call_id, predicate=lambda rows: (rows[0].spend or 0) > 0
+        )
+        assert rows, (
+            f"no spend row for embeddings call {result.call_id}; the customer is billed "
+            "by OpenAI for tokens the gateway never counted against their budget"
+        )
+        row = rows[0]
+        assert (row.spend or 0) > 0, f"embeddings passthrough was not costed: {row}"
+        assert (row.prompt_tokens or 0) > 0, (
+            f"the embeddings row logged no prompt tokens, so whatever cost it carries "
+            f"was not computed from the real usage: {row}"
         )
