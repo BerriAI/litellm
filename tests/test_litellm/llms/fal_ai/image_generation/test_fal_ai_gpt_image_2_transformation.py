@@ -127,7 +127,15 @@ def test_transform_image_generation_request():
     ) == {"prompt": "a red bicycle", "quality": "high", "num_images": 2}
 
 
-def test_cost_calculator_uses_registry_price(monkeypatch: pytest.MonkeyPatch):
+@pytest.mark.parametrize(
+    "model",
+    [
+        "openai/gpt-image-2",
+        "gpt-image-2",
+        "openai/gpt-image-2/edit",
+    ],
+)
+def test_cost_calculator_uses_registry_price(model, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
     response = ImageResponse(
         data=[
@@ -135,4 +143,4 @@ def test_cost_calculator_uses_registry_price(monkeypatch: pytest.MonkeyPatch):
             ImageObject(url="https://v3b.fal.media/files/b/two.png"),
         ]
     )
-    assert cost_calculator(model="openai/gpt-image-2", image_response=response) == pytest.approx(0.29)
+    assert cost_calculator(model=model, image_response=response) == pytest.approx(0.29)
