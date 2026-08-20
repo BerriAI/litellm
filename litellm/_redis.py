@@ -551,14 +551,22 @@ def _init_redis_sentinel(redis_kwargs) -> redis.Redis:
     return sentinel.master_for(service_name, **connection_kwargs)
 
 
+def _sentinel_auth_kwargs(connection_kwargs: dict, sentinel_password: str | None) -> dict:
+    """The Sentinel monitors are separate servers with their own password, and redis-py refuses a
+    password passed alongside a credential provider, so the data node's provider stays behind once
+    a Sentinel password is configured."""
+    superseded: Final = frozenset({"credential_provider"}) if sentinel_password else frozenset()
+    kept: Final = ((k, v) for k, v in connection_kwargs.items() if k not in superseded)
+    return dict(kept, password=sentinel_password)
+
+
 def _init_async_redis_sentinel(redis_kwargs) -> async_redis.Redis:
     sentinel_nodes: Final = redis_kwargs.get("sentinel_nodes")
     sentinel_password: Final = redis_kwargs.get("sentinel_password")
     service_name: Final = redis_kwargs.get("service_name")
     connection_kwargs: Final = _get_redis_sentinel_connection_kwargs(redis_kwargs)
     connection_kwargs.setdefault("socket_timeout", REDIS_SOCKET_TIMEOUT)
-    sentinel_kwargs: Final = dict(connection_kwargs)
-    sentinel_kwargs["password"] = sentinel_password
+    sentinel_kwargs: Final = _sentinel_auth_kwargs(connection_kwargs, sentinel_password)
 
     if not sentinel_nodes or not service_name:
         raise ValueError("Both 'sentinel_nodes' and 'service_name' are required for Redis Sentinel.")
