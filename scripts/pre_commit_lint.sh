@@ -12,6 +12,8 @@
 #   - litellm/ Python  -> `make lint` (test-linting.yml's lint job)
 #   - tests/e2e Python -> `make lint-e2e-basedpyright` (test-linting.yml's e2e type-check step)
 #                         + raw HTTP client ban (test-code-quality.yml's check_e2e_no_raw_requests)
+#   - litellm/ Python or
+#     the grandfathered list -> extra="allow" ban (test-code-quality.yml's ban_pydantic_extra_allow)
 #   - dashboard        -> prettier + eslint + lint budgets (test-litellm-ui-build.yml's frontend-lint)
 #   - proxy/types      -> regenerate dashboard API types and fail on drift (check-ui-api-types.yml)
 #
@@ -91,6 +93,9 @@ e2e_py_pattern='^tests/e2e/.*\.py$'
 spec_pattern='^(litellm/(proxy|types)/.*|ui/litellm-dashboard/(scripts/gen-api-types\.mjs|package\.json|package-lock\.json|src/lib/http/schema\.d\.ts))$'
 ui_prettier_pattern='^ui/litellm-dashboard/.*\.(js|jsx|ts|tsx|mjs|cjs|json|css|scss|md|mdx|yml|yaml|html)$'
 ui_eslint_pattern='^ui/litellm-dashboard/.*\.(js|jsx|ts|tsx|mjs|cjs)$'
+# The extra="allow" ban reads all of litellm/, and its grandfathered models are a budget
+# the check reads, so editing either can turn ban_pydantic_extra_allow red.
+extra_allow_pattern='^(litellm/.*\.py|extra-allow-budget\.json|tests/code_coverage_tests/ban_pydantic_extra_allow\.py)$'
 
 # CI's lint job (test-linting.yml) only inspects litellm/, so a tests-only or
 # scripts-only commit can't turn it red; scope the trigger there to skip the slow
@@ -99,6 +104,7 @@ litellm_py_files=$(scope_match "$litellm_py_pattern")
 e2e_py_files=$(scope_match "$e2e_py_pattern")
 # ruff format (and CI's format step) skip enterprise; the rest of make lint covers it.
 fmt_files=$(printf '%s\n' "$litellm_py_files" | grep -v '^litellm/enterprise/' | existing_files)
+extra_allow_files=$(scope_match "$extra_allow_pattern")
 # check-ui-api-types.yml triggers on any file under litellm/proxy or litellm/types
 # (Prisma schema and configs included, not just Python) plus the generator and its
 # lockfiles, so match that whole trigger set rather than a Python subset.
@@ -138,6 +144,7 @@ if [ -n "$staged" ]; then
     warn_skipped "tests/e2e checks (basedpyright + raw HTTP client ban)" "$e2e_py_pattern" "$e2e_py_files"
     warn_skipped "dashboard lint (prettier + eslint + lint budgets)" "$ui_prettier_pattern" "$ui_prettier_changed"
     warn_skipped "dashboard API-type sync (npm run gen:api)" "$spec_pattern" "$spec_files"
+    warn_skipped 'extra="allow" ban (ban_pydantic_extra_allow)' "$extra_allow_pattern" "$extra_allow_files"
 fi
 
 lint_dashboard() {
@@ -222,6 +229,14 @@ if [ -n "$e2e_py_files" ]; then
     echo "check: checking tests/e2e raw HTTP client ban (check_e2e_no_raw_requests)"
     uv run --no-sync python tests/code_coverage_tests/check_e2e_no_raw_requests.py \
         || { echo "✗ Raw HTTP client import in tests/e2e. Route the call through tests/e2e/e2e_http.py, then re-run make check." >&2; status=1; }
+fi
+
+# Around two seconds over all of litellm/, so it runs inline rather than behind a job.
+# Growing the list is the budget-ratchet job's business, which is non-gating and CI-only.
+if [ -n "$extra_allow_files" ]; then
+    echo "check: checking new pydantic models don't set extra=\"allow\" (ban_pydantic_extra_allow)"
+    uv run --no-sync python tests/code_coverage_tests/ban_pydantic_extra_allow.py \
+        || { echo "✗ New extra=\"allow\" model, or extra-allow-budget.json is stale. Declare the fields the model accepts, then re-run make check." >&2; status=1; }
 fi
 
 dashboard_checks() {
