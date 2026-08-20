@@ -210,6 +210,16 @@ def is_model_encoded_id(id_str: str) -> bool:
     return False
 
 
+def decoded_model_from_id(id_str: str) -> str | None:
+    """Deployment name embedded in a model-encoded file/batch id, or None."""
+    for prefix in ("file-", "batch_"):
+        if id_str.startswith(prefix):
+            decoded = _b64_decode(id_str[len(prefix) :])
+            if decoded.startswith("litellm:") and ";model," in decoded:
+                return decoded.split(";model,", 1)[1].split(";")[0]
+    return None
+
+
 def matches_id_shape(shape: IdShape, id_str: str) -> bool:
     if shape == "managed":
         return is_managed_id(id_str)
