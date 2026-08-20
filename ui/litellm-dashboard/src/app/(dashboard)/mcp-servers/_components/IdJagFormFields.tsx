@@ -3,7 +3,7 @@ import React from "react";
 import { SimpleTooltip } from "@/components/ui/tooltip";
 
 import { MountedFormField } from "@/components/common_components/MountedFormField";
-import { antdRequired } from "@/components/common_components/antdFormRules";
+import { requiredRule } from "@/components/common_components/formRules";
 import { MultiSelect } from "@/components/shared/MultiSelect";
 import { PasswordInput } from "@/components/shared/PasswordInput";
 import { Input } from "@/components/ui/input";
@@ -30,7 +30,7 @@ const PRIVATE_KEY_PATH = ["credentials", "client_private_key"] as const;
 const IdJagFormFields: React.FC<IdJagFormFieldsProps> = ({ isEditing = false }) => {
   const placeholderSuffix = isEditing ? " (leave blank to keep existing)" : "";
   const requiredWhenCreating = (message: string) =>
-    isEditing ? undefined : { validate: { required: antdRequired(message) } };
+    isEditing ? undefined : { validate: { required: requiredRule(message) } };
 
   return (
     <>

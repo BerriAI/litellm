@@ -19,11 +19,11 @@ const TLD = "(?:\\.(?:[a-z\\u00a1-\\uffff]{2,}))";
 const PORT = "(?::\\d{2,5})?";
 const PATH = '(?:[/?#][^\\s"]*)?';
 
-export const ANTD_URL_REGEX = new RegExp(
+export const URL_REGEX = new RegExp(
   `(?:^(?:${PROTOCOL}|www\\.)${AUTH}(?:localhost|${V4}|${V6}|${HOST}${DOMAIN}${TLD})${PORT}${PATH}$)`,
   "i",
 );
 
-export const MAX_ANTD_URL_LENGTH = 2048;
+export const MAX_URL_LENGTH = 2048;
 
-export const isAntdUrl = (value: string): boolean => value.length <= MAX_ANTD_URL_LENGTH && ANTD_URL_REGEX.test(value);
+export const isValidUrl = (value: string): boolean => value.length <= MAX_URL_LENGTH && URL_REGEX.test(value);

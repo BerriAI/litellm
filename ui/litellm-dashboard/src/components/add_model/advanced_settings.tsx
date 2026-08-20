@@ -9,7 +9,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Team } from "../key_team_helpers/key_list";
-import { antdRules } from "../common_components/antdFormRules";
+import { validatorRules } from "../common_components/formRules";
 import { labelWithHint } from "@/components/shared/form/LabelWithHint";
 import { MountedFormField } from "../common_components/MountedFormField";
 import { UtcDateTimeInput } from "@/components/shared/form/UtcDateTimeInput";
@@ -71,7 +71,7 @@ const validateNumber = (_: unknown, value: unknown) => {
 
 const usageCostRules = {
   deps: [PTU_COUNT_FIELD],
-  validate: antdRules({ validator: validateNumber }, ptuNoUsageCostRule(PTU_COUNT_FIELD)),
+  validate: validatorRules({ validator: validateNumber }, ptuNoUsageCostRule(PTU_COUNT_FIELD)),
 };
 
 const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
@@ -208,7 +208,11 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
                   )}
                   rules={{
                     deps: REVALIDATED_WHEN_PTU_COUNT_CHANGES,
-                    validate: antdRules({ validator: validateNumber }, ...ptuCountRules, ptuPairRule(PTU_RATE_FIELD)),
+                    validate: validatorRules(
+                      { validator: validateNumber },
+                      ...ptuCountRules,
+                      ptuPairRule(PTU_RATE_FIELD),
+                    ),
                   }}
                   className="mb-4"
                 >
@@ -231,7 +235,11 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
                   )}
                   rules={{
                     deps: [PTU_COUNT_FIELD],
-                    validate: antdRules({ validator: validateNumber }, ...ptuRateRules, ptuPairRule(PTU_COUNT_FIELD)),
+                    validate: validatorRules(
+                      { validator: validateNumber },
+                      ...ptuRateRules,
+                      ptuPairRule(PTU_COUNT_FIELD),
+                    ),
                   }}
                   className="mb-4"
                 >
@@ -254,7 +262,7 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
                   )}
                   rules={{
                     deps: [PTU_END_FIELD],
-                    validate: antdRules(
+                    validate: validatorRules(
                       ptuStartRequiredRule(PTU_COUNT_FIELD),
                       ptuWindowOrderRule(PTU_END_FIELD, "start"),
                     ),
@@ -279,7 +287,7 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
                   )}
                   rules={{
                     deps: [PTU_START_FIELD],
-                    validate: antdRules(ptuWindowOrderRule(PTU_START_FIELD, "end")),
+                    validate: validatorRules(ptuWindowOrderRule(PTU_START_FIELD, "end")),
                   }}
                   className="mb-4"
                 >
@@ -463,7 +471,7 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
                 "Optional litellm params used for making a litellm.completion() call.",
               )}
               className="mb-4 mt-4"
-              rules={{ validate: antdRules({ validator: formItemValidateJSON }) }}
+              rules={{ validate: validatorRules({ validator: formItemValidateJSON }) }}
             >
               {(control) => (
                 <Textarea
@@ -500,7 +508,7 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
                 "Optional model info params. Returned when calling `/model/info` endpoint.",
               )}
               className="mb-0"
-              rules={{ validate: antdRules({ validator: formItemValidateJSON }) }}
+              rules={{ validate: validatorRules({ validator: formItemValidateJSON }) }}
             >
               {(control) => (
                 <Textarea

@@ -36,7 +36,7 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { isAntdUrl } from "@/lib/forms/antdUrl";
+import { isValidUrl } from "@/lib/forms/urlValidation";
 import { useZodForm } from "@/lib/forms/useZodForm";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
@@ -51,7 +51,7 @@ const submitGuardrailSchema = z.object({
   team_id: z.string().min(1, "Select a team"),
   guardrail_name: z.string().min(1, "Enter a guardrail name"),
   mode: z.string().min(1, "Select a mode"),
-  api_base: z.string().min(1, "Enter the API base URL").refine(isAntdUrl, "Must be a valid URL"),
+  api_base: z.string().min(1, "Enter the API base URL").refine(isValidUrl, "Must be a valid URL"),
   extra_litellm_params: z.string().superRefine((value, ctx) => {
     if (!value) return;
     try {

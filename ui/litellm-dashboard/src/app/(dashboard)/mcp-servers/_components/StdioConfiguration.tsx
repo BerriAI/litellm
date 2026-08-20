@@ -3,7 +3,7 @@ import React from "react";
 import { SimpleTooltip } from "@/components/ui/tooltip";
 
 import { MountedFormField } from "@/components/common_components/MountedFormField";
-import { antdRequired } from "@/components/common_components/antdFormRules";
+import { requiredRule } from "@/components/common_components/formRules";
 import { Textarea } from "@/components/ui/textarea";
 import { parsesAsJson, textControl } from "./mcpFieldRules";
 
@@ -46,7 +46,7 @@ const StdioConfiguration: React.FC<StdioConfigurationProps> = ({ isVisible, requ
       required={required}
       rules={{
         validate: {
-          ...(required ? { required: antdRequired("Please enter stdio configuration") } : {}),
+          ...(required ? { required: requiredRule("Please enter stdio configuration") } : {}),
           json: parsesAsJson("Please enter valid JSON"),
         },
       }}

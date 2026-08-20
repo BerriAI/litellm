@@ -63,7 +63,7 @@ import {
   useMountRegistry,
   type MountedFormValues,
 } from "@/components/common_components/MountedFormField";
-import { antdRequired, antdRules } from "@/components/common_components/antdFormRules";
+import { requiredRule, validatorRules } from "@/components/common_components/formRules";
 import { allFieldsValue, mountedPaths, resetFields, setFieldsValue, singleBranchChange } from "./mcpFormStore";
 import { numberControl, notOnlyWhitespace, selectControl, selectTriggerControl, textControl } from "./mcpFieldRules";
 import mcpLogo from "../../../../../public/assets/logos/mcp_logo.png";
@@ -657,7 +657,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                       </span>
                     }
                     name="server_name"
-                    rules={{ validate: antdRules({ validator: (_, value) => validateMCPServerName(value) }) }}
+                    rules={{ validate: validatorRules({ validator: (_, value) => validateMCPServerName(value) }) }}
                   >
                     {(control) => (
                       <Input
@@ -678,7 +678,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                       </span>
                     }
                     name="alias"
-                    rules={{ validate: antdRules({ validator: (_, value) => validateMCPServerName(value) }) }}
+                    rules={{ validate: validatorRules({ validator: (_, value) => validateMCPServerName(value) }) }}
                   >
                     {(control) => (
                       <Input
@@ -725,7 +725,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                     label={<span className="text-sm font-medium text-gray-700">Transport Type</span>}
                     name="transport"
                     required
-                    rules={{ validate: { required: antdRequired("Please select a transport type") } }}
+                    rules={{ validate: { required: requiredRule("Please select a transport type") } }}
                   >
                     {(control) => (
                       <Select
@@ -755,8 +755,8 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                       required
                       rules={{
                         validate: {
-                          required: antdRequired("Please enter a server URL"),
-                          ...antdRules({ validator: (_, value) => validateMCPServerUrl(value) }),
+                          required: requiredRule("Please enter a server URL"),
+                          ...validatorRules({ validator: (_, value) => validateMCPServerUrl(value) }),
                         },
                       }}
                     >
@@ -821,7 +821,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                           label="Authentication"
                           name="auth_type"
                           required
-                          rules={{ validate: { required: antdRequired("Please select an auth type") } }}
+                          rules={{ validate: { required: requiredRule("Please select an auth type") } }}
                         >
                           {(control) => (
                             <Select {...selectControl<string>(control)} items={AUTH_TYPE_ITEMS}>

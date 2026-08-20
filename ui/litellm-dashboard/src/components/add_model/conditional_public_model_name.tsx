@@ -4,7 +4,7 @@ import { useFormContext, useWatch } from "react-hook-form";
 import { DataTable } from "@/components/shared/DataTable";
 import { Input } from "@/components/ui/input";
 import { SimpleTooltip } from "@/components/ui/tooltip";
-import { antdRules } from "../common_components/antdFormRules";
+import { validatorRules } from "../common_components/formRules";
 import { MountedFormField, type MountedFormValues } from "../common_components/MountedFormField";
 import { Providers } from "../provider_info_helpers";
 
@@ -205,7 +205,7 @@ const ConditionalPublicModelName: React.FC = () => {
         </span>
       }
       required
-      rules={{ validate: antdRules(modelMappingsRule) }}
+      rules={{ validate: validatorRules(modelMappingsRule) }}
       className="mb-4"
     >
       {(control) => (
