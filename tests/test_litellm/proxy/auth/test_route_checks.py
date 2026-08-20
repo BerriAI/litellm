@@ -3379,3 +3379,52 @@ def test_organization_daily_activity_not_granted_by_org_admin_request_data_branc
         route="/organization/daily/activity",
         allowed_routes=LiteLLMRoutes.org_admin_only_routes.value,
     )
+
+
+@pytest.mark.parametrize(
+    "user_role",
+    [
+        LitellmUserRoles.INTERNAL_USER.value,
+        LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value,
+        LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+        LitellmUserRoles.TEAM.value,
+    ],
+)
+@pytest.mark.parametrize(
+    "dry_run_route",
+    ["/auto_router/test_routing", "/auto_router/validate_complexity_router_config"],
+)
+def test_auto_router_dry_runs_share_model_new_audience(user_role, dry_run_route):
+    """The dry runs serve whoever can draft a save on /model/new, no one else: a role
+    must get the same allow-or-403 from both layers' route check, or the form's
+    pre-save call 403s for an operator whose save would have been accepted."""
+
+    def outcome(route: str) -> str:
+        user_obj = LiteLLM_UserTable(
+            user_id="test_user",
+            user_email="test@example.com",
+            user_role=user_role,
+        )
+        valid_token = UserAPIKeyAuth(
+            user_id="test_user",
+            user_role=user_role,
+        )
+        request = MagicMock(spec=Request)
+        request.query_params = {}
+        try:
+            RouteChecks.non_proxy_admin_allowed_routes_check(
+                user_obj=user_obj,
+                _user_role=user_role,
+                route=route,
+                request=request,
+                valid_token=valid_token,
+                request_data={},
+            )
+            return "allowed"
+        except HTTPException:
+            return "rejected"
+
+    assert outcome(dry_run_route) == outcome("/model/new")
+    # Anchor so parity cannot be satisfied by both routes 403ing for everyone
+    if user_role == LitellmUserRoles.INTERNAL_USER.value:
+        assert outcome(dry_run_route) == "allowed"
