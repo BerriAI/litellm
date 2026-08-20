@@ -61,7 +61,7 @@ class TestPreCallChecksOptimization:
         snapshot = copy.deepcopy(deployments)
 
         # Call the function under test
-        router._pre_call_checks(
+        router._pre_call_checks_sync(
             model="gpt-5-mini",
             healthy_deployments=deployments,
             messages=[{"role": "user", "content": "test"}],
@@ -113,7 +113,7 @@ class TestPreCallChecksOptimization:
         original_large_deployment = deployments[1]  # max_input_tokens=10000
 
         # Send a long message (100 words) that exceeds 50 tokens but fits in 10000 tokens
-        filtered = router._pre_call_checks(
+        filtered = router._pre_call_checks_sync(
             model="test",
             healthy_deployments=deployments,
             messages=[{"role": "user", "content": " ".join(["word"] * 100)}],
@@ -143,6 +143,38 @@ class TestPreCallChecksOptimization:
         assert (
             deployments[1].get("model_info", {}).get("id") == "large"
         ), "Second deployment ID changed!"
+
+
+@pytest.mark.asyncio
+async def test_async_wrapper_filters_like_sync():
+    router = Router(
+        model_list=[
+            {
+                "model_name": "test",
+                "litellm_params": {"model": "gpt-5-mini", "api_key": "sk-test"},
+                "model_info": {"id": "small", "max_input_tokens": 50},
+            },
+            {
+                "model_name": "test",
+                "litellm_params": {"model": "gpt-5.5", "api_key": "sk-test"},
+                "model_info": {"id": "large", "max_input_tokens": 10000},
+            },
+        ],
+        set_verbose=False,
+        enable_pre_call_checks=True,
+    )
+
+    deployments = router.get_model_list(model_name="test")
+    assert deployments is not None
+
+    filtered = await router._pre_call_checks_async(
+        model="test",
+        healthy_deployments=deployments,
+        messages=[{"role": "user", "content": " ".join(["word"] * 100)}],
+    )
+
+    assert len(filtered) == 1
+    assert filtered[0]["model_info"]["id"] == "large"
 
 
 if __name__ == "__main__":

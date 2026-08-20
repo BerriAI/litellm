@@ -10570,7 +10570,7 @@ class Router:
             return litellm.token_counter(messages=cast(list, input_messages))  # cast-ok: transformed chat messages
         raise ValueError("Either messages or input must be provided to count tokens")
 
-    def _pre_call_checks(
+    def _pre_call_checks_sync(
         self,
         model: str,
         healthy_deployments: list,
@@ -10746,6 +10746,29 @@ class Router:
             _returned_deployments = [d for i, d in enumerate(_returned_deployments) if i not in invalid_model_indices]
 
         return _returned_deployments
+
+    async def _pre_call_checks_async(
+        self,
+        model: str,
+        healthy_deployments: Sequence[Mapping[str, Any]],
+        messages: Sequence[Mapping[str, str]] | None = None,
+        input: str | Sequence[Any] | None = None,
+        request_kwargs: Mapping[str, Any] | None = None,
+    ) -> Sequence[Mapping[str, Any]]:
+        """
+        Async wrapper around _pre_call_checks_sync.
+
+        Offloads sync work to a worker thread so async callers can await
+        without blocking the event loop.
+        """
+        return await asyncio.to_thread(
+            self._pre_call_checks_sync,
+            model=model,
+            healthy_deployments=healthy_deployments,
+            messages=messages,
+            input=input,
+            request_kwargs=request_kwargs,
+        )
 
     def _get_model_from_alias(self, model: str) -> str | None:
         """
@@ -11115,7 +11138,7 @@ class Router:
         )
 
         if self.enable_pre_call_checks and (messages is not None or input is not None):
-            healthy_deployments = self._pre_call_checks(
+            healthy_deployments = await self._pre_call_checks_async(
                 model=model,
                 healthy_deployments=cast(list[dict], healthy_deployments),
                 messages=messages,
@@ -11850,7 +11873,7 @@ class Router:
 
         # filter pre-call checks
         if self.enable_pre_call_checks and (messages is not None or input is not None):
-            healthy_deployments = self._pre_call_checks(
+            healthy_deployments = self._pre_call_checks_sync(
                 model=model,
                 healthy_deployments=healthy_deployments,
                 messages=messages,
@@ -12008,7 +12031,7 @@ class Router:
 
         # 5. Apply pre-call checks (if enabled)
         if self.enable_pre_call_checks and (messages is not None or input is not None):
-            pass_through_deployments = self._pre_call_checks(
+            pass_through_deployments = self._pre_call_checks_sync(
                 model=model,
                 healthy_deployments=pass_through_deployments,
                 messages=messages,
