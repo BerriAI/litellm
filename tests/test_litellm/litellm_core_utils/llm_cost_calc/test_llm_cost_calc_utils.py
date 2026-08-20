@@ -1062,10 +1062,10 @@ def test_generic_cost_per_token_gpt56_terra_cache_costs_by_tier_and_context(
         ("azure/gpt-5.6", 5e-6, 3e-5, 5e-7),
         ("azure/gpt-5.6-sol", 5e-6, 3e-5, 5e-7),
         ("azure/gpt-5.6-terra", 2e-6, 1.2e-5, 2e-7),
-        ("azure/gpt-5.6-luna", 1e-6, 6e-6, 1e-7),
+        ("azure/gpt-5.6-luna", 2e-7, 1.2e-6, 2e-8),
         ("azure/us/gpt-5.6", 5.5e-6, 3.3e-5, 5.5e-7),
         ("azure/eu/gpt-5.6-terra", 2.2e-6, 1.32e-5, 2.2e-7),
-        ("azure/eu/gpt-5.6-luna", 1.1e-6, 6.6e-6, 1.1e-7),
+        ("azure/eu/gpt-5.6-luna", 2.2e-7, 1.32e-6, 2.2e-8),
     ],
 )
 def test_generic_cost_per_token_azure_gpt56(
@@ -1073,9 +1073,9 @@ def test_generic_cost_per_token_azure_gpt56(
 ):
     """Azure gpt-5.6 (global + us/eu regional).
 
-    Sol matches Azure's published global/data-zone list. Luna also tracks Azure's
-    list ($1/$6 global, 10% data-zone uplift), not OpenAI's post-cut $0.20/$1.20.
-    Terra still tracks the OpenAI 2026-07-30 cut from #35481.
+    Sol matches Azure's published global/data-zone list. Terra and luna track
+    the 2026-07-30 OpenAI cut that the Foundry blog and Azure Support say
+    applied on Azure from 2026-08-01 ($2/$12 and $0.20/$1.20 global).
     """
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
@@ -3479,15 +3479,15 @@ def test_tier_request_without_tier_pricing_keeps_the_standard_reasoning_rate():
         ("azure/gpt-5.6", 6.25e-06, 1.25e-05, 1.25e-05, 2.5e-05),
         ("azure/gpt-5.6-sol", 6.25e-06, 1.25e-05, 1.25e-05, 2.5e-05),
         ("azure/gpt-5.6-terra", 2.5e-06, 5e-06, 5e-06, 1e-05),
-        ("azure/gpt-5.6-luna", 1.25e-06, 2.5e-06, 2.5e-06, 5e-06),
+        ("azure/gpt-5.6-luna", 2.5e-07, 5e-07, 5e-07, 1e-06),
         ("azure/us/gpt-5.6", 6.875e-06, 1.375e-05, 1.375e-05, None),
         ("azure/us/gpt-5.6-sol", 6.875e-06, 1.375e-05, 1.375e-05, None),
         ("azure/us/gpt-5.6-terra", 2.75e-06, 6.875e-06, 5.5e-06, None),
-        ("azure/us/gpt-5.6-luna", 1.375e-06, 2.75e-06, 2.75e-06, None),
+        ("azure/us/gpt-5.6-luna", 2.75e-07, 6.875e-07, 5.5e-07, None),
         ("azure/eu/gpt-5.6", 6.875e-06, 1.375e-05, 1.375e-05, None),
         ("azure/eu/gpt-5.6-sol", 6.875e-06, 1.375e-05, 1.375e-05, None),
         ("azure/eu/gpt-5.6-terra", 2.75e-06, 6.875e-06, 5.5e-06, None),
-        ("azure/eu/gpt-5.6-luna", 1.375e-06, 2.75e-06, 2.75e-06, None),
+        ("azure/eu/gpt-5.6-luna", 2.75e-07, 6.875e-07, 5.5e-07, None),
     ],
 )
 def test_generic_cost_per_token_azure_gpt_5_6_cache_write_tokens(
@@ -3499,12 +3499,12 @@ def test_generic_cost_per_token_azure_gpt_5_6_cache_write_tokens(
     _local_model_cost_map,
 ):
     """
-    Azure Foundry bills GPT-5.6 prompt-cache writes at the rates published on
-    the openai-service calculator (1.25x Azure's own matching input cell).
-    Data-zone sol/gpt-5.6 priority writes are Azure's $13.75/1M cell, not 1.25x
-    of our stale $13.75 priority input. Luna writes track Azure's $1.25/$1.375
-    list, not OpenAI's post-cut $0.25. Long+priority writes on the four global
-    entries are inferred (Azure publishes no long+priority cell).
+    Azure Foundry bills GPT-5.6 prompt-cache writes at 1.25x the matching input
+    cell. Data-zone sol/gpt-5.6 priority writes are Azure's $13.75/1M cell, not
+    1.25x of our stale $13.75 priority input. Luna and terra writes track the
+    2026-07-30 cut on the Foundry blog ($0.25 and $2.50 global). Long+priority
+    writes on the four global entries are inferred (Azure publishes no
+    long+priority cell).
     """
     info = litellm.get_model_info(model=model, custom_llm_provider="azure")
     assert info["cache_creation_input_token_cost"] == pytest.approx(write_cost)
