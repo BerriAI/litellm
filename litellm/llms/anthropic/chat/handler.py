@@ -1049,23 +1049,35 @@ class ModelResponseIterator:
         This fixes network fragmentation issues where SSE data chunks may be split
         across TCP packets. See: https://github.com/BerriAI/litellm/issues/17473
 
+        Anthropic SSE payloads are always JSON objects, so a buffer that does not
+        start with "{" can never become valid. Those payloads (heartbeats, an
+        OpenAI-style "[DONE]" sentinel emitted by Anthropic-compatible gateways,
+        any other junk) are discarded so the stream resynchronizes on the next
+        event instead of silently swallowing the rest of the response.
+
         Args:
             data_str: The JSON string to parse (without "data:" prefix)
 
         Returns:
             ModelResponseStream if JSON is complete, None if still accumulating
         """
-        # Accumulate JSON data
         self.accumulated_json += data_str
 
-        # Try to parse the accumulated JSON
+        if not self.accumulated_json.lstrip().startswith("{"):
+            self._reset_json_accumulation()
+            return None
+
         try:
             data_json: Final = json.loads(self.accumulated_json)
-            self.accumulated_json = ""  # Reset after successful parsing
-            return self.chunk_parser(chunk=data_json)
         except json.JSONDecodeError:
-            # If it's not valid JSON yet, continue to the next chunk
             return None
+
+        self._reset_json_accumulation()
+        return self.chunk_parser(chunk=data_json)
+
+    def _reset_json_accumulation(self) -> None:
+        self.accumulated_json = ""
+        self.chunk_type = "valid_json"
 
     def _parse_sse_data(self, str_line: str) -> ModelResponseStream | None:
         """
