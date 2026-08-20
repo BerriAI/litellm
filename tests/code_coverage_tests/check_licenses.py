@@ -5,8 +5,9 @@ import json
 from pathlib import Path
 import re
 import sys
+import time
 import tomllib
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Callable, Dict, Final, List, Optional, Set, Tuple
 
 from packaging.requirements import Requirement
 import requests
@@ -37,6 +38,8 @@ DEFAULT_TRANSITIVE_PIN_PACKAGES = (
 # of the identifier, not an operator.
 _SPDX_OPERATOR_SPLIT = re.compile(r"\s+(?:OR|AND)\s+")
 _SPDX_WITH_SUFFIX = re.compile(r"\s+WITH\s+.*", re.DOTALL)
+_PYPI_FETCH_ATTEMPTS: Final[int] = 3
+_PYPI_FETCH_BACKOFF_SECONDS: Final[float] = 0.5
 
 
 @dataclass
@@ -50,7 +53,10 @@ class PackageLicense:
 
 class LicenseChecker:
     def __init__(
-        self, config_file: Path = Path("./tests/code_coverage_tests/liccheck.ini")
+        self,
+        config_file: Path = Path("./tests/code_coverage_tests/liccheck.ini"),
+        http_get: Optional[Callable[..., requests.Response]] = None,
+        sleep: Optional[Callable[[float], None]] = None,
     ):
         if not config_file.exists():
             print(f"Error: Config file {config_file} not found")
@@ -79,6 +85,8 @@ class LicenseChecker:
 
         # Track package results
         self.package_results: List[PackageLicense] = []
+        self._http_get = http_get
+        self._sleep = sleep
 
     @staticmethod
     def _normalize_package_name(package_name: str) -> str:
@@ -123,21 +131,45 @@ class LicenseChecker:
         last resort derives the license from the ``License :: OSI Approved ::
         ...`` trove classifiers.
         """
-        try:
-            url = f"https://pypi.org/pypi/{package_name}/{version}/json"
-            response = requests.get(url, timeout=10)
-            response.raise_for_status()
-            info = response.json().get("info", {}) or {}
-            return (
-                info.get("license_expression")
-                or info.get("license")
-                or self._license_from_classifiers(info.get("classifiers") or [])
-            )
-        except Exception as e:
-            print(
-                f"Warning: Failed to fetch license for {package_name} {version}: {str(e)}"
-            )
-            return None
+        url = f"https://pypi.org/pypi/{package_name}/{version}/json"
+        http_get = self._http_get if self._http_get is not None else requests.get
+        sleep = self._sleep if self._sleep is not None else time.sleep
+
+        for attempt in range(_PYPI_FETCH_ATTEMPTS):
+            try:
+                response = http_get(url, timeout=10)
+                response.raise_for_status()
+                info = response.json().get("info", {}) or {}
+                return (
+                    info.get("license_expression")
+                    or info.get("license")
+                    or self._license_from_classifiers(info.get("classifiers") or [])
+                )
+            except requests.HTTPError as error:
+                status_code = error.response.status_code if error.response is not None else None
+                if status_code != 429 and (status_code is None or status_code < 500):
+                    print(
+                        f"Warning: Failed to fetch license for {package_name} {version}: {str(error)}"
+                    )
+                    return None
+                if attempt == _PYPI_FETCH_ATTEMPTS - 1:
+                    print(
+                        f"Warning: Failed to fetch license for {package_name} {version}: {str(error)}"
+                    )
+                    return None
+                sleep(_PYPI_FETCH_BACKOFF_SECONDS)
+            except (requests.ConnectionError, requests.Timeout) as error:
+                if attempt == _PYPI_FETCH_ATTEMPTS - 1:
+                    print(
+                        f"Warning: Failed to fetch license for {package_name} {version}: {str(error)}"
+                    )
+                    return None
+                sleep(_PYPI_FETCH_BACKOFF_SECONDS)
+            except Exception as error:
+                print(
+                    f"Warning: Failed to fetch license for {package_name} {version}: {str(error)}"
+                )
+                return None
 
     @staticmethod
     def _license_from_classifiers(classifiers: List[str]) -> Optional[str]:
