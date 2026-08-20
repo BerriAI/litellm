@@ -88,6 +88,14 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
   const [showCacheControl, setShowCacheControl] = React.useState(false);
   const ptuCostAttributionEnabled = usePtuCostAttributionEnabled();
 
+  const handlePricingModelChange =
+    (onChange: (value: string) => void) =>
+    (value: "per_token" | "per_second" | null): void => {
+      if (value === null) return;
+      onChange(value);
+      setPricingModel(value);
+    };
+
   return (
     <>
       <Collapsible className="mt-2 mb-4 overflow-hidden rounded-lg border">
@@ -295,11 +303,7 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
                     <Select
                       items={PRICING_MODEL_ITEMS}
                       value={(control.value as "per_token" | "per_second" | undefined) ?? "per_token"}
-                      onValueChange={(value: "per_token" | "per_second" | null) => {
-                        if (value === null) return;
-                        control.onChange(value);
-                        setPricingModel(value);
-                      }}
+                      onValueChange={handlePricingModelChange(control.onChange)}
                     >
                       <SelectTrigger id={control.id} onBlur={control.onBlur} className="w-full">
                         <SelectValue />

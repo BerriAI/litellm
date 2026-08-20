@@ -26,6 +26,7 @@ interface SearchSelectProps {
   className?: string;
   inputId?: string;
   allowClear?: boolean;
+  "aria-label"?: string;
 }
 
 const matchesQuery = (option: SearchSelectOption, query: string): boolean => {
@@ -44,6 +45,7 @@ export function SearchSelect({
   className,
   inputId,
   allowClear = true,
+  "aria-label": ariaLabel,
 }: SearchSelectProps) {
   const selected =
     value === undefined || value === ""
@@ -64,6 +66,7 @@ export function SearchSelect({
     >
       <ComboboxInput
         id={inputId}
+        aria-label={ariaLabel}
         placeholder={placeholder}
         showClear={allowClear && value != null && value !== ""}
         className={`h-8 w-full text-sm ${className ?? ""}`}

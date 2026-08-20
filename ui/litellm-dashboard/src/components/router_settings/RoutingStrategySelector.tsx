@@ -27,7 +27,10 @@ const RoutingStrategySelector: React.FC<RoutingStrategySelectorProps> = ({
         </p>
       </div>
       <div className="routing-strategy-select max-w-3xl">
-        <Select value={selectedStrategy} onValueChange={(strategy: string | null) => strategy && onStrategyChange(strategy)}>
+        <Select
+          value={selectedStrategy}
+          onValueChange={(strategy: string | null) => strategy && onStrategyChange(strategy)}
+        >
           <SelectTrigger className="w-full">
             <SelectValue />
           </SelectTrigger>
