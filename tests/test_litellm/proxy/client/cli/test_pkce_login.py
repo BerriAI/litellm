@@ -619,6 +619,20 @@ def test_fresh_api_key_falls_back_to_the_old_key_only_while_it_is_still_valid():
     assert saved == []
 
 
+def test_fresh_api_key_reports_why_a_renewal_failed_unless_a_sibling_rotated_first():
+    failing = _FakeHttp({("POST", f"{BASE}/token"): _FakeResponse(503, {"error": "temporarily_unavailable"})})
+    rotated = {**STORED, "key": "sk-cli-sibling", "refresh_token": "llm_srefresh_sibling", "expires_at": 1_003_600.0}
+    warnings = []
+    assert _fresh(STORED, lambda _: None, failing, now=lambda: 990_000.0, warn=warnings.append) == "sk-cli-old"
+    assert warnings == []
+    assert _fresh(STORED, lambda _: None, failing, now=lambda: 999_950.0, warn=warnings.append) == "sk-cli-old"
+    assert _fresh(STORED, lambda _: None, failing, now=lambda: 1_000_001.0, warn=warnings.append) is None
+    assert warnings == ["Could not renew the key: token request failed with 503: temporarily_unavailable"] * 2
+    sibling = _fresh(STORED, lambda _: None, failing, reload=lambda: rotated, now=lambda: 1_000_001.0, warn=warnings.append)
+    assert sibling == "sk-cli-sibling"
+    assert len(warnings) == 2
+
+
 def test_fresh_api_key_uses_a_sibling_rotation_when_its_own_refresh_loses_the_race():
     rotated = {**STORED, "key": "sk-cli-sibling", "refresh_token": "llm_srefresh_sibling", "expires_at": 1_003_600.0}
     http = _FakeHttp({("POST", f"{BASE}/token"): _FakeResponse(400, {"error": "invalid_grant"})})
