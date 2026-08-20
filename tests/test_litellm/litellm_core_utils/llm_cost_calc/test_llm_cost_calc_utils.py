@@ -1062,17 +1062,20 @@ def test_generic_cost_per_token_gpt56_terra_cache_costs_by_tier_and_context(
         ("azure/gpt-5.6", 5e-6, 3e-5, 5e-7),
         ("azure/gpt-5.6-sol", 5e-6, 3e-5, 5e-7),
         ("azure/gpt-5.6-terra", 2e-6, 1.2e-5, 2e-7),
-        ("azure/gpt-5.6-luna", 2e-7, 1.2e-6, 2e-8),
+        ("azure/gpt-5.6-luna", 1e-6, 6e-6, 1e-7),
         ("azure/us/gpt-5.6", 5.5e-6, 3.3e-5, 5.5e-7),
         ("azure/eu/gpt-5.6-terra", 2.2e-6, 1.32e-5, 2.2e-7),
-        ("azure/eu/gpt-5.6-luna", 2.2e-7, 1.32e-6, 2.2e-8),
+        ("azure/eu/gpt-5.6-luna", 1.1e-6, 6.6e-6, 1.1e-7),
     ],
 )
 def test_generic_cost_per_token_azure_gpt56(
     model, input_cost, output_cost, cache_read_cost
 ):
-    """Azure gpt-5.6 (global + us/eu regional): pricing mirrors the openai
-    family for global deployments and carries the standard 10% regional uplift.
+    """Azure gpt-5.6 (global + us/eu regional).
+
+    Sol matches Azure's published global/data-zone list. Luna also tracks Azure's
+    list ($1/$6 global, 10% data-zone uplift), not OpenAI's post-cut $0.20/$1.20.
+    Terra still tracks the OpenAI 2026-07-30 cut from #35481.
     """
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
@@ -3476,15 +3479,15 @@ def test_tier_request_without_tier_pricing_keeps_the_standard_reasoning_rate():
         ("azure/gpt-5.6", 6.25e-06, 1.25e-05, 1.25e-05, 2.5e-05),
         ("azure/gpt-5.6-sol", 6.25e-06, 1.25e-05, 1.25e-05, 2.5e-05),
         ("azure/gpt-5.6-terra", 2.5e-06, 5e-06, 5e-06, 1e-05),
-        ("azure/gpt-5.6-luna", 2.5e-07, 5e-07, 5e-07, 1e-06),
-        ("azure/us/gpt-5.6", 6.875e-06, 1.71875e-05, 1.375e-05, None),
-        ("azure/us/gpt-5.6-sol", 6.875e-06, 1.71875e-05, 1.375e-05, None),
+        ("azure/gpt-5.6-luna", 1.25e-06, 2.5e-06, 2.5e-06, 5e-06),
+        ("azure/us/gpt-5.6", 6.875e-06, 1.375e-05, 1.375e-05, None),
+        ("azure/us/gpt-5.6-sol", 6.875e-06, 1.375e-05, 1.375e-05, None),
         ("azure/us/gpt-5.6-terra", 2.75e-06, 6.875e-06, 5.5e-06, None),
-        ("azure/us/gpt-5.6-luna", 2.75e-07, 6.875e-07, 5.5e-07, None),
-        ("azure/eu/gpt-5.6", 6.875e-06, 1.71875e-05, 1.375e-05, None),
-        ("azure/eu/gpt-5.6-sol", 6.875e-06, 1.71875e-05, 1.375e-05, None),
+        ("azure/us/gpt-5.6-luna", 1.375e-06, 2.75e-06, 2.75e-06, None),
+        ("azure/eu/gpt-5.6", 6.875e-06, 1.375e-05, 1.375e-05, None),
+        ("azure/eu/gpt-5.6-sol", 6.875e-06, 1.375e-05, 1.375e-05, None),
         ("azure/eu/gpt-5.6-terra", 2.75e-06, 6.875e-06, 5.5e-06, None),
-        ("azure/eu/gpt-5.6-luna", 2.75e-07, 6.875e-07, 5.5e-07, None),
+        ("azure/eu/gpt-5.6-luna", 1.375e-06, 2.75e-06, 2.75e-06, None),
     ],
 )
 def test_generic_cost_per_token_azure_gpt_5_6_cache_write_tokens(
@@ -3495,15 +3498,19 @@ def test_generic_cost_per_token_azure_gpt_5_6_cache_write_tokens(
     write_cost_above_272k_priority,
 ):
     """
-    Azure Foundry bills prompt-cache write tokens for the GPT-5.6 series at
-    1.25x the matching input rate (standard, priority, and long-context tiers).
-    Cache-write tokens on azure/gpt-5.6* deployments must be billed at those
-    rates rather than falling back to the plain input rate.
+    Azure Foundry bills GPT-5.6 prompt-cache writes at the rates published on
+    the openai-service calculator (1.25x Azure's own matching input cell).
+    Data-zone sol/gpt-5.6 priority writes are Azure's $13.75/1M cell, not 1.25x
+    of our stale $13.75 priority input. Luna writes track Azure's $1.25/$1.375
+    list, not OpenAI's post-cut $0.25. Long+priority writes on the four global
+    entries are inferred (Azure publishes no long+priority cell).
     """
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
     info = litellm.get_model_info(model=model, custom_llm_provider="azure")
+    assert info["cache_creation_input_token_cost"] == pytest.approx(write_cost)
+    assert info["cache_creation_input_token_cost_priority"] == pytest.approx(write_cost_priority)
     short_usage = Usage(
         prompt_tokens=1000,
         completion_tokens=10,
@@ -3542,6 +3549,25 @@ def test_generic_cost_per_token_azure_gpt_5_6_cache_write_tokens(
         (300000 - 800) * info["input_cost_per_token_above_272k_tokens_priority"]
         + 800 * write_cost_above_272k_priority
     )
+
+
+@pytest.mark.parametrize(
+    "model",
+    ["azure/us/gpt-5.6", "azure/us/gpt-5.6-sol", "azure/eu/gpt-5.6", "azure/eu/gpt-5.6-sol"],
+)
+def test_azure_data_zone_gpt56_priority_matches_azure_list(model):
+    """Azure data-zone gpt-5.6/-sol priority is $11 prompt / $13.75 write per 1M.
+
+    The map previously stored $13.75 as the priority input (2.5x of $5.50 instead
+    of Azure's 2x) and derived writes as 1.25x of that, producing $17.1875.
+    """
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    info = litellm.get_model_info(model=model, custom_llm_provider="azure")
+    assert info["input_cost_per_token_priority"] == pytest.approx(1.1e-05)
+    assert info["cache_read_input_token_cost_priority"] == pytest.approx(1.1e-06)
+    assert info["output_cost_per_token_priority"] == pytest.approx(6.6e-05)
+    assert info["cache_creation_input_token_cost_priority"] == pytest.approx(1.375e-05)
 
 
 def test_generic_cost_per_token_openai_gpt_5_6_cache_write_service_tiers():
