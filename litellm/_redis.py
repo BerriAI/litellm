@@ -589,6 +589,12 @@ def _async_credential_provider(redis_connect_func: object | None) -> CredentialP
     if azure_credential is not None:
         return AzureADCredentialProvider(azure_credential, username=os.environ.get("REDIS_USERNAME") or None)
 
+    if redis_connect_func is not None:
+        verbose_logger.warning(
+            "REDIS: dropping redis_connect_func, which an async connection cannot run. "
+            "Configure Azure AD or GCP IAM auth so a credential provider handles the token instead."
+        )
+
     return None
 
 
