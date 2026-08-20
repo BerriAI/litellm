@@ -153,17 +153,31 @@ def _keep_the_secret_in_the_file(record: CliTokenRecord, outcome: SecretWrite) -
 def clear_cli_token(*, vault: SecretVault = SYSTEM_KEYRING) -> SecretErase:
     """Remove the credential from both stores. Reports whether the keychain is now free of it.
 
-    A file that holds no secret of its own is kept when the keychain will not confirm the entry is
-    gone, because it is the only remaining record that something is still in there to remove. That
-    is what lets a later run tell a machine with a credential it cannot reach apart from one that
-    never had a login at all. Anything still holding a secret is removed either way.
+    A logout the keychain never answered keeps the token file, with its secret taken out, because
+    that file is the only remaining record that something may still be in there to remove. It is
+    what lets a later run tell a machine with a credential it cannot reach apart from one that never
+    had a login at all, and taking it away would leave the next logout answering the warning this
+    one just issued with a false all-clear. The secret goes either way.
     """
     outcome: Final = vault.erase()
     record: Final = _read_token_file()
     settled: Final = _nothing_left_behind(outcome, record)
-    if settled or record is None or record.key is not None:
+    if settled or not _keep_the_unchecked_keychain_on_record(outcome, record):
         Path(get_cli_token_file_path()).unlink(missing_ok=True)
     return SecretErased() if settled else outcome
+
+
+def _keep_the_unchecked_keychain_on_record(outcome: SecretErase, record: CliTokenRecord | None) -> bool:
+    """Whether the token file, stripped of its secret, is worth keeping as the note that says so.
+
+    Only a keychain that could not be reached leaves the question open. One that answered for itself
+    is remembered without any help from the file, and a file it can still pair a live entry with
+    would leave the machine signed in to the login that was just ended. A copy that cannot be
+    replaced with a secret-free one is not kept either, because the secret goes first.
+    """
+    if record is None or isinstance(outcome, SecretStranded):
+        return False
+    return _scrub_file_secret(record)
 
 
 def _nothing_left_behind(outcome: SecretErase, record: CliTokenRecord | None) -> bool:

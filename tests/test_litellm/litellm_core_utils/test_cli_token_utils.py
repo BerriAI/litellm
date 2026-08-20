@@ -477,6 +477,18 @@ class TestClearCliToken:
         assert clear_cli_token(vault=vault) == SecretStranded()
         assert not _token_file(isolated_home).exists()
 
+    def test_a_keychain_that_will_not_release_the_secret_still_ends_the_local_login(
+        self, isolated_home, secret_vault_factory
+    ):
+        """The warning this returns says the machine is logged out locally and the keychain entry is
+        what is left over. Keeping the file that names that entry makes the first half untrue: every
+        later command reads the credential straight back out of the keychain and keeps working."""
+        _write_metadata_only_file(isolated_home)
+        vault = secret_vault_factory(blob=_blob(), erasable=False)
+
+        assert clear_cli_token(vault=vault) == SecretStranded()
+        assert load_cli_token(vault=vault) is None
+
     @pytest.mark.parametrize(
         "failure", [KeyringDisabled(), KeyringUnreachable(), KeyringDiscardsWrites()]
     )
@@ -491,7 +503,7 @@ class TestClearCliToken:
         vault = secret_vault_factory(available=False, failure=failure)
 
         assert clear_cli_token(vault=vault) == failure
-        assert not _token_file(isolated_home).exists()
+        assert json.loads(_token_file(isolated_home).read_text()).get("key") is None
 
     def test_a_second_logout_still_reports_the_keychain_it_could_not_clear(
         self, isolated_home, secret_vault_factory
@@ -539,7 +551,25 @@ class TestClearCliToken:
 
         clear_cli_token(vault=vault)
 
-        assert not _token_file(isolated_home).exists()
+        assert "sk-legacy" not in _token_file(isolated_home).read_text()
+
+    def test_a_repeat_logout_never_answers_its_own_warning_with_an_all_clear(
+        self, isolated_home, secret_vault_factory
+    ):
+        """Sign in while the keychain works, sign in again once it has gone out of reach so the
+        second secret lands in the file, then log out twice. The first logout cannot say the first
+        login's entry is gone, and says so. If the second one reads the file the first one took
+        away as proof of a clean keychain, it retracts that warning while the credential behind it
+        is still live."""
+        vault = secret_vault_factory()
+        save_cli_token(CliTokenRecord(base_url=SERVER, key="sk-first"), vault=vault)
+        vault.available = False
+        save_cli_token(CliTokenRecord(base_url=SERVER, key="sk-second"), vault=vault)
+
+        assert clear_cli_token(vault=vault) == KeyringUnreachable()
+        assert clear_cli_token(vault=vault) == KeyringUnreachable()
+        assert vault.blob is not None
+        assert "sk-second" not in _token_file(isolated_home).read_text()
 
     @pytest.mark.parametrize("failure", [KeyringNotInstalled(), KeyringDisabled(), KeyringUnreachable()])
     def test_logging_out_of_a_machine_that_never_logged_in_invents_nothing_to_warn_about(

@@ -1074,7 +1074,7 @@ class TestKeychainBackedCommands:
 
         assert result.exit_code == 0
         assert "could not be removed" in result.output
-        assert json.loads((isolated_home / ".litellm" / "token.json").read_text()).get("key") is None
+        assert not (isolated_home / ".litellm" / "token.json").exists()
 
     def test_print_token_explains_a_locked_keychain_instead_of_printing_nothing(
         self, isolated_home, secret_vault_factory
