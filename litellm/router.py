@@ -9198,7 +9198,7 @@ class Router:
 
         # get_model_info() hands back an lru_cache'd dict, so merge into a copy; unset
         # values are skipped or Deployment's None pricing defaults would erase the map's
-        merged_model_info: Final = copy.copy(model_info)
+        merged_model_info: Final = copy.deepcopy(model_info)
         if user_model_info:
             for key, value in user_model_info.items():
                 if value is not None:
@@ -9249,7 +9249,7 @@ class Router:
         litellm_model_name_model_info: ModelInfo | None = None
 
         try:
-            custom_model_info = litellm.model_cost.get(model_id)
+            custom_model_info = copy.deepcopy(litellm.model_cost.get(model_id))
         except Exception:
             pass
 
@@ -9264,9 +9264,8 @@ class Router:
                 base_model: Final = custom_model_info.get("base_model", None)
                 if base_model is not None:
                     ## update litellm model info with base model info
-                    base_model_info: Final = litellm.get_model_info(model=base_model)
+                    base_model_info: Final = copy.deepcopy(litellm.get_model_info(model=base_model))
                     if base_model_info is not None:
-                        custom_model_info = custom_model_info or {}
                         # Base model provides defaults, custom model info overrides
                         custom_model_info = _update_dictionary(
                             cast(dict, base_model_info),
@@ -9282,13 +9281,13 @@ class Router:
             model_info = cast(
                 ModelInfo,
                 _update_dictionary(
-                    cast(dict, litellm_model_name_model_info).copy(),
+                    copy.deepcopy(cast(dict, litellm_model_name_model_info)),
                     custom_model_info,
                 ),
             )
         elif litellm_model_name_model_info is not None:
             # (2) Built-in only — no custom pricing to merge
-            model_info = litellm_model_name_model_info
+            model_info = copy.deepcopy(litellm_model_name_model_info)
         elif custom_model_info is not None:
             # (3) Custom only — model not in built-in cost map yet
             # custom_model_info already includes base_model defaults at this point, if applicable
