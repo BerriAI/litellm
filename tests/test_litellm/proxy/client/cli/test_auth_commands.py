@@ -4,7 +4,7 @@ import stat
 import sys
 import time
 from pathlib import Path
-from unittest.mock import Mock, mock_open, patch
+from unittest.mock import Mock, patch
 
 sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system path
 
@@ -13,19 +13,36 @@ import pytest
 from click.testing import CliRunner
 
 from litellm.constants import CLI_JWT_EXPIRATION_HOURS
+from litellm.litellm_core_utils.cli_token_utils import CliTokenRecord, save_cli_token
 from litellm.proxy.client.cli import cli
 from litellm.proxy.client.cli.commands.auth import (
-    clear_token,
+    KEYCHAIN_UNREACHABLE_MESSAGE,
     get_stored_api_key,
-    get_token_file_path,
-    load_token,
     login,
     logout,
     print_token,
-    save_token,
     whoami,
 )
 from litellm.proxy.client.cli.commands.claude_settings import SettingsFileOwner
+
+
+@pytest.fixture
+def isolated_home(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    monkeypatch.delenv("LITELLM_PROXY_URL", raising=False)
+    monkeypatch.delenv("LITELLM_PROXY_API_KEY", raising=False)
+    return tmp_path
+
+
+def _write_home_json(home: Path, filename: str, payload: dict[str, object]) -> None:
+    litellm_dir = home / ".litellm"
+    litellm_dir.mkdir(exist_ok=True)
+    (litellm_dir / filename).write_text(json.dumps(payload))
+
+
+def _secret_blob(base_url: str, key: str) -> str:
+    return json.dumps({"base_url": base_url, "key": key, "jwt_token": ""})
 
 
 def _mock_cli_sso_start_response(
@@ -176,200 +193,50 @@ class TestStartCliSsoFlowErrors:
         assert "https://unreachable.example.com/sso/cli/start" in message
 
 
-class TestTokenUtilities:
-    """Test token file utility functions"""
+class TestStoredApiKeyLookup:
+    """`get_stored_api_key` is what every other `lite` subcommand authenticates with, so the
+    keychain split and the origin check both have to be invisible to it."""
 
-    def test_get_token_file_path(self):
-        """Test getting token file path"""
-        with (
-            patch("pathlib.Path.home") as mock_home,
-            patch("pathlib.Path.mkdir") as mock_mkdir,
-        ):
-            mock_home.return_value = Path("/home/user")
+    def test_returns_the_secret_the_keychain_holds(self, isolated_home, secret_vault_factory):
+        _write_home_json(isolated_home, "token.json", {"base_url": "https://real-proxy.com", "user_id": "u-1"})
+        vault = secret_vault_factory(blob=_secret_blob("https://real-proxy.com", "sk-from-keychain"))
 
-            result = get_token_file_path()
+        assert get_stored_api_key(vault=vault) == "sk-from-keychain"
 
-            assert result == "/home/user/.litellm/token.json"
-            mock_mkdir.assert_called_once_with(exist_ok=True)
+    def test_returns_a_legacy_plaintext_key(self, isolated_home, secret_vault_factory):
+        _write_home_json(isolated_home, "token.json", {"base_url": "https://real-proxy.com", "key": "sk-legacy"})
 
-    def test_get_token_file_path_creates_directory(self):
-        """Test that get_token_file_path creates the config directory"""
-        with (
-            patch("pathlib.Path.home") as mock_home,
-            patch("pathlib.Path.mkdir") as mock_mkdir,
-        ):
-            mock_home.return_value = Path("/home/user")
+        assert get_stored_api_key(vault=secret_vault_factory()) == "sk-legacy"
 
-            get_token_file_path()
+    def test_no_token_at_all_returns_nothing(self, isolated_home, secret_vault_factory):
+        assert get_stored_api_key(vault=secret_vault_factory()) is None
 
-            mock_mkdir.assert_called_once_with(exist_ok=True)
+    def test_metadata_without_a_secret_returns_nothing(self, isolated_home, secret_vault_factory):
+        _write_home_json(isolated_home, "token.json", {"base_url": "https://real-proxy.com", "user_id": "u-1"})
 
-    def test_save_token(self, tmp_path):
-        """Test saving token data to file"""
-        token_data = {
-            "key": "test-key",
-            "user_id": "test-user",
-            "timestamp": 1234567890,
-        }
-        token_file = tmp_path / "token.json"
+        assert get_stored_api_key(vault=secret_vault_factory()) is None
 
-        with patch("litellm.proxy.client.cli.commands.auth.get_token_file_path") as mock_path:
-            mock_path.return_value = str(token_file)
+    def test_matching_base_url_returns_the_key(self, isolated_home, secret_vault_factory):
+        _write_home_json(isolated_home, "token.json", {"base_url": "https://real-proxy.com", "key": "sk-prod"})
 
-            save_token(token_data)
+        assert get_stored_api_key("https://real-proxy.com", vault=secret_vault_factory()) == "sk-prod"
 
-        assert json.loads(token_file.read_text()) == token_data
-        assert stat.S_IMODE(token_file.stat().st_mode) == 0o600
+    def test_trailing_slash_on_the_expected_url_is_normalised(self, isolated_home, secret_vault_factory):
+        _write_home_json(isolated_home, "token.json", {"base_url": "https://real-proxy.com", "key": "sk-prod"})
 
-    def test_load_token_success(self):
-        """Test loading token data from file successfully"""
-        token_data = {
-            "key": "test-key",
-            "user_id": "test-user",
-            "timestamp": 1234567890,
-        }
+        assert get_stored_api_key("https://real-proxy.com/", vault=secret_vault_factory()) == "sk-prod"
 
-        with (
-            patch("builtins.open", mock_open(read_data=json.dumps(token_data))),
-            patch("litellm.proxy.client.cli.commands.auth.get_token_file_path") as mock_path,
-            patch("os.path.exists", return_value=True),
-        ):
-            mock_path.return_value = "/test/path/token.json"
+    def test_mismatched_base_url_withholds_the_key(self, isolated_home, secret_vault_factory):
+        _write_home_json(isolated_home, "token.json", {"base_url": "https://real-proxy.com", "key": "sk-prod"})
 
-            result = load_token()
+        assert get_stored_api_key("https://evil.com", vault=secret_vault_factory()) is None
 
-            assert result == token_data
+    def test_old_tokens_without_a_base_url_are_rejected_when_an_origin_is_expected(
+        self, isolated_home, secret_vault_factory
+    ):
+        _write_home_json(isolated_home, "token.json", {"key": "sk-old-token"})
 
-    def test_load_token_file_not_exists(self):
-        """Test loading token when file doesn't exist"""
-        with (
-            patch("litellm.proxy.client.cli.commands.auth.get_token_file_path") as mock_path,
-            patch("os.path.exists", return_value=False),
-        ):
-            mock_path.return_value = "/test/path/token.json"
-
-            result = load_token()
-
-            assert result is None
-
-    def test_load_token_json_decode_error(self):
-        """Test loading token with invalid JSON"""
-        with (
-            patch("builtins.open", mock_open(read_data="invalid json")),
-            patch("litellm.proxy.client.cli.commands.auth.get_token_file_path") as mock_path,
-            patch("os.path.exists", return_value=True),
-        ):
-            mock_path.return_value = "/test/path/token.json"
-
-            result = load_token()
-
-            assert result is None
-
-    def test_load_token_io_error(self):
-        """Test loading token with IO error"""
-        with (
-            patch("builtins.open", side_effect=OSError("Permission denied")),
-            patch("litellm.proxy.client.cli.commands.auth.get_token_file_path") as mock_path,
-            patch("os.path.exists", return_value=True),
-        ):
-            mock_path.return_value = "/test/path/token.json"
-
-            result = load_token()
-
-            assert result is None
-
-    def test_clear_token_file_exists(self):
-        """Test clearing token when file exists"""
-        with (
-            patch("litellm.proxy.client.cli.commands.auth.get_token_file_path") as mock_path,
-            patch("os.path.exists", return_value=True),
-            patch("os.remove") as mock_remove,
-        ):
-            mock_path.return_value = "/test/path/token.json"
-
-            clear_token()
-
-            mock_remove.assert_called_once_with("/test/path/token.json")
-
-    def test_clear_token_file_not_exists(self):
-        """Test clearing token when file doesn't exist"""
-        with (
-            patch("litellm.proxy.client.cli.commands.auth.get_token_file_path") as mock_path,
-            patch("os.path.exists", return_value=False),
-            patch("os.remove") as mock_remove,
-        ):
-            mock_path.return_value = "/test/path/token.json"
-
-            clear_token()
-
-            mock_remove.assert_not_called()
-
-    def test_get_stored_api_key_success(self):
-        """Test getting stored API key successfully"""
-        token_data = {"key": "test-api-key-123", "user_id": "test-user"}
-
-        with patch(
-            "litellm.litellm_core_utils.cli_token_utils.load_cli_token",
-            return_value=token_data,
-        ):
-            result = get_stored_api_key()
-            assert result == "test-api-key-123"
-
-    def test_get_stored_api_key_no_token(self):
-        """Test getting stored API key when no token exists"""
-        with patch(
-            "litellm.litellm_core_utils.cli_token_utils.load_cli_token",
-            return_value=None,
-        ):
-            result = get_stored_api_key()
-            assert result is None
-
-    def test_get_stored_api_key_no_key_field(self):
-        """Test getting stored API key when token has no key field"""
-        token_data = {"user_id": "test-user"}
-
-        with patch(
-            "litellm.litellm_core_utils.cli_token_utils.load_cli_token",
-            return_value=token_data,
-        ):
-            result = get_stored_api_key()
-            assert result is None
-
-    def test_get_stored_api_key_base_url_match(self):
-        """Stored key is returned when expected_base_url matches stored origin"""
-        token_data = {"key": "sk-prod", "base_url": "https://real-proxy.com"}
-        with patch(
-            "litellm.litellm_core_utils.cli_token_utils.load_cli_token",
-            return_value=token_data,
-        ):
-            assert get_stored_api_key(expected_base_url="https://real-proxy.com") == "sk-prod"
-
-    def test_get_stored_api_key_base_url_match_trailing_slash(self):
-        """Trailing slash on expected_base_url is normalised before comparison"""
-        token_data = {"key": "sk-prod", "base_url": "https://real-proxy.com"}
-        with patch(
-            "litellm.litellm_core_utils.cli_token_utils.load_cli_token",
-            return_value=token_data,
-        ):
-            assert get_stored_api_key(expected_base_url="https://real-proxy.com/") == "sk-prod"
-
-    def test_get_stored_api_key_base_url_mismatch(self):
-        """Stored key is NOT returned when expected_base_url differs from stored origin"""
-        token_data = {"key": "sk-prod", "base_url": "https://real-proxy.com"}
-        with patch(
-            "litellm.litellm_core_utils.cli_token_utils.load_cli_token",
-            return_value=token_data,
-        ):
-            assert get_stored_api_key(expected_base_url="https://evil.com") is None
-
-    def test_get_stored_api_key_old_token_no_base_url(self):
-        """Old tokens without a base_url field are rejected when origin check is requested"""
-        token_data = {"key": "sk-old-token"}
-        with patch(
-            "litellm.litellm_core_utils.cli_token_utils.load_cli_token",
-            return_value=token_data,
-        ):
-            assert get_stored_api_key(expected_base_url="https://real-proxy.com") is None
+        assert get_stored_api_key("https://real-proxy.com", vault=secret_vault_factory()) is None
 
 
 class TestLoginCommand:
@@ -402,7 +269,7 @@ class TestLoginCommand:
                 return_value=_mock_cli_sso_start_response(login_id="cli-test-uuid-123"),
             ) as mock_post,
             patch("requests.get", return_value=mock_response) as mock_get,
-            patch("litellm.proxy.client.cli.commands.auth.save_token") as mock_save,
+            patch("litellm.proxy.client.cli.commands.auth.save_cli_token") as mock_save,
             patch("litellm.proxy.client.cli.interface.show_commands") as mock_show_commands,
         ):
             result = self.runner.invoke(login, obj=mock_context.obj)
@@ -424,8 +291,8 @@ class TestLoginCommand:
             # Verify JWT was saved
             mock_save.assert_called_once()
             saved_data = mock_save.call_args[0][0]
-            assert saved_data["key"] == "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.test.jwt"
-            assert saved_data["user_id"] == "test-user-123"
+            assert saved_data.key == "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.test.jwt"
+            assert saved_data.user_id == "test-user-123"
 
             # Verify commands were shown
             mock_show_commands.assert_called_once()
@@ -557,7 +424,7 @@ class TestLogoutCommand:
 
     def test_logout_success(self):
         """Test successful logout"""
-        with patch("litellm.proxy.client.cli.commands.auth.clear_token") as mock_clear:
+        with patch("litellm.proxy.client.cli.commands.auth.clear_cli_token") as mock_clear:
             result = self.runner.invoke(logout)
 
             assert result.exit_code == 0
@@ -574,14 +441,15 @@ class TestWhoamiCommand:
 
     def test_whoami_authenticated(self):
         """Test whoami when user is authenticated"""
-        token_data = {
-            "user_email": "test@example.com",
-            "user_id": "test-user-123",
-            "user_role": "admin",
-            "timestamp": time.time() - 3600,  # 1 hour ago
-        }
+        token_data = CliTokenRecord(
+            user_email="test@example.com",
+            user_id="test-user-123",
+            user_role="admin",
+            key="sk-live",
+            timestamp=time.time() - 3600,
+        )
 
-        with patch("litellm.proxy.client.cli.commands.auth.load_token", return_value=token_data):
+        with patch("litellm.proxy.client.cli.commands.auth.load_cli_token", return_value=token_data):
             result = self.runner.invoke(whoami)
 
             assert result.exit_code == 0
@@ -593,7 +461,7 @@ class TestWhoamiCommand:
 
     def test_whoami_not_authenticated(self):
         """Test whoami when user is not authenticated"""
-        with patch("litellm.proxy.client.cli.commands.auth.load_token", return_value=None):
+        with patch("litellm.proxy.client.cli.commands.auth.load_cli_token", return_value=None):
             result = self.runner.invoke(whoami)
 
             assert result.exit_code == 0
@@ -602,14 +470,15 @@ class TestWhoamiCommand:
 
     def test_whoami_old_token(self):
         """Test whoami with old token showing warning"""
-        token_data = {
-            "user_email": "test@example.com",
-            "user_id": "test-user-123",
-            "user_role": "admin",
-            "timestamp": time.time() - (25 * 3600),  # 25 hours ago
-        }
+        token_data = CliTokenRecord(
+            user_email="test@example.com",
+            user_id="test-user-123",
+            user_role="admin",
+            key="sk-live",
+            timestamp=time.time() - (25 * 3600),
+        )
 
-        with patch("litellm.proxy.client.cli.commands.auth.load_token", return_value=token_data):
+        with patch("litellm.proxy.client.cli.commands.auth.load_cli_token", return_value=token_data):
             result = self.runner.invoke(whoami)
 
             assert result.exit_code == 0
@@ -618,12 +487,9 @@ class TestWhoamiCommand:
 
     def test_whoami_missing_fields(self):
         """Test whoami with token missing some fields"""
-        token_data = {
-            "timestamp": time.time() - 3600
-            # Missing user_email, user_id, user_role
-        }
+        token_data = CliTokenRecord(key="sk-live", timestamp=time.time() - 3600)
 
-        with patch("litellm.proxy.client.cli.commands.auth.load_token", return_value=token_data):
+        with patch("litellm.proxy.client.cli.commands.auth.load_cli_token", return_value=token_data):
             result = self.runner.invoke(whoami)
 
             assert result.exit_code == 0
@@ -632,16 +498,16 @@ class TestWhoamiCommand:
 
     def test_whoami_no_timestamp(self):
         """Test whoami with token missing timestamp"""
-        token_data = {
-            "user_email": "test@example.com",
-            "user_id": "test-user-123",
-            "user_role": "admin",
-            # Missing timestamp
-        }
+        token_data = CliTokenRecord(
+            user_email="test@example.com",
+            user_id="test-user-123",
+            user_role="admin",
+            key="sk-live",
+        )
 
         with (
             patch(
-                "litellm.proxy.client.cli.commands.auth.load_token",
+                "litellm.proxy.client.cli.commands.auth.load_cli_token",
                 return_value=token_data,
             ),
             patch("time.time", return_value=1000),
@@ -701,7 +567,7 @@ class TestCLIKeyRegenerationFlow:
                 return_value=_mock_cli_sso_start_response(login_id="cli-session-uuid-456"),
             ),
             patch("requests.get", side_effect=[mock_first_response, mock_second_response]) as mock_get,
-            patch("litellm.proxy.client.cli.commands.auth.save_token") as mock_save,
+            patch("litellm.proxy.client.cli.commands.auth.save_cli_token") as mock_save,
             patch("litellm.proxy.client.cli.interface.show_commands") as mock_show_commands,
             patch("click.prompt", return_value="2"),
         ):  # User selects index 2
@@ -734,8 +600,8 @@ class TestCLIKeyRegenerationFlow:
             # Verify JWT was saved
             mock_save.assert_called_once()
             saved_data = mock_save.call_args[0][0]
-            assert saved_data["key"] == "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.team-beta.jwt"
-            assert saved_data["user_id"] == "test-user-456"
+            assert saved_data.key == "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.team-beta.jwt"
+            assert saved_data.user_id == "test-user-456"
 
             mock_show_commands.assert_called_once()
 
@@ -762,7 +628,7 @@ class TestCLIKeyRegenerationFlow:
                 return_value=_mock_cli_sso_start_response(login_id="cli-session-uuid-solo"),
             ),
             patch("requests.get", return_value=mock_response),
-            patch("litellm.proxy.client.cli.commands.auth.save_token") as mock_save,
+            patch("litellm.proxy.client.cli.commands.auth.save_cli_token") as mock_save,
             patch("litellm.proxy.client.cli.interface.show_commands"),
         ):
             result = self.runner.invoke(login, obj=mock_context.obj)
@@ -780,8 +646,8 @@ class TestCLIKeyRegenerationFlow:
             # Verify JWT was saved
             mock_save.assert_called_once()
             saved_data = mock_save.call_args[0][0]
-            assert saved_data["key"] == "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.no-team.jwt"
-            assert saved_data["user_id"] == "test-user-solo"
+            assert saved_data.key == "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.no-team.jwt"
+            assert saved_data.user_id == "test-user-solo"
 
 
 class TestPrintTokenCommand:
@@ -810,7 +676,7 @@ class TestPrintTokenCommand:
         self.runner = CliRunner()
 
     def test_no_stored_token_fails_cleanly(self):
-        with patch("litellm.proxy.client.cli.commands.auth.load_token", return_value=None):
+        with patch("litellm.proxy.client.cli.commands.auth.load_cli_token", return_value=None):
             result = self.runner.invoke(print_token, obj={})
 
         assert result.exit_code != 0
@@ -822,12 +688,12 @@ class TestPrintTokenCommand:
         one). Must use token.json's own base_url, not a hardcoded default."""
         with (
             patch(
-                "litellm.proxy.client.cli.commands.auth.load_token",
-                return_value={
-                    "base_url": "https://litellm-proxy.corp.com",
-                    "key": "sk-prod-fresh",
-                    "timestamp": time.time(),
-                },
+                "litellm.proxy.client.cli.commands.auth.load_cli_token",
+                return_value=CliTokenRecord(
+                    base_url="https://litellm-proxy.corp.com",
+                    key="sk-prod-fresh",
+                    timestamp=time.time(),
+                ),
             ),
             patch("requests.post") as mock_post,
         ):
@@ -844,12 +710,12 @@ class TestPrintTokenCommand:
         token minted for proxy A must not reach a helper invocation aimed
         at proxy B, even though the token itself is otherwise fresh."""
         with patch(
-            "litellm.proxy.client.cli.commands.auth.load_token",
-            return_value={
-                "base_url": "https://other-server.com",
-                "key": "sk-should-not-print",
-                "timestamp": time.time(),
-            },
+            "litellm.proxy.client.cli.commands.auth.load_cli_token",
+            return_value=CliTokenRecord(
+                base_url="https://other-server.com",
+                key="sk-should-not-print",
+                timestamp=time.time(),
+            ),
         ):
             result = self.runner.invoke(
                 print_token,
@@ -863,12 +729,12 @@ class TestPrintTokenCommand:
         """`lite up`'s own bound invocation shape: --base-url matching the token's origin
         must succeed exactly like the bare/legacy invocation does."""
         with patch(
-            "litellm.proxy.client.cli.commands.auth.load_token",
-            return_value={
-                "base_url": "http://localhost:4000",
-                "key": "sk-matches",
-                "timestamp": time.time(),
-            },
+            "litellm.proxy.client.cli.commands.auth.load_cli_token",
+            return_value=CliTokenRecord(
+                base_url="http://localhost:4000",
+                key="sk-matches",
+                timestamp=time.time(),
+            ),
         ):
             result = self.runner.invoke(
                 print_token,
@@ -884,12 +750,12 @@ class TestPrintTokenCommand:
         frequently)."""
         with (
             patch(
-                "litellm.proxy.client.cli.commands.auth.load_token",
-                return_value={
-                    "base_url": "http://localhost:4000",
-                    "key": "sk-cached-fresh",
-                    "timestamp": time.time(),
-                },
+                "litellm.proxy.client.cli.commands.auth.load_cli_token",
+                return_value=CliTokenRecord(
+                    base_url="http://localhost:4000",
+                    key="sk-cached-fresh",
+                    timestamp=time.time(),
+                ),
             ),
             patch("requests.post") as mock_post,
         ):
@@ -908,12 +774,12 @@ class TestPrintTokenCommand:
 
         with (
             patch(
-                "litellm.proxy.client.cli.commands.auth.load_token",
-                return_value={
-                    "base_url": "http://localhost:4000",
-                    "key": "sk-stale-key",
-                    "timestamp": old_timestamp,
-                },
+                "litellm.proxy.client.cli.commands.auth.load_cli_token",
+                return_value=CliTokenRecord(
+                    base_url="http://localhost:4000",
+                    key="sk-stale-key",
+                    timestamp=old_timestamp,
+                ),
             ),
             patch("requests.post") as mock_post,
         ):
@@ -925,24 +791,10 @@ class TestPrintTokenCommand:
         mock_post.assert_not_called()
 
 
-def _write_home_json(home: Path, filename: str, payload: dict[str, object]) -> None:
-    litellm_dir = home / ".litellm"
-    litellm_dir.mkdir(exist_ok=True)
-    (litellm_dir / filename).write_text(json.dumps(payload))
-
-
 class TestPrintTokenWithConfigFile:
     """A config-file base_url is a drop-in replacement for exporting
     LITELLM_PROXY_URL, so print-token must treat it as an explicit server
     choice: a token minted for a different proxy is never handed out."""
-
-    @pytest.fixture
-    def isolated_home(self, monkeypatch, tmp_path):
-        monkeypatch.setenv("HOME", str(tmp_path))
-        monkeypatch.setenv("USERPROFILE", str(tmp_path))
-        monkeypatch.delenv("LITELLM_PROXY_URL", raising=False)
-        monkeypatch.delenv("LITELLM_PROXY_API_KEY", raising=False)
-        return tmp_path
 
     def test_config_base_url_mismatch_fails_closed(self, isolated_home):
         _write_home_json(
@@ -1001,35 +853,194 @@ class TestPrintTokenWithConfigFile:
         assert result.stdout.strip() == "sk-issued-for-a"
 
 
-class TestSaveTokenPrivateWrite:
-    """token.json holds the real API key: it must never be world-readable at any
-    instant, and a failed write must not destroy the previously stored token."""
+class TestFileFallbackStorage:
+    """On a headless box with no keychain the token file is still the only store, so it has to
+    stay owner-only and survive a failed write."""
 
-    @pytest.fixture
-    def isolated_home(self, monkeypatch, tmp_path):
-        monkeypatch.setenv("HOME", str(tmp_path))
-        monkeypatch.setenv("USERPROFILE", str(tmp_path))
-        monkeypatch.delenv("LITELLM_PROXY_URL", raising=False)
-        monkeypatch.delenv("LITELLM_PROXY_API_KEY", raising=False)
-        return tmp_path
-
-    def test_save_token_owner_only_permissions_and_no_temp_leftovers(self, isolated_home):
-        save_token({"key": "sk-secret", "user_id": "u-1", "timestamp": 1234567890})
+    def test_owner_only_file_and_directory_with_no_temp_leftovers(self, isolated_home, secret_vault_factory):
+        save_cli_token(
+            CliTokenRecord(base_url="https://proxy.example.com", key="sk-secret", user_id="u-1", timestamp=1234567890),
+            vault=secret_vault_factory(available=False),
+        )
 
         token_file = isolated_home / ".litellm" / "token.json"
-        assert json.loads(token_file.read_text()) == {"key": "sk-secret", "user_id": "u-1", "timestamp": 1234567890}
+        assert json.loads(token_file.read_text())["key"] == "sk-secret"
         assert stat.S_IMODE(token_file.stat().st_mode) == 0o600
+        assert stat.S_IMODE(token_file.parent.stat().st_mode) == 0o700
         assert list(token_file.parent.glob(".tmp-*")) == []
 
-    def test_save_token_failure_mid_write_preserves_existing_token(self, isolated_home):
+    def test_a_failed_write_preserves_the_existing_token(self, isolated_home, secret_vault_factory, monkeypatch):
         _write_home_json(isolated_home, "token.json", {"key": "sk-original", "timestamp": 1234567890})
         token_file = isolated_home / ".litellm" / "token.json"
 
+        def _explode(*args, **kwargs):
+            raise TypeError("not serialisable")
+
+        monkeypatch.setattr("litellm.litellm_core_utils.private_json.json.dump", _explode)
+
         with pytest.raises(TypeError):
-            save_token({"key": object()})
+            save_cli_token(CliTokenRecord(key="sk-new"), vault=secret_vault_factory(available=False))
 
         assert json.loads(token_file.read_text()) == {"key": "sk-original", "timestamp": 1234567890}
         assert list(token_file.parent.glob(".tmp-*")) == []
+
+
+class TestKeychainBackedCommands:
+    """End-to-end through the `lite` commands: the secret lives in the keychain, the file keeps
+    only metadata, and every command still reads and writes through that split."""
+
+    def setup_method(self):
+        self.runner = CliRunner()
+
+    def _login(self, vault, base_url="https://test.example.com"):
+        poll_response = Mock()
+        poll_response.status_code = 200
+        poll_response.json.return_value = {
+            "status": "ready",
+            "key": "sk-minted",
+            "user_id": "test-user-123",
+            "team_id": "team-1",
+            "teams": ["team-1"],
+        }
+        with (
+            patch("webbrowser.open"),
+            patch("requests.post", return_value=_mock_cli_sso_start_response()),
+            patch("requests.get", return_value=poll_response),
+            patch("litellm.proxy.client.cli.interface.show_commands"),
+        ):
+            return self.runner.invoke(login, obj={"base_url": base_url, "secret_vault": vault})
+
+    def test_login_puts_the_secret_in_the_keychain_and_not_in_the_file(self, isolated_home, secret_vault_factory):
+        vault = secret_vault_factory()
+
+        result = self._login(vault)
+
+        token_file = isolated_home / ".litellm" / "token.json"
+        assert result.exit_code == 0
+        assert "Credential stored in your OS keychain." in result.output
+        assert json.loads(vault.blob)["key"] == "sk-minted"
+        assert "sk-minted" not in token_file.read_text()
+        assert json.loads(token_file.read_text())["user_id"] == "test-user-123"
+
+    def test_login_without_a_keychain_says_where_the_credential_went(self, isolated_home, secret_vault_factory):
+        result = self._login(secret_vault_factory(available=False))
+
+        token_file = isolated_home / ".litellm" / "token.json"
+        assert result.exit_code == 0
+        assert "No OS keychain available" in result.output
+        assert str(token_file) in result.output
+        assert json.loads(token_file.read_text())["key"] == "sk-minted"
+
+    def test_whoami_and_print_token_read_through_the_keychain(self, isolated_home, secret_vault_factory):
+        vault = secret_vault_factory()
+        self._login(vault)
+        obj = {"base_url": "https://test.example.com", "secret_vault": vault}
+
+        whoami_result = self.runner.invoke(whoami, obj=obj)
+        print_result = self.runner.invoke(print_token, obj=obj)
+
+        assert "Authenticated" in whoami_result.output
+        assert "test-user-123" in whoami_result.output
+        assert print_result.exit_code == 0
+        assert print_result.stdout.strip() == "sk-minted"
+
+    def test_logout_clears_the_keychain_as_well_as_the_file(self, isolated_home, secret_vault_factory):
+        vault = secret_vault_factory()
+        self._login(vault)
+
+        result = self.runner.invoke(logout, obj={"base_url": "https://test.example.com", "secret_vault": vault})
+
+        assert result.exit_code == 0
+        assert "Logged out successfully" in result.output
+        assert vault.blob is None
+        assert not (isolated_home / ".litellm" / "token.json").exists()
+
+    def test_logout_warns_when_the_keychain_will_not_release_the_secret(self, isolated_home, secret_vault_factory):
+        """Silently reporting success would leave a live credential in the keychain."""
+        vault = secret_vault_factory(erasable=False)
+        self._login(vault)
+
+        result = self.runner.invoke(logout, obj={"base_url": "https://test.example.com", "secret_vault": vault})
+
+        assert result.exit_code == 0
+        assert "could not be removed" in result.output
+        assert not (isolated_home / ".litellm" / "token.json").exists()
+
+    def test_print_token_explains_a_locked_keychain_instead_of_printing_nothing(
+        self, isolated_home, secret_vault_factory
+    ):
+        _write_home_json(
+            isolated_home,
+            "token.json",
+            {"base_url": "https://test.example.com", "user_id": "u-1", "timestamp": time.time()},
+        )
+        obj = {"base_url": "https://test.example.com", "secret_vault": secret_vault_factory(available=False)}
+
+        result = self.runner.invoke(print_token, obj=obj)
+
+        assert result.exit_code == 1
+        assert KEYCHAIN_UNREACHABLE_MESSAGE in result.output
+
+    def test_whoami_flags_a_locked_keychain(self, isolated_home, secret_vault_factory):
+        _write_home_json(
+            isolated_home,
+            "token.json",
+            {"base_url": "https://test.example.com", "user_id": "u-1", "timestamp": time.time()},
+        )
+        obj = {"base_url": "https://test.example.com", "secret_vault": secret_vault_factory(available=False)}
+
+        result = self.runner.invoke(whoami, obj=obj)
+
+        assert "Authenticated" in result.output
+        assert KEYCHAIN_UNREACHABLE_MESSAGE in result.output
+
+
+class TestApiKeyPrecedence:
+    """`LITELLM_PROXY_API_KEY` and `--api-key` outrank the stored credential; moving the secret
+    into the keychain must not disturb that order."""
+
+    def _resolved_key(self, args, obj=None):
+        with patch("litellm.proxy.client.cli.main.print_version") as mock_print_version:
+            result = CliRunner().invoke(cli, [*args, "version"], obj=obj)
+        assert result.exit_code == 0, result.output
+        return mock_print_version.call_args[0][1]
+
+    def test_the_stored_credential_is_the_fallback(self, isolated_home):
+        _write_home_json(
+            isolated_home,
+            "token.json",
+            {"base_url": "http://localhost:4000", "key": "sk-stored", "timestamp": time.time()},
+        )
+
+        assert self._resolved_key([]) == "sk-stored"
+
+    def test_the_stored_credential_is_read_through_the_injected_keychain(self, isolated_home, secret_vault_factory):
+        """The vault handed to the CLI through ctx.obj must be the one the group callback reads,
+        so a keychain-held secret resolves without ever touching the host OS keychain."""
+        _write_home_json(isolated_home, "token.json", {"base_url": "http://localhost:4000", "timestamp": time.time()})
+        vault = secret_vault_factory(_secret_blob("http://localhost:4000", "sk-keychain"))
+
+        assert self._resolved_key([], obj={"secret_vault": vault}) == "sk-keychain"
+
+    def test_env_var_beats_the_stored_credential(self, isolated_home, monkeypatch):
+        _write_home_json(
+            isolated_home,
+            "token.json",
+            {"base_url": "http://localhost:4000", "key": "sk-stored", "timestamp": time.time()},
+        )
+        monkeypatch.setenv("LITELLM_PROXY_API_KEY", "sk-from-env")
+
+        assert self._resolved_key([]) == "sk-from-env"
+
+    def test_explicit_api_key_beats_both(self, isolated_home, monkeypatch):
+        _write_home_json(
+            isolated_home,
+            "token.json",
+            {"base_url": "http://localhost:4000", "key": "sk-stored", "timestamp": time.time()},
+        )
+        monkeypatch.setenv("LITELLM_PROXY_API_KEY", "sk-from-env")
+
+        assert self._resolved_key(["--api-key", "sk-explicit"]) == "sk-explicit"
 
 
 class TestLoginConfigClaude:
@@ -1054,7 +1065,7 @@ class TestLoginConfigClaude:
             patch("webbrowser.open"),
             patch("requests.post", return_value=_mock_cli_sso_start_response()),
             patch("requests.get", return_value=poll_response),
-            patch("litellm.proxy.client.cli.commands.auth.save_token"),
+            patch("litellm.proxy.client.cli.commands.auth.save_cli_token"),
             patch("litellm.proxy.client.cli.interface.show_commands"),
             patch("litellm.proxy.client.cli.commands.auth.CLAUDE_SETTINGS_PATH", settings_path),
             patch(

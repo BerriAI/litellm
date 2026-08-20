@@ -1,9 +1,6 @@
-import json
-import os
 import sys
 import time
 import webbrowser
-from pathlib import Path
 from typing import Any, Final
 from urllib.parse import urlencode
 
@@ -11,10 +8,19 @@ import click
 import requests
 from rich.console import Console
 from rich.table import Table
-from typing_extensions import NotRequired, TypedDict
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm.constants import CLI_JWT_EXPIRATION_HOURS
-from litellm.litellm_core_utils.cli_token_utils import is_cli_token_fresh
+from litellm.litellm_core_utils.cli_keyring import SYSTEM_KEYRING, SecretVault
+from litellm.litellm_core_utils.cli_token_utils import (
+    CliTokenRecord,
+    clear_cli_token,
+    get_cli_token_file_path,
+    get_litellm_gateway_api_key,
+    is_cli_token_fresh,
+    load_cli_token,
+    save_cli_token,
+)
 
 from .claude_settings import (
     CLAUDE_SETTINGS_PATH,
@@ -22,18 +28,6 @@ from .claude_settings import (
     ClaudeSettingsError,
     write_claude_settings,
 )
-from .private_json import write_private_json
-
-
-class CliTokenData(TypedDict):
-    base_url: str
-    key: str
-    user_id: str
-    user_email: str
-    user_role: str
-    auth_header_name: str
-    jwt_token: str
-    timestamp: float
 
 
 class CliTeam(TypedDict, total=False):
@@ -46,6 +40,7 @@ class CliTeam(TypedDict, total=False):
 class CliContextObj(TypedDict):
     base_url: str
     base_url_explicit: NotRequired[bool]
+    secret_vault: NotRequired[ReadOnly[SecretVault]]
 
 
 class CliPollData(TypedDict, total=False):
@@ -76,50 +71,32 @@ class CliAuthResult(TypedDict):
     team_id: str | None
 
 
+KEYCHAIN_UNREACHABLE_MESSAGE: Final = (
+    "Your credential is stored in your OS keychain, which could not be read. Unlock it and retry, or run 'lite login'."
+)
+
+
 # Token storage utilities
-def get_token_file_path() -> str:
-    """Get the path to store the authentication token"""
-    home_dir: Final = Path.home()
-    config_dir: Final = home_dir / ".litellm"
-    config_dir.mkdir(exist_ok=True)
-    return str(config_dir / "token.json")
+def context_secret_vault(ctx: click.Context) -> SecretVault:
+    """Where this invocation reads and writes secret material; injectable through ctx.obj for tests"""
+    ctx_obj: Final[CliContextObj | None] = ctx.obj
+    if ctx_obj is None:
+        return SYSTEM_KEYRING
+    return ctx_obj.get("secret_vault") or SYSTEM_KEYRING
 
 
-def save_token(token_data: CliTokenData) -> None:
-    """Save token data to file"""
-    write_private_json(get_token_file_path(), token_data)
-
-
-def load_token() -> CliTokenData | None:
-    """Load token data from file"""
-    token_file: Final = get_token_file_path()
-    if not os.path.exists(token_file):
-        return None
-
-    try:
-        with open(token_file, "r") as f:
-            return json.load(f)
-    except (OSError, json.JSONDecodeError):
-        return None
-
-
-def clear_token() -> None:
-    """Clear stored token"""
-    token_file: Final = get_token_file_path()
-    if os.path.exists(token_file):
-        os.remove(token_file)
-
-
-def get_stored_api_key(expected_base_url: str | None = None) -> str | None:
-    """Get the stored API key from token file.
+def get_stored_api_key(
+    expected_base_url: str | None = None,
+    *,
+    vault: SecretVault = SYSTEM_KEYRING,
+) -> str | None:
+    """Get the stored API key.
 
     If expected_base_url is provided, the key is only returned when it was
     originally issued for that URL. This prevents credential leakage when the
     CLI is pointed at a different (possibly malicious) server.
     """
-    from litellm.litellm_core_utils.cli_token_utils import get_litellm_gateway_api_key
-
-    return get_litellm_gateway_api_key(expected_base_url=expected_base_url)
+    return get_litellm_gateway_api_key(expected_base_url=expected_base_url, vault=vault)
 
 
 # Team selection utilities
@@ -689,23 +666,27 @@ def login(ctx: click.Context, config_claude: bool):
             api_key: Final = auth_result["api_key"]
             user_id: Final = auth_result["user_id"]
 
-            # Save token data. base_url is stored so we can verify origin
-            # before reusing the key on a subsequent CLI invocation.
-            save_token(
-                {
-                    "base_url": base_url.rstrip("/"),
-                    "key": api_key,
-                    "user_id": user_id or "cli-user",
-                    "user_email": "unknown",
-                    "user_role": "cli",
-                    "auth_header_name": "Authorization",
-                    "jwt_token": "",
-                    "timestamp": time.time(),
-                }
+            # base_url is stored so we can verify origin before reusing the
+            # key on a subsequent CLI invocation.
+            record: Final = CliTokenRecord(
+                base_url=base_url.rstrip("/"),
+                key=api_key,
+                user_id=user_id or "cli-user",
+                user_email="unknown",
+                user_role="cli",
+                auth_header_name="Authorization",
+                jwt_token="",
+                timestamp=time.time(),
             )
+            in_keychain: Final = save_cli_token(record, vault=context_secret_vault(ctx))
 
             click.echo("\nLogin successful!")
             click.echo(f"JWT Token: {api_key[:20]}...")
+            click.echo(
+                "Credential stored in your OS keychain."
+                if in_keychain
+                else f"No OS keychain available; credential stored in {get_cli_token_file_path()} (owner-only)."
+            )
             click.echo("You can now use the CLI without specifying --api-key")
 
             if config_claude:
@@ -736,10 +717,14 @@ def login(ctx: click.Context, config_claude: bool):
 
 
 @click.command(name="logout")
-def logout():
+@click.pass_context
+def logout(ctx: click.Context):
     """Logout and clear stored authentication"""
-    clear_token()
-    click.echo("Logged out successfully. Authentication token cleared.")
+    if clear_cli_token(vault=context_secret_vault(ctx)):
+        click.echo("Logged out successfully. Authentication token cleared.")
+        return
+    click.echo("Logged out. The local token file is gone, but the OS keychain entry could not be removed.")
+    click.echo("Unlock your keychain and run 'lite logout' again to clear it.")
 
 
 @click.command(name="print-token")
@@ -753,7 +738,7 @@ def print_token(ctx: click.Context):
     expires after `LITELLM_CLI_JWT_EXPIRATION_HOURS` (default 24h); once
     expired, run `lite login` again.
     """
-    token_data: Final = load_token()
+    token_data: Final = load_cli_token(vault=context_secret_vault(ctx))
     if not token_data:
         click.echo("Not authenticated. Run 'lite login'.", err=True)
         sys.exit(1)
@@ -765,7 +750,7 @@ def print_token(ctx: click.Context):
     ctx_obj: Final[CliContextObj] = ctx.obj
     if ctx_obj.get("base_url_explicit"):
         base_url: Final = ctx_obj["base_url"]
-        if token_data.get("base_url") != base_url.rstrip("/"):
+        if token_data.base_url != base_url.rstrip("/"):
             click.echo("Not authenticated for this server. Run 'lite login'.", err=True)
             sys.exit(1)
 
@@ -773,32 +758,35 @@ def print_token(ctx: click.Context):
         click.echo("Token expired. Run 'lite login' again.", err=True)
         sys.exit(1)
 
-    api_key: Final = token_data.get("key")
+    api_key: Final = token_data.key
     if not api_key:
-        click.echo("No token available. Run 'lite login'.", err=True)
+        click.echo(KEYCHAIN_UNREACHABLE_MESSAGE, err=True)
         sys.exit(1)
 
     click.echo(api_key)
 
 
 @click.command(name="whoami")
-def whoami():
+@click.pass_context
+def whoami(ctx: click.Context):
     """Show current authentication status"""
-    token_data: Final = load_token()
+    token_data: Final = load_cli_token(vault=context_secret_vault(ctx))
 
     if not token_data:
         click.echo("Not authenticated. Run 'lite login' to authenticate.")
         return
 
     click.echo("Authenticated")
-    click.echo(f"User Email: {token_data.get('user_email', 'Unknown')}")
-    click.echo(f"User ID: {token_data.get('user_id', 'Unknown')}")
-    click.echo(f"User Role: {token_data.get('user_role', 'Unknown')}")
+    click.echo(f"User Email: {token_data.user_email or 'Unknown'}")
+    click.echo(f"User ID: {token_data.user_id or 'Unknown'}")
+    click.echo(f"User Role: {token_data.user_role or 'Unknown'}")
 
     # Check if token is still valid (basic timestamp check)
-    timestamp: Final = token_data.get("timestamp", 0)
-    age_hours: Final = (time.time() - timestamp) / 3600
+    age_hours: Final = (time.time() - token_data.timestamp) / 3600
     click.echo(f"Token age: {age_hours:.1f} hours")
+
+    if token_data.key is None:
+        click.echo(KEYCHAIN_UNREACHABLE_MESSAGE)
 
     if age_hours > CLI_JWT_EXPIRATION_HOURS:
         click.echo(f"Warning: Token is more than {CLI_JWT_EXPIRATION_HOURS} hours old and may have expired.")

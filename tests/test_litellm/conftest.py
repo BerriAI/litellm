@@ -22,6 +22,12 @@ import litellm
 from litellm import router as litellm_router_module
 from litellm import utils as litellm_utils_module
 from litellm._logging import ALL_LOGGERS
+from litellm.litellm_core_utils.cli_keyring import (
+    SecretFound,
+    SecretMissing,
+    SecretRead,
+    SecretUnavailable,
+)
 from litellm.litellm_core_utils.prompt_templates import (
     image_handling as image_handling_module,
 )
@@ -104,6 +110,65 @@ def isolate_host_aws_config(monkeypatch, isolated_aws_credentials_dir):
 def isolate_host_proxy_base_url(monkeypatch):
     """Prevent a host PROXY_BASE_URL from outranking request-derived URLs during unit tests."""
     monkeypatch.delenv("PROXY_BASE_URL", raising=False)
+
+
+@pytest.fixture(scope="function", autouse=True)
+def isolate_host_os_keychain(monkeypatch):
+    """Keep any code path that resolves a CLI credential out of the developer's real OS keychain.
+
+    Tests that exercise keychain behaviour inject their own vault instead.
+    """
+    monkeypatch.setenv("LITELLM_CLI_DISABLE_KEYRING", "1")
+
+
+class FakeSecretVault:
+    """In-memory stand-in for the OS keychain, injected wherever CLI credential storage is exercised.
+
+    `available=False` models a keychain that is locked or has no backend, `writable=False` one that
+    refuses to store, and `erasable=False` one that will not release what it already holds.
+    """
+
+    def __init__(
+        self,
+        blob: str | None = None,
+        *,
+        available: bool = True,
+        writable: bool = True,
+        erasable: bool = True,
+    ) -> None:
+        self.blob: str | None = blob
+        self.available: bool = available
+        self.writable: bool = writable
+        self.erasable: bool = erasable
+        self.reads: int = 0
+        self.writes: list[str] = []
+        self.erases: int = 0
+
+    def read(self) -> SecretRead:
+        self.reads += 1
+        if not self.available:
+            return SecretUnavailable()
+        return SecretMissing() if self.blob is None else SecretFound(self.blob)
+
+    def write(self, blob: str) -> bool:
+        self.writes.append(blob)
+        if not (self.available and self.writable):
+            return False
+        self.blob = blob
+        return True
+
+    def erase(self) -> bool:
+        self.erases += 1
+        if not (self.available and self.erasable):
+            return False
+        self.blob = None
+        return True
+
+
+@pytest.fixture
+def secret_vault_factory():
+    """Build FakeSecretVault instances; see its docstring for the failure modes it can model."""
+    return FakeSecretVault
 
 
 def _run_coroutine_if_needed(result):
