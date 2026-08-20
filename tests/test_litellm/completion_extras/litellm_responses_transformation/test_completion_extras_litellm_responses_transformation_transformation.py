@@ -3485,3 +3485,240 @@ async def test_acompletion_bridge_normalizes_tool_choice_on_the_wire(
     post_kwargs = mock_post.call_args.kwargs
     request_body = post_kwargs["json"] if "json" in post_kwargs else json.loads(post_kwargs["data"])
     assert request_body["tool_choice"] == expected_wire_tool_choice
+
+
+def _make_incomplete_responses_api_response(incomplete_reason, output):
+    from litellm.types.llms.openai import (
+        InputTokensDetails,
+        OutputTokensDetails,
+        ResponseAPIUsage,
+        ResponsesAPIResponse,
+    )
+
+    return ResponsesAPIResponse(
+        id="resp_incomplete",
+        created_at=1760144904,
+        error=None,
+        incomplete_details={"reason": incomplete_reason} if incomplete_reason else None,
+        instructions=None,
+        metadata={},
+        model="gpt-5.6-sol",
+        object="response",
+        output=output,
+        parallel_tool_calls=True,
+        temperature=1.0,
+        tool_choice="auto",
+        tools=[],
+        top_p=1.0,
+        max_output_tokens=16,
+        previous_response_id=None,
+        reasoning={"effort": "high", "summary": None},
+        status="incomplete",
+        text={"format": {"type": "text"}, "verbosity": "medium"},
+        truncation="disabled",
+        usage=ResponseAPIUsage(
+            input_tokens=37,
+            input_tokens_details=InputTokensDetails(
+                audio_tokens=None, cached_tokens=0, text_tokens=None
+            ),
+            output_tokens=16,
+            output_tokens_details=OutputTokensDetails(
+                reasoning_tokens=16, text_tokens=None
+            ),
+            total_tokens=53,
+            cost=None,
+        ),
+        user=None,
+        store=True,
+        background=False,
+        billing={"payer": "developer"},
+        max_tool_calls=None,
+        prompt_cache_key=None,
+        safety_identifier=None,
+        service_tier="default",
+        top_logprobs=0,
+    )
+
+
+def _make_reasoning_only_output_item():
+    from openai.types.responses.response_reasoning_item import ResponseReasoningItem
+
+    return ResponseReasoningItem(
+        id="rs_incomplete",
+        summary=[],
+        type="reasoning",
+        content=None,
+        encrypted_content="enc_abc",
+        status=None,
+    )
+
+
+def _call_transform_response(handler, raw_response):
+    logging_obj = Mock()
+    logging_obj.model_call_details = {}
+    return handler.transform_response(
+        model="gpt-5.6-sol",
+        raw_response=raw_response,
+        model_response=_make_empty_model_response(),
+        logging_obj=logging_obj,
+        request_data={"model": "gpt-5.6-sol"},
+        messages=[{"role": "user", "content": "compute something hard"}],
+        optional_params={},
+        litellm_params={},
+        encoding=Mock(),
+    )
+
+
+def test_transform_response_incomplete_reasoning_only_returns_empty_length_choice():
+    handler = LiteLLMResponsesTransformationHandler()
+    raw_response = _make_incomplete_responses_api_response(
+        "max_output_tokens", [_make_reasoning_only_output_item()]
+    )
+
+    result = _call_transform_response(handler, raw_response)
+
+    assert len(result.choices) == 1
+    choice = result.choices[0]
+    assert choice.finish_reason == "length"
+    assert choice.index == 0
+    assert choice.message.role == "assistant"
+    assert choice.message.content == ""
+    assert choice.message.reasoning_items[0]["encrypted_content"] == "enc_abc"
+    assert result.usage.prompt_tokens == 37
+    assert result.usage.completion_tokens == 16
+    assert result.usage.total_tokens == 53
+    assert result.usage.completion_tokens_details.reasoning_tokens == 16
+
+
+def test_transform_response_incomplete_content_filter_maps_finish_reason():
+    handler = LiteLLMResponsesTransformationHandler()
+    raw_response = _make_incomplete_responses_api_response(
+        "content_filter", [_make_reasoning_only_output_item()]
+    )
+
+    result = _call_transform_response(handler, raw_response)
+
+    assert len(result.choices) == 1
+    assert result.choices[0].finish_reason == "content_filter"
+    assert result.choices[0].message.content == ""
+
+
+def test_transform_response_zero_choices_not_incomplete_still_raises():
+    handler = LiteLLMResponsesTransformationHandler()
+    raw_response = _make_empty_responses_api_response()
+
+    with pytest.raises(ValueError, match="Unknown items"):
+        _call_transform_response(handler, raw_response)
+
+
+def test_transform_response_incomplete_partial_text_overrides_finish_reason_to_length():
+    from openai.types.responses import ResponseOutputMessage, ResponseOutputText
+
+    handler = LiteLLMResponsesTransformationHandler()
+    output_message = ResponseOutputMessage(
+        id="msg_partial",
+        content=[
+            ResponseOutputText(
+                annotations=[], text="partial answer", type="output_text", logprobs=[]
+            )
+        ],
+        role="assistant",
+        status="incomplete",
+        type="message",
+    )
+    raw_response = _make_incomplete_responses_api_response(
+        "max_output_tokens", [_make_reasoning_only_output_item(), output_message]
+    )
+
+    result = _call_transform_response(handler, raw_response)
+
+    assert len(result.choices) == 1
+    choice = result.choices[0]
+    assert choice.finish_reason == "length"
+    assert choice.message.content == "partial answer"
+
+
+def test_response_incomplete_stream_event_emits_length_and_usage():
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(
+        streaming_response=None, sync_stream=True
+    )
+
+    chunk = {
+        "type": "response.incomplete",
+        "response": {
+            "id": "resp_123",
+            "status": "incomplete",
+            "incomplete_details": {"reason": "max_output_tokens"},
+            "output": [
+                {
+                    "type": "reasoning",
+                    "id": "rs_1",
+                    "encrypted_content": "enc_abc",
+                    "summary": [],
+                }
+            ],
+            "usage": {
+                "input_tokens": 37,
+                "output_tokens": 16,
+                "output_tokens_details": {"reasoning_tokens": 16},
+                "total_tokens": 53,
+            },
+        },
+    }
+
+    result = iterator.chunk_parser(chunk)
+
+    assert len(result.choices) == 1
+    assert result.choices[0].finish_reason == "length"
+    assert result.choices[0].delta.reasoning_items[0]["encrypted_content"] == "enc_abc"
+    assert result.usage is not None
+    assert result.usage.prompt_tokens == 37
+    assert result.usage.completion_tokens == 16
+    assert result.usage.total_tokens == 53
+
+
+def test_response_incomplete_stream_event_content_filter_maps_finish_reason():
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(
+        streaming_response=None, sync_stream=True
+    )
+
+    chunk = {
+        "type": "response.incomplete",
+        "response": {
+            "id": "resp_123",
+            "status": "incomplete",
+            "incomplete_details": {"reason": "content_filter"},
+            "output": [],
+        },
+    }
+
+    result = iterator.chunk_parser(chunk)
+
+    assert result.choices[0].finish_reason == "content_filter"
+
+
+def test_response_incomplete_stream_event_without_details_defaults_to_length():
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(
+        streaming_response=None, sync_stream=True
+    )
+
+    chunk = {
+        "type": "response.incomplete",
+        "response": {"id": "resp_123", "status": "incomplete", "output": []},
+    }
+
+    result = iterator.chunk_parser(chunk)
+
+    assert result.choices[0].finish_reason == "length"
