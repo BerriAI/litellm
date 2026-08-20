@@ -6,6 +6,7 @@ Handles Server-Sent Events (SSE) streaming responses from Vertex AI Reasoning En
 
 from typing import Any, Final
 
+from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.types.llms.openai import ChatCompletionUsageBlock
 from litellm.types.utils import (
@@ -45,22 +46,25 @@ class VertexAgentEngineResponseIterator(BaseModelResponseIterator):
             }
         }
         """
-        # Extract text from content.parts
+        # Extract text from content.parts, minus the model's own reasoning
         text = None
         content: Final = chunk.get("content", {})
         parts: Final = content.get("parts", [])
-        for part in parts:
-            if isinstance(part, dict) and "text" in part:
-                text = part["text"]
-                break
+        texts: Final = [
+            part["text"]
+            for part in parts
+            if isinstance(part, dict) and isinstance(part.get("text"), str) and not part.get("thought")
+        ]
+        if texts:
+            text = "".join(texts)
 
-        # Extract finish_reason
+        # Tool calls also report "STOP" but carry no text. Finishing on those ends the
+        # stream before the answer arrives. Every other reason means the run really is
+        # over, so it has to reach the caller even with nothing to show for it.
         finish_reason = None
         raw_finish_reason: Final = chunk.get("finish_reason")
-        if raw_finish_reason == "STOP":
-            finish_reason = "stop"
-        elif raw_finish_reason:
-            finish_reason = raw_finish_reason.lower()
+        if raw_finish_reason and (text is not None or raw_finish_reason != "STOP"):
+            finish_reason = map_finish_reason(raw_finish_reason)
 
         # Extract usage from usage_metadata
         usage = None
