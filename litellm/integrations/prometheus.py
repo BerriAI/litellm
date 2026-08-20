@@ -718,6 +718,31 @@ class PrometheusLogger(CustomLogger):
             )
 
             ########################################
+            # Per-pod request pressure
+            ########################################
+            self.litellm_requests_shed_total = self._counter_factory(
+                name="litellm_requests_shed_total",
+                documentation=(
+                    "Responses where this proxy declined to serve rather than failed to, by status. "
+                    "status is one of 429; upstream rate limits are forwarded with the same status and "
+                    "are excluded, as are the 503s raised when a budget cannot be verified, which mean "
+                    "a dependency is unreachable rather than this pod being at capacity"
+                ),
+                labelnames=("status",),
+            )
+
+            self.litellm_global_max_parallel_requests_limit = self._gauge_factory(
+                "litellm_global_max_parallel_requests_limit",
+                (
+                    "Concurrency ceiling actually applied on this worker. +Inf means nothing bounds "
+                    "concurrency, either because global_max_parallel_requests is unset or because the "
+                    "active limiter does not enforce it"
+                ),
+                labelnames=(),
+                multiprocess_mode="livemax",
+            )
+
+            ########################################
             # Scheduled background jobs
             ########################################
             self.litellm_scheduled_job_runs_total = self._counter_factory(
@@ -859,6 +884,30 @@ class PrometheusLogger(CustomLogger):
         except Exception as e:
             print_verbose(f"Got exception on init prometheus client {e}")
             raise e
+
+        self._restore_effective_concurrency_ceiling()
+
+    def _restore_effective_concurrency_ceiling(self) -> None:
+        """Set the ceiling gauge to the value already in force.
+
+        Startup publishes the ceiling, but ``success_callback: ["prometheus"]``
+        builds this logger lazily on the first request, long after that ran with
+        no logger to publish to. The gauge would then register at its zero
+        default and stay there, reading as "no requests allowed" on a proxy
+        serving everything, which is the reading ``+Inf`` exists to prevent.
+
+        Set directly rather than through the module helper, because during
+        ``__init__`` this instance is not yet reachable by the logger lookup.
+        """
+        try:
+            from litellm.proxy.common_utils.request_pressure_metrics import effective_global_limit
+            from litellm.proxy.proxy_server import general_settings
+
+            self.set_global_max_parallel_requests_limit(
+                effective_global_limit(general_settings.get("global_max_parallel_requests"))
+            )
+        except Exception as e:  # noqa: BLE001  # a logger that cannot read proxy config must still start
+            print_verbose(f"could not publish the concurrency ceiling on init: {e}")
 
     def _parse_prometheus_config(self) -> dict[str, list[str]]:
         """Parse prometheus metrics configuration for label filtering and enabled metrics"""
@@ -3203,6 +3252,14 @@ class PrometheusLogger(CustomLogger):
                     ).inc()
         except Exception as e:
             verbose_logger.warning("Error recording check batch cost metrics: %s", e)
+
+    def record_request_shed(self, status: int) -> None:
+        """Count one response where the proxy declined to serve."""
+        self.litellm_requests_shed_total.labels(status=str(status)).inc()
+
+    def set_global_max_parallel_requests_limit(self, limit: float) -> None:
+        """Publish the per-pod concurrency ceiling actually in force."""
+        self.litellm_global_max_parallel_requests_limit.set(limit)
 
     def record_scheduled_job_run(self, run: JobRun) -> None:
         """Publish one completed run of a scheduled background job."""

@@ -347,6 +347,7 @@ from litellm.proxy.common_utils.periodic_reload_schedule import (
     write_reload_interval,
 )
 from litellm.proxy.common_utils.proxy_state import ProxyState
+from litellm.proxy.common_utils.request_pressure_metrics import publish_global_max_parallel_requests
 from litellm.proxy.common_utils.reset_budget_job import ResetBudgetJob
 from litellm.proxy.common_utils.scheduled_job_metrics import ScheduledJobMetricsListener
 from litellm.proxy.common_utils.scheduled_job_stagger import (
@@ -1215,6 +1216,10 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[None, None]:
         max_budget=litellm.max_budget,
         prisma_client=prisma_client,
     )
+
+    # Not gated on the database: concurrency is bounded per worker regardless, and
+    # a registered gauge always exposes a value, so skipping this would publish 0.
+    publish_global_max_parallel_requests(general_settings.get("global_max_parallel_requests"))
 
     ### START BATCH WRITING DB + CHECKING NEW MODELS###
     worker_heartbeat: Final = (
@@ -6325,6 +6330,7 @@ class ProxyConfig:
 
         if "global_max_parallel_requests" in _general_settings:
             general_settings["global_max_parallel_requests"] = _general_settings["global_max_parallel_requests"]
+            publish_global_max_parallel_requests(general_settings["global_max_parallel_requests"])
 
         if "max_batch_file_size_mb" not in self._yaml_general_settings_keys:
             general_settings["max_batch_file_size_mb"] = _general_settings.get("max_batch_file_size_mb")

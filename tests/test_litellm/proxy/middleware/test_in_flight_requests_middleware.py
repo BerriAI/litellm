@@ -95,3 +95,147 @@ def test_non_http_scopes_not_counted():
 
     asyncio.run(mw({"type": "lifespan"}, None, None))  # type: ignore[arg-type]
     assert get_in_flight_requests() == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status, expected_calls", [(429, 1), (503, 0), (200, 0), (400, 0), (500, 0)])
+async def test_only_shed_responses_the_proxy_itself_produced_are_counted(status, expected_calls):
+    """A 500 is the proxy failing, not declining, and the proxy's 503s are
+    fail-closed budget rejections raised when a dependency is unreachable.
+    Counting either would blur the throttle-vs-scale signal."""
+    from unittest.mock import MagicMock, patch
+
+    from litellm.proxy.common_utils.request_pressure_metrics import mark_request_shed_by_proxy
+    from litellm.proxy.middleware.in_flight_requests_middleware import (
+        InFlightRequestsMiddleware,
+    )
+
+    sent = []
+
+    async def send(message):
+        sent.append(message)
+
+    async def receive():
+        return {"type": "http.request"}
+
+    async def app(scope, receive, send):
+        mark_request_shed_by_proxy()
+        await send({"type": "http.response.start", "status": status, "headers": []})
+        await send({"type": "http.response.body", "body": b""})
+
+    logger = MagicMock()
+    with patch("litellm.integrations.prometheus.PrometheusLogger.get_instance", return_value=logger):
+        await InFlightRequestsMiddleware(app)({"type": "http"}, receive, send)
+
+    assert logger.record_request_shed.call_count == expected_calls
+    assert [m["type"] for m in sent] == ["http.response.start", "http.response.body"], (
+        "the wrapped send must still forward every message downstream"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_provider_rate_limit_is_not_counted_as_this_pod_shedding():
+    """litellm forwards an upstream 429 with the same status the proxy uses for
+    its own limits. Counting it would tell an operator to scale out when the
+    bottleneck is the provider."""
+    from unittest.mock import MagicMock, patch
+
+    from litellm.proxy.middleware.in_flight_requests_middleware import (
+        InFlightRequestsMiddleware,
+    )
+
+    async def send(message):
+        return None
+
+    async def receive():
+        return {"type": "http.request"}
+
+    async def app(scope, receive, send):
+        # no mark: the 429 came back from the provider, not from a proxy limiter
+        await send({"type": "http.response.start", "status": 429, "headers": []})
+
+    logger = MagicMock()
+    with patch("litellm.integrations.prometheus.PrometheusLogger.get_instance", return_value=logger):
+        await InFlightRequestsMiddleware(app)({"type": "http"}, receive, send)
+
+    logger.record_request_shed.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_the_proxys_own_rate_limit_error_marks_the_request():
+    """ProxyRateLimitError is the one class litellm raises for its own 429s, so
+    constructing it is what distinguishes the two cases."""
+    from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+    from litellm.proxy.common_utils.request_pressure_metrics import (
+        proxy_shed_request,
+        was_request_shed_by_proxy,
+    )
+
+    token = proxy_shed_request.set(False)
+    try:
+        assert was_request_shed_by_proxy() is False
+        ProxyRateLimitError(detail={"error": "limit"})
+        assert was_request_shed_by_proxy() is True
+    finally:
+        proxy_shed_request.reset(token)
+
+def test_the_shed_metric_documents_exactly_the_statuses_it_counts(monkeypatch):
+    """The advertised status set is what a consumer writes alerts against, so a
+    status the metric names but never counts inflates their view of shedding."""
+    import re
+
+    import litellm
+    from litellm.integrations.prometheus import PrometheusLogger
+    from litellm.proxy.middleware.in_flight_requests_middleware import _SHED_STATUSES
+
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(litellm, "success_callback", [])
+    from prometheus_client import REGISTRY
+
+    for collector in list(REGISTRY._collector_to_names.keys()):
+        try:
+            REGISTRY.unregister(collector)
+        except Exception:
+            pass
+
+    documentation = PrometheusLogger().litellm_requests_shed_total._documentation
+
+    advertised = re.search(r"status is one of ([^;]+);", documentation)
+    assert advertised is not None, f"no advertised status list in: {documentation}"
+    documented = {int(value.strip()) for value in advertised.group(1).split(",")}
+
+    assert documented == set(_SHED_STATUSES)
+
+@pytest.mark.asyncio
+async def test_a_failure_counting_a_shed_response_still_returns_the_response():
+    """The counting rides the response boundary, so a metrics failure there would
+    otherwise turn a served 429 into no response at all."""
+    from unittest.mock import patch
+
+    from litellm.proxy.common_utils.request_pressure_metrics import mark_request_shed_by_proxy
+    from litellm.proxy.middleware.in_flight_requests_middleware import (
+        InFlightRequestsMiddleware,
+    )
+
+    sent = []
+
+    async def send(message):
+        sent.append(message)
+
+    async def receive():
+        return {"type": "http.request"}
+
+    async def app(scope, receive, send):
+        mark_request_shed_by_proxy()
+        await send({"type": "http.response.start", "status": 429, "headers": []})
+        await send({"type": "http.response.body", "body": b""})
+
+    with patch(
+        "litellm.integrations.prometheus.PrometheusLogger.get_instance",
+        side_effect=RuntimeError("metrics down"),
+    ):
+        await InFlightRequestsMiddleware(app)({"type": "http"}, receive, send)
+
+    assert [m["type"] for m in sent] == ["http.response.start", "http.response.body"]
+    assert sent[0]["status"] == 429
+

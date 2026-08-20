@@ -1,14 +1,18 @@
 """
-Tracks the number of HTTP requests currently in-flight on this uvicorn worker.
+Tracks per-worker request pressure: how many HTTP requests are in flight, and
+how many the proxy shed rather than served.
 
-Used by /health/backlog to expose per-pod queue depth, and emitted as the
-Prometheus gauge `litellm_in_flight_requests`.
+Counting shed responses here rather than at each limiter means no rejection path
+can be missed, and the count is per worker for the same reason the in-flight
+gauge is.
 """
 
 import os
 from typing import Any, Final
 
-from starlette.types import ASGIApp, Receive, Scope, Send
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
+
+from litellm._logging import verbose_proxy_logger
 
 
 class InFlightRequestsMiddleware:
@@ -43,7 +47,7 @@ class InFlightRequestsMiddleware:
         if gauge is not None:
             gauge.inc()
         try:
-            await self.app(scope, receive, send)
+            await self.app(scope, receive, send=_counting_send(send))
         finally:
             InFlightRequestsMiddleware._in_flight -= 1
             if gauge is not None:
@@ -77,6 +81,40 @@ class InFlightRequestsMiddleware:
         except Exception:
             InFlightRequestsMiddleware._gauge = None
         return InFlightRequestsMiddleware._gauge
+
+
+# The status this proxy uses when it declines load, and only counted once the
+# request is also marked as shed here, since litellm forwards upstream 429s with
+# the same status. The proxy's 503s are fail-closed budget rejections, a
+# dependency being unreachable rather than this pod at capacity, so counting
+# them would blur the throttle-vs-scale signal the metric exists to give.
+_SHED_STATUSES: Final = frozenset({429})
+
+
+def _record_shed_response(status: int) -> None:
+    if status not in _SHED_STATUSES:
+        return
+    from litellm.proxy.common_utils.request_pressure_metrics import was_request_shed_by_proxy
+
+    if not was_request_shed_by_proxy():
+        return
+    try:
+        from litellm.integrations.prometheus import PrometheusLogger
+
+        logger: Final = PrometheusLogger.get_instance()
+        if logger is not None:
+            logger.record_request_shed(status)
+    except Exception as e:  # noqa: BLE001  # counting a shed response must not break the response
+        verbose_proxy_logger.debug("request shed metric failed: %s", e)
+
+
+def _counting_send(send: Send) -> Send:
+    async def wrapped(message: Message) -> None:
+        if message["type"] == "http.response.start":
+            _record_shed_response(int(message["status"]))
+        await send(message)
+
+    return wrapped
 
 
 def get_in_flight_requests() -> int:

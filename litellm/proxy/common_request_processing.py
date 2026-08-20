@@ -1834,6 +1834,10 @@ class ProxyBaseLLMRequestProcessing:
         llm_router: Router | None,
     ) -> tuple[dict, LiteLLMLoggingObj]:
         from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+        from litellm.proxy.common_utils.request_pressure_metrics import (
+            clear_request_shed_marker,
+            mark_request_shed_by_proxy,
+        )
 
         try:
             return await self.common_processing_pre_call_logic(
@@ -1876,6 +1880,11 @@ class ProxyBaseLLMRequestProcessing:
                     if fallback_model == original_model:
                         continue
                     self.data["model"] = fallback_model
+                    # This rejection is being recovered from, not returned, so it
+                    # must not leave the request marked as shed by this proxy. A
+                    # provider 429 on the fallback would otherwise be counted as
+                    # this pod shedding load.
+                    clear_request_shed_marker()
                     try:
                         return await self.common_processing_pre_call_logic(
                             request=request,
@@ -1900,6 +1909,9 @@ class ProxyBaseLLMRequestProcessing:
                 raise
 
             self.data["model"] = original_model
+            # Every fallback was rate limited too, so the original rejection is
+            # what the client gets and the mark has to be restored.
+            mark_request_shed_by_proxy()
             raise original_exc
 
     def _resolve_fallback_models(
