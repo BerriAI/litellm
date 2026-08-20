@@ -1,4 +1,5 @@
 import json
+from typing import NoReturn
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -167,6 +168,10 @@ async def _acreate_batch(*args, **kwargs):
     raise AssertionError("only used for its __name__")
 
 
+async def _acreate_file(*args: object, **kwargs: object) -> NoReturn:
+    raise AssertionError("only used for its __name__")
+
+
 @pytest.mark.asyncio
 async def test_run_async_fallback_keeps_uploaded_file_requests_in_their_model_group():
     """An input_file_id only exists under the credentials of the group it was uploaded
@@ -227,6 +232,46 @@ async def test_run_async_fallback_allows_same_model_group_retry_for_uploaded_fil
     )
 
     assert router.attempted_model_groups == ["openai-group"]
+
+
+@pytest.mark.asyncio
+async def test_run_async_fallback_keeps_file_creation_in_its_model_group():
+    """A file created for batches lands in the account of the deployment that stored it,
+    and its id is only usable against the model group the caller named. A cross-group
+    fallback silently stores the file with the wrong provider."""
+    router = AttemptRecordingRouter()
+
+    with pytest.raises(RuntimeError, match="azure connection error"):
+        await run_async_fallback(
+            litellm_router=router,
+            fallback_model_group=["openai-group"],
+            original_model_group="azure-group",
+            original_exception=RuntimeError("azure connection error"),
+            max_fallbacks=3,
+            fallback_depth=0,
+            model="azure-group",
+            original_function=_acreate_file,
+        )
+
+    assert router.attempted_model_groups == []
+
+
+@pytest.mark.asyncio
+async def test_run_async_fallback_allows_same_model_group_retry_for_file_creation():
+    router = AttemptRecordingRouter()
+
+    await run_async_fallback(
+        litellm_router=router,
+        fallback_model_group=[{"model": "azure-group", "_target_order": 2}],
+        original_model_group="azure-group",
+        original_exception=RuntimeError("first deployment failed"),
+        max_fallbacks=3,
+        fallback_depth=0,
+        model="azure-group",
+        original_function=_acreate_file,
+    )
+
+    assert router.attempted_model_groups == ["azure-group"]
 
 
 @pytest.mark.asyncio

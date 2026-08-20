@@ -12,12 +12,12 @@ describe("SimpleMessageBlock", () => {
 
   it("should return null when content is empty and no tool calls", () => {
     const { container } = render(<SimpleMessageBlock label="USER" content="" />);
-    expect(container.innerHTML).toBe("");
+    expect(container).toBeEmptyDOMElement();
   });
 
   it('should return null when content is "null" string and no tool calls', () => {
     const { container } = render(<SimpleMessageBlock label="USER" content="null" />);
-    expect(container.innerHTML).toBe("");
+    expect(container).toBeEmptyDOMElement();
   });
 
   it("should render tool calls when present", () => {

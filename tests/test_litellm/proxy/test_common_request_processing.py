@@ -28,6 +28,9 @@ from litellm.proxy.common_request_processing import (
     _get_cost_breakdown_from_logging_obj,
     _has_attribute_error_in_chain,
     _is_azure_model_router_request,
+    _UpstreamClosingStreamingResponse,
+    open_sse_before_first_byte,
+    ttft_keepalive_interval,
     _override_openai_response_model,
     _parse_event_data_for_error,
     _resolve_per_request_model_group_alias,
@@ -4511,6 +4514,61 @@ class TestAllmPassthroughStreamingProviderGate:
         assert streamed == chunks
         mock_handler.assert_not_awaited()
 
+    @pytest.mark.asyncio
+    async def test_bedrock_invoke_stream_sets_event_stream_content_type(self, monkeypatch):
+        """
+        Regression for LIT-4561. The unbuffered Bedrock event-stream relay
+        (invoke-with-response-stream, no post-call guardrail rewriting) must set
+        content-type: application/vnd.amazon.eventstream instead of emitting no
+        content-type header at all, which trips Claude Code's content-type guard
+        added in 2.1.208
+        """
+        processing_obj = self._build_processing_obj(
+            "bedrock", "model/us.anthropic.claude-sonnet-4-20250514-v1:0/invoke-with-response-stream"
+        )
+        chunks = [b"raw-1", b"raw-2"]
+
+        with patch.object(
+            ProxyBaseLLMRequestProcessing,
+            "_has_post_call_guardrails",
+            return_value=False,
+        ), patch.object(
+            ProxyBaseLLMRequestProcessing,
+            "_has_post_call_guardrails_for_passthrough",
+            return_value=False,
+        ):
+            result = await self._run(processing_obj, monkeypatch, chunks)
+
+        assert isinstance(result, StreamingResponse)
+        assert result.media_type == "application/vnd.amazon.eventstream"
+        assert result.headers["content-type"] == "application/vnd.amazon.eventstream"
+        streamed = [chunk async for chunk in result.body_iterator]
+        assert streamed == chunks
+
+    @pytest.mark.asyncio
+    async def test_non_bedrock_stream_keeps_default_content_type(self, monkeypatch):
+        """
+        A provider with no registered event-stream media type must not have one
+        forced onto its unbuffered stream, so the response default is unchanged
+        """
+        processing_obj = self._build_processing_obj("anthropic")
+        chunks = [b"chunk-1", b"chunk-2"]
+
+        with patch.object(
+            ProxyBaseLLMRequestProcessing,
+            "_has_post_call_guardrails",
+            return_value=False,
+        ), patch.object(
+            ProxyBaseLLMRequestProcessing,
+            "_has_post_call_guardrails_for_passthrough",
+            return_value=False,
+        ):
+            result = await self._run(processing_obj, monkeypatch, chunks)
+
+        assert isinstance(result, StreamingResponse)
+        assert result.media_type is None
+        assert "content-type" not in result.headers
+
 
 class TestResponseCostHeaderForTypedDictResponses:
     """
@@ -6057,3 +6115,525 @@ class TestProcessChunkWithCostInjection:
         )
 
         assert ProxyBaseLLMRequestProcessing._process_chunk_with_cost_injection(chunk, "gpt-4o-mini") == chunk
+
+
+# ---------------------------------------------------------------------------
+# SSE keepalive during the time-to-first-token (issue #34819)
+# ---------------------------------------------------------------------------
+
+TTFT_PING = b": ping\n\n"
+
+
+async def _drain(response):
+    return [chunk async for chunk in response.body_iterator]
+
+
+def _sse_response(chunks, upstream_generator=None):
+    async def gen():
+        for chunk in chunks:
+            yield chunk
+
+    if upstream_generator is None:
+        return StreamingResponse(gen(), media_type="text/event-stream")
+    return _UpstreamClosingStreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        upstream_generator=upstream_generator,
+    )
+
+
+@pytest.mark.asyncio
+async def test_ttft_keepalive_fills_the_wire_while_the_upstream_is_still_silent():
+    """Regression for #34819. The upstream withholds its headers until the first
+    token, so the whole wait happens before a byte can be written and an
+    idle-timeout hop drops a healthy connection."""
+
+    async def slow_upstream():
+        await asyncio.sleep(0.35)
+        return _sse_response(['data: {"first": true}\n\n'])
+
+    response = await open_sse_before_first_byte(slow_upstream(), ping_interval_seconds=0.05)
+
+    assert isinstance(response, StreamingResponse)
+    assert response.headers["x-accel-buffering"] == "no"
+    collected = await _drain(response)
+    assert collected[0] == TTFT_PING
+    assert collected.count(TTFT_PING) >= 3
+    assert collected[-1] == b'data: {"first": true}\n\n'
+
+
+@pytest.mark.asyncio
+async def test_ttft_keepalive_is_a_no_op_when_the_upstream_answers_in_time():
+    produced = _sse_response(['data: {"fast": true}\n\n'])
+
+    async def fast_upstream():
+        return produced
+
+    response = await open_sse_before_first_byte(fast_upstream(), ping_interval_seconds=5.0)
+
+    assert response is produced
+    assert await _drain(response) == ['data: {"fast": true}\n\n']
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("interval", [None, 0, "", "abc", float("inf"), float("nan"), -1])
+async def test_ttft_keepalive_unconfigured_leaves_the_call_completely_untouched(interval):
+    produced = _sse_response(['data: {"x": 1}\n\n'])
+    started_at = asyncio.get_running_loop().time()
+
+    async def slow_upstream():
+        await asyncio.sleep(0.15)
+        return produced
+
+    response = await open_sse_before_first_byte(slow_upstream(), ping_interval_seconds=interval)
+
+    assert response is produced
+    assert asyncio.get_running_loop().time() - started_at >= 0.15
+
+
+@pytest.mark.asyncio
+async def test_ttft_keepalive_reraises_a_fast_failure_so_it_keeps_its_http_status():
+    async def fast_failure():
+        raise HTTPException(status_code=429, detail="rate limited")
+
+    with pytest.raises(HTTPException) as excinfo:
+        await open_sse_before_first_byte(fast_failure(), ping_interval_seconds=5.0)
+
+    assert excinfo.value.status_code == 429
+
+
+@pytest.mark.asyncio
+async def test_ttft_keepalive_delivers_a_late_failure_as_an_sse_frame():
+    """Once a ping is on the wire the status line is committed, so a failure
+    discovered afterwards can only reach the client as a frame."""
+
+    async def slow_failure():
+        await asyncio.sleep(0.2)
+        raise HTTPException(status_code=429, detail="rate limited")
+
+    response = await open_sse_before_first_byte(slow_failure(), ping_interval_seconds=0.05)
+    collected = await _drain(response)
+
+    assert collected[0] == TTFT_PING
+    assert collected[-1] == b"data: [DONE]\n\n"
+    error_frame = json.loads(collected[-2].decode().removeprefix("data: ").strip())
+    assert error_frame["error"]["code"] == "429"
+    assert error_frame["error"]["message"] == "rate limited"
+
+
+@pytest.mark.asyncio
+async def test_ttft_keepalive_relays_a_late_non_streaming_body_as_an_sse_frame():
+    async def slow_json():
+        await asyncio.sleep(0.2)
+        return JSONResponse(status_code=400, content={"error": {"message": "bad request"}})
+
+    response = await open_sse_before_first_byte(slow_json(), ping_interval_seconds=0.05)
+    collected = await _drain(response)
+
+    assert collected[0] == TTFT_PING
+    assert json.loads(collected[-2].decode().removeprefix("data: ").strip()) == {"error": {"message": "bad request"}}
+    assert collected[-1] == b"data: [DONE]\n\n"
+
+
+@pytest.mark.asyncio
+async def test_ttft_keepalive_closes_the_upstream_stream_it_relayed():
+    """Starlette never calls the produced response, so its own cleanup never runs
+    and the upstream LLM connection would leak."""
+    upstream_closed = asyncio.Event()
+
+    async def upstream():
+        try:
+            yield 'data: {"a": 1}\n\n'
+        finally:
+            upstream_closed.set()
+
+    upstream_gen = upstream()
+    # Started, as create_response leaves it: aclose() on a never-started generator
+    # skips its body, so an unstarted fixture cannot tell cleanup from no cleanup.
+    await upstream_gen.__anext__()
+
+    async def slow_upstream():
+        await asyncio.sleep(0.2)
+        return _sse_response(['data: {"a": 1}\n\n'], upstream_generator=upstream_gen)
+
+    response = await open_sse_before_first_byte(slow_upstream(), ping_interval_seconds=0.05)
+    await _drain(response)
+
+    assert upstream_closed.is_set()
+
+
+@pytest.mark.asyncio
+async def test_ttft_keepalive_cancels_the_in_flight_call_when_the_client_gives_up():
+    upstream_cancelled = asyncio.Event()
+
+    async def never_answers():
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            upstream_cancelled.set()
+            raise
+
+    response = await open_sse_before_first_byte(never_answers(), ping_interval_seconds=0.05)
+    assert await response.body_iterator.__anext__() == TTFT_PING
+    await response.body_iterator.aclose()
+    await asyncio.sleep(0)
+
+    assert upstream_cancelled.is_set()
+
+
+@pytest.mark.parametrize(
+    "request_data, global_interval, expected",
+    [
+        ({"stream": True}, 30.0, 30.0),
+        ({"stream": True}, None, None),
+        ({"stream": False}, 30.0, None),
+        ({}, 30.0, None),
+        ({"stream": "true"}, 30.0, None),
+    ],
+)
+def test_ttft_keepalive_interval_only_arms_for_a_streaming_request(request_data, global_interval, expected):
+    with patch.object(litellm, "sse_keepalive_ping_interval_seconds", global_interval):
+        assert ttft_keepalive_interval(request_data) == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream_requested, expect_ping", [(True, True), (False, False)])
+async def test_base_process_llm_request_pings_while_the_upstream_call_is_still_running(
+    stream_requested, expect_ping
+):
+    """The wiring, not the helper: every route funnels through this method, and the
+    whole time-to-first-token is spent inside the call it wraps."""
+
+    async def slow_inner(self, **kwargs):
+        await asyncio.sleep(0.25)
+        return _sse_response(['data: {"late": true}\n\n'])
+
+    processor = ProxyBaseLLMRequestProcessing(data={"model": "gpt-4o", "stream": stream_requested})
+
+    with patch.object(litellm, "sse_keepalive_ping_interval_seconds", 0.05):
+        with patch.object(ProxyBaseLLMRequestProcessing, "_process_llm_request", slow_inner):
+            response = await processor.base_process_llm_request(
+                request=MagicMock(spec=Request),
+                fastapi_response=Response(),
+                user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
+                route_type="acompletion",
+                proxy_logging_obj=MagicMock(spec=ProxyLogging),
+                general_settings={},
+                proxy_config=MagicMock(spec=ProxyConfig),
+            )
+
+    collected = await _drain(response)
+    assert (collected[0] == TTFT_PING) is expect_ping
+    assert collected[-1] == (b'data: {"late": true}\n\n' if expect_ping else 'data: {"late": true}\n\n')
+
+
+def _request_disconnecting_after(delay_seconds):
+    """A Request whose ASGI channel delivers one http.disconnect, then goes quiet."""
+    request = MagicMock(spec=Request)
+    delivered = {"done": False}
+
+    async def receive():
+        if delivered["done"]:
+            await asyncio.Event().wait()
+        await asyncio.sleep(delay_seconds)
+        delivered["done"] = True
+        return {"type": "http.disconnect"}
+
+    request.receive = receive
+    return request
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "disconnect_after, expect_full_delivery",
+    [(0.25, False), (999.0, True)],
+)
+async def test_opening_the_response_early_still_closes_the_upstream_on_disconnect(
+    disconnect_after, expect_full_delivery
+):
+    """Once the response is opened early, create_response's own disconnect
+    monitoring runs while Starlette is already serving, so both read the same ASGI
+    channel. Whichever observes the disconnect, the upstream LLM stream must close.
+    """
+    upstream_closed = asyncio.Event()
+    delivered = []
+
+    async def upstream():
+        try:
+            await asyncio.sleep(0.4)
+            for chunk in ('data: {"a": 1}\n\n', "data: [DONE]\n\n"):
+                delivered.append(chunk)
+                yield chunk
+        finally:
+            upstream_closed.set()
+
+    request = _request_disconnecting_after(disconnect_after)
+
+    async def produce():
+        await asyncio.sleep(0.15)
+        return await create_response(
+            generator=upstream(),
+            media_type="text/event-stream",
+            headers={},
+            request=request,
+        )
+
+    response = await open_sse_before_first_byte(produce(), ping_interval_seconds=0.05)
+    collected = await _drain(response)
+    await asyncio.sleep(0.05)
+
+    assert collected[0] == TTFT_PING
+    assert upstream_closed.is_set()
+    # The control has to actually deliver, or "the upstream closed" proves nothing.
+    assert (delivered == ['data: {"a": 1}\n\n', "data: [DONE]\n\n"]) is expect_full_delivery
+
+
+@pytest.mark.asyncio
+async def test_a_disconnect_after_the_upstream_answered_still_closes_the_response():
+    """The upstream can answer while nobody is draining the relay, e.g. the client
+    vanished first. Nothing else holds that response, so only this teardown closes
+    it; cancelling the produce task is not enough because it already finished."""
+    upstream_closed = asyncio.Event()
+    body_closed = asyncio.Event()
+
+    async def upstream():
+        try:
+            yield 'data: {"a": 1}\n\n'
+            await asyncio.Event().wait()
+        finally:
+            upstream_closed.set()
+
+    async def body():
+        try:
+            yield 'data: {"a": 1}\n\n'
+            await asyncio.Event().wait()
+        finally:
+            body_closed.set()
+
+    # Both started, as create_response leaves them: aclose() on a never-started
+    # generator skips its body, so an unstarted fixture cannot tell cleanup apart
+    # from no cleanup at all.
+    upstream_gen, body_gen = upstream(), body()
+    await upstream_gen.__anext__()
+    await body_gen.__anext__()
+
+    async def produce():
+        await asyncio.sleep(0.15)
+        return _UpstreamClosingStreamingResponse(
+            body_gen, media_type="text/event-stream", upstream_generator=upstream_gen
+        )
+
+    response = await open_sse_before_first_byte(produce(), ping_interval_seconds=0.05)
+    assert await response.body_iterator.__anext__() == TTFT_PING
+    await asyncio.sleep(0.25)  # the produce task finishes while nothing is pulling
+    await response.body_iterator.aclose()
+    await asyncio.sleep(0.05)
+
+    assert body_closed.is_set()
+    assert upstream_closed.is_set()
+
+
+@pytest.mark.asyncio
+async def test_a_late_failure_is_reported_to_the_failure_hook():
+    """Once a keepalive is on the wire this can no longer raise, so the caller's
+    own `except` never runs and the failure would otherwise go unaudited."""
+    audited = []
+
+    async def slow_failure():
+        await asyncio.sleep(0.2)
+        raise HTTPException(status_code=500, detail="upstream exploded")
+
+    async def record(exc):
+        audited.append(exc)
+
+    response = await open_sse_before_first_byte(
+        slow_failure(), ping_interval_seconds=0.05, on_late_failure=record
+    )
+    collected = await _drain(response)
+
+    assert [type(exc).__name__ for exc in audited] == ["HTTPException"]
+    assert getattr(audited[0], "detail", None) == "upstream exploded"
+    assert collected[-1] == b"data: [DONE]\n\n"
+
+
+@pytest.mark.asyncio
+async def test_a_failing_audit_hook_never_costs_the_client_its_error_frame():
+    async def slow_failure():
+        await asyncio.sleep(0.2)
+        raise HTTPException(status_code=500, detail="upstream exploded")
+
+    async def broken_hook(exc):
+        raise RuntimeError("the audit backend is down")
+
+    response = await open_sse_before_first_byte(
+        slow_failure(), ping_interval_seconds=0.05, on_late_failure=broken_hook
+    )
+    collected = await _drain(response)
+
+    error_frame = json.loads(collected[-2].decode().removeprefix("data: ").strip())
+    assert error_frame["error"]["message"] == "upstream exploded"
+    assert collected[-1] == b"data: [DONE]\n\n"
+
+
+@pytest.mark.asyncio
+async def test_base_process_llm_request_audits_a_failure_that_lands_after_its_keepalive():
+    """The helper honouring on_late_failure is not enough: this pins that the shared
+    funnel actually passes one, which is where the route's own except would have
+    fired before the response was opened early."""
+
+    async def slow_failure(self, **kwargs):
+        await asyncio.sleep(0.25)
+        raise HTTPException(status_code=503, detail="upstream exploded")
+
+    proxy_logging_obj = MagicMock(spec=ProxyLogging)
+    # None is what a hook that only audits returns; a bare AsyncMock would hand
+    # back a MagicMock, which the code correctly reads as a sanitized replacement.
+    proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
+    user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+    processor = ProxyBaseLLMRequestProcessing(data={"model": "gpt-4o", "stream": True})
+
+    with patch.object(litellm, "sse_keepalive_ping_interval_seconds", 0.05):
+        with patch.object(ProxyBaseLLMRequestProcessing, "_process_llm_request", slow_failure):
+            response = await processor.base_process_llm_request(
+                request=MagicMock(spec=Request),
+                fastapi_response=Response(),
+                user_api_key_dict=user_api_key_dict,
+                route_type="acompletion",
+                proxy_logging_obj=proxy_logging_obj,
+                general_settings={},
+                proxy_config=MagicMock(spec=ProxyConfig),
+            )
+        collected = await _drain(response)
+
+    proxy_logging_obj.post_call_failure_hook.assert_awaited_once()
+    call = proxy_logging_obj.post_call_failure_hook.await_args.kwargs
+    assert call["user_api_key_dict"] is user_api_key_dict
+    assert call["request_data"] is processor.data
+    assert getattr(call["original_exception"], "detail", None) == "upstream exploded"
+
+    assert collected[0] == TTFT_PING
+    assert collected[-1] == b"data: [DONE]\n\n"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "deployment_keepalive, expect_ping",
+    [(0, False), (None, True)],
+    ids=["operator-hard-disabled-this-deployment", "deployment-says-nothing"],
+)
+async def test_base_process_llm_request_honours_a_deployment_hard_disable(
+    deployment_keepalive, expect_ping
+):
+    """`keepalive_seconds: 0` is documented as a disable a request cannot lift. The
+    funnel has to hand its router to the gate for that to hold before the upstream
+    has answered, since no deployment has served the request yet."""
+    params = {"model": "openai/gpt-4o"}
+    if deployment_keepalive is not None:
+        params["keepalive_seconds"] = deployment_keepalive
+
+    llm_router = MagicMock()
+    llm_router.get_model_list = MagicMock(return_value=[{"model_name": "m", "litellm_params": params}])
+
+    async def slow_inner(self, **kwargs):
+        await asyncio.sleep(0.25)
+        return _sse_response(['data: {"late": true}\n\n'])
+
+    processor = ProxyBaseLLMRequestProcessing(data={"model": "m", "stream": True})
+
+    with patch.object(litellm, "sse_keepalive_ping_interval_seconds", 0.05):
+        with patch.object(ProxyBaseLLMRequestProcessing, "_process_llm_request", slow_inner):
+            response = await processor.base_process_llm_request(
+                request=MagicMock(spec=Request),
+                fastapi_response=Response(),
+                user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
+                route_type="acompletion",
+                proxy_logging_obj=MagicMock(spec=ProxyLogging),
+                general_settings={},
+                proxy_config=MagicMock(spec=ProxyConfig),
+                llm_router=llm_router,
+            )
+
+    collected = await _drain(response)
+    assert (collected[0] == TTFT_PING) is expect_ping
+
+
+@pytest.mark.asyncio
+async def test_a_hook_returning_a_replacement_decides_what_the_client_sees():
+    """post_call_failure_hook exists partly to sanitize client-facing errors.
+    Serializing the original would leak provider detail a deployment configured away."""
+
+    async def slow_failure():
+        await asyncio.sleep(0.2)
+        raise HTTPException(status_code=500, detail="upstream said host=10.0.0.7 key=sk-internal")
+
+    async def sanitize(exc):
+        return HTTPException(status_code=502, detail="upstream unavailable")
+
+    response = await open_sse_before_first_byte(
+        slow_failure(), ping_interval_seconds=0.05, on_late_failure=sanitize
+    )
+    collected = await _drain(response)
+
+    error_frame = json.loads(collected[-2].decode().removeprefix("data: ").strip())
+    assert error_frame["error"]["message"] == "upstream unavailable"
+    assert "sk-internal" not in collected[-2].decode()
+
+
+@pytest.mark.asyncio
+async def test_a_hook_raising_a_replacement_also_decides_what_the_client_sees():
+    """The hook's contract is return *or* raise, and raising is the path a
+    suppress(Exception) around the call would silently discard."""
+
+    async def slow_failure():
+        await asyncio.sleep(0.2)
+        raise HTTPException(status_code=500, detail="upstream said host=10.0.0.7 key=sk-internal")
+
+    async def sanitize_by_raising(exc):
+        raise HTTPException(status_code=403, detail="blocked by policy")
+
+    response = await open_sse_before_first_byte(
+        slow_failure(), ping_interval_seconds=0.05, on_late_failure=sanitize_by_raising
+    )
+    collected = await _drain(response)
+
+    error_frame = json.loads(collected[-2].decode().removeprefix("data: ").strip())
+    assert error_frame["error"]["message"] == "blocked by policy"
+    assert "sk-internal" not in collected[-2].decode()
+
+
+@pytest.mark.asyncio
+async def test_a_hook_that_returns_nothing_leaves_the_real_error_intact():
+    async def slow_failure():
+        await asyncio.sleep(0.2)
+        raise HTTPException(status_code=429, detail="rate limited")
+
+    async def audit_only(exc):
+        return None
+
+    response = await open_sse_before_first_byte(
+        slow_failure(), ping_interval_seconds=0.05, on_late_failure=audit_only
+    )
+    collected = await _drain(response)
+
+    error_frame = json.loads(collected[-2].decode().removeprefix("data: ").strip())
+    assert error_frame["error"]["message"] == "rate limited"
+    assert error_frame["error"]["code"] == "429"
+
+
+@pytest.mark.asyncio
+async def test_a_broken_hook_does_not_replace_the_real_error_with_its_own_bug():
+    async def slow_failure():
+        await asyncio.sleep(0.2)
+        raise HTTPException(status_code=429, detail="rate limited")
+
+    async def broken_hook(exc):
+        raise RuntimeError("the audit backend is down")
+
+    response = await open_sse_before_first_byte(
+        slow_failure(), ping_interval_seconds=0.05, on_late_failure=broken_hook
+    )
+    collected = await _drain(response)
+
+    error_frame = json.loads(collected[-2].decode().removeprefix("data: ").strip())
+    assert error_frame["error"]["message"] == "rate limited"
+    assert "audit backend" not in collected[-2].decode()

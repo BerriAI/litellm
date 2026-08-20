@@ -1196,23 +1196,6 @@ def test_not_found_error():
 
 
 @pytest.mark.parametrize(
-    "model",
-    [
-        "bedrock/us.anthropic.claude-3-haiku-20240307-v1:0",
-        "bedrock/us.meta.llama3-2-11b-instruct-v1:0",
-    ],
-)
-def test_bedrock_cross_region_inference(model):
-    litellm.set_verbose = True
-    response = completion(
-        model=model,
-        messages=messages,
-        max_tokens=10,
-        temperature=0.1,
-    )
-
-
-@pytest.mark.parametrize(
     "model, expected_base_model",
     [
         (

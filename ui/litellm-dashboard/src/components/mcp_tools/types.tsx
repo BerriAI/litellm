@@ -46,6 +46,20 @@ export const AUTH_TYPE = {
   OAUTH_DELEGATE: "oauth_delegate",
 };
 
+export const AUTH_TYPE_ITEMS = [
+  { value: AUTH_TYPE.NONE, label: "None" },
+  { value: AUTH_TYPE.API_KEY, label: "API Key" },
+  { value: AUTH_TYPE.BEARER_TOKEN, label: "Bearer Token" },
+  { value: AUTH_TYPE.TOKEN, label: "Token" },
+  { value: AUTH_TYPE.BASIC, label: "Basic Auth" },
+  { value: AUTH_TYPE.OAUTH2, label: "OAuth" },
+  { value: AUTH_TYPE.OAUTH2_TOKEN_EXCHANGE, label: "OAuth Token Exchange (OBO)" },
+  { value: AUTH_TYPE.OAUTH2_ID_JAG, label: "ID-JAG (Okta Cross App Access)" },
+  { value: AUTH_TYPE.AWS_SIGV4, label: "AWS SigV4 (Bedrock AgentCore MCPs)" },
+  { value: AUTH_TYPE.TRUE_PASSTHROUGH, label: "True Passthrough (no LiteLLM auth)" },
+  { value: AUTH_TYPE.OAUTH_DELEGATE, label: "OAuth Delegate (client-supplied upstream token)" },
+];
+
 // The two client-forwarded token modes: the caller supplies the upstream Authorization (forwarded
 // verbatim for true_passthrough, alongside LiteLLM admission for oauth_delegate). The dashboard holds
 // their token in sessionStorage instead of persisting it, and the browser-authorize temp payload keeps
@@ -250,6 +264,13 @@ export const TRANSPORT = {
   OPENAPI: "openapi",
 };
 
+export const TRANSPORT_ITEMS = [
+  { value: TRANSPORT.HTTP, label: "Streamable HTTP (Recommended)" },
+  { value: TRANSPORT.SSE, label: "Server-Sent Events (SSE)" },
+  { value: TRANSPORT.STDIO, label: "Standard Input/Output (stdio)" },
+  { value: TRANSPORT.OPENAPI, label: "OpenAPI Spec" },
+];
+
 export const handleTransport = (transport?: string | null, specPath?: string | null): string => {
   if (transport === null || transport === undefined) {
     return TRANSPORT.SSE;
@@ -273,13 +294,15 @@ export const handleAuth = (authType?: string | null): string => {
 
 // Define the structure for tool input schema properties
 export interface InputSchemaProperty {
-  type: string;
+  type?: string;
   description?: string;
   properties?: Record<string, InputSchemaProperty>; // For nested object properties
   required?: string[]; // For required fields in nested objects
   enum?: string[]; // For enum values
   default?: any; // For default values
   items?: InputSchemaProperty | InputSchemaProperty[]; // For array item schemas
+  anyOf?: InputSchemaProperty[];
+  oneOf?: InputSchemaProperty[];
 }
 
 // Define the structure for the input schema of a tool

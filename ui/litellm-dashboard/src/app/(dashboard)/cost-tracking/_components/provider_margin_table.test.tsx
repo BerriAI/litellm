@@ -1,6 +1,6 @@
 import React from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { screen } from "@testing-library/react";
+import { fireEvent, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { renderWithProviders } from "../../../../../tests/test-utils";
 import ProviderMarginTable from "./provider_margin_table";
@@ -68,7 +68,7 @@ describe("ProviderMarginTable", () => {
       />,
     );
     const logo = screen.getByRole("img", { name: `${Providers.OpenAI} logo` });
-    expect(logo.getAttribute("src")).toBe(providerLogoMap[Providers.OpenAI]);
+    expect(logo).toHaveAttribute("src", providerLogoMap[Providers.OpenAI]);
   });
 
   it("should fall back to a letter avatar for a provider with no bundled logo", () => {
@@ -188,7 +188,7 @@ describe("ProviderMarginTable", () => {
 
     const percentInput = screen.getByPlaceholderText("10");
     await user.clear(percentInput);
-    await user.type(percentInput, "20");
+    fireEvent.change(percentInput, { target: { value: "20" } });
 
     await user.click(rowAction("save"));
 
@@ -208,7 +208,7 @@ describe("ProviderMarginTable", () => {
     await user.click(rowAction("edit"));
 
     await user.clear(screen.getByPlaceholderText("10"));
-    await user.type(screen.getByPlaceholderText("0.001"), "0.002");
+    fireEvent.change(screen.getByPlaceholderText("0.001"), { target: { value: "0.002" } });
 
     await user.click(rowAction("save"));
 
@@ -316,10 +316,10 @@ describe("ProviderMarginTable", () => {
 
       const percentInput = screen.getByPlaceholderText("10");
       await user.clear(percentInput);
-      await user.type(percentInput, "5");
+      fireEvent.change(percentInput, { target: { value: "5" } });
 
       const fixedInput = screen.getByPlaceholderText("0.001");
-      await user.type(fixedInput, "0.002");
+      fireEvent.change(fixedInput, { target: { value: "0.002" } });
 
       await user.click(rowAction("save"));
 

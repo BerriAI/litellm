@@ -20,28 +20,28 @@ import {
 } from "@/components/networking";
 import { MCPServer, MCPSubmissionsSummary } from "@/components/mcp_tools/types";
 import { FIELD_GROUPS, MCP_REQUIRED_FIELD_DEFS, SETTINGS_KEY } from "./MCPStandardsSettings";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 
 type MCPStatus = "active" | "pending_review" | "rejected";
 
 const STATUS_CONFIG: Record<MCPStatus, { label: string; bg: string; text: string; dot: string }> = {
   active: {
     label: "Active",
-    bg: "bg-green-50",
-    text: "text-green-700",
-    dot: "bg-green-500",
+    bg: "bg-success/10",
+    text: "text-success",
+    dot: "bg-success",
   },
   pending_review: {
     label: "Pending Review",
-    bg: "bg-yellow-50",
-    text: "text-yellow-700",
-    dot: "bg-yellow-500",
+    bg: "bg-warning/10",
+    text: "text-warning",
+    dot: "bg-warning",
   },
   rejected: {
     label: "Rejected",
-    bg: "bg-red-50",
-    text: "text-red-700",
-    dot: "bg-red-500",
+    bg: "bg-destructive/10",
+    text: "text-destructive",
+    dot: "bg-destructive",
   },
 };
 
@@ -57,9 +57,9 @@ function formatDate(value: string | null | undefined): string {
 
 function StatCard({ label, value, color }: { label: string; value: number; color: string }) {
   return (
-    <div className="bg-white border border-gray-200 rounded-lg px-4 py-3">
+    <div className="bg-card border border-border rounded-lg px-4 py-3">
       <div className={`text-2xl font-bold ${color}`}>{value}</div>
-      <div className="text-xs text-gray-500 mt-0.5">{label}</div>
+      <div className="text-xs text-muted-foreground mt-0.5">{label}</div>
     </div>
   );
 }
@@ -80,23 +80,24 @@ function ConfirmDialog({ action, serverName, isCurrentlyActive, onConfirm, onCan
     : "This will mark the submission as rejected.";
   return (
     <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50">
-      <div className="bg-white rounded-xl shadow-xl p-6 max-w-sm w-full mx-4">
+      <div className="bg-card rounded-xl shadow-xl p-6 max-w-sm w-full mx-4">
         <div
           className={`w-10 h-10 rounded-full flex items-center justify-center mb-4 ${
-            isApprove ? "bg-green-100" : "bg-red-100"
+            isApprove ? "bg-success/15" : "bg-destructive/15"
           }`}
         >
           {isApprove ? (
-            <CheckIcon className="h-5 w-5 text-green-600" />
+            <CheckIcon className="h-5 w-5 text-success" />
           ) : (
-            <AlertCircleIcon className="h-5 w-5 text-red-600" />
+            <AlertCircleIcon className="h-5 w-5 text-destructive" />
           )}
         </div>
-        <h3 className="text-base font-semibold text-gray-900 mb-1">
+        <h3 className="text-base font-semibold text-foreground mb-1">
           {isApprove ? "Approve MCP Server" : "Reject MCP Server"}
         </h3>
-        <p className="text-sm text-gray-500 mb-4">
-          Are you sure you want to {action} <span className="font-medium text-gray-700">&quot;{serverName}&quot;</span>?{" "}
+        <p className="text-sm text-muted-foreground mb-4">
+          Are you sure you want to {action}{" "}
+          <span className="font-medium text-foreground">&quot;{serverName}&quot;</span>?{" "}
           {isApprove
             ? "This will activate the server. The submitting user will see it in their MCP Servers list once approved."
             : rejectBody}
@@ -106,7 +107,7 @@ function ConfirmDialog({ action, serverName, isCurrentlyActive, onConfirm, onCan
             placeholder="Reason for rejection (optional)"
             value={reviewNotes}
             onChange={(e) => setReviewNotes(e.target.value)}
-            className="w-full border border-gray-200 rounded-md px-3 py-2 text-sm text-gray-700 placeholder-gray-400 focus:outline-hidden focus:ring-1 focus:ring-blue-500 mb-4 resize-none"
+            className="w-full border border-border rounded-md px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-hidden focus:ring-1 focus:ring-ring mb-4 resize-none"
             rows={3}
           />
         )}
@@ -114,15 +115,17 @@ function ConfirmDialog({ action, serverName, isCurrentlyActive, onConfirm, onCan
           <button
             type="button"
             onClick={onCancel}
-            className="flex-1 border border-gray-300 text-gray-700 hover:bg-gray-50 text-sm font-medium py-2 rounded-md transition-colors"
+            className="flex-1 border border-border text-foreground hover:bg-accent text-sm font-medium py-2 rounded-md transition-colors"
           >
             Cancel
           </button>
           <button
             type="button"
             onClick={() => onConfirm(isApprove ? undefined : reviewNotes || undefined)}
-            className={`flex-1 text-white text-sm font-medium py-2 rounded-md transition-colors ${
-              isApprove ? "bg-green-500 hover:bg-green-600" : "bg-red-500 hover:bg-red-600"
+            className={`flex-1 text-sm font-medium py-2 rounded-md transition-colors ${
+              isApprove
+                ? "bg-success text-success-foreground hover:bg-success/80"
+                : "bg-destructive text-destructive-foreground hover:bg-destructive/80"
             }`}
           >
             {isApprove ? "Approve" : "Reject"}
@@ -149,21 +152,21 @@ function SubmissionRulesPanel({ requiredFields, onChange, onSave, isSaving }: Su
   };
 
   return (
-    <div className="mb-5 border border-gray-200 rounded-lg bg-white overflow-hidden">
+    <div className="mb-5 border border-border rounded-lg bg-card overflow-hidden">
       {/* Header — always visible */}
       <div
         className="flex items-center justify-between px-4 py-3 cursor-pointer select-none"
         onClick={() => setExpanded((v) => !v)}
       >
         <div className="flex items-center gap-2">
-          <SettingsIcon className="h-4 w-4 text-gray-400" />
-          <span className="text-sm font-semibold text-gray-800">Submission Rules</span>
+          <SettingsIcon className="h-4 w-4 text-muted-foreground" />
+          <span className="text-sm font-semibold text-foreground">Submission Rules</span>
           {activeLabels.length > 0 ? (
-            <span className="text-xs text-gray-500">
+            <span className="text-xs text-muted-foreground">
               ({activeLabels.length} required field{activeLabels.length !== 1 ? "s" : ""})
             </span>
           ) : (
-            <span className="text-xs text-gray-400 italic">no rules set</span>
+            <span className="text-xs text-muted-foreground italic">no rules set</span>
           )}
         </div>
         <div className="flex items-center gap-3">
@@ -173,7 +176,7 @@ function SubmissionRulesPanel({ requiredFields, onChange, onSave, isSaving }: Su
               {activeLabels.map((f) => (
                 <span
                   key={f.key}
-                  className="inline-flex items-center gap-1 text-xs bg-blue-50 text-blue-700 border border-blue-200 px-2 py-0.5 rounded-full"
+                  className="inline-flex items-center gap-1 text-xs bg-info/10 text-info border border-info/20 px-2 py-0.5 rounded-full"
                 >
                   <CheckIcon className="h-3 w-3" />
                   {f.label}
@@ -182,24 +185,26 @@ function SubmissionRulesPanel({ requiredFields, onChange, onSave, isSaving }: Su
             </div>
           )}
           {expanded ? (
-            <ChevronUpIcon className="h-4 w-4 text-gray-400" />
+            <ChevronUpIcon className="h-4 w-4 text-muted-foreground" />
           ) : (
-            <ChevronDownIcon className="h-4 w-4 text-gray-400" />
+            <ChevronDownIcon className="h-4 w-4 text-muted-foreground" />
           )}
         </div>
       </div>
 
       {/* Expanded editor */}
       {expanded && (
-        <div className="border-t border-gray-100 px-4 pt-4 pb-4">
-          <p className="text-xs text-gray-500 mb-4">
+        <div className="border-t border-border px-4 pt-4 pb-4">
+          <p className="text-xs text-muted-foreground mb-4">
             Select which fields must be filled in before a submission is considered compliant. LiteLLM will show ✓ / ✗
             for each rule on every submission card below.
           </p>
           <div className="grid grid-cols-2 gap-x-8 gap-y-5">
             {FIELD_GROUPS.map((group) => (
               <div key={group.label}>
-                <div className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">{group.label}</div>
+                <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">
+                  {group.label}
+                </div>
                 <div className="space-y-2">
                   {group.fields.map((field) => {
                     const active = requiredFields.includes(field.key);
@@ -209,13 +214,13 @@ function SubmissionRulesPanel({ requiredFields, onChange, onSave, isSaving }: Su
                           type="checkbox"
                           checked={active}
                           onChange={() => toggle(field.key)}
-                          className="mt-0.5 h-4 w-4 rounded-sm border-gray-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
+                          className="mt-0.5 h-4 w-4 rounded-sm border-border text-info focus:ring-ring cursor-pointer"
                         />
                         <div>
-                          <div className="text-sm font-medium text-gray-800 group-hover:text-blue-700 transition-colors">
+                          <div className="text-sm font-medium text-foreground group-hover:text-info transition-colors">
                             {field.label}
                           </div>
-                          <div className="text-xs text-gray-400">{field.description}</div>
+                          <div className="text-xs text-muted-foreground">{field.description}</div>
                         </div>
                       </label>
                     );
@@ -232,14 +237,14 @@ function SubmissionRulesPanel({ requiredFields, onChange, onSave, isSaving }: Su
                 await onSave();
                 setExpanded(false);
               }}
-              className="px-4 py-1.5 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 rounded-md transition-colors"
+              className="px-4 py-1.5 text-sm font-medium text-info-foreground bg-info hover:bg-info/80 disabled:opacity-50 rounded-md transition-colors"
             >
               {isSaving ? "Saving…" : "Save Rules"}
             </button>
             <button
               type="button"
               onClick={() => setExpanded(false)}
-              className="px-4 py-1.5 text-sm font-medium text-gray-600 hover:text-gray-900 border border-gray-200 rounded-md hover:bg-gray-50 transition-colors"
+              className="px-4 py-1.5 text-sm font-medium text-muted-foreground hover:text-foreground border border-border rounded-md hover:bg-accent transition-colors"
             >
               Cancel
             </button>
@@ -272,7 +277,7 @@ function MCPServerCard({ server, onApprove, onReject, requiredFields }: MCPServe
   const allPassed = checks.length > 0 && failCount === 0;
 
   return (
-    <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
+    <div className="bg-card border border-border rounded-lg overflow-hidden">
       {/* Server info */}
       <div className="px-4 pt-4 pb-3">
         <div className="flex items-start justify-between gap-4">
@@ -285,29 +290,31 @@ function MCPServerCard({ server, onApprove, onReject, requiredFields }: MCPServe
                 {statusCfg.label}
               </span>
             </div>
-            <h3 className="text-sm font-semibold text-gray-900">
+            <h3 className="text-sm font-semibold text-foreground">
               {server.alias ?? server.server_name ?? server.server_id}
             </h3>
-            {server.description && <p className="text-xs text-gray-500 mt-0.5 line-clamp-1">{server.description}</p>}
+            {server.description && (
+              <p className="text-xs text-muted-foreground mt-0.5 line-clamp-1">{server.description}</p>
+            )}
             {server.url && (
               <div className="flex items-center gap-1.5 mt-1.5">
-                <ServerIcon className="h-3.5 w-3.5 text-gray-400 shrink-0" />
-                <code className="text-xs text-gray-500 font-mono truncate">{server.url}</code>
+                <ServerIcon className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                <code className="text-xs text-muted-foreground font-mono truncate">{server.url}</code>
               </div>
             )}
-            <div className="flex items-center gap-3 mt-1.5 text-xs text-gray-400">
+            <div className="flex items-center gap-3 mt-1.5 text-xs text-muted-foreground">
               <span>
-                Transport: <span className="text-gray-600">{server.transport ?? "sse"}</span>
+                Transport: <span className="text-muted-foreground">{server.transport ?? "sse"}</span>
               </span>
               <span>·</span>
               <span>
-                Submitted by: <span className="text-gray-600">{server.submitted_by ?? "—"}</span>
+                Submitted by: <span className="text-muted-foreground">{server.submitted_by ?? "—"}</span>
               </span>
               <span>·</span>
               <span>{formatDate(server.submitted_at)}</span>
             </div>
             {approvalStatus === "rejected" && server.review_notes && (
-              <p className="text-xs text-red-600 mt-1.5">Rejection reason: {server.review_notes}</p>
+              <p className="text-xs text-destructive mt-1.5">Rejection reason: {server.review_notes}</p>
             )}
           </div>
           {/* Approve/Reject when no checks panel (no rules configured) */}
@@ -317,7 +324,7 @@ function MCPServerCard({ server, onApprove, onReject, requiredFields }: MCPServe
                 <button
                   type="button"
                   onClick={onApprove}
-                  className="text-xs bg-green-500 hover:bg-green-600 text-white px-3 py-1.5 rounded-md transition-colors font-medium"
+                  className="text-xs bg-success hover:bg-success/80 text-success-foreground px-3 py-1.5 rounded-md transition-colors font-medium"
                 >
                   Approve
                 </button>
@@ -325,7 +332,7 @@ function MCPServerCard({ server, onApprove, onReject, requiredFields }: MCPServe
               <button
                 type="button"
                 onClick={onReject}
-                className="text-xs border border-red-300 text-red-600 hover:bg-red-50 px-3 py-1.5 rounded-md transition-colors font-medium"
+                className="text-xs border border-destructive/30 text-destructive hover:bg-destructive/10 px-3 py-1.5 rounded-md transition-colors font-medium"
               >
                 Reject
               </button>
@@ -336,7 +343,7 @@ function MCPServerCard({ server, onApprove, onReject, requiredFields }: MCPServe
               <button
                 type="button"
                 onClick={onApprove}
-                className="text-xs bg-green-500 hover:bg-green-600 text-white px-3 py-1.5 rounded-md transition-colors font-medium"
+                className="text-xs bg-success hover:bg-success/80 text-success-foreground px-3 py-1.5 rounded-md transition-colors font-medium"
               >
                 Re-approve
               </button>
@@ -347,26 +354,32 @@ function MCPServerCard({ server, onApprove, onReject, requiredFields }: MCPServe
 
       {/* GitHub-style checks panel */}
       {checks.length > 0 && (
-        <div className="border-t border-gray-200">
+        <div className="border-t border-border">
           {/* Overall status header */}
           <div
             className={`flex items-center gap-3 px-4 py-3 ${
-              allPassed ? "bg-green-50 border-b border-green-100" : "bg-red-50 border-b border-red-100"
+              allPassed
+                ? "bg-success/10 border-b border-success/15"
+                : "bg-destructive/10 border-b border-destructive/15"
             }`}
           >
             {/* Large status circle */}
             <div
               className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${
-                allPassed ? "bg-green-500" : "bg-red-500"
+                allPassed ? "bg-success" : "bg-destructive"
               }`}
             >
-              {allPassed ? <CheckIcon className="h-4 w-4 text-white" /> : <XIcon className="h-4 w-4 text-white" />}
+              {allPassed ? (
+                <CheckIcon className="h-4 w-4 text-success-foreground" />
+              ) : (
+                <XIcon className="h-4 w-4 text-destructive-foreground" />
+              )}
             </div>
             <div className="flex-1 min-w-0">
-              <div className={`text-sm font-semibold leading-tight ${allPassed ? "text-green-800" : "text-red-800"}`}>
+              <div className={`text-sm font-semibold leading-tight ${allPassed ? "text-success" : "text-destructive"}`}>
                 {allPassed ? "All checks passed" : `${failCount} check${failCount !== 1 ? "s" : ""} failed`}
               </div>
-              <div className="text-xs text-gray-500 mt-0.5">
+              <div className="text-xs text-muted-foreground mt-0.5">
                 {passCount} passing, {failCount} failing
               </div>
             </div>
@@ -376,7 +389,7 @@ function MCPServerCard({ server, onApprove, onReject, requiredFields }: MCPServe
                 <button
                   type="button"
                   onClick={onApprove}
-                  className="text-xs bg-green-600 hover:bg-green-700 text-white px-3 py-1.5 rounded-md transition-colors font-medium"
+                  className="text-xs bg-success hover:bg-success/80 text-success-foreground px-3 py-1.5 rounded-md transition-colors font-medium"
                 >
                   Approve
                 </button>
@@ -385,7 +398,7 @@ function MCPServerCard({ server, onApprove, onReject, requiredFields }: MCPServe
                 <button
                   type="button"
                   onClick={onApprove}
-                  className="text-xs bg-green-600 hover:bg-green-700 text-white px-3 py-1.5 rounded-md transition-colors font-medium"
+                  className="text-xs bg-success hover:bg-success/80 text-success-foreground px-3 py-1.5 rounded-md transition-colors font-medium"
                 >
                   Re-approve
                 </button>
@@ -394,7 +407,7 @@ function MCPServerCard({ server, onApprove, onReject, requiredFields }: MCPServe
                 <button
                   type="button"
                   onClick={onReject}
-                  className="text-xs border border-red-300 text-red-600 hover:bg-red-50 bg-white px-3 py-1.5 rounded-md transition-colors font-medium"
+                  className="text-xs border border-destructive/30 text-destructive hover:bg-destructive/10 bg-card px-3 py-1.5 rounded-md transition-colors font-medium"
                 >
                   Reject
                 </button>
@@ -403,23 +416,23 @@ function MCPServerCard({ server, onApprove, onReject, requiredFields }: MCPServe
           </div>
 
           {/* Individual check rows */}
-          <div className="divide-y divide-gray-100">
+          <div className="divide-y divide-border">
             {checks.map((c) => (
               <div key={c.key} className="flex items-center gap-3 px-4 py-2.5">
                 {/* Small circle icon */}
                 <div
                   className={`w-5 h-5 rounded-full flex items-center justify-center shrink-0 ${
-                    c.passed ? "bg-green-100" : "bg-red-100"
+                    c.passed ? "bg-success/15" : "bg-destructive/15"
                   }`}
                 >
                   {c.passed ? (
-                    <CheckIcon className="h-3 w-3 text-green-600" />
+                    <CheckIcon className="h-3 w-3 text-success" />
                   ) : (
-                    <XIcon className="h-3 w-3 text-red-600" />
+                    <XIcon className="h-3 w-3 text-destructive" />
                   )}
                 </div>
-                <span className={`text-sm flex-1 ${c.passed ? "text-gray-700" : "text-gray-800"}`}>{c.label}</span>
-                <span className={`text-xs ${c.passed ? "text-green-600" : "text-red-500"}`}>
+                <span className={`text-sm flex-1 ${c.passed ? "text-foreground" : "text-foreground"}`}>{c.label}</span>
+                <span className={`text-xs ${c.passed ? "text-success" : "text-destructive"}`}>
                   {c.passed ? "Passes" : "Missing"}
                 </span>
               </div>
@@ -496,9 +509,9 @@ export function MCPSubmissionsTab({ accessToken }: MCPSubmissionsTabProps) {
     setIsSavingRules(true);
     try {
       await updateConfigFieldSetting(accessToken, SETTINGS_KEY, requiredFields);
-      NotificationsManager.success("Submission rules saved");
+      toast.success("Submission rules saved");
     } catch {
-      NotificationsManager.fromBackend("Failed to save submission rules");
+      toast.fromError("Failed to save submission rules");
     } finally {
       setIsSavingRules(false);
     }
@@ -520,9 +533,9 @@ export function MCPSubmissionsTab({ accessToken }: MCPSubmissionsTabProps) {
     try {
       await approveMCPServer(accessToken, serverId);
       await fetchData();
-      NotificationsManager.success(`MCP server "${serverName}" approved`);
+      toast.success(`MCP server "${serverName}" approved`);
     } catch {
-      NotificationsManager.fromBackend("Failed to approve MCP server");
+      toast.fromError("Failed to approve MCP server");
     } finally {
       setConfirmAction(null);
     }
@@ -533,9 +546,9 @@ export function MCPSubmissionsTab({ accessToken }: MCPSubmissionsTabProps) {
     try {
       await rejectMCPServer(accessToken, serverId, reviewNotes);
       await fetchData();
-      NotificationsManager.success(`MCP server "${serverName}" rejected`);
+      toast.success(`MCP server "${serverName}" rejected`);
     } catch {
-      NotificationsManager.fromBackend("Failed to reject MCP server");
+      toast.fromError("Failed to reject MCP server");
     } finally {
       setConfirmAction(null);
     }
@@ -552,27 +565,27 @@ export function MCPSubmissionsTab({ accessToken }: MCPSubmissionsTabProps) {
       />
 
       <div className="grid grid-cols-4 gap-4 mb-6">
-        <StatCard label="Total Submitted" value={summary.total} color="text-gray-900" />
-        <StatCard label="Pending Review" value={summary.pending_review} color="text-yellow-600" />
-        <StatCard label="Active" value={summary.active} color="text-green-600" />
-        <StatCard label="Rejected" value={summary.rejected} color="text-red-600" />
+        <StatCard label="Total Submitted" value={summary.total} color="text-foreground" />
+        <StatCard label="Pending Review" value={summary.pending_review} color="text-warning" />
+        <StatCard label="Active" value={summary.active} color="text-success" />
+        <StatCard label="Rejected" value={summary.rejected} color="text-destructive" />
       </div>
 
       <div className="flex items-center gap-3 mb-5">
         <div className="relative flex-1 max-w-xs">
-          <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+          <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <input
             type="text"
             placeholder="Search MCP servers..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            className="w-full pl-9 pr-4 py-2 border border-gray-200 rounded-md text-sm text-gray-700 placeholder-gray-400 focus:outline-hidden focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
+            className="w-full pl-9 pr-4 py-2 border border-border rounded-md text-sm text-foreground placeholder:text-muted-foreground focus:outline-hidden focus:ring-1 focus:ring-ring focus:border-info"
           />
         </div>
         <select
           value={statusFilter}
           onChange={(e) => setStatusFilter(e.target.value as typeof statusFilter)}
-          className="border border-gray-200 rounded-md px-3 py-2 text-sm text-gray-700 focus:outline-hidden focus:ring-1 focus:ring-blue-500 focus:border-blue-500 bg-white"
+          className="border border-border rounded-md px-3 py-2 text-sm text-foreground focus:outline-hidden focus:ring-1 focus:ring-ring focus:border-info bg-card"
         >
           <option value="all">All Status</option>
           <option value="pending_review">Pending Review</option>
@@ -582,10 +595,12 @@ export function MCPSubmissionsTab({ accessToken }: MCPSubmissionsTabProps) {
       </div>
 
       <div className="space-y-3">
-        {isLoading && <div className="text-center py-12 text-gray-500 text-sm">Loading submissions…</div>}
-        {error && <div className="text-center py-12 text-red-600 text-sm">{error}</div>}
+        {isLoading && <div className="text-center py-12 text-muted-foreground text-sm">Loading submissions…</div>}
+        {error && <div className="text-center py-12 text-destructive text-sm">{error}</div>}
         {!isLoading && !error && filtered.length === 0 && (
-          <div className="text-center py-12 text-gray-400 text-sm">No MCP server submissions match your filters.</div>
+          <div className="text-center py-12 text-muted-foreground text-sm">
+            No MCP server submissions match your filters.
+          </div>
         )}
         {!isLoading &&
           !error &&

@@ -14,7 +14,7 @@ export const Logo: React.FC<LogoProps> = ({ provider, src, label, className = "w
 
   if (erroredSrc === resolvedSrc || !resolvedSrc) {
     return (
-      <div className={`${className} rounded-full bg-gray-200 flex items-center justify-center text-xs`}>
+      <div className={`${className} rounded-full bg-border flex items-center justify-center text-xs`}>
         {name.charAt(0) || "-"}
       </div>
     );

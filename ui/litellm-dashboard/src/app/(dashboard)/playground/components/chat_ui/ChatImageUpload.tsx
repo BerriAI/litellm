@@ -1,6 +1,6 @@
 import React, { useId, useRef } from "react";
 import { Paperclip } from "lucide-react";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { CHAT_ATTACHMENT_ACCEPT, validateChatAttachment } from "./uploadValidation";
@@ -29,7 +29,7 @@ const ChatImageUpload: React.FC<ChatImageUploadProps> = ({ chatUploadedImage, on
     }
     const result = validateChatAttachment(file);
     if (!result.ok) {
-      NotificationsManager.error(result.error);
+      toast.error(result.error);
       return;
     }
     onImageUpload(file);
@@ -56,7 +56,7 @@ const ChatImageUpload: React.FC<ChatImageUploadProps> = ({ chatUploadedImage, on
               size="icon-sm"
               disabled={disabled}
               aria-label="Attach image or PDF"
-              className="text-gray-400 hover:text-gray-600"
+              className="text-muted-foreground hover:text-foreground"
               onClick={() => inputRef.current?.click()}
             />
           }

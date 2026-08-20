@@ -1,22 +1,12 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { FallbackSelectionForm } from "./FallbackSelectionForm";
 import type { FallbackGroup } from "./FallbackGroupConfig";
+import { toast } from "@/lib/toast";
 
 const mockOnGroupsChange = vi.fn();
 const AVAILABLE_MODELS = ["gpt-4", "gpt-3.5-turbo", "claude-3-opus"];
-
-vi.mock("antd", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("antd")>();
-  return {
-    ...actual,
-    message: {
-      ...actual.message,
-      warning: vi.fn(),
-    },
-  };
-});
 
 describe("FallbackSelectionForm", () => {
   beforeEach(() => {
@@ -79,7 +69,7 @@ describe("FallbackSelectionForm", () => {
       <FallbackSelectionForm groups={groups} onGroupsChange={mockOnGroupsChange} availableModels={AVAILABLE_MODELS} />,
     );
 
-    const addTabButton = screen.getByRole("button", { name: /add tab/i });
+    const addTabButton = screen.getByRole("button", { name: /add fallback group/i });
     await user.click(addTabButton);
 
     expect(mockOnGroupsChange).toHaveBeenCalledTimes(1);
@@ -108,7 +98,7 @@ describe("FallbackSelectionForm", () => {
         maxGroups={5}
       />,
     );
-    expect(screen.queryByRole("button", { name: /add tab/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /add fallback group/i })).not.toBeInTheDocument();
   });
 
   it("should show add tab button when below maxGroups with custom maxGroups", () => {
@@ -121,12 +111,11 @@ describe("FallbackSelectionForm", () => {
         maxGroups={3}
       />,
     );
-    expect(screen.getByRole("button", { name: /add tab/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /add fallback group/i })).toBeInTheDocument();
   });
 
   it("should call onGroupsChange when a group is removed", async () => {
     const user = userEvent.setup();
-    const antd = await import("antd");
     const groups: FallbackGroup[] = [
       { id: "1", primaryModel: "gpt-4", fallbackModels: [] },
       { id: "2", primaryModel: "gpt-3.5-turbo", fallbackModels: [] },
@@ -135,14 +124,15 @@ describe("FallbackSelectionForm", () => {
       <FallbackSelectionForm groups={groups} onGroupsChange={mockOnGroupsChange} availableModels={AVAILABLE_MODELS} />,
     );
 
-    const removeButtons = screen.getAllByRole("tab", { name: "remove" });
+    const removeButtons = screen.getAllByRole("button", { name: /^remove /i });
+    expect(removeButtons).toHaveLength(2);
     await user.click(removeButtons[0]);
 
     expect(mockOnGroupsChange).toHaveBeenCalledTimes(1);
     const [newGroups] = mockOnGroupsChange.mock.calls[0];
     expect(newGroups).toHaveLength(1);
     expect(newGroups[0].id).toBe("2");
-    expect(antd.message.warning).not.toHaveBeenCalled();
+    expect(toast.warning).not.toHaveBeenCalled();
   });
 
   it("should render FallbackGroupConfig for each group", () => {
@@ -150,7 +140,7 @@ describe("FallbackSelectionForm", () => {
     render(
       <FallbackSelectionForm groups={groups} onGroupsChange={mockOnGroupsChange} availableModels={AVAILABLE_MODELS} />,
     );
-    expect(screen.getByText("Select primary model")).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: /primary model/i })).toHaveValue("");
     expect(screen.getByText("Primary Model")).toBeInTheDocument();
   });
 
@@ -161,7 +151,8 @@ describe("FallbackSelectionForm", () => {
     );
     expect(screen.getByRole("tab", { name: "gpt-4" })).toBeInTheDocument();
     expect(screen.getAllByText("gpt-4").length).toBeGreaterThan(0);
-    expect(screen.getByText("gpt-3.5-turbo")).toBeInTheDocument();
+    const chain = screen.getByRole("list", { name: "Fallback chain" });
+    expect(within(chain).getByText("gpt-3.5-turbo")).toBeInTheDocument();
   });
 
   it("should not add group when add button clicked at maxGroups", () => {
@@ -179,7 +170,7 @@ describe("FallbackSelectionForm", () => {
       />,
     );
 
-    expect(screen.queryByRole("button", { name: /add tab/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /add fallback group/i })).not.toBeInTheDocument();
     expect(mockOnGroupsChange).not.toHaveBeenCalled();
   });
 });

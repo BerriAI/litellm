@@ -1,14 +1,17 @@
 """Helpers for handling MCP-aware `/chat/completions` requests."""
 
 import logging
-from typing import Any, Final, cast
+from typing import TYPE_CHECKING, Any, Final, cast
 
 from litellm.responses.mcp.litellm_proxy_mcp_handler import (
     LiteLLM_Proxy_MCP_Handler,
 )
 from litellm.responses.mcp.request_context import MCPRequestContext
-from litellm.types.utils import ModelResponse
+from litellm.types.utils import Message, ModelResponse
 from litellm.utils import CustomStreamWrapper
+
+if TYPE_CHECKING:
+    from litellm.proxy._types import UserAPIKeyAuth
 
 
 def _add_mcp_metadata_to_response(
@@ -55,7 +58,7 @@ def _add_mcp_metadata_to_response(
 
     # Add MCP metadata to all choices' messages
     for choice in response.choices:
-        message = getattr(choice, "message", None)
+        message: Message | None = getattr(choice, "message", None)
         if message is not None:
             # Get existing provider_specific_fields or create new dict
             provider_fields = getattr(message, "provider_specific_fields", None) or {}
@@ -109,7 +112,7 @@ async def acompletion_with_mcp(
         )
 
     context: Final = MCPRequestContext.resolve(kwargs=kwargs, tools=tools)
-    user_api_key_auth: Final = context.user_api_key_auth
+    user_api_key_auth: Final[UserAPIKeyAuth | None] = context.user_api_key_auth
     request_tags: Final = list(context.request_tags) if context.request_tags else None
     mcp_auth_header: Final = context.mcp_auth_header
     mcp_server_auth_headers: Final = context.mcp_server_auth_headers
@@ -165,7 +168,7 @@ async def acompletion_with_mcp(
         return response
 
     # For auto-execute: handle streaming vs non-streaming differently
-    stream: Final = kwargs.get("stream", False)
+    stream: Final[bool] = kwargs.get("stream", False)
     mock_tool_calls: Final = base_call_args.pop("mock_tool_calls", None)
 
     if stream:
@@ -539,7 +542,7 @@ async def acompletion_with_mcp(
                     self.__iter__()
                 return next(self._sync_iterator)
 
-            def __getattr__(self, name):
+            def __getattr__(self, name: str) -> object:
                 # Delegate all other attributes to original wrapper
                 return getattr(self._original_wrapper, name)
 

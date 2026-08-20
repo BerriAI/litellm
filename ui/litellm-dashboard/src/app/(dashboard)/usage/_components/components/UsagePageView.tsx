@@ -12,7 +12,6 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 
 import { BarChart } from "@/components/shared/charts";
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/shared/Alert";
-import { PaginatedSearchSelect } from "@/components/shared/PaginatedSearchSelect";
 import { Button } from "@/components/ui/button";
 import { Card as ShadcnCard, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -21,13 +20,14 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { useAgents } from "@/app/(dashboard)/hooks/agents/useAgents";
 import { useCustomers } from "@/app/(dashboard)/hooks/customers/useCustomers";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import useIsOrgAdmin from "@/app/(dashboard)/hooks/useIsOrgAdmin";
 import { useCurrentUser } from "@/app/(dashboard)/hooks/users/useCurrentUser";
-import { useInfiniteUsers } from "@/app/(dashboard)/hooks/users/useUsers";
 import { hasCapability } from "@/utils/capabilities";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { all_admin_roles, internalUserRoles } from "@/utils/roles";
 import { ActivityMetrics, processActivityData } from "@/components/activity_metrics";
 import CloudZeroExportModal from "@/components/cloudzero_export_modal";
+import UserDropdown from "@/components/common_components/UserDropdown";
 import EntityUsageExportModal from "@/components/EntityUsageExport";
 import { Team } from "@/components/key_team_helpers/key_list";
 import {
@@ -101,39 +101,9 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   const { data: currentUser } = useCurrentUser();
   const isAdmin = all_admin_roles.includes(userRole || "");
   const canViewTagUsage = isAdmin || internalUserRoles.includes(userRole || "");
-  const canViewOrganizationUsage = hasCapability(userRole, "viewOrganizationUsage");
+  const isOrgAdmin = useIsOrgAdmin();
+  const canViewOrganizationUsage = hasCapability(userRole, "viewOrganizationUsage", isOrgAdmin);
   const canViewAgentUsage = hasCapability(userRole, "viewAgentUsage");
-
-  const [settledUserSearch, setSettledUserSearch] = useState("");
-
-  const {
-    data: usersInfiniteData,
-    fetchNextPage: fetchNextUsersPage,
-    hasNextPage: hasNextUsersPage,
-    isFetchingNextPage: isFetchingNextUsersPage,
-    isLoading: isLoadingUsers,
-  } = useInfiniteUsers(50, settledUserSearch || undefined);
-
-  const userOptions = useMemo(() => {
-    if (!usersInfiniteData?.pages) return [];
-    const seen = new Set<string>();
-    const result: { value: string; label: string }[] = [];
-    for (const page of usersInfiniteData.pages) {
-      for (const user of page.users) {
-        if (seen.has(user.user_id)) continue;
-        seen.add(user.user_id);
-        result.push({
-          value: user.user_id,
-          label: user.user_alias
-            ? `${user.user_alias} (${user.user_id})`
-            : user.user_email
-              ? `${user.user_email} (${user.user_id})`
-              : user.user_id,
-        });
-      }
-    }
-    return result;
-  }, [usersInfiniteData]);
 
   // For admins: null means global view (all users), a string means filter by that user
   // For non-admins: always set to their own user ID
@@ -142,7 +112,14 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   const [isCloudZeroModalOpen, setIsCloudZeroModalOpen] = useState(false);
   const [isGlobalExportModalOpen, setIsGlobalExportModalOpen] = useState(false);
   const [isAiChatOpen, setIsAiChatOpen] = useState(false);
-  const [usageView, setUsageView] = useState<UsageOption>("global");
+  const [selectedUsageView, setUsageView] = useState<UsageOption>("global");
+  // Org-admin membership is read from the server, so unlike the other usage
+  // views this one can be revoked while the page is open. Derive the view in
+  // render rather than storing it, so the fallback lands on the same paint and
+  // the selector never holds a value it no longer offers.
+  const usageView: UsageOption =
+    selectedUsageView === "organization" && !canViewOrganizationUsage ? "global" : selectedUsageView;
+
   const [showCredentialBanner, setShowCredentialBanner] = useState(true);
   const [topKeysLimit, setTopKeysLimit] = useState<number>(5);
   const [topModelsLimit, setTopModelsLimit] = useState<number>(5);
@@ -492,6 +469,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
               onChange={(value) => setUsageView(value)}
               userRole={userRole}
               canViewTagUsage={canViewTagUsage}
+              isOrgAdmin={isOrgAdmin}
             />
             <AdvancedDatePicker value={dateValue} onValueChange={handleDateChange} />
           </div>
@@ -528,18 +506,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
               {isAdmin && usageView === "global" && (
                 <div className="mb-4">
                   <p className="mb-2 text-sm text-foreground">Filter by user</p>
-                  <PaginatedSearchSelect
-                    options={userOptions}
-                    value={selectedUserId ?? undefined}
-                    onValueChange={(value) => setSelectedUserId(value === "" ? null : value)}
-                    onSearchChange={setSettledUserSearch}
-                    onLoadMore={fetchNextUsersPage}
-                    hasNextPage={hasNextUsersPage}
-                    isLoading={isLoadingUsers}
-                    isFetchingNextPage={isFetchingNextUsersPage}
-                    placeholder="Select user to filter..."
-                    emptyText="No users found"
-                  />
+                  <UserDropdown value={selectedUserId} onChange={setSelectedUserId} />
                 </div>
               )}
               <Tabs defaultValue="cost">
@@ -626,7 +593,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                                   {gatewayActivity && (
                                     <Tooltip>
                                       <TooltipTrigger
-                                        render={<Info className="size-4 text-gray-400 hover:text-gray-600" />}
+                                        render={<Info className="size-4 text-muted-foreground hover:text-foreground" />}
                                       />
                                       <TooltipContent>
                                         Counted by the gateway when it answers a request, independent of spend logging.
@@ -641,7 +608,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                                   today: a non-admin (who may not read deployment-wide counts)
                                   and an admin on a proxy whose table is still backfilling.
                                 */}
-                                <p className="text-2xl font-bold mt-2 text-green-600">
+                                <p className="text-2xl font-bold mt-2 text-success">
                                   {(
                                     gatewayActivity?.total_successful_requests ??
                                     userSpendData.metadata?.total_successful_requests
@@ -655,7 +622,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                                   <h3 className="text-lg font-medium text-foreground">Failed Requests</h3>
                                   <Tooltip>
                                     <TooltipTrigger
-                                      render={<Info className="size-4 text-gray-400 hover:text-gray-600" />}
+                                      render={<Info className="size-4 text-muted-foreground hover:text-foreground" />}
                                     />
                                     <TooltipContent>
                                       {gatewayActivity
@@ -666,7 +633,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                                 </div>
                                 {/* Same source as Successful Requests: the two must agree, or the
                                     tile disagrees with the endpoint breakdown chart below it. */}
-                                <p className="text-2xl font-bold mt-2 text-red-600">
+                                <p className="text-2xl font-bold mt-2 text-destructive">
                                   {(
                                     gatewayActivity?.total_failed_requests ??
                                     userSpendData.metadata?.total_failed_requests
@@ -687,16 +654,16 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                               </CardContent>
                             </ShadcnCard>
                             <ShadcnCard
-                              className="cursor-pointer hover:bg-gray-50 transition-colors"
+                              className="cursor-pointer hover:bg-accent transition-colors"
                               onClick={() => setShowTokenBreakdown(!showTokenBreakdown)}
                             >
                               <CardContent>
                                 <div className="flex items-center gap-2">
                                   <h3 className="text-lg font-medium text-foreground">Total Tokens</h3>
                                   {showTokenBreakdown ? (
-                                    <ChevronDown className="size-3 text-gray-400" />
+                                    <ChevronDown className="size-3 text-muted-foreground" />
                                   ) : (
-                                    <ChevronRight className="size-3 text-gray-400" />
+                                    <ChevronRight className="size-3 text-muted-foreground" />
                                   )}
                                 </div>
                                 <p className="text-2xl font-bold mt-2">
@@ -710,7 +677,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                               <ShadcnCard>
                                 <CardContent>
                                   <h3 className="text-lg font-medium text-foreground">Input Tokens</h3>
-                                  <p className="text-2xl font-bold mt-2 text-blue-600">
+                                  <p className="text-2xl font-bold mt-2 text-info">
                                     {(userSpendData.metadata?.total_prompt_tokens || 0).toLocaleString()}
                                   </p>
                                 </CardContent>
@@ -718,7 +685,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                               <ShadcnCard>
                                 <CardContent>
                                   <h3 className="text-lg font-medium text-foreground">Output Tokens</h3>
-                                  <p className="text-2xl font-bold mt-2 text-cyan-600">
+                                  <p className="text-2xl font-bold mt-2 text-info">
                                     {userSpendData.metadata?.total_completion_tokens?.toLocaleString() || 0}
                                   </p>
                                 </CardContent>
@@ -726,7 +693,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                               <ShadcnCard>
                                 <CardContent>
                                   <h3 className="text-lg font-medium text-foreground">Cache Read Tokens</h3>
-                                  <p className="text-2xl font-bold mt-2 text-green-600">
+                                  <p className="text-2xl font-bold mt-2 text-success">
                                     {userSpendData.metadata?.total_cache_read_input_tokens?.toLocaleString() || 0}
                                   </p>
                                 </CardContent>
@@ -767,15 +734,15 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                                 if (!active || !payload?.[0]) return null;
                                 const data = payload[0].payload;
                                 return (
-                                  <div className="bg-white p-4 shadow-lg rounded-lg border">
+                                  <div className="bg-card p-4 shadow-lg rounded-lg border">
                                     <p className="font-bold">{data.date}</p>
-                                    <p className="text-cyan-500">
-                                      Spend: ${formatNumberWithCommas(data.metrics.spend, 2)}
+                                    <p className="text-info">Spend: ${formatNumberWithCommas(data.metrics.spend, 2)}</p>
+                                    <p className="text-muted-foreground">Requests: {data.metrics.api_requests}</p>
+                                    <p className="text-muted-foreground">
+                                      Successful: {data.metrics.successful_requests}
                                     </p>
-                                    <p className="text-gray-600">Requests: {data.metrics.api_requests}</p>
-                                    <p className="text-gray-600">Successful: {data.metrics.successful_requests}</p>
-                                    <p className="text-gray-600">Failed: {data.metrics.failed_requests}</p>
-                                    <p className="text-gray-600">Tokens: {data.metrics.total_tokens}</p>
+                                    <p className="text-muted-foreground">Failed: {data.metrics.failed_requests}</p>
+                                    <p className="text-muted-foreground">Tokens: {data.metrics.total_tokens}</p>
                                   </div>
                                 );
                               }}
@@ -793,7 +760,9 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                               Gateway Requests by Endpoint
                               <Tooltip>
                                 <TooltipTrigger
-                                  render={<Info className="ml-2 inline size-4 text-gray-400 hover:text-gray-600" />}
+                                  render={
+                                    <Info className="ml-2 inline size-4 text-muted-foreground hover:text-foreground" />
+                                  }
                                 />
                                 <TooltipContent>
                                   Counted by the gateway middleware as each request is answered. Covers LLM, MCP and A2A
@@ -875,21 +844,21 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                                       if (!active || !payload?.[0]) return null;
                                       const data = payload[0].payload;
                                       return (
-                                        <div className="bg-white p-4 shadow-lg rounded-lg border">
+                                        <div className="bg-card p-4 shadow-lg rounded-lg border">
                                           <p className="font-bold">{data.key}</p>
-                                          <p className="text-cyan-500">
-                                            Spend: ${formatNumberWithCommas(data.spend, 2)}
-                                          </p>
-                                          <p className="text-gray-600">
+                                          <p className="text-info">Spend: ${formatNumberWithCommas(data.spend, 2)}</p>
+                                          <p className="text-muted-foreground">
                                             Total Requests: {data.requests.toLocaleString()}
                                           </p>
-                                          <p className="text-green-600">
+                                          <p className="text-success">
                                             Successful: {data.successful_requests.toLocaleString()}
                                           </p>
-                                          <p className="text-red-600">
+                                          <p className="text-destructive">
                                             Failed: {data.failed_requests.toLocaleString()}
                                           </p>
-                                          <p className="text-gray-600">Tokens: {data.tokens.toLocaleString()}</p>
+                                          <p className="text-muted-foreground">
+                                            Tokens: {data.tokens.toLocaleString()}
+                                          </p>
                                         </div>
                                       );
                                     }}
@@ -942,6 +911,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
               entityType="organization"
               userID={userID}
               userRole={userRole}
+              isOrgAdmin={isOrgAdmin}
               dateValue={dateValue}
               entityList={
                 organizations?.map((organization) => ({
@@ -1042,7 +1012,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
               entityType="user"
               userID={userID}
               userRole={userRole}
-              entityList={userOptions.length > 0 ? userOptions : null}
+              entityList={null}
               premiumUser={premiumUser}
               dateValue={dateValue}
             />

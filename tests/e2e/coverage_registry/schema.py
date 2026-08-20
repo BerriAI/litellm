@@ -76,6 +76,7 @@ LlmCapability = Literal[
     "thinking",
     "thinking_with_tool_use",
     "tool_search",
+    "tool_search_history",
     "tool_use",
     "vision",
     "web_search",

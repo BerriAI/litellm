@@ -101,3 +101,8 @@ async def test_async_transform_request_strips_unsupported_tools_from_body():
 
     assert [tool["type"] for tool in body["tools"]] == ["function"]
     assert body["tools"][0]["function"]["name"] == "shell"
+
+
+def test_thinking_mode_active_bool_thinking_returns_false_without_crashing():
+    config = DeepSeekChatConfig()
+    assert config._thinking_mode_active(model="deepseek-reasoner", optional_params={"thinking": True}) is False

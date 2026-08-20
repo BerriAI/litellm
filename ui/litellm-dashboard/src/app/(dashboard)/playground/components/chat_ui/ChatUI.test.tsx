@@ -35,7 +35,7 @@ const STREAMING_ENABLED_ARG_INDEX = 25;
 
 async function openComboboxByPlaceholder(placeholder: string) {
   const user = userEvent.setup();
-  const combobox = screen.getByPlaceholderText(placeholder);
+  const combobox = await screen.findByPlaceholderText(placeholder);
   await user.click(combobox);
   return combobox;
 }
@@ -96,6 +96,55 @@ describe("ChatUI", () => {
     });
   });
 
+  it("should show the SDK type by its human label rather than its wire value", async () => {
+    const user = userEvent.setup();
+    render(
+      <ChatUI
+        accessToken="1234567890"
+        token="1234567890"
+        userRole="user"
+        userID="1234567890"
+        disabledPersonalKeyCreation={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Test Key")).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole("button", { name: /get code/i }));
+
+    const sdkTrigger = await screen.findByLabelText("SDK Type");
+    expect(sdkTrigger).toHaveTextContent("OpenAI SDK");
+
+    await user.click(sdkTrigger);
+    await user.click(await screen.findByRole("option", { name: "Azure SDK" }));
+
+    expect(await screen.findByLabelText("SDK Type")).toHaveTextContent("Azure SDK");
+  });
+
+  it("should show the voice by its human label rather than its wire value", async () => {
+    render(
+      <ChatUI
+        accessToken="1234567890"
+        token="1234567890"
+        userRole="user"
+        userID="1234567890"
+        disabledPersonalKeyCreation={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Test Key")).toBeInTheDocument();
+    });
+
+    await selectComboboxOption("Select an endpoint", "/v1/audio/speech");
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Voice")).toHaveTextContent("Alloy - Professional and confident");
+    });
+  });
+
   it("should allow the user to select a model", async () => {
     render(
       <ChatUI
@@ -148,10 +197,10 @@ describe("ChatUI", () => {
     await waitFor(() => {
       expect(screen.getAllByText("ChatModel").length).toBeGreaterThan(0);
       expect(screen.getAllByText("NoModeModel").length).toBeGreaterThan(0);
-      expect(screen.queryByText("SpeechModel")).toBeNull();
-      expect(screen.queryByText("ImageModel")).toBeNull();
-      expect(screen.queryByText("ResponsesModel")).toBeNull();
-      expect(screen.queryByText("RealtimeModel")).toBeNull();
+      expect(screen.queryByText("SpeechModel")).not.toBeInTheDocument();
+      expect(screen.queryByText("ImageModel")).not.toBeInTheDocument();
+      expect(screen.queryByText("ResponsesModel")).not.toBeInTheDocument();
+      expect(screen.queryByText("RealtimeModel")).not.toBeInTheDocument();
     });
   });
 
@@ -182,7 +231,7 @@ describe("ChatUI", () => {
     await waitFor(() => {
       expect(screen.getAllByText("RealtimeModel").length).toBeGreaterThan(0);
       expect(screen.getAllByText("NoModeModel").length).toBeGreaterThan(0);
-      expect(screen.queryByText("ChatModel")).toBeNull();
+      expect(screen.queryByText("ChatModel")).not.toBeInTheDocument();
     });
   });
 
@@ -234,7 +283,7 @@ describe("ChatUI", () => {
     await selectComboboxOption("Select an endpoint", "/v1/chat/completions");
 
     await waitFor(() => {
-      expect(mcpInput()).not.toBeDisabled();
+      expect(mcpInput()).toBeEnabled();
     });
   });
 
@@ -432,7 +481,7 @@ describe("ChatUI", () => {
     });
 
     await waitFor(() => {
-      expect(screen.queryByText("Fill")).toBeNull();
+      expect(screen.queryByText("Fill")).not.toBeInTheDocument();
     });
 
     const customProxyInput = screen.getByPlaceholderText(
@@ -461,7 +510,7 @@ describe("ChatUI", () => {
 
     const mcpInput = screen.getByLabelText("Select MCP servers");
     expect(mcpInput).toBeInTheDocument();
-    expect(mcpInput).not.toBeDisabled();
+    expect(mcpInput).toBeEnabled();
 
     await user.click(mcpInput);
 
@@ -521,7 +570,7 @@ describe("ChatUI", () => {
     await waitFor(() => {
       expect(screen.getAllByText("ChatModel").length).toBeGreaterThan(0);
     });
-    expect(screen.queryByText("SpeechModel")).toBeNull();
+    expect(screen.queryByText("SpeechModel")).not.toBeInTheDocument();
   });
 
   it("should attach an audio file dropped on the transcription upload area", async () => {
@@ -602,7 +651,7 @@ describe("ChatUI", () => {
     await user.click(await screen.findByRole("option", { name: "Virtual Key" }));
 
     const keyField = await screen.findByPlaceholderText("Enter custom Virtual Key");
-    await user.type(keyField, "sk-test");
+    fireEvent.change(keyField, { target: { value: "sk-test" } });
 
     await waitFor(() => {
       expect(screen.getByPlaceholderText("Loading models...")).toBeInTheDocument();
@@ -611,7 +660,7 @@ describe("ChatUI", () => {
     await user.clear(keyField);
 
     await waitFor(() => {
-      expect(screen.getByPlaceholderText("Select a Model")).not.toBeDisabled();
+      expect(screen.getByPlaceholderText("Select a Model")).toBeEnabled();
     });
   });
 });
