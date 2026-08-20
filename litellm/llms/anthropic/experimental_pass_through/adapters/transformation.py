@@ -61,6 +61,7 @@ from openai.types.chat.chat_completion_chunk import Choice as OpenAIStreamingCho
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     parse_tool_call_arguments,
+    with_prompt_cache_breakpoint,
 )
 from litellm.litellm_core_utils.prompt_templates.factory import (
     THOUGHT_SIGNATURE_SEPARATOR,
@@ -308,6 +309,11 @@ class LiteLLMAnthropicMessagesAdapter:
                 # Fallback for non-dict objects (shouldn't happen in practice)
                 cast(dict[str, object], target)["cache_control"] = cache_control
 
+    @staticmethod
+    def _add_prompt_cache_breakpoint_if_present(source: object, target: object) -> None:
+        if isinstance(source, dict) and "prompt_cache_breakpoint" in source:
+            with_prompt_cache_breakpoint(target, source["prompt_cache_breakpoint"])
+
     def translatable_anthropic_params(self) -> list[str]:
         """
         Which anthropic params, we need to translate to the openai format.
@@ -368,6 +374,7 @@ class LiteLLMAnthropicMessagesAdapter:
                         if content.get("type") == "text":
                             text_obj = ChatCompletionTextObject(type="text", text=content.get("text", ""))
                             self._add_cache_control_if_applicable(content, text_obj, model)
+                            self._add_prompt_cache_breakpoint_if_present(content, text_obj)
                             new_user_content_list.append(text_obj)
                         elif content.get("type") == "image":
                             # Convert Anthropic image format to OpenAI format
@@ -378,6 +385,7 @@ class LiteLLMAnthropicMessagesAdapter:
                                 image_url_obj = ChatCompletionImageUrlObject(url=openai_image_url)
                                 image_obj = ChatCompletionImageObject(type="image_url", image_url=image_url_obj)
                                 self._add_cache_control_if_applicable(content, image_obj, model)
+                                self._add_prompt_cache_breakpoint_if_present(content, image_obj)
                                 new_user_content_list.append(image_obj)
                         elif content.get("type") == "document":
                             # Convert Anthropic document format (PDF, etc.) to OpenAI format
@@ -869,6 +877,7 @@ class LiteLLMAnthropicMessagesAdapter:
                 continue
             text_obj = ChatCompletionTextObject(type="text", text=text)
             self._add_cache_control_if_applicable(block, text_obj, model)
+            self._add_prompt_cache_breakpoint_if_present(block, text_obj)
             text_parts.append(text_obj)
         return ChatCompletionSystemMessage(role="system", content=text_parts) if text_parts else None
 
@@ -900,6 +909,7 @@ class LiteLLMAnthropicMessagesAdapter:
                         "text": block.get("text", ""),
                     }
                     self._add_cache_control_if_applicable(block, text_block, model_name)
+                    self._add_prompt_cache_breakpoint_if_present(block, text_block)
                     openai_system_content.append(text_block)
             if openai_system_content:
                 new_messages.insert(
