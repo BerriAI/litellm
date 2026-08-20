@@ -1585,6 +1585,7 @@ class TestProxyInitializationHelpers:
             "DATABASE_URL": "",
             "DIRECT_URL": "",
             "IAM_TOKEN_DB_AUTH": "",
+            "AZURE_POSTGRESQL_AUTH": "",
             "USE_AWS_KMS": "",
         }
         with patch.dict(os.environ, env_overrides):
@@ -2335,3 +2336,85 @@ class TestPostgresStatementTimeoutOptions:
                 standalone_mode=False,
             )
             return {k: os.environ[k] for k in ("DATABASE_URL", "DIRECT_URL") if k in os.environ}
+
+
+class TestTokenAuthCliFlags:
+    """`--azure_postgresql_auth` has to reach the URL assembly the same way the env var does."""
+
+    def _invoke_with_azure_host(self, args):
+        from click.testing import CliRunner
+
+        from litellm.proxy.db.token_auth import build_azure_entra_token_provider
+        from litellm.proxy.proxy_cli import run_server
+
+        build_azure_entra_token_provider.cache_clear()
+        clean_env = {
+            k: v
+            for k, v in os.environ.items()
+            if k
+            not in (
+                "DATABASE_URL",
+                "DIRECT_URL",
+                "IAM_TOKEN_DB_AUTH",
+                "AZURE_POSTGRESQL_AUTH",
+                "DATABASE_URL_READ_REPLICA",
+            )
+        }
+        clean_env["DATABASE_HOST"] = "writer.postgres.database.azure.com"
+        clean_env["DATABASE_USER"] = "litellm@contoso.onmicrosoft.com"
+        clean_env["DATABASE_NAME"] = "litellm_db"
+
+        mock_proxy_module = MagicMock(
+            app=MagicMock(),
+            ProxyConfig=MagicMock(),
+            KeyManagementSettings=MagicMock(),
+            save_worker_config=MagicMock(),
+        )
+        with (
+            patch.dict(os.environ, clean_env, clear=True),
+            patch.dict(
+                "sys.modules",
+                {
+                    "proxy_server": mock_proxy_module,
+                    "litellm.proxy.proxy_server": mock_proxy_module,
+                },
+            ),
+            patch(
+                "litellm.secret_managers.get_azure_ad_token_provider.get_azure_ad_token_provider",
+                return_value=lambda: "ENTRA_TOKEN",
+            ),
+            patch("litellm.proxy.db.prisma_client.should_update_prisma_schema", return_value=False),
+            patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database"),
+            patch("uvicorn.run"),
+            patch(
+                "litellm.proxy.proxy_cli.ProxyInitializationHelpers._get_default_unvicorn_init_args"
+            ) as mock_get_args,
+        ):
+            mock_get_args.return_value = {
+                "app": "litellm.proxy.proxy_server:app",
+                "host": "localhost",
+                "port": 8000,
+            }
+            result = CliRunner().invoke(run_server, args)
+            database_url = os.getenv("DATABASE_URL")
+            toggle = os.getenv("AZURE_POSTGRESQL_AUTH")
+        build_azure_entra_token_provider.cache_clear()
+        return result, database_url, toggle
+
+    def test_azure_flag_assembles_a_token_bearing_database_url(self):
+        result, database_url, toggle = self._invoke_with_azure_host(
+            ["--local", "--azure_postgresql_auth"]
+        )
+
+        assert result.exit_code == 0, f"exit_code={result.exit_code}, output={result.output}"
+        assert database_url is not None
+        assert "ENTRA_TOKEN" in database_url
+        assert "writer.postgres.database.azure.com" in database_url
+        assert toggle == "True"
+
+    def test_without_the_flag_no_token_is_minted(self):
+        result, database_url, toggle = self._invoke_with_azure_host(["--local"])
+
+        assert result.exit_code == 0, f"exit_code={result.exit_code}, output={result.output}"
+        assert "ENTRA_TOKEN" not in (database_url or "")
+        assert toggle is None
