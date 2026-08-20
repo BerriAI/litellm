@@ -104,27 +104,27 @@ class TestTransformResponse:
                 "content": {"parts": [{"function_call": {"name": "plan"}}], "role": "model"},
                 "finish_reason": "STOP",
                 "usage_metadata": {
-                    "prompt_token_count": 916,
-                    "candidates_token_count": 167,
-                    "total_token_count": 1083,
+                    "prompt_token_count": 907,
+                    "candidates_token_count": 129,
+                    "total_token_count": 1036,
                 },
             },
             {
                 "content": {"parts": [{"text": "Done."}], "role": "model"},
                 "finish_reason": "STOP",
                 "usage_metadata": {
-                    "prompt_token_count": 1495,
-                    "candidates_token_count": 476,
-                    "total_token_count": 1971,
+                    "prompt_token_count": 1120,
+                    "candidates_token_count": 225,
+                    "total_token_count": 1345,
                 },
             },
         )
 
         usage = _transform(body).usage
 
-        assert usage.prompt_tokens == 2411
-        assert usage.completion_tokens == 643
-        assert usage.total_tokens == 3054
+        assert usage.prompt_tokens == 2027
+        assert usage.completion_tokens == 354
+        assert usage.total_tokens == 2381
 
     def test_usage_falls_back_to_an_estimate_when_none_is_reported(self):
         body = _sse_body({"content": {"parts": [{"text": "Hello"}], "role": "model"}, "finish_reason": "STOP"})
@@ -166,5 +166,5 @@ class TestLiveCapture:
         assert "2024-01-01" not in _transform(body).choices[0].message.content
 
     def test_both_model_calls_are_billed(self, body):
-        assert _transform(body).usage.total_tokens == 3054
+        assert _transform(body).usage.total_tokens == 2381
 
