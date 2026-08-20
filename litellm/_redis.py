@@ -594,6 +594,18 @@ def _async_credential_provider(redis_connect_func: object | None) -> CredentialP
     return None
 
 
+def _async_auth_kwargs(redis_kwargs: dict) -> dict:
+    """Swaps a connect func an async path cannot run for the equivalent credential provider,
+    which supersedes any static username or password redis-py would otherwise reject it with."""
+    credential_provider: Final = _async_credential_provider(redis_kwargs.get("redis_connect_func"))
+    if credential_provider is None:
+        return redis_kwargs
+
+    superseded: Final = frozenset({"redis_connect_func", "username", "password"})
+    kept: Final = ((k, v) for k, v in redis_kwargs.items() if k not in superseded)
+    return dict(kept, credential_provider=credential_provider)  # mutable-ok: the branches below mutate these kwargs
+
+
 def get_redis_client(**env_overrides):
     redis_kwargs: Final = _get_redis_client_logic(**env_overrides)
 
@@ -620,12 +632,7 @@ def get_redis_async_client(
     connection_pool: async_redis.BlockingConnectionPool | None = None,
     **env_overrides,
 ) -> async_redis.Redis | async_redis.RedisCluster:
-    redis_kwargs: Final = _get_redis_client_logic(**env_overrides)
-    credential_provider: Final = _async_credential_provider(redis_kwargs.get("redis_connect_func"))
-    if credential_provider is not None:
-        redis_kwargs["credential_provider"] = credential_provider
-        for superseded in ("redis_connect_func", "username", "password"):
-            redis_kwargs.pop(superseded, None)
+    redis_kwargs: Final = _async_auth_kwargs(_get_redis_client_logic(**env_overrides))
 
     if "startup_nodes" in redis_kwargs:
         from redis.cluster import ClusterNode
@@ -688,12 +695,7 @@ def get_redis_async_client(
 def get_redis_connection_pool(
     **env_overrides,
 ) -> async_redis.BlockingConnectionPool | None:
-    redis_kwargs: Final = _get_redis_client_logic(**env_overrides)
-    credential_provider: Final = _async_credential_provider(redis_kwargs.get("redis_connect_func"))
-    if credential_provider is not None:
-        redis_kwargs["credential_provider"] = credential_provider
-        for superseded in ("redis_connect_func", "username", "password"):
-            redis_kwargs.pop(superseded, None)
+    redis_kwargs: Final = _async_auth_kwargs(_get_redis_client_logic(**env_overrides))
     verbose_logger.debug("get_redis_connection_pool: redis_kwargs", redis_kwargs)
 
     if "startup_nodes" in redis_kwargs:
