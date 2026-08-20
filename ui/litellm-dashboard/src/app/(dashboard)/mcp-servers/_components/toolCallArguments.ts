@@ -179,6 +179,7 @@ function buildDefaultValue(declared: InputSchemaProperty | undefined, overrideDe
   if (!declared) return undefined;
   const prop = resolveSchemaProperty(declared);
   const effectiveDefault: unknown = overrideDefault !== undefined ? overrideDefault : prop.default;
+  if (effectiveDefault === null) return null;
 
   if (prop.type === "object") return buildObjectDefault(prop, effectiveDefault);
   if (prop.type === "array") return buildArrayDefault(prop, effectiveDefault);
@@ -200,7 +201,7 @@ export const initialArgumentValues = (fields: readonly ToolArgumentField[]): unk
     const resolved = resolveSchemaProperty(prop);
     const defaultValue = buildDefaultValue(resolved);
     if (isJsonField(resolved)) {
-      return JSON.stringify(defaultValue ?? (resolved.type === "array" ? [] : {}), null, 2);
+      return isBlank(defaultValue) ? "" : JSON.stringify(defaultValue, null, 2);
     }
     return defaultValue;
   });

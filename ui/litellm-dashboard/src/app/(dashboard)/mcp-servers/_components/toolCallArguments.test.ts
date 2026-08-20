@@ -424,8 +424,11 @@ describe("union-typed properties", () => {
   });
 
   describe("initialArgumentValues", () => {
-    it("seeds an optional array parameter as an empty JSON array rather than an empty string", () => {
-      expect(initialArgumentValues([unionField("tags", optionalArray)])).toEqual(["[]"]);
+    it("leaves a null-defaulted optional parameter blank so it is not submitted at all", () => {
+      const fields = [unionField("tags", optionalArray), unionField("payload", optionalObject)];
+
+      expect(initialArgumentValues(fields)).toEqual(["", ""]);
+      expect(buildToolCallArguments(fields, initialArgumentValues(fields))).toEqual({});
     });
 
     it("builds a sample item from the resolved item schema when the union declares no default", () => {

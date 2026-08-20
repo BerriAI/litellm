@@ -424,7 +424,7 @@ describe("ToolTestPanel optional union-typed parameters", () => {
 
     const tags = screen.getByTestId("textarea-tags");
     expect(tags.tagName).toBe("TEXTAREA");
-    expect(tags).toHaveValue("[]");
+    expect(tags).toHaveValue("");
     expect(screen.getByPlaceholderText("Enter JSON array for tags")).toBe(tags);
     expect(screen.queryByPlaceholderText("Enter tags")).not.toBeInTheDocument();
   });
@@ -451,6 +451,14 @@ describe("ToolTestPanel optional union-typed parameters", () => {
 
     const expected = { message: "hi", repeat: 1, loud: false, tags: ["a", "b"] };
     expect(onSubmit).toHaveBeenCalledWith(expected);
+  });
+
+  it("omits an optional array parameter the user never filled in", async () => {
+    const onSubmit = await runPanel(() => {
+      fireEvent.change(screen.getByPlaceholderText("Enter message"), { target: { value: "hi" } });
+    });
+
+    expect(onSubmit).toHaveBeenCalledWith({ message: "hi", repeat: 1, loud: false });
   });
 
   it("blocks the call instead of sending comma-separated text as a raw string", async () => {
