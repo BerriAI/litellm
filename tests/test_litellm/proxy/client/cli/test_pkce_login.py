@@ -68,6 +68,8 @@ STORED = {
     "token_endpoint": f"{BASE}/token",
     "revocation_endpoint": f"{BASE}/revoke",
     "resource": BASE,
+    "user_id": "user-1",
+    "team_id": "team-a",
 }
 
 
@@ -590,6 +592,9 @@ def test_fresh_api_key_uses_a_sibling_rotation_when_its_own_refresh_loses_the_ra
         {"base_url": "https://other.example.com"},
         {"token_endpoint": "https://other.example.com/token"},
         {"resource": "https://other.example.com"},
+        {"user_id": "someone-else"},
+        {"team_id": "another-team"},
+        {"team_id": None},
         {"expires_at": 999_000.0},
         {"expires_at": None},
         {"key": ""},
@@ -600,12 +605,15 @@ def test_fresh_api_key_uses_a_sibling_rotation_when_its_own_refresh_loses_the_ra
         "other-base-url",
         "other-token-endpoint",
         "other-resource",
+        "other-user",
+        "other-team",
+        "no-team",
         "expired",
         "no-expiry",
         "empty-key",
     ],
 )
-def test_fresh_api_key_never_substitutes_a_sibling_record_for_another_proxy_or_a_dead_key(sibling_record):
+def test_fresh_api_key_never_substitutes_a_sibling_record_for_another_proxy_identity_or_a_dead_key(sibling_record):
     rotated = {**STORED, "key": "sk-cli-sibling", "refresh_token": "llm_srefresh_sibling", "expires_at": 1_003_600.0}
     foreign = {**rotated, **sibling_record}
     http = _FakeHttp({("POST", f"{BASE}/token"): _FakeResponse(400, {"error": "invalid_grant"})})

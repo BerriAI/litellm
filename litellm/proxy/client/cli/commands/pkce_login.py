@@ -485,16 +485,19 @@ def fresh_api_key(
     return refreshed.access_token
 
 
+_CREDENTIAL_IDENTITY_FIELDS: Final = ("base_url", "token_endpoint", "resource", "user_id", "team_id")
+
+
 def _key_rotated_by_a_sibling(
     record: Mapping[str, object] | None, token_data: Mapping[str, object], now: float
 ) -> str | None:
     """The key a sibling process saved, but only when it continues this very credential:
-    same proxy, same token endpoint, same resource, and not yet expired. A concurrent
-    ``lite login`` against a different proxy replaces the same file, and its key must never
-    be sent to this one."""
+    same proxy, same token endpoint, same resource, same user and team, and not yet expired.
+    A concurrent ``lite login`` against a different proxy, or as someone else on this one,
+    replaces the same file, and its key must never be sent as this credential."""
     if record is None or record.get("refresh_token") == token_data.get("refresh_token"):
         return None
-    if any(record.get(field) != token_data.get(field) for field in ("base_url", "token_endpoint", "resource")):
+    if any(record.get(field) != token_data.get(field) for field in _CREDENTIAL_IDENTITY_FIELDS):
         return None
     expires_at: Final = record.get("expires_at")
     if not isinstance(expires_at, (int, float)) or now >= expires_at:
