@@ -12,7 +12,6 @@ first time it reads one.
 This module has no dependencies on proxy code and can be safely imported at the SDK level.
 """
 
-import contextlib
 import time
 from pathlib import Path
 from types import MappingProxyType
@@ -217,30 +216,41 @@ def _apply_vault_secret(record: CliTokenRecord, blob: str, vault: SecretVault) -
 
 
 def _migrate_file_secret(record: CliTokenRecord, vault: SecretVault) -> CliTokenRecord | None:
+    """Move a file-held secret into the vault, but only if the file's copy can be taken away.
+
+    Migrating without scrubbing would leave the credential live in two stores instead of one, so a
+    file that will not give its copy up rolls the vault write back rather than widening exposure.
+    """
     if record.key is None:
         return None
-    if isinstance(vault.write(_encode_secret(record.base_url, record.key, record.jwt_token)), SecretStored):
-        _scrub_file_secret(record)
+    if not isinstance(vault.write(_encode_secret(record.base_url, record.key, record.jwt_token)), SecretStored):
+        return record
+    if not _scrub_file_secret(record):
+        vault.erase()
     return record
 
 
-def _scrub_file_secret(record: CliTokenRecord) -> None:
+def _scrub_file_secret(record: CliTokenRecord) -> bool:
     """Leave no secret material in the token file once the vault holds it.
 
     A file that cannot be rewritten without the secret is removed instead. Signing in again costs
     the user one command; a live credential left behind in cleartext costs them the credential.
     """
     if record.key is None and not record.jwt_token:
-        return
+        return True
     try:
         _write_token_file(_without_secret(record))
     except OSError:
-        _discard_token_file()
+        return _discard_token_file()
+    return True
 
 
-def _discard_token_file() -> None:
-    with contextlib.suppress(OSError):
+def _discard_token_file() -> bool:
+    try:
         Path(get_cli_token_file_path()).unlink(missing_ok=True)
+    except OSError:
+        return False
+    return True
 
 
 def _without_secret(record: CliTokenRecord) -> CliTokenRecord:

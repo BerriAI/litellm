@@ -1,4 +1,5 @@
 import json
+import os
 import stat
 import sys
 import time
@@ -319,6 +320,25 @@ class TestSaveCliToken:
 class TestScrubFailure:
     """A keychain that took the secret while the file kept it is the worst of both stores: the
     credential is live, it is in cleartext on disk, and every command reports success."""
+
+    @pytest.mark.skipif(os.geteuid() == 0, reason="root ignores directory permissions")
+    def test_a_file_that_will_not_give_its_copy_up_rolls_the_vault_write_back(
+        self, isolated_home, secret_vault_factory
+    ):
+        """Handing the keychain a copy without taking the file's away leaves the credential live in
+        two stores instead of one. A directory that permits neither the rewrite nor the delete, a
+        root-owned ~/.litellm left behind by a `sudo lite login`, must widen nothing."""
+        path = _write_legacy_file(isolated_home)
+        vault = secret_vault_factory()
+        path.parent.chmod(0o500)
+        try:
+            record = load_cli_token(vault=vault)
+        finally:
+            path.parent.chmod(0o700)
+
+        assert record.key == "sk-legacy"
+        assert json.loads(path.read_text())["key"] == "sk-legacy"
+        assert vault.blob is None
 
     def test_a_file_that_cannot_be_rewritten_is_removed_instead(
         self, isolated_home, secret_vault_factory, monkeypatch
