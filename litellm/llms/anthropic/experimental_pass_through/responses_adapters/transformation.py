@@ -18,6 +18,7 @@ from litellm.litellm_core_utils.reasoning_effort_utils import (
 )
 from litellm.llms.anthropic.experimental_pass_through.utils import (
     is_reasoning_auto_summary_enabled,
+    prompt_cache_key_from_user_id,
 )
 from litellm.types.llms.anthropic import (
     AllAnthropicPassThroughMessageValues,
@@ -452,10 +453,13 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             if openai_cm is not None:
                 responses_kwargs["context_management"] = openai_cm
 
-        # metadata user_id -> user
+        # metadata user_id -> user and prompt_cache_key
         metadata: Final = anthropic_request.get("metadata")
         if isinstance(metadata, dict) and "user_id" in metadata:
             responses_kwargs["user"] = str(metadata["user_id"])[:64]
+            prompt_cache_key: Final = prompt_cache_key_from_user_id(metadata["user_id"])
+            if prompt_cache_key is not None:
+                responses_kwargs["prompt_cache_key"] = prompt_cache_key
 
         return responses_kwargs
 

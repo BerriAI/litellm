@@ -917,6 +917,7 @@ class ChatCompletionRequest(TypedDict, total=False):
     seed: int
     service_tier: str
     safety_identifier: str
+    prompt_cache_key: str  # writable-ok: the /v1/messages adapter assigns it after construction
     stop: str | list[str]
     stream_options: dict
     temperature: float
