@@ -60,7 +60,7 @@ const ResponsesImageUpload: React.FC<ResponsesImageUploadProps> = ({
               size="icon-sm"
               disabled={disabled}
               aria-label="Attach image or PDF"
-              className="text-muted-foreground/70 hover:text-muted-foreground"
+              className="text-muted-foreground hover:text-foreground"
               onClick={() => inputRef.current?.click()}
             />
           }

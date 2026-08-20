@@ -53,7 +53,7 @@ const CodeInterpreterTool: React.FC<CodeInterpreterToolProps> = ({
           <span className="font-medium text-foreground">Code Interpreter</span>
           <Tooltip>
             <TooltipTrigger aria-label="About Code Interpreter">
-              <Info className="size-3 text-muted-foreground/70" />
+              <Info className="size-3 text-muted-foreground" />
             </TooltipTrigger>
             <TooltipContent>
               Run Python code to generate files, charts, and analyze data. Container is created automatically.

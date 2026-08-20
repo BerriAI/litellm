@@ -358,7 +358,7 @@ function GuardrailCard({
                 <button
                   type="button"
                   onClick={onApprove}
-                  className="text-xs bg-success hover:bg-success/80 text-white px-3 py-1.5 rounded-md transition-colors font-medium"
+                  className="text-xs bg-success hover:bg-success/80 text-success-foreground px-3 py-1.5 rounded-md transition-colors font-medium"
                 >
                   Approve
                 </button>
@@ -727,7 +727,7 @@ function DetailPanel({
               <button
                 type="button"
                 onClick={onApprove}
-                className="flex-1 flex items-center justify-center gap-1.5 bg-success hover:bg-success/80 text-white text-sm font-medium py-2 rounded-md transition-colors"
+                className="flex-1 flex items-center justify-center gap-1.5 bg-success hover:bg-success/80 text-success-foreground text-sm font-medium py-2 rounded-md transition-colors"
               >
                 <CheckIcon className="h-4 w-4" />
                 Approve
@@ -792,8 +792,10 @@ function ConfirmDialog({ action, guardrailName, onConfirm, onCancel }: ConfirmDi
           <button
             type="button"
             onClick={onConfirm}
-            className={`flex-1 text-white text-sm font-medium py-2 rounded-md transition-colors ${
-              isApprove ? "bg-success hover:bg-success/80" : "bg-destructive hover:bg-destructive/80"
+            className={`flex-1 text-sm font-medium py-2 rounded-md transition-colors ${
+              isApprove
+                ? "bg-success text-success-foreground hover:bg-success/80"
+                : "bg-destructive text-destructive-foreground hover:bg-destructive/80"
             }`}
           >
             {isApprove ? "Approve" : "Reject"}
@@ -1015,7 +1017,7 @@ export function TeamGuardrailsTab({ accessToken }: TeamGuardrailsTabProps) {
           <button
             type="button"
             onClick={() => setIsSubmitModalOpen(true)}
-            className="ml-auto flex items-center gap-2 bg-info hover:bg-info/80 text-white text-sm font-medium px-4 py-2 rounded-md transition-colors"
+            className="ml-auto flex items-center gap-2 bg-info hover:bg-info/80 text-info-foreground text-sm font-medium px-4 py-2 rounded-md transition-colors"
           >
             <PlusIcon className="h-4 w-4" />
             Add Guardrail

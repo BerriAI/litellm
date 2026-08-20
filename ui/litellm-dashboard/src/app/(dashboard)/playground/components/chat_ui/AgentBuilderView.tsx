@@ -492,7 +492,7 @@ export default function AgentBuilderView({
           <div className="flex-1 overflow-y-auto p-2">
             {loadingAgents ? (
               <div className="flex justify-center py-4" aria-busy="true">
-                <UiLoadingSpinner className="size-4 text-muted-foreground/70" />
+                <UiLoadingSpinner className="size-4 text-muted-foreground" />
               </div>
             ) : (
               <>
