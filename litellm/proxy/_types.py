@@ -2780,6 +2780,10 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
     user_email: str | None = None
     user_spend: float | None = None
     user_max_budget: float | None = None
+    # Values stay `object` rather than BudgetConfig: this is the raw JSON column,
+    # and validating it here would make one malformed row fail auth outright.
+    # resolve_model_budget validates the single entry a request actually needs.
+    user_model_max_budget: dict[str, object] | None = None
     request_route: str | None = None
     is_session_token: bool = False
     # Server-only marker set exclusively by the MCP gateway admission path
@@ -2957,6 +2961,8 @@ class UserInfoV2Response(LiteLLMPydanticObjectBase):
     sso_user_id: str | None = None
     teams: list[str] = []  # Just team IDs, not full team objects
     object_permission: LiteLLM_ObjectPermissionTable | None = None
+    model_max_budget: dict | None = None
+    model_max_budget_usage: dict | None = None
 
 
 from litellm.models.config import LiteLLM_Config as LiteLLM_Config  # noqa: E402

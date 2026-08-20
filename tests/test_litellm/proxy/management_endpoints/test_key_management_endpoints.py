@@ -13508,9 +13508,14 @@ async def test_info_key_fn_includes_model_max_budget_usage(monkeypatch):
     mock_prisma_client = AsyncMock()
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
     mock_user_api_key_cache = AsyncMock()
-    mock_user_api_key_cache.async_get_cache = AsyncMock(return_value=0.23)
     monkeypatch.setattr(
         "litellm.proxy.proxy_server.user_api_key_cache", mock_user_api_key_cache
+    )
+    # A real cache seeded at the real counter key: the spend only comes back if
+    # the endpoint computed virtual_key_spend:hashed_token_budget_test:gpt-4o:1d.
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.model_max_budget_limiter.dual_cache",
+        await _budget_cache({"virtual_key_spend:hashed_token_budget_test:gpt-4o:1d": 0.23}),
     )
 
     mock_key_info = MagicMock(spec=LiteLLM_VerificationToken)
@@ -13569,6 +13574,10 @@ async def test_info_key_fn_no_model_max_budget_skips_usage(monkeypatch):
     monkeypatch.setattr(
         "litellm.proxy.proxy_server.user_api_key_cache", mock_user_api_key_cache
     )
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.model_max_budget_limiter.dual_cache",
+        mock_user_api_key_cache,
+    )
 
     mock_key_info = MagicMock(spec=LiteLLM_VerificationToken)
     mock_key_info.token = test_key_token
@@ -13622,9 +13631,14 @@ async def test_info_key_fn_v2_includes_model_max_budget_usage(monkeypatch):
     mock_prisma_client = AsyncMock()
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
     mock_user_api_key_cache = AsyncMock()
-    mock_user_api_key_cache.async_get_cache = AsyncMock(return_value=0.55)
     monkeypatch.setattr(
         "litellm.proxy.proxy_server.user_api_key_cache", mock_user_api_key_cache
+    )
+    # A real cache seeded at the real counter key: the spend only comes back if
+    # the endpoint computed virtual_key_spend:hashed_token_v2_test:gpt-4o:7d.
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.model_max_budget_limiter.dual_cache",
+        await _budget_cache({"virtual_key_spend:hashed_token_v2_test:gpt-4o:7d": 0.55}),
     )
 
     mock_key = MagicMock(spec=LiteLLM_VerificationToken)
@@ -13681,9 +13695,14 @@ async def test_info_key_fn_budget_table_fallback(monkeypatch):
     mock_prisma_client = AsyncMock()
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
     mock_user_api_key_cache = AsyncMock()
-    mock_user_api_key_cache.async_get_cache = AsyncMock(return_value=1.20)
     monkeypatch.setattr(
         "litellm.proxy.proxy_server.user_api_key_cache", mock_user_api_key_cache
+    )
+    # A real cache seeded at the real counter key: the spend only comes back if
+    # the endpoint computed virtual_key_spend:hashed_token_budget_table_test:bedrock/anthropic.claude-opus-4:30d.
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.model_max_budget_limiter.dual_cache",
+        await _budget_cache({"virtual_key_spend:hashed_token_budget_table_test:bedrock/anthropic.claude-opus-4:30d": 1.20}),
     )
 
     mock_key_info = MagicMock(spec=LiteLLM_VerificationToken)
@@ -13749,9 +13768,14 @@ async def test_info_key_fn_v2_budget_table_fallback(monkeypatch):
     mock_prisma_client = AsyncMock()
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
     mock_user_api_key_cache = AsyncMock()
-    mock_user_api_key_cache.async_get_cache = AsyncMock(return_value=2.50)
     monkeypatch.setattr(
         "litellm.proxy.proxy_server.user_api_key_cache", mock_user_api_key_cache
+    )
+    # A real cache seeded at the real counter key: the spend only comes back if
+    # the endpoint computed virtual_key_spend:hashed_token_v2_bt_test:bedrock/anthropic.claude-opus-4:30d.
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.model_max_budget_limiter.dual_cache",
+        await _budget_cache({"virtual_key_spend:hashed_token_v2_bt_test:bedrock/anthropic.claude-opus-4:30d": 2.50}),
     )
 
     mock_key = MagicMock(spec=LiteLLM_VerificationToken)
@@ -13794,8 +13818,13 @@ async def test_info_key_fn_v2_budget_table_fallback(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_info_key_fn_provider_prefix_spend_fallback(monkeypatch):
-    """Cached spend for 'gpt-4o' matches budget key 'openai/gpt-4o' via suffix match."""
+async def test_info_key_fn_reads_the_configured_budget_model_key(monkeypatch):
+    """/key/info reads the one counter enforcement reads: the configured budget model.
+
+    It used to probe a second, provider-stripped key because the counter was
+    written under the request model instead, which is what let a key report zero
+    usage while being blocked at 429.
+    """
     from unittest.mock import AsyncMock, MagicMock
 
     from litellm.proxy._types import LiteLLM_VerificationToken
@@ -13809,9 +13838,14 @@ async def test_info_key_fn_provider_prefix_spend_fallback(monkeypatch):
     mock_prisma_client = AsyncMock()
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
     mock_user_api_key_cache = AsyncMock()
-    mock_user_api_key_cache.async_get_cache = AsyncMock(side_effect=[None, 0.75])
     monkeypatch.setattr(
         "litellm.proxy.proxy_server.user_api_key_cache", mock_user_api_key_cache
+    )
+    # A real cache seeded at the real counter key: the spend only comes back if
+    # the endpoint computed virtual_key_spend:hashed_token_prefix_test:openai/gpt-4o:7d.
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.model_max_budget_limiter.dual_cache",
+        await _budget_cache({"virtual_key_spend:hashed_token_prefix_test:openai/gpt-4o:7d": 0.75}),
     )
 
     mock_key_info = MagicMock(spec=LiteLLM_VerificationToken)
@@ -13848,7 +13882,22 @@ async def test_info_key_fn_provider_prefix_spend_fallback(monkeypatch):
     assert "model_max_budget_usage" in result["info"]
     usage = result["info"]["model_max_budget_usage"]
     assert usage["openai/gpt-4o"]["current_spend"] == 0.75
-    assert mock_user_api_key_cache.async_get_cache.await_count == 2
+
+
+async def _budget_cache(seeded):
+    """A real DualCache holding spend at the given LITERAL counter keys.
+
+    The keys are spelled out in full on purpose. Seeding via
+    model_budget_spend_cache_key would move the seed and the read together, so
+    any change to the key format would still match itself and these tests could
+    never fail, which is the exact bug they exist to catch.
+    """
+    from litellm.caching.caching import DualCache
+
+    cache = DualCache()
+    for key, spend in seeded.items():
+        await cache.async_set_cache(key, spend)
+    return cache
 
 
 @pytest.mark.asyncio
@@ -13873,19 +13922,16 @@ async def test_build_model_max_budget_usage_reads_current_cache_window():
         _build_model_max_budget_usage,
     )
 
-    mock_user_api_key_cache = AsyncMock()
-    mock_user_api_key_cache.async_get_cache = AsyncMock(return_value=0.30)
+    cache = await _budget_cache({"virtual_key_spend:some-hash:gpt-4o:30d": 0.30})
 
     result = await _build_model_max_budget_usage(
         api_key_hash="some-hash",
         model_max_budget={"gpt-4o": {"budget_limit": 1.0, "time_period": "30d"}},
-        user_api_key_cache=mock_user_api_key_cache,
+        user_api_key_cache=cache,
     )
 
+    # 0.30 comes back only if the key matched virtual_key_spend:some-hash:gpt-4o:30d.
     assert result["gpt-4o"]["current_spend"] == 0.30
-    mock_user_api_key_cache.async_get_cache.assert_awaited_once_with(
-        key="virtual_key_spend:some-hash:gpt-4o:30d"
-    )
 
 
 @pytest.mark.asyncio
@@ -13916,8 +13962,7 @@ async def test_build_model_max_budget_usage_skips_model_without_duration():
         _build_model_max_budget_usage,
     )
 
-    mock_user_api_key_cache = AsyncMock()
-    mock_user_api_key_cache.async_get_cache = AsyncMock(return_value=0.10)
+    cache = await _budget_cache({"virtual_key_spend:some-hash:gpt-4o:1d": 0.10})
 
     result = await _build_model_max_budget_usage(
         api_key_hash="some-hash",
@@ -13925,11 +13970,10 @@ async def test_build_model_max_budget_usage_skips_model_without_duration():
             "gpt-4o": {"budget_limit": 1.0, "time_period": "1d"},
             "gpt-3.5-turbo": {"budget_limit": 0.5},
         },
-        user_api_key_cache=mock_user_api_key_cache,
+        user_api_key_cache=cache,
     )
-    assert "gpt-4o" in result
+    assert result["gpt-4o"]["current_spend"] == 0.10
     assert "gpt-3.5-turbo" not in result
-    assert mock_user_api_key_cache.async_get_cache.await_count == 1
 
 
 @pytest.mark.asyncio
@@ -13962,8 +14006,7 @@ async def test_build_model_max_budget_usage_invalid_budget_config_skipped():
         _build_model_max_budget_usage,
     )
 
-    mock_user_api_key_cache = AsyncMock()
-    mock_user_api_key_cache.async_get_cache = AsyncMock(return_value=0.20)
+    cache = await _budget_cache({"virtual_key_spend:some-hash:gpt-3.5-turbo:7d": 0.20})
 
     result = await _build_model_max_budget_usage(
         api_key_hash="some-hash",
@@ -13971,32 +14014,35 @@ async def test_build_model_max_budget_usage_invalid_budget_config_skipped():
             "gpt-4o": {"max_budget": "not-a-number", "budget_duration": "1d"},
             "gpt-3.5-turbo": {"budget_limit": 0.5, "time_period": "7d"},
         },
-        user_api_key_cache=mock_user_api_key_cache,
+        user_api_key_cache=cache,
     )
     assert "gpt-4o" not in result
-    assert "gpt-3.5-turbo" in result
-    assert mock_user_api_key_cache.async_get_cache.await_count == 1
+    assert result["gpt-3.5-turbo"]["current_spend"] == 0.20
 
 
 @pytest.mark.asyncio
-async def test_build_model_max_budget_usage_provider_prefix_cache_fallback():
+async def test_build_model_max_budget_usage_reads_only_the_configured_model_key():
+    """One lookup, at the configured budget model.
+
+    The counter is written under the name the operator configured, so probing a
+    provider-stripped variant would read a key nothing writes.
+    """
     from unittest.mock import AsyncMock
 
     from litellm.proxy.management_endpoints.key_management_endpoints import (
         _build_model_max_budget_usage,
     )
 
-    mock_user_api_key_cache = AsyncMock()
-    mock_user_api_key_cache.async_get_cache = AsyncMock(side_effect=[None, 0.55])
+    cache = await _budget_cache({"virtual_key_spend:test-hash:openai/gpt-4o:7d": 0.55})
 
     result = await _build_model_max_budget_usage(
         api_key_hash="test-hash",
         model_max_budget={"openai/gpt-4o": {"budget_limit": 2.0, "time_period": "7d"}},
-        user_api_key_cache=mock_user_api_key_cache,
+        user_api_key_cache=cache,
     )
 
+    # Seeded only under the configured name, so a provider-stripped probe reads 0.0.
     assert result["openai/gpt-4o"]["current_spend"] == 0.55
-    assert mock_user_api_key_cache.async_get_cache.await_count == 2
 
 
 def test_list_keys_substring_matching_param_defaults_to_false():
