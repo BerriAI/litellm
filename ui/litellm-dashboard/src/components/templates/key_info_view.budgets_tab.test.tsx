@@ -162,7 +162,7 @@ const TEAM_SOFT_OVER: KeyBudgetEntry = {
   remaining: -400,
   source: "budget_table:b-soft",
   status: "exceeded",
-  note: "alert only",
+  note: "alert only, never blocks; compared against recorded spend rather than the live counter",
 };
 
 const TEAM_MEMBER_BLOCKING: KeyBudgetEntry = {
@@ -268,7 +268,9 @@ describe("KeyInfoView Budgets tab", () => {
     expect(within(softRow).getByText("Exceeded (alert only)")).toBeInTheDocument();
     expect(within(softRow).queryByTestId("key-budget-blocking")).not.toBeInTheDocument();
     expect(within(softRow).queryByText("Blocks requests")).not.toBeInTheDocument();
-    expect(softRow).toHaveTextContent("alert only");
+    expect(softRow).toHaveTextContent(
+      "alert only, never blocks; compared against recorded spend rather than the live counter",
+    );
   });
 
   it("explains why two rows on identical numbers get opposite statuses", async () => {
@@ -285,8 +287,8 @@ describe("KeyInfoView Budgets tab", () => {
     };
     const exclusive: KeyBudgetEntry = {
       ...UNCONFIGURED_BUDGET,
-      scope: "team",
-      entity_type: "team",
+      scope: "project",
+      entity_type: "project",
       entity_label: "Platform",
       comparison: ">",
       max_budget: 300,

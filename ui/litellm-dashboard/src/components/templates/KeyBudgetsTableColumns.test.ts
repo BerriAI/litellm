@@ -30,9 +30,9 @@ const TEAM_MEMBER_AT_LIMIT: KeyBudgetEntry = {
   status: "exceeded",
 };
 
-const TEAM_UNDER_LIMIT: KeyBudgetEntry = {
+const PROJECT_UNDER_LIMIT: KeyBudgetEntry = {
   ...UNCONFIGURED_BUDGET,
-  scope: "team",
+  scope: "project",
   comparison: ">",
   max_budget: 300,
   spend: 120,
@@ -40,8 +40,11 @@ const TEAM_UNDER_LIMIT: KeyBudgetEntry = {
   status: "ok",
 };
 
-const INCLUSIVE_AT_300: KeyBudgetEntry = {
+// team is ">=" while budget reservation is on and ">" once an operator disables it, so the same
+// scope must render either operator off the response rather than a value baked in per scope.
+const RESERVED_TEAM_AT_300: KeyBudgetEntry = {
   ...UNCONFIGURED_BUDGET,
+  scope: "team",
   comparison: ">=",
   max_budget: 300,
   spend: 300,
@@ -49,7 +52,7 @@ const INCLUSIVE_AT_300: KeyBudgetEntry = {
   status: "exceeded",
 };
 
-const EXCLUSIVE_AT_300: KeyBudgetEntry = { ...INCLUSIVE_AT_300, comparison: ">", status: "ok" };
+const UNRESERVED_TEAM_AT_300: KeyBudgetEntry = { ...RESERVED_TEAM_AT_300, comparison: ">", status: "ok" };
 
 const SOFT_OVER: KeyBudgetEntry = {
   ...UNCONFIGURED_BUDGET,
@@ -73,12 +76,12 @@ describe("budgetThresholdRule", () => {
   });
 
   it("marks an exclusive scope as blocking only above the limit", () => {
-    expect(budgetThresholdRule(TEAM_UNDER_LIMIT)).toBe("Blocks at > $300.00");
+    expect(budgetThresholdRule(PROJECT_UNDER_LIMIT)).toBe("Blocks at > $300.00");
   });
 
-  it("distinguishes two scopes sitting on identical numbers by their operator alone", () => {
-    expect(budgetThresholdRule(INCLUSIVE_AT_300)).toBe("Blocks at ≥ $300.00");
-    expect(budgetThresholdRule(EXCLUSIVE_AT_300)).toBe("Blocks at > $300.00");
+  it("reads the operator off each response, so one scope can render either threshold", () => {
+    expect(budgetThresholdRule(RESERVED_TEAM_AT_300)).toBe("Blocks at ≥ $300.00");
+    expect(budgetThresholdRule(UNRESERVED_TEAM_AT_300)).toBe("Blocks at > $300.00");
   });
 
   it("never promises a soft budget will block", () => {

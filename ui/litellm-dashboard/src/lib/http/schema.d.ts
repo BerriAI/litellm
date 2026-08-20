@@ -6822,7 +6822,8 @@ export interface paths {
          *       hash. Defaults to the key in the Authorization header when omitted (`GET /key/budgets`).
          *     - end_user_id: str | None (query parameter) - Also report the budgets that would apply to this
          *       end user. Omitted end users produce no `end_user` rows, because nothing binds an end user to
-         *       a key outside a request.
+         *       a key outside a request. Proxy admins only, since end users are a proxy-global namespace with
+         *       no key, team or organization scoping to check a caller against.
          *
          *     Returns:
          *     - key: str - The key that was looked up, echoed back as it was passed in
@@ -7512,7 +7513,8 @@ export interface paths {
          *       hash. Defaults to the key in the Authorization header when omitted (`GET /key/budgets`).
          *     - end_user_id: str | None (query parameter) - Also report the budgets that would apply to this
          *       end user. Omitted end users produce no `end_user` rows, because nothing binds an end user to
-         *       a key outside a request.
+         *       a key outside a request. Proxy admins only, since end users are a proxy-global namespace with
+         *       no key, team or organization scoping to check a caller against.
          *
          *     Returns:
          *     - key: str - The key that was looked up, echoed back as it was passed in

@@ -41,9 +41,10 @@ export const severityRank = (entry: KeyBudgetEntry): number =>
 const COMPARISON_GLYPH: Record<string, string> = { ">=": "≥", ">": ">" };
 
 /**
- * Scopes disagree on whether hitting the limit exactly is over it: team_member enforces `>=`
- * so 50 of 50 is already denied, while team enforces `>` so 300 of 300 still passes. Two rows
- * can therefore show identical numbers and opposite statuses, so state each row's real threshold.
+ * Scopes disagree on whether hitting the limit exactly is already over it, and a scope's operator
+ * is not fixed: budget reservation tightens some scopes to `>=`, and disabling it relaxes them back
+ * to `>`. So this reads `comparison` off each row rather than assuming a constant per scope. Two
+ * rows can show identical numbers and opposite statuses, so state the threshold each one enforces.
  */
 export const budgetThresholdRule = (entry: KeyBudgetEntry): string | null => {
   if (entry.max_budget == null) return null;
@@ -71,12 +72,12 @@ function ScopeCell({ entry }: { entry: KeyBudgetEntry }) {
           </span>
         }
       />
-      {entity && <span className="truncate font-mono text-xs text-muted-foreground">{entity}</span>}
-      {entry.note && (
-        <span className="truncate text-xs text-muted-foreground italic" title={entry.note}>
-          {entry.note}
+      {entity && (
+        <span className="truncate font-mono text-xs text-muted-foreground" title={entity}>
+          {entity}
         </span>
       )}
+      {entry.note && <span className="text-xs text-muted-foreground italic">{entry.note}</span>}
     </div>
   );
 }
@@ -110,7 +111,7 @@ export const getKeyBudgetsTableColumns = (): ColumnDef<KeyBudgetEntry>[] => [
     id: "scope",
     meta: { title: "Scope" },
     header: "Scope",
-    size: 240,
+    size: 300,
     enableSorting: false,
     cell: ({ row }) => <ScopeCell entry={row.original} />,
   },
