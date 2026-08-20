@@ -1,6 +1,8 @@
 import React from "react";
-import { Checkbox, Input } from "antd";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Label } from "@/components/ui/label";
+import { PasswordInput } from "@/components/shared/PasswordInput";
 import DcrBridgeToggle from "./DcrBridgeToggle";
 import { MountedFormField } from "@/components/common_components/MountedFormField";
 import { textControl } from "./mcpFieldRules";
@@ -90,11 +92,11 @@ export default function PassthroughAuthorizeSection({
         help={clientIdExtra}
       >
         {(control) => (
-          <Input.Password
+          <PasswordInput
             {...textControl(control)}
             placeholder={clientIdPlaceholder}
             disabled={removeStoredApp}
-            className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+            groupClassName="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
           />
         )}
       </MountedFormField>
@@ -103,21 +105,20 @@ export default function PassthroughAuthorizeSection({
         name={["credentials", "client_secret"]}
       >
         {(control) => (
-          <Input.Password
+          <PasswordInput
             {...textControl(control)}
             placeholder={clientSecretPlaceholder}
             disabled={removeStoredApp}
-            className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+            groupClassName="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
           />
         )}
       </MountedFormField>
       <DcrBridgeToggle authType={authType} initialChecked={dcrBridgeInitialChecked} />
       {isEditing && onRemoveStoredAppChange && (
-        <Checkbox checked={removeStoredApp} onChange={(e) => onRemoveStoredAppChange(e.target.checked)}>
-          <span className="text-sm text-gray-700">
-            Remove the saved OAuth app on save (the server goes back to dynamic client registration)
-          </span>
-        </Checkbox>
+        <Label className="items-start leading-normal font-normal text-gray-700">
+          <Checkbox className="mt-0.5" checked={removeStoredApp} onCheckedChange={onRemoveStoredAppChange} />
+          Remove the saved OAuth app on save (the server goes back to dynamic client registration)
+        </Label>
       )}
       <Button
         variant="outline"

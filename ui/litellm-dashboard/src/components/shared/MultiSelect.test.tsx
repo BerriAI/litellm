@@ -102,6 +102,24 @@ describe("MultiSelect", () => {
     expect(onValueChange).toHaveBeenCalledWith(["udp", "kafka", "terraform"]);
   });
 
+  it("leaves an already selected value that contains a comma alone when a later entry is added", async () => {
+    const onValueChange = vi.fn();
+    render(
+      <MultiSelect
+        options={OPTIONS}
+        value={["--filter=a,b"]}
+        onValueChange={onValueChange}
+        allowCustomValues
+        placeholder="Select stores"
+      />,
+    );
+
+    await userEvent.type(screen.getByRole("combobox"), "--verbose");
+    await userEvent.click(await screen.findByText('Create "--verbose"'));
+
+    expect(onValueChange).toHaveBeenCalledWith(["--filter=a,b", "--verbose"]);
+  });
+
   it("clears every selection at once", async () => {
     const onValueChange = vi.fn();
     render(

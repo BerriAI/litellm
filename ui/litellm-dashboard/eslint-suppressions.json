@@ -521,45 +521,17 @@
       "count": 1
     }
   },
-  "src/app/(dashboard)/mcp-servers/_components/AwsSigV4Fields.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/app/(dashboard)/mcp-servers/_components/CreateMCPServer.tsx": {
     "max-lines": {
       "count": 1
     },
     "no-nested-ternary": {
       "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/mcp-servers/_components/DcrBridgeToggle.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/mcp-servers/_components/IdJagFormFields.tsx": {
-    "no-restricted-imports": {
-      "count": 1
     }
   },
   "src/app/(dashboard)/mcp-servers/_components/MCPNetworkSettings.tsx": {
     "react-hooks/immutability": {
       "count": 2
-    }
-  },
-  "src/app/(dashboard)/mcp-servers/_components/MCPPermissionManagement.test.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/mcp-servers/_components/MCPPermissionManagement.tsx": {
-    "no-restricted-imports": {
-      "count": 1
     }
   },
   "src/app/(dashboard)/mcp-servers/_components/MCPSubmissionsTab.tsx": {
@@ -586,17 +558,11 @@
   "src/app/(dashboard)/mcp-servers/_components/OAuthFormFields.tsx": {
     "no-nested-ternary": {
       "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 1
     }
   },
   "src/app/(dashboard)/mcp-servers/_components/OpenAPIFormSection.tsx": {
     "local/no-complex-jsx-arrow": {
       "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 2
     }
   },
   "src/app/(dashboard)/mcp-servers/_components/OpenAPIQuickPicker.tsx": {
@@ -604,32 +570,7 @@
       "count": 1
     }
   },
-  "src/app/(dashboard)/mcp-servers/_components/OpenApiByokFields.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/app/(dashboard)/mcp-servers/_components/PassthroughAuthorizeSection.test.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/mcp-servers/_components/PassthroughAuthorizeSection.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/mcp-servers/_components/StdioConfiguration.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/mcp-servers/_components/TokenEndpointAuthMethodField.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/mcp-servers/_components/TokenExchangeFormFields.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
@@ -692,15 +633,6 @@
     },
     "max-lines": {
       "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 1
-    },
-    "react-hooks/immutability": {
-      "count": 1
-    },
-    "react-hooks/set-state-in-effect": {
-      "count": 5
     }
   },
   "src/app/(dashboard)/mcp-servers/_components/mcp_server_view.tsx": {
@@ -1986,14 +1918,6 @@
       "count": 1
     }
   },
-  "src/components/mcp_server_management/MCPServerSelector.tsx": {
-    "local/no-complex-jsx-arrow": {
-      "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/components/mcp_server_management/MCPToolPermissions.tsx": {
     "local/no-complex-jsx-arrow": {
       "count": 1
@@ -2006,9 +1930,6 @@
   },
   "src/components/mcp_tools/MCPToolArgumentsForm.tsx": {
     "no-nested-ternary": {
-      "count": 1
-    },
-    "no-restricted-imports": {
       "count": 1
     }
   },

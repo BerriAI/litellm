@@ -1,9 +1,11 @@
-import React from "react";
-import { Input, Tooltip } from "antd";
 import { Info } from "lucide-react";
+import React from "react";
+import { SimpleTooltip } from "@/components/ui/tooltip";
 
 import { MountedFormField } from "@/components/common_components/MountedFormField";
 import { antdRequired } from "@/components/common_components/antdFormRules";
+import { PasswordInput } from "@/components/shared/PasswordInput";
+import { Input } from "@/components/ui/input";
 import { requiredWhenSiblingSet, textControl } from "./mcpFieldRules";
 
 const fieldClassName = "rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500";
@@ -11,9 +13,9 @@ const fieldClassName = "rounded-lg border-gray-300 focus:border-blue-500 focus:r
 const FieldLabel: React.FC<{ label: string; tooltip: string }> = ({ label, tooltip }) => (
   <span className="text-sm font-medium text-gray-700 flex items-center">
     {label}
-    <Tooltip title={tooltip}>
+    <SimpleTooltip content={tooltip}>
       <Info className="ml-2 size-4 text-blue-400 hover:text-blue-600 cursor-help" />
-    </Tooltip>
+    </SimpleTooltip>
   </span>
 );
 
@@ -71,10 +73,10 @@ const AwsSigV4Fields: React.FC = () => (
       }}
     >
       {(control) => (
-        <Input.Password
+        <PasswordInput
           {...textControl(control)}
           placeholder="AKIA... (optional — uses IAM role if blank)"
-          className={fieldClassName}
+          groupClassName={fieldClassName}
         />
       )}
     </MountedFormField>
@@ -94,10 +96,10 @@ const AwsSigV4Fields: React.FC = () => (
       }}
     >
       {(control) => (
-        <Input.Password
+        <PasswordInput
           {...textControl(control)}
           placeholder="Enter secret key (optional — uses IAM role if blank)"
-          className={fieldClassName}
+          groupClassName={fieldClassName}
         />
       )}
     </MountedFormField>
@@ -106,10 +108,10 @@ const AwsSigV4Fields: React.FC = () => (
       name={["credentials", "aws_session_token"]}
     >
       {(control) => (
-        <Input.Password
+        <PasswordInput
           {...textControl(control)}
           placeholder="Enter session token (optional)"
-          className={fieldClassName}
+          groupClassName={fieldClassName}
         />
       )}
     </MountedFormField>

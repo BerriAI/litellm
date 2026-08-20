@@ -1,9 +1,13 @@
 import React, { useState } from "react";
-import { Tooltip, Select, Input as AntdInput, InputNumber, Collapse } from "antd";
 import { FormProvider, useForm, useWatch } from "react-hook-form";
-import { Info } from "lucide-react";
+import { ChevronDown, Info } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { SimpleTooltip } from "@/components/ui/tooltip";
+import { PasswordInput } from "@/components/shared/PasswordInput";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { createMCPServer, registerMCPServer, storeMCPOAuthUserCredential } from "@/components/networking";
 import { setToken } from "@/utils/mcpTokenStore";
@@ -14,6 +18,8 @@ import {
   MCPServer,
   MCPServerCostInfo,
   TRANSPORT,
+  TRANSPORT_ITEMS,
+  AUTH_TYPE_ITEMS,
   getMcpOAuthMode,
   MCP_OAUTH2_FLOW_M2M,
   isClientForwardedTokenMode,
@@ -59,9 +65,8 @@ import {
 } from "@/components/common_components/MountedFormField";
 import { antdRequired, antdRules } from "@/components/common_components/antdFormRules";
 import { allFieldsValue, mountedPaths, resetFields, setFieldsValue, singleBranchChange } from "./mcpFormStore";
-import { numberControl, notOnlyWhitespace, selectControl, textControl } from "./mcpFieldRules";
+import { numberControl, notOnlyWhitespace, selectControl, selectTriggerControl, textControl } from "./mcpFieldRules";
 import mcpLogo from "../../../../../public/assets/logos/mcp_logo.png";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 export const mcpLogoImg = mcpLogo.src;
 
@@ -122,7 +127,6 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   const [toolNameToDescription, setToolNameToDescription] = useState<Record<string, string>>({});
   const [transportType, setTransportType] = useState<string>("");
   const [keyTools, setKeyTools] = useState<OpenAPIKeyTool[]>([]);
-  const [searchValue, setSearchValue] = useState<string>("");
   const [oauthAccessToken, setOauthAccessToken] = useState<string | null>(null);
   const [logoUrl, setLogoUrl] = useState<string | undefined>(undefined);
   const [oauthDocsUrl, setOauthDocsUrl] = useState<string | null>(null);
@@ -174,7 +178,6 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
       costConfig,
       allowedTools,
       hasToolAllowlistInteraction,
-      searchValue,
       aliasManuallyEdited,
       logoUrl,
       authorizedIdentity,
@@ -339,9 +342,6 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     }
     if (restored.hasToolAllowlistInteraction !== undefined) {
       setHasToolAllowlistInteraction(restored.hasToolAllowlistInteraction);
-    }
-    if (restored.searchValue) {
-      setSearchValue(restored.searchValue);
     }
     if (restored.aliasManuallyEdited !== undefined) {
       setAliasManuallyEdited(restored.aliasManuallyEdited);
@@ -527,37 +527,13 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     setFormValues(allFieldsValue(form));
   };
 
-  // Generate options with existing groups and potential new group
-  const getAccessGroupOptions = () => {
-    const existingOptions = availableAccessGroups.map((group: string) => ({
-      value: group,
-      label: (
-        <div className="flex items-center gap-2">
-          <div className="w-2 h-2 bg-green-500 rounded-full"></div>
-          <span className="font-medium">{group}</span>
-        </div>
-      ),
-    }));
-
-    // If search value doesn't match any existing group and is not empty, add "create new group" option
-    if (
-      searchValue &&
-      !availableAccessGroups.some((group) => group.toLowerCase().includes(searchValue.toLowerCase()))
-    ) {
-      existingOptions.push({
-        value: searchValue,
-        label: (
-          <div className="flex items-center gap-2">
-            <div className="w-2 h-2 bg-blue-500 rounded-full"></div>
-            <span className="font-medium">{searchValue}</span>
-            <span className="text-gray-400 text-xs ml-1">create new group</span>
-          </div>
-        ),
-      });
-    }
-
-    return existingOptions;
-  };
+  const handleTransportSelected =
+    (onChange: (value: string) => void) =>
+    (value: string | null): void => {
+      if (value === null) return;
+      onChange(value);
+      handleTransportChange(value);
+    };
 
   // Auto-populate alias from server_name unless manually edited
   React.useEffect(() => {
@@ -647,31 +623,19 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     <Dialog open={isModalVisible} onOpenChange={(open) => !open && handleCancel()}>
       <DialogContent className="top-8 max-h-[calc(100dvh-4rem)] translate-y-0 overflow-y-auto sm:max-w-[1000px]">
         <DialogHeader>
-          <div className="flex items-center pb-4 border-b border-gray-100" style={{ gap: 12 }}>
+          <div className="flex items-center gap-3 border-b border-border pb-4">
             {onBackToDiscovery && (
-              <button
-                onClick={onBackToDiscovery}
-                className="text-sm text-blue-600 hover:text-blue-800 cursor-pointer bg-transparent border-none"
-                style={{ flexShrink: 0 }}
-              >
+              <Button variant="link" size="sm" className="shrink-0 px-0" onClick={onBackToDiscovery}>
                 &#8592;
-              </button>
+              </Button>
             )}
-            <img
-              src={mcpLogoImg}
-              alt="MCP Logo"
-              className="w-8 h-8 object-contain"
-              style={{
-                height: "20px",
-                width: "20px",
-                objectFit: "contain",
-              }}
-            />
-            <DialogTitle className="text-xl font-semibold text-gray-900">
+            <img src={mcpLogoImg} alt="MCP Logo" className="size-5 object-contain" />
+            <DialogTitle className="text-xl font-semibold">
               {isAdmin ? "Add New MCP Server" : "Submit MCP Server for Review"}
             </DialogTitle>
           </div>
         </DialogHeader>
+
         <div className="mt-6">
           <FormProvider {...form}>
             <MountedFormProvider value={{ control: form.control, registry }}>
@@ -687,9 +651,9 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                     label={
                       <span className="text-sm font-medium text-gray-700 flex items-center">
                         MCP Server Name
-                        <Tooltip title="Best practice: Use a descriptive name that indicates the server's purpose (e.g., 'GitHub_MCP', 'Email_Service'). Cannot contain spaces or hyphens; use underscores instead. Names must comply with SEP-986 and will be rejected if invalid (https://modelcontextprotocol.io/specification/2025-11-25/server/tools#tool-names).">
+                        <SimpleTooltip content="Best practice: Use a descriptive name that indicates the server's purpose (e.g., 'GitHub_MCP', 'Email_Service'). Cannot contain spaces or hyphens; use underscores instead. Names must comply with SEP-986 and will be rejected if invalid (https://modelcontextprotocol.io/specification/2025-11-25/server/tools#tool-names).">
                           <Info className="ml-2 size-4 text-blue-400 hover:text-blue-600 cursor-help" />
-                        </Tooltip>
+                        </SimpleTooltip>
                       </span>
                     }
                     name="server_name"
@@ -708,9 +672,9 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                     label={
                       <span className="text-sm font-medium text-gray-700 flex items-center">
                         Alias
-                        <Tooltip title="A short, unique identifier for this server. Defaults to the server name if not provided. Cannot contain spaces or hyphens; use underscores instead.">
+                        <SimpleTooltip content="A short, unique identifier for this server. Defaults to the server name if not provided. Cannot contain spaces or hyphens; use underscores instead.">
                           <Info className="ml-2 size-4 text-blue-400 hover:text-blue-600 cursor-help" />
-                        </Tooltip>
+                        </SimpleTooltip>
                       </span>
                     }
                     name="alias"
@@ -765,19 +729,20 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                   >
                     {(control) => (
                       <Select
-                        {...selectControl<string>(control)}
-                        placeholder="Select transport"
-                        className="rounded-lg"
-                        size="large"
-                        onChange={(value: string) => {
-                          control.onChange(value);
-                          handleTransportChange(value);
-                        }}
+                        items={TRANSPORT_ITEMS}
+                        value={(control.value as string | undefined) ?? null}
+                        onValueChange={handleTransportSelected(control.onChange)}
                       >
-                        <Select.Option value="http">Streamable HTTP (Recommended)</Select.Option>
-                        <Select.Option value="sse">Server-Sent Events (SSE)</Select.Option>
-                        <Select.Option value="stdio">Standard Input/Output (stdio)</Select.Option>
-                        <Select.Option value={TRANSPORT.OPENAPI}>OpenAPI Spec</Select.Option>
+                        <SelectTrigger {...selectTriggerControl(control)} className="w-full rounded-lg">
+                          <SelectValue placeholder="Select transport" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {TRANSPORT_ITEMS.map((item) => (
+                            <SelectItem key={item.value} value={item.value}>
+                              {item.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
                       </Select>
                     )}
                   </MountedFormField>
@@ -796,7 +761,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                       }}
                     >
                       {(control) => (
-                        <AntdInput
+                        <Input
                           {...textControl(control)}
                           placeholder="https://your-mcp-server.com"
                           className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
@@ -826,135 +791,114 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                     label={
                       <span className="text-sm font-medium text-gray-700 flex items-center">
                         Max Concurrent Requests (optional)
-                        <Tooltip title="Maximum number of tool calls LiteLLM will run against this server at the same time. Additional calls wait for a free slot. Leave blank for no limit.">
+                        <SimpleTooltip content="Maximum number of tool calls LiteLLM will run against this server at the same time. Additional calls wait for a free slot. Leave blank for no limit.">
                           <Info className="ml-2 size-4 text-blue-400 hover:text-blue-600 cursor-help" />
-                        </Tooltip>
+                        </SimpleTooltip>
                       </span>
                     }
                     name="max_concurrent_requests"
                   >
                     {(control) => (
-                      <InputNumber
-                        {...numberControl(control)}
+                      <Input
+                        {...numberControl(control, 0)}
                         min={1}
-                        precision={0}
+                        step={1}
                         placeholder="e.g. 10"
-                        style={{ width: "100%" }}
-                        className="rounded-lg"
+                        className="w-full rounded-lg"
                       />
                     )}
                   </MountedFormField>
 
                   {/* Authentication - show for HTTP, SSE, and OpenAPI */}
                   {transportType !== "stdio" && transportType !== "" && (
-                    <Collapse
-                      defaultActiveKey={["auth"]}
-                      className="mb-4"
-                      items={[
-                        {
-                          key: "auth",
-                          label: <span className="text-sm font-semibold text-gray-700">Authentication</span>,
-                          children: (
-                            <>
-                              <MountedFormField
-                                name="auth_type"
-                                required
-                                rules={{ validate: { required: antdRequired("Please select an auth type") } }}
-                              >
-                                {(control) => (
-                                  <Select
-                                    {...selectControl<string>(control)}
-                                    placeholder="Select auth type"
-                                    className="rounded-lg"
-                                    size="large"
-                                    virtual={false}
-                                  >
-                                    <Select.Option value="none">None</Select.Option>
-                                    <Select.Option value="api_key">API Key</Select.Option>
-                                    <Select.Option value="bearer_token">Bearer Token</Select.Option>
-                                    <Select.Option value="token">Token</Select.Option>
-                                    <Select.Option value="basic">Basic Auth</Select.Option>
-                                    <Select.Option value="oauth2">OAuth</Select.Option>
-                                    <Select.Option value="oauth2_token_exchange">
-                                      OAuth Token Exchange (OBO)
-                                    </Select.Option>
-                                    <Select.Option value="oauth2_id_jag">ID-JAG (Okta Cross App Access)</Select.Option>
-                                    <Select.Option value="aws_sigv4">AWS SigV4 (Bedrock AgentCore MCPs)</Select.Option>
-                                    <Select.Option value="true_passthrough">
-                                      True Passthrough (no LiteLLM auth)
-                                    </Select.Option>
-                                    <Select.Option value="oauth_delegate">
-                                      OAuth Delegate (client-supplied upstream token)
-                                    </Select.Option>
-                                  </Select>
-                                )}
-                              </MountedFormField>
+                    <Collapsible defaultOpen className="mb-4">
+                      <CollapsibleTrigger className="group flex w-full items-center justify-between gap-4 py-2 text-left">
+                        <span className="text-sm font-semibold text-gray-700">Authentication settings</span>
+                        <ChevronDown className="size-4 text-gray-500 transition-transform group-data-[panel-open]:rotate-180" />
+                      </CollapsibleTrigger>
+                      <CollapsibleContent keepMounted className="space-y-6 pt-2">
+                        <MountedFormField
+                          label="Authentication"
+                          name="auth_type"
+                          required
+                          rules={{ validate: { required: antdRequired("Please select an auth type") } }}
+                        >
+                          {(control) => (
+                            <Select {...selectControl<string>(control)} items={AUTH_TYPE_ITEMS}>
+                              <SelectTrigger {...selectTriggerControl(control)} className="w-full rounded-lg">
+                                <SelectValue placeholder="Select auth type" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {AUTH_TYPE_ITEMS.map((item) => (
+                                  <SelectItem key={item.value} value={item.value}>
+                                    {item.label}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          )}
+                        </MountedFormField>
 
-                              <TruePassthroughWarning authType={authType} />
+                        <TruePassthroughWarning authType={authType} />
 
-                              <PassthroughAuthorizeSection
-                                authType={authType}
-                                dcrBridgeInitialChecked
-                                oauthFlow={{
-                                  startOAuthFlow,
-                                  status: oauthStatus,
-                                  error: oauthError,
-                                  tokenResponse: oauthTokenResponse,
-                                }}
-                                appMayNotMatchUpstream={appMayNotMatchUpstream}
+                        <PassthroughAuthorizeSection
+                          authType={authType}
+                          dcrBridgeInitialChecked
+                          oauthFlow={{
+                            startOAuthFlow,
+                            status: oauthStatus,
+                            error: oauthError,
+                            tokenResponse: oauthTokenResponse,
+                          }}
+                          appMayNotMatchUpstream={appMayNotMatchUpstream}
+                        />
+
+                        {shouldShowAuthValueField && (
+                          <MountedFormField
+                            label={
+                              <span className="text-sm font-medium text-gray-700 flex items-center">
+                                Authentication Value
+                                <SimpleTooltip content="Token, password, or header value to send with each request for the selected auth type.">
+                                  <Info className="ml-2 size-4 text-blue-400 hover:text-blue-600 cursor-help" />
+                                </SimpleTooltip>
+                              </span>
+                            }
+                            name={["credentials", "auth_value"]}
+                            rules={{
+                              validate: {
+                                notWhitespace: notOnlyWhitespace("Authentication value cannot be empty whitespace"),
+                              },
+                            }}
+                          >
+                            {(control) => (
+                              <PasswordInput
+                                {...textControl(control)}
+                                placeholder="Enter token or secret"
+                                groupClassName="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
                               />
+                            )}
+                          </MountedFormField>
+                        )}
 
-                              {shouldShowAuthValueField && (
-                                <MountedFormField
-                                  label={
-                                    <span className="text-sm font-medium text-gray-700 flex items-center">
-                                      Authentication Value
-                                      <Tooltip title="Token, password, or header value to send with each request for the selected auth type.">
-                                        <Info className="ml-2 size-4 text-blue-400 hover:text-blue-600 cursor-help" />
-                                      </Tooltip>
-                                    </span>
-                                  }
-                                  name={["credentials", "auth_value"]}
-                                  rules={{
-                                    validate: {
-                                      notWhitespace: notOnlyWhitespace(
-                                        "Authentication value cannot be empty whitespace",
-                                      ),
-                                    },
-                                  }}
-                                >
-                                  {(control) => (
-                                    <AntdInput.Password
-                                      {...textControl(control)}
-                                      placeholder="Enter token or secret"
-                                      className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
-                                    />
-                                  )}
-                                </MountedFormField>
-                              )}
+                        {isOAuthAuthType && (
+                          <OAuthFormFields
+                            isM2M={isM2MFlow}
+                            initialFlowType={OAUTH_FLOW.INTERACTIVE}
+                            docsUrl={oauthDocsUrl}
+                            oauthFlow={{
+                              startOAuthFlow,
+                              status: oauthStatus,
+                              error: oauthError,
+                              tokenResponse: oauthTokenResponse,
+                            }}
+                          />
+                        )}
 
-                              {isOAuthAuthType && (
-                                <OAuthFormFields
-                                  isM2M={isM2MFlow}
-                                  initialFlowType={OAUTH_FLOW.INTERACTIVE}
-                                  docsUrl={oauthDocsUrl}
-                                  oauthFlow={{
-                                    startOAuthFlow,
-                                    status: oauthStatus,
-                                    error: oauthError,
-                                    tokenResponse: oauthTokenResponse,
-                                  }}
-                                />
-                              )}
+                        {isTokenExchangeAuthType && <TokenExchangeFormFields />}
 
-                              {isTokenExchangeAuthType && <TokenExchangeFormFields />}
-
-                              {isIdJagAuthType && <IdJagFormFields />}
-                            </>
-                          ),
-                        },
-                      ]}
-                    />
+                        {isIdJagAuthType && <IdJagFormFields />}
+                      </CollapsibleContent>
+                    </Collapsible>
                   )}
 
                   {transportType !== "stdio" && transportType !== "" && isAwsSigV4AuthType && <AwsSigV4Fields />}
@@ -974,9 +918,6 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                     availableAccessGroups={availableAccessGroups}
                     mcpServer={null}
                     mountedAuthType={authSectionMounted ? watchedAuthType : undefined}
-                    searchValue={searchValue}
-                    setSearchValue={setSearchValue}
-                    getAccessGroupOptions={getAccessGroupOptions}
                   />
                 </div>
 
