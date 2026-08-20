@@ -3,8 +3,11 @@ import json
 import os
 import sys
 from types import SimpleNamespace
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
+
+if TYPE_CHECKING:
+    from litellm.router import Router
 
 sys.path.insert(
     0, os.path.abspath("../../..")
@@ -6665,6 +6668,29 @@ def test_model_has_no_cost_mapping_explicit_zero_price_is_false(cost_field):
     )
 
     assert model_has_no_cost_mapping(model="free-group", llm_router=router) is False
+
+
+def test_model_has_no_cost_mapping_tiered_pricing_only_is_false():
+    from litellm.proxy.auth.auth_checks import model_has_no_cost_mapping
+    from litellm.router import Router
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "tiered-group",
+                "litellm_params": {
+                    "model": f"{UNPRICED_UNDERLYING_MODEL}-tiered",
+                    "api_key": "sk-test",
+                    "tiered_pricing": [
+                        {"range": [0, 128000], "input_cost_per_token": 2e-7, "output_cost_per_token": 6e-7},
+                        {"range": [128000, 256000], "input_cost_per_token": 4e-7, "output_cost_per_token": 12e-7},
+                    ],
+                },
+            }
+        ]
+    )
+
+    assert model_has_no_cost_mapping(model="tiered-group", llm_router=router) is False
 
 
 async def _run_common_checks(
