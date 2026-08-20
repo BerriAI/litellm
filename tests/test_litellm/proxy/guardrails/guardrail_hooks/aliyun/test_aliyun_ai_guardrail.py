@@ -837,6 +837,32 @@ class TestPreCallHook:
         assert "工具输出里的违规内容" in scanned
 
     @pytest.mark.asyncio
+    async def test_scans_responses_api_function_call_output_image(self):
+        g = _make_guardrail(level="medium")
+        clean = _make_aliyun_api_response(suggestion="pass", detail=[])
+        data = {
+            "input": [
+                {
+                    "type": "function_call_output",
+                    "call_id": "call_1",
+                    "output": [
+                        {"type": "input_image", "image_url": IMG_A, "detail": "auto"},
+                    ],
+                }
+            ]
+        }
+        with patch.object(g.async_handler, "post", new_callable=AsyncMock, return_value=clean) as mock_post:
+            await g.async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(api_key="test"),
+                cache=MagicMock(),
+                data=data,
+                call_type="responses",
+            )
+
+        sent = [json.loads(call.kwargs["data"]["ServiceParameters"]) for call in mock_post.call_args_list]
+        assert any(IMG_A in (service_parameters.get("imageUrls") or []) for service_parameters in sent)
+
+    @pytest.mark.asyncio
     async def test_scans_responses_api_function_call_arguments(self):
         g = _make_guardrail(level="medium")
         clean = _make_aliyun_api_response(suggestion="pass", detail=[])

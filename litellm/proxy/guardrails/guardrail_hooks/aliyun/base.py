@@ -71,8 +71,8 @@ class AliyunGuardrailBase:
         return user_prompt or None
 
     def _iter_public_image_urls(self, messages: Sequence[AllMessageValues]) -> Iterator[str]:
-        """Yield the publicly reachable image URLs of every user message, in order."""
-        for content in (message.get("content") for message in self._iter_user_messages(messages)):
+        """Yield publicly reachable image URLs from user and tool messages."""
+        for content in (message.get("content") for message in self._iter_audited_text_messages(messages)):
             if not isinstance(content, list):
                 continue
             for url in (self._extract_image_url(part) for part in content):
@@ -83,7 +83,7 @@ class AliyunGuardrailBase:
 
     def get_image_urls(self, messages: Sequence[AllMessageValues]) -> tuple[str, ...]:
         """
-        Extract image URLs from every user message in the request.
+        Extract image URLs from every user and tool message in the request.
         Only publicly accessible http(s) URLs are collected (in order,
         de-duplicated). Uses the same message range as ``get_user_prompt``.
         Example:
