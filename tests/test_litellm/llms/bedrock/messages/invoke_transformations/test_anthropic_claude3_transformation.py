@@ -2176,6 +2176,112 @@ def test_bedrock_invoke_transform_converts_mid_conversation_system_for_older_cla
     assert result["system"] == [{"type": "text", "text": "Base."}]
 
 
+def test_bedrock_invoke_transform_moves_converted_system_after_tool_result_turn(local_model_cost_map):
+    """A reminder wedged between an assistant ``tool_use`` turn and the user
+    ``tool_result`` turn cannot become a user turn in that position: the API
+    requires the result right after the call ("tool_use ids were found without
+    tool_result blocks immediately after"). The converted turn goes after the
+    tool-result turn instead, where consecutive user turns merge upstream."""
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    tool_use_turn = {
+        "role": "assistant",
+        "content": [{"type": "tool_use", "id": "toolu_01", "name": "read_file", "input": {"path": "big1.txt"}}],
+    }
+    tool_result_turn = {
+        "role": "user",
+        "content": [
+            {"type": "tool_result", "tool_use_id": "toolu_01", "content": "first 100 lines"},
+            {"type": "text", "text": "keep going"},
+        ],
+    }
+    messages = [
+        {"role": "user", "content": "read the file"},
+        tool_use_turn,
+        {"role": "system", "content": "[Truncated: PARTIAL view of big1.txt]"},
+        {"role": "system", "content": "<budget>low</budget>"},
+        tool_result_turn,
+    ]
+
+    result = cfg.transform_anthropic_messages_request(
+        model="us.anthropic.claude-opus-4-7",
+        messages=copy.deepcopy(messages),
+        anthropic_messages_optional_request_params={"max_tokens": 256, "stream": False},
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert result["messages"] == [
+        {"role": "user", "content": "read the file"},
+        tool_use_turn,
+        tool_result_turn,
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": (
+                        "Operator note (not from the user): the following was "
+                        "originally a mid-conversation system-role reminder."
+                    ),
+                },
+                {"type": "text", "text": "[Truncated: PARTIAL view of big1.txt]"},
+            ],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": (
+                        "Operator note (not from the user): the following was "
+                        "originally a mid-conversation system-role reminder."
+                    ),
+                },
+                {"type": "text", "text": "<budget>low</budget>"},
+            ],
+        },
+    ]
+
+
+def test_bedrock_invoke_transform_converted_system_carries_only_its_content(local_model_cost_map):
+    """Hoisting only ever kept a system entry's content, so the in-place
+    conversion must not forward the entry's other keys either ("messages.2.name:
+    Extra inputs are not permitted")."""
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    messages = [
+        {"role": "user", "content": "read the file"},
+        {"role": "assistant", "content": "reading"},
+        {"role": "system", "content": "[Truncated: PARTIAL view of big1.txt]", "name": "ops"},
+        {"role": "user", "content": "continue"},
+    ]
+
+    result = cfg.transform_anthropic_messages_request(
+        model="us.anthropic.claude-opus-4-7",
+        messages=copy.deepcopy(messages),
+        anthropic_messages_optional_request_params={"max_tokens": 256, "stream": False},
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert result["messages"][2] == {
+        "role": "user",
+        "content": [
+                {
+                    "type": "text",
+                    "text": (
+                        "Operator note (not from the user): the following was "
+                        "originally a mid-conversation system-role reminder."
+                    ),
+                },
+            {"type": "text", "text": "[Truncated: PARTIAL view of big1.txt]"},
+        ],
+    }
+
+
 def test_bedrock_invoke_transform_converts_system_for_unmapped_model(local_model_cost_map):
     """A model with no cost-map entry and no fallback-generalization rule gets
     the unsupported-model treatment: the safe default converts the reminder to
