@@ -154,7 +154,7 @@ PROXY_API_AUDIENCE: Final[SessionAudience] = "proxy_api"
 proxy base URL itself as the RFC 8707 ``resource``: the grant then mints the proxy-API CLI
 credential that LLM routes accept, instead of the MCP-only session pair."""
 
-ProxyCredentialMintFailure = Literal[ReloadUserFailure, "not_a_member"]
+ProxyCredentialMintFailure = Literal[ReloadUserFailure, "not_a_member", "team_required"]
 
 
 class MintedProxyCredential(BaseModel):
@@ -167,7 +167,8 @@ class MintedProxyCredential(BaseModel):
 
 class MintProxyCredential(Protocol):
     """Injected proxy-API credential minter ``(user_id, team_id)``: reloads the user live,
-    checks team membership, and mints the same credential ``lite login`` mints."""
+    checks team membership, refuses a teamless grant for a user who has teams to pick from,
+    and mints the same credential ``lite login`` mints."""
 
     def __call__(
         self, user_id: str, team_id: str | None, /
@@ -923,6 +924,10 @@ def _mint_failure_response(failure: ProxyCredentialMintFailure) -> Response:
         case "not_a_member":
             return _oauth_error(
                 400, "invalid_grant", "the user is no longer a member of the team this grant was issued for"
+            )
+        case "team_required":
+            return _oauth_error(
+                400, "invalid_grant", "this user belongs to a team; sign in again and pick the team for this credential"
             )
         case "unavailable" | "unresolvable" | "no_active_key":
             return _reload_failure_response(failure)

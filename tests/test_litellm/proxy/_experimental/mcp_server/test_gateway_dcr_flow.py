@@ -1414,6 +1414,7 @@ async def test_native_code_without_a_minter_is_refused_server_side():
     "failure, status, error",
     [
         ("not_a_member", 400, "invalid_grant"),
+        ("team_required", 400, "invalid_grant"),
         ("no_active_key", 400, "invalid_grant"),
         ("unavailable", 503, "temporarily_unavailable"),
         ("unresolvable", 500, "server_error"),

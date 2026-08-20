@@ -45,7 +45,11 @@ async def mint_proxy_credential(
     live, so a team the user left between consent and redemption (or between refreshes)
     refuses the grant instead of minting a credential attributed to a team they are no
     longer on. The team is exactly the one the consent page sealed into the grant; nothing
-    is picked on the user's behalf here, so a refresh can never move the credential. The
+    is picked on the user's behalf here, so a refresh can never move the credential, and a
+    grant that names no team is refused for a user with a live team to pick from (the same
+    rule ``lite login`` applies), so a user cannot step outside their teams' attribution by
+    posting the consent form without one. Memberships whose team rows are gone count as no
+    team at all, the way ``lite login`` treats them, so they can never lock a user out. The
     user row handed to the minter carries no team list, exactly like ``lite login``'s, so
     the minter's own first-team fallback stays inert."""
     user: Final = await load_active_user_by_id(user_id)
@@ -55,9 +59,11 @@ async def mint_proxy_credential(
         return "no_active_key"
     if team_id is not None and team_id not in user.teams:
         return "not_a_member"
-    details: Final = await _team_details(user.teams) if team_id is not None else ()
+    details: Final = await _team_details(user.teams) if user.teams else ()
     if details is None:
         return "unavailable"
+    if team_id is None and any(detail.team_id is not None for detail in details):
+        return "team_required"
     selected: Final = selected_cli_sso_team_detail(details, team_id)
     if selected is None:
         return "not_a_member"
