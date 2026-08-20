@@ -2220,6 +2220,7 @@ async def delete_user(
     )
     from litellm.proxy.management_helpers.audit_logs import (
         get_audit_log_changed_by,
+        is_audit_logging_enabled,
     )
     from litellm.proxy.proxy_server import (
         create_audit_log_for_update,
@@ -2298,9 +2299,8 @@ async def delete_user(
                     },
                 )
 
-        # Enterprise Feature - Audit Logging. Enable with litellm.store_audit_logs = True
         # we do this after the first for loop, since first for loop is for validation. we only want this inserted after validation passes
-        if litellm.store_audit_logs is True:
+        if is_audit_logging_enabled():
             # make an audit log for each team deleted
             _user_row = user_row.json(exclude_none=True)
 

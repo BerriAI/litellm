@@ -1,4 +1,4 @@
-import { CalendarOutlined, ClockCircleOutlined } from "@ant-design/icons";
+import { Calendar, Clock } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/cva.config";
 import type { DateRangePickerValue } from "./date_picker_types";
@@ -291,7 +291,7 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
         >
           <span className="flex items-center justify-between">
             <span className="flex items-center gap-2">
-              <ClockCircleOutlined className="text-gray-600" />
+              <Clock className="size-4 text-gray-600" />
               <span className="text-gray-900">{formatDisplayRange(value.from, value.to)}</span>
             </span>
             <svg
@@ -355,7 +355,7 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
               <div className="w-1/2 relative">
                 <div className="p-3.5 border-b border-gray-200">
                   <div className="flex items-center gap-2">
-                    <CalendarOutlined className="text-gray-600" />
+                    <Calendar className="size-4 text-gray-600" />
                     <span className="text-sm font-semibold text-gray-900">Start and end dates</span>
                   </div>
                 </div>

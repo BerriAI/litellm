@@ -1,8 +1,9 @@
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { renderWithProviders, screen, testQueryClient, waitFor } from "../../../tests/test-utils";
+import { act, renderWithProviders, screen, testQueryClient, waitFor } from "../../../tests/test-utils";
 import type { Team } from "../key_team_helpers/key_list";
 import { keyCreateCall, keyCreateServiceAccountCall, modelAvailableCall, userFilterUICall } from "../networking";
+import { toast } from "@/lib/toast";
 import CreateKey from "./create_key_button";
 
 const state = vi.hoisted(() => ({
@@ -21,6 +22,16 @@ const state = vi.hoisted(() => ({
   projects: [] as { project_id: string; project_alias: string; team_id?: string; models?: string[] }[],
 }));
 
+vi.mock("@/lib/toast", () => ({
+  toast: {
+    success: vi.fn(),
+    info: vi.fn(),
+    warning: vi.fn(),
+    error: vi.fn(),
+    fromError: vi.fn(),
+    dismiss: vi.fn(),
+  },
+}));
 vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({ default: () => state.authorized }));
 vi.mock("@/app/(dashboard)/hooks/useCan", () => ({
   default: (capability: string) => state.can[capability] ?? true,
@@ -186,10 +197,6 @@ const antdSearchInput = (placeholder: HTMLElement): HTMLInputElement => {
   return input;
 };
 
-const openAntdSelect = async (placeholder: HTMLElement) => {
-  await userEvent.click(antdSearchInput(placeholder));
-};
-
 const openSection = async (name: RegExp) => {
   await userEvent.click(await screen.findByRole("button", { name }));
 };
@@ -225,6 +232,7 @@ describe("CreateKey", () => {
       .mockClear()
       .mockResolvedValue({ key: "sk-service-account", soft_budget: null });
     vi.mocked(userFilterUICall).mockClear().mockResolvedValue([]);
+    vi.mocked(toast.fromError).mockClear();
     vi.mocked(modelAvailableCall)
       .mockClear()
       .mockResolvedValue({ data: [{ id: "gpt-4" }] });
@@ -456,8 +464,9 @@ describe("CreateKey", () => {
       await nameTheKey();
       await openSection(/Optional Settings/i);
 
-      await openAntdSelect(await screen.findByText("Select access groups (optional)"));
-      await userEvent.click(await screen.findByText("Group One"));
+      await userEvent.click(await screen.findByLabelText("Select access groups (optional)"));
+      await userEvent.click(await screen.findByRole("option", { name: /Group One/ }));
+      await userEvent.keyboard("{Escape}");
       await submit();
 
       expect((await createdPayload()).access_group_ids).toStrictEqual(["ag-1"]);
@@ -526,7 +535,7 @@ describe("CreateKey", () => {
       await openModal();
       await nameTheKey();
       await openSection(/Optional Settings/i);
-      await userEvent.click(await screen.findByLabelText("Disable Global Guardrails"));
+      await userEvent.click(await screen.findByRole("switch", { name: /Disable Global Guardrails/ }));
       await submit();
 
       expect((await createdPayload()).disable_global_guardrails).toBe(true);
@@ -655,7 +664,7 @@ describe("CreateKey", () => {
     it("prefills models once the available model list arrives", async () => {
       renderCreateKey({ autoOpenCreate: true, prefillData: { models: ["gpt-4"] } });
 
-      expect(await screen.findByTitle("gpt-4")).toBeInTheDocument();
+      expect(await screen.findByTitle("gpt-4", {}, { timeout: 5000 })).toBeInTheDocument();
     });
 
     it("ignores a team the user has no access to", async () => {
@@ -803,6 +812,144 @@ describe("CreateKey", () => {
         vi.useRealTimers();
       }
     });
+
+    it("keeps the current search's users when an abandoned search answers last", async () => {
+      const answers = new Map<string, (users: { user_id: string; user_email: string }[]) => void>();
+      vi.mocked(userFilterUICall).mockImplementation(
+        (_accessToken, params) =>
+          new Promise((resolve) => {
+            answers.set(params.get("user_email") ?? "", resolve);
+          }) as never,
+      );
+
+      const user = userEvent.setup();
+      renderCreateKey({ autoOpenCreate: true, prefillData: { owned_by: "another_user" } });
+      const search = antdSearchInput(await screen.findByText("Type email to search for users"));
+
+      await user.type(search, "ali");
+      await waitFor(() => expect(answers.has("ali")).toBe(true), { timeout: 3000 });
+
+      await user.type(search, "ce.smith@example.com");
+      await waitFor(() => expect(answers.has("alice.smith@example.com")).toBe(true), { timeout: 3000 });
+
+      await act(async () => {
+        answers.get("alice.smith@example.com")?.([{ user_id: "u-smith", user_email: "alice.smith@example.com" }]);
+      });
+      await screen.findByTitle("alice.smith@example.com (u-smith)");
+
+      await act(async () => {
+        answers.get("ali")?.([{ user_id: "u-jones", user_email: "alice.jones@example.com" }]);
+      });
+
+      expect(screen.queryByTitle("alice.jones@example.com (u-jones)")).not.toBeInTheDocument();
+      expect(screen.getByTitle("alice.smith@example.com (u-smith)")).toBeInTheDocument();
+    });
+
+    it("stops searching once the box is cleared and the abandoned search answers", async () => {
+      const answers = new Map<string, (users: { user_id: string; user_email: string }[]) => void>();
+      vi.mocked(userFilterUICall).mockImplementation(
+        (_accessToken, params) =>
+          new Promise((resolve) => {
+            answers.set(params.get("user_email") ?? "", resolve);
+          }) as never,
+      );
+
+      const user = userEvent.setup();
+      renderCreateKey({ autoOpenCreate: true, prefillData: { owned_by: "another_user" } });
+      const search = antdSearchInput(await screen.findByText("Type email to search for users"));
+
+      await user.type(search, "ali");
+      await waitFor(() => expect(answers.has("ali")).toBe(true), { timeout: 3000 });
+      await screen.findByText("Searching...");
+
+      await user.clear(search);
+      await screen.findByText("No users found");
+
+      await act(async () => {
+        answers.get("ali")?.([{ user_id: "u-jones", user_email: "alice.jones@example.com" }]);
+      });
+
+      expect(screen.queryByTitle("alice.jones@example.com (u-jones)")).not.toBeInTheDocument();
+      expect(screen.getByText("No users found")).toBeInTheDocument();
+    });
+
+    it("keeps searching while a newer search is still in flight", async () => {
+      const answers = new Map<string, (users: { user_id: string; user_email: string }[]) => void>();
+      vi.mocked(userFilterUICall).mockImplementation(
+        (_accessToken, params) =>
+          new Promise((resolve) => {
+            answers.set(params.get("user_email") ?? "", resolve);
+          }) as never,
+      );
+
+      const user = userEvent.setup();
+      renderCreateKey({ autoOpenCreate: true, prefillData: { owned_by: "another_user" } });
+      const search = antdSearchInput(await screen.findByText("Type email to search for users"));
+
+      await user.type(search, "ali");
+      await waitFor(() => expect(answers.has("ali")).toBe(true), { timeout: 3000 });
+
+      await user.type(search, "ce.smith@example.com");
+      await waitFor(() => expect(answers.has("alice.smith@example.com")).toBe(true), { timeout: 3000 });
+
+      await act(async () => {
+        answers.get("ali")?.([]);
+      });
+
+      expect(screen.getByText("Searching...")).toBeInTheDocument();
+      expect(screen.queryByText("No users found")).not.toBeInTheDocument();
+
+      await act(async () => {
+        answers.get("alice.smith@example.com")?.([{ user_id: "u-smith", user_email: "alice.smith@example.com" }]);
+      });
+      await screen.findByTitle("alice.smith@example.com (u-smith)");
+    });
+
+    it("only warns about a failed search when it is the one the box is waiting on", async () => {
+      const answers = new Map<
+        string,
+        { resolve: (users: { user_id: string; user_email: string }[]) => void; reject: (error: Error) => void }
+      >();
+      vi.mocked(userFilterUICall).mockImplementation(
+        (_accessToken, params) =>
+          new Promise((resolve, reject) => {
+            answers.set(params.get("user_email") ?? "", { resolve, reject });
+          }) as never,
+      );
+
+      const user = userEvent.setup();
+      renderCreateKey({ autoOpenCreate: true, prefillData: { owned_by: "another_user" } });
+      const search = antdSearchInput(await screen.findByText("Type email to search for users"));
+
+      await user.type(search, "ali");
+      await waitFor(() => expect(answers.has("ali")).toBe(true), { timeout: 3000 });
+
+      await user.type(search, "ce.smith@example.com");
+      await waitFor(() => expect(answers.has("alice.smith@example.com")).toBe(true), { timeout: 3000 });
+
+      await act(async () => {
+        answers
+          .get("alice.smith@example.com")
+          ?.resolve([{ user_id: "u-smith", user_email: "alice.smith@example.com" }]);
+      });
+      await screen.findByTitle("alice.smith@example.com (u-smith)");
+
+      await act(async () => {
+        answers.get("ali")?.reject(new Error("search failed"));
+      });
+
+      expect(toast.fromError).not.toHaveBeenCalled();
+      expect(screen.getByTitle("alice.smith@example.com (u-smith)")).toBeInTheDocument();
+
+      await user.type(search, "x");
+      await waitFor(() => expect(answers.has("alice.smith@example.comx")).toBe(true), { timeout: 3000 });
+
+      await act(async () => {
+        answers.get("alice.smith@example.comx")?.reject(new Error("search failed"));
+      });
+
+      expect(toast.fromError).toHaveBeenCalledTimes(1);
+    });
   });
 
   describe("created key display", () => {
@@ -824,6 +971,23 @@ describe("CreateKey", () => {
         expect(screen.getByRole("button", { name: /^create key$/i })).toBeInTheDocument();
       });
       expect(vi.mocked(keyCreateCall)).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("dialog accessible names", () => {
+    it("names the create form dialog", async () => {
+      await openModal();
+
+      expect(screen.getByRole("dialog", { name: "Create New Key" })).toBeInTheDocument();
+    });
+
+    it("names the created key dialog", async () => {
+      await openModal();
+      await nameTheKey();
+      await submit();
+      await createdPayload();
+
+      expect(await screen.findByRole("dialog", { name: "Save your Key" })).toBeInTheDocument();
     });
   });
 
@@ -935,7 +1099,7 @@ describe("CreateKey", () => {
       await openModal();
       await nameTheKey();
       await openSection(/Optional Settings/i);
-      await userEvent.click(await screen.findByLabelText("Enable Prompt Caching"));
+      await userEvent.click(await screen.findByRole("switch", { name: /Enable Prompt Caching/ }));
       await submit();
 
       expect((await createdPayload()).enable_prompt_caching).toBe(true);

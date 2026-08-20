@@ -1,10 +1,9 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { Card, Modal, Space, Table, Typography } from "antd";
+import { Card, Space, Table, Typography } from "antd";
 import { Button } from "@/components/ui/button";
-import { DeleteOutlined, EditOutlined, PlusOutlined } from "@ant-design/icons";
-import { Eye, EyeOff } from "lucide-react";
+import { Eye, EyeOff, Pencil, Plus, Trash2 } from "lucide-react";
 import { getConfigFieldSetting, updateConfigFieldSetting } from "@/components/networking";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { FieldGroup } from "@/components/shared/form/field";
@@ -13,6 +12,7 @@ import { Input } from "@/components/ui/input";
 import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "@/components/ui/input-group";
 import { useZodForm } from "@/lib/forms/useZodForm";
 import { pluginSchema, type PluginFormValues } from "./schema";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 const { Title, Text, Paragraph } = Typography;
 
@@ -112,13 +112,18 @@ export default function PluginSettings() {
     {
       title: "Actions",
       key: "actions",
-      render: (_: unknown, __: Plugin, idx: number) => (
+      render: (_: unknown, plugin: Plugin, idx: number) => (
         <Space>
-          <Button variant="outline" size="icon-sm" onClick={() => openEdit(idx)}>
-            <EditOutlined />
+          <Button variant="outline" size="icon-sm" aria-label={`Edit ${plugin.name}`} onClick={() => openEdit(idx)}>
+            <Pencil />
           </Button>
-          <Button variant="destructive" size="icon-sm" onClick={() => handleDelete(idx)}>
-            <DeleteOutlined />
+          <Button
+            variant="destructive"
+            size="icon-sm"
+            aria-label={`Delete ${plugin.name}`}
+            onClick={() => handleDelete(idx)}
+          >
+            <Trash2 />
           </Button>
         </Space>
       ),
@@ -137,66 +142,72 @@ export default function PluginSettings() {
       </Paragraph>
 
       <Button className="mb-4" onClick={openAdd}>
-        <PlusOutlined />
+        <Plus />
         Add Plugin
       </Button>
 
       <Table dataSource={plugins} columns={columns} rowKey="name" loading={loading} pagination={false} size="small" />
 
-      <Modal
-        title={editingIndex !== null ? "Edit Plugin" : "Add Plugin"}
-        open={modalOpen}
-        onOk={form.handleSubmit(handleOk)}
-        onCancel={() => setModalOpen(false)}
-        confirmLoading={saving}
-        okText="Save"
-      >
-        <form onSubmit={(event) => event.preventDefault()} noValidate style={{ marginTop: 16 }}>
-          <FieldGroup>
-            <FormField
-              control={form.control}
-              name="name"
-              label="Name (identifier)"
-              description="Used in URLs and config. No spaces. E.g. litellm-platform-plugin"
-            >
-              {({ ref, ...field }) => <Input {...field} ref={ref} placeholder="litellm-platform-plugin" />}
-            </FormField>
-            <FormField control={form.control} name="display_name" label="Display Name">
-              {({ ref, ...field }) => <Input {...field} ref={ref} placeholder="Agent Control Plane" />}
-            </FormField>
-            <FormField control={form.control} name="url" label="URL" description="Base URL of the plugin service">
-              {({ ref, ...field }) => <Input {...field} ref={ref} placeholder="https://your-plugin.example.com" />}
-            </FormField>
-            <FormField
-              control={form.control}
-              name="plugin_key"
-              label="Plugin Key"
-              description="Optional. The plugin's own credential, injected as Authorization: Bearer <key> only when litellm reverse-proxies API calls to the plugin's backend (/plugin-proxy/<name>/*). Leave blank for plugins that use the forwarded litellm user token (e.g. iframe plugins) — that path uses the user's token, not this key."
-            >
-              {({ ref, ...field }) => (
-                <InputGroup>
-                  <InputGroupInput
-                    {...field}
-                    ref={ref}
-                    type={keyVisible ? "text" : "password"}
-                    value={field.value ?? ""}
-                    placeholder={editingIndex !== null ? "Leave blank to keep current key" : "sk-... (optional)"}
-                  />
-                  <InputGroupAddon align="inline-end">
-                    <InputGroupButton
-                      size="icon-xs"
-                      onClick={() => setKeyVisible(!keyVisible)}
-                      aria-label={keyVisible ? "Hide plugin key" : "Show plugin key"}
-                    >
-                      {keyVisible ? <EyeOff /> : <Eye />}
-                    </InputGroupButton>
-                  </InputGroupAddon>
-                </InputGroup>
-              )}
-            </FormField>
-          </FieldGroup>
-        </form>
-      </Modal>
+      <Dialog open={modalOpen} onOpenChange={(open) => !open && setModalOpen(false)}>
+        <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>{editingIndex !== null ? "Edit Plugin" : "Add Plugin"}</DialogTitle>
+          </DialogHeader>
+          <form onSubmit={(event) => event.preventDefault()} noValidate style={{ marginTop: 16 }}>
+            <FieldGroup>
+              <FormField
+                control={form.control}
+                name="name"
+                label="Name (identifier)"
+                description="Used in URLs and config. No spaces. E.g. litellm-platform-plugin"
+              >
+                {({ ref, ...field }) => <Input {...field} ref={ref} placeholder="litellm-platform-plugin" />}
+              </FormField>
+              <FormField control={form.control} name="display_name" label="Display Name">
+                {({ ref, ...field }) => <Input {...field} ref={ref} placeholder="Agent Control Plane" />}
+              </FormField>
+              <FormField control={form.control} name="url" label="URL" description="Base URL of the plugin service">
+                {({ ref, ...field }) => <Input {...field} ref={ref} placeholder="https://your-plugin.example.com" />}
+              </FormField>
+              <FormField
+                control={form.control}
+                name="plugin_key"
+                label="Plugin Key"
+                description="Optional. The plugin's own credential, injected as Authorization: Bearer <key> only when litellm reverse-proxies API calls to the plugin's backend (/plugin-proxy/<name>/*). Leave blank for plugins that use the forwarded litellm user token (e.g. iframe plugins) — that path uses the user's token, not this key."
+              >
+                {({ ref, ...field }) => (
+                  <InputGroup>
+                    <InputGroupInput
+                      {...field}
+                      ref={ref}
+                      type={keyVisible ? "text" : "password"}
+                      value={field.value ?? ""}
+                      placeholder={editingIndex !== null ? "Leave blank to keep current key" : "sk-... (optional)"}
+                    />
+                    <InputGroupAddon align="inline-end">
+                      <InputGroupButton
+                        size="icon-xs"
+                        onClick={() => setKeyVisible(!keyVisible)}
+                        aria-label={keyVisible ? "Hide plugin key" : "Show plugin key"}
+                      >
+                        {keyVisible ? <EyeOff /> : <Eye />}
+                      </InputGroupButton>
+                    </InputGroupAddon>
+                  </InputGroup>
+                )}
+              </FormField>
+            </FieldGroup>
+          </form>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setModalOpen(false)}>
+              Cancel
+            </Button>
+            <Button onClick={form.handleSubmit(handleOk)} disabled={saving} aria-busy={saving}>
+              Save
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </Card>
   );
 }

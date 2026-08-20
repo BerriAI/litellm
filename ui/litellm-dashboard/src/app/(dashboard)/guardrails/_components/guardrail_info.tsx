@@ -5,9 +5,8 @@ import {
   updateGuardrailCall,
 } from "@/components/networking";
 import { copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils";
-import { EyeInvisibleOutlined, InfoCircleOutlined, StopOutlined } from "@ant-design/icons";
 
-import { ArrowLeft, CheckIcon, Code, CopyIcon } from "lucide-react";
+import { ArrowLeft, Ban, CheckIcon, Code, CopyIcon, EyeOff, Info } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -607,7 +606,7 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
                                 value === "MASK" ? "text-blue-600" : "text-red-600"
                               }`}
                             >
-                              {value === "MASK" ? <EyeInvisibleOutlined /> : <StopOutlined />}
+                              {value === "MASK" ? <EyeOff className="size-3.5" /> : <Ban className="size-3.5" />}
                               {String(value)}
                             </span>
                           </p>
@@ -667,7 +666,7 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
                   <h3 className="text-lg font-medium">Guardrail Settings</h3>
                   {isConfigGuardrail && (
                     <SimpleTooltip content="Guardrail is defined in the config file and cannot be edited.">
-                      <InfoCircleOutlined />
+                      <Info role="img" aria-label="Config guardrail details" className="size-4 text-muted-foreground" />
                     </SimpleTooltip>
                   )}
                   {!isEditing &&

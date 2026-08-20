@@ -13,7 +13,6 @@ from typing import Annotated, Any, Final
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 
-import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.proxy._types import (
@@ -182,13 +181,14 @@ async def _emit_team_callback_audit_log(
     Callback secrets are redacted before serialization so the audit table
     cannot itself become a credential-harvest sink.
     """
-    if litellm.store_audit_logs is not True:
-        return
-
     from litellm.proxy.management_helpers.audit_logs import (
         create_audit_log_for_update,
+        is_audit_logging_enabled,
     )
     from litellm.proxy.proxy_server import litellm_proxy_admin_name
+
+    if not is_audit_logging_enabled():
+        return
 
     redacted_before: Final = _redact_callback_secrets(before_metadata)
     redacted_after: Final = _redact_callback_secrets(after_metadata)

@@ -1,13 +1,14 @@
 import React, { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useWatch } from "react-hook-form";
-import { Card, Select as AntdSelect, Modal } from "antd";
+import { Card } from "antd";
 import { ChevronDown, ChevronRight, CircleHelp } from "lucide-react";
 import { z } from "zod/v4";
 import { FieldGroup } from "@/components/shared/form/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { useZodForm } from "@/lib/forms/useZodForm";
@@ -57,6 +58,7 @@ import {
   PresetPrefill,
   AutoRouterPreset,
 } from "@/lib/autorouter_presets";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 interface AddAutoRouterTabProps {
   handleOk: () => void;
@@ -288,6 +290,14 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     [presetAvailability],
   );
 
+  const templateItems = React.useMemo(
+    () => [
+      ...sortedPresetOptions.map(({ preset }) => ({ value: preset.key, label: preset.label })),
+      { value: "custom", label: "Custom Configuration" },
+    ],
+    [sortedPresetOptions],
+  );
+
   const applyPrefill = (prefill: PresetPrefill) => {
     setComplexityRouterConfig(prefill.complexityRouterConfig);
     setCustomTechnicalKeywords(prefill.customTechnicalKeywords);
@@ -361,6 +371,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     tierBoundaries: complexityRouterConfig.tier_boundaries,
     tokenThresholds: complexityRouterConfig.token_thresholds,
     dimensionWeights: complexityRouterConfig.dimension_weights,
+    reasoningOverrideMinScore: complexityRouterConfig.reasoning_override_min_score,
   };
 
   const submitRecommendedRouter = async (name: string) => {
@@ -484,49 +495,52 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
 
             <div>
               <label className="block text-sm font-medium text-foreground mb-2">Template</label>
-              <AntdSelect
-                value={selectedPreset}
-                onChange={handlePresetChange}
-                placeholder="Choose a template or select Custom to define your own"
-                className="w-full"
-                optionLabelProp="label"
-                data-testid="template-selector"
+              <Select
+                items={templateItems}
+                value={selectedPreset ?? null}
+                onValueChange={(presetKey: string | null) => handlePresetChange(presetKey ?? undefined)}
               >
-                {sortedPresetOptions.map(({ preset, availability: presetState }) => {
-                  const disabledHint = presetDisabledHint(presetState);
-                  const isDisabled = disabledHint !== null;
-                  const hintClass = isPresetHintAlarming(presetState)
-                    ? "text-red-500 dark:text-red-400"
-                    : "text-muted-foreground";
-                  const matchedHint =
-                    presetState.kind === "available" && presetState.viaDeployments ? "Matches your deployments" : null;
+                <SelectTrigger data-testid="template-selector" className="w-full">
+                  <SelectValue placeholder="Choose a template or select Custom to define your own" />
+                </SelectTrigger>
+                <SelectContent>
+                  {sortedPresetOptions.map(({ preset, availability: presetState }) => {
+                    const disabledHint = presetDisabledHint(presetState);
+                    const hintClass = isPresetHintAlarming(presetState)
+                      ? "text-red-500 dark:text-red-400"
+                      : "text-muted-foreground";
+                    const matchedHint =
+                      presetState.kind === "available" && presetState.viaDeployments
+                        ? "Matches your deployments"
+                        : null;
 
-                  return (
-                    <AntdSelect.Option
-                      key={preset.key}
-                      value={preset.key}
-                      label={preset.label}
-                      disabled={isDisabled}
-                      title={disabledHint ?? preset.description}
-                    >
-                      <div>
-                        <div className="font-medium">{preset.label}</div>
-                        <div className="text-xs text-muted-foreground">{preset.description}</div>
-                        {disabledHint && <div className={`text-xs mt-1 ${hintClass}`}>{disabledHint}</div>}
-                        {matchedHint && (
-                          <div className="text-xs mt-1 text-green-600 dark:text-green-400">{matchedHint}</div>
-                        )}
-                      </div>
-                    </AntdSelect.Option>
-                  );
-                })}
-                <AntdSelect.Option value="custom" label="Custom Configuration">
-                  <div>
-                    <div className="font-medium">Custom Configuration</div>
-                    <div className="text-xs text-muted-foreground">Define your auto router from scratch</div>
-                  </div>
-                </AntdSelect.Option>
-              </AntdSelect>
+                    return (
+                      <SelectItem
+                        key={preset.key}
+                        value={preset.key}
+                        label={preset.label}
+                        disabled={disabledHint !== null}
+                        title={disabledHint ?? preset.description}
+                      >
+                        <div>
+                          <div className="font-medium">{preset.label}</div>
+                          <div className="text-xs text-muted-foreground">{preset.description}</div>
+                          {disabledHint && <div className={`text-xs mt-1 ${hintClass}`}>{disabledHint}</div>}
+                          {matchedHint && (
+                            <div className="text-xs mt-1 text-green-600 dark:text-green-400">{matchedHint}</div>
+                          )}
+                        </div>
+                      </SelectItem>
+                    );
+                  })}
+                  <SelectItem value="custom" label="Custom Configuration">
+                    <div>
+                      <div className="font-medium">Custom Configuration</div>
+                      <div className="text-xs text-muted-foreground">Define your auto router from scratch</div>
+                    </div>
+                  </SelectItem>
+                </SelectContent>
+              </Select>
               {modelsUnverifiable && (
                 <div className="text-xs mt-1 text-red-500 dark:text-red-400">
                   Could not load available models.{" "}
@@ -670,62 +684,69 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
         </form>
       </Card>
 
-      <Modal
-        title="Test Routing"
-        open={isRoutingTestVisible}
-        destroyOnHidden
-        onCancel={() => setIsRoutingTestVisible(false)}
-        footer={[
-          <Button key="close" variant="outline" onClick={() => setIsRoutingTestVisible(false)}>
-            Close
-          </Button>,
-        ]}
-        width={760}
-      >
-        {isRoutingTestVisible && (
-          <AutoRouterRoutingTest
-            accessToken={accessToken}
-            config={buildComplexityRouterConfig(complexityRouterConfigParams)}
-            defaultModel={resolveComplexityDefaultModel(
-              complexityRouterConfig.tiers,
-              complexityRouterConfig.default_model,
-            )}
-            routerName={watchedName}
-            teamId={requiresTeamScope ? watchedTeamId : undefined}
-          />
-        )}
-      </Modal>
+      <Dialog open={isRoutingTestVisible} onOpenChange={(open) => !open && setIsRoutingTestVisible(false)}>
+        <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[760px]">
+          <DialogHeader>
+            <DialogTitle>Test Routing</DialogTitle>
+          </DialogHeader>
+          {isRoutingTestVisible && (
+            <AutoRouterRoutingTest
+              accessToken={accessToken}
+              config={buildComplexityRouterConfig(complexityRouterConfigParams)}
+              defaultModel={resolveComplexityDefaultModel(
+                complexityRouterConfig.tiers,
+                complexityRouterConfig.default_model,
+              )}
+              routerName={watchedName}
+              teamId={requiresTeamScope ? watchedTeamId : undefined}
+            />
+          )}
+          <DialogFooter>
+            {" "}
+            <Button variant="outline" onClick={() => setIsRoutingTestVisible(false)}>
+              Close
+            </Button>
+            , ]
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
-      <Modal
-        title="Connection Test Results"
+      <Dialog
         open={isTestModalVisible}
-        onCancel={() => {
-          setIsTestModalVisible(false);
-          setIsTestingConnection(false);
+        onOpenChange={(open) => {
+          if (!open) {
+            setIsTestModalVisible(false);
+            setIsTestingConnection(false);
+          }
         }}
-        footer={[
-          <Button
-            key="close"
-            variant="outline"
-            onClick={() => {
-              setIsTestModalVisible(false);
-              setIsTestingConnection(false);
-            }}
-          >
-            Close
-          </Button>,
-        ]}
-        width={700}
       >
-        {isTestModalVisible && (
-          <AutoRouterConnectionTest
-            key={connectionTestId}
-            accessToken={accessToken}
-            targets={testTargets}
-            onTestComplete={() => setIsTestingConnection(false)}
-          />
-        )}
-      </Modal>
+        <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[700px]">
+          <DialogHeader>
+            <DialogTitle>Connection Test Results</DialogTitle>
+          </DialogHeader>
+          {isTestModalVisible && (
+            <AutoRouterConnectionTest
+              key={connectionTestId}
+              accessToken={accessToken}
+              targets={testTargets}
+              onTestComplete={() => setIsTestingConnection(false)}
+            />
+          )}
+          <DialogFooter>
+            {" "}
+            <Button
+              variant="outline"
+              onClick={() => {
+                setIsTestModalVisible(false);
+                setIsTestingConnection(false);
+              }}
+            >
+              Close
+            </Button>
+            , ]
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </TooltipProvider>
   );
 };
