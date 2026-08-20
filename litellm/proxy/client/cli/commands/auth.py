@@ -15,16 +15,20 @@ from litellm.litellm_core_utils.cli_keyring import (
     DISABLE_KEYRING_ENV_VAR,
     SYSTEM_KEYRING,
     KeyringDisabled,
+    KeyringDiscardsWrites,
     KeyringNotInstalled,
     KeyringUnreachable,
     SecretErased,
+    SecretFound,
+    SecretMissing,
     SecretStored,
     SecretStranded,
     SecretVault,
-    SecretWrite,
 )
 from litellm.litellm_core_utils.cli_token_utils import (
     CliTokenRecord,
+    CredentialNotSaved,
+    SecretSave,
     clear_cli_token,
     get_cli_token_file_path,
     get_litellm_gateway_api_key,
@@ -84,17 +88,19 @@ class CliAuthResult(TypedDict):
 
 KEYRING_INSTALL_HINT: Final = "pip install 'litellm[cli]'"
 
+KEYRING_ENABLE_HINT: Final = "keyring --enable (or unset PYTHON_KEYRING_BACKEND)"
+
 STRANDED_CREDENTIAL_MESSAGE: Final = (
     "Logged out locally, but your credential is still in the OS keychain and could not be removed."
 )
 
-KEYCHAIN_UNREACHABLE_MESSAGE: Final = (
-    "Your credential is stored in your OS keychain, which could not be read. Unlock it, or install "
-    f"the keyring package with: {KEYRING_INSTALL_HINT}. Run 'lite login' to start over."
+UNCHECKED_KEYCHAIN_MESSAGE: Final = (
+    "Logged out locally, but your OS keychain could not be checked, so a credential stored there by "
+    "an earlier login may still be usable."
 )
 
 
-def storage_notice(outcome: SecretWrite) -> str:
+def storage_notice(outcome: SecretSave) -> str:
     """Tell the user where the credential ended up, and how to get keychain storage if it did not."""
     path: Final = get_cli_token_file_path()
     match outcome:
@@ -109,6 +115,38 @@ def storage_notice(outcome: SecretWrite) -> str:
             return f"Keychain storage is off ({DISABLE_KEYRING_ENV_VAR}). Credential stored in {path} (owner-only)."
         case KeyringUnreachable():
             return f"No OS keychain available. Credential stored in {path} (owner-only)."
+        case KeyringDiscardsWrites():
+            return (
+                f"Your keyring backend keeps nothing it is given, so the credential was stored in {path} "
+                f"(owner-only) instead. For OS keychain storage, run: {KEYRING_ENABLE_HINT}"
+            )
+        case CredentialNotSaved(detail=detail):
+            return (
+                f"Signed in, but the credential could not be saved to {path}: {detail}. "
+                "Nothing was kept, so run 'lite login' again once that path is writable."
+            )
+
+
+def keychain_unreadable_notice(vault: SecretVault) -> str:
+    """Explain why the secret half of a stored login cannot be produced, and what fixes it"""
+    match vault.read():
+        case KeyringNotInstalled():
+            return (
+                "Your credential is in your OS keychain, which this install cannot read without the "
+                f"keyring package. Install it with: {KEYRING_INSTALL_HINT}, or run 'lite login' to start over."
+            )
+        case KeyringDisabled():
+            return (
+                f"Your credential is in your OS keychain, which {DISABLE_KEYRING_ENV_VAR} is blocking. "
+                "Unset it, or run 'lite login' to start over."
+            )
+        case KeyringUnreachable() | KeyringDiscardsWrites():
+            return (
+                "Your credential is in your OS keychain, which could not be read. Unlock it, or run "
+                "'lite login' to start over."
+            )
+        case SecretFound() | SecretMissing():
+            return "Your credential could not be read from your OS keychain. Run 'lite login' to start over."
 
 
 def context_secret_vault(ctx: click.Context) -> SecretVault:
@@ -715,6 +753,8 @@ def login(ctx: click.Context, config_claude: bool):
             click.echo("\nLogin successful!")
             click.echo(f"JWT Token: {api_key[:20]}...")
             click.echo(storage_notice(stored))
+            if isinstance(stored, CredentialNotSaved):
+                return
             click.echo("You can now use the CLI without specifying --api-key")
 
             if config_claude:
@@ -751,14 +791,17 @@ def logout(ctx: click.Context):
     match clear_cli_token(vault=context_secret_vault(ctx)):
         case SecretErased():
             click.echo("Logged out successfully. Authentication token cleared.")
+        case SecretStranded():
+            click.echo(STRANDED_CREDENTIAL_MESSAGE)
+            click.echo("Unlock your keychain and run 'lite logout' again to clear it.")
         case KeyringNotInstalled():
             click.echo(STRANDED_CREDENTIAL_MESSAGE)
             click.echo(f"Install the keyring package with: {KEYRING_INSTALL_HINT}, then run 'lite logout' again.")
         case KeyringDisabled():
-            click.echo(STRANDED_CREDENTIAL_MESSAGE)
+            click.echo(UNCHECKED_KEYCHAIN_MESSAGE)
             click.echo(f"Unset {DISABLE_KEYRING_ENV_VAR} and run 'lite logout' again to clear it.")
-        case SecretStranded() | KeyringUnreachable():
-            click.echo(STRANDED_CREDENTIAL_MESSAGE)
+        case KeyringUnreachable() | KeyringDiscardsWrites():
+            click.echo(UNCHECKED_KEYCHAIN_MESSAGE)
             click.echo("Unlock your keychain and run 'lite logout' again to clear it.")
 
 
@@ -795,7 +838,7 @@ def print_token(ctx: click.Context):
 
     api_key: Final = token_data.key
     if not api_key:
-        click.echo(KEYCHAIN_UNREACHABLE_MESSAGE, err=True)
+        click.echo(keychain_unreadable_notice(context_secret_vault(ctx)), err=True)
         sys.exit(1)
 
     click.echo(api_key)
@@ -821,7 +864,7 @@ def whoami(ctx: click.Context):
     click.echo(f"Token age: {age_hours:.1f} hours")
 
     if token_data.key is None:
-        click.echo(KEYCHAIN_UNREACHABLE_MESSAGE)
+        click.echo(keychain_unreadable_notice(context_secret_vault(ctx)))
 
     if age_hours > CLI_JWT_EXPIRATION_HOURS:
         click.echo(f"Warning: Token is more than {CLI_JWT_EXPIRATION_HOURS} hours old and may have expired.")

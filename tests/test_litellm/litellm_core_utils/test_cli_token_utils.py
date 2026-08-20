@@ -15,6 +15,7 @@ from litellm.litellm_core_utils.cli_keyring import (
     SecretFound,
     SecretMissing,
     KeyringDisabled,
+    KeyringDiscardsWrites,
     KeyringNotInstalled,
     KeyringUnreachable,
     SecretErased,
@@ -23,6 +24,7 @@ from litellm.litellm_core_utils.cli_keyring import (
 )
 from litellm.litellm_core_utils.cli_token_utils import (
     CliTokenRecord,
+    CredentialNotSaved,
     clear_cli_token,
     get_cli_token_file_path,
     get_litellm_gateway_api_key,
@@ -225,6 +227,15 @@ class TestLoadCliToken:
 
         assert record.key == "sk-legacy"
 
+    def test_a_token_file_that_is_not_text_is_not_a_login(self, isolated_home, secret_vault_factory):
+        """A truncated write or a half-synced backup can leave bytes that are not UTF-8 at all.
+        Reading them must fail the way an absent file does, not crash every `lite` command."""
+        path = _token_file(isolated_home)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"\xff\xfe not utf-8 at all")
+
+        assert load_cli_token(vault=secret_vault_factory()) is None
+
     def test_corrupt_token_file_is_not_a_login(self, isolated_home, secret_vault_factory):
         _token_file(isolated_home).parent.mkdir()
         _token_file(isolated_home).write_text("not json at all {{{")
@@ -301,6 +312,40 @@ class TestSaveCliToken:
 
         assert stat.S_IMODE(config_dir.stat().st_mode) == 0o700
 
+    def test_a_credential_no_store_would_keep_is_reported_rather_than_raised(
+        self, isolated_home, secret_vault_factory, monkeypatch
+    ):
+        """`lite login` catches whatever escapes here and calls it an authentication failure, which
+        is the one thing that did not happen: the proxy minted a real credential. Saying so lets the
+        user act on the actual problem instead of retrying a sign-in that already worked."""
+
+        def _explode(*args, **kwargs):
+            raise OSError("read-only file system")
+
+        monkeypatch.setattr("litellm.litellm_core_utils.private_json.json.dump", _explode)
+
+        outcome = save_cli_token(CliTokenRecord(base_url=SERVER, key="sk-new"), vault=secret_vault_factory())
+
+        assert isinstance(outcome, CredentialNotSaved)
+        assert "read-only file system" in outcome.detail
+
+    def test_a_credential_the_file_will_not_record_is_taken_back_out_of_the_keychain(
+        self, isolated_home, secret_vault_factory, monkeypatch
+    ):
+        """The token file is what makes a keychain entry findable again. Leaving the secret in the
+        keychain with nothing pointing at it strands a live credential under a machine that has no
+        idea it is there, and no `lite logout` would ever go looking for it."""
+        vault = secret_vault_factory()
+
+        def _explode(*args, **kwargs):
+            raise OSError("read-only file system")
+
+        monkeypatch.setattr("litellm.litellm_core_utils.private_json.json.dump", _explode)
+
+        save_cli_token(CliTokenRecord(base_url=SERVER, key="sk-new"), vault=vault)
+
+        assert vault.blob is None
+
     def test_a_failed_write_leaves_the_previous_credential_intact(self, isolated_home, secret_vault_factory, monkeypatch):
         path = _write_legacy_file(isolated_home)
         before = path.read_text()
@@ -340,9 +385,11 @@ class TestScrubFailure:
         assert json.loads(path.read_text())["key"] == "sk-legacy"
         assert vault.blob is None
 
-    def test_a_file_that_cannot_be_rewritten_is_removed_instead(
+    def test_a_full_disk_stops_the_migration_before_the_keychain_is_handed_anything(
         self, isolated_home, secret_vault_factory, monkeypatch
     ):
+        """The scrubbed file is staged first precisely so this is knowable in advance. A disk that
+        cannot take the rewrite leaves the credential where it already was, in one store."""
         path = _write_legacy_file(isolated_home)
         vault = secret_vault_factory()
 
@@ -354,8 +401,8 @@ class TestScrubFailure:
         record = load_cli_token(vault=vault)
 
         assert record.key == "sk-legacy"
-        assert json.loads(vault.blob)["key"] == "sk-legacy"
-        assert not path.exists()
+        assert vault.blob is None
+        assert json.loads(path.read_text())["key"] == "sk-legacy"
         assert list(path.parent.glob(".tmp-*")) == []
 
 
@@ -376,12 +423,39 @@ class TestClearCliToken:
         assert clear_cli_token(vault=vault) == SecretStranded()
         assert not _token_file(isolated_home).exists()
 
+    @pytest.mark.parametrize(
+        "failure", [KeyringDisabled(), KeyringUnreachable(), KeyringDiscardsWrites()]
+    )
+    def test_a_secret_in_the_file_is_no_evidence_about_a_keychain_that_exists(
+        self, isolated_home, secret_vault_factory, failure
+    ):
+        """Store a secret in the keychain, sign in again while the keychain is unusable so the new
+        secret lands in the file, then log out while it is still unusable. The file now carries its
+        own secret and the first login's entry is still there, so reading the file as proof of a
+        clean keychain reports a logout that did not happen."""
+        _write_legacy_file(isolated_home)
+        vault = secret_vault_factory(available=False, failure=failure)
+
+        assert clear_cli_token(vault=vault) == failure
+        assert not _token_file(isolated_home).exists()
+
+    def test_a_second_logout_still_reports_the_keychain_it_could_not_clear(
+        self, isolated_home, secret_vault_factory
+    ):
+        """The first logout deletes the file and tells the user to run it again once the keychain is
+        reachable. If the second run reads that missing file as proof of a clean keychain, the advice
+        turns into the very false all-clear it was issued to prevent."""
+        _write_metadata_only_file(isolated_home)
+        vault = secret_vault_factory(available=False, failure=KeyringUnreachable())
+
+        assert clear_cli_token(vault=vault) == KeyringUnreachable()
+        assert clear_cli_token(vault=vault) == KeyringUnreachable()
+
     def test_logout_from_an_install_without_keyring_does_not_claim_the_keychain_is_clear(
         self, isolated_home, secret_vault_factory
     ):
-        """Log in where `litellm[cli]` is installed and the secret goes to the OS keychain; log out
-        from a venv without it and the entry survives, because it belongs to the OS rather than to
-        the package. Reporting a clean logout there leaves a live credential the user thinks is gone."""
+        """A file holding only metadata put its secret in a keychain by definition. Losing the
+        package that reaches it does not take the entry with it, so this cannot report success."""
         _write_metadata_only_file(isolated_home)
         vault = secret_vault_factory(available=False, failure=KeyringNotInstalled())
 
@@ -389,8 +463,9 @@ class TestClearCliToken:
         assert not _token_file(isolated_home).exists()
 
     def test_a_file_backed_login_logs_out_quietly_without_keyring(self, isolated_home, secret_vault_factory):
-        """The complement: a user who never had a keychain keeps their whole credential in the file,
-        so removing it is a complete logout and must not warn about an entry that cannot exist."""
+        """The complement, and the one inference the file does support: nothing here can reach a
+        keychain without the package, so an install that lacks it and a file that still holds its
+        own secret between them account for the whole credential."""
         _write_legacy_file(isolated_home)
         vault = secret_vault_factory(available=False, failure=KeyringNotInstalled())
 
@@ -417,11 +492,12 @@ class TestIsCliTokenFresh:
 
 
 class _FakeKeyringModule:
-    def __init__(self, stored=None, *, get_error=None, set_error=None, delete_error=None):
+    def __init__(self, stored=None, *, get_error=None, set_error=None, delete_error=None, discard=False):
         self.stored = stored
         self.get_error = get_error
         self.set_error = set_error
         self.delete_error = delete_error
+        self.discard = discard
         self.calls = []
 
     def get_password(self, service_name, username):
@@ -434,6 +510,8 @@ class _FakeKeyringModule:
         self.calls.append(("set", service_name, username))
         if self.set_error is not None:
             raise self.set_error
+        if self.discard:
+            return
         self.stored = password
 
     def delete_password(self, service_name, username):
@@ -502,6 +580,41 @@ class TestKeyringVault:
         install_fake_keyring(_FakeKeyringModule(stored="blob-1", delete_error=RuntimeError("locked")))
 
         assert KeyringVault().erase() == SecretStranded()
+
+    def test_a_backend_that_keeps_nothing_is_not_a_successful_write(self, install_fake_keyring):
+        """keyring's null backend accepts every write, stores nothing, and raises nothing to say so.
+        Taking its silence for success is how a credential gets deleted: the caller drops its own
+        copy on our word. Only reading the value back tells the two apart."""
+        fake = install_fake_keyring(_FakeKeyringModule(discard=True))
+
+        assert KeyringVault().write("blob-1") == KeyringDiscardsWrites()
+        assert fake.stored is None
+
+    def test_the_real_null_backend_is_rejected(self, monkeypatch):
+        """Pinned against the actual library rather than the double above, because the whole risk is
+        that upstream's no-op write looks exactly like a successful one."""
+        keyring = pytest.importorskip("keyring")
+        null_backend = pytest.importorskip("keyring.backends.null")
+        monkeypatch.delenv(DISABLE_KEYRING_ENV_VAR, raising=False)
+        previous = keyring.get_keyring()
+        keyring.set_keyring(null_backend.Keyring())
+        try:
+            assert KeyringVault().write("blob-1") == KeyringDiscardsWrites()
+        finally:
+            keyring.set_keyring(previous)
+
+    def test_a_credential_survives_a_backend_that_keeps_nothing(
+        self, isolated_home, install_fake_keyring
+    ):
+        """The end of the same story: the credential must still be usable afterwards. Reporting the
+        discard is only worth anything if the token file then keeps the copy the keychain refused."""
+        install_fake_keyring(_FakeKeyringModule(discard=True))
+
+        outcome = save_cli_token(CliTokenRecord(base_url=SERVER, key="sk-only-copy"))
+
+        assert outcome == KeyringDiscardsWrites()
+        assert json.loads(_token_file(isolated_home).read_text())["key"] == "sk-only-copy"
+        assert load_cli_token().key == "sk-only-copy"
 
     def test_erasing_a_locked_keychain_is_a_failure(self, install_fake_keyring):
         install_fake_keyring(_FakeKeyringModule(get_error=RuntimeError("locked")))

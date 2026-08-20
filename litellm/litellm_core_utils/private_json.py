@@ -16,8 +16,12 @@ def ensure_private_dir(directory: Path) -> None:
         directory.chmod(PRIVATE_DIR_MODE)
 
 
-def write_private_json(path: str, data: Mapping[str, object]) -> None:
-    """Atomically write JSON to path with owner-only permissions (0600)"""
+def stage_private_json(path: str, data: Mapping[str, object]) -> str:
+    """Write JSON to a private temp file beside `path`, ready for `commit_staged_json`.
+
+    Staging is the half that can fail on a read-only or full directory, so callers with something
+    to lose can find that out before they act on the assumption that the rewrite will land.
+    """
     parent: Final = Path(path).parent
     parent.mkdir(parents=True, exist_ok=True)
     fd, tmp_path = tempfile.mkstemp(dir=str(parent), prefix=".tmp-", suffix=".json")
@@ -26,6 +30,26 @@ def write_private_json(path: str, data: Mapping[str, object]) -> None:
             json.dump(data, f, indent=2)
             f.flush()
             os.fsync(f.fileno())
-        os.replace(tmp_path, path)
-    finally:
+    except BaseException:
         Path(tmp_path).unlink(missing_ok=True)
+        raise
+    return tmp_path
+
+
+def commit_staged_json(staged: str, path: str) -> None:
+    """Move a staged file into place, replacing whatever is there in one step"""
+    try:
+        os.replace(staged, path)
+    except OSError:
+        Path(staged).unlink(missing_ok=True)
+        raise
+
+
+def discard_staged_json(staged: str) -> None:
+    """Throw a staged file away when the change it was part of is abandoned"""
+    Path(staged).unlink(missing_ok=True)
+
+
+def write_private_json(path: str, data: Mapping[str, object]) -> None:
+    """Atomically write JSON to path with owner-only permissions (0600)"""
+    commit_staged_json(stage_private_json(path, data), path)

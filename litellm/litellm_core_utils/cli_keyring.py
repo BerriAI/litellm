@@ -6,8 +6,12 @@ Linux Secret Service) that holds the credential minted by `lite login`.
 
 The `keyring` package is optional and imported lazily, so importing this module
 never pulls it in. Every failure is returned as a value, naming which of the
-three ways the keychain can be out of reach applies, so callers can degrade to
-the token file and tell the user what to do about it.
+ways the keychain can be out of reach applies, so callers can degrade to the
+token file and tell the user what to do about it.
+
+A write is only reported as stored once it has been read back, because keyring's
+null backend, which `keyring --disable` and headless CI images both select,
+accepts every write and keeps nothing.
 """
 
 import os
@@ -61,7 +65,12 @@ class KeyringUnreachable:
     pass
 
 
-KeyringUnusable: TypeAlias = KeyringNotInstalled | KeyringDisabled | KeyringUnreachable
+@dataclass(frozen=True, slots=True)
+class KeyringDiscardsWrites:
+    pass
+
+
+KeyringUnusable: TypeAlias = KeyringNotInstalled | KeyringDisabled | KeyringUnreachable | KeyringDiscardsWrites
 SecretRead: TypeAlias = SecretFound | SecretMissing | KeyringUnusable
 SecretWrite: TypeAlias = SecretStored | KeyringUnusable
 SecretErase: TypeAlias = SecretErased | SecretStranded | KeyringUnusable
@@ -119,6 +128,13 @@ class KeyringVault:
         return SecretMissing() if blob is None else SecretFound(blob)
 
     def write(self, blob: str) -> SecretWrite:
+        """Store the secret, reporting stored only once the keychain hands the same bytes back.
+
+        A backend that accepts writes and keeps nothing, which is exactly what `keyring --disable`
+        and `PYTHON_KEYRING_BACKEND=keyring.backends.null.Keyring` select, raises nothing to
+        distinguish itself. Reading the value back is the only way to tell it apart from a keychain
+        that really stored the credential, and the caller is about to drop its own copy on our word.
+        """
         api: Final = _keyring_api()
         if isinstance(api, (KeyringNotInstalled, KeyringDisabled)):
             return api
@@ -126,7 +142,7 @@ class KeyringVault:
             api.set_password(KEYRING_SERVICE, KEYRING_ACCOUNT, blob)
         except Exception:  # noqa: BLE001  # a keychain that refuses the write falls back to the token file
             return KeyringUnreachable()
-        return SecretStored()
+        return SecretStored() if self.read() == SecretFound(blob) else KeyringDiscardsWrites()
 
     def erase(self) -> SecretErase:
         """Remove our entry, reporting whether the keychain is guaranteed to be free of it.
@@ -137,7 +153,7 @@ class KeyringVault:
         the caller knows whether this machine ever put a secret in a keychain.
         """
         match self.read():
-            case KeyringNotInstalled() | KeyringDisabled() | KeyringUnreachable() as unusable:
+            case KeyringNotInstalled() | KeyringDisabled() | KeyringUnreachable() | KeyringDiscardsWrites() as unusable:
                 return unusable
             case SecretMissing():
                 return SecretErased()
