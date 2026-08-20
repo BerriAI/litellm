@@ -332,6 +332,12 @@ def _apply_vault_secret(record: CliTokenRecord, blob: str, vault: SecretVault) -
     secret is usually left on disk by a keychain that would not take it, which makes the file the
     fresher of the two. It is the older one when a login the keychain did take could not replace
     the file afterwards, and serving that one would put a superseded credential back in use.
+
+    A scrub the file refuses leaves that superseded secret where it lies, which is the state the
+    login already named when it could not replace the file, and which `lite logout` reports rather
+    than counting as a clean sweep. Rolling the vault back the way a migration does is not the
+    answer here, because the two stores hold different credentials and the rollback would hand the
+    superseded one back out.
     """
     secret: Final = _decode_secret(blob, record.base_url)
     if secret is None or (record.key is not None and secret.timestamp <= record.timestamp):
