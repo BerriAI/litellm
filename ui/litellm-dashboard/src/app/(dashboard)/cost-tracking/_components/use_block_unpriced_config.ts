@@ -1,6 +1,6 @@
 import { useState, useCallback } from "react";
 import { apiClient } from "@/components/networking";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 
 export interface UseBlockUnpricedConfigProps {
   accessToken: string | null;
@@ -40,7 +40,7 @@ export function useBlockUnpricedConfig({ accessToken }: UseBlockUnpricedConfigPr
       try {
         const data = await apiClient.patch<BlockUnpricedResponse>(ENDPOINT, { accessToken, body: { enabled } });
         setBlockUnpricedState(Boolean(data?.enabled));
-        NotificationsManager.success(
+        toast.success(
           enabled
             ? "Requests for models without pricing will now be blocked"
             : "Requests for models without pricing are now allowed",

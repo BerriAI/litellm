@@ -1,4 +1,4 @@
-import NotificationManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { testMCPSemanticFilter } from "@/components/networking";
 
 export interface TestResult {
@@ -39,7 +39,7 @@ export const runSemanticFilterTest = async ({
   setTestError: (error: string | null) => void;
 }) => {
   if (!testQuery || !testModel || !accessToken) {
-    NotificationManager.error("Please enter a query and select a model");
+    toast.error("Please enter a query and select a model");
     return;
   }
 
@@ -52,17 +52,17 @@ export const runSemanticFilterTest = async ({
     const parsedResult = parseFilterHeaders(headers);
 
     if (!parsedResult) {
-      NotificationManager.warning("Semantic filter is not enabled or no tools were filtered");
+      toast.warning("Semantic filter is not enabled or no tools were filtered");
       return;
     }
 
     setTestResult(parsedResult);
-    NotificationManager.success("Semantic filter test completed successfully");
+    toast.success("Semantic filter test completed successfully");
   } catch (error) {
     console.error("Test failed:", error);
     const message = error instanceof Error && error.message ? error.message : "Failed to test semantic filter";
     setTestError(message);
-    NotificationManager.error("Failed to test semantic filter");
+    toast.error("Failed to test semantic filter");
   } finally {
     setIsTesting(false);
   }

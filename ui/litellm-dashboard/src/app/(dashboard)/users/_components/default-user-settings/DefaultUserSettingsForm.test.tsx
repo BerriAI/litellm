@@ -35,7 +35,7 @@ vi.mock("@/components/ModelSelect/ModelSelect", async (importOriginal) => {
   };
 });
 
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 
 import { DefaultUserSettingsForm } from "./DefaultUserSettingsForm";
 import type { InternalUserSettings } from "./mapper";
@@ -149,6 +149,34 @@ describe("DefaultUserSettingsForm", () => {
     expect(updateSettings).toHaveBeenCalledWith({ ...SAVED_BODY, max_budget: 250 });
   });
 
+  it("saves a sub-cent budget the browser would veto under a 0.01 step", async () => {
+    const user = userEvent.setup();
+    const { updateSettings } = renderForm();
+
+    await enterEditMode(user);
+    const budget: HTMLInputElement = await screen.findByLabelText("Max Budget (USD)");
+    await user.clear(budget);
+    await user.type(budget, "0.001");
+
+    const teamBudget: HTMLInputElement = screen.getByLabelText("Max Budget in Team (USD)");
+    await user.clear(teamBudget);
+    await user.type(teamBudget, "0.002");
+
+    // jsdom never blocks the submit itself, so assert the constraint the real browser
+    // enforces before handleSubmit ever runs
+    expect(budget.checkValidity()).toBe(true);
+    expect(teamBudget.checkValidity()).toBe(true);
+
+    await user.click(await saveButton());
+
+    await waitFor(() => expect(updateSettings).toHaveBeenCalledTimes(1));
+    expect(updateSettings).toHaveBeenCalledWith({
+      ...SAVED_BODY,
+      max_budget: 0.001,
+      teams: [{ team_id: "team-alpha", max_budget_in_team: 0.002, user_role: "user" }],
+    });
+  });
+
   it("clears an emptied budget with null", async () => {
     const user = userEvent.setup();
     const { updateSettings } = renderForm();
@@ -250,7 +278,7 @@ describe("DefaultUserSettingsForm", () => {
     expect(await screen.findByRole("button", { name: "Edit Settings" })).toBeInTheDocument();
     expect(await screen.findByText("250")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Save Changes" })).not.toBeInTheDocument();
-    expect(NotificationsManager.success).toHaveBeenCalledWith("Default user settings updated successfully");
+    expect(toast.success).toHaveBeenCalledWith("Default user settings updated successfully");
 
     await enterEditMode(user);
     expect(await saveButton()).toBeDisabled();
@@ -268,9 +296,7 @@ describe("DefaultUserSettingsForm", () => {
     await user.click(await saveButton());
 
     await waitFor(() => expect(updateSettings).toHaveBeenCalledTimes(1));
-    await waitFor(() =>
-      expect(NotificationsManager.fromBackend).toHaveBeenCalledWith("Team(s) not found: team-alhpa."),
-    );
+    await waitFor(() => expect(toast.fromError).toHaveBeenCalledWith("Team(s) not found: team-alhpa."));
     expect(await saveButton()).toBeEnabled();
     expect(screen.getByLabelText("Max Budget (USD)")).toHaveValue(250);
   });

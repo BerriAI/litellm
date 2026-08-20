@@ -27,6 +27,16 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
 from litellm.proxy.utils import InternalUsageCache
 
 
+def _build_batch_limiter() -> _PROXY_BatchRateLimiter:
+    internal_usage_cache = InternalUsageCache(dual_cache=DualCache())
+    return _PROXY_BatchRateLimiter(
+        internal_usage_cache=internal_usage_cache,
+        parallel_request_limiter=_PROXY_MaxParallelRequestsHandler_v3(
+            internal_usage_cache=internal_usage_cache
+        ),
+    )
+
+
 def get_expected_batch_file_usage(file_path: str) -> tuple[int, int]:
     """
     Helper function to calculate expected request count and token count from a batch JSONL file.
@@ -69,10 +79,7 @@ async def test_batch_rate_limits():
     """
     litellm._turn_on_debug()
     CUSTOM_LLM_PROVIDER = "openai"
-    BATCH_LIMITER = _PROXY_BatchRateLimiter(
-        internal_usage_cache=None,
-        parallel_request_limiter=None,
-    )
+    BATCH_LIMITER = _build_batch_limiter()
 
     file_name = "openai_batch_completions.jsonl"
     _current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -580,10 +587,7 @@ async def test_batch_rate_limiter_without_user_context(tmp_path):
     CUSTOM_LLM_PROVIDER = "openai"
 
     # Setup
-    BATCH_LIMITER = _PROXY_BatchRateLimiter(
-        internal_usage_cache=None,
-        parallel_request_limiter=None,
-    )
+    BATCH_LIMITER = _build_batch_limiter()
 
     # Create a simple batch file
     batch_content = """{"custom_id": "request-1", "method": "POST", "url": "/v1/chat/completions", "body": {"model": "gpt-3.5-turbo", "messages": [{"role": "user", "content": "Hello"}]}}"""
@@ -913,7 +917,7 @@ async def test_batch_logging_azure_credentials_regression():
     from unittest.mock import AsyncMock, MagicMock, patch
     from litellm.batches.batch_utils import (
         _extract_file_access_credentials,
-        _get_batch_output_file_content_as_dictionary,
+        _fetch_batch_output_file_content,
         _handle_completed_batch,
     )
     from litellm.types.llms.openai import Batch, HttpxBinaryResponseContent
@@ -996,7 +1000,7 @@ async def test_batch_logging_azure_credentials_regression():
     with patch(
         "litellm.files.main.afile_content", side_effect=mock_afile_content_tracker
     ):
-        result = await _get_batch_output_file_content_as_dictionary(
+        result = await _fetch_batch_output_file_content(
             batch=mock_batch,
             custom_llm_provider="azure",
             litellm_params=azure_credentials,
@@ -1092,7 +1096,7 @@ async def test_batch_logging_azure_credentials_regression():
         )
 
         # Call without litellm_params (should still work for OpenAI)
-        result = await _get_batch_output_file_content_as_dictionary(
+        result = await _fetch_batch_output_file_content(
             batch=mock_batch,
             custom_llm_provider="openai",
             litellm_params=None,
