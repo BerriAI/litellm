@@ -252,7 +252,7 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
         default=False,
         description="Use stored xAI OAuth credentials when no xAI API key is configured.",
     )
-    xai_oauth_token_file: Optional[str] = Field(
+    xai_oauth_token_file: str | None = Field(
         default=None,
         description=(
             "Per-deployment xAI OAuth token file path. When set with use_xai_oauth=True, "

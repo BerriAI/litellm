@@ -28,7 +28,7 @@ from litellm.videos.utils import VideoGenerationRequestUtils
 llm_http_handler: BaseLLMHTTPHandler = BaseLLMHTTPHandler()
 
 
-def _custom_llm_provider_from_model(model: str) -> Optional[str]:
+def _custom_llm_provider_from_model(model: str) -> str | None:
     if "/" in model:
         try:
             _, provider, _, _ = get_llm_provider(model=model)
@@ -49,8 +49,8 @@ def _custom_llm_provider_from_model(model: str) -> Optional[str]:
 
 def _provider_for_video_id(
     video_id: str,
-    custom_llm_provider: Optional[str],
-    model: Optional[object] = None,
+    custom_llm_provider: str | None,
+    model: object | None = None,
 ) -> str:
     if custom_llm_provider is not None:
         return custom_llm_provider
