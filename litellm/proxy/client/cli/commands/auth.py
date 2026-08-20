@@ -16,6 +16,12 @@ from typing_extensions import NotRequired, TypedDict
 from litellm.constants import CLI_JWT_EXPIRATION_HOURS
 from litellm.litellm_core_utils.cli_token_utils import is_cli_token_fresh
 
+from .claude_settings import (
+    CLAUDE_SETTINGS_PATH,
+    SETTINGS_FILE_OWNERS,
+    ClaudeSettingsError,
+    write_claude_settings,
+)
 from .private_json import write_private_json
 
 
@@ -629,9 +635,28 @@ def _render_and_prompt_for_team_selection(teams: list[CliTeam]) -> str | None:
             return None
 
 
+def _configure_claude_code(base_url: str) -> None:
+    """Point Claude Code at base_url by patching ~/.claude/settings.json."""
+    try:
+        write_claude_settings(base_url, CLAUDE_SETTINGS_PATH, SETTINGS_FILE_OWNERS)
+    except ClaudeSettingsError as e:
+        raise click.ClickException(f"Logged in, but could not configure Claude Code: {e}")
+    click.echo(f"\nConfigured Claude Code: {CLAUDE_SETTINGS_PATH} now routes through {base_url.rstrip('/')}.")
+    click.echo("Your other Claude Code settings were left untouched. Restart Claude Code to pick this up.")
+
+
 @click.command(name="login")
+@click.option(
+    "--config-claude",
+    is_flag=True,
+    default=False,
+    help=(
+        "After logging in, update ~/.claude/settings.json so Claude Code routes through this proxy. "
+        "Unrelated settings are preserved."
+    ),
+)
 @click.pass_context
-def login(ctx: click.Context):
+def login(ctx: click.Context, config_claude: bool):
     """Login to LiteLLM proxy using SSO authentication"""
     from litellm.constants import LITELLM_CLI_SOURCE_IDENTIFIER
     from litellm.proxy.client.cli.interface import show_commands
@@ -683,6 +708,9 @@ def login(ctx: click.Context):
             click.echo(f"JWT Token: {api_key[:20]}...")
             click.echo("You can now use the CLI without specifying --api-key")
 
+            if config_claude:
+                _configure_claude_code(base_url)
+
             # Show available commands after successful login
             click.echo("\n" + "=" * 60)
             show_commands()
@@ -698,6 +726,10 @@ def login(ctx: click.Context):
     except KeyboardInterrupt:
         click.echo("\nAuthentication cancelled by user.")
         return
+    except click.ClickException:
+        # Login itself already succeeded; only the post-login step failed, so this
+        # must not be relabelled as an authentication failure by the handler below.
+        raise
     except Exception as e:
         click.echo(f"Authentication failed: {e}")
         return

@@ -599,9 +599,13 @@ export default function KeyInfoView({
       </Dialog>
 
       <Tabs defaultValue="overview">
-        <TabsList className="mb-4">
-          <TabsTrigger value="overview">Overview</TabsTrigger>
-          <TabsTrigger value="settings">Settings</TabsTrigger>
+        <TabsList variant="line" className="mb-4 h-auto w-full justify-start rounded-none border-b p-0">
+          <TabsTrigger value="overview" className="flex-none rounded-none px-4 py-2">
+            Overview
+          </TabsTrigger>
+          <TabsTrigger value="settings" className="flex-none rounded-none px-4 py-2">
+            Settings
+          </TabsTrigger>
         </TabsList>
 
         <div>
@@ -671,11 +675,11 @@ export default function KeyInfoView({
                     ))}
                   </div>
                 ) : (
-                  <p className="text-sm text-gray-500">No guardrails configured</p>
+                  <p className="text-sm text-muted-foreground">No guardrails configured</p>
                 )}
                 {typeof currentKeyData.metadata?.disable_global_guardrails === "boolean" &&
                   currentKeyData.metadata.disable_global_guardrails === true && (
-                    <div className="mt-3 pt-3 border-t border-gray-200">
+                    <div className="mt-3 pt-3 border-t border-border">
                       <Badge variant="destructive">Global Guardrails Disabled</Badge>
                     </div>
                   )}
@@ -691,11 +695,11 @@ export default function KeyInfoView({
                           <Badge variant="secondary" className="min-w-0 break-words">
                             {policy}
                           </Badge>
-                          {loadingPolicies && <p className="text-xs text-gray-400">Loading guardrails...</p>}
+                          {loadingPolicies && <p className="text-xs text-muted-foreground/70">Loading guardrails...</p>}
                         </div>
                         {!loadingPolicies && policyGuardrails[policy] && policyGuardrails[policy].length > 0 && (
-                          <div className="ml-4 pl-3 border-l-2 border-gray-200">
-                            <p className="text-xs text-gray-500 mb-1">Resolved Guardrails:</p>
+                          <div className="ml-4 pl-3 border-l-2 border-border">
+                            <p className="text-xs text-muted-foreground mb-1">Resolved Guardrails:</p>
                             <div className="flex flex-wrap gap-1">
                               {policyGuardrails[policy].map((guardrail: string, gIndex: number) => (
                                 <Badge key={gIndex} variant="secondary" className="min-w-0 break-words">
@@ -709,7 +713,7 @@ export default function KeyInfoView({
                     ))}
                   </div>
                 ) : (
-                  <p className="text-sm text-gray-500">No policies configured</p>
+                  <p className="text-sm text-muted-foreground">No policies configured</p>
                 )}
               </Card>
 
@@ -846,7 +850,7 @@ export default function KeyInfoView({
                     keyRotationAt={currentKeyData.key_rotation_at}
                     nextRotationAt={currentKeyData.next_rotation_at}
                     variant="inline"
-                    className="pt-4 border-t border-gray-200"
+                    className="pt-4 border-t border-border"
                   />
 
                   <div>
@@ -877,9 +881,9 @@ export default function KeyInfoView({
                       <p className="text-sm font-medium">Budget Fallbacks</p>
                       <div className="mt-1 space-y-1">
                         {Object.entries(currentKeyData.budget_fallbacks).map(([model, fallbacks]) => (
-                          <div key={model} className="text-xs text-gray-600">
+                          <div key={model} className="text-xs text-muted-foreground">
                             <span className="font-medium">{model}</span>
-                            <span className="mx-1 text-gray-400">-&gt;</span>
+                            <span className="mx-1 text-muted-foreground/70">-&gt;</span>
                             {fallbacks.join(", ")}
                           </div>
                         ))}
@@ -901,7 +905,7 @@ export default function KeyInfoView({
                     <div className="flex flex-wrap gap-2 mt-1">
                       {Array.isArray(currentKeyData.metadata?.tags) && currentKeyData.metadata.tags.length > 0
                         ? currentKeyData.metadata.tags.map((tag, index) => (
-                            <span key={index} className="px-2 mr-2 py-1 bg-blue-100 rounded-sm text-xs">
+                            <span key={index} className="px-2 mr-2 py-1 bg-info/15 rounded-sm text-xs">
                               {tag}
                             </span>
                           ))
@@ -914,7 +918,7 @@ export default function KeyInfoView({
                     <p className="text-sm">
                       {Array.isArray(currentKeyData.metadata?.prompts) && currentKeyData.metadata.prompts.length > 0
                         ? currentKeyData.metadata.prompts.map((prompt, index) => (
-                            <span key={index} className="px-2 mr-2 py-1 bg-blue-100 rounded-sm text-xs">
+                            <span key={index} className="px-2 mr-2 py-1 bg-info/15 rounded-sm text-xs">
                               {prompt}
                             </span>
                           ))
@@ -927,7 +931,7 @@ export default function KeyInfoView({
                     <div className="flex flex-wrap gap-2 mt-1">
                       {Array.isArray(currentKeyData.allowed_routes) && currentKeyData.allowed_routes.length > 0 ? (
                         currentKeyData.allowed_routes.map((route, index) => (
-                          <span key={index} className="px-2 py-1 bg-blue-100 rounded-sm text-xs">
+                          <span key={index} className="px-2 py-1 bg-info/15 rounded-sm text-xs">
                             {route}
                           </span>
                         ))
@@ -943,7 +947,7 @@ export default function KeyInfoView({
                       {Array.isArray(currentKeyData.metadata?.allowed_passthrough_routes) &&
                       currentKeyData.metadata.allowed_passthrough_routes.length > 0
                         ? currentKeyData.metadata.allowed_passthrough_routes.map((route, index) => (
-                            <span key={index} className="px-2 mr-2 py-1 bg-blue-100 rounded-sm text-xs">
+                            <span key={index} className="px-2 mr-2 py-1 bg-info/15 rounded-sm text-xs">
                               {route}
                             </span>
                           ))
@@ -967,7 +971,7 @@ export default function KeyInfoView({
                     <div className="flex flex-wrap gap-2 mt-1">
                       {currentKeyData.models && currentKeyData.models.length > 0 ? (
                         currentKeyData.models.map((model, index) => (
-                          <span key={index} className="px-2 py-1 bg-blue-100 rounded-sm text-xs">
+                          <span key={index} className="px-2 py-1 bg-info/15 rounded-sm text-xs">
                             {model}
                           </span>
                         ))
@@ -1026,7 +1030,7 @@ export default function KeyInfoView({
 
                   <div>
                     <p className="text-sm font-medium">Metadata</p>
-                    <pre className="bg-gray-100 p-2 rounded-sm text-xs overflow-auto mt-1">
+                    <pre className="bg-muted p-2 rounded-sm text-xs overflow-auto mt-1">
                       {formatMetadataForDisplay(stripTagsFromMetadata(currentKeyData.metadata))}
                     </pre>
                   </div>
@@ -1034,7 +1038,7 @@ export default function KeyInfoView({
                   <ObjectPermissionsView
                     objectPermission={currentKeyData.object_permission}
                     variant="inline"
-                    className="pt-4 border-t border-gray-200"
+                    className="pt-4 border-t border-border"
                     accessToken={accessToken}
                   />
 
@@ -1046,7 +1050,7 @@ export default function KeyInfoView({
                         : []
                     }
                     variant="inline"
-                    className="pt-4 border-t border-gray-200"
+                    className="pt-4 border-t border-border"
                   />
                 </div>
               )}

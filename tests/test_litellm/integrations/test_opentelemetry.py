@@ -34,6 +34,7 @@ from litellm.integrations.opentelemetry import (
     _normalize_team_metadata_keys,
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+from litellm.types.services import ServiceLoggerPayload, ServiceTypes
 
 
 class TestOpenTelemetryGuardrails(unittest.TestCase):
@@ -6212,3 +6213,136 @@ class TestDynamicTracerProviderCache(unittest.TestCase):
 
         self.assertTrue(entry.owns_exporter)
         self.assertIsNotNone(entry.provider._atexit_handler)
+
+    def test_dynamic_providers_share_one_resource(self):
+        """Building the Resource scans every installed distribution's entry points, and the
+        dynamic providers reach it from the async logging path, so one logger builds it once."""
+        logger = self._logger(cap=8)
+
+        for i in range(4):
+            logger._get_tracer_with_dynamic_headers({"authorization": f"Basic tenant-{i}"})
+
+        entries = list(logger._tracer_provider_cache.values())
+        self.assertEqual(len(entries), 4)
+        self.assertEqual(len({id(entry.provider.resource) for entry in entries}), 1)
+        self.assertIs(entries[0].provider.resource, logger._litellm_resource())
+
+    def test_resource_is_memoized_per_logger_not_shared(self):
+        """Two loggers must not share a Resource; the second's service.name would be wrong."""
+        first = self._logger()
+        second = OpenTelemetry(
+            config=OpenTelemetryConfig(exporter="console", skip_set_global=True, service_name="svc-second")
+        )
+        self.addCleanup(second._tracer_provider.shutdown)
+
+        self.assertIsNot(first._litellm_resource(), second._litellm_resource())
+        self.assertEqual(second._litellm_resource().attributes.get("service.name"), "svc-second")
+
+
+class TestOpenTelemetryDatabaseSemconvAttributes(unittest.TestCase):
+    """A Postgres service span must name the PostgreSQL server it reached.
+
+    Without ``db.system`` and ``server.address``, the only host in the trace is
+    the loopback address of Prisma's local query engine, so the backend
+    attributes the wait to ``localhost`` and it cannot be correlated with the
+    database's own metrics.
+    """
+
+    DSN = "postgresql://llmproxy:dbpassword9090@litellm-prod.abc123.us-east-1.rds.amazonaws.com:6432/litellm?schema=reporting"
+    REPLICA_DSN = "postgresql://reader:r3ad0nly@litellm-prod-ro.abc123.us-east-1.rds.amazonaws.com/litellm"
+
+    def _service_span(self, service, call_type, dsn, error=None, replica_dsn=None):
+        exporter = InMemorySpanExporter()
+        provider = TracerProvider()
+        provider.add_span_processor(SimpleSpanProcessor(exporter))
+        otel = OpenTelemetry()
+        otel.tracer = provider.get_tracer(__name__)
+        parent = otel.tracer.start_span("Received Proxy Server Request")
+        payload = ServiceLoggerPayload(
+            is_error=error is not None,
+            error=error,
+            service=service,
+            duration=0.25,
+            call_type=call_type,
+            event_metadata=None,
+        )
+        hook = otel.async_service_failure_hook if error else otel.async_service_success_hook
+        kwargs = {"error": error} if error else {}
+        env = {k: v for k, v in (("DATABASE_URL", dsn), ("DATABASE_URL_READ_REPLICA", replica_dsn)) if v}
+        with patch.dict(os.environ, env, clear=False):
+            for absent in {"DATABASE_URL", "DATABASE_URL_READ_REPLICA"} - set(env):
+                os.environ.pop(absent, None)
+            asyncio.run(
+                hook(
+                    payload=payload,
+                    parent_otel_span=parent,
+                    start_time=datetime.now(),
+                    end_time=datetime.now(),
+                    **kwargs,
+                )
+            )
+        parent.end()
+        return next(s for s in exporter.get_finished_spans() if s.name == service.value)
+
+    def test_postgres_span_names_the_database_server(self):
+        span = self._service_span(ServiceTypes.DB, "get_data", self.DSN)
+        self.assertEqual(span.attributes["db.system.name"], "postgresql")
+        self.assertEqual(span.attributes["db.operation.name"], "get_data")
+        self.assertEqual(
+            span.attributes["server.address"],
+            "litellm-prod.abc123.us-east-1.rds.amazonaws.com",
+        )
+        self.assertEqual(span.attributes["server.port"], 6432)
+        self.assertEqual(span.attributes["db.namespace"], "litellm|reporting")
+
+    def test_datastore_span_is_a_client_span_carrying_the_legacy_db_system(self):
+        """Datadog types a span as a database call from CLIENT kind plus
+        ``db.system``; an INTERNAL span is classified as custom work."""
+        span = self._service_span(ServiceTypes.DB, "get_data", self.DSN)
+        self.assertEqual(span.kind, trace.SpanKind.CLIENT)
+        self.assertEqual(span.attributes["db.system"], "postgresql")
+
+    def test_internal_service_span_stays_internal(self):
+        span = self._service_span(ServiceTypes.RESET_BUDGET_JOB, "reset_budget", self.DSN)
+        self.assertEqual(span.kind, trace.SpanKind.INTERNAL)
+        self.assertNotIn("db.system.name", span.attributes)
+        self.assertNotIn("server.address", span.attributes)
+
+    def test_existing_service_and_call_type_attributes_are_unchanged(self):
+        span = self._service_span(ServiceTypes.DB, "get_data", self.DSN)
+        self.assertEqual(span.attributes["service"], "postgres")
+        self.assertEqual(span.attributes["call_type"], "get_data")
+
+    def test_failed_postgres_span_also_names_the_database_server(self):
+        span = self._service_span(ServiceTypes.DB, "get_data", self.DSN, error="connection refused")
+        self.assertEqual(span.attributes["db.system.name"], "postgresql")
+        self.assertEqual(span.kind, trace.SpanKind.CLIENT)
+        self.assertEqual(
+            span.attributes["server.address"],
+            "litellm-prod.abc123.us-east-1.rds.amazonaws.com",
+        )
+        self.assertEqual(span.attributes["error"], "connection refused")
+
+    def test_no_credential_from_the_dsn_lands_on_the_span(self):
+        span = self._service_span(ServiceTypes.DB, "get_data", self.DSN)
+        exported = " ".join(str(value) for value in span.attributes.values())
+        self.assertIn("litellm-prod.abc123.us-east-1.rds.amazonaws.com", exported)
+        self.assertNotIn("dbpassword9090", exported)
+        self.assertNotIn("llmproxy", exported)
+
+    def test_redis_span_does_not_borrow_the_postgres_endpoint(self):
+        span = self._service_span(ServiceTypes.REDIS, "async_set_cache", self.DSN)
+        self.assertEqual(span.attributes["db.system.name"], "redis")
+        self.assertEqual(span.kind, trace.SpanKind.CLIENT)
+        self.assertNotIn("server.address", span.attributes)
+
+    def test_configured_read_replica_suppresses_the_endpoint(self):
+        span = self._service_span(ServiceTypes.DB, "get_data", self.DSN, replica_dsn=self.REPLICA_DSN)
+        self.assertEqual(span.attributes["db.system.name"], "postgresql")
+        self.assertNotIn("server.address", span.attributes)
+        self.assertNotIn("db.namespace", span.attributes)
+
+    def test_unset_database_url_leaves_the_span_without_endpoint_attributes(self):
+        span = self._service_span(ServiceTypes.DB, "get_data", None)
+        self.assertEqual(span.attributes["db.system.name"], "postgresql")
+        self.assertNotIn("server.address", span.attributes)

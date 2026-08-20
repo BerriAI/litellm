@@ -65,6 +65,8 @@ from models import (
 )
 from e2e_config import (
     CONTROL_PLANE_BASE_URL,
+    FIXTURE_DIR,
+    FIXTURE_MODE_RAW,
     MASTER_KEY,
     POLL_INTERVAL,
     POLL_TIMEOUT,
@@ -72,6 +74,7 @@ from e2e_config import (
     REQUEST_TIMEOUT,
     settle_propagation,
 )
+from fixture_transport import select_transport
 from transport import HttpTransport, SplitTransport, Transport
 
 RowsPredicate = Callable[[list[SpendLogRow]], bool]
@@ -275,7 +278,21 @@ class ProxyClient:
         mode: ModelMode | None = None,
     ) -> str:
         """Register a deployment under `model_name` and return its proxy-assigned
-        model_id, once the model is actually servable on the data plane.
+        model_id, once the model is actually servable on the data plane."""
+        return self.register_model(
+            ModelNewBody(
+                model_name=model_name,
+                litellm_params=litellm_params,
+                model_info=ModelInfoBody(mode=mode),
+            )
+        )
+
+    def register_model(self, body: ModelNewBody, listed_for: str | None = None) -> str:
+        """`create_model` for deployments that carry more than a mode: access groups,
+        team scoping, a pinned id. `listed_for` is the virtual key whose /v1/models
+        view must list the deployment before it counts as servable, because a
+        team-scoped deployment is listed to its own team and to nobody else, master
+        key included; leave it unset for a proxy-wide model.
 
         /model/new is a control-plane route; the data plane (which serves /chat,
         /ocr, ...) only picks the new model up on its next DB reload, so a call
@@ -293,25 +310,22 @@ class ProxyClient:
             self.transport.post(
                 "/model/new",
                 headers=self.transport.master,
-                json=ModelNewBody(
-                    model_name=model_name,
-                    litellm_params=litellm_params,
-                    model_info=ModelInfoBody(mode=mode),
-                ),
+                json=body,
                 response_type=ModelNewResponse,
             )
         ).model_id
         written_at = time.monotonic()
-        self._await_model_servable(model_name)
+        self._await_model_servable(body.model_name, listed_for)
         settle_propagation(written_at)
         return model_id
 
-    def _await_model_servable(self, model_name: str) -> None:
+    def _await_model_servable(self, model_name: str, listed_for: str | None = None) -> None:
         """Block until the data plane lists `model_name`, or fail at model_servable_timeout."""
+        headers = self.transport.master if listed_for is None else self.transport.bearer(listed_for)
         outcome = await_servable(
             lambda poll_timeout: self.transport.get(
                 "/v1/models",
-                headers=self.transport.master,
+                headers=headers,
                 params=NoBody(),
                 response_type=ModelsListResponse,
                 timeout=poll_timeout,
@@ -531,19 +545,29 @@ def build_proxy_client(
     The endpoints are injectable for callers that resolve the proxy some other
     way than ``e2e_config``'s env names (see ``claude_code/_env.py``); they must
     pass all three together, since a caller that overrides only the data plane
-    would leave management calls pointed at the env default."""
+    would leave management calls pointed at the env default.
+
+    E2E_FIXTURE_MODE wraps (record) or replaces (replay) the transport here, so
+    every client built from this seam records or replays without changing shape;
+    unset it stays the plain SplitTransport (see fixture_transport.py)."""
+    split = SplitTransport(
+        data=HttpTransport(
+            base_url=base_url,
+            master_key=master_key,
+            request_timeout=REQUEST_TIMEOUT,
+        ),
+        control=HttpTransport(
+            base_url=control_plane_base_url,
+            master_key=master_key,
+            request_timeout=REQUEST_TIMEOUT,
+        ),
+    )
     return ProxyClient(
-        transport=SplitTransport(
-            data=HttpTransport(
-                base_url=base_url,
-                master_key=master_key,
-                request_timeout=REQUEST_TIMEOUT,
-            ),
-            control=HttpTransport(
-                base_url=control_plane_base_url,
-                master_key=master_key,
-                request_timeout=REQUEST_TIMEOUT,
-            ),
+        transport=select_transport(
+            split,
+            mode_raw=FIXTURE_MODE_RAW,
+            bundle_dir=FIXTURE_DIR,
+            master_key=master_key,
         ),
         poll_timeout=POLL_TIMEOUT,
         poll_interval=POLL_INTERVAL,

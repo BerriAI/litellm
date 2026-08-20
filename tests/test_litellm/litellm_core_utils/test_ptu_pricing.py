@@ -1,0 +1,163 @@
+"""Tests for the shared PTU rules: which deployments accrue flat cost, and what that zeroes."""
+
+import os
+from datetime import datetime, timezone
+from unittest.mock import patch
+
+import pytest
+
+from litellm.litellm_core_utils.ptu_pricing import (
+    CUSTOM_PRICING_FIELDS,
+    PTU_EMPTIED_PRICING_FIELDS,
+    PTU_ZEROED_PRICING_FIELDS,
+    PTU_ZEROED_TABLE_FIELDS,
+    SEARCH_CONTEXT_SIZES,
+    ptu_terms,
+    zeroed_ptu_pricing,
+)
+from litellm.types.router import ModelInfo
+
+_VALID = {
+    "team_id": "team-alpha",
+    "ptu_count": 100,
+    "cost_per_ptu_per_hour": 0.02,
+    "ptu_effective_from": "2026-01-01T00:00:00Z",
+}
+
+
+def _with_flag(model_info, declared=None, enabled=True):
+    with patch.dict(os.environ, {"LITELLM_ENABLE_PTU_COST_ATTRIBUTION": "True" if enabled else ""}, clear=False):
+        return zeroed_ptu_pricing(model_info, declared or {})
+
+
+def test_a_complete_reservation_is_accepted():
+    terms = ptu_terms(_VALID)
+
+    assert terms is not None
+    assert terms.team_id == "team-alpha"
+    assert terms.ptu_count == 100
+    assert terms.effective_from == datetime(2026, 1, 1, tzinfo=timezone.utc)
+    assert terms.effective_to is None
+
+
+@pytest.mark.parametrize(
+    "override",
+    [
+        {"team_id": None},
+        {"team_id": ""},
+        {"ptu_count": None},
+        {"cost_per_ptu_per_hour": None},
+        {"ptu_count": 0},
+        {"ptu_count": -1},
+        {"ptu_count": ModelInfo.MAX_PTU_COUNT + 1},
+        {"cost_per_ptu_per_hour": -0.01},
+        {"cost_per_ptu_per_hour": ModelInfo.MAX_COST_PER_PTU_PER_HOUR + 1},
+        {"ptu_count": "not-a-number"},
+        {"ptu_effective_from": None},
+        {"ptu_effective_from": "not-a-date"},
+        {"ptu_effective_to": "not-a-date"},
+        {"ptu_effective_to": "2025-01-01T00:00:00Z"},
+        {"ptu_effective_to": "2026-01-01T00:00:00Z"},
+    ],
+    ids=[
+        "no team",
+        "blank team",
+        "no count",
+        "no rate",
+        "zero count",
+        "negative count",
+        "count over the cap",
+        "negative rate",
+        "rate over the cap",
+        "count not a number",
+        "no start",
+        "unparseable start",
+        "unparseable end",
+        "end before start",
+        "end equal to start",
+    ],
+)
+def test_an_incomplete_reservation_accrues_nothing(override):
+    """Anything the rollup declines to charge must also decline to be zeroed, or the
+    deployment serves its traffic for free with nothing charged in its place."""
+    assert ptu_terms({**_VALID, **override}) is None
+    assert _with_flag({**_VALID, **override}) is None
+
+
+def test_a_naive_start_is_read_as_utc():
+    """config.yaml is hand-typed, and pydantic hands back a naive datetime for a date with
+    no offset."""
+    terms = ptu_terms({**_VALID, "ptu_effective_from": datetime(2026, 5, 1, 12, 0)})
+
+    assert terms is not None
+    assert terms.effective_from == datetime(2026, 5, 1, 12, 0, tzinfo=timezone.utc)
+
+
+def test_an_offset_start_is_converted_rather_than_relabelled():
+    terms = ptu_terms({**_VALID, "ptu_effective_from": "2026-05-01T12:00:00-05:00"})
+
+    assert terms is not None
+    assert terms.effective_from == datetime(2026, 5, 1, 17, 0, tzinfo=timezone.utc)
+
+
+def test_nothing_is_zeroed_while_the_feature_is_off():
+    """No flat cost accrues with the flag off, so zeroing would serve the traffic free."""
+    assert _with_flag(_VALID, enabled=False) is None
+
+
+def test_the_standing_rates_are_all_zeroed():
+    override = _with_flag(_VALID)
+
+    assert override is not None
+    assert [field for field in PTU_ZEROED_PRICING_FIELDS if override[field] != 0.0] == []
+
+
+def test_tiered_pricing_is_emptied_rather_than_zeroed():
+    """A tier outranks the flat rates written beside it, so a zero there would leave the
+    cost map's tiers billing the traffic the reserved capacity already covers."""
+    override = _with_flag(_VALID, declared={"tiered_pricing": [{"range": [0, 1000], "input_cost_per_token": 0.003}]})
+
+    assert override is not None
+    for field in PTU_EMPTIED_PRICING_FIELDS:
+        assert override[field] == ()
+
+
+def test_the_search_context_table_is_zeroed_in_place_on_every_deployment():
+    """An absent table means the provider's own default rather than free, so it is written
+    even when the deployment never declared one."""
+    override = _with_flag(_VALID)
+
+    assert override is not None
+    for field in PTU_ZEROED_TABLE_FIELDS:
+        assert dict(override[field]) == dict.fromkeys(SEARCH_CONTEXT_SIZES, 0.0)
+
+
+def test_a_declared_table_does_not_become_a_scalar():
+    """Zeroing it as a plain 0.0 would leave the provider's reader without a table to
+    consult, which is the same as absent."""
+    override = _with_flag(_VALID, declared={"search_context_cost_per_query": {"search_context_size_medium": 0.05}})
+
+    assert override is not None
+    assert dict(override["search_context_cost_per_query"]) == dict.fromkeys(SEARCH_CONTEXT_SIZES, 0.0)
+
+
+def test_a_rate_the_deployment_declares_itself_is_zeroed_too():
+    """The standing set covers the mirrored rates. Anything else the operator wrote would
+    otherwise survive and bill the traffic the hourly charge already paid for."""
+    extra = "input_cost_per_token_above_200k_tokens"
+    assert extra in CUSTOM_PRICING_FIELDS
+    assert extra not in PTU_ZEROED_PRICING_FIELDS
+
+    override = _with_flag(_VALID, declared={extra: 9e-06})
+
+    assert override is not None
+    assert override[extra] == 0.0
+
+
+def test_a_setting_that_is_not_a_charge_is_left_alone():
+    """CustomPricingLiteLLMParams also carries configuration, and zeroing one of those
+    would break the deployment rather than stop a charge."""
+    override = _with_flag(_VALID, declared={"output_vector_size": 1536})
+
+    assert override is not None
+    assert "output_vector_size" not in override

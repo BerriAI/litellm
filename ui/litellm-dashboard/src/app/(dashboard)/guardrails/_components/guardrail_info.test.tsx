@@ -1,5 +1,6 @@
 import * as networking from "@/components/networking";
 import { fireEvent, render, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import GuardrailInfoView from "./guardrail_info";
 
@@ -136,7 +137,7 @@ describe("Guardrail Info", () => {
 
     vi.mocked(networking.getGuardrailProviderSpecificParams).mockResolvedValue({});
 
-    const { getByText, container } = render(
+    const { getByText, findByText, container } = render(
       <GuardrailInfoView guardrailId="123" onClose={() => {}} accessToken="123" isAdmin={true} />,
     );
 
@@ -152,18 +153,9 @@ describe("Guardrail Info", () => {
       expect(getByText("Guardrail Settings")).toBeInTheDocument();
     });
 
-    // Find the info icon and hover over it
-    const infoIcon = within(container).getByRole("img", { name: "info-circle" });
-    expect(infoIcon).toBeInTheDocument();
+    await userEvent.hover(within(container).getByRole("img", { name: "Config guardrail details" }));
 
-    if (infoIcon) {
-      fireEvent.mouseEnter(infoIcon);
-
-      // Wait for the tooltip to appear
-      await waitFor(() => {
-        expect(getByText("Guardrail is defined in the config file and cannot be edited.")).toBeInTheDocument();
-      });
-    }
+    expect(await findByText("Guardrail is defined in the config file and cannot be edited.")).toBeInTheDocument();
   });
 
   it("should render the guardrail info", async () => {

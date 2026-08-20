@@ -1774,6 +1774,80 @@ def test_openrouter_streaming_cost_propagates_to_hidden_params():
     assert provider_cost == 0.00025
 
 
+def test_perplexity_streaming_dict_cost_propagates_to_hidden_params():
+    """
+    Regression: Perplexity reports usage.cost as a breakdown object, which used to
+    blow up the end of the stream with
+    `float() argument must be a string or a real number, not 'dict'`.
+    """
+    import litellm
+    from litellm.cost_calculator import get_response_cost_from_hidden_params
+
+    chunks = [
+        ModelResponseStream(
+            id="chatcmpl-pplx",
+            created=1742056047,
+            model="perplexity/sonar",
+            choices=[
+                StreamingChoices(
+                    finish_reason=None,
+                    index=0,
+                    delta=Delta(content="Hi", role="assistant"),
+                )
+            ],
+            usage=None,
+        ),
+        ModelResponseStream(
+            id="chatcmpl-pplx",
+            created=1742056048,
+            model="perplexity/sonar",
+            choices=[
+                StreamingChoices(finish_reason="stop", index=0, delta=Delta(content=""))
+            ],
+            usage=None,
+        ),
+        ModelResponseStream(
+            id="chatcmpl-pplx",
+            created=1742056049,
+            model="perplexity/sonar",
+            choices=[
+                StreamingChoices(finish_reason=None, index=0, delta=Delta(content=""))
+            ],
+            usage=Usage(
+                completion_tokens=18,
+                prompt_tokens=12,
+                total_tokens=30,
+                cost={
+                    "input_tokens_cost": 0.000012,
+                    "output_tokens_cost": 0.000018,
+                    "request_cost": 0.005,
+                    "total_cost": 0.00503,
+                },
+            ),
+        ),
+    ]
+
+    complete_response = litellm.stream_chunk_builder(
+        chunks=chunks, messages=[{"role": "user", "content": "test"}]
+    )
+
+    assert complete_response is not None
+
+    CustomStreamWrapper._propagate_usage_cost_to_hidden_params(complete_response)
+
+    assert (
+        get_response_cost_from_hidden_params(complete_response._hidden_params)
+        == 0.00503
+    )
+
+
+def test_provider_reported_cost_ignores_unusable_shapes():
+    assert CustomStreamWrapper._resolve_provider_reported_cost(None) is None
+    assert CustomStreamWrapper._resolve_provider_reported_cost({}) is None
+    assert CustomStreamWrapper._resolve_provider_reported_cost({"total_cost": None}) is None
+    assert CustomStreamWrapper._resolve_provider_reported_cost(0.5) == 0.5
+
+
 def test_handle_special_delta_attributes(
     initialized_custom_stream_wrapper: CustomStreamWrapper,
 ):

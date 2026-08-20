@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
-import { Tooltip, Button as AntdButton } from "antd";
+import { SimpleTooltip } from "@/components/ui/tooltip";
 import { z } from "zod/v4";
 import { fetchUserModels } from "@/components/organisms/create_key_button";
 import { getModelDisplayName } from "@/components/key_team_helpers/fetch_available_models_team_key";
@@ -122,7 +122,7 @@ const TagEditForm: React.FC<TagEditFormProps> = ({ tag, seedBudgetFields, userMo
                 href="https://github.com/BerriAI/litellm/issues/new"
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-blue-600 underline hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300"
+                className="text-info underline hover:text-info/80"
               >
                 create a GitHub issue
               </a>
@@ -229,17 +229,18 @@ const TagInfoView: React.FC<TagInfoViewProps> = ({ tagId, onClose, accessToken, 
             <span className="font-mono px-2 py-1 bg-muted rounded-sm text-sm border border-border">
               {tagDetails.name}
             </span>
-            <AntdButton
-              type="text"
-              size="small"
-              icon={copiedStates["tag-name"] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
+            <Button
+              variant="ghost"
+              size="icon-xs"
               onClick={() => copyToClipboard(tagDetails.name, "tag-name")}
               className={`transition-all duration-200 ${
                 copiedStates["tag-name"]
-                  ? "text-green-600 bg-green-50 border-green-200 dark:text-green-400 dark:bg-green-950 dark:border-green-800"
+                  ? "text-success bg-success/10 border-success/20"
                   : "text-muted-foreground hover:text-foreground hover:bg-muted"
               }`}
-            />
+            >
+              {copiedStates["tag-name"] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
+            </Button>
           </div>
           <p className="text-sm text-muted-foreground">{tagDetails.description || "No description"}</p>
         </div>
@@ -280,7 +281,9 @@ const TagInfoView: React.FC<TagInfoViewProps> = ({ tagId, onClose, accessToken, 
                     ) : (
                       tagDetails.models.map((modelId) => (
                         <Badge key={modelId} variant="secondary">
-                          <Tooltip title={`ID: ${modelId}`}>{tagDetails.model_info?.[modelId] || modelId}</Tooltip>
+                          <SimpleTooltip content={`ID: ${modelId}`}>
+                            {tagDetails.model_info?.[modelId] || modelId}
+                          </SimpleTooltip>
                         </Badge>
                       ))
                     )}

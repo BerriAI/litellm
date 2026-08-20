@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import EditFallbacks, { Fallbacks } from "./EditFallbacks";
@@ -49,10 +49,9 @@ describe("EditFallbacks", () => {
 
   it("prefills the existing fallback chain for the primary model", async () => {
     setup();
-    await waitFor(() => {
-      expect(screen.getByText("gpt-3.5-turbo")).toBeInTheDocument();
-      expect(screen.getByText("claude-3-opus")).toBeInTheDocument();
-    });
+    const chain = await screen.findByRole("list", { name: "Fallback chain" });
+    expect(within(chain).getByText("gpt-3.5-turbo")).toBeInTheDocument();
+    expect(within(chain).getByText("claude-3-opus")).toBeInTheDocument();
   });
 
   it("removes a fallback model and saves only the edited entry", async () => {
@@ -61,8 +60,8 @@ describe("EditFallbacks", () => {
     const onClose = vi.fn();
     setup({ onChange, onClose });
 
-    await screen.findByText("gpt-3.5-turbo");
-    await user.click(screen.getByTestId("remove-fallback-gpt-3.5-turbo"));
+    const chain = await screen.findByRole("list", { name: "Fallback chain" });
+    await user.click(within(chain).getByRole("button", { name: "Remove gpt-3.5-turbo" }));
 
     await user.click(screen.getByRole("button", { name: /save changes/i }));
 
@@ -77,8 +76,8 @@ describe("EditFallbacks", () => {
     const onChange = vi.fn().mockResolvedValue(undefined);
     setup({ fallbackEntry: { "gpt-4": ["gpt-3.5-turbo"] }, onChange });
 
-    await screen.findByText("gpt-3.5-turbo");
-    await user.click(screen.getByTestId("remove-fallback-gpt-3.5-turbo"));
+    const chain = await screen.findByRole("list", { name: "Fallback chain" });
+    await user.click(within(chain).getByRole("button", { name: "Remove gpt-3.5-turbo" }));
 
     const saveButton = screen.getByRole("button", { name: /save changes/i });
     expect(saveButton).toBeDisabled();

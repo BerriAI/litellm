@@ -1,11 +1,11 @@
 import { renderHook, screen, waitFor, renderWithProviders } from "../../../tests/test-utils";
 import userEvent, { PointerEventsCheckLevel } from "@testing-library/user-event";
-import { Form } from "antd";
-import type { UploadProps } from "antd/es/upload";
 import { describe, expect, it, vi } from "vitest";
 import type { Team } from "../key_team_helpers/key_list";
 import type { CredentialItem } from "../networking";
 import { Providers } from "../provider_info_helpers";
+import { projectMountedValues, useMountRegistry, type MountedFormValues } from "../common_components/MountedFormField";
+import { useForm } from "react-hook-form";
 import AddModelForm from "./AddModelForm";
 
 vi.mock("../molecules/models/ProviderLogo", () => ({
@@ -131,8 +131,12 @@ const testTeam: Team = {
 };
 
 const createTestProps = (userRole = "proxy_admin", userId = "user-1", isTeamAdmin = false) => {
-  const { result } = renderHook(() => Form.useForm());
-  const [form] = result.current;
+  const { result } = renderHook(() => {
+    const form = useForm<MountedFormValues>({ mode: "onChange" });
+    const registry = useMountRegistry();
+    return { form, registry };
+  });
+  const { form, registry } = result.current;
 
   const teams = [
     {
@@ -152,14 +156,11 @@ const createTestProps = (userRole = "proxy_admin", userId = "user-1", isTeamAdmi
     },
   ];
 
-  const uploadProps: UploadProps = {
-    beforeUpload: () => false,
-    showUploadList: false,
-  };
-
   return {
     form,
-    handleOk: vi.fn(),
+    registry,
+    mountedValues: () => projectMountedValues(registry, form.getValues),
+    handleOk: vi.fn().mockResolvedValue(true),
     setSelectedProvider: vi.fn(),
     setProviderModelsFn: vi.fn(),
     getPlaceholder: vi.fn((provider: Providers) => `Enter ${provider} model name`),
@@ -169,7 +170,6 @@ const createTestProps = (userRole = "proxy_admin", userId = "user-1", isTeamAdmi
     showAdvancedSettings: false,
     teams,
     credentials,
-    uploadProps,
     userRole,
     userId,
   };
@@ -311,6 +311,35 @@ describe("AddModelForm", () => {
     expect(await screen.findByRole("button", { name: "Add Model" })).toBeInTheDocument();
   });
 
+  describe("the enterprise gate on the Team-BYOK switch", () => {
+    const renderForm = async (premiumUser: boolean) => {
+      const mockUseAuthorized = vi.mocked(await import("@/app/(dashboard)/hooks/useAuthorized"));
+      mockUseAuthorized.default.mockReturnValue(mockAuthorizedUser("proxy_admin", "user-1", premiumUser));
+      renderWithProviders(<AddModelForm {...createTestProps()} />);
+      return screen.findByRole("switch", { name: "Team-BYOK Model" });
+    };
+
+    it("explains the gate on hover even though the switch it sits on is disabled", async () => {
+      const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
+      const teamOnlySwitch = await renderForm(false);
+      expect(teamOnlySwitch).toHaveAttribute("aria-disabled", "true");
+
+      await user.hover(teamOnlySwitch);
+
+      expect(await screen.findByText(/enterprise-only feature/)).toBeInTheDocument();
+    });
+
+    it("says nothing on hover once the user is premium", async () => {
+      const user = userEvent.setup();
+      const teamOnlySwitch = await renderForm(true);
+      expect(teamOnlySwitch).not.toHaveAttribute("aria-disabled", "true");
+
+      await user.hover(teamOnlySwitch);
+
+      expect(screen.queryByText(/enterprise-only feature/)).not.toBeInTheDocument();
+    });
+  });
+
   describe("cache control bindings reach the parent form store", () => {
     const renderWithForm = async () => {
       const mockUseAuthorized = vi.mocked(await import("@/app/(dashboard)/hooks/useAuthorized"));
@@ -324,23 +353,14 @@ describe("AddModelForm", () => {
         user,
         openCacheControl: async () => {
           await user.click(await screen.findByText("Advanced Settings"));
-          await user.click(screen.getByLabelText("Cache Control Injection Points"));
+          await user.click(screen.getByRole("switch", { name: "Cache Control Injection Points" }));
           await screen.findByText("Add Injection Point");
         },
         closeCacheControl: async () => {
-          await user.click(screen.getByLabelText("Cache Control Injection Points"));
+          await user.click(screen.getByRole("switch", { name: "Cache Control Injection Points" }));
           await waitFor(() => expect(screen.queryByText("Add Injection Point")).not.toBeInTheDocument());
         },
-        // AddModelPanel builds the wire payload from form.validateFields(), which reports exactly
-        // the mounted registered set. Reading the same instance the same way keeps this on the
-        // real payload path; a rejection still carries the same `values` object.
-        mountedValues: async (): Promise<Record<string, unknown>> => {
-          try {
-            return await props.form.validateFields();
-          } catch (error) {
-            return (error as { values: Record<string, unknown> }).values;
-          }
-        },
+        mountedValues: async (): Promise<Record<string, unknown>> => props.mountedValues(),
       };
     };
 
