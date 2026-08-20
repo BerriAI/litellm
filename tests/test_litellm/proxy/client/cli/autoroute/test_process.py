@@ -4,8 +4,8 @@ import socket
 import subprocess
 import sys
 import time
-from typing import Optional
-from unittest.mock import patch
+from typing import Final, Optional
+from unittest.mock import Mock, patch
 
 import pytest
 
@@ -37,6 +37,11 @@ class FakeProcess:
 class FakeResponse:
     def __init__(self, status_code: int):
         self.status_code = status_code
+
+
+def _signals_sent(fake_kill: Mock) -> tuple[int, ...]:
+    """Signal numbers ``os.kill`` was called with, in call order."""
+    return tuple(call.args[1] for call in fake_kill.call_args_list)
 
 
 class TestIsPortAvailable:
@@ -147,7 +152,7 @@ class TestIsRunningDoesNotSignal:
 
     def test_probing_a_child_does_not_terminate_it(self):
         """The behavioural check, with nothing mocked."""
-        child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+        child: Final = subprocess.Popen((sys.executable, "-c", "import time; time.sleep(30)"))
         try:
             assert is_running(child.pid) is True
             time.sleep(1.0)
@@ -171,13 +176,13 @@ class TestIsRunningDoesNotSignal:
         assert is_running(os.getpid()) is True
 
     def test_win32_answers_without_calling_os_kill(self, monkeypatch):
-        calls: list = []
+        fake_kill: Final = Mock()
         monkeypatch.setattr(process_module.sys, "platform", "win32")
-        monkeypatch.setattr(process_module.os, "kill", lambda pid, sig: calls.append(sig))
+        monkeypatch.setattr(process_module.os, "kill", fake_kill)
         monkeypatch.setattr(process_module, "_windows_pid_exists", lambda pid: True)
 
         assert is_running(1234) is True
-        assert calls == [], "os.kill reached on win32; signal 0 is CTRL_C_EVENT there"
+        assert _signals_sent(fake_kill) == (), "os.kill reached on win32; signal 0 is CTRL_C_EVENT there"
 
 
 class TestTerminateHardKillSignal:
@@ -191,38 +196,38 @@ class TestTerminateHardKillSignal:
         than 0 or 1 routes to ``TerminateProcess`` on Windows, so SIGTERM is a
         real kill there.
         """
-        sent: list = []
-        monkeypatch.setattr(process_module.os, "kill", lambda pid, sig: sent.append(sig))
+        fake_kill: Final = Mock()
+        monkeypatch.setattr(process_module.os, "kill", fake_kill)
         monkeypatch.setattr(process_module, "is_running", lambda pid: True)
         monkeypatch.setattr(process_module.time, "sleep", lambda seconds: None)
         monkeypatch.delattr(process_module.signal, "SIGKILL", raising=False)
 
         terminate(4242, grace_period=0.0)
 
-        assert sent == [signal.SIGTERM, signal.SIGTERM]
+        assert _signals_sent(fake_kill) == (signal.SIGTERM, signal.SIGTERM)
 
     @pytest.mark.skipif(
         not hasattr(signal, "SIGKILL"),
         reason="POSIX escalation path; SIGKILL is absent on this platform",
     )
     def test_escalation_still_uses_sigkill_where_it_exists(self, monkeypatch):
-        sent: list = []
-        monkeypatch.setattr(process_module.os, "kill", lambda pid, sig: sent.append(sig))
+        fake_kill: Final = Mock()
+        monkeypatch.setattr(process_module.os, "kill", fake_kill)
         monkeypatch.setattr(process_module, "is_running", lambda pid: True)
         monkeypatch.setattr(process_module.time, "sleep", lambda seconds: None)
 
         terminate(4242, grace_period=0.0)
 
-        assert sent == [signal.SIGTERM, signal.SIGKILL]
+        assert _signals_sent(fake_kill) == (signal.SIGTERM, signal.SIGKILL)
 
     @pytest.mark.parametrize(
         "raised",
-        [
+        (
             PermissionError(5, "Access is denied"),
             OSError(22, "Invalid argument"),
             ProcessLookupError(3, "No such process"),
-        ],
-        ids=["permission-denied", "oserror", "already-gone"],
+        ),
+        ids=("permission-denied", "oserror", "already-gone"),
     )
     def test_a_kill_that_cannot_land_does_not_escape(self, monkeypatch, raised):
         """A process that exited between the probe and the kill must not crash ``down``.
