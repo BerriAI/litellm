@@ -4,10 +4,10 @@ CLI Token Utilities
 SDK-level utilities for reading the credential minted by `lite login`.
 
 Non-secret metadata lives in ~/.litellm/token.json. The secret material (the
-bearer key, plus a JWT when one is issued) lives in the OS keychain when the
-machine has one, and in that same 0600 file otherwise. This module hides the
-split from callers, and migrates a legacy plaintext file into the keychain the
-first time it reads one.
+bearer key, the refresh token that renews it, and a JWT when one is issued)
+lives in the OS keychain when the machine has one, and in that same 0600 file
+otherwise. This module hides the split from callers, and migrates a plaintext
+file into the keychain the first time it reads one.
 
 This module has no dependencies on proxy code and can be safely imported at the SDK level.
 """
@@ -111,13 +111,20 @@ class CliTokenSecret(BaseModel):
     secret minted for one server is never handed to another, even if the
     metadata file is edited underneath us. `timestamp` is the sign-in this
     secret came from, which is what decides it against a secret still on disk.
+
+    Every field a thief could sign in with belongs here, which is why the
+    refresh token is one of them: it buys a fresh key from the proxy on demand,
+    so leaving it on disk would leave the login readable there. `key` is
+    optional because the file can hold a refresh token without one, and moving
+    that into the keychain must not invent a key to go with it.
     """
 
     model_config = ConfigDict(frozen=True)
 
     base_url: str
-    key: str
+    key: str | None = None
     jwt_token: str = ""
+    refresh_token: str | None = None
     timestamp: float = 0.0
 
 
@@ -155,7 +162,7 @@ def save_cli_token(record: CliTokenRecord, *, vault: SecretVault = SYSTEM_KEYRIN
     staged: Final = _stage_token_file(_without_secret(stamped))
     if isinstance(staged, CredentialNotSaved):
         return staged
-    outcome: Final = SecretStored() if stamped.key is None else vault.write(_encode_secret(stamped, stamped.key))
+    outcome: Final = vault.write(_encode_secret(stamped)) if _holds_a_secret(stamped) else SecretStored()
     if isinstance(outcome, SecretStored):
         return outcome if _commit_token_file(staged) else CredentialNotRecorded()
     discard_staged_json(staged)
@@ -390,8 +397,9 @@ def _apply_vault_secret(record: CliTokenRecord, blob: str, vault: SecretVault) -
     secret is usually left on disk by a keychain that would not take it, which makes the file the
     fresher of the two. It is the older one when a login the keychain did take could not replace
     the file afterwards, and serving that one would put a superseded credential back in use. Equal
-    stamps are one login sitting in both stores, left by a migration whose scrub was refused, so
-    that branch retries the migration rather than trading one credential for another.
+    stamps are one login sitting in both stores, left by a migration whose scrub was refused or by
+    an upgrade that took the key into the keychain and left the refresh token behind, so that branch
+    rejoins the halves and retries the migration rather than trading one credential for another.
 
     A scrub the file refuses leaves that superseded secret where it lies, which is the state the
     login already named when it could not replace the file, and which `lite logout` reports rather
@@ -400,21 +408,46 @@ def _apply_vault_secret(record: CliTokenRecord, blob: str, vault: SecretVault) -
     superseded one back out.
     """
     secret: Final = _decode_secret(blob, record.base_url)
-    if secret is None or (record.key is not None and secret.timestamp <= record.timestamp):
-        return _migrate_file_secret(record, vault)
+    if secret is None or (_holds_a_secret(record) and secret.timestamp <= record.timestamp):
+        return _migrate_file_secret(_rejoined(record, secret), vault, replacing=secret)
     _scrub_file_secret(record)
     return record.model_copy(
         update=MappingProxyType(
             {
                 "key": secret.key,
                 "jwt_token": secret.jwt_token,
+                "refresh_token": secret.refresh_token,
                 "timestamp": max(secret.timestamp, record.timestamp),
             }
         )
     )
 
 
-def _migrate_file_secret(record: CliTokenRecord, vault: SecretVault) -> CliTokenRecord | None:
+def _rejoined(record: CliTokenRecord, secret: CliTokenSecret | None) -> CliTokenRecord:
+    """Put one sign-in's secret material back together when each store holds part of it.
+
+    Upgrading from the release that kept only the key in the keychain leaves the refresh token
+    behind in the file, so a single login sits across both stores. Filling in whatever the file is
+    missing before the migration writes its entry is what stops that write from replacing a live key
+    with nothing. Only a matching stamp is one login. Two stamps are two logins, and pairing one's
+    key with the other's refresh token would build a credential neither store ever held.
+    """
+    if secret is None or secret.timestamp != record.timestamp:
+        return record
+    return record.model_copy(
+        update=MappingProxyType(
+            {
+                "key": record.key if record.key is not None else secret.key,
+                "jwt_token": record.jwt_token or secret.jwt_token,
+                "refresh_token": record.refresh_token if record.refresh_token is not None else secret.refresh_token,
+            }
+        )
+    )
+
+
+def _migrate_file_secret(
+    record: CliTokenRecord, vault: SecretVault, *, replacing: CliTokenSecret | None = None
+) -> CliTokenRecord | None:
     """Move a file-held secret into the vault, but only once the file's copy can be taken away.
 
     The scrubbed file is staged first so a directory that will not accept it stops the migration
@@ -426,23 +459,28 @@ def _migrate_file_secret(record: CliTokenRecord, vault: SecretVault) -> CliToken
     asked to take the new entry back, so the migration finishes on a directory that would only ever
     have refused it. Rolling back is the last resort, and a rollback the keychain also refuses
     leaves the secret in both stores until the next read, which retries this same migration.
+
+    Only an entry this migration put there is taken back. `replacing` names one that was already in
+    the keychain, whose material the new entry carries forward, so erasing it would take away the
+    half the file never had, and a machine that refuses the scrub is exactly the one with nowhere
+    else to keep it. The next read finds the same two halves and tries the move again.
     """
-    if record.key is None:
+    if not _holds_a_secret(record):
         return None
     staged: Final = _stage_scrubbed_file(record)
     if staged is None:
         return record
-    if not isinstance(vault.write(_encode_secret(record, record.key)), SecretStored):
+    if not isinstance(vault.write(_encode_secret(record)), SecretStored):
         discard_staged_json(staged)
         return record
-    if not _commit_token_file(staged) and not _overwrite_file_secret(record):
+    if not _commit_token_file(staged) and not _overwrite_file_secret(record) and replacing is None:
         vault.erase()
     return record
 
 
 def _scrub_file_secret(record: CliTokenRecord) -> bool:
     """Leave no secret material in the token file once the vault holds it"""
-    if record.key is None and not record.jwt_token:
+    if not _holds_a_secret(record):
         return True
     staged: Final = _stage_scrubbed_file(record)
     if staged is not None and _commit_token_file(staged):
@@ -487,13 +525,22 @@ def _commit_token_file(staged: str) -> bool:
     return True
 
 
+def _holds_a_secret(record: CliTokenRecord) -> bool:
+    """Whether the record carries anything that would sign someone in as this user"""
+    return record.key is not None or bool(record.jwt_token) or record.refresh_token is not None
+
+
 def _without_secret(record: CliTokenRecord) -> CliTokenRecord:
-    return record.model_copy(update=MappingProxyType({"key": None, "jwt_token": ""}))
+    return record.model_copy(update=MappingProxyType({"key": None, "jwt_token": "", "refresh_token": None}))
 
 
-def _encode_secret(record: CliTokenRecord, key: str) -> str:
+def _encode_secret(record: CliTokenRecord) -> str:
     return CliTokenSecret(
-        base_url=record.base_url, key=key, jwt_token=record.jwt_token, timestamp=record.timestamp
+        base_url=record.base_url,
+        key=record.key,
+        jwt_token=record.jwt_token,
+        refresh_token=record.refresh_token,
+        timestamp=record.timestamp,
     ).model_dump_json()
 
 
