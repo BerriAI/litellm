@@ -199,12 +199,61 @@ def test_discover_reads_the_contract_from_the_well_known_path():
         (_FakeResponse(200, text="<html>"), "unsupported discovery document"),
         (_FakeResponse(200, {**CONTRACT_DOC, "code_challenge_methods_supported": ["plain"]}), "PKCE S256"),
         (requests.ConnectionError("refused"), "could not reach"),
+        (_FakeResponse(200, {**CONTRACT_DOC, "issuer": "https://evil.example.com"}), "is issued for https://evil"),
+        (_FakeResponse(200, {**CONTRACT_DOC, "issuer": f"{BASE}/other"}), "is issued for"),
+        (_FakeResponse(200, {**CONTRACT_DOC, "issuer": "http://llm.example.com"}), "is issued for"),
+        (_FakeResponse(200, {**CONTRACT_DOC, "token_endpoint": "https://evil.example.com/token"}), "outside"),
+        (_FakeResponse(200, {**CONTRACT_DOC, "registration_endpoint": f"{BASE}:8443/register"}), "outside"),
+        (_FakeResponse(200, {**CONTRACT_DOC, "revocation_endpoint": "https://evil.example.com/revoke"}), "outside"),
+        (_FakeResponse(200, {**CONTRACT_DOC, "authorization_endpoint": "http://llm.example.com/authorize"}), "outside"),
+        (_FakeResponse(200, {**CONTRACT_DOC, "resource": "https://evil.example.com"}), "outside"),
+        (_FakeResponse(200, {**CONTRACT_DOC, "token_endpoint": "/token"}), "outside"),
     ],
 )
 def test_discover_failures_name_the_cause(response, expected):
     result = discover_cli_auth(BASE, _FakeHttp({("GET", DISCOVERY_URL): response}))
     assert isinstance(result, PkceFailure)
     assert expected in result.reason
+
+
+def test_discover_refuses_endpoints_on_another_origin_and_names_each_of_them():
+    doc = {**CONTRACT_DOC, "token_endpoint": "https://evil.example.com/token", "resource": "https://evil.example.com"}
+    result = discover_cli_auth(BASE, _FakeHttp({("GET", DISCOVERY_URL): _FakeResponse(200, doc)}))
+    assert isinstance(result, PkceFailure)
+    assert "https://evil.example.com/token" in result.reason
+    assert "https://evil.example.com" in result.reason
+    assert "refusing to send credentials" in result.reason
+
+
+@pytest.mark.parametrize(
+    "typed_base_url",
+    ["https://LLM.example.com:443/", "https://llm.example.com", "HTTPS://llm.example.com/"],
+)
+def test_discover_accepts_the_same_proxy_however_the_user_spelled_it(typed_base_url):
+    discovery_url = f"{typed_base_url.rstrip('/')}/.well-known/litellm-cli-auth"
+    http = _FakeHttp({("GET", discovery_url): _FakeResponse(200, CONTRACT_DOC)})
+    assert discover_cli_auth(typed_base_url, http) == CONTRACT
+
+
+def test_discover_accepts_a_proxy_mounted_under_a_path_only_at_that_path():
+    mounted = f"{BASE}/litellm"
+    doc = {
+        **CONTRACT_DOC,
+        "issuer": mounted,
+        "authorization_endpoint": f"{mounted}/authorize",
+        "token_endpoint": f"{mounted}/token",
+        "registration_endpoint": f"{mounted}/register",
+        "revocation_endpoint": f"{mounted}/revoke",
+        "resource": mounted,
+    }
+    routes = {
+        ("GET", f"{mounted}/.well-known/litellm-cli-auth"): _FakeResponse(200, doc),
+        ("GET", DISCOVERY_URL): _FakeResponse(200, doc),
+    }
+    assert discover_cli_auth(f"{mounted}/", _FakeHttp(routes)) == CliAuthContract.model_validate(doc)
+    rejected = discover_cli_auth(BASE, _FakeHttp(routes))
+    assert isinstance(rejected, PkceFailure)
+    assert f"is issued for {mounted}" in rejected.reason
 
 
 def test_register_sends_a_public_loopback_client_and_returns_its_id():
@@ -531,6 +580,37 @@ def test_fresh_api_key_uses_a_sibling_rotation_when_its_own_refresh_loses_the_ra
     assert _fresh(STORED, saved.append, http, reload=lambda: STORED, now=lambda: 1_000_001.0) is None
     assert _fresh(STORED, saved.append, http, reload=lambda: None, now=lambda: 1_000_001.0) is None
     assert saved == []
+
+
+@pytest.mark.parametrize(
+    "sibling_record",
+    [
+        {"base_url": "https://other.example.com", "token_endpoint": "https://other.example.com/token"},
+        {"base_url": "https://other.example.com", "resource": "https://other.example.com"},
+        {"base_url": "https://other.example.com"},
+        {"token_endpoint": "https://other.example.com/token"},
+        {"resource": "https://other.example.com"},
+        {"expires_at": 999_000.0},
+        {"expires_at": None},
+        {"key": ""},
+    ],
+    ids=[
+        "other-proxy",
+        "other-resource-line",
+        "other-base-url",
+        "other-token-endpoint",
+        "other-resource",
+        "expired",
+        "no-expiry",
+        "empty-key",
+    ],
+)
+def test_fresh_api_key_never_substitutes_a_sibling_record_for_another_proxy_or_a_dead_key(sibling_record):
+    rotated = {**STORED, "key": "sk-cli-sibling", "refresh_token": "llm_srefresh_sibling", "expires_at": 1_003_600.0}
+    foreign = {**rotated, **sibling_record}
+    http = _FakeHttp({("POST", f"{BASE}/token"): _FakeResponse(400, {"error": "invalid_grant"})})
+    assert _fresh(STORED, lambda _: None, http, reload=lambda: foreign, now=lambda: 1_000_001.0) is None
+    assert _fresh(STORED, lambda _: None, http, reload=lambda: foreign, now=lambda: 999_950.0) == "sk-cli-old"
 
 
 def test_fresh_api_key_without_refresh_inputs_expires_like_a_classic_key():

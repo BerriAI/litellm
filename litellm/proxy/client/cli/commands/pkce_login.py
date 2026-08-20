@@ -200,7 +200,47 @@ def discover_cli_auth(base_url: str, http: Http) -> CliAuthContract | PkceFailur
         return PkceFailure(f"{url} returned an unsupported discovery document: {exc}")
     if "S256" not in contract.code_challenge_methods_supported:
         return PkceFailure("the proxy does not support PKCE S256")
+    if _canonical_url(contract.issuer) != _canonical_url(base_url):
+        return PkceFailure(f"{url} is issued for {contract.issuer}, not {base_url}; pass that address as --base-url")
+    foreign: Final = _endpoints_outside(contract, _origin(base_url))
+    if foreign:
+        return PkceFailure(
+            f"{url} names endpoints outside {base_url} ({', '.join(foreign)}); refusing to send credentials there"
+        )
     return contract
+
+
+def _endpoints_outside(contract: CliAuthContract, origin: str | None) -> tuple[str, ...]:
+    endpoints: Final = (
+        contract.authorization_endpoint,
+        contract.token_endpoint,
+        contract.registration_endpoint,
+        contract.revocation_endpoint,
+        contract.resource,
+    )
+    return tuple(endpoint for endpoint in endpoints if origin is None or _origin(endpoint) != origin)
+
+
+def _origin(url: str) -> str | None:
+    """``scheme://host:port`` with the default port made explicit, so the same server spelled
+    two ways (``https://llm.example.com`` and ``https://LLM.example.com:443/``) compares equal
+    and two different servers never do."""
+    parsed: Final = urlparse(url)
+    try:
+        port: Final = parsed.port
+    except ValueError:
+        return None
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        return None
+    host: Final = f"[{parsed.hostname}]" if ":" in parsed.hostname else parsed.hostname
+    return f"{parsed.scheme}://{host}:{port or (443 if parsed.scheme == 'https' else 80)}"
+
+
+def _canonical_url(url: str) -> str | None:
+    """The origin plus the path with its trailing slash dropped: the RFC 8414 section 3.3
+    identity check, so a document can only ever be accepted for the proxy it was fetched from."""
+    origin: Final = _origin(url)
+    return None if origin is None else f"{origin}{urlparse(url).path.rstrip('/')}"
 
 
 class _ClientRegistration(TypedDict):
@@ -423,7 +463,7 @@ def fresh_api_key(
     on file. The rotated pair is saved before the new key is returned, so a crash after
     this point never strands the CLI with a burned refresh token. A refresh that fails
     reads the record again, because a sibling ``lite`` process may have rotated the pair
-    first, in which case the key it saved is the live one. A record without
+    first, in which case the key it saved for this same proxy is the live one. A record without
     ``expires_at`` (the classic ``lite login`` credential) is returned as stored."""
     key: Final = token_data.get("key")
     if not isinstance(key, str) or not key:
@@ -439,14 +479,25 @@ def fresh_api_key(
         return still_valid
     refreshed: Final = refresh_credential(*refresh_inputs, http=http, now=now)
     if isinstance(refreshed, PkceFailure):
-        return _key_rotated_by_a_sibling(reload(), token_data.get("refresh_token")) or still_valid
+        return _key_rotated_by_a_sibling(reload(), token_data, now()) or still_valid
     base_url: Final = token_data.get("base_url")
     save(pkce_token_record(base_url if isinstance(base_url, str) else "", refreshed))
     return refreshed.access_token
 
 
-def _key_rotated_by_a_sibling(record: Mapping[str, object] | None, sent_refresh_token: object) -> str | None:
-    if record is None or record.get("refresh_token") == sent_refresh_token:
+def _key_rotated_by_a_sibling(
+    record: Mapping[str, object] | None, token_data: Mapping[str, object], now: float
+) -> str | None:
+    """The key a sibling process saved, but only when it continues this very credential:
+    same proxy, same token endpoint, same resource, and not yet expired. A concurrent
+    ``lite login`` against a different proxy replaces the same file, and its key must never
+    be sent to this one."""
+    if record is None or record.get("refresh_token") == token_data.get("refresh_token"):
+        return None
+    if any(record.get(field) != token_data.get(field) for field in ("base_url", "token_endpoint", "resource")):
+        return None
+    expires_at: Final = record.get("expires_at")
+    if not isinstance(expires_at, (int, float)) or now >= expires_at:
         return None
     key: Final = record.get("key")
     return key if isinstance(key, str) and key else None
