@@ -17,6 +17,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 sys.path.insert(0, os.path.abspath("../../../.."))
 
 from litellm.proxy.common_utils.scheduled_job_metrics import (
+    JobRun,
     JobResult,
     ScheduledJobMetricsListener,
 )
@@ -336,4 +337,68 @@ def test_handle_swallows_a_failure_so_the_scheduler_keeps_running():
 
     with patch.object(ScheduledJobMetricsListener, "_publish", side_effect=RuntimeError("metrics down")):
         listener.handle(event)  # must not raise
+
+def test_a_skipped_run_does_not_refresh_the_last_run_clock():
+    """The recommended alert is time since last run. If a skipped run bumped the
+    clock, a job that never executes would look recently run and the alert would
+    stay quiet through exactly the outage this telemetry exists to catch."""
+    executed = JobRun("job", JobResult.SUCCESS, 1.0, None)
+    failed = JobRun("job", JobResult.ERROR, 1.0, None)
+    missed = JobRun("job", JobResult.MISSED, None, None)
+    overrun = JobRun("job", JobResult.MAX_INSTANCES, None, None)
+
+    assert executed.did_execute is True
+    assert failed.did_execute is True, "a job that ran and raised still ran"
+    assert missed.did_execute is False
+    assert overrun.did_execute is False
+
+
+def test_a_missed_run_releases_the_start_time_it_was_given():
+    """APScheduler emits MISSED from the executor, after the scheduler already
+    emitted SUBMITTED, so a start time was recorded for that run. Dropping the
+    event without releasing it leaks one entry per miss for the life of the
+    process."""
+    import datetime
+
+    from apscheduler.events import (
+        EVENT_JOB_MISSED,
+        EVENT_JOB_SUBMITTED,
+        JobExecutionEvent,
+        JobSubmissionEvent,
+    )
+
+    when = datetime.datetime(2026, 1, 1, 0, 0, 0)
+    listener = ScheduledJobMetricsListener()
+
+    listener._to_run(JobSubmissionEvent(EVENT_JOB_SUBMITTED, "slow_job", "default", [when]))
+    assert len(listener._started_at) == 1, "the submit records a start time"
+
+    run = listener._to_run(JobExecutionEvent(EVENT_JOB_MISSED, "slow_job", "default", when))
+
+    assert run is not None and run.result is JobResult.MISSED
+    assert listener._started_at == {}, "the missed run must not leave its start time behind"
+
+
+def test_an_overrun_keeps_the_running_jobs_start_time():
+    """MAX_INSTANCES is emitted before the submit, while the previous run is
+    still going, so it must not consume that run's start time."""
+    import datetime
+
+    from apscheduler.events import (
+        EVENT_JOB_EXECUTED,
+        EVENT_JOB_MAX_INSTANCES,
+        EVENT_JOB_SUBMITTED,
+        JobExecutionEvent,
+        JobSubmissionEvent,
+    )
+
+    when = datetime.datetime(2026, 1, 1, 0, 0, 0)
+    ticks = iter([100.0, 104.0])
+    listener = ScheduledJobMetricsListener(monotonic=lambda: next(ticks))
+
+    listener._to_run(JobSubmissionEvent(EVENT_JOB_SUBMITTED, "slow_job", "default", [when]))
+    listener._to_run(JobExecutionEvent(EVENT_JOB_MAX_INSTANCES, "slow_job", "default", when))
+    finished = listener._to_run(JobExecutionEvent(EVENT_JOB_EXECUTED, "slow_job", "default", when, retval=None))
+
+    assert finished is not None and finished.duration_seconds == pytest.approx(4.0)
 

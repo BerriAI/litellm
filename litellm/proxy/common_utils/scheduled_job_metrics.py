@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import re
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING, Final
@@ -65,6 +66,16 @@ class JobRun:
     duration_seconds: float | None
     items_processed: int | None
 
+    @property
+    def did_execute(self) -> bool:
+        """Whether the job body actually ran.
+
+        A skipped run must not refresh the last-run clock, or a job that never
+        executes keeps looking recently run and the "time since last run" alert
+        stays quiet through exactly the outage it exists to catch.
+        """
+        return self.result in (JobResult.SUCCESS, JobResult.ERROR)
+
 
 def _label_for(job_id: str) -> str:
     """The job id, unless APScheduler generated it."""
@@ -95,7 +106,7 @@ class ScheduledJobMetricsListener:
     on the job id alone would let those runs consume each other's start times.
     """
 
-    def __init__(self, *, monotonic: Final = time.monotonic) -> None:
+    def __init__(self, *, monotonic: Callable[[], float] = time.monotonic) -> None:
         self._monotonic: Final = monotonic
         self._started_at: dict[str, float] = {}  # mutable-ok: start times arrive one scheduler event at a time
 
@@ -124,14 +135,16 @@ class ScheduledJobMetricsListener:
                 self._started_at[self._key(event.job_id, scheduled)] = now
             return None
 
-        # Neither of these follows a submission of its own. MAX_INSTANCES in
-        # particular arrives while the previous run is still going, so popping
-        # before this point would steal that run's start time and drop the
-        # duration of exactly the overruns worth measuring.
-        if event.code == EVENT_JOB_MISSED:
-            return JobRun(job_name, JobResult.MISSED, None, None)
+        # MAX_INSTANCES is emitted by the scheduler before it submits, while the
+        # previous run is still going, so popping here would steal that run's
+        # start time and drop the duration of exactly the overruns worth
+        # measuring. MISSED comes from the executor after the submit, so its
+        # start time was recorded and has to be released or it leaks.
         if event.code == EVENT_JOB_MAX_INSTANCES:
             return JobRun(job_name, JobResult.MAX_INSTANCES, None, None)
+        if event.code == EVENT_JOB_MISSED:
+            self._started_at.pop(self._key(event.job_id, getattr(event, "scheduled_run_time", None)), None)
+            return JobRun(job_name, JobResult.MISSED, None, None)
 
         started_at: Final = self._started_at.pop(
             self._key(event.job_id, getattr(event, "scheduled_run_time", None)), None

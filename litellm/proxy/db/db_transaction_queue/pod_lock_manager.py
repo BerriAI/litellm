@@ -26,7 +26,7 @@ def _record_lock_attempt(cronjob_id: str, result: LockAttemptResult) -> None:
     try:
         from litellm.integrations.prometheus import PrometheusLogger
 
-        logger = PrometheusLogger.get_instance()
+        logger: Final = PrometheusLogger.get_instance()
         if logger is not None:
             logger.record_cronjob_lock_attempt(cronjob_id, result)
     except Exception as e:  # noqa: BLE001  # telemetry must not stop a job from running

@@ -3207,7 +3207,8 @@ class PrometheusLogger(CustomLogger):
     def record_scheduled_job_run(self, run: JobRun) -> None:
         """Publish one completed run of a scheduled background job."""
         self.litellm_scheduled_job_runs_total.labels(job_name=run.job_name, result=run.result.value).inc()
-        self.litellm_scheduled_job_last_run_timestamp.labels(job_name=run.job_name).set(time.time())
+        if run.did_execute:
+            self.litellm_scheduled_job_last_run_timestamp.labels(job_name=run.job_name).set(time.time())
         if run.duration_seconds is not None:
             self.litellm_scheduled_job_duration_seconds.labels(job_name=run.job_name).observe(run.duration_seconds)
         if run.items_processed:
