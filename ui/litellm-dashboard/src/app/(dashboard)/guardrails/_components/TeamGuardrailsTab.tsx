@@ -682,7 +682,7 @@ function DetailPanel({
             <button
               type="button"
               onClick={() => setConfigExpanded(!configExpanded)}
-              className="w-full flex items-center justify-between px-3 py-2 text-left text-xs font-semibold text-foreground bg-muted hover:bg-muted transition-colors"
+              className="w-full flex items-center justify-between px-3 py-2 text-left text-xs font-semibold text-foreground bg-muted hover:bg-border transition-colors"
             >
               <span>Equivalent config</span>
               {configExpanded ? (
