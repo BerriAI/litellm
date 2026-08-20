@@ -7706,9 +7706,9 @@ class Router:
         """
         try:
             config_sourced: Final = _model_info.get("db_model") is not True
-            ptu_error: Final = ptu_config_error(_model_info) if config_sourced else None
+            ptu_error: Final = ptu_config_error(_model_info, model_name=_model_name) if config_sourced else None
             if ptu_error is not None and is_ptu_cost_attribution_enabled():
-                raise ValueError(f"PTU configuration on model '{_model_name}' is invalid: {ptu_error}")
+                raise ValueError(ptu_error)
             zeroed_pricing: Final = zeroed_ptu_pricing(_model_info, _litellm_params) if config_sourced else None
             litellm_params: Final[LiteLLM_Params] = LiteLLM_Params(
                 **(
