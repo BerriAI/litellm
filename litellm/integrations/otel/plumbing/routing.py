@@ -53,9 +53,12 @@ _MAX_CACHED_PROVIDERS: Final = 256
 # other bound is the logger's open-call map (10k), so without this a caller
 # cycling unique credential sets across long-lived calls could pin far more
 # live providers, and exporter threads, than the cache cap allows. Past this
-# many, the stalest retiree is shut down, dropping whatever it was draining: by
-# then a span from a route evicted long ago that never closed. Total live
-# providers is therefore ``_MAX_CACHED_PROVIDERS + _MAX_RETIRED_PROVIDERS``.
+# many, the stalest retiree is shut down and whatever it was draining is
+# dropped (a shut-down ``BatchSpanProcessor`` discards spans handed to it after
+# the fact), which by then means a span on a route evicted long ago. A quarter
+# of the cache cap: enough that a burst of tenant churn during long-lived calls
+# still drains normally, small enough that the worst case is a bounded 320
+# providers rather than one per concurrent call.
 _MAX_RETIRED_PROVIDERS: Final = 64
 
 _HeaderItems: TypeAlias = tuple[tuple[str, str], ...]
