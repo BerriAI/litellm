@@ -187,6 +187,54 @@ def test_get_image_returns_default_logo(client, monkeypatch):
     assert shape == {"status": 200, "media_type_image": True, "has_body": True}
 
 
+PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+PNG_IHDR_COLOUR_TYPE_OFFSET = 25
+PNG_COLOUR_TYPE_RGBA = 6
+
+
+def test_get_image_dark_theme_returns_logo_with_an_alpha_channel(client, monkeypatch):
+    """?theme=dark serves the dark logo. It must be an RGBA PNG: the light logo is a
+    JPEG whose baked-in white background renders as a white slab on a dark sidebar."""
+    monkeypatch.delenv("UI_LOGO_PATH", raising=False)
+    response = client.get("/get_image", params={"theme": "dark"})
+    body = response.content
+    shape = {
+        "status": response.status_code,
+        "media_type": response.headers.get("content-type", "").split(";")[0],
+        "is_png": body[:8] == PNG_SIGNATURE,
+        "colour_type": body[PNG_IHDR_COLOUR_TYPE_OFFSET],
+    }
+    assert shape == {
+        "status": 200,
+        "media_type": "image/png",
+        "is_png": True,
+        "colour_type": PNG_COLOUR_TYPE_RGBA,
+    }
+
+
+def test_get_image_without_theme_still_serves_the_light_jpeg(client, monkeypatch):
+    """The default response is unchanged, so light mode keeps the existing logo."""
+    monkeypatch.delenv("UI_LOGO_PATH", raising=False)
+    response = client.get("/get_image")
+    shape = {
+        "status": response.status_code,
+        "media_type": response.headers.get("content-type", "").split(";")[0],
+        "is_jpeg": response.content[:3] == b"\xff\xd8\xff",
+    }
+    assert shape == {"status": 200, "media_type": "image/jpeg", "is_jpeg": True}
+
+
+def test_get_image_dark_theme_keeps_serving_a_custom_ui_logo(client, monkeypatch, tmp_path):
+    """A custom UI_LOGO_PATH has no dark variant yet, so dark mode must fall back to the
+    admin's own logo rather than replacing it with LiteLLM's."""
+    custom_logo = tmp_path / "custom.png"
+    custom_logo.write_bytes(PNG_SIGNATURE + b"custom-logo-marker")
+    monkeypatch.setenv("UI_LOGO_PATH", str(custom_logo))
+    response = client.get("/get_image", params={"theme": "dark"})
+    shape = {"status": response.status_code, "body": response.content}
+    assert shape == {"status": 200, "body": PNG_SIGNATURE + b"custom-logo-marker"}
+
+
 def test_get_image_redirects_remote_url(client, monkeypatch):
     """Remote logo URLs are served via redirect — the proxy never fetches them server-side."""
     monkeypatch.setenv("UI_LOGO_PATH", "https://example.invalid/logo.png")

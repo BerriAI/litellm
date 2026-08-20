@@ -143,7 +143,7 @@ export const getRequestLogsTableColumns = ({
       return (
         <div className="flex flex-col items-end">
           {spend ? <CellTooltip content={`$${String(spend)}`} trigger={money} /> : money}
-          {isMultiCallSession && <span className="text-[10px] text-muted-foreground/70">session total</span>}
+          {isMultiCallSession && <span className="text-[10px] text-muted-foreground">session total</span>}
           {mcpCount > 0 && mcpSpend > 0 && (
             <span className="text-[10px] text-warning">
               incl. {getSpendString(mcpSpend)} from {mcpCount} MCP
@@ -253,7 +253,7 @@ export const getRequestLogsTableColumns = ({
       return (
         <span className="text-sm">
           {String(log.total_tokens || "0")}
-          <span className="text-muted-foreground/70 text-xs ml-1">
+          <span className="text-muted-foreground text-xs ml-1">
             ({String(log.prompt_tokens || "0")}+{String(log.completion_tokens || "0")})
           </span>
         </span>

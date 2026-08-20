@@ -593,9 +593,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                                   {gatewayActivity && (
                                     <Tooltip>
                                       <TooltipTrigger
-                                        render={
-                                          <Info className="size-4 text-muted-foreground/70 hover:text-muted-foreground" />
-                                        }
+                                        render={<Info className="size-4 text-muted-foreground hover:text-foreground" />}
                                       />
                                       <TooltipContent>
                                         Counted by the gateway when it answers a request, independent of spend logging.
@@ -624,9 +622,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                                   <h3 className="text-lg font-medium text-foreground">Failed Requests</h3>
                                   <Tooltip>
                                     <TooltipTrigger
-                                      render={
-                                        <Info className="size-4 text-muted-foreground/70 hover:text-muted-foreground" />
-                                      }
+                                      render={<Info className="size-4 text-muted-foreground hover:text-foreground" />}
                                     />
                                     <TooltipContent>
                                       {gatewayActivity
@@ -665,9 +661,9 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                                 <div className="flex items-center gap-2">
                                   <h3 className="text-lg font-medium text-foreground">Total Tokens</h3>
                                   {showTokenBreakdown ? (
-                                    <ChevronDown className="size-3 text-muted-foreground/70" />
+                                    <ChevronDown className="size-3 text-muted-foreground" />
                                   ) : (
-                                    <ChevronRight className="size-3 text-muted-foreground/70" />
+                                    <ChevronRight className="size-3 text-muted-foreground" />
                                   )}
                                 </div>
                                 <p className="text-2xl font-bold mt-2">
@@ -765,7 +761,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                               <Tooltip>
                                 <TooltipTrigger
                                   render={
-                                    <Info className="ml-2 inline size-4 text-muted-foreground/70 hover:text-muted-foreground" />
+                                    <Info className="ml-2 inline size-4 text-muted-foreground hover:text-foreground" />
                                   }
                                 />
                                 <TooltipContent>

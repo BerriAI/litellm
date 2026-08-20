@@ -430,7 +430,7 @@ const RequestLifecycle = ({ entries }: { entries: GuardrailInformation[] }) => {
                     {item.status}
                   </span>
                 )}
-                <span className="text-xs text-muted-foreground/70 font-mono ml-auto shrink-0">T+{item.offsetMs}ms</span>
+                <span className="text-xs text-muted-foreground font-mono ml-auto shrink-0">T+{item.offsetMs}ms</span>
               </div>
             </div>
           </div>
@@ -670,7 +670,7 @@ const GuardrailViewer = ({ data, accessToken, logEntry }: GuardrailViewerProps) 
               <span className="text-sm text-muted-foreground">
                 {guardrailEntries.length} guardrail{guardrailEntries.length !== 1 ? "s" : ""} evaluated
               </span>
-              <span className="text-muted-foreground/70">|</span>
+              <span className="text-muted-foreground">|</span>
               <span
                 className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold ${
                   allPassed
