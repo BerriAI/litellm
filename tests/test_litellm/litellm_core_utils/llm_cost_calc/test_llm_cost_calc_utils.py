@@ -941,7 +941,7 @@ def test_generic_cost_per_token_gpt56(
     assert model_cost_map["cache_creation_input_token_cost"] == pytest.approx(
         input_cost * 1.25
     )
-    assert model_cost_map["max_input_tokens"] == 1050000
+    assert model_cost_map["max_input_tokens"] == 922000
     assert model_cost_map["input_cost_per_token_above_272k_tokens"] == pytest.approx(
         input_cost * 2
     )
@@ -1082,6 +1082,7 @@ def test_generic_cost_per_token_azure_gpt56(
     assert model_cost_map["input_cost_per_token"] == input_cost
     assert model_cost_map["output_cost_per_token"] == output_cost
     assert model_cost_map["cache_read_input_token_cost"] == cache_read_cost
+    assert model_cost_map["max_input_tokens"] == 922000
 
     prompt_tokens = 1000
     completion_tokens = 500
