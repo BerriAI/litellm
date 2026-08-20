@@ -18,8 +18,8 @@ import asyncio
 import datetime
 import inspect
 import time
-from collections.abc import AsyncGenerator, Callable, Generator
-from typing import TYPE_CHECKING, Any, Final, Optional
+from collections.abc import AsyncGenerator, AsyncIterator, Callable, Generator, Mapping
+from typing import TYPE_CHECKING, Any, Final, Optional, TypeVar
 
 from pydantic import BaseModel
 
@@ -49,9 +49,14 @@ from litellm.types.utils import (
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.llms.anthropic.experimental_pass_through.messages.response_cache import (
+        AnthropicMessagesStreamCacheWriter,
+    )
     from litellm.types.utils import PromptTokensDetailsWrapper
 else:
     LiteLLMLoggingObj = Any
+
+_StreamResultT = TypeVar("_StreamResultT")
 
 
 from litellm.litellm_core_utils.core_helpers import (
@@ -101,23 +106,34 @@ def _is_chat_completion_cached_dict(cached_result: dict) -> bool:
     return "choices" in cached_result
 
 
-def _should_defer_streaming_cache_hit_callbacks(*, kwargs: dict[str, Any]) -> bool:
+def _should_defer_streaming_cache_hit_callbacks(*, kwargs: dict[str, object]) -> bool:
     """
     When stream=True, do not run success callbacks at cache-hit time.
 
     Cached chat/text completion replay uses CustomStreamWrapper; cached Responses
-    replay uses CachedResponsesAPIStreamingIterator. Both invoke logging success
+    replay uses CachedResponsesAPIStreamingIterator; cached Anthropic Messages
+    replay uses CachedAnthropicMessagesStreamIterator. All invoke logging success
     handlers when the stream finishes; firing them here too would double-count
     spend and callback records.
     """
     return kwargs.get("stream", False) is True
 
 
+def _prompt_tokens_details_as_mapping(details: "PromptTokensDetailsWrapper") -> Mapping[str, object]:
+    """Dump prompt token details to an opaque field mapping, tolerating non-pydantic stand-ins."""
+    return details.model_dump(exclude_none=True) if hasattr(details, "model_dump") else {}
+
+
+def _request_cache_key(request_kwargs: Mapping[str, Any]) -> str | None:
+    """Read the caller-supplied ``cache_key`` off the request kwargs."""
+    return request_kwargs.get("cache_key", None)
+
+
 class LLMCachingHandler:
     def __init__(
         self,
         original_function: Callable,
-        request_kwargs: dict[str, Any],
+        request_kwargs: dict[str, object],
         start_time: datetime.datetime,
     ):
         from litellm.caching import DualCache, RedisCache
@@ -144,7 +160,7 @@ class LLMCachingHandler:
         start_time: datetime.datetime,
         call_type: str,
         kwargs: dict[str, Any],
-        args: tuple[Any, ...] | None = None,
+        args: tuple[object, ...] | None = None,
     ) -> CachingHandlerResponse | None:
         """
         Internal method to get from the cache.
@@ -283,7 +299,7 @@ class LLMCachingHandler:
         start_time: datetime.datetime,
         call_type: str,
         kwargs: dict[str, Any],
-        args: tuple[Any, ...] | None = None,
+        args: tuple[object, ...] | None = None,
     ) -> CachingHandlerResponse:
         cached_result: Any | None = None
 
@@ -360,7 +376,7 @@ class LLMCachingHandler:
                     return CachingHandlerResponse(cached_result=cached_result)
         return CachingHandlerResponse(cached_result=cached_result)
 
-    def handle_kwargs_input_list_or_str(self, kwargs: dict[str, Any]) -> list[str]:
+    def handle_kwargs_input_list_or_str(self, kwargs: dict[str, object]) -> list[str]:
         """
         Handles the input of kwargs['input'] being a list or a string
         """
@@ -542,8 +558,8 @@ class LLMCachingHandler:
         if details2 is None:
             return details1
 
-        dict1: Final = details1.model_dump(exclude_none=True) if hasattr(details1, "model_dump") else {}
-        dict2: Final = details2.model_dump(exclude_none=True) if hasattr(details2, "model_dump") else {}
+        dict1: Final = _prompt_tokens_details_as_mapping(details1)
+        dict2: Final = _prompt_tokens_details_as_mapping(details2)
 
         merged: Final[dict] = {}
         for key in set(dict1.keys()) | set(dict2.keys()):
@@ -665,7 +681,9 @@ class LLMCachingHandler:
             cache_hit=cache_hit,
         )
 
-    async def _retrieve_from_cache(self, call_type: str, kwargs: dict[str, Any], args: tuple[Any, ...]) -> Any | None:
+    async def _retrieve_from_cache(
+        self, call_type: str, kwargs: dict[str, object], args: tuple[object, ...]
+    ) -> Any | None:
         """
         Internal method to
         - get cache key
@@ -721,7 +739,8 @@ class LLMCachingHandler:
                     cached_result = None
         else:
             request_kwargs: Final = new_kwargs.copy()
-            request_cache_key: Final = request_kwargs.pop("cache_key", None)
+            request_cache_key: Final = _request_cache_key(request_kwargs)
+            request_kwargs.pop("cache_key", None)
             if litellm.cache._supports_async() is True:
                 ## check if dual cache is supported ##
                 self.preset_cache_key = request_cache_key or litellm.cache.get_cache_key(**request_kwargs)
@@ -743,10 +762,10 @@ class LLMCachingHandler:
         self,
         cached_result: Any,
         call_type: str,
-        kwargs: dict[str, Any],
+        kwargs: dict[str, object],
         logging_obj: LiteLLMLoggingObj,
         model: str,
-        args: tuple[Any, ...],
+        args: tuple[object, ...],
         custom_llm_provider: str | None = None,
     ) -> (
         ModelResponse
@@ -834,6 +853,18 @@ class LLMCachingHandler:
                 model_response_object=TranscriptionResponse(),
                 response_type="audio_transcription",
                 hidden_params=hidden_params,
+            )
+        elif (
+            call_type == CallTypes.anthropic_messages.value or call_type == CallTypes.aanthropic_messages.value
+        ) and isinstance(cached_result, dict):
+            from litellm.llms.anthropic.experimental_pass_through.messages.response_cache import (
+                convert_cached_anthropic_messages_result,
+            )
+
+            cached_result = convert_cached_anthropic_messages_result(
+                cached_result=cached_result,
+                logging_obj=logging_obj,
+                kwargs=kwargs,
             )
         elif (call_type == "aresponses" or call_type == "responses") and isinstance(cached_result, dict):
             use_chat_completion_cache: Final = _is_chat_completion_cached_dict(cached_result)
@@ -930,7 +961,7 @@ class LLMCachingHandler:
         result: Any,
         original_function: Callable,
         kwargs: dict[str, Any],
-        args: tuple[Any, ...] | None = None,
+        args: tuple[object, ...] | None = None,
     ):
         """
         Internal method to check the type of the result & cache used and adds the result to the cache accordingly
@@ -995,8 +1026,8 @@ class LLMCachingHandler:
     def sync_set_cache(
         self,
         result: Any,
-        kwargs: dict[str, Any],
-        args: tuple[Any, ...] | None = None,
+        kwargs: dict[str, object],
+        args: tuple[object, ...] | None = None,
     ):
         """
         Sync internal method to add the result to the cache
@@ -1030,6 +1061,26 @@ class LLMCachingHandler:
             and (str(original_function.__name__) in litellm.cache.supported_call_types)
             and (kwargs.get("cache", {}).get("no-store", False) is not True)
         )
+
+    def wrap_streaming_result_for_cache(
+        self, result: _StreamResultT, call_type: str
+    ) -> "_StreamResultT | AnthropicMessagesStreamCacheWriter":
+        if call_type not in (
+            CallTypes.anthropic_messages.value,
+            CallTypes.aanthropic_messages.value,
+        ):
+            return result
+        if litellm.cache is None or not self._should_store_result_in_cache(
+            original_function=self.original_function, kwargs=self.request_kwargs
+        ):
+            return result
+        if not isinstance(result, AsyncIterator):
+            return result
+        from litellm.llms.anthropic.experimental_pass_through.messages.response_cache import (
+            AnthropicMessagesStreamCacheWriter,
+        )
+
+        return AnthropicMessagesStreamCacheWriter(stream=result, caching_handler=self)
 
     def _is_call_type_supported_by_cache(
         self,
@@ -1166,8 +1217,8 @@ class LLMCachingHandler:
 
 def convert_args_to_kwargs(
     original_function: Callable,
-    args: tuple[Any, ...] | None = None,
-) -> dict[str, Any]:
+    args: tuple[object, ...] | None = None,
+) -> dict[str, object]:
     # Get the signature of the original function
     signature: Final = inspect.signature(original_function)
 

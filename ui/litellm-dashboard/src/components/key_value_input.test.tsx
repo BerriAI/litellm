@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
@@ -18,8 +18,8 @@ describe("KeyValueInput", () => {
     render(<KeyValueInput onChange={onChange} />);
 
     await user.click(screen.getByRole("button", { name: /Add Header$/ }));
-    await user.type(screen.getByPlaceholderText("Header Name"), "X-Trace");
-    await user.type(screen.getByPlaceholderText("Header Value"), "enabled");
+    fireEvent.change(screen.getByPlaceholderText("Header Name"), { target: { value: "X-Trace" } });
+    fireEvent.change(screen.getByPlaceholderText("Header Value"), { target: { value: "enabled" } });
 
     expect(onChange).toHaveBeenLastCalledWith({ "X-Trace": "enabled" });
   });

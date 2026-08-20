@@ -521,6 +521,20 @@ This is a one-time file patch and restore, not a live traffic interceptor. A Cla
 
 Cursor is not supported: it has no equivalent file-based config to hot-patch this way, since its model routing lives in its own app storage and is configured through its GUI.
 
+#### Making It Permanent at Login
+
+`lite up` holds the patch only for as long as it runs. To wire Claude Code up once and leave it that way, pass `--config-claude` to `lite login`:
+
+```bash
+lite --base-url https://your-proxy.example.com login --config-claude
+```
+
+It writes the same two settings `lite up` does, `env.ANTHROPIC_BASE_URL` and `apiKeyHelper`, but persistently: there is no backup, nothing to restore, and no foreground process to keep alive. Every other key in `~/.claude/settings.json` is preserved, the file is created if it does not exist, and it is written atomically with owner-only permissions. Plain `lite login` is unchanged; nothing happens to your Claude Code config unless you pass the flag.
+
+Because the credential is reached through `apiKeyHelper` rather than copied into the file, a later `lite login` refreshes it with no further action: Claude Code re-runs the helper on every request and picks up whatever token the most recent login stored. Nothing secret is written to `settings.json`.
+
+Run it again to point Claude Code at a different proxy; the base URL and the helper are both rewritten. `lite up` and `--config-claude` manage the same file, so the flag refuses to run while a `lite up` session holds a backup, and tells you to run `lite down` first, rather than writing settings that `lite up` would silently revert when it stops.
+
 ### QA Complexity-Based Auto-Routing Against Your Real Proxy
 
 `lite autoroute` lets you try LiteLLM's complexity-based auto-routing -- picking a cheaper or more expensive model depending on how complex a prompt looks -- against models your key already has access to on your real, running proxy, without editing that proxy's `config.yaml` and without any real request ever bypassing it. It builds a second, throwaway proxy locally that forwards every request back to your real proxy, and points Claude Code at that local proxy for the duration of the session.

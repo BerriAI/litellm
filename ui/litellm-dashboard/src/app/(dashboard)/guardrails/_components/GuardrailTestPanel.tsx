@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { Copy, Info } from "lucide-react";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -45,14 +45,14 @@ export function GuardrailTestPanel({
 
   const handleSubmit = () => {
     if (!inputText.trim()) {
-      NotificationsManager.fromBackend("Please enter text to test");
+      toast.fromError("Please enter text to test");
       return;
     }
 
     const { metadata, error } = parseMetadata(metadataText);
     if (error) {
       setMetadataError(error);
-      NotificationsManager.fromBackend(`Metadata: ${error}`);
+      toast.fromError(`Metadata: ${error}`);
       return;
     }
     setMetadataError(null);
@@ -98,9 +98,9 @@ export function GuardrailTestPanel({
   const handleCopyInput = async () => {
     const success = await copyToClipboard(inputText);
     if (success) {
-      NotificationsManager.success("Input copied to clipboard");
+      toast.success("Input copied to clipboard");
     } else {
-      NotificationsManager.fromBackend("Failed to copy input");
+      toast.fromError("Failed to copy input");
     }
   };
 
@@ -131,7 +131,7 @@ export function GuardrailTestPanel({
       </div>
 
       {/* Input Section */}
-      <div className="flex-1 overflow-auto space-y-4">
+      <div className="flex-1 space-y-4 overflow-auto px-1">
         <div className="space-y-3">
           <div>
             <div className="mb-2 flex items-center justify-between">

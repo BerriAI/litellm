@@ -14,7 +14,7 @@ import asyncio
 import json
 import os
 from collections.abc import Callable, Mapping
-from typing import Any, Final, cast
+from typing import TYPE_CHECKING, Any, Final, cast
 
 import litellm
 from litellm._logging import print_verbose, verbose_logger
@@ -23,8 +23,16 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 )
 from litellm.types.utils import EmbeddingResponse
 
-from ._embedding_router import build_router_embedding_metadata, resolve_embedding_router
+from ._embedding_router import (
+    build_router_embedding_metadata,
+    resolve_embedding_max_input_tokens,
+    resolve_embedding_router,
+    truncate_embedding_input,
+)
 from .base_cache import BaseCache
+
+if TYPE_CHECKING:
+    from litellm.router import Router
 
 
 class RedisSemanticCache(BaseCache):
@@ -38,6 +46,7 @@ class RedisSemanticCache(BaseCache):
 
     DEFAULT_REDIS_INDEX_NAME: str = "litellm_semantic_cache_index"
     CACHE_KEY_FIELD_NAME: str = "litellm_cache_key"
+    embedding_max_input_tokens: int | None = None
 
     def __init__(
         self,
@@ -48,6 +57,7 @@ class RedisSemanticCache(BaseCache):
         similarity_threshold: float | None = None,
         embedding_model: str = "text-embedding-ada-002",
         index_name: str | None = None,
+        embedding_max_input_tokens: int | None = None,
         **kwargs: object,
     ):
         """
@@ -62,6 +72,8 @@ class RedisSemanticCache(BaseCache):
                 where 1.0 requires exact matches and 0.0 accepts any match
             embedding_model: Model to use for generating embeddings
             index_name: Name for the Redis index
+            embedding_max_input_tokens: Truncate prompts to this many tokens before
+                embedding; defaults to the Router deployment's configured max_input_tokens
             ttl: Default time-to-live for cache entries in seconds
             **kwargs: Additional arguments passed to the Redis client
 
@@ -86,6 +98,7 @@ class RedisSemanticCache(BaseCache):
         # While similarity: 1 = most similar, 0 = least similar
         self.distance_threshold = 1 - similarity_threshold
         self.embedding_model = embedding_model
+        self.embedding_max_input_tokens = embedding_max_input_tokens
 
         # Set up Redis connection
         if redis_url is None:
@@ -307,6 +320,13 @@ class RedisSemanticCache(BaseCache):
             return dict_method()
         return value
 
+    def _embedding_input(self, prompt: str, router: "Router | None") -> str:
+        return truncate_embedding_input(
+            prompt,
+            self.embedding_model,
+            resolve_embedding_max_input_tokens(self.embedding_max_input_tokens, self.embedding_model, router),
+        )
+
     def _get_embedding(self, prompt: str, metadata: dict[str, Any] | None = None) -> list[float]:
         """
         Routes through the proxy Router when the embedding model is a Router
@@ -320,12 +340,13 @@ class RedisSemanticCache(BaseCache):
             llm_router = None
 
         router: Final = resolve_embedding_router(self.embedding_model, llm_router, llm_model_list)
+        embedding_input: Final = self._embedding_input(prompt, router)
         if router is not None:
             embedding_response = cast(
                 EmbeddingResponse,
                 router.embedding(
                     model=self.embedding_model,
-                    input=prompt,
+                    input=embedding_input,
                     cache={"no-store": True, "no-cache": True},
                     metadata=build_router_embedding_metadata(metadata),
                 ),
@@ -335,7 +356,7 @@ class RedisSemanticCache(BaseCache):
                 EmbeddingResponse,
                 litellm.embedding(
                     model=self.embedding_model,
-                    input=prompt,
+                    input=embedding_input,
                     cache={"no-store": True, "no-cache": True},
                 ),
             )
@@ -490,18 +511,19 @@ class RedisSemanticCache(BaseCache):
             llm_router = None
 
         router: Final = resolve_embedding_router(self.embedding_model, llm_router, llm_model_list)
+        embedding_input: Final = self._embedding_input(prompt, router)
         try:
             if router is not None:
                 embedding_response = await router.aembedding(
                     model=self.embedding_model,
-                    input=prompt,
+                    input=embedding_input,
                     cache={"no-store": True, "no-cache": True},
                     metadata=build_router_embedding_metadata(metadata),
                 )
             else:
                 embedding_response = await litellm.aembedding(
                     model=self.embedding_model,
-                    input=prompt,
+                    input=embedding_input,
                     cache={"no-store": True, "no-cache": True},
                 )
             return embedding_response["data"][0]["embedding"]

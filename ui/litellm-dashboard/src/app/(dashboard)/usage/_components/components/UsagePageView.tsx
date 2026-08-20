@@ -7,12 +7,11 @@
  */
 
 import { ChevronDown, ChevronRight, Download, ExternalLink, Info, Loader2, Sparkles, X } from "lucide-react";
-import type { DateRangePickerValue } from "@tremor/react";
+import type { DateRangePickerValue } from "@/components/shared/date_picker_types";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { BarChart } from "@/components/shared/charts";
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/shared/Alert";
-import { PaginatedSearchSelect } from "@/components/shared/PaginatedSearchSelect";
 import { Button } from "@/components/ui/button";
 import { Card as ShadcnCard, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -21,13 +20,14 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { useAgents } from "@/app/(dashboard)/hooks/agents/useAgents";
 import { useCustomers } from "@/app/(dashboard)/hooks/customers/useCustomers";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import useIsOrgAdmin from "@/app/(dashboard)/hooks/useIsOrgAdmin";
 import { useCurrentUser } from "@/app/(dashboard)/hooks/users/useCurrentUser";
-import { useInfiniteUsers } from "@/app/(dashboard)/hooks/users/useUsers";
 import { hasCapability } from "@/utils/capabilities";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { all_admin_roles, internalUserRoles } from "@/utils/roles";
 import { ActivityMetrics, processActivityData } from "@/components/activity_metrics";
 import CloudZeroExportModal from "@/components/cloudzero_export_modal";
+import UserDropdown from "@/components/common_components/UserDropdown";
 import EntityUsageExportModal from "@/components/EntityUsageExport";
 import { Team } from "@/components/key_team_helpers/key_list";
 import {
@@ -101,39 +101,9 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   const { data: currentUser } = useCurrentUser();
   const isAdmin = all_admin_roles.includes(userRole || "");
   const canViewTagUsage = isAdmin || internalUserRoles.includes(userRole || "");
-  const canViewOrganizationUsage = hasCapability(userRole, "viewOrganizationUsage");
+  const isOrgAdmin = useIsOrgAdmin();
+  const canViewOrganizationUsage = hasCapability(userRole, "viewOrganizationUsage", isOrgAdmin);
   const canViewAgentUsage = hasCapability(userRole, "viewAgentUsage");
-
-  const [settledUserSearch, setSettledUserSearch] = useState("");
-
-  const {
-    data: usersInfiniteData,
-    fetchNextPage: fetchNextUsersPage,
-    hasNextPage: hasNextUsersPage,
-    isFetchingNextPage: isFetchingNextUsersPage,
-    isLoading: isLoadingUsers,
-  } = useInfiniteUsers(50, settledUserSearch || undefined);
-
-  const userOptions = useMemo(() => {
-    if (!usersInfiniteData?.pages) return [];
-    const seen = new Set<string>();
-    const result: { value: string; label: string }[] = [];
-    for (const page of usersInfiniteData.pages) {
-      for (const user of page.users) {
-        if (seen.has(user.user_id)) continue;
-        seen.add(user.user_id);
-        result.push({
-          value: user.user_id,
-          label: user.user_alias
-            ? `${user.user_alias} (${user.user_id})`
-            : user.user_email
-              ? `${user.user_email} (${user.user_id})`
-              : user.user_id,
-        });
-      }
-    }
-    return result;
-  }, [usersInfiniteData]);
 
   // For admins: null means global view (all users), a string means filter by that user
   // For non-admins: always set to their own user ID
@@ -142,7 +112,14 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   const [isCloudZeroModalOpen, setIsCloudZeroModalOpen] = useState(false);
   const [isGlobalExportModalOpen, setIsGlobalExportModalOpen] = useState(false);
   const [isAiChatOpen, setIsAiChatOpen] = useState(false);
-  const [usageView, setUsageView] = useState<UsageOption>("global");
+  const [selectedUsageView, setUsageView] = useState<UsageOption>("global");
+  // Org-admin membership is read from the server, so unlike the other usage
+  // views this one can be revoked while the page is open. Derive the view in
+  // render rather than storing it, so the fallback lands on the same paint and
+  // the selector never holds a value it no longer offers.
+  const usageView: UsageOption =
+    selectedUsageView === "organization" && !canViewOrganizationUsage ? "global" : selectedUsageView;
+
   const [showCredentialBanner, setShowCredentialBanner] = useState(true);
   const [topKeysLimit, setTopKeysLimit] = useState<number>(5);
   const [topModelsLimit, setTopModelsLimit] = useState<number>(5);
@@ -492,6 +469,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
               onChange={(value) => setUsageView(value)}
               userRole={userRole}
               canViewTagUsage={canViewTagUsage}
+              isOrgAdmin={isOrgAdmin}
             />
             <AdvancedDatePicker value={dateValue} onValueChange={handleDateChange} />
           </div>
@@ -528,18 +506,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
               {isAdmin && usageView === "global" && (
                 <div className="mb-4">
                   <p className="mb-2 text-sm text-foreground">Filter by user</p>
-                  <PaginatedSearchSelect
-                    options={userOptions}
-                    value={selectedUserId ?? undefined}
-                    onValueChange={(value) => setSelectedUserId(value === "" ? null : value)}
-                    onSearchChange={setSettledUserSearch}
-                    onLoadMore={fetchNextUsersPage}
-                    hasNextPage={hasNextUsersPage}
-                    isLoading={isLoadingUsers}
-                    isFetchingNextPage={isFetchingNextUsersPage}
-                    placeholder="Select user to filter..."
-                    emptyText="No users found"
-                  />
+                  <UserDropdown value={selectedUserId} onChange={setSelectedUserId} />
                 </div>
               )}
               <Tabs defaultValue="cost">
@@ -942,6 +909,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
               entityType="organization"
               userID={userID}
               userRole={userRole}
+              isOrgAdmin={isOrgAdmin}
               dateValue={dateValue}
               entityList={
                 organizations?.map((organization) => ({
@@ -1042,7 +1010,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
               entityType="user"
               userID={userID}
               userRole={userRole}
-              entityList={userOptions.length > 0 ? userOptions : null}
+              entityList={null}
               premiumUser={premiumUser}
               dateValue={dateValue}
             />

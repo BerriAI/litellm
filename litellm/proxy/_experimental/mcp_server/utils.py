@@ -880,7 +880,9 @@ _HOP_BY_HOP_HEADERS: Final = frozenset(
     }
 )
 
-_SYNTHETIC_REQUEST_EXCLUDED_HEADERS: Final = _HOP_BY_HOP_HEADERS | frozenset({"content-type", "x-forwarded-for"})
+_SYNTHETIC_REQUEST_EXCLUDED_HEADERS: Final = _HOP_BY_HOP_HEADERS | frozenset(
+    {"content-type", "host", "x-forwarded-for"}
+)
 
 _SYNTHETIC_REQUEST_SERVER: Final = ("127.0.0.1", 4000)
 
@@ -908,10 +910,57 @@ def _mcp_client_side_auth_header_name() -> str:
         return MCPRequestHandler.LITELLM_MCP_AUTH_HEADER_NAME
 
 
+def _identity_header_names() -> frozenset[str]:
+    """Lowercased header names the deployment reads the caller's identity out of. A name here
+    is a claim about who the caller is rather than a secret, and ``get_user_from_headers``
+    resolves it off the request this module reconstructs, so dropping one would lose end user
+    attribution on the MCP paths that leave ``end_user_id`` unset at connect time.
+
+    ``user_header_mappings`` is accepted as a bare mapping as well as a list of them, matching
+    ``get_internal_user_header_from_mapping`` and ``get_customer_user_header_from_mapping``.
+    Iterating the bare form without normalizing yields its keys, which would silently exempt
+    nothing."""
+    try:
+        from litellm.proxy.proxy_server import general_settings
+    except ImportError:
+        return frozenset()
+    if not general_settings:
+        return frozenset()
+    user_header: Final = general_settings.get("user_header_name")
+    configured: Final = general_settings.get("user_header_mappings")
+    mappings: Final = configured if isinstance(configured, list) else (configured,) if configured else ()
+    mapped: Final = (mapping.get("header_name") for mapping in mappings if isinstance(mapping, Mapping))
+    return frozenset(name.lower() for name in (user_header, *mapped) if isinstance(name, str) and name)
+
+
+def _forwarded_upstream_header_names() -> frozenset[str]:
+    """Lowercased header names that a configured MCP server forwards upstream through its
+    ``extra_headers`` allowlist. The names are chosen by the admin, so no prefix rule can
+    recognize them, and a caller supplied value under one of them is an upstream credential.
+
+    ``authorization`` is left out because ``clean_headers`` already strips it, and claiming it
+    here would change which header ``authenticated_with_header`` resolves to on the oauth
+    passthrough config, which lists it in ``extra_headers`` by design. Identity headers are
+    left out for the same reason: naming one in ``extra_headers`` forwards the caller's
+    identity upstream, it does not turn that identity into a secret."""
+    try:
+        from .mcp_server_manager import global_mcp_server_manager
+    except ImportError:
+        return frozenset()
+    exempt: Final = _identity_header_names() | frozenset({"authorization"})
+    return frozenset(
+        name.lower()
+        for server in global_mcp_server_manager.get_registry().values()
+        for name in (server.extra_headers or ())
+        if name.lower() not in exempt
+    )
+
+
 def _upstream_credential_headers(header_names: Iterable[str]) -> frozenset[str]:
     """Lowercased names of the headers in ``header_names`` that carry an upstream MCP
-    credential rather than request context: the configured client side auth header and
-    the per-server ``x-mcp-{alias}-{header}`` family. ``clean_headers`` only knows the
+    credential rather than request context: the configured client side auth header, any
+    header name a configured server forwards upstream via ``extra_headers``, and the
+    per-server ``x-mcp-{alias}-{header}`` family. ``clean_headers`` only knows the
     credential headers of the chat completions path, so these are dropped on top of it.
     """
     from .auth.user_api_key_auth_mcp import MCPRequestHandler
@@ -923,10 +972,13 @@ def _upstream_credential_headers(header_names: Iterable[str]) -> frozenset[str]:
         }
     )
     client_side_auth: Final = _mcp_client_side_auth_header_name().lower()
+    forwarded_upstream: Final = _forwarded_upstream_header_names()
     return frozenset(
         name
         for name in (raw_name.lower() for raw_name in header_names)
-        if name == client_side_auth or (name.startswith(_MCP_SERVER_AUTH_HEADER_PREFIX) and name not in non_credential)
+        if name == client_side_auth
+        or name in forwarded_upstream
+        or (name.startswith(_MCP_SERVER_AUTH_HEADER_PREFIX) and name not in non_credential)
     )
 
 
@@ -944,7 +996,9 @@ def build_synthetic_mcp_request(
     ``proxy_server_request``, header-based tags, guardrails and trace correlation
     exactly as on the chat completions path. Hop-by-hop headers describe the
     original HTTP framing rather than the logical request, so they are dropped, and
-    ``x-forwarded-for`` comes from the resolved ``client_ip`` to avoid spoofing. Upstream
+    ``x-forwarded-for`` comes from the resolved ``client_ip`` to avoid spoofing. ``host`` is
+    dropped for the same reason: it is what ``Request.url`` is built from, so forwarding it
+    would let a caller choose the URL every logging callback records. Upstream
     MCP credentials and the deployment's proxy key header, including a custom
     ``litellm_key_header_name``, are dropped so they cannot reach a callback or a guardrail
     through the derived metadata even when a caller omits ``general_settings``.
@@ -991,7 +1045,8 @@ def logging_safe_mcp_headers(raw_headers: Mapping[str, str] | None) -> Mapping[s
     too: these headers are read back out of the metadata to change proxy behaviour, so
     leaving one in place would let any MCP client turn off the redaction an admin
     configured. This path carries no key or team object to authorize an opt-out with, so
-    it always strips them."""
+    it always strips them. ``host`` goes too, so that a caller cannot name the deployment in
+    the guardrail payload and the spend row the way it could once name the request URL."""
     from starlette.datastructures import Headers
 
     from litellm.proxy.litellm_pre_call_utils import (
@@ -1003,6 +1058,7 @@ def logging_safe_mcp_headers(raw_headers: Mapping[str, str] | None) -> Mapping[s
     excluded: Final = (
         _upstream_credential_headers(raw_headers.keys() if raw_headers else ())
         | UNTRUSTED_REQUEST_HEADER_CONTROL_FIELDS
+        | frozenset({"host"})
     )
     cleaned: Final = clean_headers(
         Headers(raw_headers),

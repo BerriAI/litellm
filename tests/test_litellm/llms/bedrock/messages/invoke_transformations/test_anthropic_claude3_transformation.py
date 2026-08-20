@@ -265,6 +265,174 @@ def test_chunk_parser_usage_transformation():
     assert parsed["usage"]["output_tokens"] == 5
 
 
+def test_chunk_parser_preserves_cache_usage_fields_with_invocation_metrics():
+    """Cache usage fields on the chunk must survive invocationMetrics conversion.
+
+    Bedrock reports cache_read_input_tokens / cache_creation_input_tokens on
+    message_stop.usage and attaches amazon-bedrock-invocationMetrics to the same
+    chunk. invocationMetrics.inputTokenCount excludes cache reads and writes, so
+    replacing the whole usage block with a metrics-only one drops the cache
+    fields and cache tokens end up billed at $0.
+    """
+
+    decoder = AmazonAnthropicClaudeMessagesStreamDecoder(
+        model="bedrock/invoke/anthropic.claude-sonnet-4-6"
+    )
+
+    chunk = {
+        "type": "message_stop",
+        "usage": {
+            "cache_read_input_tokens": 9821,
+            "cache_creation_input_tokens": 0,
+        },
+        "amazon-bedrock-invocationMetrics": {
+            "inputTokenCount": 10174,
+            "outputTokenCount": 500,
+        },
+    }
+
+    parsed = decoder._chunk_parser(chunk.copy())
+
+    assert "amazon-bedrock-invocationMetrics" not in parsed
+    assert parsed["usage"]["cache_read_input_tokens"] == 9821
+    assert parsed["usage"]["cache_creation_input_tokens"] == 0
+    assert parsed["usage"]["input_tokens"] == 10174
+    assert parsed["usage"]["output_tokens"] == 500
+
+
+def test_chunk_parser_maps_cache_token_counts_from_invocation_metrics():
+    """Cache itemization inside invocationMetrics maps to Anthropic usage keys."""
+
+    decoder = AmazonAnthropicClaudeMessagesStreamDecoder(
+        model="bedrock/invoke/anthropic.claude-sonnet-4-6"
+    )
+
+    chunk = {
+        "type": "message_stop",
+        "amazon-bedrock-invocationMetrics": {
+            "inputTokenCount": 10174,
+            "outputTokenCount": 500,
+            "cacheReadInputTokenCount": 9821,
+            "cacheWriteInputTokenCount": 42,
+        },
+    }
+
+    parsed = decoder._chunk_parser(chunk.copy())
+
+    assert parsed["usage"]["input_tokens"] == 10174
+    assert parsed["usage"]["output_tokens"] == 500
+    assert parsed["usage"]["cache_read_input_tokens"] == 9821
+    assert parsed["usage"]["cache_creation_input_tokens"] == 42
+
+
+def test_chunk_parser_keeps_existing_token_counts_over_invocation_metrics():
+    """Token counts reported in the chunk's own usage block win over invocationMetrics."""
+
+    decoder = AmazonAnthropicClaudeMessagesStreamDecoder(
+        model="bedrock/invoke/anthropic.claude-sonnet-4-6"
+    )
+
+    chunk = {
+        "type": "message_stop",
+        "usage": {
+            "input_tokens": 7,
+            "output_tokens": 11,
+            "cache_read_input_tokens": 3,
+        },
+        "amazon-bedrock-invocationMetrics": {
+            "inputTokenCount": 999,
+            "outputTokenCount": 999,
+        },
+    }
+
+    parsed = decoder._chunk_parser(chunk.copy())
+
+    assert parsed["usage"]["input_tokens"] == 7
+    assert parsed["usage"]["output_tokens"] == 11
+    assert parsed["usage"]["cache_read_input_tokens"] == 3
+
+
+@pytest.mark.asyncio
+async def test_bedrock_sse_wrapper_preserves_cache_usage_with_invocation_metrics():
+    """Regression test: cache usage on message_stop must survive when the same
+    chunk also carries amazon-bedrock-invocationMetrics.
+
+    Mirrors the commercial Bedrock stream shape: message_start and message_delta
+    repeat uncached input_tokens only, while message_stop carries the cache
+    breakdown plus invocationMetrics. The decoder previously replaced
+    message_stop's usage with a metrics-only block, so
+    _promote_message_stop_usage had no cache fields left to promote and the
+    final usage billed cache reads and writes at $0.
+    """
+
+    decoder = AmazonAnthropicClaudeMessagesStreamDecoder(
+        model="bedrock/invoke/anthropic.claude-sonnet-4-6"
+    )
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+
+    raw_chunks = [
+        {
+            "type": "message_start",
+            "message": {
+                "id": "msg_123",
+                "type": "message",
+                "role": "assistant",
+                "content": [],
+                "usage": {
+                    "input_tokens": 10174,
+                    "output_tokens": 1,
+                },
+            },
+        },
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+            "usage": {"output_tokens": 500},
+        },
+        {
+            "type": "message_stop",
+            "usage": {
+                "cache_read_input_tokens": 9821,
+                "cache_creation_input_tokens": 0,
+            },
+            "amazon-bedrock-invocationMetrics": {
+                "inputTokenCount": 10174,
+                "outputTokenCount": 500,
+                "invocationLatency": 1000,
+                "firstByteLatency": 100,
+            },
+        },
+    ]
+
+    async def _decoded_stream():  # type: ignore[return-type]
+        for chunk in raw_chunks:
+            yield decoder._chunk_parser(copy.deepcopy(chunk))
+
+    collected: list[bytes] = []
+    async for chunk in cfg.bedrock_sse_wrapper(
+        _decoded_stream(),
+        litellm_logging_obj=LiteLLMLoggingObj(
+            model="bedrock/invoke/anthropic.claude-sonnet-4-6",
+            messages=[{"role": "user", "content": "Hello"}],
+            stream=True,
+            call_type="chat",
+            start_time=datetime.now(),
+            litellm_call_id="test_bedrock_sse_wrapper_preserves_cache_usage",
+            function_id="test_bedrock_sse_wrapper_preserves_cache_usage",
+        ),
+        request_body={},
+    ):
+        collected.append(chunk)
+
+    delta_chunk = next(c for c in collected if b"event: message_delta\n" in c)
+    delta_json = json.loads(delta_chunk.decode("utf-8").split("data: ", 1)[1].strip())
+
+    assert delta_json["usage"]["cache_read_input_tokens"] == 9821
+    assert delta_json["usage"]["cache_creation_input_tokens"] == 0
+    assert delta_json["usage"]["input_tokens"] == 10174
+    assert delta_json["usage"]["output_tokens"] == 500
+
+
 def test_remove_ttl_from_cache_control():
     """Ensure ttl field is removed from cache_control in messages."""
 
@@ -2780,3 +2948,38 @@ def test_bedrock_invoke_messages_allows_converted_websearch_function_tool():
         headers={},
     )
     assert result["tools"][0]["name"] == "litellm_web_search"
+
+
+@pytest.mark.asyncio
+async def test_bedrock_sse_wrapper_dispatches_logging_on_client_disconnect():
+    """
+    Regression test for LIT-5839: closing the outer bedrock_sse_wrapper
+    mid-stream (what the proxy does on a client disconnect) must close the
+    inner async_sse_wrapper deterministically so the partial-stream logging
+    fires. `completion_start_time` is only stamped on the logging object by
+    that dispatch, so it observing a value proves the whole chain ran.
+    """
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+
+    async def _hanging_stream():
+        yield {"type": "message_start", "message": {"id": "msg_1", "usage": {"input_tokens": 25, "output_tokens": 1}}}
+        yield {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "partial"}}
+        await asyncio.Event().wait()
+
+    logging_obj = LiteLLMLoggingObj(
+        model="bedrock/invoke/anthropic.claude-3-sonnet-20240229-v1:0",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="chat",
+        start_time=datetime.now(),
+        litellm_call_id="test_bedrock_sse_wrapper_disconnect_logging",
+        function_id="test_bedrock_sse_wrapper_disconnect_logging",
+    )
+    wrapped = cfg.bedrock_sse_wrapper(_hanging_stream(), litellm_logging_obj=logging_obj, request_body={})
+    await wrapped.__anext__()
+    await wrapped.__anext__()
+    assert logging_obj.completion_start_time is None
+
+    await wrapped.aclose()
+
+    assert logging_obj.completion_start_time is not None
