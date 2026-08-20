@@ -823,6 +823,7 @@ openai_compatible_providers: Final[list] = [
     "ragflow",
     "pinstripes",  # Pinstripes - JSON-configured provider
     "darkbloom",
+    "coralbricks",
     "meta",  # Meta Model API (Muse Spark) - JSON-configured provider
 ]
 openai_text_completion_compatible_providers: Final[list] = [  # providers that support `/v1/completions`

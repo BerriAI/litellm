@@ -3782,6 +3782,7 @@ class LlmProviders(str, Enum):
     LIBERTAI = "libertai"
     PINSTRIPES = "pinstripes"
     DARKBLOOM = "darkbloom"
+    CORALBRICKS = "coralbricks"
     META = "meta"
     LITELLM_AGENT = "litellm_agent"
     CURSOR = "cursor"

@@ -529,3 +529,115 @@ if __name__ == "__main__":
     print("\n" + "=" * 50)
     print("✓ All tests passed!")
     print("=" * 50)
+
+
+class TestCoralBricks:
+    def test_coralbricks_json_config_exists(self):
+        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+        coralbricks = JSONProviderRegistry.get("coralbricks")
+        assert coralbricks is not None
+        assert coralbricks.base_url == "https://inference.coralbricks.ai/v1"
+        assert coralbricks.api_key_env == "CORALBRICKS_API_KEY"
+        assert coralbricks.api_base_env == "CORALBRICKS_API_BASE"
+        assert coralbricks.param_mappings.get("max_completion_tokens") == "max_tokens"
+
+    def test_coralbricks_provider_resolution(self):
+        from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+
+        model, provider, api_key, api_base = get_llm_provider(
+            model="coralbricks/glm-5.2-fp4",
+            custom_llm_provider=None,
+            api_base=None,
+            api_key=None,
+        )
+
+        assert model == "glm-5.2-fp4"
+        assert provider == "coralbricks"
+        assert api_key is None
+        assert api_base == "https://inference.coralbricks.ai/v1"
+
+    def test_coralbricks_dynamic_config(self):
+        from litellm.llms.openai_like.dynamic_config import create_config_class
+        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+        provider = JSONProviderRegistry.get("coralbricks")
+        config_class = create_config_class(provider)
+        config = config_class()
+
+        api_base, api_key = config._get_openai_compatible_provider_info(None, None)
+        assert api_base == "https://inference.coralbricks.ai/v1"
+
+
+class TestCoralBricksPricing:
+    """Regression coverage for the CoralBricks cost map (Greptile P2):
+    the four pricing records and the zero-cost cached-input behavior."""
+
+    EXPECTED = {
+        "coralbricks/glm-5.2-fp4": (1.12e-06, 4.4e-06),
+        "coralbricks/kimi-k3": (3e-06, 1.5e-05),
+        "coralbricks/gpt-oss-120b": (1.2e-07, 6e-07),
+    }
+
+    def test_pricing_records_present(self):
+        """The shipped cost map carries all four models with free cache reads."""
+        prices_path = os.path.join(
+            workspace_path, "model_prices_and_context_window.json"
+        )
+        with open(prices_path) as fh:
+            prices = json.load(fh)
+        for model, (inp, out) in self.EXPECTED.items():
+            row = prices[model]
+            assert row["litellm_provider"] == "coralbricks"
+            assert row["input_cost_per_token"] == inp
+            assert row["output_cost_per_token"] == out
+            assert row["cache_read_input_token_cost"] == 0.0
+            assert row["mode"] == "chat"
+
+    def test_completion_cost_with_free_cached_reads(self):
+        """completion_cost prices cached input tokens at zero for coralbricks."""
+        from litellm import ModelResponse, Usage, completion_cost
+
+        model = "coralbricks/glm-5.2-fp4"
+        inp, out = self.EXPECTED[model]
+        # register_model makes the test deterministic regardless of which
+        # cost map (local backup vs remote) the environment loaded.
+        litellm.register_model(
+            {
+                model: {
+                    "litellm_provider": "coralbricks",
+                    "mode": "chat",
+                    "input_cost_per_token": inp,
+                    "output_cost_per_token": out,
+                    "cache_read_input_token_cost": 0.0,
+                }
+            }
+        )
+        resp = ModelResponse(
+            model=model,
+            usage=Usage(
+                prompt_tokens=1000,
+                completion_tokens=100,
+                prompt_tokens_details={"cached_tokens": 800},
+            ),
+        )
+        resp._hidden_params["custom_llm_provider"] = "coralbricks"
+        cost = completion_cost(completion_response=resp)
+        # 200 uncached input tokens at full rate + 800 cached at 0 + output.
+        expected = 200 * inp + 800 * 0.0 + 100 * out
+        assert abs(cost - expected) < 1e-12, (cost, expected)
+
+    def test_add_known_models_registers_coralbricks(self):
+        """Covers the coralbricks branch in add_known_models: cost-map rows
+        with litellm_provider=coralbricks land in the provider model set."""
+        litellm.add_known_models(
+            {
+                "coralbricks/test-model": {
+                    "litellm_provider": "coralbricks",
+                    "mode": "chat",
+                    "input_cost_per_token": 1e-06,
+                    "output_cost_per_token": 2e-06,
+                }
+            }
+        )
+        assert "coralbricks/test-model" in litellm.coralbricks_models
