@@ -906,3 +906,102 @@ class TestOllamaToolCallTransformation:
         assert tool_msg["content"] == "Sunny, 72°F"
         assert "tool_call_id" in tool_msg, "tool_call_id must be forwarded to Ollama"
         assert tool_msg["tool_call_id"] == "call_abc123"
+
+
+class TestOllamaChatUsageCounts:
+    """Tests for how usage is taken from Ollama's response."""
+
+    @staticmethod
+    def _transform(config, ollama_response, messages):
+        import json
+        from unittest.mock import MagicMock
+
+        from litellm.types.utils import Choices, Message, ModelResponse
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = ollama_response
+        mock_response.text = json.dumps(ollama_response)
+
+        model_response = ModelResponse()
+        model_response.choices = [Choices(message=Message(content=""), index=0)]
+
+        return config.transform_response(
+            model="qwen3:14b",
+            raw_response=mock_response,
+            model_response=model_response,
+            logging_obj=MagicMock(),
+            request_data={},
+            messages=messages,
+            optional_params={},
+            litellm_params={},
+            encoding=None,
+            api_key=None,
+            json_mode=False,
+        )
+
+    def test_reported_counts_skip_the_estimator(self):
+        """
+        When Ollama reports both counts, `litellm.token_counter` must not run.
+
+        Passing it as the default argument of `dict.get` evaluates it on every
+        response: it costs a tokenization pass per call, and a counter failure
+        discards a response Ollama already produced. Content types the counter
+        does not handle (a `video_url` block reaches Ollama's route because
+        `extract_images_from_message` only collects `image_url`) therefore turned
+        a 200 into a 500.
+        """
+        from unittest.mock import patch
+
+        import litellm
+
+        ollama_response = {
+            "model": "qwen3:14b",
+            "created_at": "2025-01-11T00:00:00.000000Z",
+            "message": {"role": "assistant", "content": "Hello!"},
+            "done": True,
+            "prompt_eval_count": 100,
+            "eval_count": 50,
+        }
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Describe this."},
+                    {
+                        "type": "video_url",
+                        "video_url": {"url": "data:video/mp4;base64,AAAA"},
+                    },
+                ],
+            }
+        ]
+
+        with patch.object(
+            litellm, "token_counter", side_effect=AssertionError("estimator ran")
+        ):
+            result = self._transform(OllamaChatConfig(), ollama_response, messages)
+
+        assert result.usage.prompt_tokens == 100
+        assert result.usage.completion_tokens == 50
+        assert result.usage.total_tokens == 150
+
+    def test_missing_counts_fall_back_to_the_estimator(self):
+        """When Ollama omits a count, the estimator fills it in."""
+        from unittest.mock import patch
+
+        import litellm
+
+        ollama_response = {
+            "model": "qwen3:14b",
+            "created_at": "2025-01-11T00:00:00.000000Z",
+            "message": {"role": "assistant", "content": "Hello!"},
+            "done": True,
+        }
+        messages = [{"role": "user", "content": "Hi"}]
+
+        with patch.object(litellm, "token_counter", return_value=7) as counter:
+            result = self._transform(OllamaChatConfig(), ollama_response, messages)
+
+        assert counter.call_count == 2
+        assert result.usage.prompt_tokens == 7
+        assert result.usage.completion_tokens == 7
+

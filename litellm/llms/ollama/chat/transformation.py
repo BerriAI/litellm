@@ -386,10 +386,19 @@ class OllamaChatConfig(BaseConfig):
                 model_response.choices[0].finish_reason = "tool_calls"
         model_response.created = int(time.time())
         model_response.model = "ollama_chat/" + model
-        prompt_tokens = response_json.get("prompt_eval_count", litellm.token_counter(messages=messages))
-        completion_tokens: Final = response_json.get(
-            "eval_count",
-            litellm.token_counter(text=response_json["message"]["content"]),
+        # Ollama reports both counts, so only fall back to the estimator when a count is
+        # missing. Passing token_counter as the default argument of dict.get evaluates it
+        # on every response, which costs a tokenization pass per call and lets a counter
+        # failure discard a response Ollama already produced.
+        reported_prompt_tokens: Final = response_json.get("prompt_eval_count")
+        prompt_tokens: Final = (
+            reported_prompt_tokens if reported_prompt_tokens is not None else litellm.token_counter(messages=messages)
+        )
+        reported_completion_tokens: Final = response_json.get("eval_count")
+        completion_tokens: Final = (
+            reported_completion_tokens
+            if reported_completion_tokens is not None
+            else litellm.token_counter(text=response_json["message"]["content"])
         )
         setattr(
             model_response,
