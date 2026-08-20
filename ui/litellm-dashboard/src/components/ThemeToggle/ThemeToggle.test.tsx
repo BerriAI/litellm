@@ -16,7 +16,7 @@ const openMenu = async () => {
   await screen.findByRole("menu");
 };
 
-const pick = async (label: string) => userEvent.click(screen.getByRole("menuitemradio", { name: label }));
+const pick = async (label: string | RegExp) => userEvent.click(screen.getByRole("menuitemradio", { name: label }));
 
 beforeEach(() => {
   localStorage.clear();
@@ -33,7 +33,7 @@ describe("ThemeToggle", () => {
     await openMenu();
 
     expect(screen.getByRole("menuitemradio", { name: "Light" })).toBeChecked();
-    expect(screen.getByRole("menuitemradio", { name: "Dark" })).not.toBeChecked();
+    expect(screen.getByRole("menuitemradio", { name: /^Dark/ })).not.toBeChecked();
     expect(screen.getByRole("menuitemradio", { name: "System" })).not.toBeChecked();
   });
 
@@ -41,7 +41,7 @@ describe("ThemeToggle", () => {
     renderToggle();
     await openMenu();
 
-    await pick("Dark");
+    await pick(/^Dark/);
 
     expect(document.documentElement).toHaveClass("dark");
     expect(localStorage.getItem("theme")).toBe("dark");
@@ -50,7 +50,7 @@ describe("ThemeToggle", () => {
   it("hands control back to the system preference when asked", async () => {
     renderToggle();
     await openMenu();
-    await pick("Dark");
+    await pick(/^Dark/);
 
     await pick("System");
 
@@ -58,15 +58,20 @@ describe("ThemeToggle", () => {
     expect(document.documentElement).not.toHaveClass("dark");
   });
 
-  it("flags dark mode as experimental, and only while it is on", async () => {
+  it("marks dark as beta in the menu, and leaves the other choices unmarked", async () => {
     renderToggle();
     await openMenu();
-    expect(screen.queryByText("Experimental")).not.toBeInTheDocument();
 
-    await pick("Dark");
-    expect(screen.getByText("Experimental")).toBeInTheDocument();
+    expect(screen.getByRole("menuitemradio", { name: /^Dark/ })).toHaveTextContent("Beta");
+    expect(screen.getByRole("menuitemradio", { name: "Light" })).not.toHaveTextContent("Beta");
+    expect(screen.getByRole("menuitemradio", { name: "System" })).not.toHaveTextContent("Beta");
+  });
 
-    await pick("Light");
-    expect(screen.queryByText("Experimental")).not.toBeInTheDocument();
+  it("keeps the beta marker inside the menu rather than in the toolbar", async () => {
+    renderToggle();
+    await openMenu();
+    await pick(/^Dark/);
+
+    expect(screen.getByRole("button", { name: "Theme" })).not.toHaveTextContent("Beta");
   });
 });
