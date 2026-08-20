@@ -309,7 +309,7 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
           <div>
             <div className="flex items-center gap-2 mb-1">
               <strong className="font-semibold">Classification Rubric</strong>
-              <SimpleTooltip content="Every rubric uses the same four tiers and the same tier definitions. They differ only in the worked examples that show the classifier where the boundary between tiers sits.">
+              <SimpleTooltip content="Every rubric uses the same four tiers. They differ in the worked examples that show the classifier where the boundary between tiers sits, and the Business rubric also rewrites the tier definitions for business traffic.">
                 <Info className="size-4 text-muted-foreground" />
               </SimpleTooltip>
             </div>

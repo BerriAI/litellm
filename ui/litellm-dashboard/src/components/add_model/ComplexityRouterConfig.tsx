@@ -34,7 +34,7 @@ export interface ComplexityTiers {
   REASONING: string[];
 }
 
-export type ClassificationRubric = "legacy" | "agentic" | "chat";
+export type ClassificationRubric = "legacy" | "agentic" | "chat" | "business";
 
 /** What an unset preset means, matching the backend: the rubric as it shipped before calibration. */
 export const DEFAULT_CLASSIFICATION_RUBRIC: ClassificationRubric = "legacy";
@@ -67,6 +67,13 @@ export const CLASSIFICATION_RUBRIC_DESCRIPTIONS: Record<ClassificationRubric, { 
       description:
         "Drops the engineering examples, for a router serving only conversational traffic that never sees those " +
         "requests.",
+    },
+    business: {
+      label: "Business",
+      description:
+        "Business and sales examples plus business-oriented tier definitions: routine drafting and summarizing " +
+        "stay at Medium, data-determined analysis is Complex, and only decisions under conflicting tradeoffs " +
+        "reach Reasoning. Suits sales, support, and go-to-market traffic.",
     },
   };
 
