@@ -6823,7 +6823,8 @@ class ProxyConfig:
 
         if self._should_load_db_object(object_type="config_overrides"):
             await self._init_hashicorp_vault_config_override(prisma_client=prisma_client)
-            await self._apply_safe_litellm_settings_overrides_from_db(prisma_client=prisma_client)
+
+        await self._apply_safe_litellm_settings_overrides_from_db(prisma_client=prisma_client)
 
     async def _apply_safe_litellm_settings_overrides_from_db(self, prisma_client: PrismaClient) -> None:
         config_record: Final = await get_config_param(prisma_client, "litellm_settings")
