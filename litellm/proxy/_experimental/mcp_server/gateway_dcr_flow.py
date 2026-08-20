@@ -723,10 +723,16 @@ async def complete_connect_flow(
         return _oauth_error(401, "login_required", "sign in to LiteLLM to finish connecting")
     if session_user_id != flow.user_id:
         return _oauth_error(403, "access_denied", "the signed-in user does not match this connect flow")
-    if not await _SingleUseGuard(cache).claim(
-        f"{_USED_FLOW_CACHE_PREFIX}{flow.jti}", CONNECT_FLOW_TTL_SECONDS + _CLAIM_TTL_BUFFER_SECONDS
-    ):
-        return _oauth_error(400, "invalid_request", "this connect flow was already completed; restart the connection")
+    flow_refusal: Final = _claim_refusal(
+        await _SingleUseGuard(cache).claim(
+            f"{_USED_FLOW_CACHE_PREFIX}{flow.jti}", CONNECT_FLOW_TTL_SECONDS + _CLAIM_TTL_BUFFER_SECONDS
+        ),
+        replayed=_oauth_error(
+            400, "invalid_request", "this connect flow was already completed; restart the connection"
+        ),
+    )
+    if flow_refusal is not None:
+        return flow_refusal
     response: Final = (
         _denied_flow_response(flow) if decision == "deny" else _approved_flow_response(flow, delivery, team_id, now)
     )
@@ -806,6 +812,27 @@ def _pkce_verifier_matches(code_verifier: str, code_challenge: str) -> bool:
     return hmac.compare_digest(computed, code_challenge.encode("utf-8"))
 
 
+ClaimOutcome = Literal["first", "replayed", "unavailable"]
+
+_CLAIM_UNAVAILABLE_DESCRIPTION: Final = "the single-use record is unavailable right now; try again shortly"
+
+
+def _claim_refusal(outcome: ClaimOutcome, replayed: Response) -> Response | None:
+    """A claim that is not the first caller's is refused, but the two reasons must stay apart on the
+    wire: a replay is the grant's own 4xx, while a shared backend that could not record the claim is
+    a 503 (RFC 7009 section 2.2.1, RFC 6749 section 5.2 ``temporarily_unavailable``), so the client
+    keeps the still-valid token and retries instead of being told it was already used."""
+    match outcome:
+        case "first":
+            return None
+        case "replayed":
+            return replayed
+        case "unavailable":
+            return _oauth_error(503, "temporarily_unavailable", _CLAIM_UNAVAILABLE_DESCRIPTION)
+        case _:
+            assert_never(outcome)
+
+
 class _SingleUseGuard:
     """Atomic single-use claim for a one-time id (an auth-code, connect-flow ``jti``, or refresh-token
     ``jti``) over the injected proxy cache.
@@ -829,9 +856,10 @@ class _SingleUseGuard:
     def __init__(self, cache: DualCache) -> None:
         self._cache = cache
 
-    async def claim(self, key: str, ttl_seconds: int) -> bool:
-        """Atomically claim ``key``. ``True`` iff this caller is the first (increment to 1); ``False``
-        on a replay (>1) or when the claim could not be recorded in the shared backend (fail closed)."""
+    async def claim(self, key: str, ttl_seconds: int) -> ClaimOutcome:
+        """Atomically claim ``key``. ``"first"`` iff this caller is the first (increment to 1),
+        ``"replayed"`` on a replay (>1), and ``"unavailable"`` when the claim could not be recorded in
+        the shared backend, which every caller treats as a refusal (fail closed)."""
         from litellm.proxy.proxy_server import redis_usage_cache  # noqa: PLC0415  # circular import at module load
 
         # Resolve the shared authority HERE rather than trusting the injected cache: callers pass
@@ -850,11 +878,11 @@ class _SingleUseGuard:
                 verbose_logger.warning(
                     "mcp gateway single-use claim: shared cache backend unavailable, failing closed: %s", e
                 )
-                return False
-            return count == 1
+                return "unavailable"
+            return "first" if count == 1 else "replayed"
         # No shared backend configured (single-replica): the in-memory increment is authoritative.
         count = await self._cache.async_increment_cache(key, 1, ttl=ttl_seconds, local_only=True)
-        return count == 1
+        return "first" if count == 1 else "replayed"
 
 
 def _session_token_pair(principal: SessionPrincipal, keys: SessionKeys, now: datetime) -> Response:
@@ -1046,8 +1074,9 @@ class _GrantIssuer:
         failure: Final = await self._reload_user(principal.user_id)
         if failure is not None:
             return _reload_failure_response(failure)
-        if not await self._guard.claim(claim_key, claim_ttl_seconds):
-            return _oauth_error(400, "invalid_grant", replayed)
+        refusal: Final = await self._claim_refusal(claim_key, claim_ttl_seconds, replayed)
+        if refusal is not None:
+            return refusal
         return _session_token_pair(principal, self._keys, self._now)
 
     async def _issue_proxy_credential(
@@ -1060,9 +1089,15 @@ class _GrantIssuer:
         minted: Final = await self._mint_proxy_credential(principal.user_id, principal.team_id)
         if not isinstance(minted, MintedProxyCredential):
             return _mint_failure_response(minted)
-        if not await self._guard.claim(claim_key, claim_ttl_seconds):
-            return _oauth_error(400, "invalid_grant", replayed)
+        refusal: Final = await self._claim_refusal(claim_key, claim_ttl_seconds, replayed)
+        if refusal is not None:
+            return refusal
         return _proxy_credential_response(minted, principal, self._keys, self._now)
+
+    async def _claim_refusal(self, claim_key: str, claim_ttl_seconds: int, replayed: str) -> Response | None:
+        return _claim_refusal(
+            await self._guard.claim(claim_key, claim_ttl_seconds), replayed=_oauth_error(400, "invalid_grant", replayed)
+        )
 
 
 async def _authorization_code_grant(
@@ -1138,7 +1173,10 @@ async def revoke_refresh_token(token: str, client_id: str, master_key: str | Non
     ``jti`` so neither the holder nor a thief can rotate it again. Access tokens are
     stateless and expire on their own (the proxy-API credential within
     ``CLI_JWT_EXPIRATION_HOURS``), so per RFC 7009 section 2.2 an unrecognized or already
-    dead token still answers 200; only an unknown client is refused."""
+    dead token still answers 200; only an unknown client is refused. A live token whose
+    burn could not be recorded in the shared backend answers 503 (section 2.2.1), so the
+    client knows the token still stands and retries instead of reporting a logout that
+    never happened."""
     if not is_gateway_dcr_client_id(client_id) or open_gateway_dcr_client(client_id) is None:
         return _oauth_error(401, "invalid_client", "unknown or malformed client_id")
     if master_key is None:
@@ -1148,7 +1186,9 @@ async def revoke_refresh_token(token: str, client_id: str, master_key: str | Non
     now: Final = datetime.now(timezone.utc)
     opened: Final = open_session_refresh_bearer(token, keys, now, expected_client_id=client_id)
     if isinstance(opened, SessionRefreshOpened):
-        _ = await _SingleUseGuard(cache).claim(
+        burned: Final = await _SingleUseGuard(cache).claim(
             f"{_USED_REFRESH_CACHE_PREFIX}{opened.jti}", SESSION_REFRESH_TTL_SECONDS + _CLAIM_TTL_BUFFER_SECONDS
         )
+        if burned == "unavailable":
+            return _oauth_error(503, "temporarily_unavailable", _CLAIM_UNAVAILABLE_DESCRIPTION)
     return Response(content="{}", media_type="application/json", headers=TOKEN_NO_CACHE_HEADERS)
