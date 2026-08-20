@@ -3753,6 +3753,12 @@ async def info_key_fn(
         raise handle_exception_on_proxy(e)
 
 
+_END_USER_BUDGET_READER_ROLES: Final = (
+    LitellmUserRoles.PROXY_ADMIN,
+    LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+)
+
+
 def _key_not_found_error() -> ProxyException:
     return ProxyException(
         message="Key not found in database",
@@ -3800,7 +3806,8 @@ async def key_budgets_fn(
       hash. Defaults to the key in the Authorization header when omitted (`GET /key/budgets`).
     - end_user_id: str | None (query parameter) - Also report the budgets that would apply to this
       end user. Omitted end users produce no `end_user` rows, because nothing binds an end user to
-      a key outside a request.
+      a key outside a request. Proxy admins only, since end users are a proxy-global namespace with
+      no key, team or organization scoping to check a caller against.
 
     Returns:
     - key: str - The key that was looked up, echoed back as it was passed in
@@ -3839,12 +3846,22 @@ async def key_budgets_fn(
         prisma_client,
         proxy_logging_obj,
         user_api_key_cache,
+        user_custom_auth,
     )
 
     try:
         if prisma_client is None:
             raise Exception(
                 "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
+            )
+
+        if end_user_id is not None and user_api_key_dict.user_role not in _END_USER_BUDGET_READER_ROLES:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=(
+                    "Only proxy admins can resolve end user budgets, because end users are not scoped to a key, "
+                    f"a team or an organization. Your role={user_api_key_dict.user_role}"
+                ),
             )
 
         key: Final = key_id or user_api_key_dict.api_key
@@ -3886,6 +3903,12 @@ async def key_budgets_fn(
                 user_api_key_cache=user_api_key_cache,
                 proxy_logging_obj=proxy_logging_obj,
                 general_settings=general_settings,
+                custom_auth_enabled=user_custom_auth is not None,
+            ),
+            token_end_user_max_budget=(
+                user_api_key_dict.end_user_max_budget
+                if end_user_id is not None and end_user_id == user_api_key_dict.end_user_id
+                else None
             ),
         )
         return KeyBudgetsResponse(key=key, budgets=budgets)

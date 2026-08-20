@@ -17195,3 +17195,50 @@ async def test_key_budgets_treat_a_non_positive_cap_as_unset(max_budget):
     assert by_scope["organization"].status == "unlimited"
     assert by_scope["key_model"].max_budget is None
     assert by_scope["key_model"].status == "unlimited"
+
+
+@pytest.mark.parametrize(
+    "role",
+    [
+        LitellmUserRoles.INTERNAL_USER.value,
+        LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value,
+        LitellmUserRoles.TEAM.value,
+        LitellmUserRoles.CUSTOMER.value,
+        None,
+    ],
+)
+@pytest.mark.asyncio
+async def test_key_budgets_refuse_to_resolve_an_end_user_for_a_non_admin(role):
+    """End users are proxy-global, so without this any key holder could read any customer's spend."""
+    caller = UserAPIKeyAuth(api_key="sk-caller", user_role=role)
+    with _budgets_route_world(key_row=_budgets_key_row(), caller=caller) as resolver:
+        response = client.get("/key/budgets?end_user_id=someone-elses-customer")
+
+    assert response.status_code == 403
+    assert "end user" in json.dumps(response.json()).lower()
+    resolver.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "role",
+    [LitellmUserRoles.PROXY_ADMIN.value, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value],
+)
+@pytest.mark.asyncio
+async def test_key_budgets_resolve_an_end_user_for_an_admin(role):
+    """The gate has to keep admins working, or it has just deleted the parameter."""
+    caller = UserAPIKeyAuth(api_key="sk-admin", user_role=role)
+    with _budgets_route_world(key_row=_budgets_key_row(), caller=caller) as resolver:
+        response = client.get("/key/budgets?end_user_id=a-customer")
+
+    assert response.status_code == 200
+    assert resolver.await_args.kwargs["end_user_id"] == "a-customer"
+
+
+@pytest.mark.asyncio
+async def test_key_budgets_without_an_end_user_stay_open_to_non_admins():
+    """The gate is on the parameter, not the route: a caller reading their own key must be unaffected."""
+    caller = UserAPIKeyAuth(api_key="sk-caller", user_role=LitellmUserRoles.INTERNAL_USER.value)
+    with _budgets_route_world(key_row=_budgets_key_row(), caller=caller):
+        response = client.get("/key/budgets")
+
+    assert response.status_code == 200
