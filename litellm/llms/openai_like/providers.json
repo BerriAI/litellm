@@ -183,5 +183,15 @@
       "max_completion_tokens": "max_tokens"
     },
     "supported_endpoints": ["/v1/chat/completions", "/v1/responses", "/v1/embeddings"]
+  },
+  "modelsell": {
+    "base_url": "https://modelsell.com/v1",
+    "api_key_env": "MODELSELL_API_KEY",
+    "api_base_env": "MODELSELL_API_BASE",
+    "base_class": "openai_gpt",
+    "param_mappings": {
+      "max_completion_tokens": "max_tokens"
+    },
+    "supported_endpoints": ["/v1/chat/completions"]
   }
 }
