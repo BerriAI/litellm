@@ -96,8 +96,8 @@ class TestGithubCopilotResponsesAPITransformation:
         assert headers["content-type"] == "application/json"
         assert headers["copilot-integration-id"] == "vscode-chat"
         assert headers["editor-version"] == "vscode/1.115.0"
-        assert headers["editor-plugin-version"] == "copilot-chat/0.44.0"
-        assert headers["user-agent"] == "GitHubCopilotChat/0.44.0"
+        assert headers["editor-plugin-version"] == "copilot-chat/0.26.7"
+        assert headers["user-agent"] == "GitHubCopilotChat/0.26.7"
         assert "openai-intent" not in headers
         assert "x-github-api-version" not in headers
         assert "x-request-id" not in headers
