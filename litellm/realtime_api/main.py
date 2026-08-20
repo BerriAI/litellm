@@ -2,7 +2,7 @@
 
 import asyncio
 import os
-from typing import Any, Final, cast
+from typing import Any, Final, Literal, cast
 
 import litellm
 from litellm.constants import (
@@ -43,7 +43,6 @@ openai_realtime: Final = OpenAIRealtime()
 bedrock_realtime: Final = BedrockRealtime()
 xai_realtime: Final = XAIRealtime()
 vertex_llm_base: Final = VertexBase()
-vertex_access_token_resolver: Final[VertexAccessTokenResolver] = vertex_llm_base._ensure_access_token_async
 base_llm_http_handler = BaseLLMHTTPHandler()
 
 
@@ -285,6 +284,18 @@ async def arealtime_calls(
         extra_headers=kwargs.get("extra_headers"),
         client=kwargs.get("client"),
         api_version=litellm_params.api_version,
+    )
+
+
+async def vertex_access_token_resolver(
+    credentials: VERTEX_CREDENTIALS_TYPES | None,
+    project_id: str | None,
+    custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
+) -> tuple[str, str]:
+    return await vertex_llm_base._ensure_access_token_async(
+        credentials=credentials,
+        project_id=project_id,
+        custom_llm_provider=custom_llm_provider,
     )
 
 
