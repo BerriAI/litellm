@@ -1,7 +1,5 @@
 import React from "react";
-import { Spin, Tag, Typography } from "antd";
 import { CircleAlert, Info } from "lucide-react";
-import { Alert, AlertTitle } from "@/components/shared/Alert";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { z } from "zod/v4";
 import { MCPServer, MCPUserEnvVarsStatus, MCPUserEnvVarSpec } from "@/components/mcp_tools/types";
@@ -9,13 +7,13 @@ import { getMCPUserEnvVars, storeMCPUserEnvVars } from "@/components/networking"
 import { toast } from "@/lib/toast";
 import { FieldGroup } from "@/components/shared/form/field";
 import { FormField } from "@/components/shared/form/FormField";
+import { Alert, AlertTitle } from "@/components/shared/Alert";
 import { PasswordInput } from "@/components/shared/PasswordInput";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { useZodForm } from "@/lib/forms/useZodForm";
-
-const { Text } = Typography;
 
 interface UserEnvVarsModalProps {
   server: MCPServer | null;
@@ -57,7 +55,7 @@ const UserEnvVarsForm: React.FC<UserEnvVarsFormProps> = ({ required, isSaving, o
             label={
               <span className="flex items-center gap-2">
                 <span className="font-mono text-sm font-semibold">{spec.name}</span>
-                {spec.is_set && <Tag color="green">Set</Tag>}
+                {spec.is_set && <Badge variant="secondary">Set</Badge>}
               </span>
             }
           >
@@ -130,21 +128,20 @@ const UserEnvVarsModal: React.FC<UserEnvVarsModalProps> = ({ server, open, acces
   const isSaving = saveMutation.isPending;
 
   return (
-    <Dialog open={open} onOpenChange={(nextOpen) => !nextOpen && onClose()}>
+    <Dialog open={open} onOpenChange={(opened) => !opened && onClose()}>
       <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[520px]">
         <DialogHeader>
           <div className="flex items-center gap-2">
-            <DialogTitle>Set your credentials</DialogTitle>
-            <Tag color="blue">Per-user</Tag>
+            <DialogTitle className="text-base font-semibold">Set your credentials</DialogTitle>
+            <Badge variant="info">Per-user</Badge>
           </div>
-          <Text type="secondary" className="text-xs">
-            {displayName}
-          </Text>
+          <span className="text-xs text-muted-foreground">{displayName}</span>
         </DialogHeader>
-        <div className="space-y-4 mt-2">
+
+        <div className="mt-2 space-y-4">
           {isLoading ? (
             <div className="flex items-center justify-center py-8">
-              <Spin />
+              <UiLoadingSpinner className="size-5" />
             </div>
           ) : isError ? (
             <Alert variant="error">
@@ -158,11 +155,11 @@ const UserEnvVarsModal: React.FC<UserEnvVarsModalProps> = ({ server, open, acces
             </Alert>
           ) : (
             <>
-              <Text className="text-sm text-muted-foreground block">
+              <span className="block text-sm text-muted-foreground">
                 These values are private to you. Your admin configured this MCP server to require these per-user
                 credentials. Saved values are never shown back; leave an already-set field blank to keep it, or enter a
                 value to set or change it.
-              </Text>
+              </span>
               <UserEnvVarsForm required={required} isSaving={isSaving} onCancel={onClose} onSubmit={handleSave} />
             </>
           )}

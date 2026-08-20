@@ -4958,3 +4958,150 @@ def test_pre_call_redacts_and_masks_raw_request(logging_obj):
     raw_api_base = logging_obj.model_call_details["raw_request_typed_dict"]["raw_request_api_base"]
     assert _GEMINI_KEY not in raw_api_base
     assert "key=*****" in raw_api_base
+
+
+def _resolve(custom_llm_provider, litellm_params, optional_params, model):
+    from litellm.litellm_core_utils.litellm_logging import (
+        _resolve_vertex_location_for_cost,
+    )
+
+    return _resolve_vertex_location_for_cost(
+        custom_llm_provider=custom_llm_provider,
+        litellm_params=litellm_params,
+        optional_params=optional_params,
+        model=model,
+    )
+
+
+def test_resolve_vertex_location_for_cost():
+    """Vertex requests resolve the serving location the way dispatch does; other providers get None."""
+    assert _resolve("openai", {"vertex_location": "us-east5"}, None, "gpt-4o") is None
+    assert _resolve(None, {}, None, "gemini-3.5-flash") is None
+    assert _resolve("vertex_ai", {"vertex_location": "us-east5"}, None, "gemini-3.5-flash") == "us-east5"
+    assert _resolve("vertex_ai", {"vertex_location": "global"}, None, "gemini-3.5-flash") == "global"
+    assert (
+        _resolve("vertex_ai_beta", {"vertex_ai_location": "europe-west1"}, None, "claude-haiku-4-5@20251001")
+        == "europe-west1"
+    )
+
+
+def test_resolve_vertex_location_for_cost_reads_optional_params(monkeypatch):
+    """
+    On the proxy the logging object predates deployment selection, so the deployment's
+    configured location only reaches it through optional_params. A configured global
+    location must beat the environment fallback, or every proxy call gets the regional uplift.
+    """
+    monkeypatch.setenv("VERTEXAI_LOCATION", "us-east5")
+    monkeypatch.setattr(litellm, "vertex_location", None)
+
+    assert _resolve("vertex_ai", {}, {"vertex_location": "global"}, "gemini-3.5-flash") == "global"
+    assert _resolve("vertex_ai", None, {"vertex_location": "europe-west1"}, "gemini-3.5-flash") == "europe-west1"
+    assert (
+        _resolve(
+            "vertex_ai",
+            {"vertex_location": "us-east5"},
+            {"vertex_location": "global"},
+            "gemini-3.5-flash",
+        )
+        == "global"
+    )
+    assert _resolve("vertex_ai", {"vertex_location": "global"}, {}, "gemini-3.5-flash") == "global"
+    assert _resolve("vertex_ai", {}, {}, "gemini-3.5-flash") == "us-east5"
+
+
+def test_resolve_vertex_location_for_cost_default_region(monkeypatch):
+    """With no location configured anywhere, resolution lands on the dispatch default us-central1."""
+    monkeypatch.delenv("VERTEXAI_LOCATION", raising=False)
+    monkeypatch.delenv("VERTEX_LOCATION", raising=False)
+    monkeypatch.setattr(litellm, "vertex_location", None)
+
+    assert _resolve("vertex_ai", {}, None, "gemini-3.5-flash") == "us-central1"
+    assert _resolve("vertex_ai", None, None, "gemini-3.5-flash") == "us-central1"
+
+
+def test_response_cost_calculator_prices_proxy_vertex_calls_on_the_configured_location(monkeypatch):
+    """
+    Proxy-shaped logging objects (created before the router picks a deployment) carry the
+    deployment's vertex_location only in optional_params. A global deployment must price at
+    base rates even when the environment points at a regional location, and a regional one
+    must price with the uplift.
+    """
+    from datetime import datetime
+
+    from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map
+
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", get_model_cost_map(url=""))
+    monkeypatch.setenv("VERTEXAI_LOCATION", "us-east5")
+    monkeypatch.setattr(litellm, "vertex_location", None)
+
+    def cost_at(location):
+        logging_obj = LitellmLogging(
+            model="gemini-3.5-flash",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=False,
+            call_type="completion",
+            start_time=datetime.now(),
+            litellm_call_id=f"vertex-loc-{location}",
+            function_id="f",
+        )
+        logging_obj.update_environment_variables(
+            model="gemini-3.5-flash",
+            user="",
+            optional_params={"vertex_location": location},
+            litellm_params={"api_base": ""},
+            custom_llm_provider="vertex_ai",
+        )
+        response = ModelResponse(
+            id="resp-1",
+            model="gemini-3.5-flash",
+            choices=[{"message": {"role": "assistant", "content": "hello"}, "index": 0, "finish_reason": "stop"}],
+            usage={"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+        )
+        return logging_obj._response_cost_calculator(result=response)
+
+    info = litellm.model_cost["vertex_ai/gemini-3.5-flash"]
+    expected_global = 10 * info["input_cost_per_token"] + 5 * info["output_cost_per_token"]
+
+    assert cost_at("global") == pytest.approx(expected_global)
+    assert cost_at("us-east5") == pytest.approx(info["regional_endpoint_uplift_multiplier"] * expected_global)
+
+
+def test_set_cost_breakdown_stores_vertex_location():
+    """vertex_location is recorded in the pricing basis, None for non-vertex requests."""
+    from datetime import datetime
+
+    logging_obj = LitellmLogging(
+        model="vertex_ai/claude-haiku-4-5@20251001",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="completion",
+        start_time=datetime.now(),
+        litellm_call_id="vertex-location-set",
+        function_id="f",
+    )
+    logging_obj.set_cost_breakdown(
+        input_cost=0.001,
+        output_cost=0.002,
+        total_cost=0.003,
+        cost_for_built_in_tools_cost_usd_dollar=0.0,
+        vertex_location="us-east5",
+    )
+    assert logging_obj.cost_breakdown["vertex_location"] == "us-east5"
+
+    no_location = LitellmLogging(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="completion",
+        start_time=datetime.now(),
+        litellm_call_id="vertex-location-absent",
+        function_id="f",
+    )
+    no_location.set_cost_breakdown(
+        input_cost=0.001,
+        output_cost=0.002,
+        total_cost=0.003,
+        cost_for_built_in_tools_cost_usd_dollar=0.0,
+    )
+    assert no_location.cost_breakdown.get("vertex_location") is None

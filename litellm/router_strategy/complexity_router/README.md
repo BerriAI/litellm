@@ -53,6 +53,21 @@ model_list:
           REASONING: o1-preview
 ```
 
+Each tier can also use a model entry with request parameter overrides. A tier value may be
+a model string, a single object, or a list mixing strings and objects. Object entries must
+contain a model name and may contain any LiteLLM request parameters. The model name must
+still resolve to a deployment in `model_list`; this configuration does not create one
+
+```yaml
+        tiers:
+          COMPLEX: opus
+          REASONING:
+            - model_name: opus
+              litellm_params:
+                reasoning_effort: xhigh
+            - abc
+```
+
 ### Renaming the tiers
 
 `tier_labels` puts your own vocabulary on the four tiers:

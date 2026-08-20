@@ -1,7 +1,6 @@
 import { Input } from "@/components/ui/input";
 import { Select as AntdSelect, Tooltip, Typography } from "antd";
 import { Button } from "@/components/ui/button";
-import type { UploadProps } from "antd/es/upload";
 import { useState } from "react";
 import { FormProvider, useForm } from "react-hook-form";
 import ProviderSpecificFields from "../add_model/provider_specific_fields";
@@ -26,7 +25,6 @@ interface CredentialModalProps {
   open: boolean;
   onCancel: () => void;
   onSubmit: (values: any) => void;
-  uploadProps: UploadProps;
   mode: "add" | "edit";
   existingCredential?: CredentialItem | null;
 }
@@ -35,7 +33,6 @@ export default function CredentialModal({
   open,
   onCancel,
   onSubmit,
-  uploadProps,
   mode,
   existingCredential = null,
 }: CredentialModalProps) {
@@ -147,7 +144,7 @@ export default function CredentialModal({
                 )}
               </MountedFormField>
 
-              <ProviderSpecificFields selectedProvider={selectedProvider} uploadProps={uploadProps} />
+              <ProviderSpecificFields selectedProvider={selectedProvider} />
 
               <div className="flex justify-between items-center">
                 <Tooltip title="Get help on our github">

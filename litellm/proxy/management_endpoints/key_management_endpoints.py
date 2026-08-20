@@ -6245,6 +6245,7 @@ async def block_key(
     """
     from litellm.proxy.management_helpers.audit_logs import (
         get_audit_log_changed_by,
+        is_audit_logging_enabled,
     )
     from litellm.proxy.proxy_server import (
         create_audit_log_for_update,
@@ -6291,7 +6292,7 @@ async def block_key(
             code=status.HTTP_404_NOT_FOUND,
         )
 
-    if litellm.store_audit_logs is True:
+    if is_audit_logging_enabled():
         asyncio.create_task(
             create_audit_log_for_update(
                 request_data=LiteLLM_AuditLogs(
@@ -6358,6 +6359,7 @@ async def unblock_key(
     """
     from litellm.proxy.management_helpers.audit_logs import (
         get_audit_log_changed_by,
+        is_audit_logging_enabled,
     )
     from litellm.proxy.proxy_server import (
         create_audit_log_for_update,
@@ -6404,7 +6406,7 @@ async def unblock_key(
             code=status.HTTP_404_NOT_FOUND,
         )
 
-    if litellm.store_audit_logs is True:
+    if is_audit_logging_enabled():
         asyncio.create_task(
             create_audit_log_for_update(
                 request_data=LiteLLM_AuditLogs(
