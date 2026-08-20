@@ -155,6 +155,11 @@ class PrismaWrapper:
     # Fallback refresh interval if token parsing fails (10 minutes)
     FALLBACK_REFRESH_INTERVAL_SECONDS = 600
 
+    # Floor on the proactive loop's sleep, so a token whose expiry does not advance
+    # (azure-identity hands back its cached token when a renewal attempt fails) costs
+    # one retry every 30 seconds instead of spinning the loop with no sleep at all.
+    TOKEN_REFRESH_MIN_SLEEP_SECONDS = 30
+
     ENGINE_RETIREMENT_DRAIN_TIMEOUT_SECONDS = 90
 
     def __init__(
@@ -376,8 +381,9 @@ class PrismaWrapper:
         For a 15-minute (900s) token with 180s buffer, this returns ~720s (12 min).
 
         Returns:
-            Number of seconds to sleep before the next refresh.
-            Returns 0 if token should be refreshed immediately.
+            Number of seconds to sleep before the next refresh, never less than
+            TOKEN_REFRESH_MIN_SLEEP_SECONDS so a token whose expiry never advances
+            cannot spin the loop.
             Returns FALLBACK_REFRESH_INTERVAL_SECONDS if parsing fails.
         """
         db_url: Final = os.getenv(self._db_url_env_var)
@@ -399,8 +405,10 @@ class PrismaWrapper:
         now: Final = datetime.utcnow()
         seconds_until_refresh: Final = (refresh_at - now).total_seconds()
 
-        # If already past refresh time, return 0 (refresh immediately)
-        return max(0, seconds_until_refresh)
+        # Past refresh time means refresh as soon as the floor allows, not instantly:
+        # a provider that keeps handing back the same token would otherwise leave the
+        # loop re-minting and recreating the query engine with no sleep between passes.
+        return max(self.TOKEN_REFRESH_MIN_SLEEP_SECONDS, seconds_until_refresh)
 
     def is_token_expired(self, token_url: str | None) -> bool:
         """Check if the token in the given URL is expired."""

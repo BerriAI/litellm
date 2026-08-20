@@ -160,6 +160,25 @@ def test_build_url_encodes_a_upn_user_and_the_schema():
     )
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("user", "svc%40corp"),
+        ("name", "litellm%20db"),
+        ("schema", "app%2Fschema"),
+    ],
+)
+def test_build_url_leaves_an_already_encoded_component_alone(field, value):
+    """RDS IAM auth interpolated these raw, so pre-encoding was the only way to get an
+    ``@`` into ``DATABASE_USER``. Encoding again turns ``svc%40corp`` into
+    ``svc%2540corp``, which Postgres rejects with ``User `svc%40corp` was denied
+    access``, so an operator who did that on RDS breaks on upgrade."""
+    url = _endpoint(**{field: value}).build_url("TOKEN")
+
+    assert value in url
+    assert "%25" not in url
+
+
 def test_build_url_inserts_the_token_verbatim():
     """Both providers hand the token back already in wire form, so re-encoding it here
     would double-escape the password."""
@@ -263,13 +282,31 @@ def test_every_truthy_spelling_enables_token_auth(monkeypatch, value):
         assert isinstance(resolve_database_token_auth(), AzureEntraTokenAuth)
 
 
-@pytest.mark.parametrize("value", ["", "  ", "false", "False", "0", "no", "off", "maybe"])
-def test_falsy_and_unrecognized_spellings_leave_token_auth_off(monkeypatch, value):
+@pytest.mark.parametrize("value", ["", "  ", "false", "False", "0", "no", "off", "F", "N"])
+def test_falsy_spellings_leave_token_auth_off(monkeypatch, value):
     """An empty string is how a Kubernetes manifest spells 'off'."""
     monkeypatch.setenv(AZURE_POSTGRESQL_AUTH_ENV_VAR, value)
     monkeypatch.setenv(IAM_TOKEN_DB_AUTH_ENV_VAR, value)
 
     assert resolve_database_token_auth() is None
+
+
+@pytest.mark.parametrize("env_var", [IAM_TOKEN_DB_AUTH_ENV_VAR, AZURE_POSTGRESQL_AUTH_ENV_VAR])
+@pytest.mark.parametrize("value", ["enabled", "maybe", "TRUEE", "2"])
+def test_an_unreadable_toggle_is_a_startup_error(monkeypatch, env_var, value):
+    """Reading a typo as 'off' would quietly downgrade an operator who asked for token
+    auth to password auth, and the first sign of it is the server refusing the
+    connection. Pydantic rejected these before token auth had its own parser."""
+    monkeypatch.setenv(env_var, value)
+    monkeypatch.delenv(
+        AZURE_POSTGRESQL_AUTH_ENV_VAR if env_var == IAM_TOKEN_DB_AUTH_ENV_VAR else IAM_TOKEN_DB_AUTH_ENV_VAR,
+        raising=False,
+    )
+
+    with pytest.raises(ValueError, match=env_var) as raised:
+        resolve_database_token_auth()
+
+    assert value in str(raised.value)
 
 
 def test_the_entra_provider_is_built_once_per_process():

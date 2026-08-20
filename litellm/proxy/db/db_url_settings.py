@@ -34,6 +34,7 @@ password when their ``*_READ_REPLICA`` counterpart is unset.
 
 import os
 import urllib.parse
+from functools import partial
 from typing import Annotated, Final, cast
 
 from pydantic import AliasChoices, BeforeValidator, Field
@@ -50,7 +51,10 @@ from litellm.proxy.db.token_auth import (
     token_auth_flag_enabled,
 )
 
-TokenAuthFlag = Annotated[bool, BeforeValidator(token_auth_flag_enabled)]
+IamTokenAuthFlag = Annotated[bool, BeforeValidator(partial(token_auth_flag_enabled, env_var=IAM_TOKEN_DB_AUTH_ENV_VAR))]
+AzureTokenAuthFlag = Annotated[
+    bool, BeforeValidator(partial(token_auth_flag_enabled, env_var=AZURE_POSTGRESQL_AUTH_ENV_VAR))
+]
 
 # schema.prisma pins `provider = "postgresql"`, so these are the only schemes
 # Prisma can actually connect with.
@@ -98,8 +102,8 @@ class DatabaseURLSettings(BaseSettings):
 
     model_config = SettingsConfigDict(case_sensitive=False, extra="ignore")
 
-    iam_token_db_auth: TokenAuthFlag = Field(default=False, validation_alias=IAM_TOKEN_DB_AUTH_ENV_VAR)
-    azure_postgresql_auth: TokenAuthFlag = Field(default=False, validation_alias=AZURE_POSTGRESQL_AUTH_ENV_VAR)
+    iam_token_db_auth: IamTokenAuthFlag = Field(default=False, validation_alias=IAM_TOKEN_DB_AUTH_ENV_VAR)
+    azure_postgresql_auth: AzureTokenAuthFlag = Field(default=False, validation_alias=AZURE_POSTGRESQL_AUTH_ENV_VAR)
 
     # Writer
     database_url: str | None = Field(default=None, validation_alias="DATABASE_URL")

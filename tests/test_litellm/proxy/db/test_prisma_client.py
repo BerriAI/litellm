@@ -273,6 +273,22 @@ def test_azure_entra_refresh_is_scheduled_off_the_jwt_expiry(azure_env):
     assert expected - 5 <= seconds <= expected
 
 
+def test_a_token_whose_expiry_never_advances_cannot_spin_the_refresh_loop(azure_env):
+    """azure-identity hands back its cached token when a renewal attempt fails inside its
+    own window, so a transient Entra or IMDS problem in the last 3 minutes of a token
+    yields a successful refresh whose `exp` has not moved. With no floor on the sleep the
+    loop then re-mints and recreates the query engine on every pass, with nothing in
+    between, for as long as Entra stays sick."""
+    wrapper = _azure_wrapper(_entra_jwt(60))
+    wrapper.get_rds_iam_token()
+    first = wrapper._calculate_seconds_until_refresh()
+
+    wrapper.get_rds_iam_token()
+    second = wrapper._calculate_seconds_until_refresh()
+
+    assert first == second == PrismaWrapper.TOKEN_REFRESH_MIN_SLEEP_SECONDS
+
+
 def test_azure_entra_token_expiry_is_detected(azure_env):
     wrapper = _azure_wrapper(_entra_jwt(3600))
     fresh_url = wrapper.get_rds_iam_token()

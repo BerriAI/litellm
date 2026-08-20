@@ -1095,9 +1095,11 @@ def run_server(
             token_auth_flag_enabled,
         )
 
-        wants_rds_iam: Final = iam_token_db_auth or token_auth_flag_enabled(os.getenv(IAM_TOKEN_DB_AUTH_ENV_VAR))
+        wants_rds_iam: Final = iam_token_db_auth or token_auth_flag_enabled(
+            os.getenv(IAM_TOKEN_DB_AUTH_ENV_VAR), env_var=IAM_TOKEN_DB_AUTH_ENV_VAR
+        )
         wants_azure_entra: Final = azure_postgresql_auth or token_auth_flag_enabled(
-            os.getenv(AZURE_POSTGRESQL_AUTH_ENV_VAR)
+            os.getenv(AZURE_POSTGRESQL_AUTH_ENV_VAR), env_var=AZURE_POSTGRESQL_AUTH_ENV_VAR
         )
         if wants_rds_iam:
             os.environ[IAM_TOKEN_DB_AUTH_ENV_VAR] = "True"

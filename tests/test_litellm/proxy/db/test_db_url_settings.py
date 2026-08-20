@@ -15,6 +15,7 @@ import os
 from unittest.mock import patch
 
 import pytest
+from pydantic import ValidationError
 
 from litellm.proxy.db.db_url_settings import (
     DatabaseURLSettings,
@@ -112,6 +113,35 @@ def test_assembles_writer_url_when_iam_enabled(monkeypatch):
     )
     # Reader was never configured, so it must not have been set.
     assert "DATABASE_URL_READ_REPLICA" not in os.environ
+
+
+def test_a_pre_encoded_iam_user_survives_url_assembly(monkeypatch):
+    """This URL used to be interpolated raw, so pre-encoding ``DATABASE_USER`` was the
+    only way to run IAM auth as a user whose name contains an ``@``. Encoding it again
+    yields ``svc%2540corp``, which Postgres rejects with
+    ``User `svc%40corp` was denied access``."""
+    monkeypatch.setenv("IAM_TOKEN_DB_AUTH", "true")
+    monkeypatch.setenv("DATABASE_HOST", "writer.example.com")
+    monkeypatch.setenv("DATABASE_USER", "svc%40corp")
+    monkeypatch.setenv("DATABASE_NAME", "litellm_db")
+
+    with _stub_iam_token("WRITER_TOKEN"):
+        assert _apply() is True
+
+    assert os.environ["DATABASE_URL"] == "postgresql://svc%40corp:WRITER_TOKEN@writer.example.com:5432/litellm_db"
+
+
+def test_an_unreadable_toggle_fails_the_settings_model(monkeypatch):
+    """Pydantic rejected `IAM_TOKEN_DB_AUTH=enabled` before token auth had its own
+    parser. Reading it as 'off' instead would silently drop an operator who asked for
+    token auth down to password auth, with no log line saying so."""
+    monkeypatch.setenv("IAM_TOKEN_DB_AUTH", "enabled")
+    monkeypatch.setenv("DATABASE_HOST", "writer.example.com")
+    monkeypatch.setenv("DATABASE_USER", "litellm")
+    monkeypatch.setenv("DATABASE_NAME", "litellm_db")
+
+    with pytest.raises(ValidationError, match="IAM_TOKEN_DB_AUTH"):
+        DatabaseURLSettings.from_env()
 
 
 def test_missing_writer_envs_raises(monkeypatch):

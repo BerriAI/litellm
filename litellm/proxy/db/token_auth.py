@@ -36,23 +36,50 @@ CONFLICTING_TOKEN_AUTH_MESSAGE: Final = (
 DEFAULT_POSTGRES_PORT: Final = "5432"
 
 TRUTHY_TOKEN_AUTH_VALUES: Final[frozenset[str]] = frozenset({"1", "on", "t", "true", "y", "yes"})
+FALSY_TOKEN_AUTH_VALUES: Final[frozenset[str]] = frozenset({"", "0", "f", "false", "n", "no", "off"})
 
 
-def token_auth_flag_enabled(value: str | bool | None) -> bool:
-    """Whether a token-auth toggle is on.
+def token_auth_flag_enabled(value: str | bool | None, *, env_var: str) -> bool:
+    """Whether a token-auth toggle is on, rejecting anything it cannot read.
 
     The single parser for both toggles. Every entry point (the settings model, the
     CLI, and the refresh loop's own env lookup) routes through this, so a value like
     ``"1"`` cannot enable minting in one place and leave the refresh loop convinced
     token auth is off, which would strand a pod on a token it never renews.
+
+    A value that is neither recognizably on nor recognizably off raises: silently
+    reading a typo as off would downgrade an operator from token auth to password
+    auth, and the first sign of it would be a connection refused by the server.
     """
     if isinstance(value, bool):
         return value
-    return value is not None and value.strip().lower() in TRUTHY_TOKEN_AUTH_VALUES
+    if value is None:
+        return False
+    normalized: Final = value.strip().lower()
+    if normalized in TRUTHY_TOKEN_AUTH_VALUES:
+        return True
+    if normalized in FALSY_TOKEN_AUTH_VALUES:
+        return False
+    raise ValueError(
+        f"{env_var}={value!r} is not a recognized boolean. Set it to one of "
+        f"{', '.join(sorted(TRUTHY_TOKEN_AUTH_VALUES))} to turn token auth on, or to one of "
+        f"{', '.join(sorted(v for v in FALSY_TOKEN_AUTH_VALUES if v))} to turn it off."
+    )
 
 
 def _quote(value: str) -> str:
     return urllib.parse.quote(value, safe="")
+
+
+def _normalize_quote(value: str) -> str:
+    """Percent-encode a URL component that may already be percent-encoded.
+
+    ``DATABASE_USER`` used to be interpolated raw, so pre-encoding was the only way to
+    put an ``@`` in it. Encoding such a value again would double-escape it, so decode
+    first: the round trip is idempotent and leaves an already-encoded value byte for
+    byte as it was, while a raw UPN like ``svc@corp`` still comes out encoded.
+    """
+    return urllib.parse.quote(urllib.parse.unquote(value), safe="")
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,14 +101,18 @@ class IAMEndpoint:
     def build_url(self, token: str) -> str:
         """Assemble the connection URL, inserting ``token`` verbatim as the password.
 
-        User, database name, and schema are percent-encoded because an Entra principal
-        is a UPN containing ``@``. The token is not: both providers hand it back already
-        in wire form, and re-encoding it would double-escape the password.
+        User, database name, and schema are normalized rather than encoded outright,
+        because an Entra principal is a UPN containing ``@`` while an operator on the
+        older RDS path may already have encoded that ``@`` themselves. The token is
+        left alone: both providers hand it back already in wire form, and re-encoding
+        it would double-escape the password.
         """
-        base: Final = f"postgresql://{_quote(self.user)}:{token}@{self.host}:{self.port}/{_quote(self.name)}"
+        base: Final = (
+            f"postgresql://{_normalize_quote(self.user)}:{token}@{self.host}:{self.port}/{_normalize_quote(self.name)}"
+        )
         if not self.schema:
             return base
-        return f"{base}?schema={_quote(self.schema)}"
+        return f"{base}?schema={_normalize_quote(self.schema)}"
 
 
 def parse_iam_endpoint_from_url(url: str) -> IAMEndpoint:
@@ -234,6 +265,10 @@ def build_database_token_auth(*, iam_token_db_auth: bool, azure_postgresql_auth:
 def resolve_database_token_auth() -> DatabaseTokenAuth | None:
     """Resolve the token strategy from the environment, raising when both toggles are set."""
     return build_database_token_auth(
-        iam_token_db_auth=token_auth_flag_enabled(os.getenv(IAM_TOKEN_DB_AUTH_ENV_VAR)),
-        azure_postgresql_auth=token_auth_flag_enabled(os.getenv(AZURE_POSTGRESQL_AUTH_ENV_VAR)),
+        iam_token_db_auth=token_auth_flag_enabled(
+            os.getenv(IAM_TOKEN_DB_AUTH_ENV_VAR), env_var=IAM_TOKEN_DB_AUTH_ENV_VAR
+        ),
+        azure_postgresql_auth=token_auth_flag_enabled(
+            os.getenv(AZURE_POSTGRESQL_AUTH_ENV_VAR), env_var=AZURE_POSTGRESQL_AUTH_ENV_VAR
+        ),
     )
