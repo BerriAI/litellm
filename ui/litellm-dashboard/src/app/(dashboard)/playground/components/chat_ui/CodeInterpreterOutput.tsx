@@ -2,6 +2,8 @@ import React, { useEffect, useState } from "react";
 import { Code, Download, FileImage, FileText, Loader2 } from "lucide-react";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { coy } from "react-syntax-highlighter/dist/esm/styles/prism";
+
+import { useSyntaxTheme } from "@/hooks/useSyntaxTheme";
 import { getProxyBaseUrl, getGlobalLitellmHeaderName } from "@/components/networking";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
@@ -33,6 +35,7 @@ function isImageFilename(filename: string | undefined): boolean {
 }
 
 const CodeInterpreterOutput: React.FC<CodeInterpreterOutputProps> = ({ code, annotations = [], accessToken }) => {
+  const syntaxTheme = useSyntaxTheme(coy);
   const [imageUrls, setImageUrls] = useState<Record<string, string>>({});
   const [loadingImages, setLoadingImages] = useState<Record<string, boolean>>({});
   const [codeOpen, setCodeOpen] = useState(false);
@@ -147,7 +150,7 @@ const CodeInterpreterOutput: React.FC<CodeInterpreterOutputProps> = ({ code, ann
             <div className="border-t border-border p-2">
               <SyntaxHighlighter
                 language="python"
-                style={coy}
+                style={syntaxTheme}
                 customStyle={{
                   margin: 0,
                   borderRadius: "6px",

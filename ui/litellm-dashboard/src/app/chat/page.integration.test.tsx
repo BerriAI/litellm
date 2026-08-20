@@ -35,7 +35,7 @@ vi.mock("react-syntax-highlighter", () => ({
   Prism: ({ children }: { children: string }) => <pre>{children}</pre>,
 }));
 
-vi.mock("react-syntax-highlighter/dist/esm/styles/prism", () => ({ coy: {} }));
+vi.mock("react-syntax-highlighter/dist/esm/styles/prism", () => ({ coy: {}, oneDark: {}, oneLight: {}, prism: {} }));
 
 vi.mock("@/contexts/ChatShellContext", () => ({
   useChatShell: () => {

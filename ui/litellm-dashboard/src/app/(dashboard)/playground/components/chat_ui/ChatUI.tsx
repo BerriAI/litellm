@@ -21,6 +21,8 @@ import {
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { coy } from "react-syntax-highlighter/dist/esm/styles/prism";
+
+import { useSyntaxTheme } from "@/hooks/useSyntaxTheme";
 import { v4 as uuidv4 } from "uuid";
 import useCan from "@/app/(dashboard)/hooks/useCan";
 import GuardrailSelector from "@/components/guardrails/GuardrailSelector";
@@ -123,6 +125,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
   simplified = false,
   fixedModel,
 }) => {
+  const syntaxTheme = useSyntaxTheme(coy);
   const canViewPolicies = useCan("viewPolicies");
   const [mcpServers, setMCPServers] = useState<MCPServer[]>([]);
   const [mcpToolsets, setMCPToolsets] = useState<MCPToolset[]>([]);
@@ -2126,7 +2129,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
           </div>
           <SyntaxHighlighter
             language="python"
-            style={coy as Record<string, React.CSSProperties>}
+            style={syntaxTheme}
             wrapLines={true}
             wrapLongLines={true}
             className="rounded-md"
