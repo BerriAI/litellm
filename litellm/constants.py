@@ -49,6 +49,8 @@ LITELLM_MAX_STREAMING_DURATION_SECONDS: Final = (
 # Set to 0 to disable truncation.
 MAX_BASE64_LENGTH_FOR_LOGGING: Final = int(os.getenv("MAX_BASE64_LENGTH_FOR_LOGGING", 64))
 
+MAX_STRING_LENGTH_STDOUT_LOG: Final = get_env_int("MAX_STRING_LENGTH_STDOUT_LOG", 4096)
+
 # When true, adds detailed per-phase timing breakdown headers to responses.
 # Headers: x-litellm-timing-{pre-processing,llm-api,post-processing,message-copy}-ms
 LITELLM_DETAILED_TIMING: Final = os.getenv("LITELLM_DETAILED_TIMING", "false").lower() == "true"
@@ -1341,6 +1343,11 @@ LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE: Final = (
     "Truncation is a DB storage safeguard. "
     "Full, untruncated data is logged to logging callbacks (OTEL, Datadog, etc.). "
     "To increase the truncation limit, set `MAX_STRING_LENGTH_PROMPT_IN_DB` in your env."
+)
+LITELLM_TRUNCATION_STDOUT_SAFEGUARD_NOTE: Final = (
+    "Truncation is a stdout logging safeguard. "
+    "Full, untruncated data is logged to logging callbacks (OTEL, Datadog, etc.) and at DEBUG level. "
+    "To increase the truncation limit, set `MAX_STRING_LENGTH_STDOUT_LOG` in your env."
 )
 
 ########################### LiteLLM Proxy Specific Constants ###########################
