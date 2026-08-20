@@ -62,8 +62,8 @@ return 1
 
 POP_RESERVATION_SCRIPT: Final = """
 local value = redis.call('GET', KEYS[1])
-if value then
-    redis.call('DEL', KEYS[1])
+if value and value ~= '' then
+    redis.call('SET', KEYS[1], '', 'EX', tonumber(ARGV[1]))
 end
 return value
 """
@@ -375,6 +375,12 @@ class BatchEnqueuedTokenStore:
         litellm_parent_otel_span: "Span | None" = None,
     ) -> BatchEnqueuedTokenReservation | None:
         redis_raw: Final = await self._pop_redis_record(batch_id)
+        if redis_raw is not None and not redis_raw:
+            # The Redis pop tombstones popped records in place, so a hit on the empty
+            # tombstone means the batch was already refunded elsewhere; a local copy
+            # left behind by a save that raised after landing must not refund again.
+            await self._pop_local_record(batch_id, litellm_parent_otel_span)
+            return None
         raw: Final = (
             redis_raw if redis_raw is not None else await self._pop_local_record(batch_id, litellm_parent_otel_span)
         )
@@ -393,7 +399,9 @@ class BatchEnqueuedTokenStore:
         if pop_script is None:
             return None
         try:
-            return _POPPED_VALUE_ADAPTER.validate_python(await pop_script((self._record_key(batch_id),), ()))
+            return _POPPED_VALUE_ADAPTER.validate_python(
+                await pop_script((self._record_key(batch_id),), (BATCH_ENQUEUED_TOKEN_TTL_SECONDS,))
+            )
         except Exception as e:  # noqa: BLE001  # any Redis failure must fall back to the in-memory record
             verbose_proxy_logger.warning(
                 "Redis enqueued-token reservation pop failed, falling back to in-memory: %s", str(e)
