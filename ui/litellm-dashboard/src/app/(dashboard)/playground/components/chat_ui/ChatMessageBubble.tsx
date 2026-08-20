@@ -3,6 +3,8 @@ import React from "react";
 import ReactMarkdown from "react-markdown";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { coy } from "react-syntax-highlighter/dist/esm/styles/prism";
+
+import { useSyntaxTheme } from "@/hooks/useSyntaxTheme";
 import { CodeInterpreterResult } from "@/components/llm_calls/code_interpreter_handler";
 import A2AMetrics from "./A2AMetrics";
 import AudioRenderer from "./AudioRenderer";
@@ -38,6 +40,7 @@ function ChatMessageBubble({
   codeInterpreterResult,
   accessToken,
 }: ChatMessageBubbleProps) {
+  const syntaxTheme = useSyntaxTheme(coy);
   const isUser = message.role === "user";
 
   return (
@@ -143,7 +146,7 @@ function ChatMessageBubble({
                     const match = /language-(\w+)/.exec(className || "");
                     return !inline && match ? (
                       <SyntaxHighlighter
-                        style={coy as any}
+                        style={syntaxTheme}
                         language={match[1]}
                         PreTag="div"
                         className="rounded-md my-2"
