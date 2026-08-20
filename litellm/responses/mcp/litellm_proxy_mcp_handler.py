@@ -1202,7 +1202,6 @@ class LiteLLM_Proxy_MCP_Handler:
             List of MCP tool execution events for streaming
         """
         from litellm._uuid import uuid
-
         from litellm.responses.mcp.mcp_streaming_iterator import create_mcp_call_events
 
         tool_execution_events: Final[list[ResponsesAPIStreamingResponse]] = []

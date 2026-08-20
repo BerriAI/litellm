@@ -23,9 +23,8 @@ from litellm.types.llms.openai import (
 
 if TYPE_CHECKING:
     from litellm.proxy._types import UserAPIKeyAuth
-    from mcp.types import Tool as MCPTool
-
     from litellm.responses.mcp.litellm_proxy_mcp_handler import MCPToolResult
+    from mcp.types import Tool as MCPTool
 else:
     MCPTool = Any
 
@@ -767,7 +766,6 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
             return
 
         from litellm.responses.main import aresponses
-
         from litellm.responses.mcp.litellm_proxy_mcp_handler import (
             LiteLLM_Proxy_MCP_Handler,
         )

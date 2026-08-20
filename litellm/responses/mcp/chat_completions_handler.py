@@ -3,13 +3,12 @@
 import logging
 from typing import TYPE_CHECKING, Any, Final, cast
 
-from litellm.responses.mcp.request_context import MCPRequestContext
-from litellm.types.utils import Message, ModelResponse
-from litellm.utils import CustomStreamWrapper
-
 from litellm.responses.mcp.litellm_proxy_mcp_handler import (
     LiteLLM_Proxy_MCP_Handler,
 )
+from litellm.responses.mcp.request_context import MCPRequestContext
+from litellm.types.utils import Message, ModelResponse
+from litellm.utils import CustomStreamWrapper
 
 if TYPE_CHECKING:
     from litellm.proxy._types import UserAPIKeyAuth
