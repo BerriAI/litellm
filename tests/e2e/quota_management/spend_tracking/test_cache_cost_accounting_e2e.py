@@ -30,6 +30,12 @@ OpenAI caching is best-effort, so each test retries with a fresh prefix (new
 marker = brand-new cache identity) up to three times before failing; the prime and
 measured calls share the prefix but differ in the trailing question, which defeats
 the proxy's own response cache without touching the provider's prefix cache.
+
+The test that asserts on reasoning cost requests reasoning explicitly with
+`reasoning_effort`, so that assertion rests on a parameter the test sets rather
+than on whatever the model happens to do by default. Its prime call carries the
+same value: OpenAI's prefix cache keys on the reasoning setting as well as the
+tokens, so a prime at a different effort never produces a read.
 """
 
 import pytest
@@ -67,6 +73,7 @@ CACHE_WRITE_RATE = 5e-05
 
 PRIME_QUESTION = "Reply with the single word ready."
 REASONING_QUESTION = "Compute 47*83 - 19*7 step by step, then reply with just the final number."
+REASONING_EFFORT = "high"
 
 
 class _StreamChunk(BaseModel):
@@ -84,12 +91,15 @@ def _cache_priced_params(backend: str) -> LiteLLMParamsBody:
     )
 
 
-def _chat_body(model: str, content: str, *, stream: bool = False) -> ChatBody:
+def _chat_body(
+    model: str, content: str, *, stream: bool = False, reasoning_effort: str | None = None
+) -> ChatBody:
     return ChatBody(
         model=model,
         messages=[ChatMessage(role="user", content=content)],
         stream=stream,
         max_completion_tokens=4000,
+        reasoning_effort=reasoning_effort,
     )
 
 
@@ -151,9 +161,23 @@ class TestCacheCostAccounting:
 
         for _ in range(CACHE_ATTEMPTS):
             prefix = cacheable_prefix(unique_marker())
-            unwrap(client.proxy.chat(scoped_key, _chat_body(model, f"{prefix}\n{PRIME_QUESTION}")))
+            unwrap(
+                client.proxy.chat(
+                    scoped_key,
+                    _chat_body(
+                        model, f"{prefix}\n{PRIME_QUESTION}", reasoning_effort=REASONING_EFFORT
+                    ),
+                )
+            )
             chat = unwrap(
-                client.proxy.chat(scoped_key, _chat_body(model, f"{prefix}\n{REASONING_QUESTION}"))
+                client.proxy.chat(
+                    scoped_key,
+                    _chat_body(
+                        model,
+                        f"{prefix}\n{REASONING_QUESTION}",
+                        reasoning_effort=REASONING_EFFORT,
+                    ),
+                )
             )
             assert chat.id, f"chat response carried no id: {chat}"
             row = _require_row(client, chat.id)
