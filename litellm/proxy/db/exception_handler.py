@@ -1,3 +1,4 @@
+import re
 from collections.abc import Awaitable, Callable
 from typing import Any, Final, TypeVar
 
@@ -8,6 +9,11 @@ from litellm.proxy._types import (
     ProxyException,
 )
 from litellm.secret_managers.main import str_to_bool
+
+# The engine reports a pool timeout as a raw HTTP error whose body carries the
+# code, with no `code` attribute to read. Matched on prisma's own JSON field so a
+# message that merely mentions the code cannot trip it.
+_P2024_IN_ENGINE_BODY: Final = re.compile(r'"error_code"\s*:\s*"P2024"')
 
 # Bounds the __cause__/__context__ walk in is_database_service_unavailable_error_in_chain.
 # Real exception chains are a few links deep; the cap also makes the walk cycle-safe.
@@ -122,6 +128,34 @@ class PrismaDBExceptionHandler:
         import prisma
 
         return type(e) is prisma.errors.DataError
+
+    @staticmethod
+    def is_connection_pool_timeout_error(e: Exception) -> bool:
+        """True iff the query engine gave up waiting for a free pool slot (P2024).
+
+        Matched on the prisma error code rather than the message, because the
+        message is also keyword-matched as a generic transport timeout elsewhere
+        in this class. The distinction matters to an operator: the database
+        answered fine, the proxy simply had no connection left to ask with, so
+        the fix is pool sizing or shedding load rather than anything database
+        side.
+
+        The ``P####`` codes are prisma's own namespace and only prisma populates
+        ``code`` with one, so no type check is needed. Skipping it also keeps
+        this callable on the DB failure path when prisma itself is stubbed.
+
+        Both shapes have to be read. Contention raises a typed prisma error
+        carrying the code, which the attribute check already handles. When the
+        database is unreachable the engine reports the same P2024 as a raw HTTP
+        error instead, with no ``code`` attribute and the code only in the JSON
+        body. Prisma classifies both as P2024, so which layer surfaced it should
+        not decide whether it is counted. The neighbouring gauges separate the
+        two cases: saturation holds ``busy`` at ``max`` with waiters queued,
+        while an unreachable database drops ``open`` instead.
+        """
+        if getattr(e, "code", None) == "P2024":
+            return True
+        return bool(_P2024_IN_ENGINE_BODY.search(str(e)))
 
     @staticmethod
     def is_database_transport_error(e: Exception) -> bool:

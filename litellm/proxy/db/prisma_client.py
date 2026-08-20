@@ -16,6 +16,7 @@ from datetime import datetime, timedelta
 from typing import Any, Final, Protocol
 
 from litellm._logging import verbose_proxy_logger
+from litellm.proxy.db.db_pool_metrics import DBPoolSample, parse_pool_sample
 from litellm.secret_managers.main import str_to_bool
 
 
@@ -797,6 +798,12 @@ class PrismaWrapper:
             return False
         seconds_left: Final = (expiration_time - datetime.utcnow()).total_seconds()
         return seconds_left > self.TOKEN_REFRESH_BUFFER_SECONDS
+
+    async def get_pool_sample(self) -> DBPoolSample:
+        """This pool's occupancy, as the query engine sees it. Declared rather
+        than left to ``__getattr__`` so a typed caller can reach it, and so the
+        engine's counter names stay out of the metrics layer."""
+        return parse_pool_sample(await self._original_prisma.get_metrics())
 
     def __getattr__(self, name: str):
         """

@@ -9,6 +9,7 @@ from collections.abc import Callable
 from typing import Any, Final
 
 from litellm._logging import verbose_proxy_logger
+from litellm.proxy.db.db_pool_metrics import DBPoolSample
 from litellm.proxy.db.prisma_client import PrismaWrapper
 
 # Per-model action methods that read from the database. These are routed to
@@ -130,6 +131,15 @@ class RoutingPrismaWrapper:
         clears the flag — without this, the watchdog would keep firing
         reconnect attempts against an already-healthy writer."""
         self._writer_unavailable = False
+
+    async def get_pool_sample(self) -> DBPoolSample:
+        """The writer's pool occupancy.
+
+        The writer is the pool that auth, spend writes and every background job
+        contend for, so it is the one that saturates. The reader has its own
+        separate pool that this does not cover; see the metric docs.
+        """
+        return await self._writer.get_pool_sample()
 
     def _should_use_reader(self) -> bool:
         return not self._reader_unavailable

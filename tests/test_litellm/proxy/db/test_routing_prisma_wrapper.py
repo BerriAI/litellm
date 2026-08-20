@@ -991,3 +991,33 @@ async def test_recreate_keeps_writer_unavailable_when_writer_recreate_fails():
         await routing.recreate_prisma_client("writer-url")
 
     assert routing.writer_unavailable is True
+
+
+@pytest.mark.asyncio
+async def test_get_pool_sample_reads_the_writer_pool():
+    """Reads route to the replica, but the writer is the pool this PR samples.
+    Pinned so a later change to sample the reader is a deliberate edit rather
+    than a silent one, and so deleting the delegation fails."""
+    from litellm.proxy.db.db_pool_metrics import DBPoolSample
+    from litellm.proxy.db.routing_prisma_wrapper import RoutingPrismaWrapper
+
+    sample = DBPoolSample(
+        busy_connections=1.0,
+        idle_connections=2.0,
+        open_connections=3.0,
+        pending_acquirers=0.0,
+        acquire_wait_seconds_total=0.0,
+        acquire_count_total=0,
+        query_duration_seconds_total=0.0,
+        query_count_total=0,
+    )
+    writer = MagicMock()
+    writer.get_pool_sample = AsyncMock(return_value=sample)
+    reader = MagicMock()
+    reader.get_pool_sample = AsyncMock()
+
+    wrapper = RoutingPrismaWrapper(writer=writer, reader=reader)
+
+    assert await wrapper.get_pool_sample() is sample
+    writer.get_pool_sample.assert_awaited_once()
+    reader.get_pool_sample.assert_not_awaited()
