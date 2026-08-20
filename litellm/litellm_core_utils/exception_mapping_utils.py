@@ -68,6 +68,14 @@ class ExceptionCheckers:
         if "service tier capacity exceeded" in _error_str_lower:
             return True
 
+        #######################################
+        # Anthropic returns spend/usage-limit exhaustion typed as an
+        # invalid_request_error (HTTP 400), e.g. "You have reached your specified
+        # API usage limits." It is a usage limit and should map to 429. (#37599)
+        #######################################
+        if "api usage limit" in _error_str_lower:
+            return True
+
         return False
 
     @staticmethod

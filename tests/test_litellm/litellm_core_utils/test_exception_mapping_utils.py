@@ -167,6 +167,18 @@ class TestExceptionCheckers:
             is True
         )
 
+    def test_anthropic_usage_limit_is_treated_as_rate_limit(self):
+        """Anthropic reports spend/usage-limit exhaustion as an invalid_request_error
+        (HTTP 400), but it is a usage limit and should map to 429, not 400 (#37599).
+        """
+        error_str = (
+            "litellm.BadRequestError: AnthropicException - "
+            '{"type":"error","error":{"type":"invalid_request_error",'
+            '"message":"You have reached your specified API usage limits. '
+            'You will regain access on 2026-09-01 at 00:00 UTC."}}'
+        )
+        assert ExceptionCheckers.is_error_str_rate_limit(error_str, status_code=400) is True
+
     def test_is_azure_content_policy_violation_error_with_policy_violation_text(self):
         """Test detection of Azure content policy violation with explicit policy violation text"""
 
