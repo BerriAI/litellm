@@ -43,6 +43,9 @@ from litellm.litellm_core_utils.llm_response_utils.get_headers import (
     get_response_headers,
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+from litellm.litellm_core_utils.streaming_handler import (
+    zero_fill_missing_cache_usage_fields,
+)
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import can_key_call_resolved_model
 from litellm.proxy.auth.auth_utils import check_response_size_is_safe
@@ -324,6 +327,12 @@ async def _bill_partial_streamed_spend_on_disconnect(request_data: dict, respons
         return False
     if partial_response is None:
         return False
+    wrapper_model: Final = getattr(response, "model", None)
+    if isinstance(wrapper_model, str) and wrapper_model:
+        partial_response.model = wrapper_model
+    partial_usage: Final = getattr(partial_response, "usage", None)
+    if isinstance(partial_usage, Usage):
+        zero_fill_missing_cache_usage_fields(partial_usage)
     try:
         await logging_obj.dispatch_success_handlers(
             partial_response,
