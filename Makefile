@@ -314,7 +314,7 @@ test-unit-helm: install-helm-unittest
 # LLM Translation testing targets
 test-llm-translation: install-test-deps
 	@echo "Running LLM translation tests..."
-	@python .github/workflows/run_llm_translation_tests.py
+	@python .github/scripts/run_llm_translation_tests.py
 
 test-llm-translation-single: install-test-deps
 	@echo "Running single LLM translation test file..."

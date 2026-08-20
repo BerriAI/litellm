@@ -117,6 +117,14 @@ test_paths:
       - tests/load_tests/test_vertex_embeddings_load_test.py
       - tests/load_tests/test_vertex_load_tests.py
   - reason: >-
+      A local-only agent rig: test_a2a_completion_bridge.py needs a LangGraph server on
+      localhost:2024 and test_a2a.py drives a live A2A endpoint, so neither can run in a
+      pull request job. Until 2026-08-20 the CircleCI agent job hid them behind a grep -v
+      that this census could not see; the glob now excludes them structurally and this entry
+      is the decision on the record. Revisit when the A2A bridge gets a recorded-wire fixture
+    paths:
+      - tests/agent_tests/local_only_agent_tests
+  - reason: >-
       Third-party integration tests that skip themselves without OCI configuration or sandbox
       credentials, neither of which a pull request job holds
     paths:
