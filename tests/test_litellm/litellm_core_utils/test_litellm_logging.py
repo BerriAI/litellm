@@ -5115,6 +5115,7 @@ def test_prompt_hooks_skip_prompt_managers_when_no_prompt_id(logging_obj, tmp_pa
     """
     from litellm.integrations.arize.arize_phoenix_prompt_manager import ArizePhoenixPromptManager
     from litellm.integrations.dotprompt.dotprompt_manager import DotpromptManager
+    from litellm.integrations.vector_store_integrations.base_vector_store import BaseVectorStore
     from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook import (
         VectorStorePreCallHook,
     )
@@ -5164,14 +5165,25 @@ def test_prompt_hooks_skip_prompt_managers_when_no_prompt_id(logging_obj, tmp_pa
         assert logging_obj.should_run_prompt_management_hooks(
             prompt_id=None, non_default_params={"vector_store_ids": ["vs_123"]}
         )
-        assert isinstance(
-            logging_obj.get_custom_logger_for_prompt_management(
-                model="gemini-2.5-flash",
-                non_default_params={"vector_store_ids": ["vs_123"]},
-                prompt_id=None,
-                dynamic_callback_params={},
-            ),
-            VectorStorePreCallHook,
+        selected_logger = logging_obj.get_custom_logger_for_prompt_management(
+            model="gemini-2.5-flash",
+            non_default_params={"vector_store_ids": ["vs_123"]},
+            prompt_id=None,
+            dynamic_callback_params={},
+        )
+        assert isinstance(selected_logger, VectorStorePreCallHook)
+
+        assert logging_obj._prompt_manager_runs_without_prompt_id(
+            logger=BaseVectorStore(), prompt_spec=None, dynamic_callback_params=None
+        )
+        assert not logging_obj._prompt_manager_runs_without_prompt_id(
+            logger=selected_logger, prompt_spec=None, dynamic_callback_params=None
+        )
+        assert not logging_obj._prompt_manager_runs_without_prompt_id(
+            logger=dotprompt_manager, prompt_spec=None, dynamic_callback_params=None
+        )
+        assert not logging_obj._prompt_manager_runs_without_prompt_id(
+            logger=arize_manager, prompt_spec=None, dynamic_callback_params=None
         )
 
         assert isinstance(
