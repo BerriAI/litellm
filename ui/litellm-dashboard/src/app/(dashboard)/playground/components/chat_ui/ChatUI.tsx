@@ -1625,7 +1625,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                                 <Button
                                   type="button"
                                   size="xs"
-                                  className="rounded-lg bg-info px-3 py-1 text-xs font-medium text-white hover:bg-info"
+                                  className="rounded-lg bg-info px-3 py-1 text-xs font-medium text-white hover:bg-info/80"
                                   onClick={() => setByokModalServer(server)}
                                 >
                                   Connect
@@ -1816,7 +1816,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                     <div className="mb-4">
                       {uploadedImages.length === 0 ? (
                         <label
-                          className="flex cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed border-border bg-muted px-4 py-8 text-center hover:border-border"
+                          className="flex cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed border-border bg-muted px-4 py-8 text-center hover:border-ring"
                           onDragOver={(event) => event.preventDefault()}
                           onDrop={(event) => {
                             event.preventDefault();
@@ -1869,7 +1869,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                               </Button>
                             </div>
                           ))}
-                          <label className="flex h-32 w-32 cursor-pointer flex-col items-center justify-center rounded-md border-2 border-dashed border-border hover:border-border">
+                          <label className="flex h-32 w-32 cursor-pointer flex-col items-center justify-center rounded-md border-2 border-dashed border-border hover:border-ring">
                             <ImageIcon className="size-6 text-muted-foreground" aria-hidden="true" />
                             <p className="mt-1 text-xs text-muted-foreground">Add more</p>
                             <input
@@ -1892,7 +1892,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                     <div className="mb-4">
                       {!uploadedAudio ? (
                         <label
-                          className="flex cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed border-border bg-muted px-4 py-8 text-center hover:border-border"
+                          className="flex cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed border-border bg-muted px-4 py-8 text-center hover:border-ring"
                           onDragOver={(event) => event.preventDefault()}
                           onDrop={(event) => {
                             event.preventDefault();
@@ -1972,7 +1972,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                         </div>
                         <button
                           type="button"
-                          className="text-xs text-info hover:text-info"
+                          className="text-xs text-info hover:text-info/80"
                           onClick={() => codeInterpreter.setEnabled(false)}
                         >
                           Disable

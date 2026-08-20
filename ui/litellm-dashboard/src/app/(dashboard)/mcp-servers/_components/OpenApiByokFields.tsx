@@ -29,7 +29,7 @@ const OpenApiByokFields: React.FC = () => {
           <span className="text-sm font-medium text-foreground flex items-center gap-2">
             BYOK (Bring Your Own Key)
             <SimpleTooltip content="When enabled, each user provides their own API key for this service. Keys are stored per-user and never shared.">
-              <Info className="size-4 text-info hover:text-info cursor-help" />
+              <Info className="size-4 text-info hover:text-info/80 cursor-help" />
             </SimpleTooltip>
           </span>
         }
@@ -65,7 +65,7 @@ const OpenApiByokFields: React.FC = () => {
               <span className="text-sm font-medium text-foreground">
                 Access Description
                 <SimpleTooltip content="List of permissions shown to users in the connection modal (e.g. 'Create and manage Jira issues')">
-                  <Info className="ml-2 size-4 text-info hover:text-info cursor-help" />
+                  <Info className="ml-2 size-4 text-info hover:text-info/80 cursor-help" />
                 </SimpleTooltip>
               </span>
             }
@@ -85,7 +85,7 @@ const OpenApiByokFields: React.FC = () => {
               <span className="text-sm font-medium text-foreground">
                 API Key Help URL
                 <SimpleTooltip content="Optional link shown to users to help them find their API key">
-                  <Info className="ml-2 size-4 text-info hover:text-info cursor-help" />
+                  <Info className="ml-2 size-4 text-info hover:text-info/80 cursor-help" />
                 </SimpleTooltip>
               </span>
             }

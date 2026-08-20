@@ -147,7 +147,7 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
                   <>
                     <button
                       type="button"
-                      className="text-sm text-info hover:text-info font-medium"
+                      className="text-sm text-info hover:text-info/80 font-medium"
                       onClick={() => handleSelectAll(server.server_id)}
                       disabled={isLoading}
                     >
@@ -155,7 +155,7 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
                     </button>
                     <button
                       type="button"
-                      className="text-sm text-info hover:text-info font-medium"
+                      className="text-sm text-info hover:text-info/80 font-medium"
                       onClick={() => handleDeselectAll(server.server_id)}
                       disabled={isLoading}
                     >

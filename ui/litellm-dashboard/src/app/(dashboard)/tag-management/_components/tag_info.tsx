@@ -122,7 +122,7 @@ const TagEditForm: React.FC<TagEditFormProps> = ({ tag, seedBudgetFields, userMo
                 href="https://github.com/BerriAI/litellm/issues/new"
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-info underline hover:text-info"
+                className="text-info underline hover:text-info/80"
               >
                 create a GitHub issue
               </a>

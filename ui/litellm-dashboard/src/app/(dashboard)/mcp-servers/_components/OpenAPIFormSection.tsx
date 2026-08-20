@@ -70,7 +70,7 @@ const OpenAPIFormSection: React.FC<OpenAPIFormSectionProps> = ({
           <span className="text-sm font-medium text-foreground flex items-center">
             OpenAPI Spec URL
             <SimpleTooltip content="URL to an OpenAPI specification (JSON or YAML). MCP tools will be automatically generated from the API endpoints defined in the spec.">
-              <Info className="ml-2 size-4 text-info hover:text-info cursor-help" />
+              <Info className="ml-2 size-4 text-info hover:text-info/80 cursor-help" />
             </SimpleTooltip>
           </span>
         }

@@ -199,7 +199,7 @@ const A2AMetrics: React.FC<A2AMetricsProps> = ({ a2aMetadata, timeToFirstToken, 
                   type="button"
                   variant="ghost"
                   size="xs"
-                  className="h-auto p-0 text-xs text-info hover:bg-transparent hover:text-info"
+                  className="h-auto p-0 text-xs text-info hover:bg-transparent hover:text-info/80"
                 />
               }
             >

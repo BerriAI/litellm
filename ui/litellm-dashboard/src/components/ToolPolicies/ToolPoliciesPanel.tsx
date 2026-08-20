@@ -173,7 +173,7 @@ export const ToolPoliciesPanel: React.FC<ToolPoliciesPanelProps> = ({ accessToke
                 <button
                   type="button"
                   onClick={() => scrollToToolRow(tool.tool_id)}
-                  className="text-warning hover:text-warning font-medium text-xs whitespace-nowrap"
+                  className="text-warning hover:text-warning/80 font-medium text-xs whitespace-nowrap"
                 >
                   Review
                 </button>

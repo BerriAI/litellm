@@ -26,7 +26,7 @@ const TagFilteringToggle: React.FC<TagFilteringToggleProps> = ({ enabled, router
                   href={routerFieldsMetadata["enable_tag_filtering"].link}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="text-info hover:text-info underline"
+                  className="text-info hover:text-info/80 underline"
                 >
                   Learn more
                 </a>

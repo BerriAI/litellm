@@ -30,7 +30,7 @@ export default function DcrBridgeToggle({
         <span className="text-sm font-medium text-foreground flex items-center">
           Gateway-hosted sign-in (DCR bridge)
           <SimpleTooltip content="Lets OAuth-only clients like Claude Desktop register and sign in through the gateway. Turn off to relay the upstream server's own OAuth metadata instead (for clients pre-registered with the upstream IdP).">
-            <Info className="ml-2 size-4 text-info hover:text-info cursor-help" />
+            <Info className="ml-2 size-4 text-info hover:text-info/80 cursor-help" />
           </SimpleTooltip>
         </span>
       }

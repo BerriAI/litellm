@@ -141,7 +141,7 @@ export function MCPServerPermissions({
                 <div
                   onClick={() => hasToolRestrictions && toggleServerExpansion(item.value)}
                   className={`flex items-center gap-3 py-2 px-3 rounded-lg border border-border transition-all ${
-                    hasToolRestrictions ? "cursor-pointer hover:bg-accent hover:border-border" : "bg-card"
+                    hasToolRestrictions ? "cursor-pointer hover:bg-accent" : "bg-card"
                   }`}
                 >
                   <div className="flex items-center gap-2 flex-1 min-w-0">

@@ -54,7 +54,7 @@ const FieldLabel: React.FC<{ label: string; tooltip: string }> = ({ label, toolt
   <span className="text-sm font-medium text-foreground flex items-center">
     {label}
     <SimpleTooltip content={tooltip}>
-      <Info className="ml-2 size-4 text-info hover:text-info cursor-help" />
+      <Info className="ml-2 size-4 text-info hover:text-info/80 cursor-help" />
     </SimpleTooltip>
   </span>
 );
@@ -190,7 +190,7 @@ const OAuthFormFields: React.FC<OAuthFormFieldsProps> = ({
                     href={docsUrl}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="text-xs text-info hover:text-info ml-2 font-normal"
+                    className="text-xs text-info hover:text-info/80 ml-2 font-normal"
                     onClick={(e) => e.stopPropagation()}
                   >
                     Create OAuth App →

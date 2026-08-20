@@ -100,7 +100,7 @@ const ProviderDiscountTable: React.FC<ProviderDiscountTableProps> = ({
                       size="icon-sm"
                       aria-label={`Save discount for ${displayName}`}
                       onClick={() => handleSaveEdit(row.provider)}
-                      className="cursor-pointer text-success hover:text-success"
+                      className="cursor-pointer text-success hover:text-success/80"
                     >
                       <Check className="size-5" />
                     </Button>
@@ -122,7 +122,7 @@ const ProviderDiscountTable: React.FC<ProviderDiscountTableProps> = ({
                       size="icon-sm"
                       aria-label={`Edit discount for ${displayName}`}
                       onClick={() => handleStartEdit(row.provider, row.discount)}
-                      className="cursor-pointer text-info hover:text-info"
+                      className="cursor-pointer text-info hover:text-info/80"
                     >
                       <SquarePen className="size-5" />
                     </Button>

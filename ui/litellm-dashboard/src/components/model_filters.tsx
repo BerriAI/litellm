@@ -192,7 +192,10 @@ const ModelFilters: React.FC<ModelFiltersProps> = ({
       {/* Clear filters button */}
       {(searchTerm || selectedProvider || selectedMode || selectedFeature) && (
         <div className="flex items-end">
-          <button onClick={resetFilters} className="text-info hover:text-info text-sm underline h-10 flex items-center">
+          <button
+            onClick={resetFilters}
+            className="text-info hover:text-info/80 text-sm underline h-10 flex items-center"
+          >
             Clear Filters
           </button>
         </div>

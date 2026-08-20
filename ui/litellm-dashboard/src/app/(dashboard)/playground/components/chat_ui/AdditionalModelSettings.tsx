@@ -168,7 +168,7 @@ const AdditionalModelSettings: React.FC<AdditionalModelSettingsProps> = ({
                   href="https://docs.litellm.ai/docs/proxy/keys_teams_router_settings"
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="text-info hover:text-info"
+                  className="text-info hover:text-info/80"
                 >
                   Learn more
                 </a>

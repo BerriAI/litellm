@@ -864,7 +864,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                       <span className="text-sm font-medium text-foreground flex items-center">
                         OpenAPI Spec URL
                         <SimpleTooltip content="URL to an OpenAPI specification (JSON or YAML). MCP tools will be automatically generated from the API endpoints defined in the spec.">
-                          <Info className="ml-2 size-4 text-info hover:text-info cursor-help" />
+                          <Info className="ml-2 size-4 text-info hover:text-info/80 cursor-help" />
                         </SimpleTooltip>
                       </span>
                     }
@@ -887,7 +887,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                     <span className="text-sm font-medium text-foreground flex items-center">
                       Max Concurrent Requests (optional)
                       <SimpleTooltip content="Maximum number of tool calls LiteLLM will run against this server at the same time. Additional calls wait for a free slot. Leave blank for no limit.">
-                        <Info className="ml-2 size-4 text-info hover:text-info cursor-help" />
+                        <Info className="ml-2 size-4 text-info hover:text-info/80 cursor-help" />
                       </SimpleTooltip>
                     </span>
                   }
@@ -1008,7 +1008,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                       <span className="text-sm font-medium text-foreground flex items-center">
                         Authentication Value
                         <SimpleTooltip content="Token, password, or header value to send with each request for the selected auth type.">
-                          <Info className="ml-2 size-4 text-info hover:text-info cursor-help" />
+                          <Info className="ml-2 size-4 text-info hover:text-info/80 cursor-help" />
                         </SimpleTooltip>
                       </span>
                     }
@@ -1063,7 +1063,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                         href="https://docs.litellm.ai/docs/mcp_aws_sigv4"
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="text-info hover:text-info"
+                        className="text-info hover:text-info/80"
                       >
                         View docs &rarr;
                       </a>
@@ -1073,7 +1073,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                         <span className="text-sm font-medium text-foreground flex items-center">
                           AWS Region
                           <SimpleTooltip content="AWS region for SigV4 signing (e.g., us-east-1)">
-                            <Info className="ml-2 size-4 text-info hover:text-info cursor-help" />
+                            <Info className="ml-2 size-4 text-info hover:text-info/80 cursor-help" />
                           </SimpleTooltip>
                         </span>
                       }
@@ -1092,7 +1092,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                         <span className="text-sm font-medium text-foreground flex items-center">
                           AWS Service Name
                           <SimpleTooltip content="AWS service name for SigV4 signing. Defaults to 'bedrock-agentcore'.">
-                            <Info className="ml-2 size-4 text-info hover:text-info cursor-help" />
+                            <Info className="ml-2 size-4 text-info hover:text-info/80 cursor-help" />
                           </SimpleTooltip>
                         </span>
                       }
@@ -1111,7 +1111,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                         <span className="text-sm font-medium text-foreground flex items-center">
                           AWS Access Key ID
                           <SimpleTooltip content="Optional. If not provided, falls back to the boto3 credential chain (IAM role, env vars, etc.).">
-                            <Info className="ml-2 size-4 text-info hover:text-info cursor-help" />
+                            <Info className="ml-2 size-4 text-info hover:text-info/80 cursor-help" />
                           </SimpleTooltip>
                         </span>
                       }
@@ -1130,7 +1130,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                         <span className="text-sm font-medium text-foreground flex items-center">
                           AWS Secret Access Key
                           <SimpleTooltip content="Optional. Required if AWS Access Key ID is provided.">
-                            <Info className="ml-2 size-4 text-info hover:text-info cursor-help" />
+                            <Info className="ml-2 size-4 text-info hover:text-info/80 cursor-help" />
                           </SimpleTooltip>
                         </span>
                       }
@@ -1149,7 +1149,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                         <span className="text-sm font-medium text-foreground flex items-center">
                           AWS Session Token
                           <SimpleTooltip content="Optional. Only needed for temporary STS credentials.">
-                            <Info className="ml-2 size-4 text-info hover:text-info cursor-help" />
+                            <Info className="ml-2 size-4 text-info hover:text-info/80 cursor-help" />
                           </SimpleTooltip>
                         </span>
                       }
@@ -1168,7 +1168,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                         <span className="text-sm font-medium text-foreground flex items-center">
                           AWS Role ARN
                           <SimpleTooltip content="Optional. IAM role ARN to assume via STS before signing. If set, LiteLLM calls sts:AssumeRole to get temporary credentials.">
-                            <Info className="ml-2 size-4 text-info hover:text-info cursor-help" />
+                            <Info className="ml-2 size-4 text-info hover:text-info/80 cursor-help" />
                           </SimpleTooltip>
                         </span>
                       }
@@ -1187,7 +1187,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                         <span className="text-sm font-medium text-foreground flex items-center">
                           AWS Session Name
                           <SimpleTooltip content="Optional. Session name for the AssumeRole call — appears in CloudTrail logs. Auto-generated if omitted.">
-                            <Info className="ml-2 size-4 text-info hover:text-info cursor-help" />
+                            <Info className="ml-2 size-4 text-info hover:text-info/80 cursor-help" />
                           </SimpleTooltip>
                         </span>
                       }

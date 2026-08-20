@@ -275,7 +275,7 @@ export function ToolTestPanel({
                             className={`px-2 py-1 text-xs font-medium rounded transition-colors ${
                               viewMode === "formatted"
                                 ? "bg-success/15 text-success"
-                                : "text-success hover:text-success"
+                                : "text-success hover:text-success/80"
                             }`}
                           >
                             Formatted
@@ -283,7 +283,7 @@ export function ToolTestPanel({
                           <button
                             onClick={() => setViewMode("json")}
                             className={`px-2 py-1 text-xs font-medium rounded transition-colors ${
-                              viewMode === "json" ? "bg-success/15 text-success" : "text-success hover:text-success"
+                              viewMode === "json" ? "bg-success/15 text-success" : "text-success hover:text-success/80"
                             }`}
                           >
                             JSON
@@ -413,7 +413,7 @@ export function ToolTestPanel({
                                                           href={part}
                                                           target="_blank"
                                                           rel="noopener noreferrer"
-                                                          className="text-info hover:text-info underline break-all"
+                                                          className="text-info hover:text-info/80 underline break-all"
                                                         >
                                                           {part}
                                                         </a>
@@ -512,7 +512,7 @@ export function ToolTestPanel({
                                           href={content.url}
                                           target="_blank"
                                           rel="noopener noreferrer"
-                                          className="inline-flex items-center text-xs text-info hover:text-info hover:underline mt-1 transition-colors"
+                                          className="inline-flex items-center text-xs text-info hover:underline mt-1"
                                         >
                                           View Resource
                                           <svg className="ml-1 h-3 w-3" fill="currentColor" viewBox="0 0 20 20">

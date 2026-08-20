@@ -1712,7 +1712,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                                     }
                                     target="_blank"
                                     rel="noopener noreferrer"
-                                    className="text-info hover:text-info"
+                                    className="text-info hover:text-info/80"
                                   >
                                     documentation
                                   </a>

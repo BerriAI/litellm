@@ -22,6 +22,7 @@ const eslintConfig = [
       "local/no-large-inline-object-arg": "warn",
       "local/no-long-condition-chain": "warn",
       "local/no-complex-jsx-arrow": ["error", { maxStatements: 2 }],
+      "local/no-noop-hover-variant": "error",
       "@typescript-eslint/no-explicit-any": "warn",
       "no-console": ["warn", { allow: ["warn", "error"] }],
       "@typescript-eslint/no-unused-vars": "off",
@@ -80,6 +81,10 @@ const eslintConfig = [
     rules: {
       "no-restricted-syntax": "off",
     },
+  },
+  {
+    files: ["tests/eslint-rules/**/*.{ts,tsx}"],
+    rules: { "local/no-noop-hover-variant": "off" },
   },
   {
     files: ["src/**/*.test.{ts,tsx}", "tests/**/*.{ts,tsx}"],

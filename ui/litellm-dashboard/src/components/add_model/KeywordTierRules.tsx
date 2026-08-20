@@ -116,7 +116,7 @@ const KeywordTierRules: React.FC<KeywordTierRulesProps> = ({ rules, onChange, ti
                   <Button
                     variant="ghost"
                     size="icon"
-                    className="text-destructive hover:text-destructive"
+                    className="text-destructive hover:text-destructive/80"
                     aria-label={`Remove keyword rule ${index + 1}`}
                     onClick={() => removeRule(rule.id)}
                   >
