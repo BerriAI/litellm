@@ -1786,6 +1786,9 @@ if TYPE_CHECKING:
     from .llms.manus.responses.transformation import (
         ManusResponsesAPIConfig as ManusResponsesAPIConfig,
     )
+    from .llms.parallel_ai.responses.transformation import (
+        ParallelAIResponsesConfig as ParallelAIResponsesConfig,
+    )
     from .llms.perplexity.responses.transformation import (
         PerplexityResponsesConfig as PerplexityResponsesConfig,
     )

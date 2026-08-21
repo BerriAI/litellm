@@ -1934,9 +1934,9 @@
       "display_name": "Parallel AI (`parallel_ai`)",
       "url": "https://docs.litellm.ai/docs/search/parallel_ai",
       "endpoints": {
-        "chat_completions": false,
-        "messages": false,
-        "responses": false,
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
         "embeddings": false,
         "image_generations": false,
         "audio_transcriptions": false,

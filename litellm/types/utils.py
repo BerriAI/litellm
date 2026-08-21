@@ -3797,6 +3797,7 @@ class LlmProviders(str, Enum):
     CURSOR = "cursor"
     BEDROCK_MANTLE = "bedrock_mantle"
     GDC = "gdc"
+    PARALLEL_AI = "parallel_ai"
 
 
 # Create a set of all provider values for quick lookup

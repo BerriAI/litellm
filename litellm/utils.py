@@ -6334,6 +6334,11 @@ def validate_environment(
                 keys_in_environment = True
             else:
                 missing_keys.append("PERPLEXITYAI_API_KEY")
+        elif custom_llm_provider == "parallel_ai":
+            if "PARALLEL_AI_API_KEY" in os.environ or "PARALLEL_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("PARALLEL_AI_API_KEY")
         elif custom_llm_provider == "voyage":
             if "VOYAGE_API_KEY" in os.environ:
                 keys_in_environment = True
@@ -8487,6 +8492,8 @@ class ProviderConfigManager:
             return litellm.ManusResponsesAPIConfig()
         elif litellm.LlmProviders.PERPLEXITY == provider:
             return litellm.PerplexityResponsesConfig()
+        elif litellm.LlmProviders.PARALLEL_AI == provider:
+            return litellm.ParallelAIResponsesConfig()
         elif litellm.LlmProviders.DATABRICKS == provider:
             # Databricks Responses API is only compatible with OpenAI GPT models
             if model and "gpt" in model.lower():
