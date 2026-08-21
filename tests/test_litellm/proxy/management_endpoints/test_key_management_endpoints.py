@@ -18,6 +18,7 @@ import inspect
 
 from litellm.proxy._types import (
     GenerateKeyRequest,
+    KeyManagementRoutes,
     NewUserRequest,
     LiteLLM_BudgetTable,
     LiteLLM_OrganizationTable,
@@ -16670,6 +16671,51 @@ async def test_key_budgets_warn_that_custom_auth_can_hide_an_end_user_cap():
     assert "custom_auth_may_override_end_user_cap" in [note.code for note in warned.notes]
 
 
+@pytest.mark.asyncio
+async def test_key_budgets_report_the_default_end_user_cap_when_the_end_user_has_no_row():
+    """
+    `max_end_user_budget_id` caps an end user auth never found a row for, and auth reaches that
+    fallback whenever the lookup comes back empty, including when it came back empty because the
+    read failed. Leaving it out would report an uncapped end user that requests still get blocked on.
+    """
+    world = _fully_populated_world(
+        end_user=None,
+        default_end_user_budget=LiteLLM_BudgetTable(budget_id="budget-default-end-user", max_budget=42.0),
+    )
+    with _budgets_world(**world):
+        budgets = await resolve_key_budgets(
+            valid_token=_budgets_token(), end_user_id="unseen-end-user", deps=_budgets_deps()
+        )
+
+    entry = next(e for e in budgets if e.scope == "end_user")
+    assert entry.max_budget == 42.0
+    assert entry.source == "litellm_settings.max_end_user_budget_id"
+    assert entry.status == "ok"
+
+
+@pytest.mark.asyncio
+async def test_key_budgets_withhold_a_default_end_user_cap_that_auth_would_not_have_applied():
+    """
+    Both auth call sites read the end user inside a `try` that swallows, and the branch falling back
+    to `max_end_user_budget_id` sits inside that same `try`. A lookup that raises therefore leaves
+    the request with no end user cap at all, so naming the default here would invent an enforcer.
+    """
+
+    async def _explode(**kwargs):
+        raise RuntimeError("end user lookup is down")
+
+    world = _fully_populated_world(
+        default_end_user_budget=LiteLLM_BudgetTable(budget_id="budget-default-end-user", max_budget=42.0),
+    )
+    with _budgets_world(**world), patch(f"{_BUDGETS_RESOLVER}.get_end_user_object", _explode):
+        budgets = await resolve_key_budgets(
+            valid_token=_budgets_token(), end_user_id="end-user-budgets", deps=_budgets_deps()
+        )
+
+    entry = next(e for e in budgets if e.scope == "end_user")
+    assert (entry.status, entry.max_budget, entry.spend) == ("unknown", None, None)
+
+
 @pytest.mark.parametrize("max_budget", [0, 0.0, -5.0])
 @pytest.mark.asyncio
 async def test_key_budgets_treat_a_non_positive_cap_as_unset(max_budget):
@@ -17096,5 +17142,116 @@ async def test_key_budgets_without_an_end_user_stay_open_to_non_admins():
     caller = UserAPIKeyAuth(api_key="sk-caller", user_role=LitellmUserRoles.INTERNAL_USER.value)
     with _budgets_route_world(key_row=_budgets_key_row(), caller=caller):
         response = client.get("/key/budgets")
+
+    assert response.status_code == 200
+
+
+@_budgets_contextlib.contextmanager
+def _budgets_team_world(*, granted_routes, member_role="user", member_id="team-mate"):
+    team_table = LiteLLM_TeamTableCachedObj(
+        team_id="team-budgets",
+        members_with_roles=[Member(user_id=member_id, role=member_role)],
+        team_member_permissions=granted_routes,
+    )
+    with patch(
+        "litellm.proxy.management_helpers.team_member_permission_checks.get_team_object",
+        new_callable=AsyncMock,
+        return_value=team_table,
+    ):
+        yield
+
+
+@pytest.mark.asyncio
+async def test_key_budgets_refuse_a_team_mates_key_to_a_member_without_the_budgets_permission():
+    """
+    Belonging to the team is what /key/info grants, and this route reports far more than /key/info.
+
+    A member the team has not granted the route would otherwise read the team's, the organization's,
+    the key owner's and the key's tag spend off someone else's key.
+    """
+    caller = UserAPIKeyAuth(
+        api_key="sk-team-mate",
+        user_id="team-mate",
+        team_id="team-budgets",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+    with (
+        _budgets_team_world(granted_routes=[]),
+        _budgets_route_world(key_row=_budgets_key_row(), caller=caller) as resolver,
+    ):
+        response = client.get(f"/key/{_BUDGETS_KEY_HASH}/budgets")
+
+    assert response.status_code == 401
+    assert KeyManagementRoutes.KEY_BUDGETS.value in json.dumps(response.json())
+    resolver.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_key_budgets_allow_a_team_mates_key_once_the_team_grants_the_route():
+    """Denying a granted member would leave the permission listed but impossible to use."""
+    caller = UserAPIKeyAuth(
+        api_key="sk-team-mate",
+        user_id="team-mate",
+        team_id="team-budgets",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+    with (
+        _budgets_team_world(granted_routes=[KeyManagementRoutes.KEY_BUDGETS.value]),
+        _budgets_route_world(key_row=_budgets_key_row(), caller=caller) as resolver,
+    ):
+        response = client.get(f"/key/{_BUDGETS_KEY_HASH}/budgets")
+
+    assert response.status_code == 200
+    resolver.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_key_budgets_let_a_team_admin_read_a_team_key_without_an_explicit_grant():
+    caller = UserAPIKeyAuth(
+        api_key="sk-team-admin",
+        user_id="team-mate",
+        team_id="team-budgets",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+    with (
+        _budgets_team_world(granted_routes=[], member_role="admin"),
+        _budgets_route_world(key_row=_budgets_key_row(), caller=caller),
+    ):
+        response = client.get(f"/key/{_BUDGETS_KEY_HASH}/budgets")
+
+    assert response.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_key_budgets_keep_a_member_reading_the_key_they_own_without_the_permission():
+    """The permission is about reading someone else's key, so it must not lock a member out of theirs."""
+    caller = UserAPIKeyAuth(
+        api_key="sk-owner",
+        user_id="user-budgets",
+        team_id="team-budgets",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+    with (
+        _budgets_team_world(granted_routes=[], member_id="user-budgets"),
+        _budgets_route_world(key_row=_budgets_key_row(), caller=caller),
+    ):
+        response = client.get(f"/key/{_BUDGETS_KEY_HASH}/budgets")
+
+    assert response.status_code == 200
+
+
+@pytest.mark.parametrize(
+    "role",
+    [LitellmUserRoles.PROXY_ADMIN.value, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value],
+)
+@pytest.mark.asyncio
+async def test_key_budgets_never_send_an_admin_through_a_teams_permission_list(role):
+    """An admin is in no team, so a membership-derived permission list would deny every admin."""
+    caller = UserAPIKeyAuth(api_key="sk-admin", user_id="an-admin", user_role=role)
+    with (
+        _budgets_team_world(granted_routes=[]),
+        _budgets_route_world(key_row=_budgets_key_row(), caller=caller),
+    ):
+        response = client.get(f"/key/{_BUDGETS_KEY_HASH}/budgets")
 
     assert response.status_code == 200

@@ -3780,10 +3780,38 @@ async def info_key_fn(
         raise handle_exception_on_proxy(e)
 
 
-_END_USER_BUDGET_READER_ROLES: Final = (
+_PROXY_WIDE_READER_ROLES: Final = (
     LitellmUserRoles.PROXY_ADMIN,
     LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
 )
+
+
+async def _enforce_team_member_budget_permission(
+    user_api_key_dict: UserAPIKeyAuth,
+    key: str,
+    key_info: LiteLLM_VerificationToken,
+    prisma_client: PrismaClient,
+    user_api_key_cache: UserApiKeyCache,
+) -> None:
+    """
+    Belonging to a key's team is what grants /key/info; these budgets are their own permission.
+
+    A team key's budgets carry the team's, the caller's own membership, the owning user's, the
+    organization's and the key's tag spend, so a member the team has not granted this route cannot
+    read another member's key through it. Proxy admins, the calling key itself and keys the caller
+    owns never reach the team's permission list.
+    """
+    if user_api_key_dict.user_role in _PROXY_WIDE_READER_ROLES:
+        return
+    if user_api_key_dict.api_key == key or key_info.user_id == user_api_key_dict.user_id:
+        return
+    await TeamMemberPermissionChecks.can_team_member_execute_key_management_endpoint(
+        user_api_key_dict=user_api_key_dict,
+        route=KeyManagementRoutes.KEY_BUDGETS,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        existing_key_row=key_info,
+    )
 
 
 def _key_not_found_error() -> ProxyException:
@@ -3891,7 +3919,7 @@ async def key_budgets_fn(
                 "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
             )
 
-        if end_user_id is not None and user_api_key_dict.user_role not in _END_USER_BUDGET_READER_ROLES:
+        if end_user_id is not None and user_api_key_dict.user_role not in _PROXY_WIDE_READER_ROLES:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=(
@@ -3931,6 +3959,14 @@ async def key_budgets_fn(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"You are not allowed to access this key's info. Your role={user_api_key_dict.user_role}",
             )
+
+        await _enforce_team_member_budget_permission(
+            user_api_key_dict=user_api_key_dict,
+            key=key,
+            key_info=key_info,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+        )
 
         # The same object auth resolves the key to, so a stale cached limit is reported as the limit
         # that will actually be enforced rather than the database value that will not be.

@@ -1136,6 +1136,13 @@ def _plan_tag(context: _KeyBudgetContext, tag_name: str, tag: LiteLLM_TagTable |
 
 
 def _plan_end_user(context: _KeyBudgetContext) -> tuple[_PlannedBudget, ...]:
+    """
+    An end user with no row still gets `max_end_user_budget_id`; one that could not be read gets nothing.
+
+    `get_end_user_object` swallows its own read failures into the same None auth falls back on, so the
+    default cap below covers a failed read too. Reaching `unresolved` takes a raise, and both auth call
+    sites wrap that fallback in the `try` a raise escapes, leaving the request with no end user cap.
+    """
     end_user_id: Final = context.end_user_id
     if end_user_id is None or "end_user" in context.unresolved:
         return ()
