@@ -149,3 +149,83 @@ def test_v2_user_info_route_access():
         valid_token=valid_token,
         request_data={},
     )
+
+
+@pytest.mark.parametrize(
+    "role",
+    [
+        LitellmUserRoles.INTERNAL_USER,
+        LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
+        LitellmUserRoles.TEAM,
+        LitellmUserRoles.CUSTOMER,
+        None,
+    ],
+)
+def test_templated_info_route_is_as_reachable_as_a_plain_one(role):
+    """
+    A resolved path parameter must not make an info route less reachable than one without.
+
+    `is_info_route` compared the request path against the route list by exact string, so
+    `/key/{key_id}/budgets` never matched a real request and callers who could read /key/info
+    were refused on the equivalent budgets route.
+    """
+    user_obj = LiteLLM_UserTable(
+        user_id="test_user",
+        user_email="test@example.com",
+        user_role=role.value if role is not None else None,
+        max_budget=None,
+        spend=0.0,
+        models=[],
+    )
+
+    for route in ("/key/info", "/key/some-resolved-key-hash/budgets", "/key/budgets"):
+        RouteChecks.non_proxy_admin_allowed_routes_check(
+            user_obj=user_obj,
+            _user_role=role,
+            route=route,
+            request=MagicMock(spec=Request),
+            valid_token=UserAPIKeyAuth(api_key="sk-test"),
+            request_data={},
+        )
+
+
+def test_templated_route_matching_does_not_widen_unrelated_key_routes():
+    """Pattern matching must stay scoped to the entries in the list, not every /key/<x>/<y> path."""
+    assert RouteChecks.is_info_route("/key/some-hash/regenerate") is False
+    assert RouteChecks.is_info_route("/key/some-hash/delete") is False
+    assert RouteChecks.is_info_route("/key/some-hash/budgets") is True
+
+
+def test_info_route_matching_answers_exactly_what_the_generic_matcher_would():
+    """
+    This runs per request off the end-user budget check, so it matches precomputed sets instead of
+    rebuilding 25 regexes. That is only safe while it agrees with the generic matcher on every route.
+    """
+    corpus = {
+        entry
+        for member in LiteLLMRoutes
+        if isinstance(member.value, list)
+        for entry in member.value
+        if isinstance(entry, str)
+    } | {
+        "/key/hash-a/budgets",
+        "/key/budgets",
+        "/key/hash-a/regenerate",
+        "/chat/completions",
+        "/v1/responses/resp_9f2",
+        "/key//budgets",
+        "/key/a/b/budgets",
+        "/keyX/a/budgets",
+        "/key/a/budgetsX",
+        "",
+        "/",
+    }
+
+    disagreements = {
+        route
+        for route in corpus
+        if RouteChecks.is_info_route(route)
+        != RouteChecks.check_route_access(route=route, allowed_routes=LiteLLMRoutes.info_routes.value)
+    }
+    assert disagreements == set()
+    assert len(corpus) > 100, "a corpus this small would not have exercised the templated entry"

@@ -279,6 +279,8 @@ class KeyManagementRoutes(str, enum.Enum):
 
     # info and health routes
     KEY_INFO = "/key/info"
+    KEY_BUDGETS = "/key/{key_id}/budgets"
+    KEY_BUDGETS_SELF = "/key/budgets"
     KEY_HEALTH = "/key/health"
 
     # list routes
@@ -581,6 +583,8 @@ class LiteLLMRoutes(enum.Enum):
     )
     info_routes = [
         "/key/info",
+        KeyManagementRoutes.KEY_BUDGETS.value,
+        KeyManagementRoutes.KEY_BUDGETS_SELF.value,
         "/key/health",
         "/team/info",
         "/team/list",
@@ -617,6 +621,8 @@ class LiteLLMRoutes(enum.Enum):
         KeyManagementRoutes.KEY_UPDATE.value,
         KeyManagementRoutes.KEY_DELETE.value,
         KeyManagementRoutes.KEY_INFO.value,
+        KeyManagementRoutes.KEY_BUDGETS.value,
+        KeyManagementRoutes.KEY_BUDGETS_SELF.value,
         KeyManagementRoutes.KEY_REGENERATE.value,
         KeyManagementRoutes.KEY_GENERATE_SERVICE_ACCOUNT.value,
         KeyManagementRoutes.KEY_REGENERATE_WITH_PATH_PARAM.value,

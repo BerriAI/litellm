@@ -3279,3 +3279,97 @@ class TestIsRequestBodySafeBlocksAwsIdentitySelectors:
             )
             is True
         )
+
+
+class TestNormalizeRequestRouteRedactsKeys:
+    """
+    The key management routes that take a path param take a key hash, or a plaintext key when a caller
+    passes one. Every consumer of a normalized route records it somewhere durable, so the placeholder
+    has to be substituted here rather than at each of those consumers.
+    """
+
+    @pytest.mark.parametrize("suffix", ["budgets", "regenerate", "reset_spend"])
+    @pytest.mark.parametrize(
+        "key",
+        ["sk-1234567890abcdef", "a" * 64, "sk-Ab_9-xY", "not-really-a-key"],
+    )
+    def test_key_path_param_is_replaced_whatever_the_key_looks_like(self, suffix, key):
+        from litellm.proxy.auth.auth_utils import normalize_request_route
+
+        assert normalize_request_route(f"/key/{key}/{suffix}") == f"/key/{{key_id}}/{suffix}"
+
+    @pytest.mark.parametrize(
+        "route",
+        [
+            "/key/info",
+            "/key/budgets",
+            "/key/list",
+            "/key/sk-123/budgets/extra",
+            "/keyring/sk-123/budgets",
+            "/chat/completions",
+        ],
+    )
+    def test_routes_without_a_key_path_param_are_left_alone(self, route):
+        from litellm.proxy.auth.auth_utils import normalize_request_route
+
+        assert normalize_request_route(route) == route
+
+    def test_the_memoized_pass_never_receives_a_live_key(self):
+        """
+        An lru_cache holds its arguments for the life of the process, so a raw key reaching it would sit
+        in memory long after the request. Redaction runs first, which also means many distinct keys
+        collapse onto one cache entry instead of evicting everything else.
+        """
+        from litellm.proxy.auth.auth_utils import _normalize_known_id_routes, normalize_request_route
+
+        _normalize_known_id_routes.cache_clear()
+        before = _normalize_known_id_routes.cache_info().currsize
+        for index in range(50):
+            normalize_request_route(f"/key/sk-distinct-key-{index}/budgets")
+
+        assert _normalize_known_id_routes.cache_info().currsize == before + 1
+
+    def test_normalizing_does_not_change_how_a_route_is_classified(self):
+        """
+        Failure logging decides whether to run by matching the route, and it now matches the normalized
+        form. A pattern that stopped matching once its ids were replaced would silently switch off error
+        logging for that endpoint, which is a far quieter regression than the leak this fixes.
+        """
+        from litellm.proxy.auth.auth_utils import normalize_request_route
+        from litellm.proxy.auth.route_checks import RouteChecks
+
+        routes = [
+            "/chat/completions",
+            "/v1/responses/resp_abc",
+            "/v1/responses/resp_abc/cancel",
+            "/v1/responses/resp_abc/input_items",
+            "/v1/threads/th_1",
+            "/v1/threads/th_1/messages",
+            "/v1/threads/th_1/runs/run_1/steps/step_1",
+            "/v1/vector_stores/vs_1",
+            "/v1/vector_stores/vs_1/files/file_1",
+            "/v1/vector_stores/vs_1/file_batches/batch_1",
+            "/v1/assistants/asst_1",
+            "/v1/files/file_1",
+            "/v1/files/file_1/content",
+            "/v1/batches/batch_1",
+            "/v1/batches/batch_1/cancel",
+            "/v1/fine_tuning/jobs/job_1",
+            "/v1/fine_tuning/jobs/job_1/events",
+            "/v1/models/gpt-5",
+            "/key/sk-1234/budgets",
+            "/key/sk-1234/regenerate",
+            "/key/sk-1234/reset_spend",
+            "/key/info",
+            "/team/info",
+        ]
+        changed = [
+            route
+            for route in routes
+            if (RouteChecks.is_llm_api_route(route), RouteChecks.is_info_route(route))
+            != (
+                RouteChecks.is_llm_api_route(normalize_request_route(route)),
+                RouteChecks.is_info_route(normalize_request_route(route)),
+            )
+        ]
+        assert changed == [], f"normalization changed the classification of {changed}"

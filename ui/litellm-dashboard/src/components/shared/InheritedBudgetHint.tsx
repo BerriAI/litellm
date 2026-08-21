@@ -56,10 +56,13 @@ export function InheritedBudgetHint({ gates }: InheritedBudgetHintProps) {
     <SimpleTooltip
       content={
         <div data-testid="inherited-budget-hint" className="flex flex-col gap-1">
-          <span>This key has no budget of its own, but its spend still counts toward:</span>
+          <span>This key has no budget of its own. Its spend also counts toward:</span>
           {gates.map((gate) => (
             <span key={gate.scope}>{formatGate(gate)}</span>
           ))}
+          <span className="opacity-80">
+            Not the full list. The key&rsquo;s Budgets tab shows every budget that can block it, with live spend.
+          </span>
         </div>
       }
     />

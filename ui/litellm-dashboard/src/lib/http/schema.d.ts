@@ -6844,6 +6844,81 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/key/budgets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Key Budgets Fn
+         * @description List every budget that can block requests made with a key, with its live spend.
+         *
+         *     A `BudgetExceededError` names one entity, but finding out which of the key, its windows, its
+         *     per-model caps, its team, the caller's membership in that team, the owning user, org, project,
+         *     the key's tags, the end user or the proxy-wide limit produced it means reading auth source.
+         *     This returns all of them at once, including the scopes that are left unconfigured, so a scope
+         *     can be ruled out without opening every object.
+         *
+         *     Parameters:
+         *     - key_id: str | None (path parameter) - The hash of the key to inspect. The key itself is
+         *       rejected here, because a URL path reaches access logs, tracing spans and error-logging
+         *       callbacks. Defaults to the key in the Authorization header when omitted (`GET /key/budgets`).
+         *     - end_user_id: str | None (query parameter) - Also report the budgets that would apply to this
+         *       end user. Omitted end users produce no `end_user` rows, because nothing binds an end user to
+         *       a key outside a request. Proxy admins only, since end users are a proxy-global namespace with
+         *       no key, team or organization scoping to check a caller against.
+         *
+         *     Returns:
+         *     - key: str - The key that was looked up, echoed back as it was passed in
+         *     - budgets: list - One entry per applicable budget
+         *         - scope: str - `proxy`, `key`, `key_window`, `key_model`, `team`, `team_window`,
+         *           `team_member`, `user`, `organization`, `project`, `tag`, `end_user` or `end_user_model`
+         *         - entity_type: Litellm_EntityType - The entity a `BudgetExceededError` from this scope
+         *           names, so a denial message maps back to a row here
+         *         - entity_id / entity_label: str | None - Which entity is limited, and its human-facing alias
+         *         - enforcement: str - `hard` blocks the request, `throttled` scales the key's rate limits down
+         *           instead of denying anything. Only the key's own `max_budget` can be `throttled`; every
+         *           other scope on the same key still blocks
+         *         - max_budget: float | None - The limit in effect. `null` means this scope applies to the key
+         *           but places no limit on it
+         *         - spend: float | None - Spend as the enforcing check reads it, from the same cross-pod
+         *           counter, not the periodically-synced database column. `null` only when the read failed
+         *         - spend_state: str - Whether `spend` was read (`live`), is missing because the entity or its
+         *           counter could not be read (`unavailable`), or is withheld from this caller (`restricted`).
+         *           The proxy-wide row is `restricted` for everyone but a proxy admin, since its limit and spend
+         *           cover the whole deployment rather than this key
+         *         - remaining: float | None - `max_budget - spend`, when both are known
+         *         - comparison: str - The operator the enforcing check uses, which differs per scope
+         *         - budget_duration / budget_reset_at / window_start: When spend next resets to zero
+         *         - source: str - Where the limit is configured, e.g. `key.max_budget`, `budget_table:<id>`
+         *         - status: str - `unlimited`, `ok`, `exceeded`, or `unknown` when the row could not be evaluated
+         *         - notes: list - Caveats worth knowing before trusting the row, each with a stable `code`
+         *           to branch on and human-facing `text` that is free to be reworded. `severity` is for a
+         *           `code` a client does not know yet: `info` only explains a field the row already carries,
+         *           `warning` carries the fact on its own. Ordered most to least specific to this row's
+         *           numbers, and empty rather than null when there is nothing to say
+         *
+         *     Example Curl:
+         *     ```
+         *     curl -X GET "http://0.0.0.0:4000/key/a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2/budgets" -H "Authorization: Bearer sk-1234"
+         *     ```
+         *
+         *     Example Curl - the budgets on the calling key itself
+         *     ```
+         *     curl -X GET "http://0.0.0.0:4000/key/budgets" -H "Authorization: Bearer sk-test-example-key-123"
+         *     ```
+         */
+        get: operations["key_budgets_fn_key_budgets_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/key/bulk_update": {
         parameters: {
             query?: never;
@@ -7465,6 +7540,81 @@ export interface paths {
          *     ```
          */
         post: operations["update_key_fn_key_update_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/key/{key_id}/budgets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Key Budgets Fn
+         * @description List every budget that can block requests made with a key, with its live spend.
+         *
+         *     A `BudgetExceededError` names one entity, but finding out which of the key, its windows, its
+         *     per-model caps, its team, the caller's membership in that team, the owning user, org, project,
+         *     the key's tags, the end user or the proxy-wide limit produced it means reading auth source.
+         *     This returns all of them at once, including the scopes that are left unconfigured, so a scope
+         *     can be ruled out without opening every object.
+         *
+         *     Parameters:
+         *     - key_id: str | None (path parameter) - The hash of the key to inspect. The key itself is
+         *       rejected here, because a URL path reaches access logs, tracing spans and error-logging
+         *       callbacks. Defaults to the key in the Authorization header when omitted (`GET /key/budgets`).
+         *     - end_user_id: str | None (query parameter) - Also report the budgets that would apply to this
+         *       end user. Omitted end users produce no `end_user` rows, because nothing binds an end user to
+         *       a key outside a request. Proxy admins only, since end users are a proxy-global namespace with
+         *       no key, team or organization scoping to check a caller against.
+         *
+         *     Returns:
+         *     - key: str - The key that was looked up, echoed back as it was passed in
+         *     - budgets: list - One entry per applicable budget
+         *         - scope: str - `proxy`, `key`, `key_window`, `key_model`, `team`, `team_window`,
+         *           `team_member`, `user`, `organization`, `project`, `tag`, `end_user` or `end_user_model`
+         *         - entity_type: Litellm_EntityType - The entity a `BudgetExceededError` from this scope
+         *           names, so a denial message maps back to a row here
+         *         - entity_id / entity_label: str | None - Which entity is limited, and its human-facing alias
+         *         - enforcement: str - `hard` blocks the request, `throttled` scales the key's rate limits down
+         *           instead of denying anything. Only the key's own `max_budget` can be `throttled`; every
+         *           other scope on the same key still blocks
+         *         - max_budget: float | None - The limit in effect. `null` means this scope applies to the key
+         *           but places no limit on it
+         *         - spend: float | None - Spend as the enforcing check reads it, from the same cross-pod
+         *           counter, not the periodically-synced database column. `null` only when the read failed
+         *         - spend_state: str - Whether `spend` was read (`live`), is missing because the entity or its
+         *           counter could not be read (`unavailable`), or is withheld from this caller (`restricted`).
+         *           The proxy-wide row is `restricted` for everyone but a proxy admin, since its limit and spend
+         *           cover the whole deployment rather than this key
+         *         - remaining: float | None - `max_budget - spend`, when both are known
+         *         - comparison: str - The operator the enforcing check uses, which differs per scope
+         *         - budget_duration / budget_reset_at / window_start: When spend next resets to zero
+         *         - source: str - Where the limit is configured, e.g. `key.max_budget`, `budget_table:<id>`
+         *         - status: str - `unlimited`, `ok`, `exceeded`, or `unknown` when the row could not be evaluated
+         *         - notes: list - Caveats worth knowing before trusting the row, each with a stable `code`
+         *           to branch on and human-facing `text` that is free to be reworded. `severity` is for a
+         *           `code` a client does not know yet: `info` only explains a field the row already carries,
+         *           `warning` carries the fact on its own. Ordered most to least specific to this row's
+         *           numbers, and empty rather than null when there is nothing to say
+         *
+         *     Example Curl:
+         *     ```
+         *     curl -X GET "http://0.0.0.0:4000/key/a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2/budgets" -H "Authorization: Bearer sk-1234"
+         *     ```
+         *
+         *     Example Curl - the budgets on the calling key itself
+         *     ```
+         *     curl -X GET "http://0.0.0.0:4000/key/budgets" -H "Authorization: Bearer sk-test-example-key-123"
+         *     ```
+         */
+        get: operations["key_budgets_fn_key__key_id__budgets_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -26297,6 +26447,100 @@ export interface components {
             /** Updated By */
             updated_by?: string | null;
         };
+        /**
+         * KeyBudgetEntry
+         * @description One budget that can gate requests made with a key, with its live spend.
+         *
+         *     ``status`` is ``unknown`` when the row could not be evaluated, whether because the entity behind
+         *     it was unreadable, because its spend was, or because the caller may not read the numbers, and it
+         *     is never ``unlimited`` in that case: a scope nobody could evaluate is not one to rule out.
+         */
+        KeyBudgetEntry: {
+            /** Budget Duration */
+            budget_duration?: string | null;
+            /** Budget Reset At */
+            budget_reset_at?: string | null;
+            /**
+             * Comparison
+             * @enum {string}
+             */
+            comparison: ">=" | ">";
+            /**
+             * Enforcement
+             * @enum {string}
+             */
+            enforcement: "hard" | "throttled";
+            /** Entity Id */
+            entity_id?: string | null;
+            /** Entity Label */
+            entity_label?: string | null;
+            entity_type: components["schemas"]["Litellm_EntityType"];
+            /** Max Budget */
+            max_budget?: number | null;
+            /**
+             * Notes
+             * @default []
+             */
+            notes: components["schemas"]["KeyBudgetNote"][];
+            /** Remaining */
+            remaining?: number | null;
+            /**
+             * Scope
+             * @enum {string}
+             */
+            scope: "proxy" | "key" | "key_window" | "team" | "team_window" | "team_member" | "user" | "organization" | "project" | "tag" | "end_user";
+            /** Source */
+            source: string;
+            /** Spend */
+            spend?: number | null;
+            /**
+             * Spend State
+             * @enum {string}
+             */
+            spend_state: "live" | "unavailable" | "restricted";
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "unlimited" | "ok" | "exceeded" | "unknown";
+            /** Window Start */
+            window_start?: string | null;
+        };
+        /**
+         * KeyBudgetNote
+         * @description One caveat about a budget row.
+         *
+         *     ``code`` is the contract: map it to whatever treatment the caveat deserves. ``text`` is free to be
+         *     reworded and must not be matched on. ``severity`` exists for the code a client has not been taught
+         *     yet, since this union grows, and it turns on whether the row already carries the fact in a field:
+         *     ``info`` means the note only explains something the row states anyway, like ``enforcement``,
+         *     ``comparison`` or ``spend_state``, and ``warning`` means the note alone carries it, so the row
+         *     cannot be taken at face value without reading it.
+         */
+        KeyBudgetNote: {
+            /**
+             * Code
+             * @enum {string}
+             */
+            code: "custom_auth_may_override_end_user_cap" | "custom_auth_skips_read_time_checks" | "end_user_route_only" | "entity_unavailable" | "project_spend_not_tracked" | "proxy_spend_restricted" | "request_tags_add_budgets" | "reservation_blocks_at_limit" | "rolling_window" | "throttled_instead_of_blocked" | "user_budget_not_applied_to_team_key";
+            /**
+             * Severity
+             * @enum {string}
+             */
+            severity: "info" | "warning";
+            /** Text */
+            text: string;
+        };
+        /**
+         * KeyBudgetsResponse
+         * @description Every budget that applies to one key, including the ones left unconfigured.
+         */
+        KeyBudgetsResponse: {
+            /** Budgets */
+            budgets: components["schemas"]["KeyBudgetEntry"][];
+            /** Key */
+            key: string;
+        };
         /** KeyHealthResponse */
         KeyHealthResponse: {
             /**
@@ -26322,7 +26566,7 @@ export interface components {
          * @description Enum for key management routes
          * @enum {string}
          */
-        KeyManagementRoutes: "/key/generate" | "/key/update" | "/key/delete" | "/key/regenerate" | "/key/service-account/generate" | "/key/{key_id}/regenerate" | "/key/block" | "/key/unblock" | "/key/bulk_update" | "/team/key/bulk_update" | "/key/{key_id}/reset_spend" | "/key/access_group_assignment" | "/key/info" | "/key/health" | "/key/list" | "/key/aliases" | "/team/daily/activity" | "/team/daily/activity/aggregated" | "/spend/logs" | "/spend/logs/v2";
+        KeyManagementRoutes: "/key/generate" | "/key/update" | "/key/delete" | "/key/regenerate" | "/key/service-account/generate" | "/key/{key_id}/regenerate" | "/key/block" | "/key/unblock" | "/key/bulk_update" | "/team/key/bulk_update" | "/key/{key_id}/reset_spend" | "/key/access_group_assignment" | "/key/info" | "/key/{key_id}/budgets" | "/key/budgets" | "/key/health" | "/key/list" | "/key/aliases" | "/team/daily/activity" | "/team/daily/activity/aggregated" | "/spend/logs" | "/spend/logs/v2";
         /**
          * KeyManagementSystem
          * @enum {string}
@@ -29076,6 +29320,14 @@ export interface components {
          * @enum {string}
          */
         LitellmUserRoles: "proxy_admin" | "proxy_admin_viewer" | "org_admin" | "internal_user" | "internal_user_viewer" | "team" | "customer";
+        /**
+         * Litellm_EntityType
+         * @description Enum for types of entities on litellm
+         *
+         *     This enum allows specifying the type of entity that is being tracked in the database.
+         * @enum {string}
+         */
+        Litellm_EntityType: "key" | "user" | "end_user" | "team" | "team_member" | "organization" | "project" | "tag" | "agent" | "proxy";
         /** LoggingCallbackStatus */
         LoggingCallbackStatus: {
             /** Callbacks */
@@ -46004,6 +46256,39 @@ export interface operations {
             };
         };
     };
+    key_budgets_fn_key_budgets_get: {
+        parameters: {
+            query?: {
+                key_id?: string | null;
+                /** @description Resolve the budgets that apply to this end user as well. End-user budgets are request-scoped, so they can only be reported for a named end user. */
+                end_user_id?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KeyBudgetsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     bulk_update_keys_key_bulk_update_post: {
         parameters: {
             query?: never;
@@ -46403,6 +46688,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    key_budgets_fn_key__key_id__budgets_get: {
+        parameters: {
+            query?: {
+                /** @description Resolve the budgets that apply to this end user as well. End-user budgets are request-scoped, so they can only be reported for a named end user. */
+                end_user_id?: string | null;
+            };
+            header?: never;
+            path: {
+                key_id: string | null;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KeyBudgetsResponse"];
                 };
             };
             /** @description Validation Error */

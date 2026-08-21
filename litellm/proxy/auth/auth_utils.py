@@ -674,7 +674,18 @@ def get_request_route_template(request: Request) -> str | None:
         return None
 
 
-@lru_cache(maxsize=256)
+_KEY_PATH_PARAM_ROUTE: Final = re.compile(r"^/key/[^/]+/(budgets|regenerate|reset_spend)$")
+
+
+def _redact_key_path_param(route: str) -> str:
+    """
+    Replace the key in a ``/key/{key_id}/...`` path, which is a key hash or a plaintext key.
+
+    Kept out of the memoized pass below so that no cache ever retains a live credential as a cache key.
+    """
+    return _KEY_PATH_PARAM_ROUTE.sub(r"/key/{key_id}/\1", route)
+
+
 def normalize_request_route(route: str) -> str:
     """
     Normalize request routes by replacing dynamic path parameters with placeholders.
@@ -682,6 +693,10 @@ def normalize_request_route(route: str) -> str:
     This prevents high cardinality in Prometheus metrics by collapsing routes like:
     - /v1/responses/1234567890 -> /v1/responses/{response_id}
     - /v1/threads/thread_123 -> /v1/threads/{thread_id}
+
+    It is also what keeps a secret out of any consumer of a request route: the key management routes
+    that take a key in the path are collapsed here, so a route recorded on a span, a metric label or a
+    logging callback carries the placeholder rather than the credential.
 
     Args:
         route: The request route path
@@ -694,9 +709,17 @@ def normalize_request_route(route: str) -> str:
         '/v1/responses/{response_id}'
         >>> normalize_request_route("/v1/responses/abc123/cancel")
         '/v1/responses/{response_id}/cancel'
+        >>> normalize_request_route("/key/sk-1234/budgets")
+        '/key/{key_id}/budgets'
         >>> normalize_request_route("/chat/completions")
         '/chat/completions'
     """
+    return _normalize_known_id_routes(_redact_key_path_param(route))
+
+
+@lru_cache(maxsize=256)
+def _normalize_known_id_routes(route: str) -> str:
+    """Collapse the resource-id path params of the OpenAI-shaped routes."""
     # Define patterns for routes with dynamic IDs
     # Format: (regex_pattern, replacement_template)
     patterns: Final = [

@@ -1,5 +1,7 @@
 import json
-from typing import Final
+from collections.abc import Mapping
+from dataclasses import dataclass
+from typing import Final, Literal
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -16,6 +18,26 @@ from litellm.types.utils import (
 
 VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX: Final = "virtual_key_spend"
 END_USER_SPEND_CACHE_KEY_PREFIX: Final = "end_user_model_spend"
+
+ModelSpendScope = Literal["virtual_key", "end_user"]
+
+_SPEND_CACHE_KEY_PREFIX: Final[Mapping[ModelSpendScope, str]] = {
+    "virtual_key": VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX,
+    "end_user": END_USER_SPEND_CACHE_KEY_PREFIX,
+}
+
+
+@dataclass(frozen=True, slots=True)
+class ModelSpendHit:
+    """
+    Which model's counter a lookup landed on, and what it held.
+
+    A request model falls back to its provider-stripped form, so several request models can share one
+    counter. Callers that report spend rather than enforce it need to know which, or they double-count.
+    """
+
+    model: str
+    spend: float
 
 
 class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
@@ -62,7 +84,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
 
         # check if current model is within budget
         if _current_model_budget_info.max_budget and _current_model_budget_info.max_budget > 0:
-            _current_spend: Final = await self._get_virtual_key_spend_for_model(
+            _current_spend: Final = await self.get_virtual_key_spend_for_model(
                 user_api_key_hash=user_api_key_dict.token,
                 model=model,
                 key_budget_config=_current_model_budget_info,
@@ -128,7 +150,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
 
         # check if current model is within budget
         if _current_model_budget_info.max_budget and _current_model_budget_info.max_budget > 0:
-            _current_spend: Final = await self._get_end_user_spend_for_model(
+            _current_spend: Final = await self.get_end_user_spend_for_model(
                 end_user_id=end_user_id,
                 model=model,
                 key_budget_config=_current_model_budget_info,
@@ -148,71 +170,74 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
 
         return True
 
-    async def _get_end_user_spend_for_model(
+    async def resolve_model_spend(
+        self,
+        *,
+        scope: ModelSpendScope,
+        entity_id: str | None,
+        model: str,
+        budget_config: BudgetConfig,
+    ) -> ModelSpendHit | None:
+        """
+        The counter holding this model's spend, looked up the way enforcement looks it up.
+
+        Order is the request model first, then the same name with its ``{custom_llm_provider}/`` prefix
+        removed, so a counter written under ``gpt-4o`` still gates a request for ``openai/gpt-4o``.
+        """
+        prefix: Final = _SPEND_CACHE_KEY_PREFIX[scope]
+        candidates: Final = dict.fromkeys((model, self._get_model_without_custom_llm_provider(model)))
+        for candidate in candidates:
+            spend = await self.dual_cache.async_get_cache(
+                key=f"{prefix}:{entity_id}:{candidate}:{budget_config.budget_duration}",
+            )
+            if spend is not None:
+                return ModelSpendHit(model=candidate, spend=spend)
+        return None
+
+    async def get_end_user_spend_for_model(
         self,
         end_user_id: str,
         model: str,
         key_budget_config: BudgetConfig,
     ) -> float | None:
-        # 1. model: directly look up `model`
-        end_user_model_spend_cache_key = (
-            f"{END_USER_SPEND_CACHE_KEY_PREFIX}:{end_user_id}:{model}:{key_budget_config.budget_duration}"
+        hit: Final = await self.resolve_model_spend(
+            scope="end_user", entity_id=end_user_id, model=model, budget_config=key_budget_config
         )
-        _current_spend = await self.dual_cache.async_get_cache(
-            key=end_user_model_spend_cache_key,
-        )
+        return hit.spend if hit is not None else None
 
-        if _current_spend is None:
-            # 2. If 1, does not exist, check if passed as {custom_llm_provider}/model
-            end_user_model_spend_cache_key = f"{END_USER_SPEND_CACHE_KEY_PREFIX}:{end_user_id}:{self._get_model_without_custom_llm_provider(model)}:{key_budget_config.budget_duration}"
-            _current_spend = await self.dual_cache.async_get_cache(
-                key=end_user_model_spend_cache_key,
-            )
-        return _current_spend
-
-    async def _get_virtual_key_spend_for_model(
+    async def get_virtual_key_spend_for_model(
         self,
         user_api_key_hash: str | None,
         model: str,
         key_budget_config: BudgetConfig,
     ) -> float | None:
-        """
-        Get the current spend for a virtual key for a model
-
-        Lookup model in this order:
-            1. model: directly look up `model`
-            2. If 1, does not exist, check if passed as {custom_llm_provider}/model
-        """
-
-        # 1. model: directly look up `model`
-        virtual_key_model_spend_cache_key = (
-            f"{VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX}:{user_api_key_hash}:{model}:{key_budget_config.budget_duration}"
+        hit: Final = await self.resolve_model_spend(
+            scope="virtual_key", entity_id=user_api_key_hash, model=model, budget_config=key_budget_config
         )
-        _current_spend = await self.dual_cache.async_get_cache(
-            key=virtual_key_model_spend_cache_key,
-        )
+        return hit.spend if hit is not None else None
 
-        if _current_spend is None:
-            # 2. If 1, does not exist, check if passed as {custom_llm_provider}/model
-            # if "/" in model, remove first part before "/" - eg. openai/o1-preview -> o1-preview
-            virtual_key_model_spend_cache_key = f"{VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX}:{user_api_key_hash}:{self._get_model_without_custom_llm_provider(model)}:{key_budget_config.budget_duration}"
-            _current_spend = await self.dual_cache.async_get_cache(
-                key=virtual_key_model_spend_cache_key,
-            )
-        return _current_spend
-
-    def _get_request_model_budget_config(
-        self, model: str, internal_model_max_budget: GenericBudgetConfigType
-    ) -> BudgetConfig | None:
+    def get_request_model_budget_key(
+        self, model: str, internal_model_max_budget: Mapping[str, BudgetConfig]
+    ) -> str | None:
         """
-        Get the budget config for the request model
+        Which `model_max_budget` key a request model is charged against.
 
         1. Check if `model` is in `internal_model_max_budget`
         2. If not, check if `model` without custom llm provider is in `internal_model_max_budget`
         """
-        return internal_model_max_budget.get(model, None) or internal_model_max_budget.get(
-            self._get_model_without_custom_llm_provider(model), None
+        if model in internal_model_max_budget:
+            return model
+        stripped: Final = self._get_model_without_custom_llm_provider(model)
+        return stripped if stripped in internal_model_max_budget else None
+
+    def _get_request_model_budget_config(
+        self, model: str, internal_model_max_budget: GenericBudgetConfigType
+    ) -> BudgetConfig | None:
+        """Get the budget config for the request model."""
+        matched: Final = self.get_request_model_budget_key(
+            model=model, internal_model_max_budget=internal_model_max_budget
         )
+        return internal_model_max_budget.get(matched, None) if matched is not None else None
 
     def _get_model_without_custom_llm_provider(self, model: str) -> str:
         if "/" in model:

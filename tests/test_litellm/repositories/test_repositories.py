@@ -3,7 +3,7 @@ Tests for gateway repository layer.
 """
 
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -279,6 +279,25 @@ class TestBudgetRepository:
             max_budget=200.0,
         )
         assert updated.max_budget == 200.0
+
+    @pytest.mark.asyncio
+    async def test_find_full_by_ids_returns_server_managed_reset_fields(self, repo):
+        """budget_reset_at is deliberately absent from LiteLLM_BudgetTable, so the generic finders drop it."""
+        reset_at = datetime(2026, 9, 1, tzinfo=timezone.utc)
+        repo._prisma_client.db.litellm_budgettable._records["budget-1"] = {
+            "budget_id": "budget-1",
+            "max_budget": 100.0,
+            "budget_duration": "30d",
+            "budget_reset_at": reset_at,
+            "created_at": reset_at,
+        }
+
+        rows = await repo.find_full_by_ids(["budget-1"])
+
+        assert [row.budget_id for row in rows] == ["budget-1"]
+        assert rows[0].budget_reset_at == reset_at
+        assert rows[0].budget_duration == "30d"
+        assert rows[0].max_budget == 100.0
 
     @pytest.mark.asyncio
     async def test_delete_budget(self, repo):

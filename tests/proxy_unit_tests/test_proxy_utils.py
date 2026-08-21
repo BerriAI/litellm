@@ -1769,7 +1769,7 @@ def test_update_key_budget_with_temp_budget_increase():
 
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.auth.user_api_key_auth import (
-        _update_key_budget_with_temp_budget_increase,
+        update_key_budget_with_temp_budget_increase,
     )
 
     expiry = datetime.now() + timedelta(days=1)
@@ -1783,7 +1783,7 @@ def test_update_key_budget_with_temp_budget_increase():
             "temp_budget_expiry": expiry_in_isoformat,
         },
     )
-    result = _update_key_budget_with_temp_budget_increase(valid_token)
+    result = update_key_budget_with_temp_budget_increase(valid_token)
     assert result.max_budget == 200
     assert result is not valid_token
     assert valid_token.max_budget == 100

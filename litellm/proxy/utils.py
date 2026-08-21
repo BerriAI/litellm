@@ -103,6 +103,7 @@ from litellm.proxy._types import (
     Member,
     UserAPIKeyAuth,
 )
+from litellm.proxy.auth.auth_utils import normalize_request_route
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.common_utils.config_sync_pubsub import publish_config_param_change
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
@@ -2455,7 +2456,10 @@ class ProxyLogging:
             )
 
             litellm_logging_obj, data = litellm.utils.function_setup(
-                original_function=route or "IGNORE_THIS",
+                # The route becomes `call_type` on the payload every failure callback receives, and the
+                # OTEL span attributes derived from it, so it must not be the raw path: the key
+                # management routes carry a key in the path and this hook runs on the 401 they fail with.
+                original_function=normalize_request_route(route) if route else "IGNORE_THIS",
                 rules_obj=litellm.utils.Rules(),
                 start_time=datetime.now(),
                 **request_data,

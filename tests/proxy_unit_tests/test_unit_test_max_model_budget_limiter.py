@@ -73,7 +73,7 @@ async def test_is_key_within_model_budget(budget_limiter):
 
     # Test when model is within budget
     with patch.object(
-        budget_limiter, "_get_virtual_key_spend_for_model", return_value=50.0
+        budget_limiter, "get_virtual_key_spend_for_model", return_value=50.0
     ):
         assert (
             await budget_limiter.is_key_within_model_budget(user_api_key, "gpt-4")
@@ -82,7 +82,7 @@ async def test_is_key_within_model_budget(budget_limiter):
 
     # Test when model exceeds budget
     with patch.object(
-        budget_limiter, "_get_virtual_key_spend_for_model", return_value=150.0
+        budget_limiter, "get_virtual_key_spend_for_model", return_value=150.0
     ):
         with pytest.raises(litellm.BudgetExceededError):
             await budget_limiter.is_key_within_model_budget(user_api_key, "gpt-4")
@@ -94,20 +94,20 @@ async def test_is_key_within_model_budget(budget_limiter):
     )
 
 
-# Test _get_virtual_key_spend_for_model
+# Test get_virtual_key_spend_for_model
 @pytest.mark.asyncio
-async def test_get_virtual_key_spend_for_model(budget_limiter):
+async def testget_virtual_key_spend_for_model(budget_limiter):
     budget_config = GenericBudgetInfo(budget_limit=100.0, time_period="1d")
 
     # Mock cache get
     with patch.object(budget_limiter.dual_cache, "async_get_cache", return_value=50.0):
-        spend = await budget_limiter._get_virtual_key_spend_for_model(
+        spend = await budget_limiter.get_virtual_key_spend_for_model(
             user_api_key_hash="test-key", model="gpt-4", key_budget_config=budget_config
         )
         assert spend == 50.0
 
         # Test with provider prefix
-        spend = await budget_limiter._get_virtual_key_spend_for_model(
+        spend = await budget_limiter.get_virtual_key_spend_for_model(
             user_api_key_hash="test-key",
             model="openai/gpt-4",
             key_budget_config=budget_config,
@@ -165,7 +165,7 @@ async def test_async_log_success_event_uses_per_model_budget_duration(budget_lim
 async def test_is_end_user_within_model_budget(budget_limiter):
     # Test when model is within budget
     with patch.object(
-        budget_limiter, "_get_end_user_spend_for_model", return_value=50.0
+        budget_limiter, "get_end_user_spend_for_model", return_value=50.0
     ):
         assert (
             await budget_limiter.is_end_user_within_model_budget(
@@ -178,7 +178,7 @@ async def test_is_end_user_within_model_budget(budget_limiter):
 
     # Test when model exceeds budget
     with patch.object(
-        budget_limiter, "_get_end_user_spend_for_model", return_value=150.0
+        budget_limiter, "get_end_user_spend_for_model", return_value=150.0
     ):
         with pytest.raises(litellm.BudgetExceededError):
             await budget_limiter.is_end_user_within_model_budget(
@@ -198,20 +198,20 @@ async def test_is_end_user_within_model_budget(budget_limiter):
     )
 
 
-# Test _get_end_user_spend_for_model
+# Test get_end_user_spend_for_model
 @pytest.mark.asyncio
-async def test_get_end_user_spend_for_model(budget_limiter):
+async def testget_end_user_spend_for_model(budget_limiter):
     budget_config = GenericBudgetInfo(budget_limit=100.0, time_period="1d")
 
     # Mock cache get
     with patch.object(budget_limiter.dual_cache, "async_get_cache", return_value=50.0):
-        spend = await budget_limiter._get_end_user_spend_for_model(
+        spend = await budget_limiter.get_end_user_spend_for_model(
             end_user_id="test-user", model="gpt-4", key_budget_config=budget_config
         )
         assert spend == 50.0
 
         # Test with provider prefix
-        spend = await budget_limiter._get_end_user_spend_for_model(
+        spend = await budget_limiter.get_end_user_spend_for_model(
             end_user_id="test-user",
             model="openai/gpt-4",
             key_budget_config=budget_config,
@@ -473,7 +473,7 @@ async def test_get_fallback_model_within_budget_returns_first_within_budget(
         budget_fallbacks={"gpt-4": ["gpt-4o-mini", "claude-haiku"]},
     )
     with patch.object(
-        budget_limiter, "_get_virtual_key_spend_for_model", return_value=1.0
+        budget_limiter, "get_virtual_key_spend_for_model", return_value=1.0
     ):
         result = await budget_limiter.get_fallback_model_within_budget(
             user_api_key, "gpt-4"
@@ -499,7 +499,7 @@ async def test_get_fallback_model_within_budget_skips_exhausted_fallback(
 
     with patch.object(
         budget_limiter,
-        "_get_virtual_key_spend_for_model",
+        "get_virtual_key_spend_for_model",
         side_effect=_spend_for_model,
     ):
         result = await budget_limiter.get_fallback_model_within_budget(
@@ -521,7 +521,7 @@ async def test_get_fallback_model_within_budget_returns_none_when_chain_exhauste
         budget_fallbacks={"gpt-4": ["gpt-4o-mini", "claude-haiku"]},
     )
     with patch.object(
-        budget_limiter, "_get_virtual_key_spend_for_model", return_value=150.0
+        budget_limiter, "get_virtual_key_spend_for_model", return_value=150.0
     ):
         result = await budget_limiter.get_fallback_model_within_budget(
             user_api_key, "gpt-4"
@@ -558,3 +558,108 @@ async def test_async_log_success_event_skips_redis_push_without_redis(budget_lim
                 kwargs, response_obj=None, start_time=None, end_time=None
             )
             mock_push.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("stored_under", "requested", "expected_model"),
+    [
+        ("gpt-4", "gpt-4", "gpt-4"),
+        ("gpt-4", "openai/gpt-4", "gpt-4"),
+        ("openai/gpt-4", "openai/gpt-4", "openai/gpt-4"),
+    ],
+)
+async def test_resolve_model_spend_reports_which_counter_it_landed_on(
+    budget_limiter, stored_under, requested, expected_model
+):
+    """
+    The lookup falls back to the provider-stripped name, so several request models share one counter.
+    Anything reporting spend rather than enforcing it has to know which, or it shows one balance once
+    per request model and appears to multiply the spend.
+    """
+    from litellm.proxy.hooks.model_max_budget_limiter import (
+        ModelSpendHit,
+        VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX,
+    )
+
+    budget_config = GenericBudgetInfo(max_budget=100.0, budget_duration="1d")
+    await budget_limiter.dual_cache.async_set_cache(
+        key=f"{VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX}:test-key:{stored_under}:1d", value=12.0
+    )
+
+    hit = await budget_limiter.resolve_model_spend(
+        scope="virtual_key", entity_id="test-key", model=requested, budget_config=budget_config
+    )
+    assert hit == ModelSpendHit(model=expected_model, spend=12.0)
+
+
+@pytest.mark.asyncio
+async def test_resolve_model_spend_returns_nothing_when_neither_candidate_has_a_counter(budget_limiter):
+    """A missing counter is not a zero balance: these budgets fail open until something writes one."""
+    budget_config = GenericBudgetInfo(max_budget=100.0, budget_duration="1d")
+
+    assert (
+        await budget_limiter.resolve_model_spend(
+            scope="virtual_key", entity_id="test-key", model="openai/gpt-4", budget_config=budget_config
+        )
+        is None
+    )
+
+
+@pytest.mark.asyncio
+async def test_resolve_model_spend_reads_the_end_user_counters_from_their_own_prefix(budget_limiter):
+    """The two scopes must not read each other's counters, which sharing one lookup makes easy to do."""
+    from litellm.proxy.hooks.model_max_budget_limiter import (
+        END_USER_SPEND_CACHE_KEY_PREFIX,
+        ModelSpendHit,
+        VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX,
+    )
+
+    budget_config = GenericBudgetInfo(max_budget=100.0, budget_duration="1d")
+    await budget_limiter.dual_cache.async_set_cache(
+        key=f"{END_USER_SPEND_CACHE_KEY_PREFIX}:cust-1:gpt-4:1d", value=3.0
+    )
+    await budget_limiter.dual_cache.async_set_cache(
+        key=f"{VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX}:cust-1:gpt-4:1d", value=99.0
+    )
+
+    hit = await budget_limiter.resolve_model_spend(
+        scope="end_user", entity_id="cust-1", model="gpt-4", budget_config=budget_config
+    )
+    assert hit == ModelSpendHit(model="gpt-4", spend=3.0)
+
+
+@pytest.mark.asyncio
+async def test_the_public_spend_readers_still_return_a_bare_float(budget_limiter):
+    """Both wrappers are called from enforcement, so widening the shared lookup must not widen them."""
+    from litellm.proxy.hooks.model_max_budget_limiter import (
+        END_USER_SPEND_CACHE_KEY_PREFIX,
+        VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX,
+    )
+
+    budget_config = GenericBudgetInfo(max_budget=100.0, budget_duration="1d")
+    await budget_limiter.dual_cache.async_set_cache(
+        key=f"{VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX}:test-key:gpt-4:1d", value=7.0
+    )
+    await budget_limiter.dual_cache.async_set_cache(
+        key=f"{END_USER_SPEND_CACHE_KEY_PREFIX}:cust-1:gpt-4:1d", value=8.0
+    )
+
+    assert (
+        await budget_limiter.get_virtual_key_spend_for_model(
+            user_api_key_hash="test-key", model="openai/gpt-4", key_budget_config=budget_config
+        )
+        == 7.0
+    )
+    assert (
+        await budget_limiter.get_end_user_spend_for_model(
+            end_user_id="cust-1", model="openai/gpt-4", key_budget_config=budget_config
+        )
+        == 8.0
+    )
+    assert (
+        await budget_limiter.get_virtual_key_spend_for_model(
+            user_api_key_hash="test-key", model="claude-sonnet-4-5", key_budget_config=budget_config
+        )
+        is None
+    )

@@ -1644,3 +1644,69 @@ async def test_post_mcp_call_hook_skips_opted_out_guardrail(restore_callbacks):
 
     assert guardrail.call_count == 0
     assert [item.text for item in returned.content] == ["jane@example.com"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "route",
+    ["/key/sk-victim-1234567890/budgets", "/key/" + "b" * 64 + "/budgets"],
+)
+async def test_proxy_only_error_log_does_not_put_a_key_path_param_in_call_type(route):
+    """
+    The route becomes ``call_type`` on the payload every failure callback receives, and the OTEL
+    ``llm.request.type`` and ``gen_ai.operation.name`` attributes derived from it. ``/key/{key_id}/budgets``
+    is an info route, so an auth failure on it reaches this hook with a key sitting in the path.
+    """
+    from unittest.mock import patch as _patch
+
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+    captured = {}
+
+    async def _capture_async_failure(self, *args, **kwargs):
+        captured["call_type"] = self.call_type
+        return None
+
+    with _patch.object(Logging, "pre_call", lambda self, *a, **k: None), _patch.object(
+        Logging, "async_failure_handler", _capture_async_failure
+    ):
+        await proxy_logging_obj._handle_logging_proxy_only_error(
+            request_data={},
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-bad", request_route=route),
+            route=route,
+            original_exception=Exception("Invalid proxy server token passed"),
+        )
+
+    assert captured["call_type"] == "/key/{key_id}/budgets", captured
+    assert "sk-victim" not in captured["call_type"]
+    assert "b" * 64 not in captured["call_type"]
+
+
+@pytest.mark.asyncio
+async def test_proxy_only_error_log_still_reports_the_route_for_ordinary_llm_failures():
+    """Redacting the key routes must not blank out the call type every other failure is grouped by."""
+    from unittest.mock import patch as _patch
+
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+    captured = {}
+
+    async def _capture_async_failure(self, *args, **kwargs):
+        captured["call_type"] = self.call_type
+        return None
+
+    with _patch.object(Logging, "pre_call", lambda self, *a, **k: None), _patch.object(
+        Logging, "async_failure_handler", _capture_async_failure
+    ):
+        await proxy_logging_obj._handle_logging_proxy_only_error(
+            request_data={"model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}]},
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-bad", request_route="/v1/chat/completions"),
+            route="/v1/chat/completions",
+            original_exception=Exception("bad key"),
+        )
+
+    assert captured["call_type"] == "acompletion"

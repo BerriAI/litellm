@@ -2,10 +2,11 @@
 Budget repository for database operations on LiteLLM_BudgetTable.
 """
 
+from collections.abc import Sequence
 from typing import Any, Final
 
-from litellm.models.budget import LiteLLM_BudgetTable
-from litellm.repositories.base_repository import BaseRepository
+from litellm.models.budget import LiteLLM_BudgetTable, LiteLLM_BudgetTableFull
+from litellm.repositories.base_repository import BaseRepository, DbRecord, record_to_dict
 
 
 class BudgetRepository(BaseRepository[LiteLLM_BudgetTable]):
@@ -21,6 +22,13 @@ class BudgetRepository(BaseRepository[LiteLLM_BudgetTable]):
 
     async def find_by_id(self, budget_id: str, id_field: str = "budget_id") -> LiteLLM_BudgetTable | None:
         return await super().find_by_id(budget_id, id_field)
+
+    async def find_full_by_ids(self, budget_ids: Sequence[str]) -> tuple[LiteLLM_BudgetTableFull, ...]:
+        """Reset schedules are server-managed, so they are absent from the model the generic finders return."""
+        records: Final[Sequence[DbRecord]] = await self.table.find_many(
+            where={"budget_id": {"in": list(budget_ids)}}  # mutable-ok: prisma builds its query from plain dicts
+        )
+        return tuple(LiteLLM_BudgetTableFull.model_validate(record_to_dict(record)) for record in records)
 
     async def create_budget(
         self,

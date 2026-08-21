@@ -3,6 +3,8 @@ from typing import Any, Final, Literal
 
 from pydantic import BaseModel, ConfigDict, model_validator
 
+from litellm.proxy._types import Litellm_EntityType
+
 
 class BulkUpdateKeyRequestItem(BaseModel):
     """Individual key update request item"""
@@ -106,3 +108,95 @@ class BulkUpdateTeamKeysRequest(BaseModel):
         if not has_key_ids and not self.all_keys_in_team:
             raise ValueError("Must provide either `key_ids` (non-empty) or `all_keys_in_team=True`.")
         return self
+
+
+BudgetScope = Literal[
+    "proxy",
+    "key",
+    "key_window",
+    "team",
+    "team_window",
+    "team_member",
+    "user",
+    "organization",
+    "project",
+    "tag",
+    "end_user",
+]
+
+BudgetEnforcement = Literal["hard", "throttled"]
+
+BudgetComparison = Literal[">=", ">"]
+
+BudgetStatus = Literal["unlimited", "ok", "exceeded", "unknown"]
+
+BudgetNoteCode = Literal[
+    "custom_auth_may_override_end_user_cap",
+    "custom_auth_skips_read_time_checks",
+    "end_user_route_only",
+    "entity_unavailable",
+    "project_spend_not_tracked",
+    "proxy_spend_restricted",
+    "request_tags_add_budgets",
+    "reservation_blocks_at_limit",
+    "rolling_window",
+    "throttled_instead_of_blocked",
+    "user_budget_not_applied_to_team_key",
+]
+
+BudgetNoteSeverity = Literal["info", "warning"]
+
+BudgetSpendState = Literal["live", "unavailable", "restricted"]
+
+
+class KeyBudgetNote(BaseModel):
+    """
+    One caveat about a budget row.
+
+    ``code`` is the contract: map it to whatever treatment the caveat deserves. ``text`` is free to be
+    reworded and must not be matched on. ``severity`` exists for the code a client has not been taught
+    yet, since this union grows, and it turns on whether the row already carries the fact in a field:
+    ``info`` means the note only explains something the row states anyway, like ``enforcement``,
+    ``comparison`` or ``spend_state``, and ``warning`` means the note alone carries it, so the row
+    cannot be taken at face value without reading it.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    code: BudgetNoteCode
+    severity: BudgetNoteSeverity
+    text: str
+
+
+class KeyBudgetEntry(BaseModel):
+    """
+    One budget that can gate requests made with a key, with its live spend.
+
+    ``status`` is ``unknown`` when the row could not be evaluated, whether because the entity behind
+    it was unreadable, because its spend was, or because the caller may not read the numbers, and it
+    is never ``unlimited`` in that case: a scope nobody could evaluate is not one to rule out.
+    """
+
+    scope: BudgetScope
+    entity_type: Litellm_EntityType
+    entity_id: str | None = None
+    entity_label: str | None = None
+    enforcement: BudgetEnforcement
+    max_budget: float | None = None
+    spend: float | None = None
+    spend_state: BudgetSpendState
+    remaining: float | None = None
+    comparison: BudgetComparison
+    budget_duration: str | None = None
+    budget_reset_at: datetime | None = None
+    window_start: datetime | None = None
+    source: str
+    status: BudgetStatus
+    notes: tuple[KeyBudgetNote, ...] = ()
+
+
+class KeyBudgetsResponse(BaseModel):
+    """Every budget that applies to one key, including the ones left unconfigured."""
+
+    key: str
+    budgets: tuple[KeyBudgetEntry, ...]
