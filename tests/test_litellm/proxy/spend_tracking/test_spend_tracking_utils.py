@@ -2625,7 +2625,7 @@ def test_redact_logged_api_key_non_sk_raw_key_is_hashed():
 def test_redact_logged_api_key_already_valid_sha256_passes_through_with_flag():
     already_hashed = hash_token("sk-some-key")
     assert len(already_hashed) == 64
-    result = _redact_logged_api_key(already_hashed, already_hashed=True)
+    result = _redact_logged_api_key(already_hashed, already_redacted=True)
     assert result == already_hashed
     assert hash_token(already_hashed) != result  # no double-hash
 
@@ -2653,7 +2653,7 @@ def test_redact_logged_api_key_long_opaque_token_is_hashed():
 
 def test_redact_logged_api_key_hashed_jwt_passes_through():
     jwt_hash = "hashed-jwt-" + "a" * 64
-    result = _redact_logged_api_key(jwt_hash, already_hashed=True)
+    result = _redact_logged_api_key(jwt_hash, already_redacted=True)
     assert result == jwt_hash
 
 
@@ -2666,7 +2666,7 @@ def test_redact_logged_api_key_hashed_jwt_shape_without_provenance_is_hashed():
 
 def test_redact_logged_api_key_hashed_jwt_trailing_newline_is_hashed():
     trailing = "hashed-jwt-" + "a" * 64 + "\n"
-    result = _redact_logged_api_key(trailing, already_hashed=True)
+    result = _redact_logged_api_key(trailing, already_redacted=True)
     assert result == hash_token(trailing)
     assert result != trailing
 
@@ -2678,6 +2678,33 @@ def test_redact_logged_api_key_hashed_jwt_short_suffix_is_hashed():
     assert result != short_jwt
     assert len(result) == 64
     assert result == hash_token(short_jwt)
+
+
+def test_redact_logged_api_key_master_key_alias_passes_through():
+    from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
+
+    result = _redact_logged_api_key(LITELLM_PROXY_MASTER_KEY_ALIAS, already_redacted=True)
+    assert result == LITELLM_PROXY_MASTER_KEY_ALIAS
+
+
+def test_redact_logged_api_key_master_key_alias_without_provenance_is_hashed():
+    from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
+
+    result = _redact_logged_api_key(LITELLM_PROXY_MASTER_KEY_ALIAS)
+    assert result == hash_token(LITELLM_PROXY_MASTER_KEY_ALIAS)
+    assert result != LITELLM_PROXY_MASTER_KEY_ALIAS
+
+
+def test_get_spend_logs_metadata_keeps_master_key_alias_readable():
+    from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
+
+    meta = _get_spend_logs_metadata(
+        {
+            "user_api_key": LITELLM_PROXY_MASTER_KEY_ALIAS,
+            "user_api_key_hash": LITELLM_PROXY_MASTER_KEY_ALIAS,
+        }
+    )
+    assert meta["user_api_key"] == LITELLM_PROXY_MASTER_KEY_ALIAS
 
 
 def test_redact_logged_api_key_bearer_only_returns_none():
@@ -2948,7 +2975,7 @@ class TestSpendLogKeyRedaction:
 
     def test_already_hashed_key_unchanged(self):
         hashed = "bcfe8173f5447f10be0e7fb37aaa8b97829d5c9e0498232152f9d123456789ab"
-        assert _redact_logged_api_key(hashed, already_hashed=True) == hashed
+        assert _redact_logged_api_key(hashed, already_redacted=True) == hashed
 
     def test_bearer_prefixed_non_sk_key_is_hashed(self):
         raw = "Bearer some-other-token-format"
@@ -2993,6 +3020,33 @@ def test_get_logging_payload_non_sk_raw_key_both_fields_hashed():
     assert parsed_meta["user_api_key"] != raw
     assert parsed_meta["user_api_key"] is not None
     assert len(parsed_meta["user_api_key"]) == 64
+
+
+def test_get_logging_payload_keeps_master_key_alias_readable():
+    from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
+
+    kwargs = {
+        "model": "openai/gpt-4.1",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "call_type": "acompletion",
+        "litellm_params": {
+            "metadata": {
+                "user_api_key": LITELLM_PROXY_MASTER_KEY_ALIAS,
+                "user_api_key_hash": LITELLM_PROXY_MASTER_KEY_ALIAS,
+                "user_api_key_user_id": "test_user",
+            }
+        },
+    }
+    payload = get_logging_payload(
+        kwargs=kwargs,
+        response_obj=Exception("error"),
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+
+    assert payload["api_key"] == LITELLM_PROXY_MASTER_KEY_ALIAS
+    parsed_meta = json.loads(payload["metadata"])
+    assert parsed_meta["user_api_key"] == LITELLM_PROXY_MASTER_KEY_ALIAS
 
 
 @patch("litellm.proxy.proxy_server.master_key", None)
@@ -3503,7 +3557,7 @@ def test_redact_logged_api_key_partial_sha256_is_hashed():
 def test_redact_logged_api_key_bearer_already_hashed_passes_through_with_flag():
     already_hashed = hash_token("sk-some-key")
     assert len(already_hashed) == 64
-    result = _redact_logged_api_key(f"Bearer {already_hashed}", already_hashed=True)
+    result = _redact_logged_api_key(f"Bearer {already_hashed}", already_redacted=True)
     assert result == already_hashed
     assert hash_token(already_hashed) != result
 
