@@ -1236,6 +1236,12 @@ def _get_thought_signature_from_tool(tool: dict) -> str | None:
         parts: Final = tool_call_id.split(THOUGHT_SIGNATURE_SEPARATOR, 1)
         if len(parts) == 2:
             _, signature = parts
+            if not signature:
+                return None
+            try:
+                base64.b64decode(signature, validate=True)
+            except ValueError:
+                return None
             return signature
     return None
 
