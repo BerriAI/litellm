@@ -1056,6 +1056,53 @@ def test_generic_cost_per_token_gpt56_terra_cache_costs_by_tier_and_context(
     assert prompt_cost == pytest.approx(expected_prompt_cost)
 
 
+@pytest.mark.parametrize("model", ["gpt-5.6-cyber", "daybreak-red-latest"])
+@pytest.mark.parametrize(
+    "prompt_tokens,input_rate,cache_write_rate,cache_read_rate,output_rate",
+    [
+        (100000, 1.25e-5, 1.5625e-5, 1.25e-6, 7.5e-5),
+        (300000, 2.5e-5, 3.125e-5, 2.5e-6, 1.125e-4),
+    ],
+)
+def test_generic_cost_per_token_gpt56_cyber(
+    model,
+    prompt_tokens,
+    input_rate,
+    cache_write_rate,
+    cache_read_rate,
+    output_rate,
+    monkeypatch,
+):
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+    cached_tokens = 50000
+    cache_write_tokens = 40000
+    text_tokens = prompt_tokens - cached_tokens - cache_write_tokens
+    completion_tokens = 1000
+    usage = Usage(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=prompt_tokens + completion_tokens,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cached_tokens=cached_tokens, cache_write_tokens=cache_write_tokens
+        ),
+    )
+
+    prompt_cost, completion_cost = generic_cost_per_token(
+        model=model,
+        usage=usage,
+        custom_llm_provider="openai",
+    )
+
+    assert prompt_cost == pytest.approx(
+        text_tokens * input_rate
+        + cached_tokens * cache_read_rate
+        + cache_write_tokens * cache_write_rate
+    )
+    assert completion_cost == pytest.approx(completion_tokens * output_rate)
+
+
 @pytest.mark.parametrize(
     "model,input_cost,output_cost,cache_read_cost",
     [
