@@ -1371,6 +1371,7 @@ class CostCalculatorUtils:
             return fal_ai_image_cost_calculator(
                 model=model,
                 image_response=completion_response,
+                optional_params=optional_params,
             )
         elif custom_llm_provider == litellm.LlmProviders.RUNWAYML.value:
             from litellm.llms.runwayml.cost_calculator import (
