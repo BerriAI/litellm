@@ -17426,13 +17426,13 @@
     "fal_ai/openai/gpt-image-2/edit": {
         "litellm_provider": "fal_ai",
         "metadata": {
-            "notes": "Editing endpoint of gpt-image-2 on fal.ai. Same rate as fal_ai/openai/gpt-image-2, see that entry for the size and quality caveat"
+            "notes": "Editing endpoint of gpt-image-2 on fal.ai, reached through the image generation path with fal's image_urls param since /v1/images/edits is not wired for fal_ai. Same rate as fal_ai/openai/gpt-image-2, see that entry for the size and quality caveat"
         },
         "mode": "image_generation",
         "output_cost_per_image": 0.145,
         "source": "https://fal.ai/models/openai/gpt-image-2/edit",
         "supported_endpoints": [
-            "/v1/images/edits"
+            "/v1/images/generations"
         ],
         "supports_vision": true
     },
