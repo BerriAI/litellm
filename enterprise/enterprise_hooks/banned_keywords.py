@@ -21,7 +21,6 @@ from fastapi import HTTPException
 
 
 class _ENTERPRISE_BannedKeywords(CustomLogger):
-    # judges the payload itself, so it must also see a record of a batch upload
     enforces_request_content: bool = True
     # Class variables or attributes
     def __init__(self):

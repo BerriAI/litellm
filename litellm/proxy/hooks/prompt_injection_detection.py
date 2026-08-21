@@ -26,7 +26,6 @@ from litellm.utils import get_formatted_prompt
 
 
 class _OPTIONAL_PromptInjectionDetection(CustomLogger):
-    # judges the payload itself, so it must also see a record of a batch upload
     enforces_request_content: bool = True
 
     # Class variables or attributes

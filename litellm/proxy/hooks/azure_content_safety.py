@@ -19,7 +19,6 @@ class _PROXY_AzureContentSafety(
 ):  # https://docs.litellm.ai/docs/observability/custom_callback#callback-class
     # Class variables or attributes
 
-    # judges the payload itself, so it must also see a record of a batch upload
     enforces_request_content: bool = True
 
     def __init__(self, endpoint, api_key, thresholds=None):
