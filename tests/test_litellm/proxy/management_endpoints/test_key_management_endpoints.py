@@ -17326,3 +17326,32 @@ async def test_key_budgets_route_shows_the_proxy_numbers_only_to_a_proxy_wide_re
 
     assert response.status_code == 200
     assert resolver.await_args.kwargs["deps"].proxy_spend_visible is expected
+
+
+@pytest.mark.asyncio
+async def test_key_budgets_report_a_tag_its_own_fetch_fails_open_on_the_way_the_request_will_see_it():
+    """
+    `_fetch_uncached_tags` swallows a failed tag fetch into "no budget objects" so auth never breaks
+    on it, and the enforcing check reads that same empty result. Reporting the tag as unknown would
+    name a limit that will not be applied to the request this row describes.
+    """
+    world = _fully_populated_world(tags={})
+    with _budgets_world(**world):
+        budgets = await resolve_key_budgets(valid_token=_budgets_token(), end_user_id=None, deps=_budgets_deps())
+
+    entry = next(e for e in budgets if e.scope == "tag")
+    assert (entry.max_budget, entry.status) == (None, "unlimited")
+
+
+@pytest.mark.asyncio
+async def test_key_budgets_report_a_scope_whose_helper_raises_as_unknown_rather_than_unlimited():
+    """`get_team_object` raises rather than swallowing, so a request would still be gated on the team."""
+
+    async def _explode(**kwargs):
+        raise RuntimeError("team lookup is down")
+
+    with _budgets_world(**_fully_populated_world()), patch(f"{_BUDGETS_RESOLVER}.get_team_object", _explode):
+        budgets = await resolve_key_budgets(valid_token=_budgets_token(), end_user_id=None, deps=_budgets_deps())
+
+    entry = next(e for e in budgets if e.scope == "team")
+    assert (entry.max_budget, entry.spend, entry.status) == (None, None, "unknown")

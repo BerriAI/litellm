@@ -7,7 +7,11 @@ live spend, and the operator the enforcing check compares with.
 
 The limit and counter for each scope come from the same helpers enforcement uses, so
 the two cannot disagree about which budget applies or which counter it is measured
-against.
+against. That holds through failure too: several of those helpers swallow a read
+error and hand back an absence rather than raising, and since enforcement acts on
+that same absence, a scope this reports as unlimited is one no check will apply on
+the request it describes. ``_Unavailable`` is for the helpers that do raise, whose
+failures leave a budget that would still be enforced, and those become ``unknown``.
 """
 
 import asyncio
