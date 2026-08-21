@@ -1507,7 +1507,7 @@ def test_team_info_masking():
         "langfuse_public_key": "public-test-key",
     }
 
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(Exception, match="secr\\*\\*\\*\\*\\*\\*\\*-key', 'langfuse_public_key':") as exc_info:
         proxy_config._get_team_config(
             team_id="test_dev",
             all_teams_config=[team1_info],
@@ -7071,6 +7071,44 @@ async def test_update_general_settings_store_model_in_db_none_keeps_current():
 
 
 @pytest.mark.asyncio
+async def test_batch_cost_poller_is_confirmed_before_serving(monkeypatch):
+    monkeypatch.delenv("STORE_MODEL_IN_DB", raising=False)
+    from litellm.proxy.openai_files_endpoints.common_utils import batch_cost_poller_is_active
+    from litellm.proxy.proxy_server import ProxyStartupEvent
+    from litellm.proxy.utils import ProxyLogging
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_config.find_first = AsyncMock(return_value=None)
+    mock_prisma_client.db.litellm_managedobjecttable.find_first = AsyncMock(return_value=None)
+    mock_proxy_logging = MagicMock(spec=ProxyLogging)
+    mock_proxy_logging.slack_alerting_instance = MagicMock()
+    mock_proxy_logging.db_spend_update_writer = MagicMock()
+
+    with (
+        patch("litellm.proxy.proxy_server.proxy_config", AsyncMock()),
+        patch("litellm.proxy.proxy_server.store_model_in_db", False),
+        patch("litellm.proxy.proxy_server.llm_router", MagicMock()),
+        patch("litellm.proxy.proxy_server.PROXY_BATCH_POLLING_ENABLED", True),
+        patch("litellm.constants.PROXY_BATCH_POLLING_ENABLED", True),
+        patch("litellm.proxy.proxy_server.get_secret_bool", return_value=False),
+    ):
+        await ProxyStartupEvent.initialize_scheduled_background_jobs(
+            general_settings={},
+            prisma_client=mock_prisma_client,
+            proxy_budget_rescheduler_min_time=1,
+            proxy_budget_rescheduler_max_time=2,
+            proxy_batch_write_at=5,
+            proxy_logging_obj=mock_proxy_logging,
+        )
+
+        poller = proxy_server_module.scheduler.get_job("check_batch_cost_job").func.__self__
+        assert poller.batch_processed_support_confirmed is True
+        assert batch_cost_poller_is_active() is True
+        probe_where = mock_prisma_client.db.litellm_managedobjecttable.find_first.call_args[1]["where"]
+        assert probe_where["batch_processed"] is False
+
+
+@pytest.mark.asyncio
 async def test_store_model_in_db_db_override_when_config_false():
     """
     Verify the early DB check in initialize_scheduled_background_jobs
@@ -11026,3 +11064,134 @@ async def test_ptu_rollup_job_not_registered_without_opt_in(monkeypatch):
 
     assert scheduler.get_job(PTU_ROLLUP_JOB_ID) is None
     assert len(scheduler.get_jobs()) > 0
+
+
+@pytest.mark.asyncio
+async def test_moderations_reraises_proxy_exception_unwrapped():
+    """A 400 ProxyException from request validation must surface as-is,
+    not be re-wrapped into a code-500 ProxyException."""
+    from litellm.proxy._types import ProxyErrorTypes, ProxyException
+
+    exc = ProxyException(
+        message="Invalid type for 'metadata': expected an object, but got a string instead.",
+        type=ProxyErrorTypes.bad_request_error,
+        param="metadata",
+        code=400,
+    )
+
+    request = MagicMock()
+    request.body = AsyncMock(return_value=b'{"input": "hi", "metadata": "abc"}')
+
+    with (
+        patch.object(proxy_server_module, "add_litellm_data_to_request", new=AsyncMock(side_effect=exc)),
+        patch.object(proxy_server_module, "proxy_logging_obj") as mock_logging,
+    ):
+        mock_logging.post_call_failure_hook = AsyncMock()
+        with pytest.raises(ProxyException) as exc_info:
+            await proxy_server_module.moderations(
+                request=request,
+                fastapi_response=MagicMock(),
+                user_api_key_dict=MagicMock(),
+            )
+
+    assert exc_info.value is exc
+    assert exc_info.value.code == "400"
+    assert exc_info.value.param == "metadata"
+    mock_logging.post_call_failure_hook.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_init_agents_in_db_rebuilds_registry_under_agent_reconcile_lock(monkeypatch):
+    from litellm.proxy.agent_endpoints.agent_registry import (
+        AGENT_RECONCILE_LOCK,
+        global_agent_registry,
+    )
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    lock_states: list[bool] = []
+
+    async def fake_get_all_agents_from_db(prisma_client) -> list:
+        lock_states.append(AGENT_RECONCILE_LOCK.locked())
+        return []
+
+    def fake_load_agents_from_db_and_config(db_agents) -> None:
+        lock_states.append(AGENT_RECONCILE_LOCK.locked())
+
+    monkeypatch.setattr(global_agent_registry, "get_all_agents_from_db", fake_get_all_agents_from_db)
+    monkeypatch.setattr(global_agent_registry, "load_agents_from_db_and_config", fake_load_agents_from_db_and_config)
+
+    await ProxyConfig()._init_agents_in_db(prisma_client=MagicMock())
+
+    assert lock_states == [True, True]
+    assert not AGENT_RECONCILE_LOCK.locked()
+
+
+@pytest.mark.asyncio
+async def test_init_guardrails_in_db_snapshots_and_reconciles_under_guardrail_reconcile_lock(monkeypatch):
+    from litellm.proxy.guardrails.guardrail_registry import (
+        GUARDRAIL_RECONCILE_LOCK,
+        IN_MEMORY_GUARDRAIL_HANDLER,
+        GuardrailRegistry,
+    )
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    lock_states: list[bool] = []
+
+    async def fake_get_all_guardrails_from_db(prisma_client) -> list:
+        lock_states.append(GUARDRAIL_RECONCILE_LOCK.locked())
+        return []
+
+    def fake_reconcile_db_guardrails(db_guardrail_ids) -> list:
+        lock_states.append(GUARDRAIL_RECONCILE_LOCK.locked())
+        return []
+
+    monkeypatch.setattr(GuardrailRegistry, "get_all_guardrails_from_db", fake_get_all_guardrails_from_db)
+    monkeypatch.setattr(IN_MEMORY_GUARDRAIL_HANDLER, "reconcile_db_guardrails", fake_reconcile_db_guardrails)
+
+    await ProxyConfig()._init_guardrails_in_db(prisma_client=MagicMock())
+
+    assert lock_states == [True, True]
+    assert not GUARDRAIL_RECONCILE_LOCK.locked()
+
+
+class TestEmbeddingsFailureHookRequestData:
+    @pytest.mark.asyncio
+    async def test_failure_hook_gets_post_setup_data_with_logging_obj(self):
+        """Request setup replaces the processor's data dict (adding the logging
+        object the failure hook needs to lift token usage from); the embeddings
+        exception handler must pass that replaced dict, not the raw request body
+        dict it was rebuilt from."""
+        from litellm.proxy._types import ProxyException
+
+        captured = {}
+        logging_obj_sentinel = MagicMock()
+
+        async def fake_process(self, **kwargs):
+            self.data = {**self.data, "litellm_logging_obj": logging_obj_sentinel}
+            captured["processor_data"] = self.data
+            raise RuntimeError("provider timeout")
+
+        with (
+            patch.object(
+                proxy_server_module,
+                "_read_request_body",
+                new=AsyncMock(return_value={"model": "my-embed", "input": "hello"}),
+            ),
+            patch.object(
+                proxy_server_module.ProxyBaseLLMRequestProcessing,
+                "base_process_llm_request",
+                new=fake_process,
+            ),
+            patch.object(proxy_server_module, "proxy_logging_obj") as mock_logging,
+        ):
+            mock_logging.post_call_failure_hook = AsyncMock(return_value=None)
+            with pytest.raises(ProxyException):
+                await proxy_server_module.embeddings(
+                    request=MagicMock(),
+                    fastapi_response=MagicMock(),
+                    user_api_key_dict=UserAPIKeyAuth(),
+                )
+
+        hook_request_data = mock_logging.post_call_failure_hook.await_args.kwargs["request_data"]
+        assert hook_request_data is captured["processor_data"]
+        assert hook_request_data["litellm_logging_obj"] is logging_obj_sentinel

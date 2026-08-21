@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor } from "@testing-library/react";
-import type { ReactElement, ReactNode } from "react";
+import type { ReactElement } from "react";
 import { describe, expect, it, vi } from "vitest";
 import type { FallbackGroup } from "../Settings/RouterSettings/Fallbacks/FallbackGroupConfig";
 import type { RouterSettingsFormValue } from "../router_settings/RouterSettingsForm";
@@ -14,14 +14,6 @@ vi.mock("../networking", () => ({
 vi.mock("@/components/llm_calls/fetch_models", () => ({
   fetchAvailableModels: vi.fn().mockResolvedValue([{ model_group: "gpt-5.5" }, { model_group: "gpt-4o-mini" }]),
   fetchAvailableModelsForTeam: vi.fn().mockResolvedValue([]),
-}));
-
-vi.mock("@tremor/react", () => ({
-  TabGroup: ({ children }: { children: ReactNode }) => <div>{children}</div>,
-  TabList: ({ children }: { children: ReactNode }) => <div>{children}</div>,
-  Tab: ({ children }: { children: ReactNode }) => <div>{children}</div>,
-  TabPanels: ({ children }: { children: ReactNode }) => <div>{children}</div>,
-  TabPanel: ({ children }: { children: ReactNode }) => <div>{children}</div>,
 }));
 
 vi.mock("../router_settings/RouterSettingsForm", () => ({
@@ -66,8 +58,8 @@ describe("key router settings wiring, /key/info payload through to rendered outp
   it("should not leak a field the accordion has no control for into the editor", async () => {
     render(renderAccordion(KEY_INFO_ROUTER_SETTINGS));
 
-    await waitFor(() => expect(screen.getByTestId("loadbalancing")).toBeInTheDocument());
-    expect(screen.getByTestId("loadbalancing").textContent).not.toContain("tag_routing_prefix");
+    expect(await screen.findByTestId("loadbalancing")).toBeInTheDocument();
+    expect(screen.getByTestId("loadbalancing")).not.toHaveTextContent(/tag_routing_prefix/);
   });
 
   it("should render an empty editor for a key holding only fields it cannot show", async () => {

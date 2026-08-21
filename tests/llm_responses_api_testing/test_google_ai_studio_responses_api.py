@@ -81,9 +81,8 @@ async def test_mock_basic_google_ai_studio_responses_api_with_tools():
             call_kwargs["messages"][0]["content"]
             == "what is the latest version of supabase python package and when was it released?"
         )
-        assert (
-            call_kwargs["tools"] == []
-        )  # web search tools are converted to web_search_options, not kept as tools
+        assert "tools" not in call_kwargs
+        assert "tool_choice" not in call_kwargs
 
 
 @pytest.mark.asyncio

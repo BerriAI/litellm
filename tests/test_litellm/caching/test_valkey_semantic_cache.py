@@ -105,6 +105,17 @@ def test_init_requires_similarity_threshold():
         ValkeySemanticCache(sync_client=MagicMock(), async_client=AsyncMock())
 
 
+def test_init_stores_embedding_max_input_tokens():
+    cache = ValkeySemanticCache(
+        similarity_threshold=0.8,
+        sync_client=MagicMock(),
+        async_client=AsyncMock(),
+        embedding_max_input_tokens=512,
+    )
+    assert cache.embedding_max_input_tokens == 512
+    assert _make_cache().embedding_max_input_tokens is None
+
+
 def test_init_rejects_cluster_startup_nodes():
     with pytest.raises(ValueError, match="cluster-mode-enabled"):
         ValkeySemanticCache(

@@ -106,7 +106,7 @@ class PassThroughStreamingHandler:
                     )  # rebind-ok: SSE frame reassembly buffer across transport chunks
                     if complete_frames:
                         yield ProxyBaseLLMRequestProcessing._process_chunk_with_cost_injection(
-                            complete_frames, resolved_model_name
+                            complete_frames, resolved_model_name, litellm_logging_obj
                         )
                 if pending:
                     yield pending
@@ -193,7 +193,7 @@ class PassThroughStreamingHandler:
                 result=standard_logging_response_object,
                 start_time=start_time,
                 end_time=end_time,
-                cache_hit=False,
+                cache_hit=litellm_logging_obj.model_call_details.get("cache_hit") is True,
                 prefer_async_handlers=True,
                 **kwargs,
             )

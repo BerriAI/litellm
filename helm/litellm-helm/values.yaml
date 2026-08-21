@@ -6,8 +6,9 @@ replicaCount: 1
 # numWorkers: 2
 
 image:
-  # Use "ghcr.io/berriai/litellm-database" for optimized image with database
-  repository: ghcr.io/berriai/litellm-database
+  # Bundles the prisma CLI and engines, which is what lets the migrations job
+  # and the proxy's own schema check run without network access.
+  repository: ghcr.io/berriai/litellm
   pullPolicy: Always
   # Overrides the image tag whose default is the chart appVersion.
   # tag: "latest"
@@ -276,6 +277,14 @@ db:
     # written to db.readReplicaUrl ends up visible in the rendered pod spec
     # and the Helm release secret.
     readReplicaUrlKey: ""
+    # Optional: when set, a DATABASE_READER_HOST env var is sourced from this
+    # secret key, so db.readReplicaUrl can compose the reader URL from
+    # individual secret components, e.g.
+    # postgresql://$(DATABASE_USERNAME):$(DATABASE_PASSWORD)@$(DATABASE_READER_HOST):5432/$(DATABASE_NAME)
+    # Use this when your secret store holds the bare reader hostname rather
+    # than a full connection URL. Only takes effect when readReplicaUrl is
+    # set; ignored when readReplicaUrlKey is set.
+    readReplicaEndpointKey: ""
 
   # Optional read-replica routing. When set, the proxy sends read-only
   # queries (find_*, count, group_by, query_raw/_first) to this URL while
@@ -427,6 +436,13 @@ migrationJob:
   enabled: true # Enable or disable the schema migration Job
   retries: 3 # Number of retries for the Job in case of failure
   backoffLimit: 4 # Backoff limit for Job restarts
+  # Wall-clock budget for the whole Job, shared across every `backoffLimit`
+  # retry rather than granted per attempt. Without it a migration that blocks
+  # on the database never fails, and when the Helm hook is enabled the release
+  # waits on it forever: `helm upgrade` and any GitOps controller driving it
+  # stop reconciling the whole chart until someone deletes the Job by hand.
+  # Set to null to opt out and restore the unbounded behaviour.
+  activeDeadlineSeconds: 1800
   disableSchemaUpdate: false # Skip schema migrations for specific environments. When True, the job will exit with code 0.
   # Optional service account for the migration job.
   # Only used when migrationJob.hooks.helm.enabled=true and serviceAccount.create=true.

@@ -29,6 +29,10 @@ from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.user_api_key_cache import (
+    end_user_cache_key,
+    end_user_restricted_registry_cache_key,
+)
 from litellm.proxy.management_endpoints.common_daily_activity import get_daily_activity
 from litellm.proxy.management_endpoints.common_utils import validate_budget_duration
 from litellm.proxy.management_helpers.object_permission_utils import (
@@ -99,6 +103,25 @@ def _typed_table(repo: EndUserRepository | BudgetRepository) -> object:
 router: Final = APIRouter()
 
 
+async def _evict_end_user_cache_keys(cache_keys: Sequence[str]) -> None:
+    """
+    Every endpoint that mutates an end-user row must call this, or a newly blocked or budgeted
+    customer keeps being served unrestricted until the TTL expires: auth reads end users
+    cache-first, and the cached restricted-id registry decides whether the row is read at all.
+    """
+    from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
+        evict_and_broadcast,
+    )
+    from litellm.proxy.proxy_server import user_api_key_cache
+
+    await evict_and_broadcast(cache_keys=cache_keys, user_api_key_cache=user_api_key_cache)
+
+
+def _end_user_cache_keys(user_ids: Sequence[str]) -> tuple[str, ...]:
+    """The per-id entries plus the registry, which any restriction change can move ids in or out of."""
+    return (*(end_user_cache_key(user_id) for user_id in user_ids), end_user_restricted_registry_cache_key())
+
+
 def _to_customer_response(record: BaseModel) -> CustomerResponse:
     """Validate a raw end-user DB row into the typed customer response.
 
@@ -152,6 +175,7 @@ async def block_user(data: BlockUsers):
                     },
                 )
                 records.append(record)
+            await _evict_end_user_cache_keys(_end_user_cache_keys(data.user_ids))
         else:
             raise HTTPException(
                 status_code=500,
@@ -448,6 +472,8 @@ async def new_end_user(
             include={"litellm_budget_table": True, "object_permission": True},
         )
 
+        await _evict_end_user_cache_keys(_end_user_cache_keys((data.user_id,)))
+
         return _to_customer_response(end_user_record)
     except Exception as e:
         verbose_proxy_logger.exception(
@@ -691,6 +717,8 @@ async def update_end_user(
                 raise ValueError(f"Failed updating customer data. User ID does not exist passed user_id={data.user_id}")
             verbose_proxy_logger.debug("received response from updating prisma client. response=%s", response)
 
+            await _evict_end_user_cache_keys(_end_user_cache_keys((data.user_id,)))
+
             return _to_customer_response(response)
         else:
             raise ValueError(f"user_id is required, passed user_id = {data.user_id}")
@@ -764,6 +792,9 @@ async def delete_end_user(
                 where={"user_id": {"in": data.user_ids}}
             )
             verbose_proxy_logger.debug("received response from updating prisma client. response=%s", response)
+
+            await _evict_end_user_cache_keys(_end_user_cache_keys(data.user_ids))
+
             return DeleteCustomersResponse(
                 deleted_customers=response,
                 message="Successfully deleted customers with ids: " + str(data.user_ids),

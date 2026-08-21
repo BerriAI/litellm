@@ -733,6 +733,7 @@ class DatabricksChatResponseIterator(BaseModelResponseIterator):
                 created=chunk["created"],
                 model=chunk["model"],
                 choices=translated_choices,
+                usage=chunk.get("usage"),
             )
         except KeyError as e:
             raise DatabricksException(

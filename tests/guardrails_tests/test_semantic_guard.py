@@ -10,6 +10,7 @@ sys.path.insert(0, os.path.abspath("../.."))
 from unittest.mock import MagicMock
 
 import pytest
+from fastapi import HTTPException
 
 
 class TestRouteLoader:
@@ -307,7 +308,7 @@ class TestContentFilterSqlInjectionTemplate:
     @pytest.mark.asyncio
     async def test_sql_always_block(self, sql_injection_guardrail, sentence, reason):
         request_data = {"messages": [{"role": "user", "content": sentence}]}
-        with pytest.raises(Exception):
+        with pytest.raises(HTTPException):
             await sql_injection_guardrail.apply_guardrail(
                 inputs={"texts": [sentence]},
                 request_data=request_data,
@@ -343,7 +344,7 @@ class TestContentFilterSqlInjectionTemplate:
         self, sql_injection_guardrail, sentence, reason
     ):
         request_data = {"messages": [{"role": "user", "content": sentence}]}
-        with pytest.raises(Exception):
+        with pytest.raises(HTTPException):
             await sql_injection_guardrail.apply_guardrail(
                 inputs={"texts": [sentence]},
                 request_data=request_data,
@@ -552,7 +553,7 @@ class TestContentFilterPromptInjectionTemplate:
     @pytest.mark.asyncio
     async def test_always_block(self, content_filter_guardrail, sentence, reason):
         request_data = {"messages": [{"role": "user", "content": sentence}]}
-        with pytest.raises(Exception):
+        with pytest.raises(HTTPException):
             await content_filter_guardrail.apply_guardrail(
                 inputs={"texts": [sentence]},
                 request_data=request_data,

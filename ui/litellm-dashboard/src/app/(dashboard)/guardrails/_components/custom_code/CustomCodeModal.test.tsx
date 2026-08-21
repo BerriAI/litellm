@@ -10,10 +10,6 @@ vi.mock("@/components/networking", () => ({
   testCustomCodeGuardrail: vi.fn(),
 }));
 
-vi.mock("@/components/molecules/notifications_manager", () => ({
-  default: { success: vi.fn(), error: vi.fn(), fromBackend: vi.fn() },
-}));
-
 const mockCreate = vi.mocked(createGuardrailCall);
 const mockUpdate = vi.mocked(updateGuardrailCall);
 const mockTest = vi.mocked(testCustomCodeGuardrail);

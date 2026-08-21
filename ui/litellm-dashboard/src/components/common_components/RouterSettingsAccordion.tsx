@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useImperativeHandle, forwardRef, useRef } from "react";
-import { TabPanel, TabPanels, TabGroup, TabList, Tab } from "@tremor/react";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useQuery } from "@tanstack/react-query";
 import { useDebouncedCallback } from "@tanstack/react-pacer/debouncer";
 import { getRouterSettingsCall } from "../networking";
@@ -344,13 +344,13 @@ const RouterSettingsAccordion = forwardRef<RouterSettingsAccordionRef, RouterSet
 
     return (
       <div className="w-full">
-        <TabGroup className="w-full">
-          <TabList variant="line" defaultValue="1" className="px-8 pt-4">
-            <Tab value="1">Loadbalancing</Tab>
-            <Tab value="2">Fallbacks</Tab>
-          </TabList>
-          <TabPanels className="px-8 py-6">
-            <TabPanel>
+        <Tabs defaultValue="1" className="w-full">
+          <TabsList variant="line" className="px-8 pt-4">
+            <TabsTrigger value="1">Loadbalancing</TabsTrigger>
+            <TabsTrigger value="2">Fallbacks</TabsTrigger>
+          </TabsList>
+          <div className="px-8 py-6">
+            <TabsContent value="1" keepMounted>
               <RouterSettingsForm
                 value={formValue}
                 onChange={setFormValue}
@@ -358,17 +358,17 @@ const RouterSettingsAccordion = forwardRef<RouterSettingsAccordionRef, RouterSet
                 availableRoutingStrategies={availableRoutingStrategies}
                 routingStrategyDescriptions={routingStrategyDescriptions}
               />
-            </TabPanel>
-            <TabPanel>
+            </TabsContent>
+            <TabsContent value="2" keepMounted>
               <FallbackSelectionForm
                 groups={fallbackGroups}
                 onGroupsChange={handleFallbackGroupsChange}
                 availableModels={availableModels}
                 maxGroups={5}
               />
-            </TabPanel>
-          </TabPanels>
-        </TabGroup>
+            </TabsContent>
+          </div>
+        </Tabs>
       </div>
     );
   },

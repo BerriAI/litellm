@@ -41,6 +41,11 @@ OBJECT_KEYS: dict[str, JsonSchema] = {
         },
         "additionalProperties": False,
     },
+    "guardrail_cost_per_unit": {
+        "type": "object",
+        "description": "USD cost per billable guardrail unit, keyed by the provider's usage counter name (e.g. Bedrock's contentPolicyUnits).",
+        "additionalProperties": NONNEG_NUMBER,
+    },
     "metadata": {
         "type": "object",
         "description": "Free-form notes about the entry (e.g. pricing derivation).",
@@ -96,6 +101,7 @@ ARRAY_KEYS: dict[str, JsonSchema] = {
                 "output_cost_per_token": NONNEG_NUMBER,
                 "output_cost_per_reasoning_token": NONNEG_NUMBER,
                 "cache_read_input_token_cost": NONNEG_NUMBER,
+                "cache_creation_input_token_cost": NONNEG_NUMBER,
                 "input_cost_per_query": NONNEG_NUMBER,
             },
             "additionalProperties": False,
@@ -138,6 +144,11 @@ NUMBER_KEYS: dict[str, JsonSchema] = {
         "type": "number",
         "minimum": 1,
         "description": "Multiplier applied to all token costs for US data residency (e.g. 1.10 = +10%).",
+    },
+    "regional_endpoint_uplift_multiplier": {
+        "type": "number",
+        "minimum": 1,
+        "description": "Multiplier applied to all token costs when served from a non-global Vertex AI endpoint (e.g. 1.10 = +10%).",
     },
 }
 
