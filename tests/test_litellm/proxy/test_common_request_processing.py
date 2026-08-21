@@ -435,7 +435,7 @@ class TestProxyBaseLLMRequestProcessing:
 
         # Test with invalid header value (should raise ValueError when converting to float)
         headers_with_invalid = {"x-litellm-stream-timeout": "invalid"}
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="could not convert string to float: 'invalid"):
             LiteLLMProxyRequestSetup._get_stream_timeout_from_request(headers_with_invalid)
 
     @pytest.mark.asyncio

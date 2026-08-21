@@ -1706,7 +1706,7 @@ def test_an_incomplete_reservation_is_refused_rather_than_served(dropped):
     state the operator was trying to leave."""
     incomplete = {k: v for k, v in _PTU_MODEL_INFO.items() if k != dropped}
 
-    with pytest.raises(ValueError) as raised:
+    with pytest.raises(ValueError, match="PTU configuration on model 'gpt") as raised:
         _ptu_router(model_info=incomplete, litellm_params={"input_cost_per_token": 5e-06})
 
     assert "gpt-4o-ptu" in str(raised.value)
@@ -1726,7 +1726,7 @@ def test_the_refusal_reason_is_the_one_the_model_endpoint_answers_with(dropped, 
     incomplete = {k: v for k, v in _PTU_MODEL_INFO.items() if k != dropped}
 
     assert ptu_config_error(incomplete) == expected
-    with pytest.raises(ValueError) as raised:
+    with pytest.raises(ValueError, match="PTU configuration on model 'gpt") as raised:
         _ptu_router(model_info=incomplete)
 
     assert expected in str(raised.value)

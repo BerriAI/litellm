@@ -90,12 +90,12 @@ def test_config_model_wiring():
 
 
 def test_init_rejects_empty_api_key():
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match='api_key must be non-empty'):
         StraikerGuardrail(api_key="")
 
 
 def test_init_rejects_invalid_fallback():
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="unreachable_fallback must be 'fail_open' or 'fail_closed';"):
         StraikerGuardrail(api_key="k", unreachable_fallback="nope")
 
 
@@ -109,7 +109,7 @@ def test_supported_hooks_limited_to_pre_and_post():
 
 
 def test_during_call_mode_rejected_at_init():
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match='Event hook GuardrailEventHooks\\.during_call is not in the'):
         StraikerGuardrail(api_key="k", event_hook="during_call")
 
 

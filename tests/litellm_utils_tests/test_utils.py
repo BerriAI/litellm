@@ -2147,7 +2147,7 @@ def test_validate_user_messages_invalid_content_type():
 
     messages = [{"content": [{"type": "invalid_type", "text": "Hello"}]}]
 
-    with pytest.raises(Exception) as e:
+    with pytest.raises(Exception, match='Please ensure all messages are valid OpenAI chat completion') as e:
         validate_chat_completion_user_messages(messages)
 
     assert "Invalid message" in str(e)

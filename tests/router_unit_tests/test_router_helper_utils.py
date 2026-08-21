@@ -90,7 +90,7 @@ def test_routing_strategy_init_invalid_strategy(model_list):
     router = Router(model_list=model_list)
 
     # Test common mistake: "simple" instead of "simple-shuffle"
-    with pytest.raises(ValueError) as exc_info:
+    with pytest.raises(ValueError, match="usage-based-routing', 'provider-budget-routing'\\]\\. Check") as exc_info:
         router.routing_strategy_init(
             routing_strategy="simple", routing_strategy_args={}
         )
@@ -106,7 +106,7 @@ def test_routing_strategy_init_invalid_strategy(model_list):
     assert "Router SDK" in error_msg
 
     # Test completely invalid strategy
-    with pytest.raises(ValueError) as exc_info:
+    with pytest.raises(ValueError, match="usage-based-routing', 'provider-budget-routing'\\]\\. Check") as exc_info:
         router.routing_strategy_init(
             routing_strategy="not-a-real-strategy", routing_strategy_args={}
         )

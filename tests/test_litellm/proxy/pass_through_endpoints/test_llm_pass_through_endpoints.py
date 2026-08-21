@@ -2714,7 +2714,7 @@ class TestMilvusProxyRoute:
                 None
             )
 
-            with pytest.raises(Exception) as exc_info:
+            with pytest.raises(Exception, match='Vector store not found for missing-store') as exc_info:
                 await milvus_proxy_route(
                     endpoint="vectors/search",
                     request=mock_request,
@@ -2779,7 +2779,7 @@ class TestMilvusProxyRoute:
                 mock_vector_store
             )
 
-            with pytest.raises(Exception) as exc_info:
+            with pytest.raises(Exception, match='api_base not found in vector store configuration for') as exc_info:
                 await milvus_proxy_route(
                     endpoint="vectors/search",
                     request=mock_request,
@@ -2988,7 +2988,7 @@ class TestOpenAIPassthroughRoute:
             "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router.get_credentials",
             return_value=None,
         ):
-            with pytest.raises(Exception) as exc_info:
+            with pytest.raises(Exception, match="Required 'OPENAI_API_KEY' in environment to make") as exc_info:
                 await openai_proxy_route(
                     endpoint="v1/chat/completions",
                     request=mock_request,
@@ -3177,7 +3177,7 @@ class TestCursorProxyRoute:
                 [],
             ),
         ):
-            with pytest.raises(Exception) as exc_info:
+            with pytest.raises(Exception, match='Cursor API key not found\\. Add Cursor credentials via') as exc_info:
                 await cursor_proxy_route(
                     endpoint="v0/agents",
                     request=mock_request,

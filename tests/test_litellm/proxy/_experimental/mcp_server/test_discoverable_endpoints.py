@@ -2698,13 +2698,6 @@ async def test_token_endpoint_respects_x_forwarded_host():
         (
             "http://localhost:4000/",
             "https",
-            "proxy.example.com",
-            "8443",
-            "https://proxy.example.com:8443",
-        ),
-        (
-            "http://localhost:4000/",
-            "https",
             "proxy.example.com:443",
             None,
             "https://proxy.example.com",

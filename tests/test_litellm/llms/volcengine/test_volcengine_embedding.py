@@ -202,7 +202,7 @@ def test_volcengine_embedding_error_scenarios():
                 k: v for k, v in scenario.items() if k != "expected_error_pattern"
             }
 
-            with pytest.raises(Exception) as exc_info:
+            with pytest.raises(Exception, match=f"(?i){scenario['expected_error_pattern']}") as exc_info:
                 litellm.embedding(input=["test"], **test_params)
 
             # Verify error message contains expected pattern

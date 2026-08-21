@@ -131,7 +131,7 @@ def test_get_redis_url_from_environment_missing_host_port(monkeypatch):
     monkeypatch.delenv("REDIS_PORT", raising=False)
 
     # Call the function and expect a ValueError
-    with pytest.raises(ValueError) as excinfo:
+    with pytest.raises(ValueError, match="Either 'REDIS_URL' or both 'REDIS_HOST' and 'REDIS_PORT") as excinfo:
         get_redis_url_from_environment()
 
     # Check the error message
@@ -149,7 +149,7 @@ def test_get_redis_url_from_environment_missing_port(monkeypatch):
     monkeypatch.setenv("REDIS_HOST", "redis-server")
 
     # Call the function and expect a ValueError
-    with pytest.raises(ValueError) as excinfo:
+    with pytest.raises(ValueError, match="Either 'REDIS_URL' or both 'REDIS_HOST' and 'REDIS_PORT") as excinfo:
         get_redis_url_from_environment()
 
     # Check the error message
