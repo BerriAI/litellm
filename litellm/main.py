@@ -7535,7 +7535,15 @@ async def amoderation(
             },
             custom_llm_provider=custom_llm_provider,
         )
-        litellm_logging_obj.pre_call(input=input, api_key=api_key)
+        moderation_request: Final = {"input": input, "model": model}  # mutable-ok: logged as the raw request body
+        litellm_logging_obj.pre_call(
+            input=input,
+            api_key=api_key,
+            additional_args={  # mutable-ok: loggers isinstance-check this payload as a dict
+                "complete_input_dict": moderation_request,
+                "api_base": str(_openai_client.base_url),
+            },
+        )
 
     if model is not None:
         response = await _openai_client.moderations.create(input=input, model=model)

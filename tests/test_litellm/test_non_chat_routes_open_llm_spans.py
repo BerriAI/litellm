@@ -23,9 +23,11 @@ class _PreCallRecorder(CustomLogger):
     def __init__(self) -> None:
         super().__init__()
         self.call_types: list[str] = []  # mutable-ok: test recorder of hook calls
+        self.api_bases: list[str] = []  # mutable-ok: test recorder of hook calls
 
     def log_pre_api_call(self, model, messages, kwargs) -> None:
         self.call_types.append(str(kwargs.get("call_type")))
+        self.api_bases.append(str(kwargs.get("litellm_params", {}).get("api_base")))
 
 
 class _FakeSpeech:
@@ -78,8 +80,8 @@ class _FakeAsyncOpenAI(AsyncOpenAI):
     """Stands in for the injected client: a real ``AsyncOpenAI`` (``amoderation``
     type-checks it) whose resource namespaces answer without a network call."""
 
-    def __init__(self) -> None:
-        super().__init__(api_key="sk-test", base_url="https://api.openai.com/v1")
+    def __init__(self, base_url: str = "https://api.openai.com/v1") -> None:
+        super().__init__(api_key="sk-test", base_url=base_url)
         self.audio = type("_Audio", (), {"speech": _FakeSpeech()})()
         self.images = _FakeImages()
         self.moderations = _FakeModerations()
@@ -121,7 +123,8 @@ def test_async_moderation_opens_an_llm_span(recorder):
         litellm.amoderation(
             model="omni-moderation-latest",
             input="hello",
-            client=_FakeAsyncOpenAI(),
+            client=_FakeAsyncOpenAI(base_url="https://gateway.example/v1"),
         )
     )
     assert recorder.call_types == ["amoderation"]
+    assert recorder.api_bases == ["https://gateway.example/v1/"]
