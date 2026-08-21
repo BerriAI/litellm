@@ -28,6 +28,7 @@ from litellm.constants import (
     MAX_TEAM_LIST_LIMIT,
     SPEND_LOG_QUEUE_MAX_BYTES,
     SPEND_LOG_WRITE_BATCH_MAX_BYTES,
+    SPEND_LOG_WRITE_BATCH_MAX_ROWS,
 )
 from litellm.proxy._types import (
     CommonProxyErrors,
@@ -6048,7 +6049,9 @@ class ProxyUpdateSpend:
                             batch_with_dates = [prisma_client.jsonify_object({**entry}) for entry in batch]
                             isolation_budget = MAX_SPEND_LOG_ISOLATION_FAILURES_PER_BATCH
                             for statement_rows in spend_log_write_batches(
-                                batch_with_dates, SPEND_LOG_WRITE_BATCH_MAX_BYTES
+                                batch_with_dates,
+                                SPEND_LOG_WRITE_BATCH_MAX_BYTES,
+                                SPEND_LOG_WRITE_BATCH_MAX_ROWS,
                             ):
                                 isolation_budget = await _create_spend_logs_with_poison_isolation(
                                     SpendLogsRepository(prisma_client),
