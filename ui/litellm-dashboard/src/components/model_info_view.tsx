@@ -43,7 +43,7 @@ import {
 import { Logo } from "@/components/molecules/logo/Logo";
 import UpdateModelCredentialsModal from "./update_model_credentials_modal";
 import ModelInfoEditForm, {
-  editableExtraParams,
+  applyNullsForDeletedExtraParams,
   type ModelEditFormValues,
   type TouchedPricingField,
 } from "./ModelInfoEditForm";
@@ -430,14 +430,7 @@ export default function ModelInfoView({
         return;
       }
 
-      // Keys the user deleted from the LiteLLM Params JSON editor must be sent as
-      // explicit nulls: the backend PATCH merges params, so an absent key would
-      // silently keep its old value.
-      for (const key of Object.keys(editableExtraParams(localModelData?.litellm_params))) {
-        if (!(key in parsedExtraParams) && updatedLitellmParams[key] === undefined) {
-          updatedLitellmParams[key] = null;
-        }
-      }
+      applyNullsForDeletedExtraParams(updatedLitellmParams, localModelData?.litellm_params, parsedExtraParams);
 
       // Final guard: never PATCH a redacted secret. The /model/info snapshot that
       // seeds this form masks secrets, and any save re-sends the whole params blob;

@@ -214,6 +214,21 @@ export const editableExtraParams = (
     ),
   );
 
+// Keys the user deleted from the LiteLLM Params JSON editor must be sent as
+// explicit nulls: the backend PATCH merges params, so an absent key would
+// silently keep its old value.
+export const applyNullsForDeletedExtraParams = (
+  updatedLitellmParams: Record<string, any>,
+  storedLitellmParams: Record<string, unknown> | null | undefined,
+  parsedExtraParams: Record<string, any>,
+): void => {
+  for (const key of Object.keys(editableExtraParams(storedLitellmParams))) {
+    if (!(key in parsedExtraParams) && updatedLitellmParams[key] === undefined) {
+      updatedLitellmParams[key] = null;
+    }
+  }
+};
+
 export const toModelEditFormValues = (localModelData: any, isWildcardModel: boolean): ModelEditFormValues => ({
   model_name: localModelData.model_name,
   litellm_model_name: localModelData.litellm_model_name,
