@@ -20,8 +20,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Final
 
-from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
-from litellm.types.utils import InternalCallOrigin
+from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY, NON_INFERENCE_CALL_TYPES
+from litellm.types.utils import BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN, InternalCallOrigin
 
 BUDGET_RESERVATION_METADATA_KEYS: Final = frozenset({"user_api_key_budget_reservation"})
 
@@ -43,6 +43,17 @@ FORWARDABLE_IDENTITY_METADATA_KEYS: Final = frozenset(
 budget-checked like the request that spawned it. Everything else on the parent's metadata
 (routing decision, guardrail state, logging payload) describes the parent call and would
 be a lie on a sub-call that runs after it returned."""
+
+
+def is_unbilled_non_inference_call(call_type: str | None, metadata: Mapping[str, object] | None) -> bool:
+    """A read/management route priced at zero, except when the background response cost
+    poller made the read: that poll is the only place a background job's usage is ever
+    seen, so its retrieval carries the job's real spend."""
+    if call_type not in NON_INFERENCE_CALL_TYPES:
+        return False
+    if metadata is None:
+        return True
+    return metadata.get(INTERNAL_CALL_ORIGIN_METADATA_KEY) != BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN
 
 
 def sanitize_user_api_key_auth(auth: object) -> object:

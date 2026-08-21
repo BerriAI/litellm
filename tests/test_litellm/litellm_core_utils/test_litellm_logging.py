@@ -4834,7 +4834,9 @@ class TestNonInferenceCallTypesAreNotBilled:
 
     RETRIEVED_RESPONSE_USAGE = {"input_tokens": 4000, "output_tokens": 2000, "total_tokens": 6000}
 
-    def _logging_obj(self, call_type: str):
+    BACKGROUND_POLL_METADATA = {"internal_call_origin": "background_response_cost_poll"}
+
+    def _logging_obj(self, call_type: str, litellm_metadata: dict | None = None):
         from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
         obj = LiteLLMLoggingObj(
@@ -4850,7 +4852,11 @@ class TestNonInferenceCallTypesAreNotBilled:
             model="gpt-4o",
             user="",
             optional_params={},
-            litellm_params={"api_base": "", "custom_llm_provider": "openai"},
+            litellm_params={
+                "api_base": "",
+                "custom_llm_provider": "openai",
+                "litellm_metadata": litellm_metadata or {},
+            },
         )
         return obj
 
@@ -4914,6 +4920,41 @@ class TestNonInferenceCallTypesAreNotBilled:
         assert payload["completion_tokens"] == 0
         assert payload["total_tokens"] == 0
         assert payload["response_cost"] == 0.0
+
+    def test_background_cost_poll_read_is_still_priced(self):
+        """A background create returns queued with no usage, so the poller's read carries the job's
+        only billable usage. Zeroing it there means background jobs are never billed."""
+        cost = self._logging_obj(
+            "aget_responses", litellm_metadata=self.BACKGROUND_POLL_METADATA
+        )._response_cost_calculator(result=self._retrieved_response())
+        assert cost is not None and cost > 0
+
+    def test_background_cost_poll_reports_usage_in_standard_logging_payload(self):
+        from datetime import datetime
+
+        from litellm.litellm_core_utils.litellm_logging import (
+            get_standard_logging_object_payload,
+        )
+
+        now = datetime.now()
+        payload = get_standard_logging_object_payload(
+            kwargs={
+                "litellm_call_id": "lit5602-poll-payload",
+                "model": "gpt-4o",
+                "call_type": "aget_responses",
+                "litellm_params": {"litellm_metadata": self.BACKGROUND_POLL_METADATA},
+            },
+            init_response_obj=self._retrieved_response(),
+            start_time=now,
+            end_time=now,
+            logging_obj=self._logging_obj(
+                "aget_responses", litellm_metadata=self.BACKGROUND_POLL_METADATA
+            ),
+            status="success",
+        )
+
+        assert payload is not None
+        assert payload["total_tokens"] == 6000
 
     def test_read_calls_do_not_log_a_placeholder_chat_message(self):
         logging_obj, _ = litellm.utils.function_setup(
