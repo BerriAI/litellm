@@ -18,6 +18,7 @@ from pydantic import TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import LiteLLMRoutes, LitellmUserRoles
+from litellm.repositories.prisma_args import prisma_args
 from litellm.types.custom_rbac import CustomRBACRole, CustomRBACRoleResponse
 
 CUSTOM_RBAC_ROLES_CONFIG_KEY: Final = "custom_rbac_roles"
@@ -119,7 +120,7 @@ def get_config_custom_rbac_roles() -> tuple[CustomRBACRole, ...]:
 
 
 async def get_db_custom_rbac_roles(table: _CustomRoleTable) -> tuple[CustomRBACRoleResponse, ...]:
-    records: Final = await table.find_many(order=_ORDER_BY_ROLE_NAME)
+    records: Final = await table.find_many(order=prisma_args(_ORDER_BY_ROLE_NAME))
     return tuple(CustomRBACRoleResponse.model_validate(record.dict()) for record in records)
 
 
@@ -180,8 +181,8 @@ async def validate_assigned_user_role(user_role: LitellmUserRoles | str | None) 
 async def get_active_custom_rbac_engine() -> CustomRBACEngine | None:
     """The engine for the currently configured roles, or None when no custom role exists.
 
-    A DB read failure reuses the last known policy so a transient outage cannot silently
-    downgrade a governed role to the built-in role permissions.
+    A DB read failure reuses the last known policy, or the config defined roles alone, so a
+    transient outage cannot silently downgrade a governed role to the built-in permissions.
     """
     cached: Final = _ENGINE_CACHE.get_fresh()
     if cached is not None:
@@ -192,7 +193,11 @@ async def get_active_custom_rbac_engine() -> CustomRBACEngine | None:
         db_roles: Final = () if table is None else await get_db_custom_rbac_roles(table=table)
     except Exception as exc:  # noqa: BLE001  # any DB failure must keep the last known policy, not drop it
         verbose_proxy_logger.exception("Failed to load custom RBAC roles from the DB: %s", exc)
-        return _ENGINE_CACHE.get_stale()
+        stale: Final = _ENGINE_CACHE.get_stale()
+        config_only: Final = get_config_custom_rbac_roles()
+        if stale is not None or not config_only:
+            return stale
+        return build_custom_rbac_engine(roles=config_only)
 
     roles: Final = get_config_custom_rbac_roles() + tuple(
         CustomRBACRole(

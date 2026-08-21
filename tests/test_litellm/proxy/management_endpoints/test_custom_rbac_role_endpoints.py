@@ -32,10 +32,12 @@ class _FakeTable:
         self.deleted: list[str] = []
 
     async def find_unique(self, where):
+        assert type(where) is dict, "prisma only serializes plain dicts"
         row = self.rows.get(where["role_name"])
         return None if row is None else _FakeRecord(row)
 
     async def find_many(self, order):
+        assert type(order) is dict, "prisma only serializes plain dicts"
         return [_FakeRecord(row) for row in self.rows.values()]
 
     async def create(self, data):

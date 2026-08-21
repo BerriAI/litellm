@@ -96,7 +96,10 @@ async def _reject_unknown_inherits(
         return
     known: Final = (
         frozenset(role.role_name for role in get_config_custom_rbac_roles())
-        | frozenset(str(record.dict()["role_name"]) for record in await table.find_many(order=_ORDER_BY_ROLE_NAME))
+        | frozenset(
+            str(record.dict()["role_name"])
+            for record in await table.find_many(order=prisma_args(_ORDER_BY_ROLE_NAME))
+        )
         | frozenset((role_name,))
     )
     unknown: Final = tuple(parent for parent in inherits if parent not in known)
@@ -190,7 +193,7 @@ async def list_custom_roles(
         )
         for role in get_config_custom_rbac_roles()
     )
-    records: Final = await _role_table().find_many(order=_ORDER_BY_ROLE_NAME)
+    records: Final = await _role_table().find_many(order=prisma_args(_ORDER_BY_ROLE_NAME))
     return CustomRBACRoleListResponse(roles=config_roles + tuple(_to_response(record) for record in records))
 
 

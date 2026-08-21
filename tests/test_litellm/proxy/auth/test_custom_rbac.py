@@ -166,6 +166,7 @@ class _FakeTable:
         self.reads = 0
 
     async def find_many(self, order):
+        assert type(order) is dict, "prisma only serializes plain dicts"
         self.reads += 1
         if self._fail:
             raise RuntimeError("db down")
@@ -227,6 +228,19 @@ class TestEngineLoading:
             after_failure = await get_active_custom_rbac_engine()
 
         assert after_failure is engine
+
+    @pytest.mark.asyncio
+    async def test_db_failure_without_cache_still_serves_config_roles(self):
+        settings = {_CONFIG_KEY: [{"role_name": "cfg-role", "allowed_routes": ["/key/info"]}]}
+        with (
+            patch("litellm.proxy.proxy_server.general_settings", settings),
+            patch(_TABLE_PATH, return_value=_FakeTable(records=(), fail=True)),
+        ):
+            engine = await get_active_custom_rbac_engine()
+
+        assert engine is not None
+        assert engine.is_route_allowed(role_name="cfg-role", route="/key/info") is True
+        assert engine.is_route_allowed(role_name="cfg-role", route="/key/generate") is False
 
     @pytest.mark.asyncio
     async def test_no_roles_means_no_engine(self):
