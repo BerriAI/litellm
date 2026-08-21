@@ -2315,7 +2315,7 @@ def exception_type(
                     exception_provider=exception_provider,
                     extra_information=extra_information,
                 )
-            elif custom_llm_provider == "bedrock":
+            elif custom_llm_provider in ("bedrock", "bedrock_mantle"):
                 _map_bedrock_exception(
                     model=model,
                     original_exception=mappable_exception,
