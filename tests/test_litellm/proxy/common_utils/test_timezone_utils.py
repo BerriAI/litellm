@@ -130,16 +130,16 @@ def test_parse_budget_reset_time_unset_defaults_to_midnight():
 
 
 def test_parse_budget_reset_time_invalid_string_raises():
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="hour 'HH:MM' or 'HH:MM:SS' string, e\\.g\\."):
         parse_budget_reset_time("25:00")
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="Invalid budget_reset_time 'noon'; expected a"):
         parse_budget_reset_time("noon")
 
 
 def test_parse_budget_reset_time_non_string_raises():
     # Unquoted "12:00" in YAML parses to the int 720; it must fail loudly,
     # not silently fall back to midnight.
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="hour 'HH:MM' string, e\\.g\\."):
         parse_budget_reset_time(720)
 
 

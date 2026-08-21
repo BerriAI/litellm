@@ -167,7 +167,7 @@ class TestRecraftImageEditTransformation:
         mock_response.status_code = 500
         mock_response.headers = {}
 
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(Exception, match='Error transforming image edit response: Invalid JSON: line') as exc_info:
             self.config.transform_image_edit_response(
                 model=self.model,
                 raw_response=mock_response,

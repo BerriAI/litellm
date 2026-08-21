@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import CompareUI from "./CompareUI";
@@ -138,14 +138,14 @@ describe("CompareUI", () => {
     }
 
     await waitFor(() => {
-      expect(queryByTestId("has-attachment")).toBeInTheDocument();
+      expect(getByTestId("has-attachment")).toBeInTheDocument();
     });
 
     const textarea = getByTestId("message-textarea");
-    await user.type(textarea, "Describe this image");
+    fireEvent.change(textarea, { target: { value: "Describe this image" } });
 
     const sendButton = getByTestId("send-button");
-    expect(sendButton).not.toBeDisabled();
+    expect(sendButton).toBeEnabled();
     await user.click(sendButton);
 
     await waitFor(() => {

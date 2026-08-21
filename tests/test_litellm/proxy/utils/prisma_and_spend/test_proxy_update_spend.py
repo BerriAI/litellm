@@ -83,8 +83,8 @@ async def test_update_end_user_spend_retries_on_connect_error(
     mock_prisma_client: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """``DB_RETRY_SAFE_ERROR_TYPES`` (ConnectError, statements provably never
-    sent) retries with backoff; once retries are exhausted the original
-    exception bubbles up via ``_raise_failed_update_spend_exception``.
+    sent) retries with jittered backoff; once retries are exhausted the
+    original exception bubbles up via ``_raise_failed_update_spend_exception``.
     """
     import httpx
     import litellm.proxy.utils as utils_mod
@@ -107,7 +107,8 @@ async def test_update_end_user_spend_retries_on_connect_error(
             proxy_logging_obj=proxy_logging,
             end_user_list_transactions={"u": 1.0},
         )
-    assert sleeps == [1.0]
+    assert len(sleeps) == 1
+    assert 1.0 <= sleeps[0] <= 2.0
 
 
 @pytest.mark.asyncio
@@ -147,6 +148,79 @@ async def test_update_end_user_spend_non_connection_error_raises_immediately(
             proxy_logging_obj=proxy_logging,
             end_user_list_transactions={"u": 1.0},
         )
+
+
+def _end_user_deadlock_error() -> Exception:
+    from prisma.errors import RawQueryError
+
+    return RawQueryError(data={"user_facing_error": {"error_code": "P2034", "meta": {"table": "LiteLLM_EndUserTable"}}})
+
+
+def _failing_tx(error: Exception) -> Any:
+    tx = MagicMock()
+    tx.__aenter__ = AsyncMock(side_effect=error)
+    tx.__aexit__ = AsyncMock(return_value=False)
+    return tx
+
+
+@pytest.mark.asyncio
+async def test_update_end_user_spend_retries_on_deadlock_then_commits(
+    mock_prisma_client: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression for #27989: a Postgres deadlock (P2034/40P01) on the end-user
+    spend batch is retried with jittered backoff and the increments land,
+    instead of raising immediately and dropping the flushed spend."""
+    sleeps: list[float] = []
+
+    async def _fake_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+
+    monkeypatch.setattr(asyncio, "sleep", _fake_sleep)
+
+    batcher = MagicMock()
+    batcher.litellm_endusertable.upsert = MagicMock()
+    transaction = MagicMock()
+    transaction.batch_ = lambda: _AsyncCM(batcher)
+    mock_prisma_client.db.tx = MagicMock(side_effect=[_failing_tx(_end_user_deadlock_error()), _AsyncCM(transaction)])
+
+    proxy_logging = MagicMock()
+    proxy_logging.failure_handler = AsyncMock()
+
+    await ProxyUpdateSpend.update_end_user_spend(
+        n_retry_times=3,
+        prisma_client=mock_prisma_client,
+        proxy_logging_obj=proxy_logging,
+        end_user_list_transactions={"end-user-1": 0.25},
+    )
+
+    assert mock_prisma_client.db.tx.call_count == 2
+    batcher.litellm_endusertable.upsert.assert_called_once()
+    assert batcher.litellm_endusertable.upsert.call_args.kwargs["where"] == {"user_id": "end-user-1"}
+    assert len(sleeps) == 1
+    assert 1.0 <= sleeps[0] <= 2.0
+    proxy_logging.failure_handler.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_update_end_user_spend_raises_after_exhausting_deadlock_retries(
+    mock_prisma_client: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from prisma.errors import RawQueryError
+
+    monkeypatch.setattr(asyncio, "sleep", AsyncMock(return_value=None))
+    mock_prisma_client.db.tx = MagicMock(side_effect=lambda timeout: _failing_tx(_end_user_deadlock_error()))
+    proxy_logging = MagicMock()
+    proxy_logging.failure_handler = AsyncMock()
+
+    with pytest.raises(RawQueryError):
+        await ProxyUpdateSpend.update_end_user_spend(
+            n_retry_times=2,
+            prisma_client=mock_prisma_client,
+            proxy_logging_obj=proxy_logging,
+            end_user_list_transactions={"end-user-1": 0.25},
+        )
+
+    assert mock_prisma_client.db.tx.call_count == 3
 
 
 @pytest.mark.asyncio
@@ -487,7 +561,7 @@ async def test_update_spend_logs_does_not_requeue_non_transport_failures(
     proxy_logging.failure_handler = AsyncMock()
     mock_prisma_client.spend_log_transactions = []
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="bad payload"):
         await ProxyUpdateSpend.update_spend_logs(
             n_retry_times=1,
             prisma_client=mock_prisma_client,

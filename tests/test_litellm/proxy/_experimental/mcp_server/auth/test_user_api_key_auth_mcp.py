@@ -8185,7 +8185,7 @@ class TestGetUserObjectPermission:
                 return_value=None,
             ),
         ):
-            with pytest.raises(ValueError):
+            with pytest.raises(ValueError, match="user 'human-dangling' names object_permission_id"):
                 await MCPRequestHandler._get_user_object_permission(auth)
 
     async def test_no_user_id_places_no_ceiling(self):

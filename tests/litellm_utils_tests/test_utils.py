@@ -1334,7 +1334,7 @@ def test_validate_chat_completion_user_messages(messages, expected_bool):
         validate_chat_completion_user_messages(messages=messages)
     else:
         ## Invalid message
-        with pytest.raises(Exception):
+        with pytest.raises(Exception, match="Invalid user message at index 0"):
             validate_chat_completion_user_messages(messages=messages)
 
 
@@ -1354,7 +1354,7 @@ def test_validate_chat_completion_tool_choice(tool_choice, expected_bool):
     if expected_bool:
         validate_chat_completion_tool_choice(tool_choice=tool_choice)
     else:
-        with pytest.raises(Exception):
+        with pytest.raises(Exception, match="Invalid tool choice"):
             validate_chat_completion_tool_choice(tool_choice=tool_choice)
 
 
@@ -2147,7 +2147,7 @@ def test_validate_user_messages_invalid_content_type():
 
     messages = [{"content": [{"type": "invalid_type", "text": "Hello"}]}]
 
-    with pytest.raises(Exception) as e:
+    with pytest.raises(Exception, match='Please ensure all messages are valid OpenAI chat completion') as e:
         validate_chat_completion_user_messages(messages)
 
     assert "Invalid message" in str(e)
