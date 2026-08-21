@@ -573,6 +573,41 @@ class TestOpenAIFiles:
         )
 
     @pytest.mark.covers(
+        "llm.files.openai.list_isolation.nonstream.works",
+        exercised_on=["files"],
+    )
+    def test_list_page_cursors_address_only_the_callers_own_files(
+        self, client: BatchClient, resources: ResourceManager
+    ) -> None:
+        """Pins GitHub issue #36087: a list page's pagination cursors must address
+        rows in that page.
+
+        The proxy fronts one shared provider account, so the upstream page is the
+        whole organization's. The gateway narrows `data` to the files the caller
+        owns, and `first_id` / `last_id` have to be narrowed with it: left as the
+        upstream org's, they hand any caller raw provider file ids belonging to
+        other tenants, which is the handle the file routes accept.
+        """
+        key = resources.key(user_id=f"e2e-file-list-{unique_marker()}")
+
+        listed = unwrap(client.list_files(key=key))
+
+        expected_first = listed.data[0].id if listed.data else None
+        expected_last = listed.data[-1].id if listed.data else None
+        assert listed.first_id == expected_first, (
+            f"first_id {listed.first_id!r} is not the first row this caller can see "
+            f"({expected_first!r}); the page leaked another caller's file id"
+        )
+        assert listed.last_id == expected_last, (
+            f"last_id {listed.last_id!r} is not the last row this caller can see "
+            f"({expected_last!r}); the page leaked another caller's file id"
+        )
+        assert listed.has_more is not True, (
+            "the page advertises another page, but the proxy never forwards a cursor "
+            "upstream, so following it re-serves this same page forever"
+        )
+
+    @pytest.mark.covers(
         "llm.files.openai.retrieve.nonstream.works",
         exercised_on=["files"],
     )
