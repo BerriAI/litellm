@@ -3459,7 +3459,7 @@ def test_record_partial_usage_for_failure_counts_prompt_tokens_from_request_mess
     assert stashed.prompt_tokens > 0
 
 
-def test_record_partial_usage_for_failure_zero_fills_missing_cache_fields():
+def test_record_partial_usage_for_failure_backfills_missing_cache_fields():
     wrapper, logging_obj = _wrapper_with_partial_chunks(chunk_model="gpt-4o-mini")
 
     wrapper._record_partial_usage_for_failure()
@@ -3469,6 +3469,24 @@ def test_record_partial_usage_for_failure_zero_fills_missing_cache_fields():
     assert stashed.cache_read_input_tokens == 0
     assert stashed.prompt_tokens_details is not None
     assert stashed.prompt_tokens_details.cached_tokens == 0
+
+
+def test_record_partial_usage_for_failure_carries_up_openai_style_cached_tokens():
+    recovered = Usage(
+        prompt_tokens=1000,
+        completion_tokens=10,
+        total_tokens=1010,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=500),
+    )
+    wrapper, logging_obj = _wrapper_with_partial_chunks(
+        chunk_model="gpt-4o-mini", usage=recovered
+    )
+
+    wrapper._record_partial_usage_for_failure()
+
+    stashed = logging_obj.model_call_details["combined_usage_object"]
+    assert stashed.cache_read_input_tokens == 500
+    assert stashed.cache_creation_input_tokens == 0
 
 
 def test_record_partial_usage_for_failure_keeps_cache_values_recovered_from_chunks():
