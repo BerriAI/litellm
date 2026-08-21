@@ -286,6 +286,7 @@ example files.
 cd terraform/litellm/gcp/examples/default
 cp terraform.tfvars.example terraform.tfvars
 # Edit: project, region, tenant, env, image_registry, proxy_config, gateway_extra_secrets.
+# If your org enforces Domain Restricted Sharing (DRS), also set invoker_iam_disabled = true.
 
 terraform init
 terraform apply
@@ -341,6 +342,23 @@ DNS propagation completes — `gcloud compute ssl-certificates describe
 Set `allow_plaintext_lb = true` and leave `lb_domains = []`. Without the
 flag, plan fails with a clear error pointing at the precondition.
 Intended for short-lived trial / dev stacks only.
+
+## Domain Restricted Sharing (DRS)
+
+Some organizations enforce Domain Restricted Sharing policies that reject
+`allUsers` IAM members on Cloud Run. This module supports those environments
+through the `invoker_iam_disabled` input.
+
+- `invoker_iam_disabled = true`: disables the Cloud Run invoker IAM check on
+  gateway/backend/ui services and skips the `allUsers` `run.invoker` bindings.
+- `invoker_iam_disabled = false` (or unset): implements `allUsers` invoker
+  bindings so the load balancer can call the Cloud Run services.
+
+Example for DRS-constrained environments:
+
+```hcl
+invoker_iam_disabled = true
+```
 
 ## Using as a module
 

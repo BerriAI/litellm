@@ -155,6 +155,13 @@ variable "migrations_image" {
   default     = ""
 }
 
+# ---------- Load balancer auth mechanism ----------
+variable "invoker_iam_disabled" {
+  description = "Disable the Cloud Run invoker IAM check. When true, the allUsers grant is skipped. Enable if the environment implements the DomainRestrictedSharing policy."
+  type        = bool
+  default     = null
+}
+
 # ---------- Service sizing ----------
 
 variable "gateway_cpu" {
