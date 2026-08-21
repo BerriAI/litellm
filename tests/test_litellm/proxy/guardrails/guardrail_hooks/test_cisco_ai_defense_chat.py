@@ -1834,6 +1834,31 @@ class TestCiscoAIDefenseToolDefinitionBypass:
         )
 
     @pytest.mark.asyncio
+    async def test_pre_call_sends_tool_definitions_as_final_tool_message(self):
+        g = _make_guardrail(event_hook="pre_call")
+        data = self._tools_request("Fetch weather data")
+        data["messages"] = [
+            {"role": "system", "content": "Follow the security policy."},
+            {"role": "user", "content": "First question"},
+            {"role": "assistant", "content": "First answer"},
+            {"role": "user", "content": "Current question"},
+        ]
+        post_mock = AsyncMock(return_value=_safe_response())
+
+        with _patch_inspection_post(g, post_mock):
+            await g.async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(),
+                cache=DualCache(),
+                data=data,
+                call_type="completion",
+            )
+
+        sent_messages = post_mock.call_args.kwargs["json"]["messages"]
+        assert sent_messages[:-1] == data["messages"]
+        assert sent_messages[-1]["role"] == "tool"
+        assert "get_weather" in sent_messages[-1]["content"]
+
+    @pytest.mark.asyncio
     async def test_pre_call_scans_legacy_functions_definitions(self):
         g = _make_guardrail(event_hook="pre_call")
         data = {
@@ -1884,7 +1909,7 @@ class TestCiscoAIDefenseToolDefinitionBypass:
         cisco_resp = _redact_response(
             sanitized_messages=[
                 {"role": "user", "content": "what's the weather?"},
-                {"role": "system", "content": "[REDACTED] tool description"},
+                {"role": "tool", "content": "[REDACTED] tool description"},
             ]
         )
 
