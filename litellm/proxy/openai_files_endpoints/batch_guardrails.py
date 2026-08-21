@@ -322,7 +322,9 @@ def _custom_id_of(payload: Mapping[str, object]) -> str | None:
     """
     custom_id: Final = payload.get("custom_id")
     if isinstance(custom_id, str):
-        return custom_id
+        # A lone surrogate parses out of the file but cannot be encoded back out, and this value
+        # is echoed in the response, so rendering it would fail the whole upload with a 500.
+        return custom_id.encode("utf-8", "replace").decode("utf-8")
     return str(custom_id) if isinstance(custom_id, (int, float)) and not isinstance(custom_id, bool) else None
 
 

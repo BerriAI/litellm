@@ -413,6 +413,21 @@ def test_load_balancing_finds_the_routing_record_in_any_file_the_upload_accepts(
 
 
 @pytest.mark.parametrize(
+    "custom_id, expected",
+    [("req-1", "req-1"), ("caf\u00e9-42", "caf\u00e9-42"), ("a\ud800b", "a?b")],
+    ids=["ascii", "unicode", "lone_surrogate"],
+)
+def test_a_reported_custom_id_can_always_be_rendered(custom_id, expected):
+    """The id is echoed in the response; one that cannot be encoded back out would 500 the upload."""
+    from litellm.proxy.openai_files_endpoints.batch_guardrails import _custom_id_of
+
+    rendered = _custom_id_of({"custom_id": custom_id})
+
+    assert rendered == expected
+    assert json.dumps({"custom_id": rendered}, ensure_ascii=False).encode("utf-8")
+
+
+@pytest.mark.parametrize(
     "body",
     ["summarize this", ["a"], None, 12345],
     ids=["string", "list", "null", "number"],
