@@ -231,12 +231,14 @@ def render_meta_style_mutant(
     return "\n".join(out)
 
 
-UNRESOLVED_STATUSES: Final = ("no_tests", "skipped", "suspicious", "timeout", "segfault")
+RESOLVED_KEYS: Final = frozenset({"killed", "survived", "total"})
 
 
 def unresolved_counts(stats: dict) -> dict[str, int]:
-    """Statuses that mean a mutant was never actually put in front of the tests."""
-    return {k: stats.get(k, 0) for k in UNRESOLVED_STATUSES if stats.get(k, 0)}
+    """Every non-zero count that is neither a kill nor a survivor means a mutant did not
+    reach the tests. Reading it as "anything else" rather than as a list of known statuses
+    keeps a status this reporter has never met from passing as a clean sweep."""
+    return {k: v for k, v in sorted(stats.items()) if k not in RESOLVED_KEYS and isinstance(v, int) and v > 0}
 
 
 def clean_sweep_is_provable(stats: dict | None) -> bool:
@@ -287,13 +289,8 @@ def render(config: dict, results: MutmutResults, stats: dict | None) -> str:
     out.append("## Summary")
     out.append("")
     if stats:
-        total = stats.get("total", 0) or sum(
-            stats.get(k, 0)
-            for k in (
-                "killed",
-                "survived",
-                *UNRESOLVED_STATUSES,
-            )
+        total = stats.get("total", 0) or (
+            stats.get("killed", 0) + stats.get("survived", 0) + sum(unresolved_counts(stats).values())
         )
         killed = stats.get("killed", 0)
         survived = stats.get("survived", 0)

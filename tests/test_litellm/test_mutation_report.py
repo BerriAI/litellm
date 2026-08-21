@@ -59,6 +59,18 @@ def test_mutants_that_never_reached_the_tests_are_not_a_clean_sweep():
     assert "1 timeout" in rendered
 
 
+def test_a_status_the_reporter_has_never_met_still_blocks_a_clean_sweep():
+    rendered = report.render(
+        _CONFIG,
+        report.MutmutResults(survivors=(), reported=0),
+        {"killed": 48, "survived": 0, "check_was_interrupted_by_user": 2},
+    )
+
+    assert "not a passing score" in rendered
+    assert "caught every mutation" not in rendered
+    assert "2 check was interrupted by user" in rendered
+
+
 def test_no_survivors_without_a_kill_is_not_a_clean_sweep():
     rendered = report.render(
         _CONFIG, report.MutmutResults(survivors=(), reported=48), {"killed": 0, "survived": 0}
