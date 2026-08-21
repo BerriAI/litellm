@@ -2468,10 +2468,12 @@ async def _delete_cache_key_object(
     """
     Evict a cached key object after its row has been written.
 
-    Eviction is best-effort, matching `delete_cache_team_object`. Every caller runs this after a
+    Eviction is best-effort, matching `delete_cache_team_object`. Most callers run this after a
     committed write (`/key/update`, `/key/bulk_update`, `/key/regenerate`, `/key/{block,unblock}`,
     the SCIM deactivation sweep), so raising here turned an unreachable Redis into a 400 for an
-    update that had already landed, which reads to the caller as "nothing was written".
+    update that had already landed, which reads to the caller as "nothing was written". The one
+    read-path caller, the expired-key branch of `user_api_key_auth`, wants the same treatment for
+    the same reason: an unreachable Redis must not replace that request's 401 with a 400.
 
     The two caches are separate `DualCache` instances, so each is evicted under its own guard: a
     backend that is down for one must not skip the other. Retrying in-request would not help, since
