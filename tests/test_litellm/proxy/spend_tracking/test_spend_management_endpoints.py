@@ -3037,6 +3037,8 @@ async def test_view_spend_logs_summarize_parameter(client, monkeypatch):
         async def query_raw(self, sql_query, *params):
             if "GROUP BY" not in sql_query:
                 return mock_spend_logs
+            assert len(params) == 3
+            assert params[-1] == spend_management_endpoints.LEGACY_SPEND_LOGS_MAX_SUMMARY_GROUPS + 1
             yesterday = datetime.datetime.now(timezone.utc) - timedelta(days=1)
             return [
                 {
@@ -3316,8 +3318,9 @@ async def test_view_spend_logs_with_date_range_summarized(client, monkeypatch):
         async def query_raw(self, sql_query, *params):
             assert "date_trunc('day', \"startTime\")" in sql_query
             assert "GROUP BY" in sql_query
-            assert len(params) == 2
-            assert all(isinstance(value, datetime) for value in params)
+            assert len(params) == 3
+            assert all(isinstance(value, datetime) for value in params[:2])
+            assert params[-1] == spend_management_endpoints.LEGACY_SPEND_LOGS_MAX_SUMMARY_GROUPS + 1
             return [
                 {
                     "spend_date": (datetime.now(timezone.utc) - timedelta(days=1)).date(),
@@ -4048,6 +4051,7 @@ def _assert_legacy_list_query(mock_prisma, expected_where, expected_take, expect
     query_args = mock_prisma.db.query_raw.await_args.args
     assert _reconstruct_ui_where_from_sql(query_args[0], query_args[1:]) == expected_where
     assert query_args[-2:] == (expected_take, expected_skip)
+    assert 'ORDER BY "startTime" DESC, request_id DESC' in query_args[0]
     assert "messages" not in query_args[0]
     assert "response" not in query_args[0]
     assert "proxy_server_request" not in query_args[0]
@@ -4087,6 +4091,9 @@ def test_legacy_spend_logs_list_query_omits_heavy_payload_columns(
     response, mock_prisma = legacy_spend_logs_request(spend_logs)
 
     assert response.status_code == 200
+    assert response.json()[0]["messages"] is None
+    assert response.json()[0]["response"] is None
+    assert response.json()[0]["proxy_server_request"] is None
     mock_prisma.db.query_raw.assert_awaited_once()
     sql_query = mock_prisma.db.query_raw.await_args.args[0]
     assert "messages" not in sql_query
@@ -4233,6 +4240,128 @@ def test_legacy_spend_logs_summary_aggregates_by_day_in_database(
     assert "date_trunc('day', \"startTime\")" in sql_query
     assert "GROUP BY" in sql_query
     mock_prisma.db.group_by.assert_not_awaited()
+
+
+def test_legacy_spend_logs_summary_rejects_high_cardinality_groups(client, monkeypatch):
+    mock_prisma = _LegacySpendLogsPaginationPrismaClient([])
+    summary_row = {
+        "spend_date": datetime.date(2024, 1, 1),
+        "api_key": "key-a",
+        "user": "user-a",
+        "model": "model-a",
+        "spend": 1.0,
+    }
+    mock_prisma.db.query_raw.side_effect = None
+    mock_prisma.db.query_raw.return_value = [
+        {**summary_row, "model": f"model-{index}"}
+        for index in range(spend_management_endpoints.LEGACY_SPEND_LOGS_MAX_SUMMARY_GROUPS + 1)
+    ]
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+    )
+
+    try:
+        response = client.get(
+            "/spend/logs",
+            params={
+                "start_date": "2024-01-01",
+                "end_date": "2024-01-02",
+            },
+            headers={"Authorization": "Bearer sk-test"},
+        )
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+    assert response.status_code == 422
+    mock_prisma.db.query_raw.assert_awaited_once()
+    query_args = mock_prisma.db.query_raw.await_args.args
+    assert query_args[-1] == spend_management_endpoints.LEGACY_SPEND_LOGS_MAX_SUMMARY_GROUPS + 1
+    assert "LIMIT $3" in query_args[0]
+
+
+def test_legacy_spend_logs_summary_rejects_excessive_date_range(client, monkeypatch):
+    mock_prisma = _LegacySpendLogsPaginationPrismaClient([])
+    mock_prisma.db.query_raw.side_effect = RuntimeError("summary query must not run")
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+    )
+
+    try:
+        response = client.get(
+            "/spend/logs",
+            params={
+                "start_date": "2024-01-01",
+                "end_date": "2051-05-20",
+                "summarize": "true",
+            },
+            headers={"Authorization": "Bearer sk-test"},
+        )
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+    assert response.status_code == 422
+    mock_prisma.db.query_raw.assert_not_awaited()
+
+
+def test_legacy_spend_logs_summary_accepts_maximum_date_range(client, monkeypatch):
+    mock_prisma = _LegacySpendLogsPaginationPrismaClient([])
+    mock_prisma.db.query_raw.side_effect = None
+    mock_prisma.db.query_raw.return_value = []
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+    )
+    start_date = datetime.date(2024, 1, 1)
+    end_date = start_date + datetime.timedelta(
+        days=spend_management_endpoints.LEGACY_SPEND_LOGS_MAX_SUMMARY_DAYS - 1
+    )
+
+    try:
+        response = client.get(
+            "/spend/logs",
+            params={
+                "start_date": start_date.isoformat(),
+                "end_date": end_date.isoformat(),
+                "summarize": "true",
+            },
+            headers={"Authorization": "Bearer sk-test"},
+        )
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+    assert response.status_code == 200
+    assert response.json() == []
+    mock_prisma.db.query_raw.assert_awaited_once()
+
+
+def test_legacy_spend_logs_unsummarized_range_remains_bounded_past_summary_day_cap(
+    client, monkeypatch
+):
+    mock_prisma = _LegacySpendLogsPaginationPrismaClient([])
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+    )
+
+    try:
+        response = client.get(
+            "/spend/logs",
+            params={
+                "start_date": "2024-01-01",
+                "end_date": "2025-01-02",
+                "summarize": "false",
+                "page_size": 1,
+            },
+            headers={"Authorization": "Bearer sk-test"},
+        )
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+    assert response.status_code == 200
+    assert isinstance(response.json(), list)
+    assert mock_prisma.db.query_raw.await_args.args[-2:] == (1, 0)
 
 
 @pytest.mark.asyncio

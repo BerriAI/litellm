@@ -42,6 +42,8 @@ router: Final = APIRouter()
 SPEND_LOGS_PAGINATION_COUNT_CAP: Final = 10000
 LEGACY_SPEND_LOGS_MAX_PAGE_SIZE: Final = 1000
 LEGACY_SPEND_LOGS_MAX_SKIP: Final = SPEND_LOGS_PAGINATION_COUNT_CAP
+LEGACY_SPEND_LOGS_MAX_SUMMARY_GROUPS: Final = SPEND_LOGS_PAGINATION_COUNT_CAP
+LEGACY_SPEND_LOGS_MAX_SUMMARY_DAYS: Final = SPEND_LOGS_PAGINATION_COUNT_CAP
 
 _RowT = TypeVar("_RowT")
 
@@ -294,9 +296,20 @@ async def _find_legacy_spend_log_page(
         take,
         skip,
     )
-    _hydrate_spend_log_metadata(rows)
-    _hydrate_spend_log_request_tags(rows)
-    return rows
+    response_rows: Final = tuple(
+        {
+            **row,
+            "messages": None,
+            "response": None,
+            "proxy_server_request": None,
+        }
+        if isinstance(row, dict)
+        else row
+        for row in rows
+    )
+    _hydrate_spend_log_metadata(response_rows)
+    _hydrate_spend_log_request_tags(response_rows)
+    return response_rows
 
 
 async def _summarize_legacy_spend_logs(
@@ -326,8 +339,14 @@ async def _summarize_legacy_spend_logs(
         WHERE {where_sql}
         GROUP BY spend_date, api_key, "user", model
         ORDER BY spend_date ASC, api_key ASC, "user" ASC, model ASC
+        LIMIT ${len(query_params) + 1}
     """
-    rows: Final[Sequence[_LegacySpendSummaryRow]] = await _query_raw(prisma_client, sql_query, *query_params)
+    rows: Final[Sequence[_LegacySpendSummaryRow]] = await _query_raw(
+        prisma_client,
+        sql_query,
+        *query_params,
+        LEGACY_SPEND_LOGS_MAX_SUMMARY_GROUPS + 1,
+    )
     return rows
 
 
@@ -3128,6 +3147,15 @@ async def view_spend_logs(
             start_date_obj: Final = datetime.strptime(start_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
             end_date_obj: Final = datetime.strptime(end_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
 
+            summary_day_count: Final = (end_date_obj.date() - start_date_obj.date()).days + 1
+            if summarize and summary_day_count > LEGACY_SPEND_LOGS_MAX_SUMMARY_DAYS:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                    detail=(
+                        f"summarize=true date ranges must be no more than {LEGACY_SPEND_LOGS_MAX_SUMMARY_DAYS} days"
+                    ),
+                )
+
             # Convert to ISO format strings for Prisma
             start_date_iso: Final = start_date_obj.isoformat()
             end_date_iso: Final = end_date_obj.isoformat()
@@ -3180,6 +3208,14 @@ async def view_spend_logs(
                 user_id=effective_user_id,
                 request_id=effective_request_id,
             )
+
+            if len(response) > LEGACY_SPEND_LOGS_MAX_SUMMARY_GROUPS:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                    detail=(
+                        "summarized spend logs exceed the server result limit; narrow the date range or add a filter"
+                    ),
+                )
 
             if len(response) > 0:
                 daily_spend: Final[dict[date, float]] = {}  # mutable-ok: aggregate database groups by day
