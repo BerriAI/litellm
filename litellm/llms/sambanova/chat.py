@@ -26,9 +26,7 @@ def _flatten_text_only_messages(
     """
     for message in messages:
         content = message.get("content")
-        if isinstance(content, list) and all(
-            isinstance(part, dict) and part.get("type") == "text" for part in content
-        ):
+        if isinstance(content, list) and all(isinstance(part, dict) and part.get("type") == "text" for part in content):
             texts = convert_content_list_to_str(message=message)
             if texts:
                 message["content"] = texts
