@@ -5224,3 +5224,57 @@ async def test_wrapper_async_fires_post_call_failure_deployment_hook_on_internal
 
     assert len(recorder.calls) == 1
     assert isinstance(recorder.calls[0][1], litellm.AuthenticationError)
+
+
+@pytest.mark.asyncio
+async def test_wrapper_async_does_not_fire_failure_hook_for_pre_call_budget_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression: a BudgetExceededError raised before any deployment call is attempted
+    (the [OPTIONAL] CHECK BUDGET gate) is not a deployment attempt failure and must not
+    reach async_post_call_failure_deployment_hook."""
+    recorder = _RecordingDeploymentFailureLogger()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    monkeypatch.setattr(litellm, "max_budget", 0.0001)
+    monkeypatch.setattr(litellm, "_current_cost", 100.0)
+
+    with pytest.raises(litellm.BudgetExceededError):
+        await litellm.acompletion(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": "hi"}],
+            mock_response="should never be reached",
+        )
+
+    assert recorder.calls == []
+
+
+@pytest.mark.asyncio
+async def test_wrapper_async_does_not_fire_failure_hook_for_post_success_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression: an error raised after the deployment call already succeeded (e.g. inside
+    async_post_call_success_deployment_hook or post_call_processing) is not a deployment
+    attempt failure and must not reach async_post_call_failure_deployment_hook."""
+
+    class ExplodingSuccessLogger(CustomLogger):
+        def __init__(self) -> None:
+            super().__init__()
+            self.failure_calls: list[Exception] = []
+
+        async def async_post_call_success_deployment_hook(self, request_data, response, call_type):
+            raise RuntimeError("boom in success hook, model call itself succeeded")
+
+        async def async_post_call_failure_deployment_hook(self, request_data, exception, call_type, fallback_depth=None):
+            self.failure_calls.append(exception)
+
+    exploding_logger = ExplodingSuccessLogger()
+    monkeypatch.setattr(litellm, "callbacks", [exploding_logger])
+
+    with pytest.raises(RuntimeError, match="boom in success hook"):
+        await litellm.acompletion(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": "hi"}],
+            mock_response="this call succeeds",
+        )
+
+    assert exploding_logger.failure_calls == []
