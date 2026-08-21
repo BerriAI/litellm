@@ -66,6 +66,9 @@ class BatchObject(BaseModel):
 class BatchList(BaseModel):
     object: str | None = None
     data: list[BatchObject] = []
+    has_more: bool | None = None
+    first_id: str | None = None
+    last_id: str | None = None
 
 
 class FileDeleteResponse(BaseModel):
@@ -83,6 +86,11 @@ class BatchCreateBody(BaseModel):
 
 class ModelQuery(BaseModel):
     model: str | None = None
+
+
+class BatchListQuery(BaseModel):
+    limit: int | None = None
+    after: str | None = None
 
 
 def is_model_access_denied(resp: StreamingResponse) -> bool:
@@ -175,12 +183,17 @@ class BatchClient:
         )
 
     def list_batches(
-        self, *, key: str, provider: str | None = None
+        self,
+        *,
+        key: str,
+        provider: str | None = None,
+        limit: int | None = None,
+        after: str | None = None,
     ) -> Result[BatchList]:
         return self.proxy.transport.get(
             _batches_path(provider),
             headers=self.proxy.transport.bearer(key),
-            params=NoBody(),
+            params=BatchListQuery(limit=limit, after=after),
             response_type=BatchList,
         )
 
