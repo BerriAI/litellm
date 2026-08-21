@@ -1742,6 +1742,41 @@ def test_azure_ai_cache_cost_calculation():
     ), f"Output cost mismatch: got {output_cost}, expected {expected_output_cost}"
 
 
+@pytest.mark.parametrize("model_name", ["gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"])
+def test_azure_gpt_5_6_cache_creation_pricing_matches_openai(model_name):
+    """
+    Regression test for azure/gpt-5.6* price map entries missing
+    cache_creation_input_token_cost, which billed Azure cache writes at zero (#37631).
+    """
+    from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
+
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    azure_model_name = f"azure/{model_name}"
+    assert (
+        litellm.model_cost[azure_model_name]["cache_creation_input_token_cost"] is not None
+    ), f"{azure_model_name} is missing cache_creation_input_token_cost"
+
+    details = PromptTokensDetailsWrapper(cached_tokens=0)
+    details.cache_write_tokens = 2216
+    usage = Usage(
+        prompt_tokens=2219,
+        completion_tokens=5,
+        total_tokens=2224,
+        prompt_tokens_details=details,
+    )
+
+    openai_input_cost, _ = generic_cost_per_token(
+        model=model_name, usage=usage, custom_llm_provider="openai"
+    )
+    azure_input_cost, _ = generic_cost_per_token(
+        model=azure_model_name, usage=usage, custom_llm_provider="azure"
+    )
+
+    assert azure_input_cost == pytest.approx(openai_input_cost)
+
+
 def test_vertex_regional_deployment_costs_uplift_over_global(monkeypatch):
     """
     Regression for https://github.com/BerriAI/litellm/issues/34393: two Vertex
