@@ -21,11 +21,11 @@ class TestStandardizedResetTime(unittest.TestCase):
         daily_result = get_next_standardized_reset_time("1d", base_time, "UTC")
         self.assertEqual(daily_result, daily_expected)
 
-        # Weekly reset (7d) - should reset on next Monday
+        # Weekly reset (7d) - should reset on next Saturday
         wednesday = datetime(2023, 5, 17, 15, 45, 0, tzinfo=timezone.utc)  # A Wednesday
         weekly_expected = datetime(
-            2023, 5, 22, 0, 0, 0, tzinfo=timezone.utc
-        )  # Next Monday
+            2023, 5, 20, 0, 0, 0, tzinfo=timezone.utc
+        )  # Next Saturday
         weekly_result = get_next_standardized_reset_time("7d", wednesday, "UTC")
         self.assertEqual(weekly_result, weekly_expected)
 
@@ -41,16 +41,16 @@ class TestStandardizedResetTime(unittest.TestCase):
 
     def test_week_based_resets(self):
         """Test week-based reset durations (1w, 2w).
-        1w snaps to the next Monday at midnight (same as 7d).
+        1w snaps to the next Saturday at midnight (same as 7d).
         2w advances exactly 14 days from the current date at midnight.
         """
-        # 1w from a Wednesday -> next Monday (5 days away, not 7)
+        # 1w from a Wednesday -> next Saturday (3 days away, not 7)
         wednesday = datetime(2023, 5, 17, 15, 45, 0, tzinfo=timezone.utc)
-        weekly_expected = datetime(2023, 5, 22, 0, 0, 0, tzinfo=timezone.utc)
+        weekly_expected = datetime(2023, 5, 20, 0, 0, 0, tzinfo=timezone.utc)
         weekly_result = get_next_standardized_reset_time("1w", wednesday, "UTC")
         self.assertEqual(weekly_result, weekly_expected)
 
-        # 2w from a Wednesday -> exactly 14 days out (lands on a Wednesday, not Monday)
+        # 2w from a Wednesday -> exactly 14 days out (lands on a Wednesday, not Saturday)
         base_time = datetime(2023, 5, 17, 10, 30, 0, tzinfo=timezone.utc)
         two_week_expected = datetime(2023, 5, 31, 0, 0, 0, tzinfo=timezone.utc)
         two_week_result = get_next_standardized_reset_time("2w", base_time, "UTC")
@@ -249,26 +249,26 @@ class TestResetTimeOfDay(unittest.TestCase):
         self.assertEqual(jerusalem.hour, 12)
         self.assertEqual(jerusalem.minute, 0)
 
-    def test_weekly_reset_lands_on_monday_at_offset(self):
+    def test_weekly_reset_lands_on_saturday_at_offset(self):
         wednesday = datetime(2023, 5, 17, 15, 45, 0, tzinfo=timezone.utc)
         result = get_next_standardized_reset_time(
             "7d", wednesday, "UTC", reset_time_of_day=time(12, 0)
         )
-        self.assertEqual(result, datetime(2023, 5, 22, 12, 0, 0, tzinfo=timezone.utc))
+        self.assertEqual(result, datetime(2023, 5, 20, 12, 0, 0, tzinfo=timezone.utc))
 
-    def test_weekly_reset_today_is_monday_before_offset_is_today(self):
-        monday_morning = datetime(2023, 5, 22, 9, 0, 0, tzinfo=timezone.utc)
+    def test_weekly_reset_today_is_saturday_before_offset_is_today(self):
+        saturday_morning = datetime(2023, 5, 27, 9, 0, 0, tzinfo=timezone.utc)
         result = get_next_standardized_reset_time(
-            "7d", monday_morning, "UTC", reset_time_of_day=time(12, 0)
+            "7d", saturday_morning, "UTC", reset_time_of_day=time(12, 0)
         )
-        self.assertEqual(result, datetime(2023, 5, 22, 12, 0, 0, tzinfo=timezone.utc))
+        self.assertEqual(result, datetime(2023, 5, 27, 12, 0, 0, tzinfo=timezone.utc))
 
-    def test_weekly_reset_today_is_monday_after_offset_is_next_week(self):
-        monday_afternoon = datetime(2023, 5, 22, 15, 0, 0, tzinfo=timezone.utc)
+    def test_weekly_reset_today_is_saturday_after_offset_is_next_week(self):
+        saturday_afternoon = datetime(2023, 5, 27, 15, 0, 0, tzinfo=timezone.utc)
         result = get_next_standardized_reset_time(
-            "7d", monday_afternoon, "UTC", reset_time_of_day=time(12, 0)
+            "7d", saturday_afternoon, "UTC", reset_time_of_day=time(12, 0)
         )
-        self.assertEqual(result, datetime(2023, 5, 29, 12, 0, 0, tzinfo=timezone.utc))
+        self.assertEqual(result, datetime(2023, 6, 3, 12, 0, 0, tzinfo=timezone.utc))
 
     def test_monthly_30d_lands_on_first_at_offset(self):
         now = datetime(2023, 5, 15, 10, 30, 0, tzinfo=timezone.utc)
@@ -340,7 +340,7 @@ class TestWordFormBudgetDurations(unittest.TestCase):
         )
         self.assertEqual(
             get_next_standardized_reset_time("weekly", base_time, "UTC"),
-            datetime(2023, 5, 22, 0, 0, 0, tzinfo=timezone.utc),
+            datetime(2023, 5, 20, 0, 0, 0, tzinfo=timezone.utc),
         )
         self.assertEqual(
             get_next_standardized_reset_time("monthly", base_time, "UTC"),

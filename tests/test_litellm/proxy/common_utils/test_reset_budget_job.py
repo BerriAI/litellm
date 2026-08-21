@@ -600,8 +600,8 @@ def test_budget_reset_at_written_is_calendar_aligned(
     assert (written.hour, written.minute, written.second) == (0, 0, 0)
 
 
-def test_budget_reset_at_written_for_7d_is_next_monday(reset_budget_job, mock_prisma_client):
-    """7d budgets advance to next Monday at midnight."""
+def test_budget_reset_at_written_for_7d_is_next_saturday(reset_budget_job, mock_prisma_client):
+    """7d budgets advance to next Saturday at midnight."""
     # 2023-06-14 is a Wednesday
     fixed_now = datetime(2023, 6, 14, 10, 30, 0, tzinfo=timezone.utc)
     mock_prisma_client.data["budget"] = [
@@ -611,8 +611,8 @@ def test_budget_reset_at_written_for_7d_is_next_monday(reset_budget_job, mock_pr
     _run_reset_at_fixed_now(reset_budget_job, fixed_now)
 
     written = _batch_writes(mock_prisma_client, "budget")[0]["data"]["budget_reset_at"]
-    assert (written.day, written.month) == (19, 6)
-    assert written.weekday() == 0
+    assert (written.day, written.month) == (17, 6)
+    assert written.weekday() == 5
     assert written.hour == 0
 
 

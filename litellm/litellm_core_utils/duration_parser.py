@@ -243,10 +243,10 @@ def _handle_day_reset(
 
     if value == 1:  # Daily reset at the configured time of day
         return _next_occurrence(base_midnight, reset_time_of_day, current_time, timedelta(days=1))
-    elif value == 7:  # Weekly reset on Monday at the configured time of day
-        days_until_monday: Final = (7 - current_time.weekday()) % 7
-        upcoming_monday: Final = base_midnight + timedelta(days=days_until_monday)
-        return _next_occurrence(upcoming_monday, reset_time_of_day, current_time, timedelta(days=7))
+    elif value == 7:  # Weekly reset on Saturday at the configured time of day
+        days_until_saturday: Final = (5 - current_time.weekday()) % 7
+        upcoming_saturday: Final = base_midnight + timedelta(days=days_until_saturday)
+        return _next_occurrence(upcoming_saturday, reset_time_of_day, current_time, timedelta(days=7))
     elif value == 30:  # Monthly reset on 1st at the configured time of day
         return _handle_month_reset(current_time, base_midnight, 1, reset_time_of_day)
     else:  # Custom day value - next interval is value days from the start of today

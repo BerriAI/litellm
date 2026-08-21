@@ -3657,7 +3657,7 @@ async def info_key_fn(
         - budget_duration: str | None - Budget reset period ("30d", "1h", etc.)
         - budget_reset_at: datetime | None - When the current budget window ends and spend is next
           reset to 0, not when it was last reset. Reset times snap to standard boundaries in the
-          configured timezone (30d and 1mo land on the 1st of the month, 7d on Monday, 1h on the
+          configured timezone (30d and 1mo land on the 1st of the month, 7d on Saturday, 1h on the
           hour), so subtracting budget_duration from it does not give the window's start
         - model_max_budget: dict - Per-model budgets, e.g. {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}
         - model_max_budget_usage: dict | None - Current-window spend per model, present only when
