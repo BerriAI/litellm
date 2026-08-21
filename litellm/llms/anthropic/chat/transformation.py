@@ -121,6 +121,16 @@ else:
 # response side.
 _ANTHROPIC_TOOL_NAME_INVALID_CHARS: Final = re.compile(r"[^a-zA-Z0-9_-]")
 _ANTHROPIC_TOOL_NAME_MAX_LEN: Final = 128
+
+_ENUM_TYPE_CHECKS: Final[dict[str, Any]] = {
+    "null": lambda v: v is None,
+    "boolean": lambda v: isinstance(v, bool),
+    "integer": lambda v: isinstance(v, int) and not isinstance(v, bool),
+    "number": lambda v: isinstance(v, (int, float)) and not isinstance(v, bool),
+    "string": lambda v: isinstance(v, str),
+    "array": lambda v: isinstance(v, list),
+    "object": lambda v: isinstance(v, dict),
+}
 # Single, internal-only key on ``litellm_params`` used to thread the per-
 # request reverse map (sanitized -> original) from request build to response
 # parsing. ``litellm_params`` is never serialized to a provider; ``optional_
@@ -592,6 +602,16 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 ]
             else:
                 result[key] = value
+
+        enum_values = result.get("enum")
+        declared_type = result.get("type")
+        if isinstance(enum_values, list) and declared_type is not None:
+            if isinstance(declared_type, list):
+                result.pop("type")
+            else:
+                check = _ENUM_TYPE_CHECKS.get(declared_type)
+                if check is not None and not all(check(v) for v in enum_values):
+                    result.pop("type")
 
         # Anthropic requires additionalProperties=false for object schemas
         # See: https://docs.anthropic.com/en/docs/build-with-claude/structured-outputs
