@@ -12,6 +12,7 @@ import os
 import random
 import time
 import traceback
+from collections.abc import Sequence
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, cast, overload
 
@@ -159,8 +160,8 @@ class DBSpendUpdateWriter:
         # Every team/org this request is attributed to, when
         # track_spend_across_all_user_teams is on. None keeps the historical
         # single-team/single-org behavior.
-        attributed_team_ids: list[str] | None = None,
-        attributed_org_ids: list[str] | None = None,
+        attributed_team_ids: Sequence[str] | None = None,
+        attributed_org_ids: Sequence[str] | None = None,
     ):
         from litellm.proxy.proxy_server import (
             disable_spend_logs,
@@ -431,8 +432,8 @@ class DBSpendUpdateWriter:
         prisma_client: PrismaClient | None,
         litellm_proxy_budget_name: str | None,
         payload: SpendLogsPayload,
-        attributed_team_ids: list[str] | None = None,
-        attributed_org_ids: list[str] | None = None,
+        attributed_team_ids: Sequence[str] | None = None,
+        attributed_org_ids: Sequence[str] | None = None,
     ):
         """
         Runs all 11 spend-update helpers sequentially inside a single asyncio task.
@@ -660,7 +661,7 @@ class DBSpendUpdateWriter:
             )
 
     @staticmethod
-    def _attribution_targets(attributed_ids: list[str] | None, stamped_id: str | None) -> list[str]:
+    def _attribution_targets(attributed_ids: Sequence[str] | None, stamped_id: str | None) -> tuple[str, ...]:
         """The entity ids to charge for one request. See ``attribution_targets``."""
         from litellm.proxy.auth.membership_attribution import attribution_targets
 
@@ -672,7 +673,7 @@ class DBSpendUpdateWriter:
         team_id: str | None,
         user_id: str | None,
         prisma_client: PrismaClient | None,
-        attributed_team_ids: list[str] | None = None,
+        attributed_team_ids: Sequence[str] | None = None,
     ):
         """Charge the request to every team it is attributed to.
 
@@ -738,7 +739,7 @@ class DBSpendUpdateWriter:
         response_cost: float | None,
         org_id: str | None,
         prisma_client: PrismaClient | None,
-        attributed_org_ids: list[str] | None = None,
+        attributed_org_ids: Sequence[str] | None = None,
     ):
         """Charge the request to every organization it is attributed to.
 
@@ -1981,7 +1982,7 @@ class DBSpendUpdateWriter:
         self,
         payload: SpendLogsPayload,
         prisma_client: PrismaClient | None = None,
-        attributed_team_ids: list[str] | None = None,
+        attributed_team_ids: Sequence[str] | None = None,
     ) -> None:
         """Enqueue one daily rollup row per attributed team.
 
@@ -2018,7 +2019,7 @@ class DBSpendUpdateWriter:
         payload: SpendLogsPayload,
         prisma_client: PrismaClient | None = None,
         org_id: str | None = None,
-        attributed_org_ids: list[str] | None = None,
+        attributed_org_ids: Sequence[str] | None = None,
     ) -> None:
         """Enqueue one daily rollup row per attributed organization."""
         if prisma_client is None:

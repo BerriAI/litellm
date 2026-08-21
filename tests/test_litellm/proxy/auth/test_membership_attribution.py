@@ -61,20 +61,20 @@ def test_settings_are_independent():
 # target resolution
 # --------------------------------------------------------------------------- #
 def test_attribution_targets_falls_back_to_stamped_id():
-    assert attribution_targets(None, "team-a") == ["team-a"]
-    assert attribution_targets([], "team-a") == ["team-a"]
-    assert attribution_targets(None, None) == []
+    assert attribution_targets(None, "team-a") == ("team-a",)
+    assert attribution_targets([], "team-a") == ("team-a",)
+    assert attribution_targets(None, None) == ()
 
 
 def test_attribution_targets_dedupes_and_preserves_order():
     """The stamped team is normally also in the membership list; charge it once."""
-    assert attribution_targets(["team-a", "team-b", "team-a", ""], "team-a") == ["team-a", "team-b"]
+    assert attribution_targets(["team-a", "team-b", "team-a", ""], "team-a") == ("team-a", "team-b")
 
 
 def test_read_helpers_fall_back_to_stamped_values():
     token = UserAPIKeyAuth(api_key="sk-1", team_id="team-a", org_id="org-1")
-    assert attributed_team_ids(token) == ["team-a"]
-    assert attributed_org_ids(token) == ["org-1"]
+    assert attributed_team_ids(token) == ("team-a",)
+    assert attributed_org_ids(token) == ("org-1",)
 
 
 def test_attributed_fields_cannot_be_forged_from_input():
@@ -136,9 +136,9 @@ async def test_resolver_collects_every_membership_with_stamped_team_first():
         )
 
     # stamped team leads, membership list follows, no duplicate of team-a
-    assert token.attributed_team_ids == ["team-a", "team-b", "team-c"]
+    assert token.attributed_team_ids == ("team-a", "team-b", "team-c")
     assert token.attributed_team_limits["team-b"] == {"rpm": 10, "tpm": None}
-    assert token.attributed_org_ids == ["org-1"]
+    assert token.attributed_org_ids == ("org-1",)
 
 
 @pytest.mark.asyncio
@@ -165,7 +165,7 @@ async def test_resolver_fails_open_on_unresolvable_team():
             user_api_key_cache=MagicMock(),
         )
 
-    assert token.attributed_team_ids == ["team-a"]
+    assert token.attributed_team_ids == ("team-a",)
 
 
 # --------------------------------------------------------------------------- #
@@ -313,10 +313,9 @@ def test_rate_limit_descriptors_not_added_when_setting_off():
     token = UserAPIKeyAuth(api_key="sk-1", team_id="team-a")
     token.attributed_team_limits = {"team-b": {"rpm": 10, "tpm": None}}
 
-    descriptors: list = []
     with patch("litellm.proxy.proxy_server.general_settings", {}):
-        limiter._add_attributed_team_rate_limit_descriptors(user_api_key_dict=token, descriptors=descriptors)
-    assert descriptors == []
+        descriptors = limiter._attributed_team_rate_limit_descriptors(user_api_key_dict=token)
+    assert descriptors == ()
 
 
 def test_rate_limit_descriptors_added_for_other_teams_only():
@@ -329,12 +328,11 @@ def test_rate_limit_descriptors_added_for_other_teams_only():
         "team-d": {"rpm": None, "tpm": 900},
     }
 
-    descriptors: list = []
     with patch(
         "litellm.proxy.proxy_server.general_settings",
         {"enforce_rate_limits_across_all_user_teams": True},
     ):
-        limiter._add_attributed_team_rate_limit_descriptors(user_api_key_dict=token, descriptors=descriptors)
+        descriptors = limiter._attributed_team_rate_limit_descriptors(user_api_key_dict=token)
 
     assert [d["value"] for d in descriptors] == ["team-b", "team-d"]
     # same namespace as the stamped-team descriptor, so a team shares one bucket
@@ -554,14 +552,11 @@ def test_metadata_stamped_only_when_setting_on():
         LiteLLMProxyRequestSetup._add_attributed_membership_metadata(
             data=data_on, user_api_key_dict=token, _metadata_variable_name="metadata"
         )
-    assert data_on["metadata"]["user_api_key_attributed_team_ids"] == ["team-a", "team-b"]
-    assert data_on["metadata"]["user_api_key_attributed_org_ids"] == ["org-1", "org-2"]
+    assert data_on["metadata"]["user_api_key_attributed_team_ids"] == ("team-a", "team-b")
+    assert data_on["metadata"]["user_api_key_attributed_org_ids"] == ("org-1", "org-2")
 
     # and the cost callback reads back exactly what was stamped
-    assert _metadata_id_list(data_on["metadata"], "user_api_key_attributed_team_ids") == [
-        "team-a",
-        "team-b",
-    ]
+    assert _metadata_id_list(data_on["metadata"], "user_api_key_attributed_team_ids") == ("team-a", "team-b")
 
 
 def test_metadata_id_list_returns_none_when_absent():

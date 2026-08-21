@@ -33,7 +33,9 @@ those teams (and the caller's own user row) belong to, never a recursive walk.
 """
 
 import asyncio
-from typing import TYPE_CHECKING, Final
+from collections.abc import Iterable, Mapping, Sequence
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Final, TypeAlias
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import LiteLLM_UserTable, UserAPIKeyAuth
@@ -48,83 +50,86 @@ if TYPE_CHECKING:
 SPEND_ATTRIBUTION_SETTING: Final = "track_spend_across_all_user_teams"
 RATE_LIMIT_ATTRIBUTION_SETTING: Final = "enforce_rate_limits_across_all_user_teams"
 
+# One resolved team: its id, and the team row if it could be loaded.
+TeamResolution: TypeAlias = tuple[str, "LiteLLM_TeamTableCachedObj | None"]
 
-def spend_attribution_enabled(general_settings: dict | None) -> bool:
+
+def spend_attribution_enabled(general_settings: Mapping[str, object] | None) -> bool:
     """Whether spend, rollups, and budget gates fan out across memberships."""
     if not general_settings:
         return False
     return general_settings.get(SPEND_ATTRIBUTION_SETTING) is True
 
 
-def rate_limit_attribution_enabled(general_settings: dict | None) -> bool:
+def rate_limit_attribution_enabled(general_settings: Mapping[str, object] | None) -> bool:
     """Whether the RPM/TPM limiter fans out across memberships."""
     if not general_settings:
         return False
     return general_settings.get(RATE_LIMIT_ATTRIBUTION_SETTING) is True
 
 
-def _attribution_enabled(general_settings: dict | None) -> bool:
+def _attribution_enabled(general_settings: Mapping[str, object] | None) -> bool:
     return spend_attribution_enabled(general_settings) or rate_limit_attribution_enabled(general_settings)
 
 
-def attributed_team_ids(valid_token: UserAPIKeyAuth | None) -> list[str]:
-    """Every team this request is attributed to, most-specific first.
+def attributed_team_ids(valid_token: UserAPIKeyAuth | None) -> tuple[str, ...]:
+    """Every team this request is attributed to, stamped team first.
 
     Falls back to the single stamped team whenever attribution is off or
     resolved nothing, so a call site can use this unconditionally and keep
     identical behavior with the settings disabled.
     """
     if valid_token is None:
-        return []
+        return ()
     resolved: Final = valid_token.attributed_team_ids
     if resolved:
-        return list(resolved)
-    return [valid_token.team_id] if valid_token.team_id else []
+        return tuple(resolved)
+    return (valid_token.team_id,) if valid_token.team_id else ()
 
 
-def attributed_org_ids(valid_token: UserAPIKeyAuth | None) -> list[str]:
+def attributed_org_ids(valid_token: UserAPIKeyAuth | None) -> tuple[str, ...]:
     """Every organization this request is attributed to.
 
     Same fallback contract as :func:`attributed_team_ids`.
     """
     if valid_token is None:
-        return []
+        return ()
     resolved: Final = valid_token.attributed_org_ids
     if resolved:
-        return list(resolved)
-    return [valid_token.org_id] if valid_token.org_id else []
+        return tuple(resolved)
+    return (valid_token.org_id,) if valid_token.org_id else ()
 
 
-def attribution_targets(attributed_ids: list[str] | None, stamped_id: str | None) -> list[str]:
+def attribution_targets(attributed_ids: Sequence[str] | None, stamped_id: str | None) -> tuple[str, ...]:
     """The entity ids one request should be charged against.
 
     The attributed set when membership attribution resolved one, otherwise the
     single stamped id -- so with both settings off this returns exactly
-    ``[stamped_id]`` and every caller keeps its historical behavior.
+    ``(stamped_id,)`` and every caller keeps its historical behavior.
 
     Order-preserving dedupe: the stamped team normally also appears in the
     caller's membership list, and charging it twice would double-count.
     """
     if attributed_ids:
-        return list(dict.fromkeys(i for i in attributed_ids if i))
-    return [stamped_id] if stamped_id else []
+        return _ordered_unique(attributed_ids)
+    return (stamped_id,) if stamped_id else ()
 
 
-def _ordered_unique(values: list[str | None]) -> list[str]:
+def _ordered_unique(values: Iterable[str | None]) -> tuple[str, ...]:
     """Dedupe while preserving order, dropping empties.
 
     Order is preserved so the stamped team stays first. Budget and rate-limit
     errors report the first offending entity, and a caller reading that error
     is best served by hearing about the team their key actually names.
     """
-    return list(dict.fromkeys(v for v in values if v))
+    return tuple(dict.fromkeys(v for v in values if v))
 
 
 async def resolve_membership_attribution(
     *,
     user_api_key_auth_obj: UserAPIKeyAuth,
     user_object: LiteLLM_UserTable | None,
-    general_settings: dict | None,
+    general_settings: Mapping[str, object] | None,
     prisma_client: "PrismaClient | None",
     user_api_key_cache: "DualCache",
     proxy_logging_obj: "ProxyLogging | None" = None,
@@ -153,14 +158,14 @@ async def resolve_membership_attribution(
     # pointed at a new team, and losing that team would silently under-charge
     # the one team the operator explicitly named.
     candidate_team_ids: Final = _ordered_unique(
-        [user_api_key_auth_obj.team_id, *(list(user_object.teams) if user_object and user_object.teams else [])]
+        (user_api_key_auth_obj.team_id, *(user_object.teams if user_object and user_object.teams else ()))
     )
 
     if not candidate_team_ids:
-        _apply_org_only_attribution(
+        _apply_org_attribution(
             user_api_key_auth_obj=user_api_key_auth_obj,
             user_object=user_object,
-            team_objects=[],
+            team_objects=(),
         )
         return
 
@@ -172,30 +177,39 @@ async def resolve_membership_attribution(
         proxy_logging_obj=proxy_logging_obj,
     )
 
-    resolved_ids: Final = [team_id for team_id, team_object in team_objects if team_object is not None]
+    resolved_ids: Final = tuple(team_id for team_id, team_object in team_objects if team_object is not None)
     if resolved_ids:
-        user_api_key_auth_obj.attributed_team_ids = resolved_ids
-        user_api_key_auth_obj.attributed_team_limits = {
-            team_id: {
-                "rpm": getattr(team_object, "rpm_limit", None),
-                "tpm": getattr(team_object, "tpm_limit", None),
+        team_limits: Final = MappingProxyType(
+            {
+                team_id: MappingProxyType(
+                    {
+                        "rpm": getattr(team_object, "rpm_limit", None),
+                        "tpm": getattr(team_object, "tpm_limit", None),
+                    }
+                )
+                for team_id, team_object in team_objects
+                if team_object is not None
             }
-            for team_id, team_object in team_objects
-            if team_object is not None
-        }
+        )
+        # The resolved context belongs on the auth object every later stage
+        # already reads -- the key/team org fallback immediately above this
+        # call does exactly the same. Returning a new object instead would
+        # mean rebuilding every consumer of user_api_key_auth.
+        user_api_key_auth_obj.attributed_team_ids = resolved_ids  # rebind-ok: stamping resolved auth context
+        user_api_key_auth_obj.attributed_team_limits = team_limits  # rebind-ok: stamping resolved auth context
 
-    _apply_org_only_attribution(
+    _apply_org_attribution(
         user_api_key_auth_obj=user_api_key_auth_obj,
         user_object=user_object,
         team_objects=team_objects,
     )
 
 
-def _apply_org_only_attribution(
+def _apply_org_attribution(
     *,
     user_api_key_auth_obj: UserAPIKeyAuth,
     user_object: LiteLLM_UserTable | None,
-    team_objects: list[tuple[str, "LiteLLM_TeamTableCachedObj | None"]],
+    team_objects: Sequence[TeamResolution],
 ) -> None:
     """Derive the attributed organizations from what is already loaded.
 
@@ -207,28 +221,28 @@ def _apply_org_only_attribution(
     several organizations.
     """
     org_ids: Final = _ordered_unique(
-        [
+        (
             user_api_key_auth_obj.org_id,
             user_object.organization_id if user_object else None,
-            *[
+            *(
                 getattr(team_object, "organization_id", None)
                 for _team_id, team_object in team_objects
                 if team_object is not None
-            ],
-        ]
+            ),
+        )
     )
     if org_ids:
-        user_api_key_auth_obj.attributed_org_ids = org_ids
+        user_api_key_auth_obj.attributed_org_ids = org_ids  # rebind-ok: stamping resolved auth context
 
 
 async def _load_team_objects(
     *,
-    team_ids: list[str],
+    team_ids: Sequence[str],
     prisma_client: "PrismaClient",
     user_api_key_cache: "DualCache",
     parent_otel_span: "Span | None",
     proxy_logging_obj: "ProxyLogging | None",
-) -> list[tuple[str, "LiteLLM_TeamTableCachedObj | None"]]:
+) -> tuple[TeamResolution, ...]:
     """Resolve every candidate team, preserving input order.
 
     Lookups run concurrently: ``get_team_object`` is cache-first, so the steady
@@ -237,9 +251,9 @@ async def _load_team_objects(
     """
     from litellm.proxy.auth.auth_checks import get_team_object
 
-    async def _safe_get(team_id: str) -> tuple[str, "LiteLLM_TeamTableCachedObj | None"]:
+    async def _safe_get(team_id: str) -> TeamResolution:
         try:
-            team_object = await get_team_object(
+            team_object: Final = await get_team_object(
                 team_id=team_id,
                 prisma_client=prisma_client,
                 user_api_key_cache=user_api_key_cache,
@@ -256,4 +270,4 @@ async def _load_team_objects(
         else:
             return team_id, team_object
 
-    return list(await asyncio.gather(*(_safe_get(team_id) for team_id in team_ids)))
+    return tuple(await asyncio.gather(*(_safe_get(team_id) for team_id in team_ids)))

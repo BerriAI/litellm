@@ -2786,12 +2786,12 @@ class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
     # validated input for the same reason as mcp_source_team_rpm_limits below:
     # a forged entry would let a caller choose which teams they are charged
     # against, or name a team with generous limits to escape their real ones.
-    attributed_team_ids: list[str] | None = Field(default=None, exclude=True)
-    attributed_org_ids: list[str] | None = Field(default=None, exclude=True)
+    attributed_team_ids: tuple[str, ...] | None = Field(default=None, exclude=True)
+    attributed_org_ids: tuple[str, ...] | None = Field(default=None, exclude=True)
     # team_id -> {"rpm": int | None, "tpm": int | None}. Precomputed during auth
     # because rate-limit descriptor construction is synchronous and cannot await
     # a per-team lookup.
-    attributed_team_limits: dict[str, dict[str, int | None]] | None = Field(default=None, exclude=True)
+    attributed_team_limits: Mapping[str, Mapping[str, int | None]] | None = Field(default=None, exclude=True)
 
     # Project Params
     project_alias: str | None = None

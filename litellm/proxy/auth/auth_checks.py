@@ -4687,7 +4687,7 @@ async def _attributed_teams_max_budget_check(
     prisma_client: PrismaClient | None,
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging,
-    general_settings: dict,
+    general_settings: Mapping[str, object],
 ) -> None:
     """Enforce the max budget of every OTHER team the caller belongs to.
 
@@ -4718,7 +4718,9 @@ async def _attributed_teams_max_budget_check(
     if valid_token is None or prisma_client is None:
         return
 
-    other_team_ids: Final = [team_id for team_id in attributed_team_ids(valid_token) if team_id != valid_token.team_id]
+    other_team_ids: Final = tuple(
+        team_id for team_id in attributed_team_ids(valid_token) if team_id != valid_token.team_id
+    )
     if not other_team_ids:
         return
 
@@ -4726,7 +4728,7 @@ async def _attributed_teams_max_budget_check(
 
     async def _check(team_id: str) -> None:
         try:
-            team_object = await get_team_object(
+            team_object: Final = await get_team_object(
                 team_id=team_id,
                 prisma_client=prisma_client,
                 user_api_key_cache=user_api_key_cache,
@@ -4739,7 +4741,7 @@ async def _attributed_teams_max_budget_check(
         if team_object is None or team_object.max_budget is None or not math.isfinite(team_object.max_budget):
             return
 
-        spend = await get_current_spend(
+        spend: Final = await get_current_spend(
             counter_key=f"spend:team:{team_id}",
             fallback_spend=team_object.spend or 0.0,
             max_budget=team_object.max_budget,
@@ -4747,7 +4749,7 @@ async def _attributed_teams_max_budget_check(
         if spend <= team_object.max_budget:
             return
 
-        call_info = CallInfo(
+        call_info: Final = CallInfo(
             token=valid_token.token,
             spend=spend,
             max_budget=team_object.max_budget,
@@ -4784,7 +4786,7 @@ async def _attributed_orgs_max_budget_check(
     prisma_client: PrismaClient | None,
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging,
-    general_settings: dict,
+    general_settings: Mapping[str, object],
 ) -> None:
     """Enforce the max budget of every OTHER organization the caller belongs to.
 
@@ -4803,7 +4805,7 @@ async def _attributed_orgs_max_budget_check(
     if valid_token is None or prisma_client is None:
         return
 
-    other_org_ids: Final = [org_id for org_id in attributed_org_ids(valid_token) if org_id != valid_token.org_id]
+    other_org_ids: Final = tuple(org_id for org_id in attributed_org_ids(valid_token) if org_id != valid_token.org_id)
     if not other_org_ids:
         return
 
@@ -4811,7 +4813,7 @@ async def _attributed_orgs_max_budget_check(
 
     async def _check(org_id: str) -> None:
         try:
-            org_table = await get_org_object(
+            org_table: Final = await get_org_object(
                 org_id=org_id,
                 prisma_client=prisma_client,
                 user_api_key_cache=user_api_key_cache,
@@ -4824,11 +4826,11 @@ async def _attributed_orgs_max_budget_check(
 
         if org_table is None or org_table.litellm_budget_table is None:
             return
-        org_max_budget = org_table.litellm_budget_table.max_budget
+        org_max_budget: Final = org_table.litellm_budget_table.max_budget
         if org_max_budget is None or org_max_budget <= 0 or not math.isfinite(org_max_budget):
             return
 
-        org_spend = await get_current_spend(
+        org_spend: Final = await get_current_spend(
             counter_key=f"spend:org:{org_id}",
             fallback_spend=org_table.spend or 0.0,
             max_budget=org_max_budget,

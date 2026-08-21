@@ -1201,7 +1201,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         key_groups: Final = self._group_keys_by_hash_tag(keys_to_fetch)
         all_cache_values: Final[list[CacheCounterValue | None]] = []
 
-        async def _read_group(hash_tag: str, group_keys: list[str]) -> CacheCounterValues:
+        async def _read_group(hash_tag: str, group_keys: Sequence[str]) -> CacheCounterValues:
             try:
                 return await self.batch_rate_limiter_script(
                     keys=group_keys,
@@ -2362,11 +2362,10 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             )
         )
 
-    def _add_attributed_team_rate_limit_descriptors(
+    def _attributed_team_rate_limit_descriptors(
         self,
         user_api_key_dict: UserAPIKeyAuth,
-        descriptors: list[RateLimitDescriptor],
-    ) -> None:
+    ) -> tuple[RateLimitDescriptor, ...]:
         """Add a team descriptor for every OTHER team the caller belongs to.
 
         Only active when ``enforce_rate_limits_across_all_user_teams`` is on;
@@ -2388,30 +2387,27 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         from litellm.proxy.proxy_server import general_settings
 
         if not rate_limit_attribution_enabled(general_settings):
-            return
+            return ()
 
         attributed_limits: Final = user_api_key_dict.attributed_team_limits
         if not attributed_limits:
-            return
+            return ()
 
-        for team_id, team_limits in attributed_limits.items():
-            if not team_id or team_id == user_api_key_dict.team_id:
-                continue
-            rpm_limit = team_limits.get("rpm")
-            tpm_limit = team_limits.get("tpm")
-            if rpm_limit is None and tpm_limit is None:
-                continue
-            descriptors.append(
-                RateLimitDescriptor(
-                    key="team",
-                    value=team_id,
-                    rate_limit={
-                        "requests_per_unit": rpm_limit,
-                        "tokens_per_unit": tpm_limit,
-                        "window_size": self.window_size,
-                    },
-                )
+        return tuple(
+            RateLimitDescriptor(
+                key="team",
+                value=team_id,
+                rate_limit=RateLimitDescriptorRateLimitObject(
+                    requests_per_unit=team_limits.get("rpm"),
+                    tokens_per_unit=team_limits.get("tpm"),
+                    window_size=self.window_size,
+                ),
             )
+            for team_id, team_limits in attributed_limits.items()
+            if team_id
+            and team_id != user_api_key_dict.team_id
+            and not (team_limits.get("rpm") is None and team_limits.get("tpm") is None)
+        )
 
     def _add_tag_per_key_rate_limit_descriptor(
         self,
@@ -2764,10 +2760,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 )
             )
 
-        self._add_attributed_team_rate_limit_descriptors(
-            user_api_key_dict=user_api_key_dict,
-            descriptors=descriptors,
-        )
+        descriptors.extend(self._attributed_team_rate_limit_descriptors(user_api_key_dict=user_api_key_dict))
 
         # Team Member rate limits
         if user_api_key_dict.user_id and (

@@ -1,5 +1,6 @@
 import asyncio
 import traceback
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import Any, Final, cast
 
@@ -512,26 +513,28 @@ def _get_budget_reservation_from_metadata(metadata: dict) -> dict | None:
     return getattr(user_api_key_auth_obj, "budget_reservation", None)
 
 
-def _metadata_id_list(metadata: dict, key: str) -> list[str] | None:
+def _metadata_id_list(metadata: Mapping[str, object], key: str) -> tuple[str, ...] | None:
     """Read a stamped id list out of request metadata, or None if absent.
 
-    Returns None (not []) when the key is missing so downstream writers can
-    tell "attribution off" apart from "attribution on, nothing resolved".
+    Returns None (not an empty tuple) when the key is missing, so downstream
+    writers can tell "attribution off" apart from "attribution on, nothing
+    resolved".
     """
     value: Final = metadata.get(key)
-    if not isinstance(value, list):
+    # tuple as stamped, list after any JSON round trip
+    if not isinstance(value, (list, tuple)):
         return None
-    ids: Final = [v for v in value if isinstance(v, str) and v]
+    ids: Final = tuple(v for v in value if isinstance(v, str) and v)
     return ids or None
 
 
-def _attributed_team_ids(user_api_key_dict: UserAPIKeyAuth) -> list[str] | None:
+def _attributed_team_ids(user_api_key_dict: UserAPIKeyAuth) -> tuple[str, ...] | None:
     from litellm.proxy.auth.membership_attribution import attributed_team_ids
 
     return attributed_team_ids(user_api_key_dict) if user_api_key_dict.attributed_team_ids else None
 
 
-def _attributed_org_ids(user_api_key_dict: UserAPIKeyAuth) -> list[str] | None:
+def _attributed_org_ids(user_api_key_dict: UserAPIKeyAuth) -> tuple[str, ...] | None:
     from litellm.proxy.auth.membership_attribution import attributed_org_ids
 
     return attributed_org_ids(user_api_key_dict) if user_api_key_dict.attributed_org_ids else None
@@ -568,8 +571,8 @@ async def _update_database_and_spend_counters(
     response_cost: float,
     budget_reservation: dict | None,
     request_tags: list[str] | None = None,
-    attributed_team_ids: list[str] | None = None,
-    attributed_org_ids: list[str] | None = None,
+    attributed_team_ids: Sequence[str] | None = None,
+    attributed_org_ids: Sequence[str] | None = None,
 ) -> None:
     try:
         await proxy_logging_obj.db_spend_update_writer.update_database(

@@ -1332,7 +1332,7 @@ class LiteLLMProxyRequestSetup:
 
     @staticmethod
     def _add_attributed_membership_metadata(
-        data: dict,
+        data: dict,  # mutable-ok: every sibling stamper in this class writes into the caller's request dict
         user_api_key_dict: UserAPIKeyAuth,
         _metadata_variable_name: str,
     ) -> None:
@@ -1354,8 +1354,14 @@ class LiteLLMProxyRequestSetup:
         if user_api_key_dict.attributed_team_ids is None and user_api_key_dict.attributed_org_ids is None:
             return
 
-        data[_metadata_variable_name]["user_api_key_attributed_team_ids"] = attributed_team_ids(user_api_key_dict)
-        data[_metadata_variable_name]["user_api_key_attributed_org_ids"] = attributed_org_ids(user_api_key_dict)
+        # Stored as tuples. This dict is serialized into the spend-log payload,
+        # and json.dumps renders a tuple as an array exactly like a list; the
+        # reader (_metadata_id_list) accepts either, so a JSON round trip that
+        # turns these back into lists is also fine.
+        team_ids: Final = attributed_team_ids(user_api_key_dict)
+        org_ids: Final = attributed_org_ids(user_api_key_dict)
+        data[_metadata_variable_name]["user_api_key_attributed_team_ids"] = team_ids  # rebind-ok: metadata stamp
+        data[_metadata_variable_name]["user_api_key_attributed_org_ids"] = org_ids  # rebind-ok: metadata stamp
 
     @staticmethod
     def add_management_endpoint_metadata_to_request_metadata(

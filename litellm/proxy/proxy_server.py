@@ -2610,8 +2610,8 @@ async def increment_spend_counters(
     budget_reservation: dict | None = None,
     end_user_id: str | None = None,
     tags: list[str] | None = None,
-    attributed_team_ids: list[str] | None = None,
-    attributed_org_ids: list[str] | None = None,
+    attributed_team_ids: Sequence[str] | None = None,
+    attributed_org_ids: Sequence[str] | None = None,
 ):
     """
     Atomically increment spend counters for budget enforcement.
