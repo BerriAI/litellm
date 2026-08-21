@@ -4140,6 +4140,28 @@ async def test_callback_forwards_when_issuer_is_unknown_or_iss_absent(monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_callback_rejects_an_issuer_differing_only_outside_the_path(monkeypatch):
+    """A tenant a deployment encoded in a query string is part of that issuer's identity, so the
+    comparison must not canonicalize it away and let another tenant's response through."""
+    from litellm.proxy._experimental.mcp_server.oauth_utils import issuer_identities_match
+
+    assert not issuer_identities_match("https://idp.example.com/?tenant=b", "https://idp.example.com/?tenant=a")
+    assert not issuer_identities_match("https://idp.example.com/#b", "https://idp.example.com/#a")
+    assert issuer_identities_match("https://IDP.example.com:443/?tenant=a", "https://idp.example.com/?tenant=a")
+
+    response, state_data = await _authorize_then_callback(
+        _issuer_anchored_oauth_server(issuer="https://idp.example.com/?tenant=a"),
+        iss="https://idp.example.com/?tenant=b",
+        monkeypatch=monkeypatch,
+    )
+
+    assert state_data["expected_issuer"] == "https://idp.example.com/?tenant=a"
+    assert response.status_code == 400
+    assert "location" not in response.headers
+    assert b"upstream-auth-code" not in response.body
+
+
+@pytest.mark.asyncio
 async def test_callback_accepts_states_minted_before_the_issuer_was_sealed(monkeypatch):
     """An authorization in flight across the upgrade carries no sealed issuer and must still land."""
     response, _ = await _authorize_then_callback(
