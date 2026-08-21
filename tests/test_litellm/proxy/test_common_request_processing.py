@@ -4416,7 +4416,7 @@ class TestCancelOnDisconnect:
         never reaches litellm.utils.wrapper_async's own except block -- the
         cancelled call's async_log_failure_event never fires, and the 499
         this raises is later handled by post_call_failure_hook, a different
-        hook a CustomLogger like tag_rate_limiter doesn't implement. Without
+        hook a CustomLogger like model_based_tag_rate_limits_hook doesn't implement. Without
         an explicit release here, a callback that reserved per-request state
         at admission (a concurrency slot) leaks it until that state's own
         safety TTL. This mirrors the streaming disconnect case

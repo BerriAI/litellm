@@ -30,7 +30,7 @@ from litellm.router_strategy.tag_based_routing import (
 )
 from litellm.types.caching import RedisPipelineIncrementOperation
 from litellm.types.llms.openai import AllMessageValues
-from litellm.types.router import TagRateLimitEntry, TagRateLimits
+from litellm.types.router import TagRateLimitEntry, TagRateLimits, TagRateLimitScope
 from litellm.types.utils import StandardLoggingPayload
 
 if TYPE_CHECKING:
@@ -42,10 +42,21 @@ else:
 
 _LimitUnit: TypeAlias = Literal["tokens", "requests", "dollars", "concurrency"]
 _LIMIT_UNITS: Final[tuple[_LimitUnit, ...]] = ("tokens", "requests", "dollars", "concurrency")
-# (tag_id, name, limit, period_seconds, scope_by_key_hash) -- the fields that
-# decide whether two deployments' entries are the same rate limit for dedup
-# purposes; see _build_group_limits.
-_DedupSignature: TypeAlias = tuple[str, str, float, int, bool]
+# A (tag_id, values) pair mirroring TagRateLimitScope's own fields, used only
+# to fold `enabled_for`/`disabled_for` into `_DedupSignature` below without
+# depending on TagRateLimitScope's own hashability.
+_ScopeSignature: TypeAlias = tuple[str, tuple[str, ...]] | None
+# (tag_id, name, limit, period_seconds, scope_by_key_hash, included_values,
+# excluded_values, enabled_for, disabled_for) -- the fields that decide
+# whether two deployments' entries are the same rate limit for dedup
+# purposes; see _build_group_limits. Two deployments that agree on the first
+# five but disagree on any scoping field are declaring genuinely different
+# policies (e.g. one excludes a user the other doesn't) and must not be
+# merged into one shared bucket -- the same class of bug this signature
+# already guards against for a plain divergent `limit`.
+_DedupSignature: TypeAlias = tuple[
+    str, str, float, int, bool, tuple[str, ...] | None, tuple[str, ...] | None, _ScopeSignature, _ScopeSignature
+]
 # Units whose admission must be atomic (check-and-increment in one Redis
 # round trip) because the increment amount is known upfront (always 1).
 # tokens/dollars can't be: real usage is only known after the response, so
@@ -185,6 +196,49 @@ def _extract_identity(tags: Sequence[str], tag_id: str) -> str | None:
     return None
 
 
+def _scope_signature(scope: TagRateLimitScope | None) -> _ScopeSignature:
+    """Normalizes a `TagRateLimitScope` into a plain, hashable tuple for use
+    in `_DedupSignature` -- see that alias's own comment for why two
+    deployments disagreeing on `enabled_for`/`disabled_for` must be treated
+    as genuinely different policies rather than merged into one bucket."""
+    return None if scope is None else (scope.tag_id, scope.values)
+
+
+def _entry_applies(entry: TagRateLimitEntry, tag_value: str, tags: Sequence[str]) -> bool:
+    """
+    Applies `entry`'s own scoping fields (`included_values`/`excluded_values`/
+    `enabled_for`/`disabled_for`), evaluated in this order -- deny overrides
+    allow, checked before either allowlist:
+
+      1. `excluded_values`: `tag_value` is in it -> doesn't apply.
+      2. `included_values`: `tag_value` is NOT in it -> doesn't apply.
+      3. `disabled_for`: the gate tag (a tag OTHER than `entry.tag_id`,
+         resolved via `disabled_for.tag_id`) is present and its value is in
+         `disabled_for.values` -> doesn't apply. Absent gate tag never
+         triggers this -- nothing to match against a denylist.
+      4. `enabled_for`: the gate tag is absent, or present but its value is
+         NOT in `enabled_for.values` -> doesn't apply. Unlike `disabled_for`,
+         absence DOES fail this check -- an allowlist gate requires an
+         explicit match, so "not tagged at all" means "not in scope".
+
+    An entry with none of the four fields set always applies -- this is the
+    unscoped behavior every existing entry has today, unchanged.
+    """
+    if entry.excluded_values is not None and tag_value in entry.excluded_values:
+        return False
+    if entry.included_values is not None and tag_value not in entry.included_values:
+        return False
+    if entry.disabled_for is not None:
+        gate_value = _extract_identity(tags, entry.disabled_for.tag_id)
+        if gate_value is not None and gate_value in entry.disabled_for.values:
+            return False
+    if entry.enabled_for is not None:
+        gate_value = _extract_identity(tags, entry.enabled_for.tag_id)
+        if gate_value is None or gate_value not in entry.enabled_for.values:
+            return False
+    return True
+
+
 def _deployment_id(deployment: Mapping[str, object]) -> str | None:
     return (deployment.get("model_info") or _EMPTY_MAPPING).get("id")
 
@@ -232,7 +286,7 @@ def _configured_limit_for_signature(
 ) -> _ConfiguredLimit | None:
     if unit == "concurrency" and not is_chain_wide:
         verbose_proxy_logger.warning(
-            "tag_rate_limiter: concurrency_limits entry %r (tag_id=%s) is not declared identically by every "
+            "model_based_tag_rate_limits_hook: concurrency_limits entry %r (tag_id=%s) is not declared identically by every "
             "deployment sharing this model_name; per-deployment-scoped concurrency limits are not supported "
             "and this entry is being skipped entirely.",
             entry.name,
@@ -293,7 +347,17 @@ def _build_group_limits(deployments: Sequence[Mapping[str, object]], unit: _Limi
         if dep_id is None:
             continue
         for entry in _entries_for_unit(deployment, unit):
-            signature = (entry.tag_id, entry.name, entry.limit, entry.period_seconds, entry.scope_by_key_hash)
+            signature = (
+                entry.tag_id,
+                entry.name,
+                entry.limit,
+                entry.period_seconds,
+                entry.scope_by_key_hash,
+                entry.included_values,
+                entry.excluded_values,
+                _scope_signature(entry.enabled_for),
+                _scope_signature(entry.disabled_for),
+            )
             ids_for_signature = declaring_ids_by_signature.setdefault(signature, [])  # mutable-ok: see comment above
             # One deployment declaring the identical entry twice (a config
             # duplicate) must count once, or len(declaring_ids) inflates past
@@ -537,7 +601,7 @@ _CONCURRENCY_MIN_SAFETY_TTL_SECONDS: Final = 3600
 # server-side per logical request (and shared across that request's own
 # fallback hops, matching the original chain-wide release semantics), so it
 # can't be forged or guessed.
-_PENDING_CONCURRENCY_KEYS_FIELD: Final[str] = "_tag_rate_limiter_pending_concurrency_keys"
+_PENDING_CONCURRENCY_KEYS_FIELD: Final[str] = "_model_based_tag_rate_limits_pending_concurrency_keys"
 
 # The admission-time timestamp a hop's token/dollar checks classified their
 # bucket against, stashed on the same model_call_details object so success
@@ -550,7 +614,7 @@ _PENDING_CONCURRENCY_KEYS_FIELD: Final[str] = "_tag_rate_limiter_pending_concurr
 # rollover. Overwritten by each hop's own admission (last-write-wins), which
 # is correct: success only ever fires for whichever hop actually served the
 # request, so its own most recent admission timestamp is the right one.
-_ADMISSION_TIME_FIELD: Final[str] = "_tag_rate_limiter_admission_time"
+_ADMISSION_TIME_FIELD: Final[str] = "_model_based_tag_rate_limits_admission_time"
 
 
 class _TagRateLimitIndex:
@@ -658,6 +722,8 @@ def _classify_check(
     tag_value: Final = _extract_identity(tags, configured_limit.entry.tag_id)
     if tag_value is None:
         return None
+    if not _entry_applies(configured_limit.entry, tag_value, tags):
+        return None
     key_hash: Final = (
         _extract_key_hash(request_kwargs, metadata_variable_name) if configured_limit.entry.scope_by_key_hash else None
     )
@@ -694,6 +760,8 @@ def _increment_operation_for_limit(
     tag_value: Final = _extract_identity(tags, configured_limit.entry.tag_id)
     if tag_value is None:
         return None
+    if not _entry_applies(configured_limit.entry, tag_value, tags):
+        return None
     if configured_limit.unit not in increment_by_unit:
         return None  # "requests" is accounted atomically at admission, not here
     increment_value: Final = increment_by_unit[configured_limit.unit]
@@ -711,7 +779,7 @@ def _increment_operation_for_limit(
 
 def _resolve_max_in_memory_cache_size() -> int | None:
     """
-    `litellm_settings` values reach `litellm.tag_rate_limiter_max_in_memory_cache_size`
+    `litellm_settings` values reach `litellm.model_based_tag_rate_limits_max_in_memory_cache_size`
     via a plain, unvalidated `setattr`, so a config typo (a negative number, or a
     string like "500" from an unresolved os.environ/ substitution) can reach here.
     InMemoryCache raises when comparing its size against a non-positive-int
@@ -719,12 +787,12 @@ def _resolve_max_in_memory_cache_size() -> int | None:
     an invalid value would otherwise silently disable every counter write for this
     hook rather than fail loudly -- rejected here in favor of the safe default instead.
     """
-    configured: Final = litellm.tag_rate_limiter_max_in_memory_cache_size
+    configured: Final = litellm.model_based_tag_rate_limits_max_in_memory_cache_size
     if isinstance(configured, int) and not isinstance(configured, bool) and configured > 0:
         return configured
     if configured is not None:
         verbose_proxy_logger.warning(
-            "tag_rate_limiter: tag_rate_limiter_max_in_memory_cache_size=%r is not a positive integer; "
+            "model_based_tag_rate_limits_hook: model_based_tag_rate_limits_max_in_memory_cache_size=%r is not a positive integer; "
             "falling back to the default in-memory cache size.",
             configured,
         )
@@ -737,7 +805,7 @@ def _resolve_max_in_memory_cache_size() -> int | None:
 # entries that happen to choose the identical max_in_memory_cache_size don't
 # get merged into one shared partition; the same entry (same config content)
 # always resolves to the same signature across index rebuilds, which is what
-# keeps _PROXY_TagRateLimiter._partitions from leaking a fresh partition
+# keeps _PROXY_ModelBasedTagRateLimitsHook._partitions from leaking a fresh partition
 # every time _TagRateLimitIndex rebuilds and reconstructs `_ConfiguredLimit`s.
 _PartitionKey: TypeAlias = tuple[str, str, float, int, bool, int] | None
 # Grouping type for async_log_success_event's per-partition tokens/dollars
@@ -801,7 +869,7 @@ class _CachePartition:
     v3: _PROXY_MaxParallelRequestsHandler_v3
 
 
-class _PROXY_TagRateLimiter(  # pyright: ignore[reportUnusedClass]  # only referenced via the deferred import in litellm_logging.py's callback resolver; basedpyright doesn't trace that usage
+class _PROXY_ModelBasedTagRateLimitsHook(  # pyright: ignore[reportUnusedClass]  # only referenced via the deferred import in litellm_logging.py's callback resolver; basedpyright doesn't trace that usage
     CustomLogger
 ):
     def __init__(
@@ -825,7 +893,7 @@ class _PROXY_TagRateLimiter(  # pyright: ignore[reportUnusedClass]  # only refer
         # here -- see _partition_for. None (the key every entry uses unless
         # it sets its own max_in_memory_cache_size) is this hook's single
         # default partition, sized by
-        # litellm.tag_rate_limiter_max_in_memory_cache_size (200 if that's
+        # litellm.model_based_tag_rate_limits_max_in_memory_cache_size (200 if that's
         # also unset), matching today's behavior for every entry that doesn't
         # opt into its own partition.
         self._partitions: dict[_PartitionKey, _CachePartition] = {}  # mutable-ok: lazily memoized; see _partition_for
@@ -988,7 +1056,9 @@ class _PROXY_TagRateLimiter(  # pyright: ignore[reportUnusedClass]  # only refer
             try:
                 await self._decrement_floor_zero(refund_cache, refund_key, -refund_increment)
             except Exception as e:  # noqa: BLE001 - one failed refund must not block refunding the rest
-                verbose_proxy_logger.warning("tag_rate_limiter: failed to refund %s on rollback: %s", refund_key, e)
+                verbose_proxy_logger.warning(
+                    "model_based_tag_rate_limits_hook: failed to refund %s on rollback: %s", refund_key, e
+                )
 
     async def async_filter_deployments(
         self,
@@ -1192,7 +1262,7 @@ class _PROXY_TagRateLimiter(  # pyright: ignore[reportUnusedClass]  # only refer
         current: float,
     ) -> None:
         verbose_proxy_logger.debug(
-            "tag_rate_limiter: OVER_LIMIT model=%s unit=%s name=%s tag_id=%s tag_value=%s current=%s limit=%s",
+            "model_based_tag_rate_limits_hook: OVER_LIMIT model=%s unit=%s name=%s tag_id=%s tag_value=%s current=%s limit=%s",
             model,
             configured_limit.unit,
             configured_limit.entry.name,
@@ -1237,7 +1307,9 @@ class _PROXY_TagRateLimiter(  # pyright: ignore[reportUnusedClass]  # only refer
                 partition = await self._partition_for(partition_key)  # not Final: rebound each loop iteration
                 await self._decrement_floor_zero(partition.internal_usage_cache, key, -1.0)
             except Exception as e:  # noqa: BLE001 - releasing a slot must never raise into the caller's request path
-                verbose_proxy_logger.warning("tag_rate_limiter: failed to release concurrency slot %s: %s", key, e)
+                verbose_proxy_logger.warning(
+                    "model_based_tag_rate_limits_hook: failed to release concurrency slot %s: %s", key, e
+                )
 
     async def _release_stale_hop_reservations(self, request_kwargs: Mapping[str, object]) -> None:
         """

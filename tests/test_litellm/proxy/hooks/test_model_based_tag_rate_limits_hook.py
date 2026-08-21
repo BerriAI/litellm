@@ -17,13 +17,14 @@ from pydantic import ValidationError
 import litellm
 from litellm.caching.dual_cache import DualCache
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
-from litellm.proxy.hooks.tag_rate_limiter import (
+from litellm.proxy.hooks.model_based_tag_rate_limits_hook import (
     _CONCURRENCY_MIN_SAFETY_TTL_SECONDS,
     _bucket_key,
     _bucket_ttl_seconds,
     _build_group_limits,
     _build_limits_index,
     _ConfiguredLimit,
+    _entry_applies,
     _extract_identity,
     _extract_key_hash,
     _extract_team_id,
@@ -32,10 +33,10 @@ from litellm.proxy.hooks.tag_rate_limiter import (
     _inflight_key,
     _partition_key,
     _PENDING_CONCURRENCY_KEYS_FIELD,
-    _PROXY_TagRateLimiter,
+    _PROXY_ModelBasedTagRateLimitsHook,
     _queue_pending_concurrency_reservations,
 )
-from litellm.types.router import RoutingGroup, TagRateLimitEntry
+from litellm.types.router import RoutingGroup, TagRateLimitEntry, TagRateLimitScope
 
 
 class TimeController:
@@ -54,8 +55,8 @@ def time_controller():
     return TimeController()
 
 
-def _make_limiter(time_controller: TimeController) -> _PROXY_TagRateLimiter:
-    return _PROXY_TagRateLimiter(
+def _make_limiter(time_controller: TimeController) -> _PROXY_ModelBasedTagRateLimitsHook:
+    return _PROXY_ModelBasedTagRateLimitsHook(
         internal_usage_cache=DualCache(),
         time_provider=time_controller.now,
     )
@@ -312,6 +313,206 @@ def test_build_group_limits_per_deployment_when_only_some_declare_it():
 def test_build_group_limits_empty_when_no_deployment_configures_unit():
     deployments = [_deployment("grp", "dep-1", {}), _deployment("grp", "dep-2", {})]
     assert _build_group_limits(deployments, "tokens") == ()
+
+
+# ---------------------------------------------------------------------------
+# _entry_applies -- included_values / excluded_values / enabled_for / disabled_for
+# ---------------------------------------------------------------------------
+
+
+def test_entry_applies_with_none_of_the_four_fields_set():
+    entry = TagRateLimitEntry(name="daily", tag_id="end_user_id", limit=500, period_seconds=86400)
+    assert _entry_applies(entry, "u1", ["end_user_id:u1"]) is True
+
+
+def test_entry_applies_excludes_a_listed_value():
+    entry = TagRateLimitEntry(
+        name="daily", tag_id="end_user_id", limit=500, period_seconds=86400, excluded_values=("u1",)
+    )
+    assert _entry_applies(entry, "u1", ["end_user_id:u1"]) is False
+
+
+def test_entry_applies_admits_a_value_not_on_the_exclusion_list():
+    entry = TagRateLimitEntry(
+        name="daily", tag_id="end_user_id", limit=500, period_seconds=86400, excluded_values=("u1",)
+    )
+    assert _entry_applies(entry, "u2", ["end_user_id:u2"]) is True
+
+
+def test_entry_applies_rejects_a_value_missing_from_the_inclusion_list():
+    entry = TagRateLimitEntry(
+        name="daily", tag_id="end_user_id", limit=500, period_seconds=86400, included_values=("u2", "u3")
+    )
+    assert _entry_applies(entry, "u1", ["end_user_id:u1"]) is False
+
+
+def test_entry_applies_admits_a_value_on_the_inclusion_list():
+    entry = TagRateLimitEntry(
+        name="daily", tag_id="end_user_id", limit=500, period_seconds=86400, included_values=("u2", "u3")
+    )
+    assert _entry_applies(entry, "u2", ["end_user_id:u2", "company_id:1032"]) is True
+
+
+def test_entry_applies_matches_an_enabled_for_gate():
+    entry = TagRateLimitEntry(
+        name="daily",
+        tag_id="end_user_id",
+        limit=500,
+        period_seconds=86400,
+        enabled_for=TagRateLimitScope(tag_id="company_id", values=("1032",)),
+    )
+    assert _entry_applies(entry, "u1", ["end_user_id:u1", "company_id:1032"]) is True
+
+
+def test_entry_applies_skips_when_enabled_for_gate_tag_is_absent():
+    """
+    enabled_for is an allowlist gate: absence of the gate tag must not
+    satisfy it, unlike disabled_for below.
+    """
+    entry = TagRateLimitEntry(
+        name="daily",
+        tag_id="end_user_id",
+        limit=500,
+        period_seconds=86400,
+        enabled_for=TagRateLimitScope(tag_id="company_id", values=("1032",)),
+    )
+    assert _entry_applies(entry, "u1", ["end_user_id:u1"]) is False
+
+
+def test_entry_applies_skips_when_disabled_for_gate_matches():
+    entry = TagRateLimitEntry(
+        name="daily",
+        tag_id="end_user_id",
+        limit=500,
+        period_seconds=86400,
+        disabled_for=TagRateLimitScope(tag_id="company_id", values=("1032",)),
+    )
+    assert _entry_applies(entry, "u1", ["end_user_id:u1", "company_id:1032"]) is False
+
+
+def test_entry_applies_when_disabled_for_gate_tag_is_absent():
+    """disabled_for is a denylist gate: absence of the gate tag has nothing
+    to match against, so the entry still applies."""
+    entry = TagRateLimitEntry(
+        name="daily",
+        tag_id="end_user_id",
+        limit=500,
+        period_seconds=86400,
+        disabled_for=TagRateLimitScope(tag_id="company_id", values=("1032",)),
+    )
+    assert _entry_applies(entry, "u1", ["end_user_id:u1"]) is True
+
+
+def test_entry_applies_excluded_values_overrides_a_matching_enabled_for_gate():
+    """Deny (identity-level excluded_values) takes effect independently of
+    whether the enabled_for gate itself matched."""
+    entry = TagRateLimitEntry(
+        name="daily",
+        tag_id="end_user_id",
+        limit=500,
+        period_seconds=86400,
+        enabled_for=TagRateLimitScope(tag_id="company_id", values=("1032",)),
+        excluded_values=("u1",),
+    )
+    assert _entry_applies(entry, "u1", ["end_user_id:u1", "company_id:1032"]) is False
+
+
+# ---------------------------------------------------------------------------
+# TagRateLimitEntry / TagRateLimitScope -- scoping field validation
+# ---------------------------------------------------------------------------
+
+
+def test_tag_rate_limit_entry_rejects_empty_included_values():
+    with pytest.raises(ValidationError, match="included_values must be a non-empty list"):
+        TagRateLimitEntry(name="daily", limit=1, period_seconds=60, included_values=())
+
+
+def test_tag_rate_limit_entry_rejects_empty_excluded_values():
+    with pytest.raises(ValidationError, match="excluded_values must be a non-empty list"):
+        TagRateLimitEntry(name="daily", limit=1, period_seconds=60, excluded_values=())
+
+
+def test_tag_rate_limit_scope_rejects_empty_values():
+    with pytest.raises(ValidationError, match="values must be a non-empty list"):
+        TagRateLimitScope(tag_id="company_id", values=())
+
+
+def test_tag_rate_limit_entry_rejects_enabled_for_missing_values():
+    with pytest.raises(ValidationError):
+        TagRateLimitEntry(name="daily", limit=1, period_seconds=60, enabled_for={"tag_id": "company_id"})
+
+
+# ---------------------------------------------------------------------------
+# _build_group_limits -- scoping fields fold into the dedup signature
+# ---------------------------------------------------------------------------
+
+
+def test_build_group_limits_per_deployment_when_excluded_values_diverge():
+    """
+    Regression test: two deployments agreeing on tag_id/limit/period_seconds
+    but declaring different excluded_values are genuinely different
+    policies and must not be silently merged into one shared bucket -- the
+    same class of bug test_build_group_limits_per_deployment_when_values_diverge
+    already guards against for a plain divergent limit value.
+    """
+    deployments = [
+        _deployment(
+            "grp",
+            "dep-1",
+            {
+                "token_limits": {
+                    "limits": [
+                        {"name": "daily", "limit": 500, "period_seconds": 86400, "excluded_values": ["u1"]}
+                    ]
+                }
+            },
+        ),
+        _deployment(
+            "grp",
+            "dep-2",
+            {
+                "token_limits": {
+                    "limits": [
+                        {"name": "daily", "limit": 500, "period_seconds": 86400, "excluded_values": ["u2"]}
+                    ]
+                }
+            },
+        ),
+    ]
+    configured = _build_group_limits(deployments, "tokens")
+    assert len(configured) == 2
+    scopes = {c.deployment_scope for c in configured}
+    assert scopes == {("dep-1",), ("dep-2",)}
+
+
+def test_build_group_limits_chain_wide_when_excluded_values_agree():
+    deployments = [
+        _deployment(
+            "grp",
+            "dep-1",
+            {
+                "token_limits": {
+                    "limits": [
+                        {"name": "daily", "limit": 500, "period_seconds": 86400, "excluded_values": ["u1"]}
+                    ]
+                }
+            },
+        ),
+        _deployment(
+            "grp",
+            "dep-2",
+            {
+                "token_limits": {
+                    "limits": [
+                        {"name": "daily", "limit": 500, "period_seconds": 86400, "excluded_values": ["u1"]}
+                    ]
+                }
+            },
+        ),
+    ]
+    configured = _build_group_limits(deployments, "tokens")
+    assert len(configured) == 1
+    assert configured[0].deployment_scope is None
 
 
 # ---------------------------------------------------------------------------
@@ -578,7 +779,7 @@ def test_resolve_any_picks_the_same_resolved_group_regardless_of_hash_seed():
     see the bug report this regression-tests for the exact reproduction.
     """
     script = (
-        "from litellm.proxy.hooks.tag_rate_limiter import _build_limits_index\n"
+        "from litellm.proxy.hooks.model_based_tag_rate_limits_hook import _build_limits_index\n"
         "def _deployment(model_name, deployment_id, tag_rate_limits):\n"
         "    return {'model_name': model_name, 'litellm_params': {'model': 'gpt-4o'},"
         " 'model_info': {'id': deployment_id, 'tag_rate_limits': tag_rate_limits}}\n"
@@ -646,6 +847,129 @@ async def test_filter_deployments_per_entry_fail_open_when_tag_absent(time_contr
     team_bucket_id = int(now) // 2592000
     team_key = f"{{tag_rl:grp:requests:monthly:team_id:chain:whatever}}:{team_bucket_id}"
     assert await limiter.internal_usage_cache.async_get_cache(key=team_key, litellm_parent_otel_span=None) is None
+
+
+def _company_tiered_cap_router(default_limit: int, override_limit: int) -> "litellm.Router":
+    return litellm.Router(
+        model_list=[
+            _deployment(
+                "grp",
+                "dep-1",
+                {
+                    "request_limits": {
+                        "limits": [
+                            {
+                                "name": "default_daily",
+                                "tag_id": "end_user_id",
+                                "limit": default_limit,
+                                "period_seconds": 86400,
+                            },
+                            {
+                                "name": "company_1032_daily",
+                                "tag_id": "end_user_id",
+                                "limit": override_limit,
+                                "period_seconds": 86400,
+                                "enabled_for": {"tag_id": "company_id", "values": ["1032"]},
+                                "excluded_values": ["u1"],
+                            },
+                        ]
+                    }
+                },
+            )
+        ]
+    )
+
+
+@pytest.mark.asyncio
+async def test_filter_deployments_scoped_override_skips_for_an_excluded_identity(time_controller):
+    """
+    Company-tiered-cap example from the plan: a stricter override entry
+    gated to one company via enabled_for, with a handful of named users
+    excluded from it via excluded_values. An excluded user must fall
+    through to the unscoped default entry entirely -- the override never
+    enforces or accounts for them.
+    """
+    limiter = _make_limiter(time_controller)
+    router = _company_tiered_cap_router(default_limit=3, override_limit=1)
+    limiter.update_variables(llm_router=router)
+    healthy = router.model_list
+
+    for _ in range(3):
+        result = await limiter.async_filter_deployments(
+            model="grp",
+            healthy_deployments=healthy,
+            messages=None,
+            request_kwargs={"metadata": {"tags": ["end_user_id:u1", "company_id:1032"]}},
+        )
+        assert result == healthy
+
+    with pytest.raises(ProxyRateLimitError) as exc_info:
+        await limiter.async_filter_deployments(
+            model="grp",
+            healthy_deployments=healthy,
+            messages=None,
+            request_kwargs={"metadata": {"tags": ["end_user_id:u1", "company_id:1032"]}},
+        )
+    assert exc_info.value.detail["limit_name"] == "default_daily"
+
+
+@pytest.mark.asyncio
+async def test_filter_deployments_scoped_override_enforces_for_a_non_excluded_identity_in_scope(time_controller):
+    """
+    The same override applies, and enforces its own stricter limit, for a
+    company-1032 user who is not on excluded_values, proving the two
+    entries are independently enforced rather than one silently replacing
+    the other.
+    """
+    limiter = _make_limiter(time_controller)
+    router = _company_tiered_cap_router(default_limit=3, override_limit=1)
+    limiter.update_variables(llm_router=router)
+    healthy = router.model_list
+
+    result = await limiter.async_filter_deployments(
+        model="grp",
+        healthy_deployments=healthy,
+        messages=None,
+        request_kwargs={"metadata": {"tags": ["end_user_id:u2", "company_id:1032"]}},
+    )
+    assert result == healthy
+
+    with pytest.raises(ProxyRateLimitError) as exc_info:
+        await limiter.async_filter_deployments(
+            model="grp",
+            healthy_deployments=healthy,
+            messages=None,
+            request_kwargs={"metadata": {"tags": ["end_user_id:u2", "company_id:1032"]}},
+        )
+    assert exc_info.value.detail["limit_name"] == "company_1032_daily"
+
+
+@pytest.mark.asyncio
+async def test_filter_deployments_scoped_override_does_not_apply_outside_its_enabled_for_gate(time_controller):
+    """A user not tagged with the gate company at all only ever hits the
+    unscoped default entry, even though the override's own limit is looser
+    and would otherwise still have room."""
+    limiter = _make_limiter(time_controller)
+    router = _company_tiered_cap_router(default_limit=1, override_limit=5)
+    limiter.update_variables(llm_router=router)
+    healthy = router.model_list
+
+    result = await limiter.async_filter_deployments(
+        model="grp",
+        healthy_deployments=healthy,
+        messages=None,
+        request_kwargs={"metadata": {"tags": ["end_user_id:u3"]}},
+    )
+    assert result == healthy
+
+    with pytest.raises(ProxyRateLimitError) as exc_info:
+        await limiter.async_filter_deployments(
+            model="grp",
+            healthy_deployments=healthy,
+            messages=None,
+            request_kwargs={"metadata": {"tags": ["end_user_id:u3"]}},
+        )
+    assert exc_info.value.detail["limit_name"] == "default_daily"
 
 
 @pytest.mark.asyncio
@@ -2086,7 +2410,7 @@ def _redis_limiter(time_controller: TimeController):
         pytest.skip("Redis environment variables (REDIS_HOST, REDIS_PORT) not set")
     redis_cache = RedisCache(host=redis_host, port=int(redis_port), password=os.getenv("REDIS_PASSWORD"))
     dual_cache = DualCache(redis_cache=redis_cache)
-    return _PROXY_TagRateLimiter(internal_usage_cache=dual_cache, time_provider=time_controller.now), redis_cache
+    return _PROXY_ModelBasedTagRateLimitsHook(internal_usage_cache=dual_cache, time_provider=time_controller.now), redis_cache
 
 
 @pytest.mark.asyncio
@@ -2608,7 +2932,7 @@ def test_concurrency_identical_across_all_deployments_is_still_chain_wide():
 def test_concurrency_ttl_floor_overrides_a_too_short_period_seconds():
     entry = TagRateLimitEntry(name="inflight", tag_id="end_user_id", limit=1, period_seconds=5)
     configured_limit = _ConfiguredLimit(unit="concurrency", entry=entry, deployment_scope=None)
-    assert _PROXY_TagRateLimiter._ttl_for(configured_limit) == _CONCURRENCY_MIN_SAFETY_TTL_SECONDS
+    assert _PROXY_ModelBasedTagRateLimitsHook._ttl_for(configured_limit) == _CONCURRENCY_MIN_SAFETY_TTL_SECONDS
 
 
 def test_concurrency_ttl_floor_does_not_shorten_a_longer_period_seconds():
@@ -2616,7 +2940,7 @@ def test_concurrency_ttl_floor_does_not_shorten_a_longer_period_seconds():
         name="inflight", tag_id="end_user_id", limit=1, period_seconds=_CONCURRENCY_MIN_SAFETY_TTL_SECONDS + 100
     )
     configured_limit = _ConfiguredLimit(unit="concurrency", entry=entry, deployment_scope=None)
-    assert _PROXY_TagRateLimiter._ttl_for(configured_limit) == _CONCURRENCY_MIN_SAFETY_TTL_SECONDS + 100
+    assert _PROXY_ModelBasedTagRateLimitsHook._ttl_for(configured_limit) == _CONCURRENCY_MIN_SAFETY_TTL_SECONDS + 100
 
 
 # ---------------------------------------------------------------------------
@@ -2636,7 +2960,7 @@ async def test_release_in_a_forked_task_is_visible_to_the_parent_context():
     model_call_details: dict = {_PENDING_CONCURRENCY_KEYS_FIELD: ["key1"]}
 
     async def detached_release():
-        return _PROXY_TagRateLimiter._pop_pending_concurrency_keys(model_call_details)
+        return _PROXY_ModelBasedTagRateLimitsHook._pop_pending_concurrency_keys(model_call_details)
 
     released = await asyncio.create_task(detached_release())
     assert released == ("key1",)
@@ -2650,7 +2974,7 @@ async def test_release_does_not_sweep_up_a_key_appended_after_its_snapshot():
     model_call_details: dict = {_PENDING_CONCURRENCY_KEYS_FIELD: ["key1"]}
 
     async def detached_release_then_sibling_admits():
-        released = _PROXY_TagRateLimiter._pop_pending_concurrency_keys(model_call_details)
+        released = _PROXY_ModelBasedTagRateLimitsHook._pop_pending_concurrency_keys(model_call_details)
         # A sibling hop's admission, appending to the same shared dict,
         # interleaved right after this release's snapshot was taken.
         model_call_details[_PENDING_CONCURRENCY_KEYS_FIELD].append("key2")
@@ -2665,8 +2989,8 @@ async def test_release_does_not_sweep_up_a_key_appended_after_its_snapshot():
 @pytest.mark.asyncio
 async def test_release_is_not_repeated_for_the_same_snapshot():
     model_call_details: dict = {_PENDING_CONCURRENCY_KEYS_FIELD: ["key1"]}
-    first = _PROXY_TagRateLimiter._pop_pending_concurrency_keys(model_call_details)
-    second = _PROXY_TagRateLimiter._pop_pending_concurrency_keys(model_call_details)
+    first = _PROXY_ModelBasedTagRateLimitsHook._pop_pending_concurrency_keys(model_call_details)
+    second = _PROXY_ModelBasedTagRateLimitsHook._pop_pending_concurrency_keys(model_call_details)
     assert first == ("key1",)
     assert second == ()
 
@@ -2758,7 +3082,7 @@ async def test_refund_failure_on_one_key_does_not_block_others_or_raise(time_con
     other_key = "{tag_rl:test:refund-fail:b}:requests"
     rejecting_key = "{tag_rl:test:refund-fail:c}:requests"
 
-    class _FlakyLimiter(_PROXY_TagRateLimiter):
+    class _FlakyLimiter(_PROXY_ModelBasedTagRateLimitsHook):
         async def _decrement_floor_zero(self, cache, key: str, delta: float) -> None:
             if key == failing_key:
                 raise RuntimeError("simulated transient redis failure")
@@ -2794,7 +3118,7 @@ async def test_exception_mid_batch_refunds_every_earlier_admission_before_propag
     admitted_key = "{tag_rl:test:exception-refund:a}:requests"
     raising_key = "{tag_rl:test:exception-refund:b}:requests"
 
-    class _FlakyLimiter(_PROXY_TagRateLimiter):
+    class _FlakyLimiter(_PROXY_ModelBasedTagRateLimitsHook):
         async def _check_and_increment_one(self, cache, key: str, limit: float, increment: float, ttl: int):
             if key == raising_key:
                 raise RuntimeError("simulated transient redis failure")
@@ -2832,7 +3156,7 @@ async def test_a_raising_keys_own_ambiguous_outcome_is_never_refunded(time_contr
     admitted_key = "{tag_rl:test:ambiguous-no-refund:a}:requests"
     raising_key = "{tag_rl:test:ambiguous-no-refund:b}:requests"
 
-    class _FlakyLimiter(_PROXY_TagRateLimiter):
+    class _FlakyLimiter(_PROXY_ModelBasedTagRateLimitsHook):
         async def _check_and_increment_one(self, cache, key: str, limit: float, increment: float, ttl: int):
             if key == raising_key:
                 # Simulate Redis committing the increment before the
@@ -3219,7 +3543,7 @@ async def test_flooding_tag_buckets_does_not_evict_the_shared_cache_authenticati
     shared_cache = DualCache()
     await shared_cache.async_set_cache(key="authentication_bound_counter", value="do-not-evict")
 
-    limiter = _PROXY_TagRateLimiter(internal_usage_cache=shared_cache, time_provider=time_controller.now)
+    limiter = _PROXY_ModelBasedTagRateLimitsHook(internal_usage_cache=shared_cache, time_provider=time_controller.now)
     router = litellm.Router(
         model_list=[
             _deployment(
@@ -3271,14 +3595,14 @@ async def test_max_in_memory_cache_size_setting_lets_high_cardinality_tags_avoid
     This hook's own isolated cache still defaults to 200 items, shared across
     every distinct tag value it sees. A deployment rate-limiting on a
     high-cardinality tag_id (e.g. per end user) without Redis can raise
-    `litellm_settings.tag_rate_limiter_max_in_memory_cache_size` so an
+    `litellm_settings.model_based_tag_rate_limits_max_in_memory_cache_size` so an
     earlier bucket survives churn from later, unrelated tag values: with
     limit=1, a still-live bucket rejects a second request instead of having
     been evicted back to a fresh count of 0.
     """
-    monkeypatch.setattr(litellm, "tag_rate_limiter_max_in_memory_cache_size", 500)
+    monkeypatch.setattr(litellm, "model_based_tag_rate_limits_max_in_memory_cache_size", 500)
 
-    limiter = _PROXY_TagRateLimiter(internal_usage_cache=DualCache(), time_provider=time_controller.now)
+    limiter = _PROXY_ModelBasedTagRateLimitsHook(internal_usage_cache=DualCache(), time_provider=time_controller.now)
     router = _single_request_per_minute_router()
     limiter.update_variables(llm_router=router)
     healthy = router.model_list
@@ -3327,9 +3651,9 @@ async def test_invalid_max_in_memory_cache_size_falls_back_to_the_safe_default(
     of failing loudly. Each of these must be rejected in favor of the safe
     default: a limit=1 bucket must still reject a second, immediate request.
     """
-    monkeypatch.setattr(litellm, "tag_rate_limiter_max_in_memory_cache_size", invalid_configured_size)
+    monkeypatch.setattr(litellm, "model_based_tag_rate_limits_max_in_memory_cache_size", invalid_configured_size)
 
-    limiter = _PROXY_TagRateLimiter(internal_usage_cache=DualCache(), time_provider=time_controller.now)
+    limiter = _PROXY_ModelBasedTagRateLimitsHook(internal_usage_cache=DualCache(), time_provider=time_controller.now)
     router = _single_request_per_minute_router()
     limiter.update_variables(llm_router=router)
     healthy = router.model_list
@@ -3390,7 +3714,7 @@ def test_bucket_ttl_seconds_honors_key_ttl_seconds_override():
 def test_ttl_for_concurrency_honors_key_ttl_seconds_above_the_safety_floor():
     above_floor: Final = _CONCURRENCY_MIN_SAFETY_TTL_SECONDS + 100
     assert (
-        _PROXY_TagRateLimiter._ttl_for(_concurrency_limit(period_seconds=60, key_ttl_seconds=above_floor))
+        _PROXY_ModelBasedTagRateLimitsHook._ttl_for(_concurrency_limit(period_seconds=60, key_ttl_seconds=above_floor))
         == above_floor
     )
 
@@ -3404,7 +3728,7 @@ def test_ttl_for_concurrency_never_drops_below_the_safety_floor_even_with_a_lowe
     """
     below_floor: Final = 10
     assert (
-        _PROXY_TagRateLimiter._ttl_for(_concurrency_limit(period_seconds=5, key_ttl_seconds=below_floor))
+        _PROXY_ModelBasedTagRateLimitsHook._ttl_for(_concurrency_limit(period_seconds=5, key_ttl_seconds=below_floor))
         == _CONCURRENCY_MIN_SAFETY_TTL_SECONDS
     )
 

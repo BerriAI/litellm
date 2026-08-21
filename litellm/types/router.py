@@ -155,6 +155,27 @@ def _as_utc(value: datetime.datetime | None) -> datetime.datetime | None:
     return value.astimezone(datetime.timezone.utc)
 
 
+class TagRateLimitScope(BaseModel):
+    """
+    A gate on a tag OTHER than the entry's own `tag_id` -- e.g. scoping an
+    entry to `tag_id: company_id, values: ["1032"]` so it only applies to
+    requests tagged as belonging to company 1032, independent of whichever
+    tag the entry itself keys its bucket by. See `TagRateLimitEntry.enabled_for`/
+    `disabled_for`, which are the only two fields that construct this.
+    """
+
+    tag_id: str
+    values: tuple[str, ...]
+
+    model_config = ConfigDict(frozen=True)
+
+    @model_validator(mode="after")
+    def _validate_values(self) -> "TagRateLimitScope":
+        if not self.values:
+            raise ValueError("values must be a non-empty list of strings")
+        return self
+
+
 class TagRateLimitEntry(BaseModel):
     name: str
     tag_id: str = "end_user_id"
@@ -163,7 +184,7 @@ class TagRateLimitEntry(BaseModel):
     scope_by_key_hash: bool = False
     # Overrides this entry's bucket/reservation key TTL (Redis, and the
     # in-memory fallback when Redis isn't configured). Defaults to
-    # period_seconds + 3600 when unset -- see _PROXY_TagRateLimiter._ttl_for.
+    # period_seconds + 3600 when unset -- see _PROXY_ModelBasedTagRateLimitsHook._ttl_for.
     # A high-cardinality tag_id can keep many keys alive at once; lowering
     # this lets an operator shed them sooner without shortening
     # period_seconds itself.
@@ -172,11 +193,27 @@ class TagRateLimitEntry(BaseModel):
     # entry's own keys live in, when Redis isn't configured (or as a local
     # fast-path cache when it is). Unset means this entry shares the hook's
     # single default partition, sized by
-    # litellm.tag_rate_limiter_max_in_memory_cache_size (200 if that's also
+    # litellm.model_based_tag_rate_limits_max_in_memory_cache_size (200 if that's also
     # unset). A high-cardinality tag_id can churn past that shared cap and
     # evict another entry's active counters; setting this gives the entry
     # its own dedicated partition instead.
     max_in_memory_cache_size: int | None = None
+    # Scope this entry to a subset of its own resolved `tag_id` value --
+    # e.g. hand-picking a handful of identities without needing a second
+    # tag at all. `excluded_values` is checked before `included_values`
+    # (deny overrides allow) when both happen to be set on the same entry.
+    included_values: tuple[str, ...] | None = None
+    excluded_values: tuple[str, ...] | None = None
+    # Gate this entry on a SECOND, independent tag rather than its own
+    # `tag_id` -- e.g. `enabled_for: {tag_id: company_id, values: ["1032"]}`
+    # to scope an override to one company's traffic without enumerating
+    # every one of that company's end_user_id values by hand.
+    # `disabled_for` is checked first (deny overrides allow) when both are
+    # set. An absent gate tag never satisfies `enabled_for` (an allowlist
+    # gate requires an explicit match) but never triggers `disabled_for`
+    # either (nothing to match against a denylist).
+    enabled_for: TagRateLimitScope | None = None
+    disabled_for: TagRateLimitScope | None = None
 
     model_config = ConfigDict(protected_namespaces=())
 
@@ -201,6 +238,14 @@ class TagRateLimitEntry(BaseModel):
     def _validate_max_in_memory_cache_size(self) -> "TagRateLimitEntry":
         if self.max_in_memory_cache_size is not None and self.max_in_memory_cache_size <= 0:
             raise ValueError("max_in_memory_cache_size must be a positive integer when set")
+        return self
+
+    @model_validator(mode="after")
+    def _validate_included_and_excluded_values(self) -> "TagRateLimitEntry":
+        if self.included_values is not None and not self.included_values:
+            raise ValueError("included_values must be a non-empty list of strings when set")
+        if self.excluded_values is not None and not self.excluded_values:
+            raise ValueError("excluded_values must be a non-empty list of strings when set")
         return self
 
 
