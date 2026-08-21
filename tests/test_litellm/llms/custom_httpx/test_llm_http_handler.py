@@ -2369,3 +2369,79 @@ async def test_async_anthropic_messages_handler_carries_deployment_vertex_locati
 
     unconfigured_deployment = await logging_obj_after_handler(GenericLiteLLMParams())
     assert "vertex_location" not in unconfigured_deployment.litellm_params
+
+
+_GENERIC_STREAM_SSE = (
+    b'data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1,'
+    b'"model":"test-model","choices":[{"index":0,"delta":{"content":"hi"},'
+    b'"finish_reason":null}]}\n\n'
+    b"data: [DONE]\n\n"
+)
+
+
+def _generic_stream_upstream_response() -> httpx.Response:
+    return httpx.Response(
+        200,
+        headers={
+            "x-request-id": "generic-req-123",
+            "x-ratelimit-remaining-requests": "42",
+        },
+        content=_GENERIC_STREAM_SSE,
+        request=httpx.Request("POST", "https://fake-vllm.test/v1/chat/completions"),
+    )
+
+
+def test_generic_http_handler_sync_streaming_forwards_provider_response_headers():
+    """
+    Regression test for the generic BaseLLMHTTPHandler streaming path used by
+    ~30 providers (deepseek, groq, hosted_vllm, databricks, openrouter, ...).
+
+    The sync `completion()` streaming branch builds the CustomStreamWrapper from
+    `make_sync_call`, which returns the upstream response headers alongside the
+    stream. Those headers must reach the caller as `llm_provider-*` entries in
+    `_hidden_params["additional_headers"]`, which is what the proxy merges into
+    the client-facing response headers.
+    """
+    mock_client = Mock(spec=HTTPHandler)
+    mock_client.post = Mock(return_value=_generic_stream_upstream_response())
+
+    response = litellm.completion(
+        model="hosted_vllm/test-model",
+        messages=[{"role": "user", "content": "Hello"}],
+        api_base="https://fake-vllm.test/v1",
+        api_key="sk-test",
+        stream=True,
+        client=mock_client,
+    )
+
+    additional_headers = response._hidden_params["additional_headers"]
+    assert additional_headers["llm_provider-x-request-id"] == "generic-req-123"
+    assert additional_headers["llm_provider-x-ratelimit-remaining-requests"] == "42"
+
+    assert "".join([chunk.choices[0].delta.content or "" for chunk in response]) == "hi"
+
+
+@pytest.mark.asyncio
+async def test_generic_http_handler_async_streaming_forwards_provider_response_headers():
+    """
+    Companion to the sync test above for `acompletion_stream_function`, which
+    builds its CustomStreamWrapper from `make_async_call_stream_helper`.
+    """
+    mock_client = AsyncMock(spec=AsyncHTTPHandler)
+    mock_client.post = AsyncMock(return_value=_generic_stream_upstream_response())
+
+    response = await litellm.acompletion(
+        model="hosted_vllm/test-model",
+        messages=[{"role": "user", "content": "Hello"}],
+        api_base="https://fake-vllm.test/v1",
+        api_key="sk-test",
+        stream=True,
+        client=mock_client,
+    )
+
+    additional_headers = response._hidden_params["additional_headers"]
+    assert additional_headers["llm_provider-x-request-id"] == "generic-req-123"
+    assert additional_headers["llm_provider-x-ratelimit-remaining-requests"] == "42"
+
+    collected = [chunk async for chunk in response]
+    assert "".join([chunk.choices[0].delta.content or "" for chunk in collected]) == "hi"
