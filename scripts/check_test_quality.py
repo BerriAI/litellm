@@ -48,6 +48,10 @@ TQ006   A `pytest.skip` reached only when a credential-shaped environment variab
         deliberate branch. The gate follows one local or module-level binding, which is
         the `key = os.getenv(...)` then `if not key: pytest.skip(...)` shape most of
         these use.
+TQ008   A `patch(...)` whose target is a `litellm.` internal. Patching the SDK's own
+        functions pins the test to the current wiring instead of the behaviour, and it
+        is the idiom the suite reaches for instead of faking the HTTP boundary. Mocking
+        a third-party client, a transport, or anything outside `litellm.` is untouched.
 TQ007   A module global that a conftest saves before every test and restores after it.
         The save/restore list is a hand-maintained inventory of the leaks the suite
         already knows about, so it is allowed to shrink and never to grow: a new entry
@@ -467,6 +471,36 @@ def iter_global_mutation_violations(path: Path, tree: ast.Module) -> Iterator[Vi
                 )
 
 
+def _patch_targets(call: ast.Call) -> Iterator[str]:
+    """What a patch installer is replacing: the dotted string it names, or the
+    attribute chain handed to `patch.object` / `patch.dict`."""
+    for first in call.args[:1]:
+        if isinstance(first, ast.Constant) and isinstance(first.value, str):
+            yield first.value
+        elif dotted := _dotted_name(first):
+            yield dotted
+
+
+def _is_sdk_internal(dotted: str) -> bool:
+    return dotted == SDK_MODULE or dotted.startswith(f"{SDK_MODULE}.")
+
+
+def iter_internal_patch_violations(path: Path, tree: ast.Module) -> Iterator[Violation]:
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call) and _is_patch_installer(_dotted_name(node.func))):
+            continue
+        for target in _patch_targets(node):
+            if _is_sdk_internal(target):
+                yield Violation(
+                    path,
+                    node.lineno,
+                    "TQ008",
+                    f"patches `{target}`, an SDK internal, so the test is pinned to how the code is "
+                    "wired rather than what it does; fake the HTTP boundary (respx / MockTransport) "
+                    f"or inject the collaborator (suppress: `# {SUPPRESSION_TOKEN}: <reason>`)",
+                )
+
+
 def _environ_keys(node: ast.AST) -> Iterator[str]:
     for inner in ast.walk(node):
         if isinstance(inner, ast.Call) and _dotted_name(inner.func) in ENVIRON_READERS:
@@ -678,6 +712,7 @@ def check_file(path: Path) -> tuple[Violation, ...]:
             *iter_global_mutation_violations(path, tree),
             *iter_credential_skip_violations(path, tree),
             *iter_conftest_inventory_violations(path, tree),
+            *iter_internal_patch_violations(path, tree),
         )
         if violation.line not in skip
     )
