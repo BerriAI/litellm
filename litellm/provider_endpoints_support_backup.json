@@ -2029,7 +2029,7 @@
     },
     "scx-ai": {
       "display_name": "SCX.ai (`scx-ai`)",
-      "url": "https://docs.litellm.ai/docs/providers/scx-ai",
+      "url": "https://docs.litellm.ai/docs/providers/scx_ai",
       "endpoints": {
         "chat_completions": true,
         "messages": false,
