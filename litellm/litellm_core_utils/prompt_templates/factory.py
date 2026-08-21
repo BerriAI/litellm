@@ -649,7 +649,7 @@ def get_model_info(token, model):
     try:
         headers: Final = {"Authorization": f"Bearer {token}"}
         client: Final = HTTPHandler(concurrent_limit=1)
-        response: Final = client.get("https://api.together.xyz/models/info", headers=headers)
+        response: Final = client.get("https://api.together.ai/models/info", headers=headers)
         if response.status_code == 200:
             model_info: Final = response.json()
             for m in model_info:

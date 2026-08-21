@@ -21,7 +21,9 @@ from litellm.utils import _get_model_cost_key
 
 from ..openai.chat.gpt_transformation import OpenAIGPTConfig
 
-TOGETHER_AI_API_BASE: Final = "https://api.together.xyz/v1"
+# Together's documented base URL. api.together.xyz is the legacy host and still serves,
+# so it stays a recognized openai-compatible endpoint for configs that already point there.
+TOGETHER_AI_API_BASE: Final = "https://api.together.ai/v1"
 
 # Together-native chat-completions params: accepted by the API, absent from OpenAI's schema.
 _NATIVE_PARAMS: Final = (

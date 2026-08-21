@@ -232,7 +232,7 @@ def test_request_body_reaching_the_openai_sdk(local_model_cost_map, no_together_
     """End to end: what a caller passes has to arrive in the shape Together documents."""
     import openai
 
-    client = openai.OpenAI(api_key="test-key", base_url="https://api.together.xyz/v1")
+    client = openai.OpenAI(api_key="test-key", base_url="https://api.together.ai/v1")
     with patch.object(client.chat.completions.with_raw_response, "create", new=MagicMock()) as mocked_create:
         local_model_cost_map.completion(
             model="together_ai/openai/gpt-oss-120b",
@@ -270,7 +270,7 @@ def test_reasoning_toggle_reaches_the_sdk_in_extra_body(local_model_cost_map, no
     `AsyncCompletions.create() got an unexpected keyword argument 'reasoning'`."""
     import openai
 
-    client = openai.OpenAI(api_key="test-key", base_url="https://api.together.xyz/v1")
+    client = openai.OpenAI(api_key="test-key", base_url="https://api.together.ai/v1")
     with patch.object(client.chat.completions.with_raw_response, "create", new=MagicMock()) as mocked_create:
         local_model_cost_map.completion(
             model="together_ai/moonshotai/Kimi-K3",
@@ -303,7 +303,8 @@ def test_api_key_resolution_order(no_together_env):
 
 
 def test_api_base_resolution(no_together_env):
-    assert TogetherAIConfig.get_api_base() == "https://api.together.xyz/v1"
+    """Together documents https://api.together.ai/v1; api.together.xyz is the legacy host."""
+    assert TogetherAIConfig.get_api_base() == "https://api.together.ai/v1"
 
     no_together_env.setenv("TOGETHER_AI_API_BASE", "https://gateway.internal/v1")
     assert TogetherAIConfig.get_api_base() == "https://gateway.internal/v1"
@@ -318,7 +319,7 @@ def test_get_llm_provider_uses_the_config(no_together_env):
 
     assert (model, provider) == ("moonshotai/Kimi-K3", "together_ai")
     assert api_key == "primary-key"
-    assert api_base == "https://api.together.xyz/v1"
+    assert api_base == "https://api.together.ai/v1"
 
 
 @pytest.mark.parametrize(
@@ -339,7 +340,7 @@ def test_get_models_prefixes_ids_for_both_payload_shapes(no_together_env, payloa
         models = TogetherAIConfig().get_models(api_key="test-key")
 
     assert models == ["together_ai/zai-org/GLM-5.2", "together_ai/openai/whisper-large-v3"]
-    assert mocked_get.call_args.kwargs["url"] == "https://api.together.xyz/v1/models"
+    assert mocked_get.call_args.kwargs["url"] == "https://api.together.ai/v1/models"
     assert mocked_get.call_args.kwargs["headers"]["Authorization"] == "Bearer test-key"
 
 

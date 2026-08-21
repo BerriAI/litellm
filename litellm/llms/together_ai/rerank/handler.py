@@ -49,7 +49,7 @@ class TogetherAIRerank(BaseLLM):
             return self.async_rerank(request_data_dict, api_key)  # Call async method
 
         response: Final = client.post(
-            "https://api.together.xyz/v1/rerank",
+            "https://api.together.ai/v1/rerank",
             headers={
                 "accept": "application/json",
                 "content-type": "application/json",
@@ -73,7 +73,7 @@ class TogetherAIRerank(BaseLLM):
         client: Final = get_async_httpx_client(llm_provider=litellm.LlmProviders.TOGETHER_AI)  # Use async client
 
         response: Final = await client.post(
-            "https://api.together.xyz/v1/rerank",
+            "https://api.together.ai/v1/rerank",
             headers={
                 "accept": "application/json",
                 "content-type": "application/json",
