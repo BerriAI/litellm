@@ -119,3 +119,27 @@
   assertions: [succeeds]
   source: "server.py:1089"
   rationale: Smoke; rarely used; same auth model as tools
+- id: mcp.list_tools.api_key.team_grant_preserves_key_toolset
+  module: mcp
+  tier: P0
+  operation: list_tools
+  auth_family: api_key
+  assertions: [team_grant_preserves_key_toolset]
+  source: "user_api_key_auth_mcp.py:1443 base = key_set & team_set"
+  rationale: "Toolset-granted servers pass through the key/team intersection, so granting a team an unrelated MCP access group erased a child key's toolset tools and took a customer's coding agents down (ticket #7578). A team grant must widen, never narrow"
+- id: mcp.list_tools.api_key.prefixes_native_name_once
+  module: mcp
+  tier: P1
+  operation: list_tools
+  auth_family: api_key
+  assertions: [prefixes_native_name_once]
+  source: "mcp_server_manager.py:3060 resolve_toolset_tool_permissions + utils.py:273 add_server_prefix_to_name"
+  rationale: "The wire prefix must be applied exactly once and a native name that begins with its server's prefix must not be mistaken for an already-prefixed one and stripped, which silently renames a real tool"
+- id: mcp.list_tools.api_key.legacy_prefixed_row_resolves
+  module: mcp
+  tier: P1
+  operation: list_tools
+  auth_family: api_key
+  assertions: [legacy_prefixed_row_resolves]
+  source: "mcp_server_manager.py:3092 stored tool_name used as written"
+  rationale: "PR #34559 moved toolset rows to bare tool names with no migration, so every toolset written by <=1.94 holds a prefixed name that matches nothing upstream and returns zero tools (ticket #7059)"
