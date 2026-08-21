@@ -6222,6 +6222,66 @@ class TestInjectCostIntoUsageDict:
             + 8 * pricing["output_cost_per_token"]
         )
 
+    def test_pricing_a_frame_leaves_the_real_logging_obj_unchanged(self):
+        """Pricing runs against the live logging object, and the pass-through handlers never
+        recompute cost_breakdown, so a frame-derived breakdown would reach the spend log."""
+        from litellm.litellm_core_utils.litellm_logging import (
+            Logging as LiteLLMLoggingObj,
+        )
+        from litellm.types.utils import ModelResponse, Usage
+
+        logging_obj = LiteLLMLoggingObj(
+            model="claude-haiku-4-5",
+            messages=[{"role": "user", "content": "test"}],
+            stream=True,
+            call_type="completion",
+            start_time=None,
+            litellm_call_id="lit4902-breakdown-test",
+            function_id="lit4902-breakdown-test",
+        )
+        logging_obj.update_environment_variables(litellm_params={}, optional_params={})
+        logging_obj.model_call_details["custom_llm_provider"] = "anthropic"
+        assert logging_obj.cost_breakdown is None
+
+        model_response = ModelResponse(
+            usage=Usage(prompt_tokens=3216, completion_tokens=8, total_tokens=3224)
+        )
+        cost = ProxyBaseLLMRequestProcessing._logging_obj_cost_or_none(model_response, logging_obj)
+
+        assert cost is not None and cost > 0
+        assert logging_obj.cost_breakdown is None
+        assert "response_cost_failure_debug_information" not in logging_obj.model_call_details
+
+    def test_pricing_a_frame_restores_a_breakdown_the_request_already_had(self):
+        from litellm.litellm_core_utils.litellm_logging import (
+            Logging as LiteLLMLoggingObj,
+        )
+        from litellm.types.utils import ModelResponse, Usage
+
+        logging_obj = LiteLLMLoggingObj(
+            model="claude-haiku-4-5",
+            messages=[{"role": "user", "content": "test"}],
+            stream=True,
+            call_type="completion",
+            start_time=None,
+            litellm_call_id="lit4902-breakdown-restore",
+            function_id="lit4902-breakdown-restore",
+        )
+        logging_obj.update_environment_variables(litellm_params={}, optional_params={})
+        logging_obj.model_call_details["custom_llm_provider"] = "anthropic"
+        logging_obj.set_cost_breakdown(
+            input_cost=0.5, output_cost=0.25, total_cost=0.75, cost_for_built_in_tools_cost_usd_dollar=0.0
+        )
+        existing = logging_obj.cost_breakdown
+
+        model_response = ModelResponse(
+            usage=Usage(prompt_tokens=3216, completion_tokens=8, total_tokens=3224)
+        )
+        ProxyBaseLLMRequestProcessing._logging_obj_cost_or_none(model_response, logging_obj)
+
+        assert logging_obj.cost_breakdown is existing
+        assert logging_obj.cost_breakdown["total_cost"] == 0.75
+
     def test_openai_chunk_prices_through_the_logging_obj_so_custom_pricing_applies(self):
         """The chat.completion.chunk path rides the same pricer, so a discounted deployment
         streaming /v1/chat/completions gets its negotiated price instead of sticker."""
