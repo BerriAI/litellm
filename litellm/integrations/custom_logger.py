@@ -72,6 +72,11 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
     Set it to True on a hook that inspects or rejects content, so that scanning a payload which
     is not itself a request, such as one record of a batch input file, still reaches it. A
     ``CustomGuardrail`` does not need it; guardrails are dispatched by their own branch.
+
+    Judging content is necessary but not sufficient. A hook that also rewrites the payload for
+    routing, as the managed-files and managed-vector-store hooks do, stays False: a per-record
+    rewrite would read as a redaction and ship embedded in the record. Only the leaf class is
+    consulted, so a subclass that does not override ``async_pre_call_hook`` inherits nothing.
     """
 
     def __init__(

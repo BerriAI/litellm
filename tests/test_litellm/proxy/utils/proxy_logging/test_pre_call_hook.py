@@ -14,6 +14,16 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy.utils import ProxyLogging
 
 
+def _load(module: str, name: str):
+    """The enterprise package is optional; a missing one is not an unclassified hook."""
+    import importlib
+
+    try:
+        return getattr(importlib.import_module(module), name)
+    except (ImportError, AttributeError):
+        return None
+
+
 @pytest.fixture(autouse=True)
 def _clear_caps_cache():
     ProxyLogging._callback_capabilities_cache.clear()
@@ -324,7 +334,6 @@ class _Accountant(CustomLogger):
 async def test_a_content_enforcer_runs_in_both_walks(proxy_logging, monkeypatch, guardrails_only):
     enforcer = _Enforcer()
     monkeypatch.setattr(litellm, "callbacks", [enforcer])
-    ProxyLogging._callback_capabilities_cache.clear()
 
     await proxy_logging.pre_call_hook(
         user_api_key_dict=MagicMock(),
@@ -341,7 +350,6 @@ async def test_an_accounting_hook_is_skipped_by_a_guardrails_only_walk(proxy_log
     """Charging budget or taking a rate-limit slot once per batch record is the bug this prevents."""
     accountant = _Accountant()
     monkeypatch.setattr(litellm, "callbacks", [accountant])
-    ProxyLogging._callback_capabilities_cache.clear()
 
     await proxy_logging.pre_call_hook(
         user_api_key_dict=MagicMock(),
@@ -363,33 +371,70 @@ async def test_an_accounting_hook_is_skipped_by_a_guardrails_only_walk(proxy_log
 def test_has_pre_call_guardrails_counts_a_content_enforcer(proxy_logging, monkeypatch):
     """The batch scan is gated on this, so an enforcer-only proxy must still stream the file."""
     monkeypatch.setattr(litellm, "callbacks", [_Accountant()])
-    ProxyLogging._callback_capabilities_cache.clear()
     assert proxy_logging.has_pre_call_guardrails({}) is False
 
     monkeypatch.setattr(litellm, "callbacks", [_Enforcer()])
+    # required: the list keeps length one, so a reused object address could hit a stale entry
     ProxyLogging._callback_capabilities_cache.clear()
     assert proxy_logging.has_pre_call_guardrails({}) is True
 
 
-def test_the_in_tree_hooks_are_classified():
-    """A hook that judges content opts in; every hook that counts a request stays out."""
-    from litellm.proxy.hooks.azure_content_safety import _PROXY_AzureContentSafety
-    from litellm.proxy.hooks.cache_control_check import _PROXY_CacheControlCheck
-    from litellm.proxy.hooks.max_budget_limiter import _PROXY_MaxBudgetLimiter
-    from litellm.proxy.hooks.max_budget_per_session_limiter import _PROXY_MaxBudgetPerSessionHandler
-    from litellm.proxy.hooks.max_iterations_limiter import _PROXY_MaxIterationsHandler
-    from litellm.proxy.hooks.parallel_request_limiter_v3 import _PROXY_MaxParallelRequestsHandler_v3
-    from litellm.proxy.hooks.prompt_injection_detection import _OPTIONAL_PromptInjectionDetection
+def test_every_pre_call_customlogger_is_deliberately_classified():
+    """
+    A ledger, so a new hook cannot land unclassified.
 
-    assert CustomLogger.enforces_request_content is False
-    for enforcing in (_OPTIONAL_PromptInjectionDetection, _PROXY_AzureContentSafety):
-        assert enforcing.enforces_request_content is True, enforcing.__name__
-    for counting in (
-        _PROXY_MaxBudgetLimiter,
-        _PROXY_MaxParallelRequestsHandler_v3,
-        _PROXY_MaxIterationsHandler,
-        _PROXY_MaxBudgetPerSessionHandler,
-        _PROXY_CacheControlCheck,
+    The flag has no forcing function on its own: an enforcement hook added later would simply
+    default to False and silently skip batch records, which is the bug this fixes. Adding a
+    pre-call CustomLogger now fails here until someone puts it on one side.
+    """
+    judges_content = {
+        "_OPTIONAL_PromptInjectionDetection",
+        "_PROXY_AzureContentSafety",
+        "_ENTERPRISE_BannedKeywords",
+        "_ENTERPRISE_BlockedUserList",
+    }
+    counts_or_shapes_the_request = {
+        "_PROXY_MaxBudgetLimiter",
+        "_PROXY_MaxParallelRequestsHandler_v3",
+        "_PROXY_MaxIterationsHandler",
+        "_PROXY_MaxBudgetPerSessionHandler",
+        "_PROXY_CacheControlCheck",
+        "_PROXY_BatchRedisRequests",
+        "_PROXY_SensitiveDataRoutingHandler",
+        "ResponsesIDSecurity",
+        "SkillsInjectionHook",
+        "_PROXY_LiteLLMManagedFiles",
+        "_PROXY_LiteLLMManagedVectorStores",
+    }
+
+    from litellm.proxy.hooks import PROXY_HOOKS
+
+    registered = dict(PROXY_HOOKS)
+    for name, cls in (
+        ("banned_keywords", _load("enterprise.enterprise_hooks.banned_keywords", "_ENTERPRISE_BannedKeywords")),
+        ("blocked_user_check", _load("enterprise.enterprise_hooks.blocked_user_list", "_ENTERPRISE_BlockedUserList")),
+        ("detect_prompt_injection", _load("litellm.proxy.hooks.prompt_injection_detection", "_OPTIONAL_PromptInjectionDetection")),
+        ("azure_content_safety", _load("litellm.proxy.hooks.azure_content_safety", "_PROXY_AzureContentSafety")),
     ):
-        assert counting.enforces_request_content is False, counting.__name__
+        if cls is not None:
+            registered[name] = cls
 
+    unclassified = []
+    for cls in registered.values():
+        if not (isinstance(cls, type) and issubclass(cls, CustomLogger)):
+            continue
+        if "async_pre_call_hook" not in cls.__dict__:
+            continue
+        name = cls.__name__
+        if name in judges_content:
+            assert cls.enforces_request_content is True, f"{name} judges content but is not marked"
+        elif name in counts_or_shapes_the_request:
+            assert cls.enforces_request_content is False, f"{name} must not run once per record"
+        else:
+            unclassified.append(name)
+
+    assert not unclassified, (
+        f"pre-call CustomLogger(s) with no recorded classification: {sorted(unclassified)}. "
+        "Decide whether each judges the payload (mark it) or counts the request (leave it)."
+    )
+    assert CustomLogger.enforces_request_content is False

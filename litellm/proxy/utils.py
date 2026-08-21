@@ -1530,7 +1530,7 @@ class ProxyLogging:
 
     def has_pre_call_guardrails(self, request_metadata: Mapping[str, object]) -> bool:
         """
-        Whether any guardrail or guardrail pipeline would inspect a request carrying this metadata.
+        Whether anything configured would inspect the content of a request carrying this metadata.
 
         Evaluated with the same predicate the pre-call loop uses, so a proxy configured only with
         post-call guardrails answers False. Callers that must pay a real cost to build the hook's
@@ -1986,7 +1986,7 @@ class ProxyLogging:
                 has_streaming_chunk_override = True
             if "async_pre_call_hook" in cls_attrs:
                 has_pre_call_override = True
-                if resolved.enforces_request_content:
+                if resolved.enforces_request_content is True:
                     has_content_enforcer = True
 
         caps: Final = _CallbackCapabilities(
