@@ -290,7 +290,7 @@ async def test_db_health_watchdog_should_trigger_reconnect_on_db_error(
             AsyncMock(side_effect=[None, asyncio.CancelledError()]),
         ),
         patch(
-            "litellm.proxy.db.exception_handler.PrismaDBExceptionHandler.is_database_connection_error",
+            "litellm.proxy.db.exception_handler.PrismaDBExceptionHandler.is_database_infrastructure_error",
             return_value=True,
         ),
     ):
@@ -321,7 +321,7 @@ async def test_db_health_watchdog_should_trigger_reconnect_on_probe_timeout(
             AsyncMock(side_effect=[None, asyncio.CancelledError()]),
         ),
         patch(
-            "litellm.proxy.db.exception_handler.PrismaDBExceptionHandler.is_database_connection_error",
+            "litellm.proxy.db.exception_handler.PrismaDBExceptionHandler.is_database_infrastructure_error",
             return_value=False,
         ),
     ):
@@ -507,7 +507,7 @@ async def test_engine_confirmed_dead_persists_across_failed_heavy_reconnect(
     client._reap_all_zombies = MagicMock()
 
     with patch.dict(os.environ, {"DATABASE_URL": "postgresql://test"}):
-        with pytest.raises(Exception):
+        with pytest.raises(RuntimeError):
             await client._run_reconnect_cycle(timeout_seconds=5.0)
 
     # The flag must STILL be True so the next attempt re-enters the heavy

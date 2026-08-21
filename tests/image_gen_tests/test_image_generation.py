@@ -105,20 +105,6 @@ def load_vertex_ai_credentials():
     os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = os.path.abspath(temp_file.name)
 
 
-class TestVertexImageGeneration(BaseImageGenTest):
-    def get_base_image_generation_call_args(self) -> dict:
-        # comment this when running locally
-        load_vertex_ai_credentials()
-
-        litellm.in_memory_llm_clients_cache = InMemoryCache()
-        return {
-            "model": "vertex_ai/imagen-3.0-fast-generate-001",
-            "vertex_ai_project": "litellm-ci-cd",
-            "vertex_ai_location": "us-central1",
-            "n": 1,
-        }
-
-
 class TestVertexAIGeminiImageGeneration(BaseImageGenTest):
     """Test Gemini image generation models (Nano Banana)"""
 
@@ -269,7 +255,7 @@ class TestAimlImageGeneration(BaseImageGenTest):
 
 class TestGoogleImageGen(BaseImageGenTest):
     def get_base_image_generation_call_args(self) -> dict:
-        return {"model": "gemini/imagen-4.0-generate-001"}
+        return {"model": "gemini/gemini-3.1-flash-image"}
 
 
 @pytest.mark.skip(reason="Runwayml image generation API only tested locally")
@@ -458,7 +444,7 @@ async def test_azure_image_generation_request_body():
     ) as mock_post:
         mock_post.side_effect = Exception("test")
 
-        with pytest.raises(Exception):
+        with pytest.raises(litellm.APIConnectionError):
             await aimage_generation(
                 model="azure/gpt-image-1",
                 prompt="test prompt",

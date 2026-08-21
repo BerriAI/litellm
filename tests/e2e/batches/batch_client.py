@@ -26,14 +26,29 @@ from e2e_http import (
 )
 from models import LiteLLMParamsBody
 
+UPLOAD_FILENAME = "batch_input.jsonl"
+
 
 class FileObject(BaseModel):
     id: str
     object: str | None = None
     purpose: str | None = None
+    filename: str | None = None
     bytes: int | None = None
     status: str | None = None
     created_at: int | None = None
+
+
+class FileList(BaseModel):
+    """GET /v1/files page. The cursors are modelled because they are part of the
+    page's isolation contract: they must address rows in `data`, never rows the
+    caller was not allowed to see."""
+
+    object: str | None = None
+    data: list[FileObject] = []
+    first_id: str | None = None
+    last_id: str | None = None
+    has_more: bool | None = None
 
 
 class BatchObject(BaseModel):
@@ -106,10 +121,28 @@ class BatchClient:
             _files_path(provider),
             headers=self.proxy.transport.bearer(key),
             form=form,
-            filename="batch_input.jsonl",
+            filename=UPLOAD_FILENAME,
             content=content,
             params=ModelQuery(model=model),
             response_type=FileObject,
+        )
+
+    def retrieve_file(
+        self, file_id: str, *, key: str, provider: str | None = None
+    ) -> Result[FileObject]:
+        return self.proxy.transport.get(
+            f"{_files_path(provider)}/{file_id}",
+            headers=self.proxy.transport.bearer(key),
+            params=NoBody(),
+            response_type=FileObject,
+        )
+
+    def list_files(self, *, key: str, provider: str | None = None) -> Result[FileList]:
+        return self.proxy.transport.get(
+            _files_path(provider),
+            headers=self.proxy.transport.bearer(key),
+            params=NoBody(),
+            response_type=FileList,
         )
 
     def create_batch(

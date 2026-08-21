@@ -1,4 +1,4 @@
-import { CACHE_FIELDS, CacheField, CacheSection, RedisType } from "./cacheSettingsFields";
+import { CACHE_FIELDS, CacheField, CacheSection, REDACTED_VALUE, RedisType } from "./cacheSettingsFields";
 
 export type CacheFormValue = string | number | boolean | undefined;
 export type CacheFormValues = Record<string, CacheFormValue>;
@@ -11,7 +11,20 @@ export const isFieldVisible = (field: CacheField, redisType: RedisType): boolean
 export const fieldsForSection = (section: CacheSection, redisType: RedisType): CacheField[] =>
   CACHE_FIELDS.filter((field) => field.section === section && isFieldVisible(field, redisType));
 
+const hasValue = (raw: unknown): boolean => raw !== undefined && raw !== null && raw !== "";
+
+// Credential fields the server reports as configured (returned as the redacted
+// marker). Used to show an "already set" hint without ever holding the secret.
+export const configuredSecretFields = (currentValues: Record<string, unknown>): ReadonlySet<string> =>
+  new Set(CACHE_FIELDS.filter((field) => field.secret && hasValue(currentValues[field.name])).map((f) => f.name));
+
 const initialValueForField = (field: CacheField, raw: unknown): CacheFormValue => {
+  // Never prefill a credential: the server sends the redacted marker for a
+  // configured secret, and echoing it back would persist the marker.
+  if (field.secret) {
+    return "";
+  }
+
   const source = raw ?? field.defaultValue;
 
   if (field.type === "boolean") {
@@ -35,6 +48,11 @@ export const buildInitialValues = (currentValues: Record<string, unknown>): Cach
   Object.fromEntries(CACHE_FIELDS.map((field) => [field.name, initialValueForField(field, currentValues[field.name])]));
 
 const saveValueForField = (field: CacheField, raw: CacheFormValue): CacheSavePayloadValue | undefined => {
+  // A redacted secret echoed back untouched must never be persisted as a value.
+  if (field.secret && raw === REDACTED_VALUE) {
+    return undefined;
+  }
+
   if (field.type === "boolean") {
     return Boolean(raw);
   }

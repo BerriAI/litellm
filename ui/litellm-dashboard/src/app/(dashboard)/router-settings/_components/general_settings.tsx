@@ -1,22 +1,14 @@
 import React, { useState, useEffect } from "react";
-import {
-  Card,
-  Table,
-  TableHead,
-  TableRow,
-  TableHeaderCell,
-  TableCell,
-  TableBody,
-  Title,
-  Text,
-  Button,
-  Icon,
-  Switch,
-} from "@tremor/react";
-import { TabPanel, TabPanels, TabGroup, TabList, Tab } from "@tremor/react";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { getGeneralSettingsCall, updateConfigFieldSetting, deleteConfigFieldSetting } from "@/components/networking";
-import { InputNumber, Select as AntdSelect } from "antd";
-import { TrashIcon } from "@heroicons/react/outline";
+import { Trash2 } from "lucide-react";
 import { StatusBadge } from "@/components/shared/table_cells";
 
 import RouterSettings from "@/components/router_settings";
@@ -41,7 +33,12 @@ export interface generalSettingsItem {
   stored_in_db: boolean | null;
   field_options?: string[] | null;
   field_tab?: string | null;
+  field_default_value?: any;
 }
+
+const NUMERIC_INPUT_WIDTH = "w-36";
+
+const toNumericValue = (raw: string): number | null => (raw === "" ? null : Number(raw));
 
 const SettingValueEditor: React.FC<{
   setting: generalSettingsItem;
@@ -49,10 +46,12 @@ const SettingValueEditor: React.FC<{
 }> = ({ setting, onChange }) => {
   if (setting.field_type === "Integer") {
     return (
-      <InputNumber
+      <Input
+        type="number"
         step={1}
-        value={setting.field_value}
-        onChange={(newValue) => onChange(setting.field_name, newValue)}
+        className={NUMERIC_INPUT_WIDTH}
+        value={setting.field_value ?? ""}
+        onChange={(event) => onChange(setting.field_name, toNumericValue(event.target.value))}
       />
     );
   }
@@ -60,31 +59,55 @@ const SettingValueEditor: React.FC<{
     return (
       <Switch
         checked={setting.field_value === true || setting.field_value === "true"}
-        onChange={(checked) => onChange(setting.field_name, checked)}
+        onCheckedChange={(checked) => onChange(setting.field_name, checked)}
       />
     );
   }
   if (setting.field_type === "Float") {
     return (
-      <InputNumber
+      <Input
+        type="number"
         min={0}
         max={1}
         step={0.05}
-        value={setting.field_value}
-        onChange={(newValue) => onChange(setting.field_name, newValue)}
+        className={NUMERIC_INPUT_WIDTH}
+        value={setting.field_value ?? ""}
+        onChange={(event) => onChange(setting.field_name, toNumericValue(event.target.value))}
       />
+    );
+  }
+  if (setting.field_type === "Dollar") {
+    return (
+      <InputGroup className={NUMERIC_INPUT_WIDTH}>
+        <InputGroupAddon>$</InputGroupAddon>
+        <InputGroupInput
+          type="number"
+          min={0.01}
+          step={0.25}
+          value={setting.field_value ?? ""}
+          onChange={(event) => onChange(setting.field_name, toNumericValue(event.target.value))}
+        />
+      </InputGroup>
     );
   }
   if (setting.field_type === "Select") {
     return (
-      <AntdSelect
-        allowClear
-        style={{ minWidth: "8rem" }}
-        placeholder="Default"
-        value={setting.field_value || undefined}
-        options={(setting.field_options ?? []).map((option) => ({ label: option, value: option }))}
-        onChange={(newValue) => onChange(setting.field_name, newValue ?? "")}
-      />
+      <Select
+        value={setting.field_value || null}
+        onValueChange={(newValue) => onChange(setting.field_name, newValue ?? "")}
+      >
+        <SelectTrigger className="min-w-32">
+          <SelectValue placeholder="Default" />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value={null}>Default</SelectItem>
+          {(setting.field_options ?? []).map((option) => (
+            <SelectItem key={option} value={option}>
+              {option}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
     );
   }
   return null;
@@ -119,33 +142,43 @@ export const PromptCachingPanel: React.FC<{
 
   return (
     <Card>
-      <Title>Prompt Caching</Title>
+      <CardContent>
+        <CardTitle>Prompt Caching</CardTitle>
 
-      <div className="mt-6 flex items-start justify-between gap-8">
-        <div className="max-w-2xl">
-          <Text className="font-medium">Automatic Anthropic prompt caching</Text>
-          <p className="mt-1 text-xs text-gray-500">{enableSetting.field_description}</p>
-        </div>
-        <Switch checked={enabled} onChange={(checked) => persist(ENABLE_ANTHROPIC_PROMPT_CACHING, checked)} />
-      </div>
-
-      {ttlSetting && (
         <div className="mt-6 flex items-start justify-between gap-8">
-          <div className="max-w-2xl">
-            <Text className={`font-medium ${enabled ? "" : "text-gray-400"}`}>Cache lifetime (TTL)</Text>
-            <p className="mt-1 text-xs text-gray-500">{ttlSetting.field_description}</p>
+          <div className="min-w-0 max-w-2xl">
+            <p className="font-medium">Automatic Anthropic prompt caching</p>
+            <p className="mt-1 break-words text-xs text-muted-foreground">{enableSetting.field_description}</p>
           </div>
-          <AntdSelect
-            allowClear
-            disabled={!enabled}
-            style={{ minWidth: "10rem" }}
-            placeholder="5m (default)"
-            value={ttlSetting.field_value || undefined}
-            options={(ttlSetting.field_options ?? []).map((option) => ({ label: option, value: option }))}
-            onChange={(newValue) => persist(ANTHROPIC_PROMPT_CACHING_TTL, newValue ?? "")}
-          />
+          <Switch checked={enabled} onCheckedChange={(checked) => persist(ENABLE_ANTHROPIC_PROMPT_CACHING, checked)} />
         </div>
-      )}
+
+        {ttlSetting && (
+          <div className="mt-6 flex items-start justify-between gap-8">
+            <div className="min-w-0 max-w-2xl">
+              <p className={`font-medium ${enabled ? "" : "text-muted-foreground"}`}>Cache lifetime (TTL)</p>
+              <p className="mt-1 break-words text-xs text-muted-foreground">{ttlSetting.field_description}</p>
+            </div>
+            <Select
+              disabled={!enabled}
+              value={ttlSetting.field_value || null}
+              onValueChange={(newValue) => persist(ANTHROPIC_PROMPT_CACHING_TTL, newValue ?? "")}
+            >
+              <SelectTrigger className="min-w-40">
+                <SelectValue placeholder="5m (default)" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={null}>5m (default)</SelectItem>
+                {(ttlSetting.field_options ?? []).map((option) => (
+                  <SelectItem key={option} value={option}>
+                    {option}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        )}
+      </CardContent>
     </Card>
   );
 };
@@ -171,12 +204,12 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, user
     setGeneralSettings(updatedSettings);
   };
 
-  const handleUpdateField = (fieldName: string, idx: number) => {
+  const handleUpdateField = (fieldName: string) => {
     if (!accessToken) {
       return;
     }
 
-    let fieldValue = generalSettings[idx].field_value;
+    let fieldValue = generalSettings.find((setting) => setting.field_name === fieldName)?.field_value;
 
     if (fieldValue == null || fieldValue == undefined) {
       return;
@@ -194,7 +227,7 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, user
     }
   };
 
-  const handleResetField = (fieldName: string, idx: number) => {
+  const handleResetField = (fieldName: string) => {
     if (!accessToken) {
       return;
     }
@@ -204,7 +237,9 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, user
       // update value in state
 
       const updatedSettings = generalSettings.map((setting) =>
-        setting.field_name === fieldName ? { ...setting, stored_in_db: null, field_value: null } : setting,
+        setting.field_name === fieldName
+          ? { ...setting, stored_in_db: null, field_value: setting.field_default_value ?? null }
+          : setting,
       );
       setGeneralSettings(updatedSettings);
     } catch (error) {
@@ -218,52 +253,52 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, user
 
   return (
     <div className="w-full">
-      <TabGroup className="h-[75vh] w-full">
-        <TabList variant="line" defaultValue="1" className="px-8 pt-4">
-          <Tab value="1">Loadbalancing</Tab>
-          <Tab value="2">Routing Groups</Tab>
-          <Tab value="3">Fallbacks</Tab>
-          <Tab value="5">Prompt Caching</Tab>
-          <Tab value="4">General</Tab>
-        </TabList>
-        <TabPanels className="px-8 py-6">
-          <TabPanel>
-            <RouterSettings accessToken={accessToken} userRole={userRole} userID={userID} />
-          </TabPanel>
-          <TabPanel>
-            <RoutingGroups />
-          </TabPanel>
-          <TabPanel>
-            <Fallbacks accessToken={accessToken} userRole={userRole} userID={userID} />
-          </TabPanel>
-          <TabPanel>
-            <PromptCachingPanel accessToken={accessToken} settings={generalSettings} onChange={handleInputChange} />
-          </TabPanel>
-          <TabPanel>
-            <Card>
+      <Tabs defaultValue="loadbalancing" className="h-[75vh] w-full">
+        <TabsList variant="line" className="mx-8 mt-4">
+          <TabsTrigger value="loadbalancing">Loadbalancing</TabsTrigger>
+          <TabsTrigger value="routing-groups">Routing Groups</TabsTrigger>
+          <TabsTrigger value="fallbacks">Fallbacks</TabsTrigger>
+          <TabsTrigger value="prompt-caching">Prompt Caching</TabsTrigger>
+          <TabsTrigger value="general">General</TabsTrigger>
+        </TabsList>
+        <TabsContent value="loadbalancing" className="px-8 py-6" keepMounted>
+          <RouterSettings accessToken={accessToken} userRole={userRole} userID={userID} />
+        </TabsContent>
+        <TabsContent value="routing-groups" className="px-8 py-6" keepMounted>
+          <RoutingGroups />
+        </TabsContent>
+        <TabsContent value="fallbacks" className="px-8 py-6" keepMounted>
+          <Fallbacks accessToken={accessToken} userRole={userRole} userID={userID} />
+        </TabsContent>
+        <TabsContent value="prompt-caching" className="px-8 py-6" keepMounted>
+          <PromptCachingPanel accessToken={accessToken} settings={generalSettings} onChange={handleInputChange} />
+        </TabsContent>
+        <TabsContent value="general" className="px-8 py-6" keepMounted>
+          <Card>
+            <CardContent>
               <Table>
-                <TableHead>
+                <TableHeader>
                   <TableRow>
-                    <TableHeaderCell>Setting</TableHeaderCell>
-                    <TableHeaderCell>Value</TableHeaderCell>
-                    <TableHeaderCell>Status</TableHeaderCell>
-                    <TableHeaderCell>Action</TableHeaderCell>
+                    <TableHead>Setting</TableHead>
+                    <TableHead>Value</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead>Action</TableHead>
                   </TableRow>
-                </TableHead>
+                </TableHeader>
                 <TableBody>
                   {generalSettings
                     .filter((value) => value.field_type !== "TypedDictionary" && value.field_tab !== PROMPT_CACHING_TAB)
                     .map((value, index) => (
                       <TableRow key={index}>
-                        <TableCell>
-                          <Text>{value.field_name}</Text>
+                        <TableCell className="whitespace-normal">
+                          <p className="break-words">{value.field_name}</p>
                           <p
                             style={{
                               fontSize: "0.65rem",
                               color: "#808080",
                               fontStyle: "italic",
                             }}
-                            className="mt-1"
+                            className="mt-1 break-words"
                           >
                             {value.field_description}
                           </p>
@@ -281,19 +316,22 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, user
                           )}
                         </TableCell>
                         <TableCell>
-                          <Button onClick={() => handleUpdateField(value.field_name, index)}>Update</Button>
-                          <Icon icon={TrashIcon} color="red" onClick={() => handleResetField(value.field_name, index)}>
-                            Reset
-                          </Icon>
+                          <Button onClick={() => handleUpdateField(value.field_name)}>Update</Button>
+                          <span
+                            onClick={() => handleResetField(value.field_name)}
+                            className="inline-flex shrink-0 cursor-pointer items-center justify-center px-1.5 py-1.5 text-destructive"
+                          >
+                            <Trash2 className="h-5 w-5 shrink-0" />
+                          </span>
                         </TableCell>
                       </TableRow>
                     ))}
                 </TableBody>
               </Table>
-            </Card>
-          </TabPanel>
-        </TabPanels>
-      </TabGroup>
+            </CardContent>
+          </Card>
+        </TabsContent>
+      </Tabs>
     </div>
   );
 };

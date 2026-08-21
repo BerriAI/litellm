@@ -44,7 +44,7 @@ class TestFeatherlessAIConfig:
         """Test error handling when API key is missing"""
         config = FeatherlessAIConfig()
 
-        with pytest.raises(ValueError) as excinfo:
+        with pytest.raises(ValueError, match='Missing Featherless AI API Key') as excinfo:
             config.validate_environment(
                 headers={},
                 model="featherless-ai/Qwerky-72B",
@@ -112,7 +112,7 @@ class TestFeatherlessAIConfig:
             "tool_choice": {"type": "function", "function": {"name": "get_weather"}}
         }
         optional_params = {}
-        with pytest.raises(Exception) as excinfo:
+        with pytest.raises(Exception, match="litellm\\.UnsupportedParamsError: Featherless AI doesn't") as excinfo:
             config.map_openai_params(
                 non_default_params=non_default_params,
                 optional_params=optional_params,
@@ -138,7 +138,7 @@ class TestFeatherlessAIConfig:
         assert "tools" not in result
 
         # Test with tools and drop_params=False
-        with pytest.raises(Exception) as excinfo:
+        with pytest.raises(Exception, match="litellm\\.UnsupportedParamsError: Featherless AI doesn't") as excinfo:
             config.map_openai_params(
                 non_default_params=non_default_params,
                 optional_params=optional_params,

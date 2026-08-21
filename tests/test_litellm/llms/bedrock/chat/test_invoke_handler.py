@@ -2,6 +2,7 @@ import os
 import sys
 from unittest.mock import AsyncMock, MagicMock
 
+import httpx
 import pytest
 
 sys.path.insert(
@@ -11,11 +12,10 @@ sys.path.insert(
 import litellm
 from litellm.llms.bedrock.chat.invoke_handler import (
     AWSEventStreamDecoder,
-    BedrockLLM,
     make_call,
     make_sync_call,
 )
-from litellm.llms.custom_httpx.http_handler import HTTPHandler
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 
 
 def test_transform_thinking_blocks_with_redacted_content():
@@ -297,32 +297,49 @@ def test_make_sync_call_honors_explicit_stream_chunk_size():
     response.iter_bytes.assert_called_once_with(chunk_size=2048)
 
 
-def test_legacy_bedrock_llm_streaming_does_not_rechunk_by_default():
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.iter_bytes = MagicMock(return_value=iter([]))
+def test_invoke_streaming_forwards_bedrock_response_headers():
+    response = MagicMock()
+    response.status_code = 200
+    response.iter_bytes = MagicMock(return_value=iter([]))
+    response.headers = httpx.Headers({"x-amzn-requestid": "req-789"})
     client = HTTPHandler()
-    client.post = MagicMock(return_value=mock_response)
+    client.post = MagicMock(return_value=response)
 
-    BedrockLLM().completion(
-        model="cohere.command-text-v14",
+    stream = litellm.completion(
+        model="bedrock/invoke/anthropic.claude-haiku-4-5-20251001-v1:0",
         messages=[{"role": "user", "content": "hi"}],
-        api_base=None,
-        custom_prompt_dict={},
-        model_response=litellm.ModelResponse(),
-        print_verbose=lambda *args, **kwargs: None,
-        encoding=litellm.encoding,
-        logging_obj=MagicMock(),
-        optional_params={
-            "stream": True,
-            "aws_access_key_id": "fake",
-            "aws_secret_access_key": "fake",
-            "aws_region_name": "us-east-1",
-        },
-        acompletion=False,
-        timeout=None,
-        litellm_params={},
+        stream=True,
         client=client,
+        aws_access_key_id="fake",
+        aws_secret_access_key="fake",
+        aws_region_name="us-east-1",
     )
 
-    mock_response.iter_bytes.assert_called_once_with(chunk_size=None)
+    assert stream._hidden_params["additional_headers"]["llm_provider-x-amzn-requestid"] == "req-789"
+
+
+@pytest.mark.asyncio
+async def test_async_invoke_streaming_forwards_bedrock_response_headers():
+    async def _no_bytes(chunk_size=None):
+        return
+        yield b""
+
+    response = MagicMock()
+    response.status_code = 200
+    response.aiter_bytes = _no_bytes
+    response.headers = httpx.Headers({"x-amzn-requestid": "req-987"})
+    client = AsyncHTTPHandler()
+    client.post = AsyncMock(return_value=response)
+
+    stream = await litellm.acompletion(
+        model="bedrock/invoke/anthropic.claude-haiku-4-5-20251001-v1:0",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        client=client,
+        aws_access_key_id="fake",
+        aws_secret_access_key="fake",
+        aws_region_name="us-east-1",
+    )
+
+    assert stream._hidden_params["additional_headers"]["llm_provider-x-amzn-requestid"] == "req-987"
+

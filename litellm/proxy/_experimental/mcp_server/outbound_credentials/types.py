@@ -28,7 +28,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
-from typing import Annotated, Literal
+from typing import Annotated, Final, Literal
 
 from expression import case, tag, tagged_union
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
@@ -199,6 +199,7 @@ class ClientCredentialsConfig(BaseModel):
     token_url: str | None = None
     scopes: tuple[str, ...] = ()
     audience: str | None = None
+    upstream_resource: str | None = None
     token_endpoint_auth_method: Literal["client_secret_post", "client_secret_basic"] | None = None
 
 
@@ -310,7 +311,7 @@ class ApiKeyConfig(BaseModel):
     key_source: ApiKeySource
 
     def header(self, value: str) -> tuple[str, str]:
-        formatted = f"{self.value_prefix} {value}" if self.value_prefix else value
+        formatted: Final = f"{self.value_prefix} {value}" if self.value_prefix else value
         return self.header_name, formatted
 
 
@@ -390,7 +391,8 @@ class Subject(BaseModel):
 
     tenant_id: str
     subject_id: str
-    # Opaque, already-validated inbound identity. Only `token_exchange` / `passthrough` read it.
+    # Opaque, already-validated inbound identity. Read by `token_exchange`, `passthrough`, and
+    # `id_jag` (which falls back to the user's stored SSO assertion when it is absent).
     inbound_token: SecretStr | None = None
 
 

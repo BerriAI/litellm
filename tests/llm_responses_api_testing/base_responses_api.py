@@ -16,7 +16,6 @@ import litellm
 from abc import ABC, abstractmethod
 
 from litellm.integrations.custom_logger import CustomLogger
-import json
 from litellm.types.utils import StandardLoggingPayload
 from litellm.types.llms.openai import (
     ResponseCompletedEvent,
@@ -28,6 +27,7 @@ from openai.types.responses.response_create_params import (
     ResponseInputParam,
 )
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+import openai
 
 
 def validate_responses_api_response(response, final_chunk: bool = False):
@@ -338,7 +338,7 @@ class BaseResponsesAPITest(ABC):
                 )
                 assert result is not None
                 assert result.id == response.id
-                assert result.output == response.output
+                assert result.output_text == response.output_text
             else:
                 raise ValueError("response is not a ResponsesAPIResponse")
         else:
@@ -352,7 +352,7 @@ class BaseResponsesAPITest(ABC):
                 )
                 assert result is not None
                 assert result.id == response.id
-                assert result.output == response.output
+                assert result.output_text == response.output_text
             else:
                 raise ValueError("response is not a ResponsesAPIResponse")
 
@@ -700,12 +700,12 @@ class BaseResponsesAPITest(ABC):
         base_completion_call_args = self.get_base_completion_call_args()
 
         if sync_mode:
-            with pytest.raises(Exception):
+            with pytest.raises(openai.APIError):
                 litellm.cancel_responses(
                     response_id="invalid_response_id_12345", **base_completion_call_args
                 )
         else:
-            with pytest.raises(Exception):
+            with pytest.raises(openai.APIError):
                 await litellm.acancel_responses(
                     response_id="invalid_response_id_12345", **base_completion_call_args
                 )

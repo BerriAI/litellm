@@ -1,0 +1,298 @@
+suite: test pod hardening knobs on the component deployments
+templates:
+  - gateway/deployment.yaml
+  - gateway/configmap.yaml
+  - backend/deployment.yaml
+  - ui/deployment.yaml
+values:
+  - ./values/required.yaml
+tests:
+  - it: gateway renders no hardening fields by default
+    template: gateway/deployment.yaml
+    asserts:
+      - isNull:
+          path: spec.template.spec.securityContext
+      - isNull:
+          path: spec.template.spec.containers[0].securityContext
+      - isNull:
+          path: spec.template.spec.containers[0].lifecycle
+      - isNull:
+          path: spec.template.spec.terminationGracePeriodSeconds
+      - lengthEqual:
+          path: spec.template.spec.containers
+          count: 1
+      - equal:
+          path: spec.template.metadata.labels
+          value:
+            app.kubernetes.io/name: litellm
+            app.kubernetes.io/instance: RELEASE-NAME
+            app.kubernetes.io/component: gateway
+
+  - it: gateway renders pod-level and container-level securityContext in their own scopes
+    template: gateway/deployment.yaml
+    set:
+      gateway.podSecurityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      gateway.securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop:
+            - ALL
+    asserts:
+      - equal:
+          path: spec.template.spec.securityContext
+          value:
+            runAsNonRoot: true
+            runAsUser: 65532
+            fsGroup: 65532
+            seccompProfile:
+              type: RuntimeDefault
+      - equal:
+          path: spec.template.spec.containers[0].securityContext
+          value:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+
+  - it: gateway merges podLabels with the selector labels
+    template: gateway/deployment.yaml
+    set:
+      gateway.podLabels:
+        egress-policy: restricted
+        team: platform
+    asserts:
+      - equal:
+          path: spec.template.metadata.labels
+          value:
+            app.kubernetes.io/name: litellm
+            app.kubernetes.io/instance: RELEASE-NAME
+            app.kubernetes.io/component: gateway
+            egress-policy: restricted
+            team: platform
+      - equal:
+          path: spec.selector.matchLabels
+          value:
+            app.kubernetes.io/name: litellm
+            app.kubernetes.io/instance: RELEASE-NAME
+            app.kubernetes.io/component: gateway
+
+  - it: gateway rejects a podLabel that collides with the selector
+    template: gateway/deployment.yaml
+    set:
+      gateway.podLabels:
+        app.kubernetes.io/component: not-gateway
+    asserts:
+      - failedTemplate:
+          errorMessage: "gateway.podLabels cannot set app.kubernetes.io/component: it is part of the Deployment's immutable selector"
+
+  - it: backend rejects a podLabel that collides with the selector
+    template: backend/deployment.yaml
+    set:
+      backend.podLabels:
+        app.kubernetes.io/name: not-litellm
+    asserts:
+      - failedTemplate:
+          errorMessage: "backend.podLabels cannot set app.kubernetes.io/name: it is part of the Deployment's immutable selector"
+
+  - it: ui rejects a podLabel that collides with the selector
+    template: ui/deployment.yaml
+    set:
+      ui.podLabels:
+        app.kubernetes.io/instance: not-the-release
+    asserts:
+      - failedTemplate:
+          errorMessage: "ui.podLabels cannot set app.kubernetes.io/instance: it is part of the Deployment's immutable selector"
+
+  - it: gateway renders lifecycle hooks on the container
+    template: gateway/deployment.yaml
+    set:
+      gateway.lifecycle:
+        preStop:
+          httpGet:
+            path: /health/drain
+            port: 4000
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].lifecycle
+          value:
+            preStop:
+              httpGet:
+                path: /health/drain
+                port: 4000
+
+  - it: gateway renders terminationGracePeriodSeconds on the pod spec
+    template: gateway/deployment.yaml
+    set:
+      gateway.terminationGracePeriodSeconds: 90
+    asserts:
+      - equal:
+          path: spec.template.spec.terminationGracePeriodSeconds
+          value: 90
+
+  - it: gateway honors an explicit terminationGracePeriodSeconds of zero
+    template: gateway/deployment.yaml
+    set:
+      gateway.terminationGracePeriodSeconds: 0
+    asserts:
+      - equal:
+          path: spec.template.spec.terminationGracePeriodSeconds
+          value: 0
+
+  - it: gateway appends extraContainers after the gateway container
+    template: gateway/deployment.yaml
+    set:
+      gateway.extraContainers:
+        - name: auth-sidecar
+          image: registry.example.com/auth-proxy:1.2.3
+          args:
+            - --upstream
+            - http://127.0.0.1:4000
+    asserts:
+      - lengthEqual:
+          path: spec.template.spec.containers
+          count: 2
+      - equal:
+          path: spec.template.spec.containers[0].name
+          value: gateway
+      - equal:
+          path: spec.template.spec.containers[1]
+          value:
+            name: auth-sidecar
+            image: registry.example.com/auth-proxy:1.2.3
+            args:
+              - --upstream
+              - http://127.0.0.1:4000
+
+  - it: gateway templates chart context inside extraContainers
+    template: gateway/deployment.yaml
+    set:
+      gateway.extraContainers:
+        - name: auth-sidecar
+          image: registry.example.com/auth-proxy:1.2.3
+          env:
+            - name: RELEASE
+              value: "{{ .Release.Name }}"
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[1].env[0].value
+          value: RELEASE-NAME
+
+  - it: backend renders every hardening knob in the right scope
+    template: backend/deployment.yaml
+    set:
+      backend.podLabels:
+        egress-policy: restricted
+      backend.podSecurityContext:
+        runAsNonRoot: true
+      backend.securityContext:
+        readOnlyRootFilesystem: true
+      backend.lifecycle:
+        preStop:
+          exec:
+            command:
+              - sleep
+              - "5"
+      backend.terminationGracePeriodSeconds: 60
+      backend.extraContainers:
+        - name: auth-sidecar
+          image: registry.example.com/auth-proxy:1.2.3
+    asserts:
+      - equal:
+          path: spec.template.metadata.labels['egress-policy']
+          value: restricted
+      - equal:
+          path: spec.template.spec.securityContext
+          value:
+            runAsNonRoot: true
+      - equal:
+          path: spec.template.spec.containers[0].securityContext
+          value:
+            readOnlyRootFilesystem: true
+      - equal:
+          path: spec.template.spec.containers[0].lifecycle
+          value:
+            preStop:
+              exec:
+                command:
+                  - sleep
+                  - "5"
+      - equal:
+          path: spec.template.spec.terminationGracePeriodSeconds
+          value: 60
+      - equal:
+          path: spec.template.spec.containers[1].name
+          value: auth-sidecar
+
+  - it: ui renders every hardening knob in the right scope
+    template: ui/deployment.yaml
+    set:
+      ui.podLabels:
+        egress-policy: restricted
+      ui.podSecurityContext:
+        runAsNonRoot: true
+        fsGroup: 101
+      ui.securityContext:
+        readOnlyRootFilesystem: true
+      ui.lifecycle:
+        preStop:
+          exec:
+            command:
+              - /bin/sh
+              - -c
+              - nginx -s quit
+      ui.terminationGracePeriodSeconds: 30
+      ui.extraContainers:
+        - name: auth-sidecar
+          image: registry.example.com/auth-proxy:1.2.3
+    asserts:
+      - equal:
+          path: spec.template.metadata.labels['egress-policy']
+          value: restricted
+      - equal:
+          path: spec.template.spec.securityContext
+          value:
+            runAsNonRoot: true
+            fsGroup: 101
+      - equal:
+          path: spec.template.spec.containers[0].securityContext
+          value:
+            readOnlyRootFilesystem: true
+      - equal:
+          path: spec.template.spec.containers[0].lifecycle
+          value:
+            preStop:
+              exec:
+                command:
+                  - /bin/sh
+                  - -c
+                  - nginx -s quit
+      - equal:
+          path: spec.template.spec.terminationGracePeriodSeconds
+          value: 30
+      - equal:
+          path: spec.template.spec.containers[1].name
+          value: auth-sidecar
+
+  - it: backend and ui render no hardening fields by default
+    templates:
+      - backend/deployment.yaml
+      - ui/deployment.yaml
+    asserts:
+      - isNull:
+          path: spec.template.spec.securityContext
+      - isNull:
+          path: spec.template.spec.containers[0].securityContext
+      - isNull:
+          path: spec.template.spec.containers[0].lifecycle
+      - isNull:
+          path: spec.template.spec.terminationGracePeriodSeconds
+      - lengthEqual:
+          path: spec.template.spec.containers
+          count: 1

@@ -1,9 +1,11 @@
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach, Mock } from "vitest";
-import EditSSOSettingsModal from "./EditSSOSettingsModal";
+import EditSSOSettingsModal, { toSSOFormValues } from "./EditSSOSettingsModal";
+import { ssoProviderConfigs } from "./BaseSSOSettingsForm";
+import type { SSOSettingsValues } from "@/app/(dashboard)/hooks/sso/useSSOSettings";
 import { useSSOSettings } from "@/app/(dashboard)/hooks/sso/useSSOSettings";
 import { useEditSSOSettings } from "@/app/(dashboard)/hooks/sso/useEditSSOSettings";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { parseErrorMessage } from "@/components/shared/errorUtils";
 import { processSSOSettingsPayload } from "../utils";
 
@@ -18,7 +20,6 @@ const SSO_PROVIDERS = {
 
 const TEST_DATA = {
   MODAL_TITLE: "Edit SSO Settings",
-  MODAL_WIDTH: "800",
   SUCCESS_MESSAGE: "SSO settings updated successfully",
   ERROR_MESSAGE_PREFIX: "Failed to save SSO settings:",
   BUTTON_TEXT: {
@@ -29,19 +30,9 @@ const TEST_DATA = {
 } as const;
 
 const TEST_IDS = {
-  MODAL: "modal",
-  BUTTON: "button",
   BASE_SSO_FORM: "base-sso-form",
   TRIGGER_FORM_SUBMIT: "trigger-form-submit",
 } as const;
-
-// Mock form instance
-const mockForm = {
-  resetFields: vi.fn(),
-  setFieldsValue: vi.fn(),
-  getFieldsValue: vi.fn(),
-  submit: vi.fn(),
-};
 
 // Types
 type SSOData = {
@@ -129,37 +120,20 @@ const createMockHooks = (): {
   },
 });
 
-vi.mock("antd", () => ({
-  Modal: ({ children, open, title, footer, onCancel, width, ...props }: any) => (
-    <div data-testid={TEST_IDS.MODAL} data-open={open} data-title={title} data-width={width} {...props}>
-      <div data-testid="modal-content">{children}</div>
-      <div data-testid="modal-footer">{footer}</div>
-      <button data-testid="modal-cancel" onClick={onCancel} />
-    </div>
-  ),
-  Button: ({ children, onClick, loading, disabled, ...props }: any) => (
-    <button data-testid={TEST_IDS.BUTTON} onClick={onClick} data-loading={loading} disabled={disabled} {...props}>
-      {children}
-    </button>
-  ),
-  Form: {
-    useForm: () => [mockForm],
-  },
-  Space: ({ children, ...props }: any) => (
-    <div data-testid="space" {...props}>
-      {children}
-    </div>
-  ),
-}));
+let lastSeededForm: any;
 
-vi.mock("./BaseSSOSettingsForm", () => ({
-  default: ({ form, onFormSubmit }: any) => (
-    <div data-testid={TEST_IDS.BASE_SSO_FORM}>
-      <button data-testid={TEST_IDS.TRIGGER_FORM_SUBMIT} onClick={() => onFormSubmit({ testField: "testValue" })}>
-        Trigger Form Submit
-      </button>
-    </div>
-  ),
+vi.mock("./BaseSSOSettingsForm", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./BaseSSOSettingsForm")>()),
+  default: ({ form, onFormSubmit }: any) => {
+    lastSeededForm = form;
+    return (
+      <div data-testid={TEST_IDS.BASE_SSO_FORM}>
+        <button data-testid={TEST_IDS.TRIGGER_FORM_SUBMIT} onClick={() => onFormSubmit({ testField: "testValue" })}>
+          Trigger Form Submit
+        </button>
+      </div>
+    );
+  },
 }));
 
 vi.mock("@/app/(dashboard)/hooks/sso/useSSOSettings", () => ({
@@ -170,18 +144,12 @@ vi.mock("@/app/(dashboard)/hooks/sso/useEditSSOSettings", () => ({
   useEditSSOSettings: vi.fn(),
 }));
 
-vi.mock("@/components/molecules/notifications_manager", () => ({
-  default: {
-    success: vi.fn(),
-    fromBackend: vi.fn(),
-  },
-}));
-
 vi.mock("@/components/shared/errorUtils", () => ({
   parseErrorMessage: vi.fn(),
 }));
 
-vi.mock("../utils", () => ({
+vi.mock("../utils", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../utils")>()),
   processSSOSettingsPayload: vi.fn(),
 }));
 
@@ -218,9 +186,11 @@ const renderComponent = (props: Partial<React.ComponentProps<typeof EditSSOSetti
   };
 };
 
-const getButtons = () => screen.getAllByTestId(TEST_IDS.BUTTON);
-const getCancelButton = () => getButtons()[0];
-const getSaveButton = () => getButtons()[1];
+const getDialog = () => screen.getByRole("dialog");
+const getCancelButton = () => within(getDialog()).getByRole("button", { name: TEST_DATA.BUTTON_TEXT.CANCEL });
+const getSaveButton = () => within(getDialog()).getByRole("button", { name: /^(Save|Saving)/ });
+
+const seededValuesFor = (ssoData: SSOData) => toSSOFormValues(ssoData.values as SSOSettingsValues);
 
 describe("EditSSOSettingsModal", () => {
   beforeEach(() => {
@@ -236,17 +206,15 @@ describe("EditSSOSettingsModal", () => {
     it("displays modal with correct configuration", () => {
       renderComponent();
 
-      const modal = screen.getByTestId(TEST_IDS.MODAL);
-      expect(modal).toHaveAttribute("data-open", "true");
-      expect(modal).toHaveAttribute("data-title", TEST_DATA.MODAL_TITLE);
-      expect(modal).toHaveAttribute("data-width", TEST_DATA.MODAL_WIDTH);
+      expect(within(getDialog()).getByText(TEST_DATA.MODAL_TITLE)).toBeInTheDocument();
+      expect(screen.getByTestId(TEST_IDS.BASE_SSO_FORM)).toBeInTheDocument();
     });
 
     it("displays modal as closed when not visible", () => {
       renderComponent({ isVisible: false });
 
-      const modal = screen.getByTestId(TEST_IDS.MODAL);
-      expect(modal).toHaveAttribute("data-open", "false");
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+      expect(screen.queryByText(TEST_DATA.MODAL_TITLE)).not.toBeInTheDocument();
     });
   });
 
@@ -254,10 +222,8 @@ describe("EditSSOSettingsModal", () => {
     it("renders cancel and save buttons", () => {
       renderComponent();
 
-      const buttons = getButtons();
-      expect(buttons).toHaveLength(2);
-      expect(buttons[0]).toHaveTextContent(TEST_DATA.BUTTON_TEXT.CANCEL);
-      expect(buttons[1]).toHaveTextContent(TEST_DATA.BUTTON_TEXT.SAVE);
+      expect(getCancelButton()).toBeInTheDocument();
+      expect(getSaveButton()).toHaveTextContent(TEST_DATA.BUTTON_TEXT.SAVE);
     });
 
     it("calls onCancel and resets form when cancel button is clicked", () => {
@@ -265,16 +231,24 @@ describe("EditSSOSettingsModal", () => {
 
       fireEvent.click(getCancelButton());
 
-      expect(mockForm.resetFields).toHaveBeenCalled();
       expect(mockOnCancel).toHaveBeenCalled();
     });
 
-    it("calls form.submit when save button is clicked", () => {
+    it("calls form.submit when save button is clicked", async () => {
+      const mockMutateAsync = vi.fn().mockResolvedValue({ success: true });
+      (processSSOSettingsPayload as any).mockReturnValue({ processed: "payload" });
+      setupMocks({
+        useSSOSettings: { data: createGoogleSSOData({ proxy_base_url: "https://proxy.example.com" }) },
+        useEditSSOSettings: { mutateAsync: mockMutateAsync, isPending: false },
+      });
+
       renderComponent();
 
       fireEvent.click(getSaveButton());
 
-      expect(mockForm.submit).toHaveBeenCalled();
+      await waitFor(() => {
+        expect(mockMutateAsync).toHaveBeenCalled();
+      });
     });
 
     describe("Loading States", () => {
@@ -295,7 +269,7 @@ describe("EditSSOSettingsModal", () => {
 
         renderComponent();
 
-        expect(getSaveButton()).toHaveAttribute("data-loading", "true");
+        expect(getSaveButton()).toBeDisabled();
         expect(getSaveButton()).toHaveTextContent(TEST_DATA.BUTTON_TEXT.SAVING);
       });
     });
@@ -319,7 +293,7 @@ describe("EditSSOSettingsModal", () => {
         useEditSSOSettings: { mutateAsync: mockMutateAsync, isPending: false },
       });
 
-      const { mockOnSuccess } = renderComponent();
+      renderComponent();
 
       fireEvent.click(screen.getByTestId(TEST_IDS.TRIGGER_FORM_SUBMIT));
 
@@ -347,7 +321,7 @@ describe("EditSSOSettingsModal", () => {
 
       fireEvent.click(screen.getByTestId(TEST_IDS.TRIGGER_FORM_SUBMIT));
 
-      expect(NotificationsManager.success).toHaveBeenCalledWith(TEST_DATA.SUCCESS_MESSAGE);
+      expect(toast.success).toHaveBeenCalledWith(TEST_DATA.SUCCESS_MESSAGE);
       expect(mockOnSuccess).toHaveBeenCalled();
     });
 
@@ -369,9 +343,7 @@ describe("EditSSOSettingsModal", () => {
       fireEvent.click(screen.getByTestId(TEST_IDS.TRIGGER_FORM_SUBMIT));
 
       expect(parseErrorMessage).toHaveBeenCalledWith(error);
-      expect(NotificationsManager.fromBackend).toHaveBeenCalledWith(
-        `${TEST_DATA.ERROR_MESSAGE_PREFIX} Parsed error message`,
-      );
+      expect(toast.fromError).toHaveBeenCalledWith(`${TEST_DATA.ERROR_MESSAGE_PREFIX} Parsed error message`);
     });
   });
 
@@ -386,9 +358,8 @@ describe("EditSSOSettingsModal", () => {
           renderComponent();
 
           await waitFor(() => {
-            expect(mockForm.setFieldsValue).toHaveBeenCalledWith({
+            expect(seededValuesFor(ssoData)).toMatchObject({
               sso_provider: expectedProvider,
-              ...ssoData.values,
             });
           });
         });
@@ -428,9 +399,8 @@ describe("EditSSOSettingsModal", () => {
         renderComponent();
 
         await waitFor(() => {
-          expect(mockForm.setFieldsValue).toHaveBeenCalledWith({
+          expect(seededValuesFor(ssoData)).toMatchObject({
             sso_provider: SSO_PROVIDERS.GOOGLE,
-            ...ssoData.values,
             use_role_mappings: true,
             group_claim: "groups",
             default_role: "internal_user",
@@ -456,9 +426,8 @@ describe("EditSSOSettingsModal", () => {
         renderComponent();
 
         await waitFor(() => {
-          expect(mockForm.setFieldsValue).toHaveBeenCalledWith({
+          expect(seededValuesFor(ssoData)).toMatchObject({
             sso_provider: SSO_PROVIDERS.GOOGLE,
-            ...ssoData.values,
             use_role_mappings: true,
             group_claim: "groups",
             default_role: "internal_user",
@@ -482,8 +451,7 @@ describe("EditSSOSettingsModal", () => {
         renderComponent();
 
         await waitFor(() => {
-          expect(mockForm.resetFields).toHaveBeenCalled();
-          expect(mockForm.setFieldsValue).toHaveBeenCalled();
+          expect(seededValuesFor(ssoData).sso_provider).toBe(SSO_PROVIDERS.GOOGLE);
         });
       });
 
@@ -496,7 +464,8 @@ describe("EditSSOSettingsModal", () => {
 
         renderComponent({ isVisible: false });
 
-        expect(mockForm.setFieldsValue).not.toHaveBeenCalled();
+        expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+        expect(screen.queryByTestId(TEST_IDS.BASE_SSO_FORM)).not.toBeInTheDocument();
       });
 
       it("skips initialization when SSO data is unavailable", () => {
@@ -506,7 +475,7 @@ describe("EditSSOSettingsModal", () => {
 
         renderComponent();
 
-        expect(mockForm.setFieldsValue).not.toHaveBeenCalled();
+        expect(screen.getByTestId(TEST_IDS.BASE_SSO_FORM)).toBeInTheDocument();
       });
     });
   });
@@ -529,7 +498,7 @@ describe("EditSSOSettingsModal", () => {
 
       fireEvent.click(screen.getByTestId(TEST_IDS.TRIGGER_FORM_SUBMIT));
 
-      expect(NotificationsManager.fromBackend).toHaveBeenCalledWith(`${TEST_DATA.ERROR_MESSAGE_PREFIX} undefined`);
+      expect(toast.fromError).toHaveBeenCalledWith(`${TEST_DATA.ERROR_MESSAGE_PREFIX} undefined`);
     });
 
     it("handles form submission with malformed data", async () => {
@@ -572,9 +541,8 @@ describe("EditSSOSettingsModal", () => {
       renderComponent();
 
       await waitFor(() => {
-        expect(mockForm.setFieldsValue).toHaveBeenCalledWith({
+        expect(seededValuesFor(ssoData)).toMatchObject({
           sso_provider: SSO_PROVIDERS.GOOGLE,
-          ...ssoData.values,
           use_role_mappings: true,
           group_claim: "groups",
           default_role: "internal_user",
@@ -598,9 +566,8 @@ describe("EditSSOSettingsModal", () => {
       renderComponent();
 
       await waitFor(() => {
-        expect(mockForm.setFieldsValue).toHaveBeenCalledWith({
+        expect(seededValuesFor(ssoData)).toMatchObject({
           sso_provider: SSO_PROVIDERS.GENERIC,
-          ...ssoData.values,
           use_team_mappings: true,
           team_ids_jwt_field: "teams",
         });
@@ -619,9 +586,8 @@ describe("EditSSOSettingsModal", () => {
       renderComponent();
 
       await waitFor(() => {
-        expect(mockForm.setFieldsValue).toHaveBeenCalledWith({
+        expect(seededValuesFor(ssoData)).toMatchObject({
           sso_provider: SSO_PROVIDERS.GENERIC,
-          ...ssoData.values,
           use_team_mappings: true,
           team_ids_jwt_field: "custom_teams_field",
         });
@@ -652,9 +618,8 @@ describe("EditSSOSettingsModal", () => {
       renderComponent();
 
       await waitFor(() => {
-        expect(mockForm.setFieldsValue).toHaveBeenCalledWith({
+        expect(seededValuesFor(ssoData)).toMatchObject({
           sso_provider: SSO_PROVIDERS.GENERIC,
-          ...ssoData.values,
           use_role_mappings: true,
           group_claim: "groups",
           default_role: "internal_user",
@@ -678,7 +643,7 @@ describe("EditSSOSettingsModal", () => {
       renderComponent();
 
       await waitFor(() => {
-        const callArgs = mockForm.setFieldsValue.mock.calls[0][0];
+        const callArgs = seededValuesFor(ssoData);
         expect(callArgs.use_team_mappings).toBeUndefined();
         expect(callArgs.team_ids_jwt_field).toBeUndefined();
       });
@@ -698,9 +663,8 @@ describe("EditSSOSettingsModal", () => {
       renderComponent();
 
       await waitFor(() => {
-        expect(mockForm.setFieldsValue).toHaveBeenCalledWith({
+        expect(seededValuesFor(ssoData)).toMatchObject({
           sso_provider: SSO_PROVIDERS.GENERIC,
-          ...ssoData.values,
         });
       });
     });
@@ -721,6 +685,50 @@ describe("EditSSOSettingsModal", () => {
       }).not.toThrow();
 
       expect(processSSOSettingsPayload).toHaveBeenCalled();
+    });
+  });
+
+  describe("Reseeding", () => {
+    it("replaces every field when reopened against a different stored config", async () => {
+      const first = createGoogleSSOData({
+        google_client_id: "first-tenant-id",
+        proxy_base_url: "https://first.example.com",
+        user_email: "first-admin@example.com",
+      });
+      setupMocks({ useSSOSettings: { data: first, isLoading: false, error: null } });
+      const { rerender } = renderComponent();
+
+      await waitFor(() => {
+        expect(lastSeededForm.getValues().google_client_id).toBe("first-tenant-id");
+      });
+
+      const second = createGoogleSSOData({
+        google_client_id: "second-tenant-id",
+        proxy_base_url: "https://second.example.com",
+        user_email: "second-admin@example.com",
+      });
+      setupMocks({ useSSOSettings: { data: second, isLoading: false, error: null } });
+      rerender(<EditSSOSettingsModal isVisible={true} onCancel={vi.fn()} onSuccess={vi.fn()} />);
+
+      await waitFor(() => {
+        expect(lastSeededForm.getValues().google_client_id).toBe("second-tenant-id");
+      });
+      expect(JSON.stringify(lastSeededForm.getValues())).not.toContain("first");
+    });
+  });
+
+  describe("Seeding completeness", () => {
+    it("seeds every field the provider forms can mount", () => {
+      const allFields = Object.values(ssoProviderConfigs).flatMap((config) => config.fields);
+      const textFieldNames = Array.from(
+        new Set(allFields.filter((field) => field.type !== "checkbox").map((field) => field.name)),
+      );
+      const stored = Object.fromEntries(textFieldNames.map((name) => [name, `stored-${name}`]));
+
+      const seeded = toSSOFormValues({ ...stored, saml_allow_unsolicited: "true" } as unknown as SSOSettingsValues);
+
+      expect(textFieldNames.filter((name) => seeded[name] !== `stored-${name}`)).toEqual([]);
+      expect(seeded.saml_allow_unsolicited).toBe(true);
     });
   });
 });

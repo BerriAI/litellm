@@ -7,6 +7,14 @@
   assertions: [succeeds]
   source: "server.py:637"
   rationale: Core operation; most common auth path; high usage
+- id: mcp.list_tools.api_key.access_group_scoped
+  module: mcp
+  tier: P1
+  operation: list_tools
+  auth_family: api_key
+  assertions: [access_group_scoped]
+  source: "test_mcp_access_group_e2e.py"
+  rationale: "A key granted an MCP access group sees the tagged server's tools; a key with a different group does not. Access-group-scoped tool selection at key creation"
 - id: mcp.list_tools.api_key.denied_without_permission
   module: mcp
   tier: P0
