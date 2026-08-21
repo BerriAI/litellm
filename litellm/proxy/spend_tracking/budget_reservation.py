@@ -103,35 +103,7 @@ def _key_reservation_should_release_for_throttle(counter_key: str, valid_token: 
     return counter_key == f"spend:key:{valid_token.token}" and should_throttle_budget_exceeded(valid_token)
 
 
-async def _apply_over_budget_reservation_policy(
-    counter: _BudgetCounter,
-    valid_token: UserAPIKeyAuth | None,
-    entry: dict[str, float | str],
-    applied_entries: list[dict[str, float | str]],
-    reservation_cost: float,
-    current_spend: float,
-) -> float:
-    """
-    Decide what to do when a counter is over budget, and return the reservation
-    cost to carry into the next counter. Three outcomes: an over-budget key that
-    opted into throttling releases its own reservation (the rate limiter slows
-    it) and keeps the cost; a partially-remaining budget resizes the reservation
-    down to what is left; anything else hard-blocks by raising.
-    """
-    if _key_reservation_should_release_for_throttle(counter.counter_key, valid_token):
-        await _release_applied_entries_best_effort(entries=[entry], default_reserved_cost=reservation_cost)
-        applied_entries.remove(entry)
-        return reservation_cost
-
-    remaining_before_reservation: Final = counter.max_budget - (current_spend - reservation_cost)
-    if remaining_before_reservation > 1e-12:
-        await _resize_applied_reservation(
-            entries=applied_entries,
-            current_reserved_cost=reservation_cost,
-            new_reserved_cost=remaining_before_reservation,
-        )
-        return remaining_before_reservation
-
+def _raise_counter_budget_exceeded(counter: _BudgetCounter, current_spend: float) -> NoReturn:
     raise litellm.BudgetExceededError(
         current_cost=current_spend,
         max_budget=counter.max_budget,
@@ -144,6 +116,49 @@ async def _apply_over_budget_reservation_policy(
         entity_type=_COUNTER_ENTITY_TYPES.get(counter.entity_type),
         entity_id=counter.spend_log_entity_id or counter.entity_id,
     )
+
+
+async def _apply_over_budget_reservation_policy(
+    counter: _BudgetCounter,
+    valid_token: UserAPIKeyAuth | None,
+    entry: dict[str, float | str],
+    applied_entries: list[dict[str, float | str]],
+    reservation_cost: float,
+    current_spend: float,
+    fail_closed_budget_enforcement: bool,
+) -> float:
+    """
+    Decide what to do when a counter is over budget, and return the reservation
+    cost to carry into the next counter. An over-budget key that opted into
+    throttling releases its own reservation (the rate limiter slows it) and
+    keeps the cost. Otherwise strict enforcement blocks the request, since the
+    estimated cost is already known not to fit, while soft mode resizes the
+    reservation down to the budget that was left and admits the request.
+    """
+    if _key_reservation_should_release_for_throttle(counter.counter_key, valid_token):
+        await _release_applied_entries_best_effort(entries=[entry], default_reserved_cost=reservation_cost)
+        applied_entries.remove(entry)
+        return reservation_cost
+
+    if fail_closed_budget_enforcement:
+        verbose_proxy_logger.warning(
+            "fail_closed_budget_enforcement: rejecting request, estimated cost %s does not fit the budget "
+            "remaining on %s",
+            reservation_cost,
+            counter.counter_key,
+        )
+        _raise_counter_budget_exceeded(counter=counter, current_spend=current_spend)
+
+    remaining_before_reservation: Final = counter.max_budget - (current_spend - reservation_cost)
+    if remaining_before_reservation > 1e-12:
+        await _resize_applied_reservation(
+            entries=applied_entries,
+            current_reserved_cost=reservation_cost,
+            new_reserved_cost=remaining_before_reservation,
+        )
+        return remaining_before_reservation
+
+    _raise_counter_budget_exceeded(counter=counter, current_spend=current_spend)
 
 
 async def reserve_budget_for_request(
@@ -241,6 +256,7 @@ async def reserve_budget_for_request(
                     applied_entries=applied_entries,
                     reservation_cost=reservation_cost,
                     current_spend=current_spend,
+                    fail_closed_budget_enforcement=fail_closed_budget_enforcement,
                 )
                 continue
     except Exception:

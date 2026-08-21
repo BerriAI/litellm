@@ -185,6 +185,7 @@ async def test_over_budget_window_counter_tags_clean_entity_id():
             applied_entries=[],
             reservation_cost=0.5,
             current_spend=2.0,
+            fail_closed_budget_enforcement=False,
         )
     assert exc_info.value.entity_type == "key"
     assert exc_info.value.entity_id == "test-token"
@@ -799,6 +800,184 @@ async def test_should_cap_known_estimate_to_remaining_budget(
     await release_budget_reservation(reservation)
     assert counter_cache.in_memory_cache.get_cache(
         key="spend:key:key-budget-known-estimate-cap"
+    ) == pytest.approx(0.9)
+
+
+@pytest.mark.asyncio
+async def test_should_reject_known_estimate_over_remaining_budget_when_fail_closed(
+    spend_counter_state,
+):
+    """Capping a known estimate to the leftover budget admits a request whose full
+    cost is already known not to fit, and reconciliation then pushes the counter
+    past max_budget. Strict mode must block it and roll the counter back."""
+    counter_cache, key_cache = spend_counter_state
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
+    valid_token = UserAPIKeyAuth(
+        token="key-budget-known-estimate-strict",
+        spend=0.9,
+        max_budget=1.0,
+    )
+    counter_cache.in_memory_cache.set_cache(
+        key="spend:key:key-budget-known-estimate-strict",
+        value=0.9,
+    )
+
+    with patch(
+        "litellm.proxy.spend_tracking.budget_reservation.estimate_request_max_cost",
+        return_value=0.6,
+    ):
+        with pytest.raises(litellm.BudgetExceededError) as exc_info:
+            await reserve_budget_for_request(
+                request_body=_request_body(),
+                route="/chat/completions",
+                llm_router=None,
+                valid_token=valid_token,
+                team_object=None,
+                user_object=None,
+                prisma_client=None,
+                user_api_key_cache=key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+                fail_closed_budget_enforcement=True,
+            )
+
+    assert exc_info.value.entity_type == "key"
+    assert exc_info.value.entity_id == "key-budget-known-estimate-strict"
+    assert counter_cache.in_memory_cache.get_cache(
+        key="spend:key:key-budget-known-estimate-strict"
+    ) == pytest.approx(0.9)
+
+
+@pytest.mark.asyncio
+async def test_should_admit_exact_boundary_estimate_when_fail_closed(
+    spend_counter_state,
+):
+    counter_cache, key_cache = spend_counter_state
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
+    valid_token = UserAPIKeyAuth(
+        token="key-budget-strict-boundary",
+        spend=0.4,
+        max_budget=1.0,
+    )
+    counter_cache.in_memory_cache.set_cache(
+        key="spend:key:key-budget-strict-boundary",
+        value=0.4,
+    )
+
+    with patch(
+        "litellm.proxy.spend_tracking.budget_reservation.estimate_request_max_cost",
+        return_value=0.6,
+    ):
+        reservation = await reserve_budget_for_request(
+            request_body=_request_body(),
+            route="/chat/completions",
+            llm_router=None,
+            valid_token=valid_token,
+            team_object=None,
+            user_object=None,
+            prisma_client=None,
+            user_api_key_cache=key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+            fail_closed_budget_enforcement=True,
+        )
+
+    assert reservation is not None
+    assert reservation["reserved_cost"] == pytest.approx(0.6)
+    assert counter_cache.in_memory_cache.get_cache(
+        key="spend:key:key-budget-strict-boundary"
+    ) == pytest.approx(1.0)
+
+
+@pytest.mark.asyncio
+async def test_strict_rejection_releases_counters_reserved_before_the_full_one(
+    spend_counter_state,
+):
+    counter_cache, key_cache = spend_counter_state
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
+    valid_token = UserAPIKeyAuth(
+        token="key-budget-strict-multi",
+        spend=0.0,
+        max_budget=10.0,
+        team_id="team-budget-strict-multi",
+    )
+    team_object = LiteLLM_TeamTable(
+        team_id="team-budget-strict-multi",
+        spend=0.9,
+        max_budget=1.0,
+    )
+    counter_cache.in_memory_cache.set_cache(
+        key="spend:team:team-budget-strict-multi",
+        value=0.9,
+    )
+
+    with patch(
+        "litellm.proxy.spend_tracking.budget_reservation.estimate_request_max_cost",
+        return_value=0.6,
+    ):
+        with pytest.raises(litellm.BudgetExceededError) as exc_info:
+            await reserve_budget_for_request(
+                request_body=_request_body(),
+                route="/chat/completions",
+                llm_router=None,
+                valid_token=valid_token,
+                team_object=team_object,
+                user_object=None,
+                prisma_client=None,
+                user_api_key_cache=key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+                fail_closed_budget_enforcement=True,
+            )
+
+    assert exc_info.value.entity_type == "team"
+    assert counter_cache.in_memory_cache.get_cache(
+        key="spend:key:key-budget-strict-multi"
+    ) == pytest.approx(0.0)
+    assert counter_cache.in_memory_cache.get_cache(
+        key="spend:team:team-budget-strict-multi"
+    ) == pytest.approx(0.9)
+
+
+@pytest.mark.asyncio
+async def test_strict_mode_keeps_throttled_key_exemption(
+    spend_counter_state, monkeypatch
+):
+    """A key that opted into budget-exceeded throttling is slowed by the rate
+    limiter, so strict enforcement must not turn its own counter into a block."""
+    monkeypatch.setattr(litellm, "budget_exceeded_throttle_percentage", 0.1)
+    counter_cache, key_cache = spend_counter_state
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
+    valid_token = UserAPIKeyAuth(
+        token="key-strict-throttle",
+        spend=0.9,
+        max_budget=1.0,
+        tpm_limit=1000,
+        rpm_limit=100,
+        metadata={"throttle_on_budget_exceeded": True},
+    )
+    counter_cache.in_memory_cache.set_cache(
+        key="spend:key:key-strict-throttle",
+        value=0.9,
+    )
+
+    with patch(
+        "litellm.proxy.spend_tracking.budget_reservation.estimate_request_max_cost",
+        return_value=0.6,
+    ):
+        reservation = await reserve_budget_for_request(
+            request_body=_request_body(),
+            route="/chat/completions",
+            llm_router=None,
+            valid_token=valid_token,
+            team_object=None,
+            user_object=None,
+            prisma_client=None,
+            user_api_key_cache=key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+            fail_closed_budget_enforcement=True,
+        )
+
+    assert reservation is None
+    assert counter_cache.in_memory_cache.get_cache(
+        key="spend:key:key-strict-throttle"
     ) == pytest.approx(0.9)
 
 
