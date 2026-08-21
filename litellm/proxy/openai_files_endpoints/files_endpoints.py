@@ -145,25 +145,37 @@ async def _scan_batch_upload(
 
 
 def get_first_json_object(file_source: bytes | BinaryIO) -> dict | None:
+    """
+    The first record, used to pick a deployment when batch load balancing is on.
+
+    Read the way the upload validation reads it, since a file it accepted must not lose its
+    routing here: blank lines are not records and are skipped, and the line is parsed as bytes so
+    the json module sniffs the encoding rather than rejecting a leading byte order mark. Either
+    difference makes this return None, which silently sends the batch to the default provider.
+    """
     try:
         if isinstance(file_source, (bytes, bytearray)):
-            newline: Final = file_source.find(b"\n")
-            raw: Final = file_source if newline == -1 else file_source[:newline]
-            first_line = raw.decode("utf-8")
+            first_record: bytes | None = next((line for line in file_source.splitlines() if line.strip()), None)
         else:
+            # lazily, so a batch file that can be gigabytes is not read past its first record
             file_source.seek(0)
-            first_line = file_source.readline().decode("utf-8")
+            first_record = next((line for line in file_source if line.strip()), None)
             file_source.seek(0)
-        return json.loads(first_line.strip())
+        return None if first_record is None else json.loads(first_record.strip())
     except (json.JSONDecodeError, UnicodeDecodeError, OSError, ValueError):
         return None
 
 
 def get_model_from_json_obj(json_object: dict) -> str | None:
-    body: Final = json_object.get("body", {}) or {}
-    model: Final = body.get("model")
+    """
+    The model a record names, or None when it does not name one readably.
 
-    return model
+    The upload validation only checks that `body` is present, not that it is an object, so a
+    record can carry a string there and reach this. Returning None sends the upload down the
+    default-provider branch, which is what a record with no resolvable model already did.
+    """
+    body: Final = json_object.get("body")
+    return body.get("model") if isinstance(body, dict) else None
 
 
 async def _deprecated_loadbalanced_create_file(
