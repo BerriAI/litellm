@@ -986,6 +986,33 @@ def test_async_url_client_drops_username_alongside_credential_provider():
     pool.connection_class(**pool.connection_kwargs)
 
 
+def test_async_host_client_drops_username_alongside_credential_provider():
+    """
+    Regression test for https://github.com/BerriAI/litellm/issues/37335
+
+    A host/port (non-URL) Azure Entra config -- e.g. REDIS_AZURE_AD_TOKEN=true with
+    REDIS_USERNAME set and no REDIS_PASSWORD -- must not reach redis-py with both
+    `username` and `credential_provider` set, since redis-py rejects that combination
+    outright. AzureADCredentialProvider already carries REDIS_USERNAME, so the plain
+    `username` kwarg must be dropped on this path too, not just the REDIS_URL one.
+    """
+    redis_kwargs = {
+        "host": "redis-host",
+        "port": 6380,
+        "ssl": True,
+        "username": "redis-user",
+        "redis_connect_func": SimpleNamespace(**AZURE_AD_CONNECT_FUNC),
+    }
+
+    with patch("litellm._redis._get_redis_client_logic", return_value=redis_kwargs):
+        client = get_redis_async_client()
+
+    pool = client.connection_pool
+    assert pool.connection_kwargs.get("username") is None
+    assert isinstance(pool.connection_kwargs.get("credential_provider"), AzureADCredentialProvider)
+    pool.connection_class(**pool.connection_kwargs)
+
+
 @pytest.mark.parametrize("build_pool", [False, True], ids=["client", "pool"])
 def test_async_url_keeps_a_coroutine_connect_func(build_pool):
     """redis-py awaits a coroutine redis_connect_func on an async connection, so one we cannot
