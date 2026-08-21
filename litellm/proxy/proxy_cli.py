@@ -1224,6 +1224,8 @@ def run_server(
 
         if os.getenv("DATABASE_URL", None) is not None or os.getenv("DIRECT_URL", None) is not None:
             from litellm.proxy.db.db_url_settings import (
+                add_missing_query_params,
+                reader_shareable_params,
                 unsupported_db_scheme,
                 unsupported_db_scheme_message,
             )
@@ -1273,6 +1275,24 @@ def run_server(
                     database_url = os.getenv("DIRECT_URL")
                     modified_url = append_query_params(database_url, connection_url_params)
                     os.environ["DIRECT_URL"] = modified_url
+                # The reader pool is a real pool against the same configured cap, so it
+                # gets the allowlisted pool params. Schema-affecting ones, including any
+                # the operator smuggled in through database_extra_connection_params, stay
+                # on the writer. Anything pinned on the replica URL wins, unlike the
+                # writer where the config is applied on top.
+                read_replica_url: Final[str | None] = os.getenv("DATABASE_URL_READ_REPLICA")
+                if read_replica_url:
+                    reader_options: Final[str] = _pg_options_with_timeouts(
+                        _url_query_value(read_replica_url, "options"),
+                        db_statement_timeout,
+                        db_lock_timeout,
+                    )
+                    os.environ["DATABASE_URL_READ_REPLICA"] = add_missing_query_params(
+                        _with_query_value(read_replica_url, "options", reader_options)
+                        if reader_options
+                        else read_replica_url,
+                        reader_shareable_params(connection_url_params),
+                    )
                 subprocess.run(["prisma"], capture_output=True)
                 is_prisma_runnable = True
             except FileNotFoundError:
