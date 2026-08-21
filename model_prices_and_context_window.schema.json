@@ -702,6 +702,9 @@
         "supports_tool_search": {
           "type": "boolean"
         },
+        "supports_ultra_reasoning_effort": {
+          "type": "boolean"
+        },
         "supports_url_context": {
           "type": "boolean"
         },

@@ -13,6 +13,7 @@ import { ModelGroup } from "@/components/llm_calls/fetch_models";
 import AdaptiveRoutingConfig from "./AdaptiveRoutingConfig";
 import ClassificationMethodConfig from "./ClassificationMethodConfig";
 import {
+  REASONING_EFFORT_OPTIONS,
   ReasoningEffort,
   TierModelParamsByTier,
   pruneTierModelParams,
@@ -251,8 +252,13 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
   const defaultModel = resolveComplexityDefaultModel(value.tiers, value.default_model);
 
   // Embedding models can't serve a chat-completion role, so they're excluded here.
-  const reasoningModels = new Set(
-    modelInfo.filter((model) => model.supports_reasoning).map((model) => model.model_group),
+  // The backend list is the per-group intersection of accepted effort levels; when a proxy does not
+  // send it yet, fall back to the coarse supports_reasoning gate with every level offered.
+  const effortOptionsByModel: Record<string, string[]> = Object.fromEntries(
+    modelInfo.map((model) => [
+      model.model_group,
+      model.supported_reasoning_efforts ?? (model.supports_reasoning ? [...REASONING_EFFORT_OPTIONS] : []),
+    ]),
   );
 
   const modelOptions = modelInfo
@@ -365,7 +371,7 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
                   <TierModelEffortRows
                     tierLabel={label}
                     models={value.tiers[tier]}
-                    reasoningModels={reasoningModels}
+                    effortOptionsByModel={effortOptionsByModel}
                     paramsByModel={value.tier_model_params?.[tier]}
                     onEffortChange={(model, effort) => handleTierModelEffortChange(tier, model, effort)}
                   />
