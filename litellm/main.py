@@ -7535,6 +7535,7 @@ async def amoderation(
             },
             custom_llm_provider=custom_llm_provider,
         )
+        litellm_logging_obj.pre_call(input=input, api_key=api_key)
 
     if model is not None:
         response = await _openai_client.moderations.create(input=input, model=model)
@@ -8040,6 +8041,7 @@ def speech(
             project=project,
             max_retries=max_retries,
             timeout=timeout,
+            logging_obj=logging_obj,
             client=client,  # pass AsyncOpenAI, OpenAI client
             aspeech=aspeech,
             shared_session=shared_session,
@@ -8118,6 +8120,7 @@ def speech(
                 organization=organization,
                 max_retries=max_retries,
                 timeout=timeout,
+                logging_obj=logging_obj,
                 client=client,  # pass AsyncOpenAI, OpenAI client
                 aspeech=aspeech,
                 litellm_params=litellm_params_dict,

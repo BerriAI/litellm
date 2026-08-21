@@ -1367,6 +1367,17 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
 
             if headers:
                 data["extra_headers"] = headers
+            ## LOGGING
+            logging_obj.pre_call(
+                input=prompt,
+                api_key=openai_aclient.api_key,
+                additional_args={
+                    "headers": {"Authorization": f"Bearer {openai_aclient.api_key}"},
+                    "api_base": str(openai_aclient.base_url),
+                    "acompletion": True,
+                    "complete_input_dict": data,
+                },
+            )
             response = await openai_aclient.images.generate(**data, timeout=timeout)
             stringified_response: Final = response.model_dump()
             ## LOGGING
@@ -1501,6 +1512,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         project: str | None,
         max_retries: int,
         timeout: float | httpx.Timeout,
+        logging_obj: LiteLLMLoggingObj,
         aspeech: bool | None = None,
         client=None,
         shared_session: Optional["ClientSession"] = None,
@@ -1517,6 +1529,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 project=project,
                 max_retries=max_retries,
                 timeout=timeout,
+                logging_obj=logging_obj,
                 client=client,
                 shared_session=shared_session,
             )
@@ -1529,6 +1542,16 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             max_retries=max_retries,
             client=client,
             shared_session=shared_session,
+        )
+
+        ## LOGGING
+        logging_obj.pre_call(
+            input=input,
+            api_key=api_key,
+            additional_args={
+                "complete_input_dict": {"model": model, "voice": voice, **optional_params},
+                "api_base": api_base,
+            },
         )
 
         response: Final = cast(OpenAI, openai_client).audio.speech.create(
@@ -1551,6 +1574,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         project: str | None,
         max_retries: int,
         timeout: float | httpx.Timeout,
+        logging_obj: LiteLLMLoggingObj,
         client=None,
         shared_session: Optional["ClientSession"] = None,
     ) -> HttpxBinaryResponseContent:
@@ -1565,6 +1589,16 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 client=client,
                 shared_session=shared_session,
             ),
+        )
+
+        ## LOGGING
+        logging_obj.pre_call(
+            input=input,
+            api_key=api_key,
+            additional_args={
+                "complete_input_dict": {"model": model, "voice": voice, **optional_params},
+                "api_base": api_base,
+            },
         )
 
         response: Final = await openai_client.audio.speech.create(

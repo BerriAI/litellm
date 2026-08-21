@@ -264,6 +264,27 @@ def test_vector_store_file_management_is_not_chat(call_type):
     assert resolve_operation(call_type).value == "litellm.vector_store_file_management"
 
 
+@pytest.mark.parametrize(
+    ("call_type", "operation"),
+    [
+        (f"{prefix}{call_type}", operation)
+        for call_type, operation in (
+            ("image_generation", GenAIOperation.LITELLM_IMAGE_GENERATION),
+            ("moderation", GenAIOperation.LITELLM_MODERATION),
+            ("ocr", GenAIOperation.LITELLM_OCR),
+            ("speech", GenAIOperation.LITELLM_SPEECH),
+            ("transcription", GenAIOperation.LITELLM_TRANSCRIPTION),
+        )
+        for prefix in ("", "a")
+    ],
+)
+def test_non_chat_inference_routes_are_not_chat(call_type, operation):
+    """Image generation, moderation, OCR, speech and transcription are their own
+    operations, so their spans must not be named ``chat <model>`` and mix their
+    latency and cost into the chat series a dashboard reads."""
+    assert resolve_operation(call_type) is operation
+
+
 def test_vendor_operation_values_are_namespaced():
     """A vendor value must stay under the ``litellm.`` prefix: an unprefixed invented
     name could collide with a value the convention adds later, silently changing what

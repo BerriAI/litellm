@@ -30,6 +30,11 @@ class GenAIOperation(str, Enum):
     EXECUTE_TOOL = "execute_tool"  # MCP tool-call spans
     LITELLM_VECTOR_STORE_MANAGEMENT = "litellm.vector_store_management"
     LITELLM_VECTOR_STORE_FILE_MANAGEMENT = "litellm.vector_store_file_management"
+    LITELLM_IMAGE_GENERATION = "litellm.image_generation"
+    LITELLM_MODERATION = "litellm.moderation"
+    LITELLM_OCR = "litellm.ocr"
+    LITELLM_SPEECH = "litellm.speech"
+    LITELLM_TRANSCRIPTION = "litellm.transcription"
 
 
 class GenAIProvider(str, Enum):
@@ -352,6 +357,16 @@ _OPERATION_BY_CALL_TYPE: Final[dict[str, GenAIOperation]] = {
     "aembedding": GenAIOperation.EMBEDDINGS,
     "responses": GenAIOperation.CHAT,
     "aresponses": GenAIOperation.CHAT,
+    "image_generation": GenAIOperation.LITELLM_IMAGE_GENERATION,
+    "aimage_generation": GenAIOperation.LITELLM_IMAGE_GENERATION,
+    "moderation": GenAIOperation.LITELLM_MODERATION,
+    "amoderation": GenAIOperation.LITELLM_MODERATION,
+    "ocr": GenAIOperation.LITELLM_OCR,
+    "aocr": GenAIOperation.LITELLM_OCR,
+    "speech": GenAIOperation.LITELLM_SPEECH,
+    "aspeech": GenAIOperation.LITELLM_SPEECH,
+    "transcription": GenAIOperation.LITELLM_TRANSCRIPTION,
+    "atranscription": GenAIOperation.LITELLM_TRANSCRIPTION,
     "call_mcp_tool": GenAIOperation.EXECUTE_TOOL,
     "vector_store_search": GenAIOperation.RETRIEVAL,
     "avector_store_search": GenAIOperation.RETRIEVAL,
