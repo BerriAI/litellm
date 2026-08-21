@@ -231,6 +231,25 @@ def render_meta_style_mutant(
     return "\n".join(out)
 
 
+def clean_sweep_is_provable(stats: dict | None) -> bool:
+    """`mutmut results` omits killed mutants, so its silence is equally consistent with a
+    perfect run and with a run that never started. Only the stats file can tell them apart."""
+    return bool(stats) and stats.get("killed", 0) > 0
+
+
+def no_survivors_verdict(results: MutmutResults, stats: dict | None) -> str:
+    if clean_sweep_is_provable(stats):
+        return "**No surviving mutants, and the run killed some, so the test suite caught every mutation.**"
+    if stats:
+        return "**Not one mutant was killed. This is not a passing score.**"
+    return (
+        f"**mutmut-cicd-stats.json is missing and `mutmut results` printed {results.reported} "
+        "verdict(s), none of them a survivor. Since that command never lists killed mutants, a "
+        "clean sweep and a run that mutated nothing look identical from here. This is not a "
+        "passing score.**"
+    )
+
+
 def render(config: dict, results: MutmutResults, stats: dict | None) -> str:
     survivors = list(results.survivors)
     by_function: dict[tuple[str, str], list[tuple[str, str]]] = defaultdict(list)
@@ -274,12 +293,7 @@ def render(config: dict, results: MutmutResults, stats: dict | None) -> str:
     out.append("")
 
     if not survivors:
-        out.append(
-            "**No surviving mutants — the test suite caught every mutation.**"
-            if results.reported
-            else "**mutmut reported no mutants at all. The run did not finish; this is "
-            "not a passing score.**"
-        )
+        out.append(no_survivors_verdict(results, stats))
         out.append("")
         return "\n".join(out)
 
@@ -431,10 +445,10 @@ def main() -> int:
         f"Wrote {out_path} ({len(results.survivors)} survivor"
         f"{'s' if len(results.survivors) != 1 else ''}, {len(report)} chars)"
     )
-    if not results.reported and stats is None:
+    if not results.survivors and not clean_sweep_is_provable(stats):
         print(
-            "error: mutmut produced no results, so the report cannot say anything "
-            "about the suite",
+            "error: nothing was shown to have been killed, so the report cannot say "
+            "anything about the suite",
             file=sys.stderr,
         )
         return 1

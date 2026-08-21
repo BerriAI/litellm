@@ -28,10 +28,30 @@ def test_a_run_that_reported_nothing_is_not_a_clean_sweep():
 
 
 def test_a_run_that_killed_every_mutant_says_so():
-    rendered = report.render(_CONFIG, report.MutmutResults(survivors=(), reported=12), None)
+    rendered = report.render(
+        _CONFIG, report.MutmutResults(survivors=(), reported=0), {"killed": 48, "survived": 0}
+    )
 
     assert "caught every mutation" in rendered
     assert "not a passing score" not in rendered
+
+
+def test_no_survivors_without_a_kill_is_not_a_clean_sweep():
+    rendered = report.render(
+        _CONFIG, report.MutmutResults(survivors=(), reported=48), {"killed": 0, "survived": 0}
+    )
+
+    assert "not a passing score" in rendered
+    assert "caught every mutation" not in rendered
+
+
+def test_no_survivors_and_no_stats_cannot_claim_a_sweep():
+    """`mutmut results` never lists killed mutants, so with the stats file missing an
+    empty survivor list is equally consistent with a perfect run and a dead one."""
+    rendered = report.render(_CONFIG, report.MutmutResults(survivors=(), reported=48), None)
+
+    assert "not a passing score" in rendered
+    assert "caught every mutation" not in rendered
 
 
 def test_survivors_are_read_out_of_the_verdicts_they_came_with(monkeypatch):
@@ -73,7 +93,6 @@ def test_every_multi_word_verdict_mutmut_can_emit_still_counts(monkeypatch):
 
     assert results.survivors == ()
     assert results.reported == 4
-    assert "not a passing score" not in report.render(_CONFIG, results, None)
 
 
 def test_an_empty_mutmut_results_reports_nothing_rather_than_zero_survivors(monkeypatch):
