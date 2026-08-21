@@ -2079,17 +2079,10 @@ async def test_call_with_key_over_budget_stream(prisma_client):
         proxy_logging_obj=proxy_logging_obj,
     )
     # use generated key to auth in
-    result = await user_api_key_auth(request=request, api_key=bearer_token)
-
     with pytest.raises(Exception, match="Budget has been exceeded") as exc_info:
-        print("result from user auth with new key", result)
-    e = exc_info.value
-    print("Got Exception", e)
+        await user_api_key_auth(request=request, api_key=bearer_token)
     # Handle DataError and other exceptions that don't have .message attribute
-    error_detail = getattr(e, "message", str(e))
-    assert "Budget has been exceeded" in error_detail
-
-    print(vars(e))
+    assert "Budget has been exceeded" in getattr(exc_info.value, "message", str(exc_info.value))
 
 
 @pytest.mark.skip(reason="Requires reliable external DB connection (prisma).")
