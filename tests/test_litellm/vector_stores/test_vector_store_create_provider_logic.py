@@ -36,7 +36,6 @@ def test_vector_store_create_with_simple_provider_name():
         pytest.fail("Should not enter this branch for simple provider name")
     else:
         api_type = None
-        custom_llm_provider = custom_llm_provider  # Keep as-is
 
     # Verify api_type is None
     assert api_type is None, "api_type should be None for simple provider names"
@@ -132,7 +131,6 @@ def test_vector_store_create_with_ragflow_provider():
         pytest.fail("Should not enter this branch for RAGFlow provider")
     else:
         api_type = None
-        custom_llm_provider = custom_llm_provider  # Keep as-is
 
     # Verify api_type is None
     assert api_type is None, "api_type should be None for RAGFlow provider"

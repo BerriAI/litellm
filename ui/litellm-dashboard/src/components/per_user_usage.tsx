@@ -124,11 +124,11 @@ const PerUserUsage: React.FC<PerUserUsageProps> = ({ accessToken, selectedTags, 
       <p className="text-sm text-muted-foreground">Individual developer usage metrics</p>
 
       <Tabs defaultValue="details">
-        <TabsList className="mb-6">
-          <TabsTrigger value="details" className="flex-none px-3">
+        <TabsList variant="line" className="mb-6 h-auto w-full justify-start rounded-none border-b p-0">
+          <TabsTrigger value="details" className="flex-none rounded-none px-4 py-2">
             User Details
           </TabsTrigger>
-          <TabsTrigger value="distribution" className="flex-none px-3">
+          <TabsTrigger value="distribution" className="flex-none rounded-none px-4 py-2">
             Usage Distribution
           </TabsTrigger>
         </TabsList>
@@ -145,7 +145,7 @@ const PerUserUsage: React.FC<PerUserUsageProps> = ({ accessToken, selectedTags, 
 
           {perUserData.results.length > 10 && (
             <div className="mt-4 flex justify-between items-center">
-              <p className="text-sm text-gray-500">Showing 10 of {perUserData.total_count} results</p>
+              <p className="text-sm text-muted-foreground">Showing 10 of {perUserData.total_count} results</p>
               <div className="flex gap-2">
                 <Button size="sm" variant="secondary" onClick={handlePrevPage} disabled={currentPage === 1}>
                   Previous

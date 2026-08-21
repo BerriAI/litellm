@@ -842,6 +842,8 @@ def test_completion_mistral_api_modified_input():
 
 @pytest.mark.skip(reason="this test is flaky")
 def test_completion_gpt4_vision():
+    import openai
+
     try:
         litellm.set_verbose = True
         response = completion(
@@ -1820,6 +1822,8 @@ def test_completion_openai_litellm_key():
 
 @pytest.mark.skip(reason="Unresponsive endpoint.[TODO] Rehost this somewhere else")
 def test_completion_ollama_hosted():
+    import openai
+
     try:
         litellm.request_timeout = 20  # give ollama 20 seconds to response
         litellm.set_verbose = True
@@ -2057,17 +2061,12 @@ def test_completion_openrouter_reasoning_effort():
 
 
 def test_completion_hf_model_no_provider():
-    try:
-        response = completion(
+    with pytest.raises(litellm.BadRequestError, match="LLM Provider NOT provided"):
+        completion(
             model="WizardLM/WizardLM-70B-V1.0",
             messages=messages,
             max_tokens=5,
         )
-        # Add any assertions here to check the response
-        print(response)
-        pytest.fail(f"Error occurred: {e}")
-    except Exception as e:
-        pass
 
 
 # test_completion_hf_model_no_provider()
@@ -2546,7 +2545,7 @@ def test_completion_replicate_vicuna():
         response_str = response["choices"][0]["message"]["content"]
         print("RESPONSE STRING\n", response_str)
         if type(response_str) != str:
-            pytest.fail(f"Error occurred: {e}")
+            pytest.fail(f"Expected a string response, got {type(response_str)}: {response_str}")
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 

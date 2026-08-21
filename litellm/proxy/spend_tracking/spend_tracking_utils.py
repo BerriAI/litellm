@@ -1,5 +1,3 @@
-import hashlib
-import json
 import os
 import re
 import secrets
@@ -29,6 +27,7 @@ from litellm.proxy._types import SpendLogsMetadata, SpendLogsPayload
 from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
 from litellm.proxy.utils import PrismaClient, hash_token
 from litellm.types.utils import (
+    CallTypes,
     CostBreakdown,
     StandardLoggingGuardrailInformation,
     StandardLoggingMCPToolCall,
@@ -145,36 +144,22 @@ def _get_spend_logs_metadata(
     return clean_metadata
 
 
-def generate_hash_from_response(response_obj: Any) -> str:
-    """
-    Generate a stable hash from a response object.
-
-    Args:
-        response_obj: The response object to hash (can be dict, list, etc.)
-
-    Returns:
-        A hex string representation of the MD5 hash
-    """
-    try:
-        # Create a stable JSON string of the entire response object
-        # Sort keys to ensure consistent ordering
-        json_str: Final = json.dumps(response_obj, sort_keys=True)
-
-        # Generate a hash of the response object
-        unique_hash: Final = hashlib.md5(json_str.encode()).hexdigest()
-        return unique_hash
-    except Exception:
-        # Return a fallback hash if serialization fails
-        return hashlib.md5(str(response_obj).encode()).hexdigest()
+BATCH_COST_REQUEST_ID_SUFFIX: Final = "_batch_cost"
 
 
 def get_spend_logs_id(call_type: str, response_obj: dict, kwargs: dict) -> str | None:
-    if call_type == "aretrieve_batch" or call_type == "acreate_file":
-        # Generate a hash from the response object
-        id: str | None = generate_hash_from_response(response_obj)
-    else:
-        id = cast(str | None, response_obj.get("id")) or cast(str | None, kwargs.get("litellm_call_id"))
-    return id
+    standard_logging_payload = kwargs.get("standard_logging_object")
+    candidate_ids: Final = (
+        response_obj.get("id"),
+        standard_logging_payload.get("id") if isinstance(standard_logging_payload, dict) else None,
+        kwargs.get("litellm_call_id"),
+    )
+    resolved_id: Final = next(
+        (candidate for candidate in candidate_ids if isinstance(candidate, str) and candidate), None
+    )
+    if resolved_id is not None and call_type == CallTypes.aretrieve_batch.value:
+        return f"{resolved_id}{BATCH_COST_REQUEST_ID_SUFFIX}"
+    return resolved_id
 
 
 def _extract_usage_for_ocr_call(response_obj: Any, response_obj_dict: dict) -> dict:
@@ -230,6 +215,15 @@ def _extract_usage_for_ocr_call(response_obj: Any, response_obj_dict: dict) -> d
             }
     else:
         return {}
+
+
+def _sl_attribution_fallback(
+    standard_logging_payload: StandardLoggingPayload | None,
+    field: Literal["model_id", "model_group", "api_base", "custom_llm_provider"],
+) -> str:
+    if standard_logging_payload is None:
+        return ""
+    return standard_logging_payload.get(field) or ""
 
 
 def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogsPayload:
@@ -304,8 +298,15 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogs
     ):  # use 'tags' from standard logging payload instead
         request_tags = safe_dumps(standard_logging_payload["request_tags"])
 
-    _model_id: Final = metadata.get("model_info", {}).get("id", "")
-    _model_group: Final = metadata.get("model_group", "")
+    _model_id: Final = metadata.get("model_info", {}).get("id", "") or _sl_attribution_fallback(
+        standard_logging_payload, "model_id"
+    )
+    _model_group: Final = metadata.get("model_group", "") or _sl_attribution_fallback(
+        standard_logging_payload, "model_group"
+    )
+    _api_base: Final = litellm_params.get("api_base", "") or _sl_attribution_fallback(
+        standard_logging_payload, "api_base"
+    )
 
     # Extract overhead from hidden_params if available
     litellm_overhead_time_ms = None
@@ -405,7 +406,11 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogs
 
     # Extract agent_id for A2A requests (set directly on model_call_details)
     agent_id: Final[str | None] = kwargs.get("agent_id") or metadata.get("agent_id")
-    custom_llm_provider: Final = kwargs.get("custom_llm_provider")
+    custom_llm_provider: Final = (
+        kwargs.get("custom_llm_provider")
+        or _sl_attribution_fallback(standard_logging_payload, "custom_llm_provider")
+        or None
+    )
     raw_model: Final = cast(str, kwargs.get("model") or "")
     model_name: Final = reconstruct_model_name(raw_model, custom_llm_provider, metadata or {})
 
@@ -430,13 +435,13 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogs
             completion_tokens=usage.get("completion_tokens", standard_logging_completion_tokens),
             request_tags=request_tags,
             end_user=end_user_id or "",
-            api_base=litellm_params.get("api_base", ""),
+            api_base=_api_base,
             model_group=_model_group,
             model_id=_model_id,
             mcp_namespaced_tool_name=mcp_namespaced_tool_name,
             agent_id=agent_id,
             requester_ip_address=clean_metadata.get("requester_ip_address", None),
-            custom_llm_provider=kwargs.get("custom_llm_provider", ""),
+            custom_llm_provider=custom_llm_provider or "",
             messages=_get_messages_for_spend_logs_payload(
                 standard_logging_payload=standard_logging_payload, metadata=metadata
             ),

@@ -22,6 +22,7 @@ from litellm.proxy._types import (
     NewUserRequest,
     LiteLLM_BudgetTable,
     LiteLLM_OrganizationTable,
+    LiteLLM_ProjectTableCachedObj,
     LiteLLM_TeamTableCachedObj,
     LiteLLM_UserTable,
     LiteLLM_VerificationToken,
@@ -31,9 +32,12 @@ from litellm.proxy._types import (
     ResetSpendRequest,
     UpdateKeyRequest,
 )
+from litellm.proxy.auth.auth_checks import _project_cache_key
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     _check_org_key_limits,
+    _check_project_key_limits,
     _check_team_key_limits,
     _common_key_generation_helper,
     _enforce_upperbound_key_params,
@@ -15515,6 +15519,207 @@ async def test_regenerate_key_output_token_estimate_lowered_rejected_for_non_adm
     assert "Only proxy admins can set" in str(exc.value.detail)
 
 
+_BATCH_LIMIT = "batch_enqueued_token_limit"
+
+
+@pytest.mark.parametrize(
+    "label, request_body, existing_metadata, allowed",
+    [
+        ("set on a key with none stored", {"metadata": {_BATCH_LIMIT: 50000}}, None, False),
+        ("raised above the stored limit", {"metadata": {_BATCH_LIMIT: 200000}}, {_BATCH_LIMIT: 100000}, False),
+        ("cleared by replacing the blob", {"metadata": {}}, {_BATCH_LIMIT: 100000}, False),
+        ("resent unchanged", {"metadata": {_BATCH_LIMIT: 100000}}, {_BATCH_LIMIT: 100000}, True),
+        ("left untouched", {}, {_BATCH_LIMIT: 100000}, True),
+    ],
+)
+def test_batch_enqueued_token_limit_admin_gate_matrix(label, request_body, existing_metadata, allowed):
+    """A non-admin may only leave a key's stored batch enqueued-token limit as it is.
+
+    When set, the limit replaces the standard RPM/TPM checks for batch
+    submissions, so a key holder writing it would pick their own batch quota.
+    Resending the stored value is what the edit form produces on every save
+    and has to stay allowed.
+    """
+    from litellm.proxy.auth.auth_utils import (
+        enforce_batch_enqueued_token_limit_is_admin_only,
+    )
+
+    def _call(caller):
+        enforce_batch_enqueued_token_limit_is_admin_only(
+            data=UpdateKeyRequest(key="sk-1", **request_body),
+            existing_metadata=existing_metadata,
+            user_api_key_dict=caller,
+            entity="key",
+        )
+
+    non_admin = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        api_key="sk-non-admin",
+        user_id="alice",
+    )
+    if allowed:
+        _call(non_admin)
+    else:
+        with pytest.raises(HTTPException) as exc:
+            _call(non_admin)
+        assert exc.value.status_code == 403
+        assert "Only proxy admins can set" in str(exc.value.detail)
+
+    _call(
+        UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            api_key="sk-admin",
+            user_id="admin",
+        )
+    )
+
+
+@pytest.mark.asyncio
+async def test_generate_key_batch_enqueued_token_limit_rejected_for_non_admin():
+    """A non-admin self-minting a key with the limit would replace the standard
+    batch RPM/TPM checks with a cap of their own choosing."""
+    with patch("litellm.proxy.proxy_server.prisma_client", AsyncMock()):
+        with pytest.raises(HTTPException) as exc:
+            await _common_key_generation_helper(
+                data=GenerateKeyRequest(metadata={_BATCH_LIMIT: 100000}, rpm_limit=2),
+                user_api_key_dict=UserAPIKeyAuth(
+                    user_role=LitellmUserRoles.INTERNAL_USER,
+                    api_key="sk-alice",
+                    user_id="alice",
+                ),
+                litellm_changed_by=None,
+                team_table=None,
+            )
+    assert int(getattr(exc.value, "status_code", 0)) == 403
+    assert "Only proxy admins can set" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_update_key_batch_enqueued_token_limit_raised_rejected_for_non_admin(monkeypatch):
+    """/key/update is reachable by the key's own holder, so the gate has to
+    fire inside the update path itself rather than only at generation."""
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        update_key_fn,
+    )
+
+    token = "d1b2c3d4e5f6789012345678901234567890123456789012345678901234abcd"
+    _wire_update_key_fn(monkeypatch, _estimate_key_row(token, {_BATCH_LIMIT: 100000}))
+
+    mock_request = MagicMock()
+    mock_request.query_params = {}
+
+    with pytest.raises(ProxyException) as exc:
+        await update_key_fn(
+            request=mock_request,
+            data=UpdateKeyRequest(key=token, metadata={_BATCH_LIMIT: 10**12}),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.INTERNAL_USER,
+                api_key="sk-internal",
+                user_id="internal_user",
+            ),
+            litellm_changed_by=None,
+        )
+
+    assert str(exc.value.code) == "403"
+    assert "Only proxy admins can set" in str(exc.value.message)
+
+
+@pytest.mark.asyncio
+async def test_update_key_batch_enqueued_token_limit_unchanged_allows_non_admin_edit(monkeypatch):
+    """The edit form resends every field it renders, so gating on presence
+    would 403 a key owner renaming a key that carries an admin-set limit."""
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        update_key_fn,
+    )
+
+    token = "e1b2c3d4e5f6789012345678901234567890123456789012345678901234abcd"
+    _wire_update_key_fn(monkeypatch, _estimate_key_row(token, {_BATCH_LIMIT: 100000}))
+
+    mock_request = MagicMock()
+    mock_request.query_params = {}
+
+    result = await update_key_fn(
+        request=mock_request,
+        data=UpdateKeyRequest(key=token, key_alias="my-alias", metadata={_BATCH_LIMIT: 100000}),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.INTERNAL_USER,
+            api_key="sk-internal",
+            user_id="internal_user",
+        ),
+        litellm_changed_by=None,
+    )
+
+    assert result is not None
+
+
+@pytest.mark.asyncio
+async def test_regenerate_key_batch_enqueued_token_limit_rejected_for_non_admin():
+    """/key/regenerate runs the request body through prepare_key_update_data
+    exactly as an update does, so it is a third write path into the field."""
+    from litellm.proxy._types import RegenerateKeyRequest
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _execute_virtual_key_regeneration,
+    )
+
+    token = "f1b2c3d4e5f6789012345678901234567890123456789012345678901234abcd"
+    key_in_db = LiteLLM_VerificationToken(
+        token=token,
+        user_id="internal_user",
+        metadata={_BATCH_LIMIT: 100000},
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await _execute_virtual_key_regeneration(
+            prisma_client=AsyncMock(),
+            key_in_db=key_in_db,
+            hashed_api_key=token,
+            key="sk-original",
+            data=RegenerateKeyRequest(key="sk-original", metadata={_BATCH_LIMIT: 10**12}),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.INTERNAL_USER,
+                api_key="sk-internal",
+                user_id="internal_user",
+            ),
+            litellm_changed_by=None,
+            user_api_key_cache=MagicMock(),
+            proxy_logging_obj=MagicMock(),
+        )
+
+    assert exc.value.status_code == 403
+    assert "Only proxy admins can set" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_bulk_key_update_batch_enqueued_token_limit_rejected_for_non_admin():
+    """Bulk team-key updates run through _process_single_key_update, not
+    /key/update's validator, so the gate must also live on that path."""
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _process_single_key_update,
+    )
+
+    token = "a2b2c3d4e5f6789012345678901234567890123456789012345678901234abcd"
+    existing = _estimate_key_row(token, {_BATCH_LIMIT: 100000})
+
+    with pytest.raises(HTTPException) as exc:
+        await _process_single_key_update(
+            update_key_request=UpdateKeyRequest(key=token, metadata={_BATCH_LIMIT: 10**12}),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.INTERNAL_USER,
+                api_key="sk-internal",
+                user_id="internal_user",
+            ),
+            litellm_changed_by=None,
+            prisma_client=None,
+            user_api_key_cache=MagicMock(),
+            proxy_logging_obj=MagicMock(),
+            llm_router=None,
+            existing_key_row=existing,
+        )
+
+    assert exc.value.status_code == 403
+    assert "Only proxy admins can set" in str(exc.value.detail)
+
+
 @pytest.mark.asyncio
 async def test_execute_virtual_key_regeneration_stamps_settings_updated_at():
     """Regenerate rewrites the key's config, so it must move settings_updated_at."""
@@ -16444,3 +16649,49 @@ async def test_regenerate_key_repoints_live_membership_not_the_key_row_it_read(
     assert await _authorized_models_for_key(
         access_groups, new_token_hash, ["ag-revoked-since", "ag-attached-since"]
     ) == ["attached-model"]
+
+
+async def _cache_with_project(project_id: str, project_models: list[str]) -> UserApiKeyCache:
+    user_api_key_cache = UserApiKeyCache()
+    await user_api_key_cache.async_set_cache(
+        key=_project_cache_key(project_id),
+        value=LiteLLM_ProjectTableCachedObj(project_id=project_id, team_id="team-lit-5823", models=project_models),
+        model_type=LiteLLM_ProjectTableCachedObj,
+    )
+    return user_api_key_cache
+
+
+@pytest.mark.parametrize("request_cls", [GenerateKeyRequest, UpdateKeyRequest])
+@pytest.mark.parametrize("sentinel", ["all-team-models", "all-proxy-models"])
+@pytest.mark.asyncio
+async def test_check_project_key_limits_accepts_inherited_model_sentinels(request_cls, sentinel):
+    """LIT-5823: the sentinels inherit a parent scope, so a project allowlist must not treat them as model names."""
+    user_api_key_cache = await _cache_with_project("proj-lit-5823", ["gpt-5.4-nano"])
+
+    await _check_project_key_limits(
+        project_id="proj-lit-5823",
+        data=request_cls(key="sk-lit-5823", models=[sentinel]),
+        prisma_client=MagicMock(),
+        user_api_key_cache=user_api_key_cache,
+    )
+
+
+@pytest.mark.parametrize("request_cls", [GenerateKeyRequest, UpdateKeyRequest])
+@pytest.mark.parametrize(
+    "key_models",
+    [["gpt-5.4-mini"], ["all-team-models", "gpt-5.4-mini"], ["gpt-5.4-nano", "all-proxy-models", "gpt-5.4-mini"]],
+)
+@pytest.mark.asyncio
+async def test_check_project_key_limits_still_rejects_real_model_outside_project(request_cls, key_models):
+    user_api_key_cache = await _cache_with_project("proj-lit-5823", ["gpt-5.4-nano"])
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _check_project_key_limits(
+            project_id="proj-lit-5823",
+            data=request_cls(key="sk-lit-5823", models=key_models),
+            prisma_client=MagicMock(),
+            user_api_key_cache=user_api_key_cache,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "Model 'gpt-5.4-mini' not in project's allowed models" in exc_info.value.detail["error"]

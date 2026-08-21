@@ -30,7 +30,7 @@ class GenAIOperation(str, Enum):
     EXECUTE_TOOL = "execute_tool"  # MCP tool-call spans
     LITELLM_VECTOR_STORE_MANAGEMENT = "litellm.vector_store_management"
     LITELLM_VECTOR_STORE_FILE_MANAGEMENT = "litellm.vector_store_file_management"
-    LITELLM_RESPONSES_MANAGEMENT = "litellm.responses_management"  # fetch/delete/cancel a stored response
+    LITELLM_RESPONSES_MANAGEMENT = "litellm.responses_management"
 
 
 class GenAIProvider(str, Enum):
@@ -239,7 +239,11 @@ class DB:
     """
 
     SYSTEM_NAME: Final = "db.system.name"
+    # Superseded by SYSTEM_NAME, dual-emitted because Datadog's OTLP intake
+    # still infers a span's database type from this key.
+    SYSTEM_LEGACY: Final = "db.system"
     OPERATION_NAME: Final = "db.operation.name"
+    NAMESPACE: Final = "db.namespace"
 
 
 class HTTP:

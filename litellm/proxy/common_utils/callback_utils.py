@@ -39,15 +39,17 @@ _EXTRA_SENSITIVE_CALLBACK_KEYS: Final = {"gcs_path_service_account"}
 # already-encrypted input cheaply (no decrypt-attempt round trip) and
 # avoid double-encrypting if `LITELLM_SALT_KEY` is rotated between writes.
 _CALLBACK_VAR_ENCRYPTED_PREFIX: Final = "litellm_enc::"
-# Metadata slots that hold operator-configured callback setup (and therefore
-# integration credentials). Resolved from UserAPIKeyAuth during pre-call setup,
-# never read back off the copies stamped into request metadata.
-_CALLBACK_CONFIG_SLOTS: Final = frozenset({"logging", "callback_settings"})
+# Metadata slots that hold operator-configured callback and secret-manager setup
+# (and therefore integration credentials). Resolved from UserAPIKeyAuth during
+# pre-call setup, never read back off the copies stamped into request metadata.
+_CALLBACK_CONFIG_SLOTS: Final = frozenset({"logging", "callback_settings", "secret_manager_settings"})
 
 blue_color_code: Final = "\033[94m"
 reset_color_code: Final = "\033[0m"
 
 TRUSTED_PILLAR_RESPONSE_HEADERS_METADATA_KEY: Final = "_pillar_response_headers_trusted"
+
+GUARDRAIL_SCAN_IDS_METADATA_KEY: Final = "guardrail_scan_ids"
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
@@ -460,6 +462,10 @@ def get_logging_caching_headers(request_data: dict) -> dict | None:
     if "applied_guardrails" in _metadata:
         headers["x-litellm-applied-guardrails"] = ",".join(_metadata["applied_guardrails"])
 
+    scan_ids: Final = _metadata.get(GUARDRAIL_SCAN_IDS_METADATA_KEY)
+    if scan_ids:
+        headers["x-litellm-guardrail-scan-id"] = ",".join(scan_ids)
+
     if "applied_policies" in _metadata:
         headers["x-litellm-applied-policies"] = ",".join(_metadata["applied_policies"])
 
@@ -492,6 +498,7 @@ LITELLM_PROXY_INTERNAL_METADATA_KEYS: Final = frozenset(
     {
         "applied_policies",
         "applied_guardrails",
+        GUARDRAIL_SCAN_IDS_METADATA_KEY,
         "policy_sources",
         "guardrails",
         "guardrail_config",
@@ -552,6 +559,22 @@ def add_guardrail_to_applied_guardrails_header(request_data: dict, guardrail_nam
             _metadata["applied_guardrails"].append(guardrail_name)
     else:
         _metadata["applied_guardrails"] = [guardrail_name]
+
+
+def add_guardrail_scan_id(request_data: dict, scan_id: str | None) -> None:
+    """
+    Record a provider scan id so it can be surfaced to the caller.
+
+    Guardrails only return scan details to the client when they block, so allowed requests carry no
+    audit trail. Ids recorded here become the x-litellm-guardrail-scan-id response header.
+    """
+    if not scan_id:
+        return
+    _, _metadata = get_or_create_metadata_bucket(request_data)
+    existing: Final = _metadata.get(GUARDRAIL_SCAN_IDS_METADATA_KEY)
+    scan_ids: Final = tuple(existing) if isinstance(existing, (list, tuple)) else ()
+    if scan_id not in scan_ids:
+        _metadata[GUARDRAIL_SCAN_IDS_METADATA_KEY] = (*scan_ids, scan_id)
 
 
 def add_policy_to_applied_policies_header(request_data: dict, policy_name: str | None):

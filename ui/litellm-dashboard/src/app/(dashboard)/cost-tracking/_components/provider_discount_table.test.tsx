@@ -1,52 +1,24 @@
 import React from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { screen } from "@testing-library/react";
+import { fireEvent, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { renderWithProviders } from "../../../../../tests/test-utils";
 import ProviderDiscountTable from "./provider_discount_table";
-
-vi.mock("@heroicons/react/outline", () => ({
-  TrashIcon: function TrashIcon() {
-    return null;
-  },
-  PencilAltIcon: function PencilAltIcon() {
-    return null;
-  },
-  CheckIcon: function CheckIcon() {
-    return null;
-  },
-  XIcon: function XIcon() {
-    return null;
-  },
-}));
-
-vi.mock("@tremor/react", () => ({
-  Table: ({ children }: any) => <table>{children}</table>,
-  TableHead: ({ children }: any) => <thead>{children}</thead>,
-  TableRow: ({ children }: any) => <tr>{children}</tr>,
-  TableHeaderCell: ({ children }: any) => <th>{children}</th>,
-  TableBody: ({ children }: any) => <tbody>{children}</tbody>,
-  TableCell: ({ children }: any) => <td>{children}</td>,
-  Text: ({ children }: any) => <span>{children}</span>,
-  TextInput: ({ value, onValueChange, onKeyDown, placeholder, ...rest }: any) => (
-    <input
-      value={value}
-      onChange={(e) => onValueChange?.(e.target.value)}
-      onKeyDown={onKeyDown}
-      placeholder={placeholder}
-      {...rest}
-    />
-  ),
-  Icon: ({ icon: IconComponent, onClick }: any) => {
-    const name = IconComponent?.displayName ?? IconComponent?.name ?? "icon";
-    return <button onClick={onClick} aria-label={name} />;
-  },
-}));
 
 const DEFAULT_DISCOUNT_CONFIG = {
   openai: 0.05,
   anthropic: 0.1,
 };
+
+const ROW_ACTION_NAME = {
+  edit: /^Edit discount for /,
+  save: /^Save discount for /,
+  cancel: /^Cancel editing discount for /,
+  remove: /^Remove discount for /,
+} as const;
+
+const rowAction = (action: keyof typeof ROW_ACTION_NAME): HTMLElement =>
+  screen.getByRole("button", { name: ROW_ACTION_NAME[action] });
 
 describe("ProviderDiscountTable", () => {
   const onDiscountChange = vi.fn();
@@ -75,9 +47,9 @@ describe("ProviderDiscountTable", () => {
         onRemoveProvider={onRemoveProvider}
       />,
     );
-    expect(screen.getByText("Provider")).toBeInTheDocument();
-    expect(screen.getByText("Discount Percentage")).toBeInTheDocument();
-    expect(screen.getByText("Actions")).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "Provider" })).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "Discount Percentage" })).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "Actions" })).toBeInTheDocument();
   });
 
   it("should display provider display names in the table", () => {
@@ -91,6 +63,21 @@ describe("ProviderDiscountTable", () => {
     expect(screen.getByText("OpenAI")).toBeInTheDocument();
   });
 
+  it("should sort rows by provider display name", () => {
+    renderWithProviders(
+      <ProviderDiscountTable
+        discountConfig={DEFAULT_DISCOUNT_CONFIG}
+        onDiscountChange={onDiscountChange}
+        onRemoveProvider={onRemoveProvider}
+      />,
+    );
+    const rows = screen.getAllByRole("row").slice(1);
+    expect(rows.map((row) => row.textContent)).toEqual([
+      expect.stringContaining("Anthropic"),
+      expect.stringContaining("OpenAI"),
+    ]);
+  });
+
   it("should display the formatted discount percentage", () => {
     renderWithProviders(
       <ProviderDiscountTable
@@ -100,6 +87,17 @@ describe("ProviderDiscountTable", () => {
       />,
     );
     expect(screen.getByText("5.0%")).toBeInTheDocument();
+  });
+
+  it("should render the provider logo alongside the display name", () => {
+    renderWithProviders(
+      <ProviderDiscountTable
+        discountConfig={{ openai: 0.05 }}
+        onDiscountChange={onDiscountChange}
+        onRemoveProvider={onRemoveProvider}
+      />,
+    );
+    expect(screen.getByRole("img", { name: "OpenAI logo" })).toBeInTheDocument();
   });
 
   it("should show a text input when the edit icon is clicked", async () => {
@@ -112,8 +110,7 @@ describe("ProviderDiscountTable", () => {
       />,
     );
 
-    const pencilButton = screen.getByRole("button", { name: /PencilAltIcon/i });
-    await user.click(pencilButton);
+    await user.click(rowAction("edit"));
 
     expect(screen.getByPlaceholderText("5")).toBeInTheDocument();
   });
@@ -128,9 +125,24 @@ describe("ProviderDiscountTable", () => {
       />,
     );
 
-    await user.click(screen.getByRole("button", { name: /PencilAltIcon/i }));
+    await user.click(rowAction("edit"));
 
     expect(screen.queryByText("5.0%")).not.toBeInTheDocument();
+  });
+
+  it("should seed the edit input with the current discount as a percentage", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(
+      <ProviderDiscountTable
+        discountConfig={{ openai: 0.05 }}
+        onDiscountChange={onDiscountChange}
+        onRemoveProvider={onRemoveProvider}
+      />,
+    );
+
+    await user.click(rowAction("edit"));
+
+    expect(screen.getByPlaceholderText("5")).toHaveValue("5");
   });
 
   it("should call onDiscountChange with the new value when the save icon is clicked", async () => {
@@ -143,15 +155,55 @@ describe("ProviderDiscountTable", () => {
       />,
     );
 
-    await user.click(screen.getByRole("button", { name: /PencilAltIcon/i }));
+    await user.click(rowAction("edit"));
 
     const input = screen.getByPlaceholderText("5");
     await user.clear(input);
-    await user.type(input, "10");
+    fireEvent.change(input, { target: { value: "10" } });
 
-    await user.click(screen.getByRole("button", { name: /CheckIcon/i }));
+    await user.click(rowAction("save"));
 
     expect(onDiscountChange).toHaveBeenCalledWith("openai", "0.1");
+  });
+
+  it("should save the edited discount when Enter is pressed", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(
+      <ProviderDiscountTable
+        discountConfig={{ openai: 0.05 }}
+        onDiscountChange={onDiscountChange}
+        onRemoveProvider={onRemoveProvider}
+      />,
+    );
+
+    await user.click(rowAction("edit"));
+
+    const input = screen.getByPlaceholderText("5");
+    await user.clear(input);
+    await user.type(input, "10{Enter}");
+
+    expect(onDiscountChange).toHaveBeenCalledWith("openai", "0.1");
+    expect(screen.queryByPlaceholderText("5")).not.toBeInTheDocument();
+  });
+
+  it("should abandon the edit when Escape is pressed", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(
+      <ProviderDiscountTable
+        discountConfig={{ openai: 0.05 }}
+        onDiscountChange={onDiscountChange}
+        onRemoveProvider={onRemoveProvider}
+      />,
+    );
+
+    await user.click(rowAction("edit"));
+
+    const input = screen.getByPlaceholderText("5");
+    await user.clear(input);
+    await user.type(input, "10{Escape}");
+
+    expect(onDiscountChange).not.toHaveBeenCalled();
+    expect(screen.getByText("5.0%")).toBeInTheDocument();
   });
 
   it("should restore the display view after saving", async () => {
@@ -164,8 +216,8 @@ describe("ProviderDiscountTable", () => {
       />,
     );
 
-    await user.click(screen.getByRole("button", { name: /PencilAltIcon/i }));
-    await user.click(screen.getByRole("button", { name: /CheckIcon/i }));
+    await user.click(rowAction("edit"));
+    await user.click(rowAction("save"));
 
     expect(screen.queryByPlaceholderText("5")).not.toBeInTheDocument();
   });
@@ -180,28 +232,12 @@ describe("ProviderDiscountTable", () => {
       />,
     );
 
-    await user.click(screen.getByRole("button", { name: /PencilAltIcon/i }));
-    await user.click(screen.getByRole("button", { name: /XIcon/i }));
+    await user.click(rowAction("edit"));
+    await user.click(rowAction("cancel"));
 
     expect(screen.queryByPlaceholderText("5")).not.toBeInTheDocument();
     expect(onDiscountChange).not.toHaveBeenCalled();
     expect(screen.getByText("5.0%")).toBeInTheDocument();
-  });
-
-  it("should not call onDiscountChange when canceling edit", async () => {
-    const user = userEvent.setup();
-    renderWithProviders(
-      <ProviderDiscountTable
-        discountConfig={{ openai: 0.05 }}
-        onDiscountChange={onDiscountChange}
-        onRemoveProvider={onRemoveProvider}
-      />,
-    );
-
-    await user.click(screen.getByRole("button", { name: /PencilAltIcon/i }));
-    await user.click(screen.getByRole("button", { name: /XIcon/i }));
-
-    expect(onDiscountChange).not.toHaveBeenCalled();
   });
 
   it("should call onRemoveProvider with the provider key and display name when the trash icon is clicked", async () => {
@@ -214,7 +250,7 @@ describe("ProviderDiscountTable", () => {
       />,
     );
 
-    await user.click(screen.getByRole("button", { name: /TrashIcon/i }));
+    await user.click(rowAction("remove"));
 
     expect(onRemoveProvider).toHaveBeenCalledWith("openai", "OpenAI");
   });
@@ -229,12 +265,42 @@ describe("ProviderDiscountTable", () => {
       />,
     );
 
-    await user.click(screen.getByRole("button", { name: /PencilAltIcon/i }));
+    await user.click(rowAction("edit"));
     const input = screen.getByPlaceholderText("5");
     await user.clear(input);
-    await user.type(input, "150");
-    await user.click(screen.getByRole("button", { name: /CheckIcon/i }));
+    fireEvent.change(input, { target: { value: "150" } });
+    await user.click(rowAction("save"));
 
     expect(onDiscountChange).not.toHaveBeenCalled();
+  });
+
+  it("should expose each row action as a button named for its provider", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(
+      <ProviderDiscountTable
+        discountConfig={{ openai: 0.05 }}
+        onDiscountChange={onDiscountChange}
+        onRemoveProvider={onRemoveProvider}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Edit discount for OpenAI" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Remove discount for OpenAI" })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Edit discount for OpenAI" }));
+
+    expect(screen.getByRole("button", { name: "Save discount for OpenAI" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Cancel editing discount for OpenAI" })).toBeInTheDocument();
+  });
+
+  it("should render the empty message when no discounts are configured", () => {
+    renderWithProviders(
+      <ProviderDiscountTable
+        discountConfig={{}}
+        onDiscountChange={onDiscountChange}
+        onRemoveProvider={onRemoveProvider}
+      />,
+    );
+    expect(screen.getByText("No provider discounts configured")).toBeInTheDocument();
   });
 });

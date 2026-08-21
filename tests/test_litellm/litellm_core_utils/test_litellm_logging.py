@@ -1,3 +1,4 @@
+import contextlib
 import os
 import sys
 import asyncio
@@ -338,6 +339,292 @@ class TestGetRouterModelId:
         )
         # litellm_params exists but is empty by default
         assert obj.get_router_model_id() is None
+
+
+class TestGetRouterDeploymentModelInfo:
+    """Pricing a deployment registered under its own model_info.id."""
+
+    def test_returns_registered_deployment_pricing(self, logging_obj) -> None:
+        deployment_id = "deploy-zero-cost-1"
+        litellm.model_cost[deployment_id] = {
+            "input_cost_per_token": 0.0,
+            "output_cost_per_token": 0.0,
+            "input_cost_per_token_batches": 0.0,
+            "output_cost_per_token_batches": 0.0,
+            "litellm_provider": "vertex_ai",
+            "mode": "chat",
+        }
+        logging_obj.litellm_params = {"litellm_metadata": {"model_info": {"id": deployment_id}}}
+        try:
+            info = logging_obj.get_router_deployment_model_info()
+            assert info is not None
+            assert info["input_cost_per_token"] == 0.0
+            assert info["output_cost_per_token_batches"] == 0.0
+        finally:
+            litellm.model_cost.pop(deployment_id, None)
+
+    def test_returns_none_for_unregistered_deployment(self, logging_obj) -> None:
+        logging_obj.litellm_params = {"litellm_metadata": {"model_info": {"id": "deploy-never-registered"}}}
+        assert logging_obj.get_router_deployment_model_info() is None
+
+    def test_returns_none_when_deployment_registered_without_pricing(self, logging_obj) -> None:
+        """The router registers an entry for EVERY deployment, priced or not.
+
+        get_model_info fills absent costs with 0, so consulting it directly would
+        hand back free pricing for an ordinary deployment and bill its batches $0.
+        """
+        deployment_id = "deploy-no-pricing-1"
+        litellm.register_model(
+            model_cost={deployment_id: {"id": deployment_id, "access_groups": ["x"]}},
+            persist_across_reloads=False,
+        )
+        logging_obj.litellm_params = {"litellm_metadata": {"model_info": {"id": deployment_id}}}
+        try:
+            assert litellm.get_model_info(model=deployment_id)["input_cost_per_token"] == 0
+            assert logging_obj.get_router_deployment_model_info() is None
+        finally:
+            litellm.model_cost.pop(deployment_id, None)
+
+    def test_returns_none_without_a_deployment_id(self, logging_obj) -> None:
+        logging_obj.litellm_params = {"api_base": ""}
+        assert logging_obj.get_router_deployment_model_info() is None
+
+    @pytest.mark.parametrize(
+        "declared,expected_input,expected_output",
+        [
+            ({"input_cost_per_token": 1e-06}, 1e-06, 1.5e-05),
+            ({"output_cost_per_token": 5e-06}, 3e-06, 5e-06),
+            ({"input_cost_per_token": 0.0, "output_cost_per_token": 0.0}, 0.0, 0.0),
+        ],
+        ids=["input-only", "output-only", "both-zero"],
+    )
+    def test_one_sided_override_keeps_the_published_rate_for_the_other_side(
+        self,
+        declared: dict[str, float],
+        expected_input: float,
+        expected_output: float,
+    ) -> None:
+        """A deployment may configure one direction only.
+
+        Substituting its pricing wholesale billed the direction it left unset at
+        zero, because get_model_info fills an absent cost with 0 and that
+        suppressed the global fallback.
+        """
+        from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+
+        model = "bedrock/global.anthropic.claude-sonnet-4-6"
+        published = litellm.get_model_info(model=model)
+        assert (published["input_cost_per_token"], published["output_cost_per_token"]) == (3e-06, 1.5e-05)
+
+        deployment_id = f"deploy-one-sided-{'-'.join(sorted(declared))}"
+        litellm.model_cost[deployment_id] = {"id": deployment_id, **declared}
+        obj = LiteLLMLoggingObj(
+            model=model,
+            messages=[],
+            stream=False,
+            call_type="aretrieve_batch",
+            start_time=time.time(),
+            litellm_call_id="one-sided",
+            function_id="f",
+        )
+        obj.litellm_params = {"litellm_metadata": {"model_info": {"id": deployment_id}}, "model": model}
+        obj.model_call_details["model"] = model
+        try:
+            info = obj.get_router_deployment_model_info()
+            assert info is not None
+            assert info["input_cost_per_token"] == expected_input
+            assert info["output_cost_per_token"] == expected_output
+        finally:
+            litellm.model_cost.pop(deployment_id, None)
+
+    def test_a_published_batch_rate_never_displaces_a_declared_standard_rate(self) -> None:
+        """Ownership is per token direction, not per field.
+
+        Filling the batch field from the published entry let that rate win, so a
+        deployment configuring only its standard rate had batches billed at the
+        published batch price instead of half the rate it configured.
+        """
+        from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+
+        model = "ft:gpt-3.5-turbo"
+        published = litellm.get_model_info(model=model)
+        assert published["input_cost_per_token_batches"] is not None
+
+        deployment_id = "deploy-standard-input-only-1"
+        litellm.model_cost[deployment_id] = {
+            "id": deployment_id,
+            "input_cost_per_token": 1e-06,
+            "litellm_provider": "openai",
+            "mode": "chat",
+        }
+        obj = LiteLLMLoggingObj(
+            model=model,
+            messages=[],
+            stream=False,
+            call_type="aretrieve_batch",
+            start_time=time.time(),
+            litellm_call_id="direction-ownership",
+            function_id="f",
+        )
+        obj.litellm_params = {"litellm_metadata": {"model_info": {"id": deployment_id}}, "model": model}
+        obj.model_call_details["model"] = model
+        try:
+            info = obj.get_router_deployment_model_info()
+            assert info is not None
+            assert info["input_cost_per_token"] == 1e-06
+            assert info["input_cost_per_token_batches"] is None
+            assert info["output_cost_per_token"] == published["output_cost_per_token"]
+            assert info["output_cost_per_token_batches"] == published["output_cost_per_token_batches"]
+        finally:
+            litellm.model_cost.pop(deployment_id, None)
+
+    def test_merging_does_not_mutate_the_cached_model_info(self) -> None:
+        """The published-rate merge must not write into get_model_info's lru-cached dict.
+
+        get_model_info returns the same cached object on every call, so writing
+        the published rates into it poisoned every later lookup of the
+        deployment id for the life of the process.
+        """
+        from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+
+        model = "bedrock/global.anthropic.claude-sonnet-4-6"
+        deployment_id = "deploy-cache-not-poisoned-1"
+        litellm.model_cost[deployment_id] = {"id": deployment_id, "input_cost_per_token": 1e-06}
+        obj = LiteLLMLoggingObj(
+            model=model,
+            messages=[],
+            stream=False,
+            call_type="aretrieve_batch",
+            start_time=time.time(),
+            litellm_call_id="cache-not-poisoned",
+            function_id="f",
+        )
+        obj.litellm_params = {"litellm_metadata": {"model_info": {"id": deployment_id}}, "model": model}
+        obj.model_call_details["model"] = model
+        try:
+            cached_before = dict(litellm.get_model_info(model=deployment_id))
+            info = obj.get_router_deployment_model_info()
+            assert info is not None
+            assert info["output_cost_per_token"] == 1.5e-05
+            assert dict(litellm.get_model_info(model=deployment_id)) == cached_before
+        finally:
+            litellm.model_cost.pop(deployment_id, None)
+
+    def test_keeps_declared_rates_when_no_model_is_resolvable(self, logging_obj) -> None:
+        """With no model to look a published entry up by, the declared rates stand alone."""
+        deployment_id = "deploy-no-model-at-all-1"
+        litellm.model_cost[deployment_id] = {
+            "id": deployment_id,
+            "input_cost_per_token": 9e-06,
+            "output_cost_per_token": 2e-05,
+            "litellm_provider": "bedrock",
+            "mode": "chat",
+        }
+        logging_obj.litellm_params = {"litellm_metadata": {"model_info": {"id": deployment_id}}}
+        logging_obj.model_call_details["model"] = None
+        logging_obj.model = None
+        try:
+            assert logging_obj.get_deployment_model_for_cost() is None
+            info = logging_obj.get_router_deployment_model_info()
+            assert info is not None
+            assert info["input_cost_per_token"] == 9e-06
+            assert info["output_cost_per_token"] == 2e-05
+        finally:
+            litellm.model_cost.pop(deployment_id, None)
+
+    def test_returns_none_when_the_deployment_id_resolves_no_provider(self, logging_obj) -> None:
+        """A registration whose id get_model_info cannot resolve yields no pricing."""
+        deployment_id = "deploy-unresolvable-provider-1"
+        litellm.model_cost[deployment_id] = {"id": deployment_id, "input_cost_per_token": 4e-06}
+        logging_obj.litellm_params = {"litellm_metadata": {"model_info": {"id": deployment_id}}}
+        logging_obj.model_call_details["model"] = None
+        logging_obj.model = None
+        try:
+            with patch.object(litellm, "get_model_info", side_effect=Exception("unresolvable")):
+                assert logging_obj.get_router_deployment_model_info() is None
+        finally:
+            litellm.model_cost.pop(deployment_id, None)
+
+    def test_falls_back_to_declared_rates_when_the_model_has_no_published_entry(self, logging_obj) -> None:
+        """With no published entry to layer under, the declared rates still apply."""
+        deployment_id = "deploy-unpublished-model-1"
+        litellm.model_cost[deployment_id] = {"id": deployment_id, "input_cost_per_token": 7e-06}
+        logging_obj.litellm_params = {
+            "litellm_metadata": {"model_info": {"id": deployment_id}},
+            "model": "not-a-real-provider/not-a-real-model-xyz",
+        }
+        logging_obj.model_call_details["model"] = "not-a-real-provider/not-a-real-model-xyz"
+        try:
+            info = logging_obj.get_router_deployment_model_info()
+            assert info is not None
+            assert info["input_cost_per_token"] == 7e-06
+        finally:
+            litellm.model_cost.pop(deployment_id, None)
+
+
+class TestRetrieveBatchCostPassesModelIdentity:
+    """Regression: retrieving a batch priced it with no model identity at all.
+
+    _handle_completed_batch was called without model_name or model_info, so a
+    bedrock batch fell back to the provider's own response model (unresolvable
+    under custom_llm_provider="bedrock") and silently cost $0, and a deployment's
+    configured rates were ignored entirely.
+    """
+
+    @pytest.mark.asyncio
+    async def test_forwards_deployment_model_and_pricing(self, monkeypatch) -> None:
+        from litellm.litellm_core_utils import litellm_logging as logging_module
+        from litellm.types.utils import LiteLLMBatch, Usage
+
+        deployment_id = "deploy-batch-pricing-1"
+        litellm.model_cost[deployment_id] = {
+            "input_cost_per_token": 0.0,
+            "output_cost_per_token": 0.0,
+            "litellm_provider": "bedrock",
+            "mode": "chat",
+        }
+
+        captured: dict[str, object] = {}
+
+        async def fake_handle_completed_batch(**kwargs: object) -> tuple[float, Usage, list[str]]:
+            captured.update(kwargs)
+            return 1.25, Usage(prompt_tokens=1800, completion_tokens=1000, total_tokens=2800), ["m"]
+
+        monkeypatch.setattr(logging_module, "_handle_completed_batch", fake_handle_completed_batch)
+
+        obj = LitellmLogging(
+            model="bedrock/global.anthropic.claude-sonnet-4-6",
+            messages=[{"role": "user", "content": "Hey"}],
+            stream=False,
+            call_type="aretrieve_batch",
+            start_time=time.time(),
+            litellm_call_id="batch-call-1",
+            function_id="f",
+        )
+        obj.custom_llm_provider = "bedrock"
+        obj.litellm_params = {"litellm_metadata": {"model_info": {"id": deployment_id}}}
+
+        batch = LiteLLMBatch(
+            id="batch_abc",
+            completion_window="24h",
+            created_at=1,
+            endpoint="/v1/chat/completions",
+            input_file_id="file-in",
+            object="batch",
+            status="completed",
+            output_file_id="file-out",
+        )
+
+        try:
+            with contextlib.suppress(Exception):
+                await obj._async_success_handler_body(result=batch, start_time=None, end_time=None)
+        finally:
+            litellm.model_cost.pop(deployment_id, None)
+
+        assert captured, "_handle_completed_batch was never called"
+        assert captured["model_name"] == "bedrock/global.anthropic.claude-sonnet-4-6"
+        assert captured["model_info"] is not None
+        assert captured["model_info"]["input_cost_per_token"] == 0.0
 
 
 class TestAnthropicPassthroughCustomPricing:
@@ -4585,7 +4872,15 @@ class TestNonInferenceCallTypesAreNotBilled:
 
     @pytest.mark.parametrize(
         "call_type",
-        ["aget_responses", "adelete_responses", "acancel_responses", "alist_input_items", "avector_store_delete"],
+        [
+            "aget_responses",
+            "adelete_responses",
+            "acancel_responses",
+            "alist_input_items",
+            "avector_store_delete",
+            "avector_store_file_content",
+            "avector_store_file_delete",
+        ],
     )
     def test_read_and_management_calls_cost_nothing(self, call_type):
         cost = self._logging_obj(call_type)._response_cost_calculator(result=self._retrieved_response())
@@ -4629,3 +4924,380 @@ class TestNonInferenceCallTypesAreNotBilled:
         )
 
         assert logging_obj.model_call_details["messages"] == ()
+
+
+def _build_success_payload(logging_obj, kwargs):
+    import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import (
+        get_standard_logging_object_payload,
+    )
+
+    now = datetime.datetime.now()
+    return get_standard_logging_object_payload(
+        kwargs=kwargs,
+        init_response_obj={},
+        start_time=now,
+        end_time=now,
+        logging_obj=logging_obj,
+        status="success",
+    )
+
+
+def _guardrail_kwargs(response_cost):
+    return {
+        "litellm_call_id": "guardrail-cost-call",
+        "model": "gpt-4o",
+        "messages": [],
+        "response_cost": response_cost,
+        "litellm_params": {
+            "metadata": {
+                "standard_logging_guardrail_information": [
+                    {
+                        "guardrail_name": "bedrock-pre",
+                        "guardrail_status": "success",
+                        "guardrail_usage": {"topicPolicyUnits": 1, "contentPolicyUnits": 1},
+                        "guardrail_cost": 0.0003,
+                    },
+                    {"guardrail_name": "no-usage-guardrail", "guardrail_status": "success"},
+                ]
+            }
+        },
+    }
+
+
+def test_payload_response_cost_includes_guardrail_cost(logging_obj):
+    """LIT-5651: provider-billed guardrail cost must count in response_cost."""
+    payload = _build_success_payload(logging_obj, _guardrail_kwargs(response_cost=0.0000429))
+
+    assert payload is not None
+    assert payload["response_cost"] == pytest.approx(0.0003429)
+    assert payload["cost_breakdown"] is not None
+    assert payload["cost_breakdown"]["guardrail_cost"] == pytest.approx(0.0003)
+    assert payload["cost_breakdown"]["total_cost"] == pytest.approx(0.0003)
+    assert payload["hidden_params"]["response_cost"] == pytest.approx(0.0000429)
+
+
+def test_payload_guardrail_cost_merges_into_existing_cost_breakdown(logging_obj):
+    logging_obj.set_cost_breakdown(
+        input_cost=0.00003,
+        output_cost=0.0000129,
+        total_cost=0.0000429,
+        cost_for_built_in_tools_cost_usd_dollar=0.0,
+    )
+    payload = _build_success_payload(logging_obj, _guardrail_kwargs(response_cost=0.0000429))
+
+    assert payload is not None
+    assert payload["response_cost"] == pytest.approx(0.0003429)
+    assert payload["cost_breakdown"]["guardrail_cost"] == pytest.approx(0.0003)
+    assert payload["cost_breakdown"]["total_cost"] == pytest.approx(0.0003429)
+    assert payload["cost_breakdown"]["input_cost"] == pytest.approx(0.00003)
+    assert logging_obj.cost_breakdown["total_cost"] == pytest.approx(0.0000429)
+
+
+def test_payload_without_guardrail_cost_is_unchanged(logging_obj):
+    kwargs = {
+        "litellm_call_id": "no-guardrail-call",
+        "model": "gpt-4o",
+        "messages": [],
+        "response_cost": 0.0000429,
+        "litellm_params": {"metadata": {}},
+    }
+    payload = _build_success_payload(logging_obj, kwargs)
+
+    assert payload is not None
+    assert payload["response_cost"] == pytest.approx(0.0000429)
+    assert payload["cost_breakdown"] is None
+
+
+_AWS_SECRET = "wJalrXUtnFEMIK7MDENGbPxRfiCYEXAMPLEKEY"
+_GEMINI_KEY = "AIzaSyC0000000000000000000000000000000"
+
+
+def test_empty_api_base_does_not_dump_call_state(logging_obj):
+    """Direct (non-HTTP) providers pass api_base='', which used to echo model_call_details."""
+    logging_obj.model_call_details["litellm_params"] = {
+        "api_key": "sk-proj-hunter2hunter2hunter2hunter2",
+        "aws_secret_access_key": _AWS_SECRET,
+    }
+
+    curl_command = logging_obj._get_request_curl_command(
+        api_base="",
+        headers={},
+        additional_args={},
+        data={"model": "some-model"},
+    )
+
+    assert "litellm_call_id" not in curl_command
+    assert _AWS_SECRET not in curl_command
+    assert "hunter2" not in curl_command
+
+
+def test_pre_call_redacts_and_masks_raw_request(logging_obj):
+    """log_raw_request_response echoes the request body and api_base back to loggers/UI."""
+    metadata = {"user_api_key_alias": "qa-key"}
+    logging_obj.model_call_details["litellm_params"] = {"metadata": metadata}
+    logging_obj.log_raw_request_response = True
+
+    logging_obj.pre_call(
+        input="hi",
+        api_key="",
+        additional_args={
+            "api_base": f"https://generativelanguage.googleapis.com/v1beta/models/x:generateContent?key={_GEMINI_KEY}",
+            "headers": {},
+            "complete_input_dict": {"aws_secret_access_key": _AWS_SECRET},
+        },
+    )
+
+    raw_request = metadata["raw_request"]
+    assert _AWS_SECRET not in raw_request
+    assert "REDACTED" in raw_request
+
+    raw_api_base = logging_obj.model_call_details["raw_request_typed_dict"]["raw_request_api_base"]
+    assert _GEMINI_KEY not in raw_api_base
+    assert "key=*****" in raw_api_base
+
+
+def _resolve(custom_llm_provider, litellm_params, optional_params, model):
+    from litellm.litellm_core_utils.litellm_logging import (
+        _resolve_vertex_location_for_cost,
+    )
+
+    return _resolve_vertex_location_for_cost(
+        custom_llm_provider=custom_llm_provider,
+        litellm_params=litellm_params,
+        optional_params=optional_params,
+        model=model,
+    )
+
+
+def test_resolve_vertex_location_for_cost():
+    """Vertex requests resolve the serving location the way dispatch does; other providers get None."""
+    assert _resolve("openai", {"vertex_location": "us-east5"}, None, "gpt-4o") is None
+    assert _resolve(None, {}, None, "gemini-3.5-flash") is None
+    assert _resolve("vertex_ai", {"vertex_location": "us-east5"}, None, "gemini-3.5-flash") == "us-east5"
+    assert _resolve("vertex_ai", {"vertex_location": "global"}, None, "gemini-3.5-flash") == "global"
+    assert (
+        _resolve("vertex_ai_beta", {"vertex_ai_location": "europe-west1"}, None, "claude-haiku-4-5@20251001")
+        == "europe-west1"
+    )
+
+
+def test_resolve_vertex_location_for_cost_reads_optional_params(monkeypatch):
+    """
+    On the proxy the logging object predates deployment selection, so the deployment's
+    configured location only reaches it through optional_params. A configured global
+    location must beat the environment fallback, or every proxy call gets the regional uplift.
+    """
+    monkeypatch.setenv("VERTEXAI_LOCATION", "us-east5")
+    monkeypatch.setattr(litellm, "vertex_location", None)
+
+    assert _resolve("vertex_ai", {}, {"vertex_location": "global"}, "gemini-3.5-flash") == "global"
+    assert _resolve("vertex_ai", None, {"vertex_location": "europe-west1"}, "gemini-3.5-flash") == "europe-west1"
+    assert (
+        _resolve(
+            "vertex_ai",
+            {"vertex_location": "us-east5"},
+            {"vertex_location": "global"},
+            "gemini-3.5-flash",
+        )
+        == "global"
+    )
+    assert _resolve("vertex_ai", {"vertex_location": "global"}, {}, "gemini-3.5-flash") == "global"
+    assert _resolve("vertex_ai", {}, {}, "gemini-3.5-flash") == "us-east5"
+
+
+def test_resolve_vertex_location_for_cost_default_region(monkeypatch):
+    """With no location configured anywhere, resolution lands on the dispatch default us-central1."""
+    monkeypatch.delenv("VERTEXAI_LOCATION", raising=False)
+    monkeypatch.delenv("VERTEX_LOCATION", raising=False)
+    monkeypatch.setattr(litellm, "vertex_location", None)
+
+    assert _resolve("vertex_ai", {}, None, "gemini-3.5-flash") == "us-central1"
+    assert _resolve("vertex_ai", None, None, "gemini-3.5-flash") == "us-central1"
+
+
+def test_response_cost_calculator_prices_proxy_vertex_calls_on_the_configured_location(monkeypatch):
+    """
+    Proxy-shaped logging objects (created before the router picks a deployment) carry the
+    deployment's vertex_location only in optional_params. A global deployment must price at
+    base rates even when the environment points at a regional location, and a regional one
+    must price with the uplift.
+    """
+    from datetime import datetime
+
+    from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map
+
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", get_model_cost_map(url=""))
+    monkeypatch.setenv("VERTEXAI_LOCATION", "us-east5")
+    monkeypatch.setattr(litellm, "vertex_location", None)
+
+    def cost_at(location):
+        logging_obj = LitellmLogging(
+            model="gemini-3.5-flash",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=False,
+            call_type="completion",
+            start_time=datetime.now(),
+            litellm_call_id=f"vertex-loc-{location}",
+            function_id="f",
+        )
+        logging_obj.update_environment_variables(
+            model="gemini-3.5-flash",
+            user="",
+            optional_params={"vertex_location": location},
+            litellm_params={"api_base": ""},
+            custom_llm_provider="vertex_ai",
+        )
+        response = ModelResponse(
+            id="resp-1",
+            model="gemini-3.5-flash",
+            choices=[{"message": {"role": "assistant", "content": "hello"}, "index": 0, "finish_reason": "stop"}],
+            usage={"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+        )
+        return logging_obj._response_cost_calculator(result=response)
+
+    info = litellm.model_cost["vertex_ai/gemini-3.5-flash"]
+    expected_global = 10 * info["input_cost_per_token"] + 5 * info["output_cost_per_token"]
+
+    assert cost_at("global") == pytest.approx(expected_global)
+    assert cost_at("us-east5") == pytest.approx(info["regional_endpoint_uplift_multiplier"] * expected_global)
+
+
+def test_set_cost_breakdown_stores_vertex_location():
+    """vertex_location is recorded in the pricing basis, None for non-vertex requests."""
+    from datetime import datetime
+
+    logging_obj = LitellmLogging(
+        model="vertex_ai/claude-haiku-4-5@20251001",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="completion",
+        start_time=datetime.now(),
+        litellm_call_id="vertex-location-set",
+        function_id="f",
+    )
+    logging_obj.set_cost_breakdown(
+        input_cost=0.001,
+        output_cost=0.002,
+        total_cost=0.003,
+        cost_for_built_in_tools_cost_usd_dollar=0.0,
+        vertex_location="us-east5",
+    )
+    assert logging_obj.cost_breakdown["vertex_location"] == "us-east5"
+
+    no_location = LitellmLogging(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="completion",
+        start_time=datetime.now(),
+        litellm_call_id="vertex-location-absent",
+        function_id="f",
+    )
+    no_location.set_cost_breakdown(
+        input_cost=0.001,
+        output_cost=0.002,
+        total_cost=0.003,
+        cost_for_built_in_tools_cost_usd_dollar=0.0,
+    )
+    assert no_location.cost_breakdown.get("vertex_location") is None
+
+
+def test_prompt_hooks_skip_prompt_managers_when_no_prompt_id(logging_obj, tmp_path, monkeypatch):
+    """
+    Regression for UI-injected `vector_store_ids: []` and always-on non-empty `vector_store_ids`
+    with a registered prompt manager (e.g. dotprompt): requests without a prompt_id 500'd with
+    "prompt_id is required for Prompt Management Base class" instead of completing normally.
+    """
+    from litellm.integrations.arize.arize_phoenix_prompt_manager import ArizePhoenixPromptManager
+    from litellm.integrations.dotprompt.dotprompt_manager import DotpromptManager
+    from litellm.integrations.vector_store_integrations.base_vector_store import BaseVectorStore
+    from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook import (
+        VectorStorePreCallHook,
+    )
+    from litellm.types.vector_stores import LiteLLM_ManagedVectorStore
+    from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
+
+    (tmp_path / "stem.prompt").write_text("---\nmodel: gemini-2.5-flash\n---\nyou are a stem tutor\n")
+    dotprompt_manager = DotpromptManager(prompt_directory=str(tmp_path))
+    arize_manager = ArizePhoenixPromptManager(api_key="fake-key", api_base="http://127.0.0.1:9")
+    litellm.logging_callback_manager.add_litellm_callback(dotprompt_manager)
+    litellm.logging_callback_manager.add_litellm_callback(arize_manager)
+    monkeypatch.setattr(
+        litellm,
+        "vector_store_registry",
+        VectorStoreRegistry(
+            vector_stores=[LiteLLM_ManagedVectorStore(vector_store_id="vs_123", custom_llm_provider="openai")]
+        ),
+    )
+
+    messages = [{"role": "user", "content": "hi"}]
+    try:
+        assert not logging_obj.should_run_prompt_management_hooks(
+            prompt_id=None, non_default_params={"vector_store_ids": []}
+        )
+
+        assert logging_obj.get_chat_completion_prompt(
+            model="gemini-2.5-flash",
+            messages=messages,
+            non_default_params={"vector_store_ids": []},
+            prompt_variables=None,
+            prompt_id=None,
+        ) == ("gemini-2.5-flash", messages, {"vector_store_ids": []})
+
+        assert dotprompt_manager.get_chat_completion_prompt(
+            model="gemini-2.5-flash",
+            messages=messages,
+            non_default_params={},
+            prompt_id=None,
+            prompt_variables=None,
+            dynamic_callback_params={},
+        ) == ("gemini-2.5-flash", messages, {})
+
+        assert not arize_manager.should_run_prompt_management(
+            prompt_id=None, prompt_spec=None, dynamic_callback_params={}
+        )
+
+        assert logging_obj.should_run_prompt_management_hooks(
+            prompt_id=None, non_default_params={"vector_store_ids": ["vs_123"]}
+        )
+        selected_logger = logging_obj.get_custom_logger_for_prompt_management(
+            model="gemini-2.5-flash",
+            non_default_params={"vector_store_ids": ["vs_123"]},
+            prompt_id=None,
+            dynamic_callback_params={},
+        )
+        assert isinstance(selected_logger, VectorStorePreCallHook)
+
+        assert logging_obj._prompt_manager_runs_without_prompt_id(
+            logger=BaseVectorStore(), prompt_spec=None, dynamic_callback_params=None
+        )
+        assert not logging_obj._prompt_manager_runs_without_prompt_id(
+            logger=selected_logger, prompt_spec=None, dynamic_callback_params=None
+        )
+        assert not logging_obj._prompt_manager_runs_without_prompt_id(
+            logger=dotprompt_manager, prompt_spec=None, dynamic_callback_params=None
+        )
+        assert not logging_obj._prompt_manager_runs_without_prompt_id(
+            logger=arize_manager, prompt_spec=None, dynamic_callback_params=None
+        )
+
+        assert isinstance(
+            logging_obj.get_custom_logger_for_prompt_management(
+                model="gemini-2.5-flash",
+                non_default_params={},
+                prompt_id="stem",
+                dynamic_callback_params={},
+            ),
+            DotpromptManager,
+        )
+    finally:
+        for manager in (dotprompt_manager, arize_manager):
+            litellm.logging_callback_manager.remove_callback_from_list_by_object(litellm.callbacks, manager)
+            litellm.logging_callback_manager.remove_callback_from_list_by_object(
+                litellm._async_success_callback, manager
+            )
+        for hook in [cb for cb in litellm.callbacks if isinstance(cb, VectorStorePreCallHook)]:
+            litellm.logging_callback_manager.remove_callback_from_list_by_object(litellm.callbacks, hook)
