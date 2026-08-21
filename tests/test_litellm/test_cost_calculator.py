@@ -3778,13 +3778,15 @@ def test_completion_cost_prices_anthropic_shaped_cache_read_tokens():
 
 
 @pytest.mark.parametrize("model", ["azure/us/gpt-4o-2024-11-20", "azure/eu/gpt-4o-2024-11-20"])
-def test_azure_data_zone_gpt4o_nov_cache_read_cost(model: str) -> None:
+def test_azure_data_zone_gpt4o_nov_cache_read_cost(
+    model: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Regression: azure/us/ and azure/eu/ gpt-4o-2024-11-20 were missing
     cache_read_input_token_cost, so cache-read tokens were billed at $0.
     Every other azure data-zone gpt-4o entry applies the standard 1.1x uplift
     over the OpenAI rate (1.25e-06 -> 1.375e-06); these two must too."""
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-    litellm.model_cost = litellm.get_model_cost_map(url="")
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
 
     model_info = litellm.model_cost.get(model)
     assert model_info is not None, f"Missing price map entry: {model}"
