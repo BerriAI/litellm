@@ -6486,3 +6486,34 @@ def test_get_error_information_redacts_provider_key_from_upstream_url():
     assert "REDACTED" in result["traceback"]
     assert "REDACTED" in result["error_message"]
     assert result["error_code"] == "400"
+
+
+def test_prompt_hooks_skip_prompt_managers_when_prompt_id_is_empty(logging_obj, tmp_path, monkeypatch):
+    """
+    `should_run_prompt_management_hooks` gates on `if prompt_id`, so an empty string reaches
+    dispatch as a call that names no prompt. Dispatch gated on `prompt_id is None`, so it
+    handed the call to the dotprompt manager anyway and the cache_control hook never ran.
+    """
+    from litellm.integrations.dotprompt.dotprompt_manager import DotpromptManager
+
+    (tmp_path / "stem.prompt").write_text("---\nmodel: claude-opus-4-5\n---\nyou are a stem tutor\n")
+    dotprompt_manager = DotpromptManager(prompt_directory=str(tmp_path))
+    monkeypatch.setattr(litellm, "callbacks", [dotprompt_manager])
+
+    cache_control_params = {"cache_control_injection_points": [{"role": "system", "location": "message"}]}
+    messages = [
+        {"role": "system", "content": "you are a stem tutor"},
+        {"role": "user", "content": "hi"},
+    ]
+
+    assert logging_obj.should_run_prompt_management_hooks(prompt_id="", non_default_params=cache_control_params)
+
+    _, compiled_messages, _ = logging_obj.get_chat_completion_prompt(
+        model="claude-opus-4-5",
+        messages=messages,
+        non_default_params=cache_control_params,
+        prompt_variables=None,
+        prompt_id="",
+    )
+
+    assert compiled_messages[0]["cache_control"] == {"type": "ephemeral"}
