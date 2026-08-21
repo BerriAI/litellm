@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import sys
 from datetime import datetime
 from io import BytesIO
@@ -578,7 +579,7 @@ def test_litellm_gateway_from_sdk_with_response_cost_in_additional_headers():
 
 
 def test_litellm_gateway_from_sdk_with_thinking_param():
-    with pytest.raises(Exception, match="Connection error.") as exc_info:
+    with pytest.raises(Exception, match=re.escape("Connection error.")) as exc_info:
         response = litellm.completion(
             model="litellm_proxy/anthropic.claude-sonnet-4-5-20250929-v1:0",
             messages=[{"role": "user", "content": "Hello world"}],
