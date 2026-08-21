@@ -524,8 +524,9 @@ def test_load_from_azure_key_vault_missing_uri_failure_is_swallowed(monkeypatch)
 # ---------------------------------------------------------------------------
 
 
-def test_cost_tracking_adds_two_callbacks_when_prisma_set(monkeypatch):
+def test_cost_tracking_adds_db_and_shadow_eval_callbacks_when_prisma_set(monkeypatch):
     import litellm
+    from litellm.integrations.shadow_eval_logger import ShadowEvalLogger
 
     fake_prisma = MagicMock()
     monkeypatch.setattr(ps, "prisma_client", fake_prisma, raising=False)
@@ -536,15 +537,18 @@ def test_cost_tracking_adds_two_callbacks_when_prisma_set(monkeypatch):
     before_async = len(litellm._async_success_callback)
 
     cost_tracking()
+    cost_tracking()
 
     observed = {
         "added_to_callbacks": len(litellm.callbacks) - before_callbacks,
         "added_to_async_success": len(litellm._async_success_callback) - before_async,
+        "shadow_eval_loggers": sum(isinstance(cb, ShadowEvalLogger) for cb in litellm.callbacks),
         "prisma_was_set": True,
     }
     assert normalize(observed) == {
-        "added_to_callbacks": 1,
+        "added_to_callbacks": 2,
         "added_to_async_success": 1,
+        "shadow_eval_loggers": 1,
         "prisma_was_set": True,
     }
 

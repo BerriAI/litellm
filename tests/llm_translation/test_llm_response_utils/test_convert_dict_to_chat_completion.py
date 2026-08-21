@@ -982,7 +982,7 @@ def test_convert_to_model_response_object_with_real_error():
         },
     }
 
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(Exception) as exc_info:  # noqa: PT011  # message rides on .message, str() is empty
         convert_to_model_response_object(
             model_response_object=ModelResponse(),
             response_object=response_object,
@@ -1243,7 +1243,7 @@ def test_convert_to_model_response_object_with_error_code_only():
         },
     }
 
-    with pytest.raises(Exception):
+    with pytest.raises(Exception) as exc_info:  # noqa: B017, PT011  # bare Exception, empty message, so status_code is the assertion
         convert_to_model_response_object(
             model_response_object=ModelResponse(),
             response_object=response_object,
@@ -1254,6 +1254,8 @@ def test_convert_to_model_response_object_with_error_code_only():
             _response_headers=None,
             convert_tool_call_to_json_mode=False,
         )
+
+    assert exc_info.value.status_code == 500
 
 
 def test_model_prefix_preservation():
@@ -1421,7 +1423,7 @@ def test_error_message_includes_function_args():
         "choices": [{"index": 0}],
     }
 
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(Exception, match='in convert_to_model_response_object') as exc_info:
         convert_to_model_response_object(
             model_response_object=ModelResponse(),
             response_object=response_object,
@@ -2473,14 +2475,14 @@ class TestConvertToModelResponseObjectCompletion:
         assert "reasoning_content" not in (message.provider_specific_fields or {})
 
     def test_response_none_raises(self):
-        with pytest.raises(Exception):
+        with pytest.raises(Exception, match="Invalid response object"):
             convert_to_model_response_object(
                 response_object=None,
                 model_response_object=ModelResponse(),
             )
 
     def test_model_response_none_raises(self):
-        with pytest.raises(Exception):
+        with pytest.raises(Exception, match="Invalid response object"):
             convert_to_model_response_object(
                 response_object={
                     "choices": [

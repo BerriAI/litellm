@@ -140,7 +140,7 @@ class TestModelManagementAuthChecks:
     @pytest.mark.asyncio
     async def test_can_user_make_team_model_call_non_premium_fails(self):
         """Test that non-premium users cannot make team model calls"""
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(Exception, match='You must be a LiteLLM Enterprise user to use this feature\\.') as exc_info:
             ModelManagementAuthChecks.can_user_make_team_model_call(
                 team_id="test_team",
                 user_api_key_dict=self.admin_user,
@@ -195,7 +195,7 @@ class TestModelManagementAuthChecks:
         )
         prisma_client = MockPrismaClient(team_exists=True)
 
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(Exception, match='You must be a LiteLLM Enterprise user to use this feature\\.') as exc_info:
             await ModelManagementAuthChecks.allow_team_model_action(
                 model_params=model_params,
                 user_api_key_dict=self.admin_user,
@@ -216,7 +216,7 @@ class TestModelManagementAuthChecks:
         )
         prisma_client = MockPrismaClient(team_exists=False)
 
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(Exception, match="Team id=nonexistent_team does not exist in db'\\}") as exc_info:
             await ModelManagementAuthChecks.allow_team_model_action(
                 model_params=model_params,
                 user_api_key_dict=self.admin_user,
@@ -257,7 +257,7 @@ class TestModelManagementAuthChecks:
         )
         prisma_client = MockPrismaClient(team_exists=True, user_admin=False)
 
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(Exception, match="Team ID=test_team does not match the API key's team") as exc_info:
             await ModelManagementAuthChecks.can_user_make_model_call(
                 model_params=model_params,
                 user_api_key_dict=self.normal_user,
@@ -1483,7 +1483,7 @@ class TestTeamModelUpdate:
             "litellm.proxy.proxy_server.premium_user",
             True,
         ):
-            with pytest.raises(Exception) as exc_info:
+            with pytest.raises(Exception, match="does not match the API key's team ID=None, OR you are") as exc_info:
                 await _update_team_model_in_db(
                     db_model=db_model,
                     patch_data=patch_data,
@@ -3256,7 +3256,7 @@ class TestPatchModelBlockedAuthGate:
                 new=AsyncMock(return_value=None),
             ),
         ):
-            with pytest.raises(Exception) as exc_info:
+            with pytest.raises(Exception, match="Only proxy admins can change a model's blocked flag\\.") as exc_info:
                 await patch_model(
                     model_id="m1",
                     patch_data=updateDeployment(blocked=True),
@@ -4118,6 +4118,30 @@ class TestAutoRouterClassifierDefaultPrompt:
         assert "Tiers:" in response.system_prompt
 
     @pytest.mark.asyncio
+    async def test_rubric_preset_selects_the_calibration_examples(self):
+        """A router on the chat preset must not prefill the editor with the agentic rubric, or the
+        operator edits a prompt their classifier never sends."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            get_auto_router_classifier_default_prompt,
+        )
+        from litellm.router_strategy.complexity_router import ClassificationRubric, classification_system_prompt
+
+        for preset in ClassificationRubric:
+            response = await get_auto_router_classifier_default_prompt(context_window_size=5, classification_rubric=preset)
+            assert response.system_prompt == classification_system_prompt(5, classification_rubric=preset)
+
+        agentic = await get_auto_router_classifier_default_prompt(
+            context_window_size=5, classification_rubric=ClassificationRubric.AGENTIC
+        )
+        chat = await get_auto_router_classifier_default_prompt(context_window_size=5, classification_rubric=ClassificationRubric.CHAT)
+        unset = await get_auto_router_classifier_default_prompt(context_window_size=5)
+        assert "Calibration on engineering tasks" in agentic.system_prompt
+        assert "Calibration on engineering tasks" not in chat.system_prompt
+        assert "Calibration examples:" in chat.system_prompt
+        # An unset preset must prefill the editor with the rubric an unconfigured router still sends.
+        assert "Calibration" not in unset.system_prompt
+
+    @pytest.mark.asyncio
     async def test_context_window_size_changes_the_closing_line(self):
         """The editor must prefill the prompt matching the configured window, not a fixed one."""
         from litellm.proxy.management_endpoints.model_management_endpoints import (
@@ -4160,7 +4184,7 @@ class TestAutoRouterClassifierDefaultPrompt:
 
     @pytest.mark.asyncio
     async def test_malformed_tier_labels_are_rejected_rather_than_silently_ignored(self):
-        """An unparseable or invalid rename must not fall back to the canonical rubric: that would
+        """An unparseable or invalid rename must not fall back to the canonical classification_rubric: that would
         prefill tier names the router does not accept while looking like it worked."""
         from litellm.proxy._types import ProxyException
         from litellm.proxy.management_endpoints.model_management_endpoints import (

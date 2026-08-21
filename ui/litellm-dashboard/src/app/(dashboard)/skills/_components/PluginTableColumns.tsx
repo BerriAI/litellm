@@ -20,13 +20,14 @@ import { cn } from "@/lib/cva.config";
 import { copyToClipboard } from "@/utils/dataUtils";
 
 const CATEGORY_BADGE_CLASS: Record<ReturnType<typeof getCategoryBadgeColor>, string> = {
-  blue: "border-blue-200 bg-blue-50 text-blue-600",
-  green: "border-green-200 bg-green-50 text-green-600",
-  purple: "border-purple-200 bg-purple-50 text-purple-600",
-  red: "border-red-200 bg-red-50 text-red-600",
-  orange: "border-orange-200 bg-orange-50 text-orange-600",
-  yellow: "border-yellow-200 bg-yellow-50 text-yellow-600",
-  gray: "border-gray-200 bg-gray-50 text-gray-600",
+  blue: "border-info/20 bg-info/10 text-info",
+  green: "border-success/20 bg-success/10 text-success",
+  purple:
+    "border-purple-200 bg-purple-50 text-purple-600 dark:border-purple-800 dark:bg-purple-950 dark:text-purple-300",
+  red: "border-destructive/20 bg-destructive/10 text-destructive",
+  orange: "border-warning/20 bg-warning/10 text-warning",
+  yellow: "border-warning/20 bg-warning/10 text-warning",
+  gray: "border-border bg-muted text-muted-foreground",
 };
 
 function PluginCategoryBadge({ category }: { category?: string }) {
