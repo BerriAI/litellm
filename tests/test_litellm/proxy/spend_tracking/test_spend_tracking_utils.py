@@ -6,6 +6,8 @@ import sys
 from datetime import timezone
 from typing import Any, Final, cast
 
+from typing_extensions import ReadOnly, TypedDict
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -3243,7 +3245,13 @@ def test_get_logging_payload_failed_request_without_standard_logging_payload_lea
     assert payload["custom_llm_provider"] == ""
 
 
-def _model_router_spend_log_kwargs(slp_model: str | None) -> dict[str, Any]:
+class _ModelRouterSpendLogKwargs(TypedDict):
+    model: ReadOnly[str]
+    litellm_params: ReadOnly[dict[str, dict[str, str]]]
+    standard_logging_object: ReadOnly[StandardLoggingPayload]
+
+
+def _model_router_spend_log_kwargs(slp_model: str | None) -> _ModelRouterSpendLogKwargs:
     standard_logging_payload: Final = cast(
         StandardLoggingPayload,
         {
