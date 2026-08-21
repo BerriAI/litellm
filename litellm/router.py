@@ -9313,6 +9313,10 @@ class Router:
         model_list: Final = self.get_model_list(model_name=model_group)
         if model_list is None:
             return None
+        model_group_description: Final[str | None] = next(
+            (d for d in (m.get("model_info", {}).get("description") for m in model_list) if isinstance(d, str)),
+            None,
+        )
         for model in model_list:
             is_match = False
             if (
@@ -9333,9 +9337,6 @@ class Router:
             # Cache nested dict access to avoid repeated temporary dict allocations
             model_litellm_params = model.get("litellm_params", {})
             model_info_dict = model.get("model_info", {})
-
-            _raw_description = model_info_dict.get("description")
-            _deployment_description: str | None = _raw_description if isinstance(_raw_description, str) else None
 
             # get model tpm
             _deployment_tpm: int | None = None
@@ -9418,7 +9419,7 @@ class Router:
                     **{
                         "model_group": user_facing_model_group_name,
                         "providers": [llm_provider],
-                        "description": _deployment_description,
+                        "description": model_group_description,
                         **model_info,
                     }
                 )
@@ -9432,8 +9433,6 @@ class Router:
                 # supports_function_calling == True
                 if llm_provider not in model_group_info.providers:
                     model_group_info.providers.append(llm_provider)
-                if model_group_info.description is None and _deployment_description is not None:
-                    model_group_info.description = _deployment_description
                 if (
                     model_info.get("max_input_tokens", None) is not None
                     and model_info["max_input_tokens"] is not None
