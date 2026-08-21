@@ -395,6 +395,17 @@ async def test_a_bom_file_is_rewritten_without_losing_the_untouched_records():
     assert rows[1]["body"]["messages"][0]["content"] == "my *** is here"
 
 
+@pytest.mark.parametrize("prefix", [b"", b"\xef\xbb\xbf"], ids=["plain", "utf8_bom"])
+def test_load_balancing_reads_the_first_record_whatever_its_encoding(prefix):
+    """A file whose routing model cannot be read silently goes to the default provider."""
+    from litellm.proxy.openai_files_endpoints.files_endpoints import get_first_json_object
+
+    payload = prefix + (json.dumps(_record("a")) + "\n").encode()
+
+    assert get_first_json_object(io.BytesIO(payload))["body"]["model"] == "gpt-4o-mini"
+    assert get_first_json_object(payload)["body"]["model"] == "gpt-4o-mini"
+
+
 @pytest.mark.asyncio
 async def test_a_numeric_custom_id_is_still_reported():
     """The spec asks for a string, but callers send numbers, and null would break reconciliation."""

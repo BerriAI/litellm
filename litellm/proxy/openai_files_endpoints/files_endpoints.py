@@ -145,14 +145,20 @@ async def _scan_batch_upload(
 
 
 def get_first_json_object(file_source: bytes | BinaryIO) -> dict | None:
+    """
+    The first record, used to pick a deployment when batch load balancing is on.
+
+    Parsed as bytes so the json module sniffs the encoding itself, the same way the upload
+    validation does. Decoding to text first rejects a leading byte order mark, and a file that
+    carries one would silently lose its routing and go to the default provider.
+    """
     try:
         if isinstance(file_source, (bytes, bytearray)):
             newline: Final = file_source.find(b"\n")
-            raw: Final = file_source if newline == -1 else file_source[:newline]
-            first_line = raw.decode("utf-8")
+            first_line: bytes = file_source if newline == -1 else file_source[:newline]
         else:
             file_source.seek(0)
-            first_line = file_source.readline().decode("utf-8")
+            first_line = file_source.readline()
             file_source.seek(0)
         return json.loads(first_line.strip())
     except (json.JSONDecodeError, UnicodeDecodeError, OSError, ValueError):
