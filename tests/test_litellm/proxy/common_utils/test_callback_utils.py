@@ -10,6 +10,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 from litellm.proxy.common_utils.callback_utils import (
+    add_guardrail_scan_id,
     add_policy_to_applied_policies_header,
     decrypt_callback_vars,
     encrypt_callback_vars,
@@ -190,6 +191,22 @@ def test_get_logging_caching_headers_merges_metadata_and_litellm_metadata():
     assert headers["x-litellm-applied-policies"] == "global-baseline"
     assert headers["x-litellm-applied-guardrails"] == "pii_blocker"
     assert headers["x-litellm-policy-sources"] == "global-baseline=team_default"
+
+
+def test_add_guardrail_scan_id_dedupes_and_becomes_response_header():
+    request_data = {"litellm_metadata": {}}
+
+    add_guardrail_scan_id(request_data=request_data, scan_id="scan-1")
+    add_guardrail_scan_id(request_data=request_data, scan_id="scan-1")
+    add_guardrail_scan_id(request_data=request_data, scan_id="scan-2")
+    add_guardrail_scan_id(request_data=request_data, scan_id=None)
+
+    assert request_data["litellm_metadata"]["guardrail_scan_ids"] == ("scan-1", "scan-2")
+    assert get_logging_caching_headers(request_data)["x-litellm-guardrail-scan-id"] == "scan-1,scan-2"
+
+
+def test_get_logging_caching_headers_omits_scan_id_header_without_scans():
+    assert "x-litellm-guardrail-scan-id" not in get_logging_caching_headers({"litellm_metadata": {}})
 
 
 def test_initialize_callbacks_on_proxy_instantiates_compression_interception(
@@ -475,6 +492,7 @@ def test_strip_callback_config_drops_credential_bearing_slots():
             }
         ],
         "callback_settings": {"callback_vars": {"langfuse_secret_key": "litellm_enc::other"}},
+        "secret_manager_settings": {"vault_token": "vt-secret"},
         "priority": "high",
         "guardrails": ["presidio"],
         "langsmith_provisioning": {"api_key_id": "prov-1"},
@@ -484,6 +502,7 @@ def test_strip_callback_config_drops_credential_bearing_slots():
 
     assert "logging" not in stripped
     assert "callback_settings" not in stripped
+    assert "secret_manager_settings" not in stripped
     assert stripped["priority"] == "high"
     assert stripped["guardrails"] == ["presidio"]
     assert stripped["langsmith_provisioning"] == {"api_key_id": "prov-1"}
@@ -567,7 +586,7 @@ def test_initialize_callbacks_on_proxy_rejects_class_valued_entry(probe_config_p
     silently never run the hook. Config load must fail instead."""
     entry = f"{_PROBE_MODULE_NAME}.FloorMaxTokens"
 
-    with pytest.raises(ValueError) as exc_info:
+    with pytest.raises(ValueError, match='litellm_settings\\.callbacks entry') as exc_info:
         _load_callbacks([entry], probe_config_path)
 
     message = str(exc_info.value)
@@ -590,7 +609,7 @@ def test_initialize_callbacks_on_proxy_rejects_non_dispatchable_values(
 ):
     entry = f"{_PROBE_MODULE_NAME}.{attribute}"
 
-    with pytest.raises(ValueError) as exc_info:
+    with pytest.raises(ValueError, match='litellm_settings\\.callbacks entry') as exc_info:
         _load_callbacks([entry], probe_config_path)
 
     message = str(exc_info.value)
@@ -602,7 +621,7 @@ def test_initialize_callbacks_on_proxy_rejects_non_dispatchable_values(
 def test_initialize_callbacks_on_proxy_rejects_class_valued_non_list_value(probe_config_path):
     entry = f"{_PROBE_MODULE_NAME}.FloorMaxTokens"
 
-    with pytest.raises(ValueError) as exc_info:
+    with pytest.raises(ValueError, match='litellm_settings\\.callbacks entry') as exc_info:
         _load_callbacks(entry, probe_config_path)
 
     assert entry in str(exc_info.value)

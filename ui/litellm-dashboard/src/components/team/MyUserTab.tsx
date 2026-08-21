@@ -1,6 +1,6 @@
 import { formatBudgetReset } from "@/utils/budgetUtils";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
-import { Tooltip } from "@/components/atoms/Tooltip";
+import { SimpleTooltip } from "@/components/ui/tooltip";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { CircleHelp } from "lucide-react";
@@ -14,9 +14,9 @@ interface MyUserTabProps {
 const labelWithTooltip = (label: string, tooltip: string) => (
   <span className="flex items-center gap-1 text-muted-foreground">
     {label}
-    <Tooltip content={tooltip}>
+    <SimpleTooltip content={tooltip}>
       <CircleHelp className="size-4" aria-label={`${label} information`} />
-    </Tooltip>
+    </SimpleTooltip>
   </span>
 );
 
