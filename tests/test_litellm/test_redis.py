@@ -13,7 +13,7 @@ from litellm._redis import (
     get_redis_connection_pool,
     get_redis_url_from_environment,
 )
-from litellm.constants import REDIS_CLUSTER_HEALTH_CHECK_INTERVAL
+from litellm.constants import REDIS_CLUSTER_HEALTH_CHECK_INTERVAL, REDIS_SOCKET_TIMEOUT
 from litellm._redis_credential_provider import (
     AzureADCredentialProvider,
     GCPIAMCredentialProvider,
@@ -197,6 +197,25 @@ def test_async_cluster_sets_reconnect_defaults(mock_cluster_cls):
     assert call_kwargs["health_check_interval"] == REDIS_CLUSTER_HEALTH_CHECK_INTERVAL
     assert call_kwargs["health_check_interval"] > 0
     assert call_kwargs["socket_keepalive"] is True
+    assert call_kwargs["socket_timeout"] == REDIS_SOCKET_TIMEOUT
+    assert call_kwargs["socket_connect_timeout"] == REDIS_SOCKET_TIMEOUT
+
+
+@patch("litellm._redis.redis.RedisCluster")
+def test_sync_cluster_sets_reconnect_defaults(mock_cluster_cls):
+    """Sync RedisCluster must get the same fail-fast reconnect defaults as async.
+
+    init_redis_cluster used to skip them, so a dropped ElastiCache Serverless
+    connection stalled the (often event-loop) caller in CLUSTER SLOTS rediscovery.
+    """
+    get_redis_client(startup_nodes=[{"host": "cluster-node", "port": 6379}])
+
+    mock_cluster_cls.assert_called_once()
+    call_kwargs = mock_cluster_cls.call_args[1]
+    assert call_kwargs["health_check_interval"] == REDIS_CLUSTER_HEALTH_CHECK_INTERVAL
+    assert call_kwargs["socket_keepalive"] is True
+    assert call_kwargs["socket_timeout"] == REDIS_SOCKET_TIMEOUT
+    assert call_kwargs["socket_connect_timeout"] == REDIS_SOCKET_TIMEOUT
 
 
 @patch("litellm._redis.async_redis.RedisCluster")
