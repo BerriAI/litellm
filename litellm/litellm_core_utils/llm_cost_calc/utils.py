@@ -309,7 +309,11 @@ def _get_token_base_cost(
         float,
         _get_cost_per_unit(model_info, "cache_creation_input_token_cost_above_1hr"),
     )
-    cache_read_cost = cast(float, _get_cost_per_unit(model_info, cache_read_cost_key))
+    # A model that publishes no cached-input rate gives no cached discount, so a cache hit
+    # bills at the standard input rate; read as 0.0 it would bill the hit as free. This is
+    # what the tiered-pricing path above already does for cache reads.
+    published_cache_read_cost: Final = _get_cost_per_unit(model_info, cache_read_cost_key, None)
+    cache_read_cost = prompt_base_cost if published_cache_read_cost is None else cast(float, published_cache_read_cost)
 
     ## CHECK IF ABOVE THRESHOLD
     # Optimization: collect threshold keys first to avoid sorting all model_info keys.

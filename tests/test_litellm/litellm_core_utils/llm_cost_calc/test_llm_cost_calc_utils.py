@@ -270,6 +270,64 @@ def test_image_tokens_fallback_to_base_cost():
     assert round(completion_cost, 12) == round(expected_completion_cost, 12)
 
 
+def test_cache_hit_tokens_fall_back_to_the_input_rate():
+    """A model with no published cached-input rate gives no discount, so a cache hit bills
+    at the standard input rate. Read as 0.0 the missing key billed the hit as free, which
+    under-reported spend for every provider that reports cached_tokens without a discount
+    (Together AI's non-reasoning models report one on every warm prefix)."""
+    from unittest.mock import patch
+
+    model_info_without_cache_rate = {
+        "input_cost_per_token": 1e-6,
+        "output_cost_per_token": 2e-6,
+        # no cache_read_input_token_cost
+    }
+    usage = Usage(
+        prompt_tokens=1000,
+        completion_tokens=10,
+        total_tokens=1010,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=800),
+    )
+
+    with patch(
+        "litellm.litellm_core_utils.llm_cost_calc.utils.get_model_info",
+        return_value=model_info_without_cache_rate,
+    ):
+        prompt_cost, completion_cost = generic_cost_per_token(
+            model="test-model", usage=usage, custom_llm_provider="together_ai"
+        )
+
+    assert round(prompt_cost, 12) == round(1000 * 1e-6, 12)
+    assert round(completion_cost, 12) == round(10 * 2e-6, 12)
+
+
+def test_published_cache_read_rate_still_wins():
+    """A published cached-input rate keeps its discount."""
+    from unittest.mock import patch
+
+    model_info_with_cache_rate = {
+        "input_cost_per_token": 1e-6,
+        "output_cost_per_token": 2e-6,
+        "cache_read_input_token_cost": 1e-7,
+    }
+    usage = Usage(
+        prompt_tokens=1000,
+        completion_tokens=10,
+        total_tokens=1010,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=800),
+    )
+
+    with patch(
+        "litellm.litellm_core_utils.llm_cost_calc.utils.get_model_info",
+        return_value=model_info_with_cache_rate,
+    ):
+        prompt_cost, _ = generic_cost_per_token(
+            model="test-model", usage=usage, custom_llm_provider="together_ai"
+        )
+
+    assert round(prompt_cost, 12) == round(200 * 1e-6 + 800 * 1e-7, 12)
+
+
 def test_video_output_tokens_gemini_omni_flash_preview():
     """Video output tokens are billed at output_cost_per_video_token, not the text rate and not zero."""
     model = "gemini-omni-flash-preview"
