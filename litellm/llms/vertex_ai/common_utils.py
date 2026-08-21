@@ -1,7 +1,7 @@
 import re
 from copy import deepcopy
 from enum import Enum
-from typing import Any, Final, Literal, get_type_hints
+from typing import Any, Final, Literal, Protocol, get_type_hints
 
 import httpx
 
@@ -1095,8 +1095,15 @@ class VertexAIModelInfo(BaseLLMModelInfo):
         raise NotImplementedError("Vertex AI models are not supported yet")
 
 
+class GeminiCountTokensClient(Protocol):
+    async def acount_tokens(self, contents: object, model: str, **kwargs: object) -> dict[str, Any]: ...
+
+
 class VertexAITokenCounter(BaseTokenCounter):
     """Token counter implementation for Google AI Studio provider."""
+
+    def __init__(self, gemini_token_counter: GeminiCountTokensClient | None = None) -> None:
+        self._gemini_token_counter: Final = gemini_token_counter
 
     def should_use_token_counting_api(
         self,
@@ -1164,16 +1171,18 @@ class VertexAITokenCounter(BaseTokenCounter):
                     original_response=result,
                 )
         else:
-            from litellm.llms.vertex_ai.count_tokens.handler import VertexAITokenCounter
+            from litellm.llms.vertex_ai.count_tokens.handler import (
+                VertexAITokenCounter as VertexAIGeminiTokenCounter,
+            )
             from litellm.llms.vertex_ai.gemini.transformation import (
-                _gemini_convert_messages_with_history,  # pyright: ignore[reportPrivateUsage]  # shared helper already used by gemini/chat, context_caching, and vertex_and_google_ai_studio_gemini
+                _gemini_convert_messages_with_history,  # pyright: ignore[reportPrivateUsage]  # shared conversion helper, also imported by gemini/chat and context_caching
             )
 
             resolved_contents: Final = (
                 contents
                 if contents is not None
                 else _gemini_convert_messages_with_history(
-                    messages=messages or []  # mutable-ok: fallback for None messages; helper signature requires list
+                    messages=messages or []  # mutable-ok: helper signature requires a list
                 )
             )
 
@@ -1182,7 +1191,8 @@ class VertexAITokenCounter(BaseTokenCounter):
                 "contents": resolved_contents,
             }
             count_tokens_params_request.update(count_tokens_params)
-            result = await VertexAITokenCounter().acount_tokens(
+            gemini_token_counter: Final = self._gemini_token_counter or VertexAIGeminiTokenCounter()
+            result = await gemini_token_counter.acount_tokens(
                 **count_tokens_params_request,
             )
 
