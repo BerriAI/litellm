@@ -10,6 +10,7 @@ from pydantic import BaseModel
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
+    LITELLM_PROXY_MASTER_KEY_ALIAS,
     LITELLM_TRUNCATED_PAYLOAD_FIELD,
     LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE,
     REDACTED_BY_LITELM_STRING,
@@ -67,17 +68,21 @@ def _is_master_key(api_key: str | None, _master_key: str | None) -> bool:
 _HASHED_JWT_RE = re.compile(r"hashed-jwt-[a-fA-F0-9]{64}")
 
 
-def _is_prehashed_key_shape(value: str) -> bool:
-    return is_valid_sha256_hash(value) or _HASHED_JWT_RE.fullmatch(value) is not None
+def _is_non_secret_key_value(value: str) -> bool:
+    return (
+        value == LITELLM_PROXY_MASTER_KEY_ALIAS
+        or is_valid_sha256_hash(value)
+        or _HASHED_JWT_RE.fullmatch(value) is not None
+    )
 
 
-def _redact_logged_api_key(value: str | None, *, already_hashed: bool = False) -> str | None:
+def _redact_logged_api_key(value: str | None, *, already_redacted: bool = False) -> str | None:
     if not isinstance(value, str) or not value:
         return None
     stripped: Final = re.sub(r"(?i)^bearer ", "", value)
     if not stripped:
         return None
-    if already_hashed and _is_prehashed_key_shape(stripped):
+    if already_redacted and _is_non_secret_key_value(stripped):
         return stripped
     return hash_token(stripped)
 
@@ -137,10 +142,10 @@ def _get_spend_logs_metadata(
     clean_metadata: Final = SpendLogsMetadata(**{key: metadata.get(key) for key in SpendLogsMetadata.__annotations__})
     _raw_key: Final = clean_metadata.get("user_api_key")
     _trusted_hash: Final = metadata.get("user_api_key_hash")
-    _already_hashed: Final = (
-        isinstance(_trusted_hash, str) and _is_prehashed_key_shape(_trusted_hash) and _trusted_hash == _raw_key
+    _already_redacted: Final = (
+        isinstance(_trusted_hash, str) and _is_non_secret_key_value(_trusted_hash) and _trusted_hash == _raw_key
     )
-    clean_metadata["user_api_key"] = _redact_logged_api_key(_raw_key, already_hashed=_already_hashed)
+    clean_metadata["user_api_key"] = _redact_logged_api_key(_raw_key, already_redacted=_already_redacted)
     clean_metadata["applied_guardrails"] = applied_guardrails
     clean_metadata["batch_models"] = batch_models
     clean_metadata["mcp_tool_call_metadata"] = mcp_tool_call_metadata
@@ -297,10 +302,10 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogs
         standard_logging_completion_tokens = standard_logging_payload.get("completion_tokens", 0)
         standard_logging_total_tokens = standard_logging_payload.get("total_tokens", 0)
     _trusted_hash = metadata.get("user_api_key_hash")
-    _key_already_hashed = (
-        isinstance(_trusted_hash, str) and _is_prehashed_key_shape(_trusted_hash) and _trusted_hash == api_key
+    _key_already_redacted = (
+        isinstance(_trusted_hash, str) and _is_non_secret_key_value(_trusted_hash) and _trusted_hash == api_key
     )
-    api_key = _redact_logged_api_key(api_key, already_hashed=_key_already_hashed) or ""
+    api_key = _redact_logged_api_key(api_key, already_redacted=_key_already_redacted) or ""
 
     if (
         standard_logging_payload is not None
@@ -308,7 +313,7 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogs
         api_key = (
             api_key
             or _redact_logged_api_key(
-                standard_logging_payload["metadata"].get("user_api_key_hash"), already_hashed=True
+                standard_logging_payload["metadata"].get("user_api_key_hash"), already_redacted=True
             )
             or ""
         )
