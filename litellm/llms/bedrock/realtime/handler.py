@@ -7,9 +7,10 @@ This uses aws_sdk_bedrock_runtime for bidirectional streaming with Nova Sonic.
 import asyncio
 import contextlib
 import json
-from typing import Any, Final
+from typing import TYPE_CHECKING, Final, Protocol
 
 from pydantic import TypeAdapter
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import _redact_string, verbose_proxy_logger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
@@ -18,7 +19,72 @@ from ..base_aws_llm import BaseAWSLLM
 from ..common_utils import BedrockError
 from .transformation import BedrockRealtimeConfig
 
+if TYPE_CHECKING:
+    from litellm.types.realtime import RealtimeResponseTransformInput
+
 _CLIENT_MODALITIES_ADAPTER: Final[TypeAdapter["list[str] | None"]] = TypeAdapter(list[str] | None)
+
+
+class _ClientWebSocket(Protocol):
+    """The client-facing websocket surface used by the Bedrock realtime bridge."""
+
+    async def send_text(self, data: str) -> None: ...
+
+    async def receive_text(self) -> str: ...
+
+    async def close(self, code: int = ..., reason: str | None = ...) -> None: ...
+
+
+class _BedrockInputStream(Protocol):
+    """The write half of a Bedrock bidirectional stream."""
+
+    async def send(self, chunk: object) -> None: ...
+
+    async def close(self) -> None: ...
+
+
+class _BedrockPayloadPart(Protocol):
+    """A single Bedrock bidirectional output payload."""
+
+    bytes_: bytes | None
+
+
+class _BedrockOutputChunk(Protocol):
+    """A chunk read off the read half of a Bedrock bidirectional stream."""
+
+    value: _BedrockPayloadPart | None
+
+
+class _BedrockOutputStream(Protocol):
+    """The read half of a Bedrock bidirectional stream."""
+
+    async def receive(self) -> _BedrockOutputChunk | None: ...
+
+
+class _BedrockBidirectionalStream(Protocol):
+    """The bidirectional stream returned by ``invoke_model_with_bidirectional_stream``."""
+
+    input_stream: _BedrockInputStream
+
+    async def await_output(self) -> tuple[object, _BedrockOutputStream]: ...
+
+
+class _ClientSessionPayload(TypedDict, total=False):
+    """The ``session`` body of a client ``session.update`` frame."""
+
+    modalities: ReadOnly[object]
+
+
+class _ClientRealtimeFrame(TypedDict, total=False):
+    """The fields read off a client realtime frame."""
+
+    type: ReadOnly[str]
+    session: ReadOnly[_ClientSessionPayload]
+
+
+def _decode_client_frame(payload: str) -> _ClientRealtimeFrame:
+    """Decode a client realtime frame into the fields this bridge reads."""
+    return json.loads(payload)
 
 
 class BedrockRealtime(BaseAWSLLM):
@@ -30,7 +96,7 @@ class BedrockRealtime(BaseAWSLLM):
     async def async_realtime(
         self,
         model: str,
-        websocket: Any,
+        websocket: _ClientWebSocket,
         logging_obj: LiteLLMLogging,
         api_base: str | None = None,
         api_key: str | None = None,
@@ -46,7 +112,7 @@ class BedrockRealtime(BaseAWSLLM):
         aws_sts_endpoint: str | None = None,
         aws_bedrock_runtime_endpoint: str | None = None,
         aws_external_id: str | None = None,
-        **kwargs,
+        **kwargs: object,
     ):
         """
         Establish bidirectional streaming connection with Bedrock Nova Sonic.
@@ -118,13 +184,16 @@ class BedrockRealtime(BaseAWSLLM):
         )
         bedrock_client: Final = BedrockRuntimeClient(config=config)
 
+        async def open_bidirectional_stream() -> _BedrockBidirectionalStream:
+            return await bedrock_client.invoke_model_with_bidirectional_stream(
+                InvokeModelWithBidirectionalStreamOperationInput(model_id=model)
+            )
+
         transformation_config: Final = BedrockRealtimeConfig()
 
         try:
             # Initialize the bidirectional stream
-            bedrock_stream: Final = await bedrock_client.invoke_model_with_bidirectional_stream(
-                InvokeModelWithBidirectionalStreamOperationInput(model_id=model)
-            )
+            bedrock_stream: Final = await open_bidirectional_stream()
 
             verbose_proxy_logger.debug("Bedrock Realtime: Bidirectional stream established")
 
@@ -132,7 +201,7 @@ class BedrockRealtime(BaseAWSLLM):
             verbose_proxy_logger.debug("Bedrock Realtime: sent session.created to client on connect")
 
             # Track state for transformation
-            session_state: Final = {
+            session_state: Final[RealtimeResponseTransformInput] = {
                 "current_output_item_id": None,
                 "current_response_id": None,
                 "current_conversation_id": None,
@@ -182,11 +251,11 @@ class BedrockRealtime(BaseAWSLLM):
 
     async def _forward_client_to_bedrock(
         self,
-        client_ws: Any,
-        bedrock_stream: Any,
+        client_ws: _ClientWebSocket,
+        bedrock_stream: _BedrockBidirectionalStream,
         transformation_config: BedrockRealtimeConfig,
         model: str,
-        session_state: dict,
+        session_state: "RealtimeResponseTransformInput",
         logging_obj: LiteLLMLogging | None = None,
     ):
         """Forward messages from client WebSocket to Bedrock stream."""
@@ -195,10 +264,11 @@ class BedrockRealtime(BaseAWSLLM):
             InvokeModelWithBidirectionalStreamInputChunk,
         )
 
+        def build_input_chunk(payload: bytes) -> object:
+            return InvokeModelWithBidirectionalStreamInputChunk(value=BidirectionalInputPayloadPart(bytes_=payload))
+
         async def send_to_bedrock(bedrock_message: str) -> None:
-            event: Final = InvokeModelWithBidirectionalStreamInputChunk(
-                value=BidirectionalInputPayloadPart(bytes_=bedrock_message.encode("utf-8"))
-            )
+            event: Final = build_input_chunk(bedrock_message.encode("utf-8"))
             await bedrock_stream.input_stream.send(event)
             verbose_proxy_logger.debug("Bedrock Realtime: Sent to Bedrock: %s", bedrock_message[:200])
 
@@ -223,7 +293,7 @@ class BedrockRealtime(BaseAWSLLM):
                     client_message_type: str | None = None
                     requested_modalities: list[str] | None = None
                     with contextlib.suppress(Exception):
-                        parsed_client_message = json.loads(message)
+                        parsed_client_message = _decode_client_frame(message)
                         client_message_type = parsed_client_message.get("type")
                         if client_message_type == "session.update":
                             requested_modalities = _CLIENT_MODALITIES_ADAPTER.validate_python(
@@ -246,12 +316,12 @@ class BedrockRealtime(BaseAWSLLM):
 
     async def _forward_bedrock_to_client(
         self,
-        bedrock_stream: Any,
-        client_ws: Any,
+        bedrock_stream: _BedrockBidirectionalStream,
+        client_ws: _ClientWebSocket,
         transformation_config: BedrockRealtimeConfig,
         model: str,
         logging_obj: LiteLLMLogging,
-        session_state: dict,
+        session_state: "RealtimeResponseTransformInput",
     ):
         """Forward messages from Bedrock stream to client WebSocket."""
         try:

@@ -6,14 +6,62 @@ Handles retrieving secrets from different secret management systems.
 
 import base64
 import os
-from typing import Any, Final
+from collections.abc import Mapping
+from typing import Final, Protocol, overload
 
 import litellm
 from litellm._logging import print_verbose
-from litellm.types.secret_managers.main import KeyManagementSystem
+from litellm.types.secret_managers.main import KeyManagementSettings, KeyManagementSystem
 
 
-def _is_base64(s):
+class _VaultSecret(Protocol):
+    """The secret object returned by the Azure Key Vault and Infisical clients."""
+
+    @property
+    def value(self) -> str | None: ...
+
+    @property
+    def secret_value(self) -> str | None: ...
+
+
+class _KmsPlaintext(Protocol):
+    """The decrypted payload the AWS KMS client exposes under the ``Plaintext`` response key."""
+
+    def decode(self, encoding: str) -> str | None: ...
+
+
+class _KmsDecryptResponse(Protocol):
+    """The decrypt response returned by the Google KMS and AWS KMS clients."""
+
+    @property
+    def plaintext(self) -> bytes: ...
+
+    def __getitem__(self, key: str) -> _KmsPlaintext: ...
+
+
+class _SecretManagerClient(Protocol):
+    """The untyped secret manager client surface reached by ``get_secret_from_manager``."""
+
+    def get_secret(self, secret_name: str, /) -> _VaultSecret: ...
+
+    @overload
+    def decrypt(self, *, request: Mapping[str, object]) -> _KmsDecryptResponse: ...
+
+    @overload
+    def decrypt(self, *, CiphertextBlob: bytes) -> _KmsDecryptResponse: ...
+
+    def sync_read_secret(
+        self,
+        *,
+        secret_name: str,
+        primary_secret_name: str | None = None,
+        optional_params: Mapping[str, object] | None = None,
+    ) -> str | None: ...
+
+    def get_secret_from_google_secret_manager(self, secret_name: str, /) -> str | None: ...
+
+
+def _is_base64(s: str | bytes) -> bool:
     """Check if a string is valid base64."""
     import binascii
 
@@ -24,10 +72,10 @@ def _is_base64(s):
 
 
 def get_secret_from_manager(
-    client: Any,
+    client: _SecretManagerClient,
     key_manager: str,
     secret_name: str,
-    key_management_settings: Any | None = None,
+    key_management_settings: KeyManagementSettings | None = None,
 ) -> str | None:
     """
     Get a secret from the configured secret manager.
@@ -56,7 +104,7 @@ def get_secret_from_manager(
     elif (
         key_manager == KeyManagementSystem.GOOGLE_KMS.value or client.__class__.__name__ == "KeyManagementServiceClient"
     ):
-        encrypted_secret: Any = os.getenv(secret_name)
+        encrypted_secret: str | bytes | None = os.getenv(secret_name)
         if encrypted_secret is None:
             raise ValueError("Google KMS requires the encrypted secret to be in the environment!")
         b64_flag: Final = _is_base64(encrypted_secret)

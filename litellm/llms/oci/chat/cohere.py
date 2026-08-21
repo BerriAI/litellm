@@ -8,10 +8,12 @@ response parsing, and streaming chunk parsing for models served with
 
 import datetime
 import json
-from typing import Any, Final
+from collections.abc import Sequence
+from typing import Any, Final, TypedDict
 
 import httpx
 from pydantic import ValidationError
+from typing_extensions import ReadOnly
 
 from litellm.llms.oci.chat.generic import (
     _normalize_oci_finish_reason,
@@ -46,6 +48,20 @@ from litellm.types.utils import (
 )
 
 
+class _OpenAIToolCallFunction(TypedDict, total=False):
+    """The ``function`` block of an OpenAI-format assistant tool call."""
+
+    name: ReadOnly[str | None]
+    arguments: ReadOnly[str | dict[str, object]]
+
+
+class _OpenAIToolCall(TypedDict, total=False):
+    """An entry of an OpenAI-format assistant message's ``tool_calls``."""
+
+    id: ReadOnly[str | None]
+    function: ReadOnly[_OpenAIToolCallFunction]
+
+
 def _extract_text_content(content: Any) -> str:
     """Return the plain-text representation of a message content value."""
     if content is None:
@@ -78,10 +94,10 @@ def adapt_messages_to_cohere_standard(
     """
     # First pass: build tool_call_id → CohereToolCall so tool-result messages can
     # reference the originating call by name and parameters.
-    tool_call_lookup: Final[dict[str, CohereToolCall]] = {}
+    tool_call_lookup: Final[dict[str | None, CohereToolCall]] = {}
     for msg in messages:
         if msg.get("role") == "assistant":
-            tool_calls_raw: Any = msg.get("tool_calls") or []
+            tool_calls_raw: Sequence[_OpenAIToolCall] = msg.get("tool_calls") or []
             for tc in tool_calls_raw:
                 tc_id = tc.get("id", "")
                 raw_args = tc.get("function", {}).get("arguments", "{}")
@@ -150,8 +166,22 @@ def adapt_messages_to_cohere_standard(
     return chat_history
 
 
+class _OpenAIToolDefinitionFunction(TypedDict, total=False):
+    """The ``function`` block of an OpenAI-format tool definition."""
+
+    name: ReadOnly[str]
+    description: ReadOnly[str]
+    parameters: ReadOnly[dict[str, object]]
+
+
+class _OpenAIToolDefinition(TypedDict, total=False):
+    """An entry of an OpenAI-format ``tools`` array."""
+
+    function: ReadOnly[_OpenAIToolDefinitionFunction]
+
+
 def adapt_tool_definitions_to_cohere_standard(
-    tools: list[dict[str, Any]],
+    tools: Sequence[_OpenAIToolDefinition],
 ) -> list[CohereTool]:
     """Adapt OpenAI-format tool definitions to the OCI Cohere format.
 

@@ -3,7 +3,7 @@ Base repository class with common functionality.
 """
 
 from abc import ABC, abstractmethod
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from typing import Any, Final, Generic, Protocol, TypeVar, runtime_checkable
 
 from pydantic import BaseModel
@@ -24,6 +24,22 @@ class SupportsDict(Protocol):
 DbRecord = Mapping[str, object] | SupportsModelDump | SupportsDict | Sequence[tuple[str, object]]
 
 
+class PrismaCrudActions(Protocol):
+    """The Prisma table actions reached by the generic repository CRUD helpers."""
+
+    async def find_unique(self, *, where: Mapping[str, object]) -> DbRecord | None: ...
+
+    find_many: Callable[..., Awaitable[Sequence[DbRecord]]]
+
+    async def create(self, *, data: Mapping[str, object]) -> DbRecord: ...
+
+    async def update(self, *, where: Mapping[str, object], data: Mapping[str, object]) -> DbRecord | None: ...
+
+    async def delete(self, *, where: Mapping[str, object]) -> DbRecord | None: ...
+
+    async def count(self, *, where: Mapping[str, object] | None = None) -> int: ...
+
+
 def record_to_dict(record: DbRecord) -> Mapping[str, object]:
     """Project a database record into a mapping of column name to value."""
     if isinstance(record, SupportsModelDump):
@@ -38,7 +54,7 @@ def record_to_dict(record: DbRecord) -> Mapping[str, object]:
 class BaseRepository(ABC, Generic[T]):
     """Abstract base class for all repositories."""
 
-    def __init__(self, prisma_client: Any):  # any-ok: PrismaClient is an untyped runtime wrapper
+    def __init__(self, prisma_client: object):
         self._prisma_client = prisma_client
 
     @property
@@ -52,6 +68,11 @@ class BaseRepository(ABC, Generic[T]):
     def table(self) -> Any:  # any-ok: Prisma table actions are reached through the untyped client wrapper
         """Return the Prisma table for this repository."""
         ...
+
+    @property
+    def _crud_actions(self) -> PrismaCrudActions:
+        """View ``table`` through the action surface the CRUD helpers below use."""
+        return self.table
 
     @property
     @abstractmethod
@@ -71,18 +92,18 @@ class BaseRepository(ABC, Generic[T]):
 
     async def find_by_id(self, id_value: str, id_field: str = "id") -> T | None:
         """Find a record by its primary key."""
-        record: Final = await self.table.find_unique(where={id_field: id_value})
+        record: Final = await self._crud_actions.find_unique(where={id_field: id_value})
         return self._to_model(record)
 
     async def find_many(
         self,
-        where: dict[str, Any] | None = None,
+        where: Mapping[str, object] | None = None,
         skip: int | None = None,
         take: int | None = None,
-        order: dict[str, str] | None = None,
+        order: Mapping[str, str] | None = None,
     ) -> list[T]:
         """Find multiple records matching the criteria."""
-        kwargs: Final[dict[str, Any]] = {}
+        kwargs: Final[dict[str, object]] = {}
         if where:
             kwargs["where"] = where
         if skip is not None:
@@ -92,31 +113,31 @@ class BaseRepository(ABC, Generic[T]):
         if order:
             kwargs["order"] = order
 
-        records: Final = await self.table.find_many(**kwargs)
+        records: Final = await self._crud_actions.find_many(**kwargs)
         return self._to_model_list(records)
 
-    async def create(self, data: dict[str, Any]) -> T:
+    async def create(self, data: Mapping[str, object]) -> T:
         """Create a new record."""
-        record: Final = await self.table.create(data=data)
+        record: Final = await self._crud_actions.create(data=data)
         model: Final = self._to_model(record)
         assert model is not None
         return model
 
-    async def update(self, id_value: str, data: dict[str, Any], id_field: str = "id") -> T | None:
+    async def update(self, id_value: str, data: Mapping[str, object], id_field: str = "id") -> T | None:
         """Update an existing record."""
-        record: Final = await self.table.update(where={id_field: id_value}, data=data)
+        record: Final = await self._crud_actions.update(where={id_field: id_value}, data=data)
         return self._to_model(record)
 
     async def delete(self, id_value: str, id_field: str = "id") -> T | None:
         """Delete a record by its primary key."""
-        record: Final = await self.table.delete(where={id_field: id_value})
+        record: Final = await self._crud_actions.delete(where={id_field: id_value})
         return self._to_model(record)
 
-    async def count(self, where: dict[str, Any] | None = None) -> int:
+    async def count(self, where: Mapping[str, object] | None = None) -> int:
         """Count records matching the criteria."""
-        return await self.table.count(where=where)
+        return await self._crud_actions.count(where=where)
 
     async def exists(self, id_value: str, id_field: str = "id") -> bool:
         """Check if a record exists."""
-        record: Final = await self.table.find_unique(where={id_field: id_value})
+        record: Final = await self._crud_actions.find_unique(where={id_field: id_value})
         return record is not None

@@ -12,6 +12,7 @@ from litellm.proxy.management_helpers.object_permission_utils import (
     handle_update_object_permission_common,
 )
 from litellm.proxy.utils import PrismaClient
+from litellm.repositories.base_repository import SupportsModelDump
 from litellm.repositories.table_repositories import AgentsRepository, ObjectPermissionRepository
 from litellm.types.agents import AgentConfig, AgentResponse, PatchAgentRequest
 
@@ -83,9 +84,17 @@ class AgentTableClient(Protocol):
     async def delete(self, where: Mapping[str, object]) -> AgentRecord: ...
 
 
+class _AgentsRepositoryView(Protocol):
+    @property
+    def table(self) -> AgentTableClient: ...
+
+
+def _agents_table_of(repository: _AgentsRepositoryView) -> AgentTableClient:
+    return repository.table
+
+
 def agents_table(prisma_client: PrismaClient) -> AgentTableClient:
-    table: Final[AgentTableClient] = AgentsRepository(prisma_client).table
-    return table
+    return _agents_table_of(AgentsRepository(prisma_client))
 
 
 class ObjectPermissionGrantRecord(Protocol):
@@ -99,9 +108,17 @@ class ObjectPermissionTableClient(Protocol):
     async def update_many(self, where: Mapping[str, object], data: Mapping[str, object]) -> int: ...
 
 
+class _ObjectPermissionRepositoryView(Protocol):
+    @property
+    def table(self) -> ObjectPermissionTableClient: ...
+
+
+def _object_permission_table_of(repository: _ObjectPermissionRepositoryView) -> ObjectPermissionTableClient:
+    return repository.table
+
+
 def object_permission_table(prisma_client: PrismaClient) -> ObjectPermissionTableClient:
-    table: Final[ObjectPermissionTableClient] = ObjectPermissionRepository(prisma_client).table
-    return table
+    return _object_permission_table_of(ObjectPermissionRepository(prisma_client))
 
 
 class GrantMigrationResult(NamedTuple):
@@ -283,19 +300,21 @@ class AgentRegistry:
             agent_name: Final = agent.get("agent_name")
 
             # Serialize litellm_params
-            litellm_params_obj: Final[Any] = agent.get("litellm_params", {})
-            if hasattr(litellm_params_obj, "model_dump"):
-                litellm_params_dict = litellm_params_obj.model_dump()
-            else:
-                litellm_params_dict = dict(litellm_params_obj) if litellm_params_obj else {}
+            litellm_params_obj: Final[Mapping[str, object] | SupportsModelDump] = agent.get("litellm_params", {})
+            litellm_params_dict: Final[Mapping[str, object]] = (
+                litellm_params_obj.model_dump()
+                if isinstance(litellm_params_obj, SupportsModelDump)
+                else (dict(litellm_params_obj) if litellm_params_obj else {})
+            )
             litellm_params: Final[str] = safe_dumps(litellm_params_dict)
 
             # Serialize agent_card_params
-            agent_card_params_obj: Final[Any] = agent.get("agent_card_params", {})
-            if hasattr(agent_card_params_obj, "model_dump"):
-                agent_card_params_dict = agent_card_params_obj.model_dump()
-            else:
-                agent_card_params_dict = dict(agent_card_params_obj) if agent_card_params_obj else {}
+            agent_card_params_obj: Final[Mapping[str, object] | SupportsModelDump] = agent.get("agent_card_params", {})
+            agent_card_params_dict: Final[Mapping[str, object]] = (
+                agent_card_params_obj.model_dump()
+                if isinstance(agent_card_params_obj, SupportsModelDump)
+                else (dict(agent_card_params_obj) if agent_card_params_obj else {})
+            )
             agent_card_params: Final[str] = safe_dumps(agent_card_params_dict)
 
             # Handle object_permission (MCP tool access for agent)
@@ -386,15 +405,13 @@ class AgentRegistry:
             The patched agent
         """
         try:
-            existing_agent = await AgentsRepository(prisma_client).table.find_unique(where={"agent_id": agent_id})
-            if existing_agent is not None:
-                existing_agent = dict(existing_agent)
-
-            if existing_agent is None:
+            existing_record: Final = await agents_table(prisma_client).find_unique(where={"agent_id": agent_id})
+            if existing_record is None:
                 raise Exception(f"Agent with ID {agent_id} not found")
+            existing_agent: Final[Mapping[str, object]] = dict(existing_record)
 
             augment_agent: Final = {**existing_agent, **agent}
-            update_data: Final[dict[str, Any]] = {}
+            update_data: Final[dict[str, object]] = {}
             if augment_agent.get("agent_name"):
                 update_data["agent_name"] = augment_agent.get("agent_name")
             if augment_agent.get("litellm_params"):
@@ -418,7 +435,7 @@ class AgentRegistry:
                 update_data["extra_headers"] = extra_headers_value if extra_headers_value is not None else []
             if agent.get("object_permission") is not None:
                 agent_copy: Final = dict(augment_agent)
-                existing_object_permission_id: Final = existing_agent.get("object_permission_id")
+                existing_object_permission_id: Final = existing_record.object_permission_id
                 object_permission_id: Final = await handle_update_object_permission_common(
                     agent_copy,
                     existing_object_permission_id,
@@ -460,19 +477,21 @@ class AgentRegistry:
             agent_name: Final = agent.get("agent_name")
 
             # Serialize litellm_params
-            litellm_params_obj: Final[Any] = agent.get("litellm_params", {})
-            if hasattr(litellm_params_obj, "model_dump"):
-                litellm_params_dict = litellm_params_obj.model_dump()
-            else:
-                litellm_params_dict = dict(litellm_params_obj) if litellm_params_obj else {}
+            litellm_params_obj: Final[Mapping[str, object] | SupportsModelDump] = agent.get("litellm_params", {})
+            litellm_params_dict: Final[Mapping[str, object]] = (
+                litellm_params_obj.model_dump()
+                if isinstance(litellm_params_obj, SupportsModelDump)
+                else (dict(litellm_params_obj) if litellm_params_obj else {})
+            )
             litellm_params: Final[str] = safe_dumps(litellm_params_dict)
 
             # Serialize agent_card_params
-            agent_card_params_obj: Final[Any] = agent.get("agent_card_params", {})
-            if hasattr(agent_card_params_obj, "model_dump"):
-                agent_card_params_dict = agent_card_params_obj.model_dump()
-            else:
-                agent_card_params_dict = dict(agent_card_params_obj) if agent_card_params_obj else {}
+            agent_card_params_obj: Final[Mapping[str, object] | SupportsModelDump] = agent.get("agent_card_params", {})
+            agent_card_params_dict: Final[Mapping[str, object]] = (
+                agent_card_params_obj.model_dump()
+                if isinstance(agent_card_params_obj, SupportsModelDump)
+                else (dict(agent_card_params_obj) if agent_card_params_obj else {})
+            )
             agent_card_params: Final[str] = safe_dumps(agent_card_params_dict)
 
             # Serialize static_headers for update
