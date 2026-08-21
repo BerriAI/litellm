@@ -6,6 +6,7 @@ from unittest.mock import patch
 import pytest
 
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
+from litellm.types.llms.vertex_ai import CountTokensAPIResponse
 
 sys.path.insert(
     0, os.path.abspath("../../..")
@@ -1143,13 +1144,37 @@ def test_get_token_url():
 
 
 class FakeGeminiCountTokensClient:
-    def __init__(self, response: dict[str, Any]) -> None:
+    def __init__(self, response: CountTokensAPIResponse) -> None:
         self.response: Final = response
-        self.calls: Final[list[dict[str, Any]]] = []  # mutable-ok: test spy records calls
+        self.calls: Final[list[dict[str, object]]] = []  # mutable-ok: test spy records calls
 
-    async def acount_tokens(self, contents: Any, model: str, **kwargs: Any) -> dict[str, Any]:
+    async def acount_tokens(
+        self,
+        contents: object,
+        model: str,
+        **kwargs: object,  # kwargs-ok: mirrors the protocol under test
+    ) -> CountTokensAPIResponse:
         self.calls.append({"contents": contents, "model": model, **kwargs})
         return self.response
+
+
+@pytest.mark.asyncio
+async def test_vertex_ai_token_counter_falls_back_to_the_real_gemini_client() -> None:
+    """
+    Production never injects a client, so guard the fallback: a no-argument
+    VertexAITokenCounter must resolve the real vertex countTokens handler,
+    and an injected client must win over it.
+    """
+    from litellm.llms.vertex_ai.common_utils import VertexAITokenCounter
+    from litellm.llms.vertex_ai.count_tokens.handler import (
+        VertexAITokenCounter as VertexAIGeminiTokenCounter,
+    )
+
+    assert isinstance(VertexAITokenCounter()._resolve_gemini_token_counter(), VertexAIGeminiTokenCounter)
+
+    fake_gemini_counter: Final = FakeGeminiCountTokensClient(response={"totalTokens": 1})
+    injecting_counter: Final = VertexAITokenCounter(gemini_token_counter=fake_gemini_counter)
+    assert injecting_counter._resolve_gemini_token_counter() is fake_gemini_counter
 
 
 @pytest.mark.asyncio

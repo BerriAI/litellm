@@ -1,5 +1,4 @@
 import re
-from collections.abc import Mapping
 from copy import deepcopy
 from enum import Enum
 from typing import Any, Final, Literal, Protocol, get_type_hints
@@ -15,6 +14,7 @@ from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.llms.vertex_ai import (
     VERTEX_AI_PROVIDER_METADATA_FIELDS,
+    CountTokensAPIResponse,
     PartType,
     Schema,
 )
@@ -1102,7 +1102,7 @@ class GeminiCountTokensClient(Protocol):
         contents: object,
         model: str,
         **kwargs: object,  # kwargs-ok: mirrors the handler signature, litellm_params are splatted into the call
-    ) -> Mapping[str, Any]: ...
+    ) -> CountTokensAPIResponse: ...
 
 
 class VertexAITokenCounter(BaseTokenCounter):
@@ -1110,6 +1110,13 @@ class VertexAITokenCounter(BaseTokenCounter):
 
     def __init__(self, gemini_token_counter: GeminiCountTokensClient | None = None) -> None:
         self._gemini_token_counter: Final = gemini_token_counter
+
+    def _resolve_gemini_token_counter(self) -> GeminiCountTokensClient:
+        from litellm.llms.vertex_ai.count_tokens.handler import (
+            VertexAITokenCounter as VertexAIGeminiTokenCounter,
+        )
+
+        return self._gemini_token_counter or VertexAIGeminiTokenCounter()
 
     def should_use_token_counting_api(
         self,
@@ -1177,9 +1184,6 @@ class VertexAITokenCounter(BaseTokenCounter):
                     original_response=result,
                 )
         else:
-            from litellm.llms.vertex_ai.count_tokens.handler import (
-                VertexAITokenCounter as VertexAIGeminiTokenCounter,
-            )
             from litellm.llms.vertex_ai.gemini.transformation import (
                 _gemini_convert_messages_with_history,  # pyright: ignore[reportPrivateUsage]  # shared conversion helper, also imported by gemini/chat and context_caching
             )
@@ -1197,8 +1201,7 @@ class VertexAITokenCounter(BaseTokenCounter):
                 "contents": resolved_contents,
             }
             count_tokens_params_request.update(count_tokens_params)
-            gemini_token_counter: Final = self._gemini_token_counter or VertexAIGeminiTokenCounter()
-            result = await gemini_token_counter.acount_tokens(
+            result = await self._resolve_gemini_token_counter().acount_tokens(
                 **count_tokens_params_request,
             )
 
