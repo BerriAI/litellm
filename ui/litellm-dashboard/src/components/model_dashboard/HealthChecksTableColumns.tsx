@@ -135,8 +135,8 @@ function RunHealthCheckButton({
       className={cn(
         "rounded-md p-2 transition-colors",
         isLoading
-          ? "cursor-not-allowed bg-muted text-muted-foreground/70"
-          : "text-indigo-600 hover:bg-indigo-50 hover:text-indigo-700",
+          ? "cursor-not-allowed bg-muted text-muted-foreground"
+          : "text-indigo-600 hover:bg-indigo-50 hover:text-indigo-700 dark:text-indigo-300 dark:hover:bg-indigo-950 dark:hover:text-indigo-200",
       )}
     >
       <RunButtonIcon isLoading={isLoading} hasExistingStatus={hasExistingStatus} />
@@ -314,7 +314,7 @@ export const getHealthChecksTableColumns = ({
             <DetailButton
               label="View response details"
               testId="view-health-success-btn"
-              className="text-success hover:bg-success/10 hover:text-success"
+              className="text-success hover:bg-success/10 "
               onClick={() => onShowSuccess(displayName, successResponse)}
             />
           )}
@@ -351,7 +351,7 @@ export const getHealthChecksTableColumns = ({
             <DetailButton
               label="View full error details"
               testId="view-health-error-btn"
-              className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+              className="text-destructive hover:bg-destructive/10 "
               onClick={() => onShowError(displayName, cleanedError, fullError)}
             />
           )}

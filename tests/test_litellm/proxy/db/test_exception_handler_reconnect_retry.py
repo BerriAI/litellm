@@ -14,7 +14,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
-from prisma.errors import UniqueViolationError
+from prisma.errors import ClientNotConnectedError, UniqueViolationError
 
 sys.path.insert(0, os.path.abspath("../../.."))
 
@@ -252,4 +252,46 @@ async def test_call_with_db_reconnect_retry_preserves_original_error_when_reconn
 
     assert exc_info.value is original_exc
     assert exc_info.value.__cause__ is reconnect_exc
+    client.attempt_db_reconnect.assert_awaited_once()
+
+@pytest.mark.asyncio
+async def test_call_with_db_reconnect_retry_honors_narrowed_retry_safe_types():
+    """A non-idempotent write can pass `retry_safe_error_types` to opt out of
+    replaying post-send transport errors, whose commit outcome is unknown."""
+    client = _make_client(attempt_db_reconnect_return=True)
+    attempts = 0
+
+    async def _factory():
+        nonlocal attempts  # rebind-ok: attempt counter for a two-call helper
+        attempts += 1
+        raise httpx.ReadError("ambiguous")
+
+    with pytest.raises(httpx.ReadError):
+        await call_with_db_reconnect_retry(
+            client,
+            _factory,
+            reason="write_narrowed",
+            retry_safe_error_types=(httpx.ConnectError,),
+        )
+
+    assert attempts == 1
+    client.attempt_db_reconnect.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_call_with_db_reconnect_retry_default_covers_every_transport_error():
+    """Callers that don't narrow keep retrying anything
+    `is_database_transport_error` accepts, not just the httpx types."""
+    client = _make_client(attempt_db_reconnect_return=True)
+    attempts = 0
+
+    async def _factory():
+        nonlocal attempts  # rebind-ok: attempt counter for a two-call helper
+        attempts += 1
+        if attempts == 1:
+            raise ClientNotConnectedError()
+        return "ok"
+
+    assert await call_with_db_reconnect_retry(client, _factory, reason="default_wide") == "ok"
+    assert attempts == 2
     client.attempt_db_reconnect.assert_awaited_once()

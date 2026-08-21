@@ -384,7 +384,7 @@ class TestContainerAPI:
             "container_create_handler",
             side_effect=Exception("API Error"),
         ):
-            with pytest.raises(Exception):
+            with pytest.raises(litellm.APIConnectionError):
                 create_container(
                     name="Error Test Container", custom_llm_provider="openai"
                 )

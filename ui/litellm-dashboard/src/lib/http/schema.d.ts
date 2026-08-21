@@ -849,11 +849,12 @@ export interface paths {
          *     serve and duplicates them against baseline_model. A key can hold one active job per
          *     direction, so both questions can run at once.
          *
-         *     Shadow responses are never served to users. Each key samples until it has judged
-         *     max_turns turns of its own traffic, the job's window ends, or the job is stopped, so one
-         *     key running out of budget does not end sampling for the others; sampling changes
-         *     propagate to pods within about 10 seconds. Shadow and judge calls bill to the shadowed
-         *     key but are excluded from request counts and auto-router adoption metrics.
+         *     Shadow responses are never served to users. Each key samples until its recorded eval
+         *     spend, the shadow and judge calls' own cost, reaches max_budget dollars, the job's
+         *     window ends, or the job is stopped, so one key running out of budget does not end
+         *     sampling for the others; sampling changes propagate to pods within about 10 seconds.
+         *     Shadow and judge calls bill to the shadowed key but are excluded from request counts
+         *     and auto-router adoption metrics.
          */
         post: operations["start_shadow_eval_auto_router_shadow_eval_start_post"];
         delete?: never;
@@ -939,6 +940,31 @@ export interface paths {
          *     ```
          */
         post: operations["preview_auto_router_routing_auto_router_test_routing_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auto_router/validate_complexity_router_config": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Validate Complexity Router Config
+         * @description Validate a complexity-router config without saving it.
+         *
+         *     Runs the same check every write path runs (the router's own pydantic model), so a form can
+         *     show the backend's exact verdict while the operator is still editing rather than after a
+         *     rejected save. Gated exactly like the save it rehearses: a proxy admin, or a team admin
+         *     naming their own team. Nothing is created, routed, or billed.
+         */
+        post: operations["validate_complexity_router_config_auto_router_validate_complexity_router_config_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2118,6 +2144,24 @@ export interface paths {
         options?: never;
         head?: never;
         patch?: never;
+        trace?: never;
+    };
+    "/config/block_requests_for_models_without_pricing": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Block Requests For Models Without Pricing */
+        get: operations["get_block_requests_for_models_without_pricing_config_block_requests_for_models_without_pricing_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Update Block Requests For Models Without Pricing */
+        patch: operations["update_block_requests_for_models_without_pricing_config_block_requests_for_models_without_pricing_patch"];
         trace?: never;
     };
     "/config/callback/delete": {
@@ -22058,7 +22102,7 @@ export interface components {
             routed_model: string;
             /**
              * Routed Model Configured
-             * @description Whether routed_model is a model group this proxy actually serves
+             * @description Whether routed_model is a model group available to the caller, scoped to team_id when given. Never confirms models the caller could not use
              */
             routed_model_configured: boolean;
             /** @description The decision record this request would have written to its log row */
@@ -22430,6 +22474,16 @@ export interface components {
         BlockTeamRequest: {
             /** Team Id */
             team_id: string;
+        };
+        /** BlockUnpricedModelsRequest */
+        BlockUnpricedModelsRequest: {
+            /** Enabled */
+            enabled: boolean;
+        };
+        /** BlockUnpricedModelsResponse */
+        BlockUnpricedModelsResponse: {
+            /** Enabled */
+            enabled: boolean;
         };
         /** BlockUsers */
         BlockUsers: {
@@ -23613,16 +23667,16 @@ export interface components {
         };
         /**
          * ClassificationRubric
-         * @description Which calibration examples the built-in classifier rubric carries.
+         * @description Which calibration examples, and for BUSINESS which tier criteria, the built-in classifier rubric carries.
          * @enum {string}
          */
-        ClassificationRubric: "legacy" | "agentic" | "chat";
+        ClassificationRubric: "legacy" | "agentic" | "chat" | "business";
         /**
          * ClassifierLLMConfig
          * @description Configuration for the LLM-based complexity classifier.
          */
         ClassifierLLMConfig: {
-            /** @description Which calibration examples the built-in rubric carries. 'agentic' anchors routine installs, builds, multi-file edits, and standard debugging at MEDIUM, so ordinary engineering does not route to the most expensive tier; it suits agent, terminal, and coding-assistant traffic as well as mixed traffic. 'chat' omits those engineering anchors, for a deployment serving only conversational traffic. Every preset shares the same tier criteria, so this moves where the boundary sits without changing the taxonomy. Leave unset for 'legacy', the rubric as it shipped before calibration examples existed, so an existing router's tier decisions and spend do not move on upgrade. Mutually exclusive with system_prompt, which replaces the rubric this would select. Only applies when classifier_type is 'llm'. */
+            /** @description Which calibration examples the built-in rubric carries. 'agentic' anchors routine installs, builds, multi-file edits, and standard debugging at MEDIUM, so ordinary engineering does not route to the most expensive tier; it suits agent, terminal, and coding-assistant traffic as well as mixed traffic. 'chat' omits those engineering anchors, for a deployment serving only conversational traffic. 'business' carries business/sales anchors and business-flavored tier criteria that keep routine drafting and summarizing off the expensive tiers and reserve the top tier for committing to decisions under tradeoffs; it suits sales, support, and go-to-market traffic. Every preset keeps the same four tiers, so this moves where the boundary sits without changing the taxonomy. Leave unset for 'legacy', the rubric as it shipped before calibration examples existed, so an existing router's tier decisions and spend do not move on upgrade. Mutually exclusive with system_prompt, which replaces the rubric this would select. Only applies when classifier_type is 'llm'. */
             classification_rubric?: components["schemas"]["ClassificationRubric"] | null;
             /**
              * Model
@@ -23772,6 +23826,29 @@ export interface components {
              * @description Timezone for date handling
              */
             timezone?: string | null;
+        };
+        /**
+         * ComplexityRouterConfigValidationRequest
+         * @description A complexity-router config to validate without saving, so a form can surface the
+         *     backend's own verdict inline instead of a raw 400 at write time.
+         */
+        ComplexityRouterConfigValidationRequest: {
+            /** Complexity Router Config */
+            complexity_router_config: {
+                [key: string]: unknown;
+            };
+            /**
+             * Team Id
+             * @description Team the router is being created for. Required for a team admin, who may only validate their own team's routers
+             */
+            team_id?: string | null;
+        };
+        /** ComplexityRouterConfigValidationResponse */
+        ComplexityRouterConfigValidationResponse: {
+            /** Error */
+            error?: string | null;
+            /** Valid */
+            valid: boolean;
         };
         /**
          * ComplexityScorerDefaults
@@ -24086,6 +24163,11 @@ export interface components {
              * @description Maximum retention period for auto-router benchmark session rollup rows (e.g., '365d'). Rows whose last turn is older than this are deleted by the spend log cleanup job, on that job's schedule. Unset means rollup rows are never deleted.
              */
             maximum_autorouter_session_retention_period?: string | null;
+            /**
+             * Maximum Health Check Retention Period
+             * @description Maximum retention period for health-check rows (e.g., '30d'). Rows whose checked_at is older than this are deleted by the spend log cleanup job, on that job's schedule. Unset means rows are never deleted. Set this well above health_check_interval because /health and the UI read the latest row per model.
+             */
+            maximum_health_check_retention_period?: string | null;
             /**
              * Maximum Spend Logs Cleanup Batch Size
              * @description Rows deleted per DELETE statement by the spend log cleanup job. Defaults to 1000.
@@ -33258,10 +33340,20 @@ export interface components {
              */
             key_name?: string | null;
             /**
+             * Max Budget
+             * @description This key's own USD budget for the eval's shadow and judge spend, independent of its siblings'; None on jobs created before spend budgets existed, which max_turns alone bounds
+             */
+            max_budget?: number | null;
+            /**
              * Max Turns
-             * @description This key's own sample budget, independent of its siblings'
+             * @description This key's sample-count ceiling: the whole budget for jobs created before max_budget existed, and the error-loop safety valve otherwise
              */
             max_turns: number;
+            /**
+             * Spend
+             * @description This key's recorded shadow plus judge spend in USD, the same figure the sampler budgets against max_budget; populated on list and detail responses and frozen at stopped_at exactly like attempt_count
+             */
+            spend?: number | null;
             /**
              * Stopped At
              * @description When this key's slot was stamped free, whether its own budget ran out, the window closed, or an operator stopped the job; status is derived, so a spent budget reads completed even while this is still unset
@@ -33578,7 +33670,7 @@ export interface components {
         StartShadowEvalRequest: {
             /**
              * Api Key Ids
-             * @description The hashed virtual keys whose traffic will be shadowed. Shadow evaluation runs ONLY on these keys' traffic; requests made with any other key are not sampled. Each key carries its own max_turns budget, so one key exhausting its budget leaves the others sampling. At most 100 keys per job, which also bounds every read the job's endpoints make.
+             * @description The hashed virtual keys whose traffic will be shadowed. Shadow evaluation runs ONLY on these keys' traffic; requests made with any other key are not sampled. Each key carries its own max_budget spend budget, so one key exhausting its budget leaves the others sampling. At most 100 keys per job, which also bounds every read the job's endpoints make.
              */
             api_key_ids: string[];
             /**
@@ -33606,11 +33698,11 @@ export interface components {
              */
             judge_model: string;
             /**
-             * Max Turns
-             * @description Per-key sample budget: the job judges at most this many turns of EACH scoped key's traffic, so a job over N keys judges at most N times max_turns turns. This is also the spend bound; expected judge cost is roughly that turn ceiling times one judge call
-             * @default 200
+             * Max Budget
+             * @description Per-key USD budget for the eval's own overhead, the shadow-arm and judge calls, priced with the same figures the spend pipeline bills. EACH scoped key samples until its recorded eval spend reaches this, so a job over N keys spends at most about N times max_budget; in-flight samples can overshoot the cap by one sampling cache window
+             * @default 10
              */
-            max_turns: number;
+            max_budget: number;
             /**
              * Router Name
              * @description The auto-router under evaluation, in either direction
@@ -34691,6 +34783,11 @@ export interface components {
              * @description URL or path to custom logo image. Can be a local file path or HTTP/HTTPS URL
              */
             logo_url?: string | null;
+            /**
+             * Logo Url Dark
+             * @description URL or path to a custom logo image for dark mode. Can be a local file path or HTTP/HTTPS URL. Leave unset to reuse logo_url in dark mode
+             */
+            logo_url_dark?: string | null;
         };
         /**
          * UIThemeSettingsResponse
@@ -38165,6 +38262,39 @@ export interface operations {
             };
         };
     };
+    validate_complexity_router_config_auto_router_validate_complexity_router_config_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ComplexityRouterConfigValidationRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ComplexityRouterConfigValidationResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     azure_proxy_route_azure__endpoint__get: {
         parameters: {
             query?: never;
@@ -40058,6 +40188,59 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_block_requests_for_models_without_pricing_config_block_requests_for_models_without_pricing_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BlockUnpricedModelsResponse"];
+                };
+            };
+        };
+    };
+    update_block_requests_for_models_without_pricing_config_block_requests_for_models_without_pricing_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BlockUnpricedModelsRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BlockUnpricedModelsResponse"];
                 };
             };
             /** @description Validation Error */
@@ -43633,7 +43816,9 @@ export interface operations {
     };
     get_image_get_image_get: {
         parameters: {
-            query?: never;
+            query?: {
+                theme?: ("light" | "dark") | null;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -43647,6 +43832,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -55688,6 +55882,8 @@ export interface operations {
                 user_id?: string | null;
                 /** @description Timezone offset in minutes from UTC (e.g., 480 for PST). Matches JavaScript's Date.getTimezoneOffset() convention. */
                 timezone?: number | null;
+                /** @description When the range ends on the caller's current local day, extend it to today's UTC bucket so spend written after the caller's local midnight (in UTC terms) is included. Requires the timezone parameter. Historical ranges are never extended. */
+                include_current_utc_day?: boolean;
             };
             header?: never;
             path?: never;

@@ -205,9 +205,12 @@ async def test_max_parallel_requests_tpm_rate_limiting_base_case():
         num_retries=0,
     )
 
-    with pytest.raises(litellm.RateLimitError):
+    async def _exceed_limit():
         for _ in range(2):
             await router.acompletion(
                 model="gpt-4o-2024-08-06",
                 messages=_messages,
             )
+
+    with pytest.raises(litellm.RateLimitError):
+        await _exceed_limit()

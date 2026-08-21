@@ -286,7 +286,7 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
           type="button"
           data-slot="advanced-date-picker-trigger"
           aria-expanded={isOpen}
-          className="w-[300px] px-3 py-2 text-sm text-left border border-border rounded-md bg-card cursor-pointer hover:border-border focus:border-info focus:ring-1 focus:ring-ring"
+          className="w-[300px] px-3 py-2 text-sm text-left border border-border rounded-md bg-card cursor-pointer hover:border-ring focus:border-info focus:ring-1 focus:ring-ring"
           onClick={() => setIsOpen(!isOpen)}
         >
           <span className="flex items-center justify-between">
@@ -295,7 +295,7 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
               <span className="text-foreground">{formatDisplayRange(value.from, value.to)}</span>
             </span>
             <svg
-              className={`w-4 h-4 text-muted-foreground/70 transition-transform ${isOpen ? "rotate-180" : ""}`}
+              className={`w-4 h-4 text-muted-foreground transition-transform ${isOpen ? "rotate-180" : ""}`}
               fill="none"
               stroke="currentColor"
               viewBox="0 0 24 24"
@@ -368,7 +368,7 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
                       type="date"
                       value={startDate}
                       onChange={(e) => setStartDate(e.target.value)}
-                      className={`w-65 px-3 py-2 text-sm border rounded-md cursor-pointer hover:border-border focus:border-info focus:ring-1 focus:ring-ring ${
+                      className={`w-65 px-3 py-2 text-sm border rounded-md cursor-pointer hover:border-ring focus:border-info focus:ring-1 focus:ring-ring ${
                         !validation.isValid
                           ? "border-destructive/30 focus:border-destructive focus:ring-red-200"
                           : "border-border"
@@ -383,7 +383,7 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
                       type="date"
                       value={endDate}
                       onChange={(e) => setEndDate(e.target.value)}
-                      className={`w-65 px-3 py-2 text-sm border rounded-md cursor-pointer hover:border-border focus:border-info focus:ring-1 focus:ring-ring ${
+                      className={`w-65 px-3 py-2 text-sm border rounded-md cursor-pointer hover:border-ring focus:border-info focus:ring-1 focus:ring-ring ${
                         !validation.isValid
                           ? "border-destructive/30 focus:border-destructive focus:ring-red-200"
                           : "border-border"

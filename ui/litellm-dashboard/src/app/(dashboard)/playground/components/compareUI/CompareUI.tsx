@@ -819,7 +819,7 @@ export default function CompareUI({ accessToken, disabledPersonalKeyCreation }: 
                   <div className="flex items-center gap-3 p-3 bg-muted rounded-lg border border-border">
                     <div className="relative inline-block">
                       {isUploadedFilePdf ? (
-                        <div className="w-10 h-10 rounded-md bg-destructive flex items-center justify-center text-white">
+                        <div className="w-10 h-10 rounded-md bg-destructive flex items-center justify-center text-destructive-foreground">
                           <FileText className="size-4" aria-label="file-pdf" />
                         </div>
                       ) : (
@@ -835,7 +835,7 @@ export default function CompareUI({ accessToken, disabledPersonalKeyCreation }: 
                       <div className="text-xs text-muted-foreground">{isUploadedFilePdf ? "PDF" : "Image"}</div>
                     </div>
                     <button
-                      className="flex items-center justify-center w-6 h-6 text-muted-foreground/70 hover:text-muted-foreground hover:bg-accent rounded-full transition-colors"
+                      className="flex items-center justify-center w-6 h-6 text-muted-foreground hover:text-foreground hover:bg-accent rounded-full transition-colors"
                       onClick={handleRemoveFile}
                       aria-label="Remove attachment"
                     >

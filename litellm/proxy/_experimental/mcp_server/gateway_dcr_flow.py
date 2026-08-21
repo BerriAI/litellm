@@ -42,15 +42,16 @@ import hmac
 import html
 import secrets
 from base64 import urlsafe_b64encode
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Iterable, Mapping
 from datetime import datetime, timezone
-from typing import Final, Literal, TypeVar
+from types import MappingProxyType
+from typing import Final, Literal, Protocol, TypeVar
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 from fastapi import HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
-from typing_extensions import assert_never
+from typing_extensions import ReadOnly, TypedDict, assert_never
 
 from litellm._logging import verbose_logger
 from litellm.caching.caching import DualCache
@@ -70,6 +71,7 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.session_credent
 from litellm.proxy._experimental.mcp_server.outbound_credentials.session_token import (
     SESSION_REFRESH_TTL_SECONDS,
     MintedSessionToken,
+    SessionAudience,
     SessionKeys,
     SessionPrincipal,
     mint_session_refresh_token,
@@ -78,6 +80,9 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.session_token i
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
     encrypt_value_helper,
+)
+from litellm.proxy.common_utils.html_forms.native_client_consent import (
+    render_native_client_consent_page,
 )
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
@@ -144,6 +149,47 @@ ReloadUser = Callable[[str], Awaitable[ReloadUserFailure | None]]
 ``None`` means the user is active; ``unavailable`` is a retryable DB outage; anything
 else fails the grant closed."""
 
+PROXY_API_AUDIENCE: Final[SessionAudience] = "proxy_api"
+"""The audience a native client (``lite login --pkce``, a Go CLI) asks for by sending the
+proxy base URL itself as the RFC 8707 ``resource``: the grant then mints the proxy-API CLI
+credential that LLM routes accept, instead of the MCP-only session pair."""
+
+ProxyCredentialMintFailure = Literal[ReloadUserFailure, "not_a_member", "team_required"]
+
+
+class MintedProxyCredential(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    key: str = Field(min_length=1)
+    expires_in: int = Field(gt=0)
+    user_id: str = Field(min_length=1)
+    team_id: str | None = None
+
+
+class MintProxyCredential(Protocol):
+    """Injected proxy-API credential minter ``(user_id, team_id)``: reloads the user live,
+    checks team membership, refuses a teamless grant for a user who has teams to pick from,
+    and mints the same credential ``lite login`` mints."""
+
+    def __call__(
+        self, user_id: str, team_id: str | None, /
+    ) -> Awaitable[MintedProxyCredential | ProxyCredentialMintFailure]: ...
+
+
+class ConsentTeam(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    team_id: str = Field(min_length=1)
+    team_alias: str | None = None
+
+
+class LookupConsentTeams(Protocol):
+    """Injected lookup of the teams a signed-in user may bind a proxy-API credential to."""
+
+    def __call__(self, user_id: str, /) -> Awaitable[tuple[ConsentTeam, ...] | ReloadUserFailure]: ...
+
+
+async def _refuse_proxy_credential(user_id: str, team_id: str | None) -> ProxyCredentialMintFailure:
+    return "unresolvable"
+
 
 class GatewayDcrClient(BaseModel):
     """The registration record sealed into a gateway DCR ``client_id``.
@@ -173,6 +219,7 @@ class _ConnectFlow(BaseModel):
     jti: str = Field(min_length=1)
     exp: int
     resource_server_id: str | None = None
+    audience: SessionAudience | None = None
 
 
 class _GatewayAuthCode(BaseModel):
@@ -190,6 +237,8 @@ class _GatewayAuthCode(BaseModel):
     iat: int
     exp: int
     resource_server_id: str | None = None
+    audience: SessionAudience | None = None
+    team_id: str | None = None
 
 
 def is_gateway_dcr_client_id(client_id: str | None) -> bool:
@@ -318,9 +367,9 @@ def _cookie_path_and_secure(request: Request) -> tuple[str, bool]:
     return parsed.path or "/", parsed.scheme == "https"
 
 
-def _append_query_params(url: str, params: dict[str, str]) -> str:
+def _append_query_params(url: str, params: Iterable[tuple[str, str]]) -> str:
     parsed: Final = urlparse(url)
-    query: Final = parse_qsl(parsed.query, keep_blank_values=True) + list(params.items())
+    query: Final = (*parse_qsl(parsed.query, keep_blank_values=True), *params)
     return urlunparse(parsed._replace(query=urlencode(query)))
 
 
@@ -392,6 +441,155 @@ def aggregate_authorize(
     section 4.1.2.1 an unvalidated redirect URI must not receive an error redirect, and
     once the client is at fault there is no trusted place to send the browser.
     """
+    rejected: Final = _rejected_authorize_request(
+        client_id, redirect_uri, state, code_challenge, code_challenge_method, response_type
+    )
+    if rejected is not None:
+        return rejected
+    base_url: Final = get_request_base_url(request)
+    if session_user_id is None:
+        return _login_redirect(base_url, request)
+    scoped_server: Final = resolve_scoped_resource_server(request, resource)
+    handle: Final = secrets.token_urlsafe(24)
+    flow: Final = _new_connect_flow(
+        session_user_id=session_user_id,
+        client_id=client_id,
+        redirect_uri=redirect_uri,
+        state=state,
+        code_challenge=code_challenge or "",
+        resource_server_id=scoped_server.server_id if scoped_server is not None else None,
+        audience=None,
+    )
+    connect_url: Final = _append_query_params(
+        f"{base_url}/ui/connect",
+        (("connect_flow", handle), ("connect_client", _origin_only(redirect_uri))),
+    )
+    response: Final = RedirectResponse(connect_url, status_code=303)
+    _set_flow_cookie(response, request, handle, flow)
+    return response
+
+
+async def native_client_authorize(
+    request: Request,
+    client_id: str,
+    redirect_uri: str,
+    state: str,
+    code_challenge: str | None,
+    code_challenge_method: str | None,
+    response_type: str | None,
+    session_user_id: str | None,
+    lookup_consent_teams: LookupConsentTeams,
+) -> Response:
+    """The authorize verb for a native client that named the proxy API itself as its
+    RFC 8707 ``resource``: the same client, redirect, PKCE, and sign-in checks as the
+    aggregate verb plus a loopback-only redirect (the credential this grant mints is the
+    user's personal proxy key, which belongs on their own machine and never behind a hosted
+    callback), then the consent page rendered right here (no connect-page interlude, since
+    there is no per-server vaulting to do) with the flow sealed into the per-flow cookie
+    and its handle carried only in the form, never in a URL."""
+    rejected: Final = _rejected_authorize_request(
+        client_id, redirect_uri, state, code_challenge, code_challenge_method, response_type
+    )
+    if rejected is not None:
+        return rejected
+    if not is_loopback_redirect_host(urlparse(redirect_uri)):
+        return _oauth_error(400, "invalid_request", "a proxy-API grant may only redirect to a loopback address")
+    base_url: Final = get_request_base_url(request)
+    if session_user_id is None:
+        return _login_redirect(base_url, request)
+    teams: Final = await lookup_consent_teams(session_user_id)
+    if not isinstance(teams, tuple):
+        return _consent_lookup_failure_response(teams)
+    handle: Final = secrets.token_urlsafe(24)
+    flow: Final = _new_connect_flow(
+        session_user_id=session_user_id,
+        client_id=client_id,
+        redirect_uri=redirect_uri,
+        state=state,
+        code_challenge=code_challenge or "",
+        resource_server_id=None,
+        audience=PROXY_API_AUDIENCE,
+    )
+    page: Final = render_native_client_consent_page(
+        client_origin=_origin_only(redirect_uri),
+        user_id=session_user_id,
+        teams=tuple((team.team_id, team.team_alias or team.team_id) for team in teams),
+        flow_handle=handle,
+        complete_url=f"{base_url}/authorize/complete",
+    )
+    response: Final = HTMLResponse(page, headers=_CONSENT_PAGE_HEADERS)
+    _set_flow_cookie(response, request, handle, flow)
+    return response
+
+
+_CONSENT_PAGE_HEADERS: Final = MappingProxyType(
+    {
+        **TOKEN_NO_CACHE_HEADERS,
+        "X-Frame-Options": "DENY",
+        "Content-Security-Policy": "frame-ancestors 'none'",
+    }
+)
+
+NATIVE_CLIENT_AUTH_CONTRACT_VERSION: Final = 1
+"""The version a native client checks before trusting the rest of the discovery document.
+Bump it only when an existing field changes meaning or goes away; adding fields is free."""
+
+
+class NativeClientAuthContract(TypedDict):
+    contract_version: ReadOnly[int]
+    issuer: ReadOnly[str]
+    authorization_endpoint: ReadOnly[str]
+    token_endpoint: ReadOnly[str]
+    registration_endpoint: ReadOnly[str]
+    revocation_endpoint: ReadOnly[str]
+    resource: ReadOnly[str]
+    response_types_supported: ReadOnly[tuple[str, ...]]
+    grant_types_supported: ReadOnly[tuple[str, ...]]
+    code_challenge_methods_supported: ReadOnly[tuple[str, ...]]
+    token_endpoint_auth_methods_supported: ReadOnly[tuple[str, ...]]
+    revocation_endpoint_auth_methods_supported: ReadOnly[tuple[str, ...]]
+
+
+def native_client_auth_contract(request: Request) -> NativeClientAuthContract:
+    """The versioned discovery document at ``/.well-known/litellm-cli-auth``: everything a
+    native client (in any language) needs to run the sign-in without reading LiteLLM
+    source. ``resource`` is the exact value to send as the RFC 8707 ``resource`` parameter
+    on authorize and token requests so the grant is issued for the proxy API."""
+    base_url: Final = get_request_base_url(request)
+    contract: Final[NativeClientAuthContract] = {
+        "contract_version": NATIVE_CLIENT_AUTH_CONTRACT_VERSION,
+        "issuer": base_url,
+        "authorization_endpoint": f"{base_url}/authorize",
+        "token_endpoint": f"{base_url}/token",
+        "registration_endpoint": f"{base_url}/register",
+        "revocation_endpoint": f"{base_url}/revoke",
+        "resource": base_url,
+        "response_types_supported": ("code",),
+        "grant_types_supported": ("authorization_code", "refresh_token"),
+        "code_challenge_methods_supported": ("S256",),
+        "token_endpoint_auth_methods_supported": ("none",),
+        "revocation_endpoint_auth_methods_supported": ("none",),
+    }
+    return contract
+
+
+def is_proxy_api_resource(request: Request, resource: str | None) -> bool:
+    """True when the RFC 8707 ``resource`` names the proxy itself (its base URL), which is
+    how a native client asks for the proxy-API audience rather than an MCP session."""
+    if resource is None:
+        return False
+    canonical: Final = canonical_resource_uri(resource)
+    return canonical is not None and canonical == canonicalize_url_identity(get_request_base_url(request))
+
+
+def _rejected_authorize_request(
+    client_id: str,
+    redirect_uri: str,
+    state: str,
+    code_challenge: str | None,
+    code_challenge_method: str | None,
+    response_type: str | None,
+) -> Response | None:
     client: Final = open_gateway_dcr_client(client_id)
     if client is None:
         return _oauth_error(400, "invalid_client", "unknown or malformed client_id")
@@ -407,14 +605,25 @@ def aggregate_authorize(
         )
     if len(state) > MAX_STATE_LENGTH:
         return _oauth_error(400, "invalid_request", f"state must be at most {MAX_STATE_LENGTH} characters")
-    base_url: Final = get_request_base_url(request)
-    if session_user_id is None:
-        login_url: Final = f"{base_url}/sso/key/generate?{urlencode({'return_to': relative_request_url(request)})}"
-        return RedirectResponse(login_url, status_code=303)
+    return None
+
+
+def _login_redirect(base_url: str, request: Request) -> Response:
+    return_to: Final = urlencode((("return_to", relative_request_url(request)),))
+    return RedirectResponse(f"{base_url}/sso/key/generate?{return_to}", status_code=303)
+
+
+def _new_connect_flow(
+    session_user_id: str,
+    client_id: str,
+    redirect_uri: str,
+    state: str,
+    code_challenge: str,
+    resource_server_id: str | None,
+    audience: SessionAudience | None,
+) -> _ConnectFlow:
     now: Final = datetime.now(timezone.utc)
-    scoped_server: Final = resolve_scoped_resource_server(request, resource)
-    handle: Final = secrets.token_urlsafe(24)
-    flow: Final = _ConnectFlow(
+    return _ConnectFlow(
         user_id=session_user_id,
         client_id=client_id,
         redirect_uri=redirect_uri,
@@ -422,13 +631,12 @@ def aggregate_authorize(
         code_challenge=code_challenge,
         jti=secrets.token_urlsafe(24),
         exp=int(now.timestamp()) + CONNECT_FLOW_TTL_SECONDS,
-        resource_server_id=scoped_server.server_id if scoped_server is not None else None,
+        resource_server_id=resource_server_id,
+        audience=audience,
     )
-    connect_url: Final = _append_query_params(
-        f"{base_url}/ui/connect",
-        {"connect_flow": handle, "connect_client": _origin_only(redirect_uri)},
-    )
-    response: Final = RedirectResponse(connect_url, status_code=303)
+
+
+def _set_flow_cookie(response: Response, request: Request, handle: str, flow: _ConnectFlow) -> None:
     path, secure = _cookie_path_and_secure(request)
     response.set_cookie(
         key=_flow_cookie_name(handle),
@@ -439,7 +647,18 @@ def aggregate_authorize(
         httponly=True,
         samesite="lax",
     )
-    return response
+
+
+def _consent_lookup_failure_response(failure: ReloadUserFailure) -> Response:
+    match failure:
+        case "unavailable":
+            return _oauth_error(503, "temporarily_unavailable", "the gateway database is unavailable; retry")
+        case "unresolvable":
+            return _oauth_error(500, "server_error", "the gateway is not configured to resolve users")
+        case "no_active_key":
+            return _oauth_error(403, "access_denied", "the signed-in user is not active")
+        case _:
+            assert_never(failure)
 
 
 def _origin_only(url: str) -> str:
@@ -455,6 +674,8 @@ async def complete_connect_flow(
     session_user_id: str | None,
     cache: DualCache,
     delivery: str | None = None,
+    team_id: str | None = None,
+    decision: str | None = None,
 ) -> Response:
     """The deliberate finish step of the connect flow: mint the gateway authorization
     code and send the browser back to the client.
@@ -479,9 +700,16 @@ async def complete_connect_flow(
     party. Unknown ``delivery`` values are rejected rather than defaulted: a client that
     asked for manual delivery and got a dead redirect instead would silently lose its
     code.
+
+    ``decision`` and ``team_id`` come from the native-client consent page. ``"deny"``
+    burns the flow and sends the client ``error=access_denied`` so it stops waiting;
+    ``team_id`` is sealed into the code only for proxy-API flows, where it picks which of
+    the user's teams the minted credential is attributed to.
     """
     if delivery not in (None, "redirect", "manual"):
         return _oauth_error(400, "invalid_request", "delivery must be 'redirect' or 'manual'")
+    if decision not in (None, "approve", "deny"):
+        return _oauth_error(400, "invalid_request", "decision must be 'approve' or 'deny'")
     sealed_flow: Final = request.cookies.get(_flow_cookie_name(flow_handle))
     if sealed_flow is None:
         return _oauth_error(400, "invalid_request", "unknown or expired connect flow")
@@ -495,10 +723,34 @@ async def complete_connect_flow(
         return _oauth_error(401, "login_required", "sign in to LiteLLM to finish connecting")
     if session_user_id != flow.user_id:
         return _oauth_error(403, "access_denied", "the signed-in user does not match this connect flow")
-    if not await _SingleUseGuard(cache).claim(
-        f"{_USED_FLOW_CACHE_PREFIX}{flow.jti}", CONNECT_FLOW_TTL_SECONDS + _CLAIM_TTL_BUFFER_SECONDS
-    ):
-        return _oauth_error(400, "invalid_request", "this connect flow was already completed; restart the connection")
+    flow_refusal: Final = _claim_refusal(
+        await _SingleUseGuard(cache).claim(
+            f"{_USED_FLOW_CACHE_PREFIX}{flow.jti}", CONNECT_FLOW_TTL_SECONDS + _CLAIM_TTL_BUFFER_SECONDS
+        ),
+        replayed=_oauth_error(
+            400, "invalid_request", "this connect flow was already completed; restart the connection"
+        ),
+    )
+    if flow_refusal is not None:
+        return flow_refusal
+    response: Final = (
+        _denied_flow_response(flow) if decision == "deny" else _approved_flow_response(flow, delivery, team_id, now)
+    )
+    path, secure = _cookie_path_and_secure(request)
+    response.delete_cookie(key=_flow_cookie_name(flow_handle), path=path, secure=secure, httponly=True, samesite="lax")
+    return response
+
+
+def _state_param(flow: _ConnectFlow) -> tuple[tuple[str, str], ...]:
+    return (("state", flow.state),) if flow.state else ()
+
+
+def _denied_flow_response(flow: _ConnectFlow) -> Response:
+    params: Final = (("error", "access_denied"), *_state_param(flow))
+    return RedirectResponse(_append_query_params(flow.redirect_uri, params), status_code=303)
+
+
+def _approved_flow_response(flow: _ConnectFlow, delivery: str | None, team_id: str | None, now: datetime) -> Response:
     manual_delivery: Final = delivery == "manual" and is_loopback_redirect_host(urlparse(flow.redirect_uri))
     code_ttl: Final = MANUAL_DELIVERY_AUTH_CODE_TTL_SECONDS if manual_delivery else GATEWAY_AUTH_CODE_TTL_SECONDS
     code: Final = _seal(
@@ -512,16 +764,14 @@ async def complete_connect_flow(
             iat=int(now.timestamp()),
             exp=int(now.timestamp()) + code_ttl,
             resource_server_id=flow.resource_server_id,
+            audience=flow.audience,
+            team_id=(team_id or None) if flow.audience == PROXY_API_AUDIENCE else None,
         ),
     )
-    params: Final = {"code": code, **({"state": flow.state} if flow.state else {})}
-    callback_url: Final = _append_query_params(flow.redirect_uri, params)
-    response: Final[Response] = (
-        _manual_delivery_response(callback_url) if manual_delivery else RedirectResponse(callback_url, status_code=303)
-    )
-    path, secure = _cookie_path_and_secure(request)
-    response.delete_cookie(key=_flow_cookie_name(flow_handle), path=path, secure=secure, httponly=True, samesite="lax")
-    return response
+    callback_url: Final = _append_query_params(flow.redirect_uri, (("code", code), *_state_param(flow)))
+    if manual_delivery:
+        return _manual_delivery_response(callback_url)
+    return RedirectResponse(callback_url, status_code=303)
 
 
 def _manual_delivery_response(callback_url: str) -> Response:
@@ -562,6 +812,27 @@ def _pkce_verifier_matches(code_verifier: str, code_challenge: str) -> bool:
     return hmac.compare_digest(computed, code_challenge.encode("utf-8"))
 
 
+ClaimOutcome = Literal["first", "replayed", "unavailable"]
+
+_CLAIM_UNAVAILABLE_DESCRIPTION: Final = "the single-use record is unavailable right now; try again shortly"
+
+
+def _claim_refusal(outcome: ClaimOutcome, replayed: Response) -> Response | None:
+    """A claim that is not the first caller's is refused, but the two reasons must stay apart on the
+    wire: a replay is the grant's own 4xx, while a shared backend that could not record the claim is
+    a 503 (RFC 7009 section 2.2.1, RFC 6749 section 5.2 ``temporarily_unavailable``), so the client
+    keeps the still-valid token and retries instead of being told it was already used."""
+    match outcome:
+        case "first":
+            return None
+        case "replayed":
+            return replayed
+        case "unavailable":
+            return _oauth_error(503, "temporarily_unavailable", _CLAIM_UNAVAILABLE_DESCRIPTION)
+        case _:
+            assert_never(outcome)
+
+
 class _SingleUseGuard:
     """Atomic single-use claim for a one-time id (an auth-code, connect-flow ``jti``, or refresh-token
     ``jti``) over the injected proxy cache.
@@ -585,9 +856,10 @@ class _SingleUseGuard:
     def __init__(self, cache: DualCache) -> None:
         self._cache = cache
 
-    async def claim(self, key: str, ttl_seconds: int) -> bool:
-        """Atomically claim ``key``. ``True`` iff this caller is the first (increment to 1); ``False``
-        on a replay (>1) or when the claim could not be recorded in the shared backend (fail closed)."""
+    async def claim(self, key: str, ttl_seconds: int) -> ClaimOutcome:
+        """Atomically claim ``key``. ``"first"`` iff this caller is the first (increment to 1),
+        ``"replayed"`` on a replay (>1), and ``"unavailable"`` when the claim could not be recorded in
+        the shared backend, which every caller treats as a refusal (fail closed)."""
         from litellm.proxy.proxy_server import redis_usage_cache  # noqa: PLC0415  # circular import at module load
 
         # Resolve the shared authority HERE rather than trusting the injected cache: callers pass
@@ -606,11 +878,11 @@ class _SingleUseGuard:
                 verbose_logger.warning(
                     "mcp gateway single-use claim: shared cache backend unavailable, failing closed: %s", e
                 )
-                return False
-            return count == 1
+                return "unavailable"
+            return "first" if count == 1 else "replayed"
         # No shared backend configured (single-replica): the in-memory increment is authoritative.
         count = await self._cache.async_increment_cache(key, 1, ttl=ttl_seconds, local_only=True)
-        return count == 1
+        return "first" if count == 1 else "replayed"
 
 
 def _session_token_pair(principal: SessionPrincipal, keys: SessionKeys, now: datetime) -> Response:
@@ -630,6 +902,37 @@ def _session_token_pair(principal: SessionPrincipal, keys: SessionKeys, now: dat
     )
 
 
+class _ProxyCredentialTokenResponse(TypedDict):
+    access_token: ReadOnly[str]
+    token_type: ReadOnly[Literal["Bearer"]]
+    expires_in: ReadOnly[int]
+    refresh_token: ReadOnly[str]
+    user_id: ReadOnly[str]
+    team_id: ReadOnly[str | None]
+
+
+def _proxy_credential_response(
+    minted: MintedProxyCredential, principal: SessionPrincipal, keys: SessionKeys, now: datetime
+) -> Response:
+    """The proxy-API token response: the access token is the very credential ``lite
+    login`` stores (accepted on every proxy route with user and team attribution), and
+    the refresh token is a gateway-sealed rotating token bound to the team the credential
+    was minted for, so a renewal keeps the team the user consented to."""
+    bound_principal: Final = principal.model_copy(update=MappingProxyType({"team_id": minted.team_id}))
+    refresh: Final = mint_session_refresh_token(bound_principal, keys, now)
+    if not isinstance(refresh, MintedSessionToken):
+        return _oauth_error(500, "server_error", "failed to mint the session credential")
+    body: Final[_ProxyCredentialTokenResponse] = {
+        "access_token": minted.key,
+        "token_type": "Bearer",
+        "expires_in": minted.expires_in,
+        "refresh_token": refresh.token.get_secret_value(),
+        "user_id": minted.user_id,
+        "team_id": minted.team_id,
+    }
+    return JSONResponse(status_code=200, content=body, headers=TOKEN_NO_CACHE_HEADERS)
+
+
 def _reload_failure_response(failure: ReloadUserFailure) -> Response:
     """Map the live-user revalidation failure onto its OAuth error, exhaustively, so a new
     ``ReloadUserFailure`` member is a type error here rather than silently 400ing."""
@@ -640,6 +943,22 @@ def _reload_failure_response(failure: ReloadUserFailure) -> Response:
             return _oauth_error(500, "server_error", "the gateway is not configured to resolve users")
         case "no_active_key":
             return _oauth_error(400, "invalid_grant", "the user for this grant is no longer active")
+        case _:
+            assert_never(failure)
+
+
+def _mint_failure_response(failure: ProxyCredentialMintFailure) -> Response:
+    match failure:
+        case "not_a_member":
+            return _oauth_error(
+                400, "invalid_grant", "the user is no longer a member of the team this grant was issued for"
+            )
+        case "team_required":
+            return _oauth_error(
+                400, "invalid_grant", "this user belongs to a team; sign in again and pick the team for this credential"
+            )
+        case "unavailable" | "unresolvable" | "no_active_key":
+            return _reload_failure_response(failure)
         case _:
             assert_never(failure)
 
@@ -670,15 +989,26 @@ async def aggregate_token(
     reload_user: ReloadUser,
     cache: DualCache,
     resource: str | None = None,
+    mint_proxy_credential: MintProxyCredential = _refuse_proxy_credential,
 ) -> Response:
     """The aggregate token verb: authorization_code and refresh_token grants for the
-    identity-only session pair. Every path re-validates the litellm user live before
-    minting, so a deactivated user cannot obtain or renew a session."""
+    identity-only session pair, or for the proxy-API credential when the grant was issued
+    with that audience. Every path re-validates the litellm user live before minting, so a
+    deactivated user cannot obtain or renew a session."""
     if master_key is None:
         verbose_logger.error("mcp_gateway_dcr token grant rejected: no master_key configured")
         return _oauth_error(500, "server_error", "the gateway has no master key configured")
     keys: Final = session_keys_from_master_key(master_key)
     now: Final = datetime.now(timezone.utc)
+    issue: Final = _GrantIssuer(
+        request=request,
+        resource=resource,
+        keys=keys,
+        now=now,
+        reload_user=reload_user,
+        mint_proxy_credential=mint_proxy_credential,
+        guard=_SingleUseGuard(cache),
+    )
     if grant_type == "authorization_code":
         return await _authorization_code_grant(
             request=request,
@@ -687,10 +1017,8 @@ async def aggregate_token(
             client_id=client_id,
             code_verifier=code_verifier,
             resource=resource,
-            keys=keys,
             now=now,
-            reload_user=reload_user,
-            guard=_SingleUseGuard(cache),
+            issue=issue,
         )
     if grant_type == "refresh_token":
         return await _refresh_token_grant(
@@ -700,10 +1028,76 @@ async def aggregate_token(
             resource=resource,
             keys=keys,
             now=now,
-            reload_user=reload_user,
-            guard=_SingleUseGuard(cache),
+            issue=issue,
         )
     return _oauth_error(400, "unsupported_grant_type", "grant_type must be authorization_code or refresh_token")
+
+
+class _GrantIssuer:
+    """The tail every grant shares once its own proof (code + PKCE, or a refresh token)
+    has checked out: revalidate the user live, claim the single-use marker, mint. The
+    claim comes AFTER revalidation and minting so a transient DB 503 never burns a
+    still-valid code or refresh token, and fails closed when it cannot be recorded."""
+
+    def __init__(
+        self,
+        request: Request,
+        resource: str | None,
+        keys: SessionKeys,
+        now: datetime,
+        reload_user: ReloadUser,
+        mint_proxy_credential: MintProxyCredential,
+        guard: _SingleUseGuard,
+    ) -> None:
+        self._request: Final = request
+        self._resource: Final = resource
+        self._keys: Final = keys
+        self._now: Final = now
+        self._reload_user: Final = reload_user
+        self._mint_proxy_credential: Final = mint_proxy_credential
+        self._guard: Final = guard
+
+    async def __call__(
+        self, principal: SessionPrincipal, claim_key: str, claim_ttl_seconds: int, replayed: str
+    ) -> Response:
+        match principal.audience:
+            case None:
+                return await self._issue_session_pair(principal, claim_key, claim_ttl_seconds, replayed)
+            case "proxy_api":
+                return await self._issue_proxy_credential(principal, claim_key, claim_ttl_seconds, replayed)
+            case _:
+                assert_never(principal.audience)
+
+    async def _issue_session_pair(
+        self, principal: SessionPrincipal, claim_key: str, claim_ttl_seconds: int, replayed: str
+    ) -> Response:
+        failure: Final = await self._reload_user(principal.user_id)
+        if failure is not None:
+            return _reload_failure_response(failure)
+        refusal: Final = await self._claim_refusal(claim_key, claim_ttl_seconds, replayed)
+        if refusal is not None:
+            return refusal
+        return _session_token_pair(principal, self._keys, self._now)
+
+    async def _issue_proxy_credential(
+        self, principal: SessionPrincipal, claim_key: str, claim_ttl_seconds: int, replayed: str
+    ) -> Response:
+        if self._resource is not None and not is_proxy_api_resource(self._request, self._resource):
+            return _oauth_error(
+                400, "invalid_target", "resource does not match the proxy API this grant was issued for"
+            )
+        minted: Final = await self._mint_proxy_credential(principal.user_id, principal.team_id)
+        if not isinstance(minted, MintedProxyCredential):
+            return _mint_failure_response(minted)
+        refusal: Final = await self._claim_refusal(claim_key, claim_ttl_seconds, replayed)
+        if refusal is not None:
+            return refusal
+        return _proxy_credential_response(minted, principal, self._keys, self._now)
+
+    async def _claim_refusal(self, claim_key: str, claim_ttl_seconds: int, replayed: str) -> Response | None:
+        return _claim_refusal(
+            await self._guard.claim(claim_key, claim_ttl_seconds), replayed=_oauth_error(400, "invalid_grant", replayed)
+        )
 
 
 async def _authorization_code_grant(
@@ -713,10 +1107,8 @@ async def _authorization_code_grant(
     client_id: str,
     code_verifier: str | None,
     resource: str | None,
-    keys: SessionKeys,
     now: datetime,
-    reload_user: ReloadUser,
-    guard: _SingleUseGuard,
+    issue: _GrantIssuer,
 ) -> Response:
     if not code or not redirect_uri or not code_verifier:
         return _oauth_error(400, "invalid_request", "code, redirect_uri, and code_verifier are required")
@@ -733,23 +1125,19 @@ async def _authorization_code_grant(
         return _oauth_error(400, "invalid_target", "resource does not match the scope this code was issued for")
     if not _pkce_verifier_matches(code_verifier, parsed.code_challenge):
         return _oauth_error(400, "invalid_grant", "PKCE verification failed")
-    # Revalidate the user BEFORE claiming the code, so a transient DB outage (a retryable
-    # 503) does not consume a still-valid code and force the client to restart sign-in.
-    failure: Final = await reload_user(parsed.user_id)
-    if failure is not None:
-        return _reload_failure_response(failure)
-    # Atomic single-use claim is the gate: on a concurrent double-redeem exactly one caller
-    # wins, and a claim that cannot be recorded fails closed. The marker's TTL derives from
-    # the code's own remaining lifetime so it outlives whichever lifetime the code was minted with.
-    if not await guard.claim(
-        f"{_USED_CODE_CACHE_PREFIX}{parsed.jti}",
-        parsed.exp - int(now.timestamp()) + _CLAIM_TTL_BUFFER_SECONDS,
-    ):
-        return _oauth_error(400, "invalid_grant", "the authorization code was already used")
-    return _session_token_pair(
-        SessionPrincipal(user_id=parsed.user_id, client_id=client_id, resource_server_id=parsed.resource_server_id),
-        keys,
-        now,
+    # The marker's TTL derives from the code's own remaining lifetime so it outlives
+    # whichever lifetime the code was minted with.
+    return await issue(
+        SessionPrincipal(
+            user_id=parsed.user_id,
+            client_id=client_id,
+            resource_server_id=parsed.resource_server_id,
+            audience=parsed.audience,
+            team_id=parsed.team_id,
+        ),
+        claim_key=f"{_USED_CODE_CACHE_PREFIX}{parsed.jti}",
+        claim_ttl_seconds=parsed.exp - int(now.timestamp()) + _CLAIM_TTL_BUFFER_SECONDS,
+        replayed="the authorization code was already used",
     )
 
 
@@ -760,8 +1148,7 @@ async def _refresh_token_grant(
     resource: str | None,
     keys: SessionKeys,
     now: datetime,
-    reload_user: ReloadUser,
-    guard: _SingleUseGuard,
+    issue: _GrantIssuer,
 ) -> Response:
     if not refresh_token:
         return _oauth_error(400, "invalid_request", "refresh_token is required")
@@ -770,16 +1157,38 @@ async def _refresh_token_grant(
         return _oauth_error(400, "invalid_grant", "the refresh token is invalid for this client")
     if _resource_conflicts_with_scope(request, resource, opened.principal.resource_server_id):
         return _oauth_error(400, "invalid_target", "resource does not match the scope this token was issued for")
-    failure: Final = await reload_user(opened.principal.user_id)
-    if failure is not None:
-        return _reload_failure_response(failure)
     # Refresh-token rotation (OAuth 2.0 Security BCP section 4.13): the presented refresh token is
-    # single-use. Claim its jti before issuing the replacement pair, so a captured or replayed
-    # refresh token cannot mint a second pair after the legitimate holder rotated. Claimed AFTER
-    # user revalidation so a transient DB 503 does not burn a still-valid token; a claim that
-    # cannot be recorded fails closed, exactly like the authorization-code path.
-    if not await guard.claim(
-        f"{_USED_REFRESH_CACHE_PREFIX}{opened.jti}", SESSION_REFRESH_TTL_SECONDS + _CLAIM_TTL_BUFFER_SECONDS
-    ):
-        return _oauth_error(400, "invalid_grant", "the refresh token was already used")
-    return _session_token_pair(opened.principal, keys, now)
+    # single-use, so a captured or replayed refresh token cannot mint a second pair after the
+    # legitimate holder rotated.
+    return await issue(
+        opened.principal,
+        claim_key=f"{_USED_REFRESH_CACHE_PREFIX}{opened.jti}",
+        claim_ttl_seconds=SESSION_REFRESH_TTL_SECONDS + _CLAIM_TTL_BUFFER_SECONDS,
+        replayed="the refresh token was already used",
+    )
+
+
+async def revoke_refresh_token(token: str, client_id: str, master_key: str | None, cache: DualCache) -> Response:
+    """RFC 7009 revocation for the gateway's refresh tokens: burn the presented token's
+    ``jti`` so neither the holder nor a thief can rotate it again. Access tokens are
+    stateless and expire on their own (the proxy-API credential within
+    ``CLI_JWT_EXPIRATION_HOURS``), so per RFC 7009 section 2.2 an unrecognized or already
+    dead token still answers 200; only an unknown client is refused. A live token whose
+    burn could not be recorded in the shared backend answers 503 (section 2.2.1), so the
+    client knows the token still stands and retries instead of reporting a logout that
+    never happened."""
+    if not is_gateway_dcr_client_id(client_id) or open_gateway_dcr_client(client_id) is None:
+        return _oauth_error(401, "invalid_client", "unknown or malformed client_id")
+    if master_key is None:
+        verbose_logger.error("mcp_gateway_dcr revoke rejected: no master_key configured")
+        return _oauth_error(500, "server_error", "the gateway has no master key configured")
+    keys: Final = session_keys_from_master_key(master_key)
+    now: Final = datetime.now(timezone.utc)
+    opened: Final = open_session_refresh_bearer(token, keys, now, expected_client_id=client_id)
+    if isinstance(opened, SessionRefreshOpened):
+        burned: Final = await _SingleUseGuard(cache).claim(
+            f"{_USED_REFRESH_CACHE_PREFIX}{opened.jti}", SESSION_REFRESH_TTL_SECONDS + _CLAIM_TTL_BUFFER_SECONDS
+        )
+        if burned == "unavailable":
+            return _oauth_error(503, "temporarily_unavailable", _CLAIM_UNAVAILABLE_DESCRIPTION)
+    return Response(content="{}", media_type="application/json", headers=TOKEN_NO_CACHE_HEADERS)

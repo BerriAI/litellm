@@ -555,7 +555,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                       <button
                         key={title}
                         onClick={() => window.open(url, "_blank")}
-                        className="flex min-w-0 items-center space-x-3 text-info hover:text-info transition-colors p-3 rounded-lg hover:bg-info/10 border border-border"
+                        className="flex min-w-0 items-center space-x-3 text-info transition-colors p-3 rounded-lg hover:bg-info/10 border border-border"
                       >
                         <ExternalLinkIcon className="w-4 h-4 shrink-0" />
                         <p className="text-sm font-medium break-words">{title}</p>
@@ -597,7 +597,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                       <div className="flex items-center space-x-2 mb-3">
                         <p className="text-sm font-medium text-foreground">Search Models:</p>
                         <Tooltip>
-                          <TooltipTrigger render={<Info className="w-4 h-4 text-muted-foreground/70 cursor-help" />} />
+                          <TooltipTrigger render={<Info className="w-4 h-4 text-muted-foreground cursor-help" />} />
                           <TooltipContent side="top">
                             Smart search with relevance ranking - finds models containing your search terms, ranked by
                             relevance. Try searching &apos;xai grok-4&apos;, &apos;claude-4&apos;, &apos;gpt-4&apos;, or
@@ -606,7 +606,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                         </Tooltip>
                       </div>
                       <div className="relative">
-                        <SearchIcon className="w-4 h-4 text-muted-foreground/70 absolute left-3 top-1/2 transform -translate-y-1/2" />
+                        <SearchIcon className="w-4 h-4 text-muted-foreground absolute left-3 top-1/2 transform -translate-y-1/2" />
                         <input
                           type="text"
                           placeholder="Search model names... (smart search enabled)"
@@ -731,14 +731,12 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                         <div className="flex items-center space-x-2 mb-3">
                           <p className="text-sm font-medium text-foreground">Search Agents:</p>
                           <Tooltip>
-                            <TooltipTrigger
-                              render={<Info className="w-4 h-4 text-muted-foreground/70 cursor-help" />}
-                            />
+                            <TooltipTrigger render={<Info className="w-4 h-4 text-muted-foreground cursor-help" />} />
                             <TooltipContent side="top">Search agents by name or description</TooltipContent>
                           </Tooltip>
                         </div>
                         <div className="relative">
-                          <SearchIcon className="w-4 h-4 text-muted-foreground/70 absolute left-3 top-1/2 transform -translate-y-1/2" />
+                          <SearchIcon className="w-4 h-4 text-muted-foreground absolute left-3 top-1/2 transform -translate-y-1/2" />
                           <input
                             type="text"
                             placeholder="Search agent names or descriptions..."
@@ -799,14 +797,12 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                         <div className="flex items-center space-x-2 mb-3">
                           <p className="text-sm font-medium text-foreground">Search MCP Servers:</p>
                           <Tooltip>
-                            <TooltipTrigger
-                              render={<Info className="w-4 h-4 text-muted-foreground/70 cursor-help" />}
-                            />
+                            <TooltipTrigger render={<Info className="w-4 h-4 text-muted-foreground cursor-help" />} />
                             <TooltipContent side="top">Search MCP servers by name or description</TooltipContent>
                           </Tooltip>
                         </div>
                         <div className="relative">
-                          <SearchIcon className="w-4 h-4 text-muted-foreground/70 absolute left-3 top-1/2 transform -translate-y-1/2" />
+                          <SearchIcon className="w-4 h-4 text-muted-foreground absolute left-3 top-1/2 transform -translate-y-1/2" />
                           <input
                             type="text"
                             placeholder="Search MCP server names or descriptions..."
@@ -1087,7 +1083,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                           });
                           copyToClipboard(codeSnippet);
                         }}
-                        className="text-sm text-info hover:text-info cursor-pointer"
+                        className="text-sm text-info hover:text-info/80 cursor-pointer"
                       >
                         Copy to clipboard
                       </button>
@@ -1144,7 +1140,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                             href={selectedAgent.url}
                             target="_blank"
                             rel="noopener noreferrer"
-                            className="text-info hover:text-info text-sm break-all"
+                            className="text-info hover:text-info/80 text-sm break-all"
                           >
                             {selectedAgent.url}
                           </a>
@@ -1232,7 +1228,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                         href={selectedAgent.documentationUrl}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="text-info hover:text-info flex items-center space-x-2"
+                        className="text-info hover:text-info/80 flex items-center space-x-2"
                       >
                         <ExternalLinkIcon className="w-4 h-4" />
                         <span>View Documentation</span>
@@ -1332,7 +1328,7 @@ if _public_card.supports_authenticated_extended_card:
         )`;
                             copyToClipboard(codeSnippet);
                           }}
-                          className="text-sm text-info hover:text-info cursor-pointer"
+                          className="text-sm text-info hover:text-info/80 cursor-pointer"
                         >
                           Copy to clipboard
                         </button>
@@ -1389,7 +1385,7 @@ response = await client.send_message(request)
 print(response.model_dump(mode='json', exclude_none=True))`;
                             copyToClipboard(codeSnippet);
                           }}
-                          className="text-sm text-info hover:text-info cursor-pointer"
+                          className="text-sm text-info hover:text-info/80 cursor-pointer"
                         >
                           Copy to clipboard
                         </button>
@@ -1549,7 +1545,7 @@ if __name__ == "__main__":
     asyncio.run(main())`;
                           copyToClipboard(codeSnippet);
                         }}
-                        className="text-sm text-info hover:text-info cursor-pointer"
+                        className="text-sm text-info hover:text-info/80 cursor-pointer"
                       >
                         Copy to clipboard
                       </button>

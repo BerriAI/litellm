@@ -201,7 +201,7 @@ const MCPPermissionManagement: React.FC<MCPPermissionManagementProps> = ({
               <span className="text-sm font-medium text-foreground flex items-center">
                 Allow All LiteLLM Keys
                 <SimpleTooltip content="When enabled, every API key can access this MCP server.">
-                  <Info className="ml-2 size-4 text-info hover:text-info cursor-help" />
+                  <Info className="ml-2 size-4 text-info hover:text-info/80 cursor-help" />
                 </SimpleTooltip>
               </span>
               <p className="text-sm text-muted-foreground mt-1">
@@ -218,7 +218,7 @@ const MCPPermissionManagement: React.FC<MCPPermissionManagementProps> = ({
               <span className="text-sm font-medium text-foreground flex items-center">
                 Internal network only
                 <SimpleTooltip content="When on, only requests from within your internal network are accepted. Turn off to allow external clients (other clusters, ChatGPT, etc). API key authentication is always required regardless of this setting.">
-                  <Info className="ml-2 size-4 text-info hover:text-info cursor-help" />
+                  <Info className="ml-2 size-4 text-info hover:text-info/80 cursor-help" />
                 </SimpleTooltip>
               </span>
               <p className="text-sm text-muted-foreground mt-1">
@@ -236,7 +236,7 @@ const MCPPermissionManagement: React.FC<MCPPermissionManagementProps> = ({
                 <span className="text-sm font-medium text-foreground flex items-center">
                   Delegate auth to upstream (PKCE passthrough)
                   <SimpleTooltip content="When on, LiteLLM skips its own API key/SSO check for this server and lets the client complete PKCE directly with the upstream MCP server. Only honored when Auth Type is oauth2. No spend tracking or per-key rate limiting will run on this route.">
-                    <Info className="ml-2 size-4 text-info hover:text-info cursor-help" />
+                    <Info className="ml-2 size-4 text-info hover:text-info/80 cursor-help" />
                   </SimpleTooltip>
                 </span>
                 <p className="text-sm text-muted-foreground mt-1">
@@ -261,7 +261,7 @@ const MCPPermissionManagement: React.FC<MCPPermissionManagementProps> = ({
                 <span className="text-sm font-medium text-foreground flex items-center">
                   OAuth pass-through
                   <SimpleTooltip content="When on, this server is treated as an OAuth pass-through: the gateway proxies the upstream /.well-known/oauth-protected-resource metadata, emits spec-compliant 401 challenges when no bearer is supplied, and propagates upstream 401/403 responses. Only honored when Auth Type is None and 'Authorization' is in Extra Headers.">
-                    <Info className="ml-2 size-4 text-info hover:text-info cursor-help" />
+                    <Info className="ml-2 size-4 text-info hover:text-info/80 cursor-help" />
                   </SimpleTooltip>
                 </span>
                 <p className="text-sm text-muted-foreground mt-1">
@@ -296,7 +296,7 @@ const MCPPermissionManagement: React.FC<MCPPermissionManagementProps> = ({
               <span className="text-sm font-medium text-foreground flex items-center">
                 MCP Access Groups
                 <SimpleTooltip content="Specify access groups for this MCP server. Users must be in at least one of these groups to access the server.">
-                  <Info className="ml-2 size-4 text-info hover:text-info cursor-help" />
+                  <Info className="ml-2 size-4 text-info hover:text-info/80 cursor-help" />
                 </SimpleTooltip>
               </span>
             }
@@ -318,7 +318,7 @@ const MCPPermissionManagement: React.FC<MCPPermissionManagementProps> = ({
               <span className="text-sm font-medium text-foreground flex items-center">
                 Extra Headers
                 <SimpleTooltip content="Forward custom headers from incoming requests to this MCP server (e.g., Authorization, X-Custom-Header, User-Agent)">
-                  <Info className="ml-2 size-4 text-info hover:text-info cursor-help" />
+                  <Info className="ml-2 size-4 text-info hover:text-info/80 cursor-help" />
                 </SimpleTooltip>
                 {mcpServer?.extra_headers && mcpServer.extra_headers.length > 0 && (
                   <span className="ml-2 text-xs bg-info/15 text-info px-2 py-1 rounded-full">
@@ -347,7 +347,7 @@ const MCPPermissionManagement: React.FC<MCPPermissionManagementProps> = ({
               <span className="text-sm font-medium text-foreground flex items-center">
                 Static Headers
                 <SimpleTooltip content="Send these key-value headers with every request to this MCP server.">
-                  <Info className="ml-2 size-4 text-info hover:text-info cursor-help" />
+                  <Info className="ml-2 size-4 text-info hover:text-info/80 cursor-help" />
                 </SimpleTooltip>
               </span>
             </FieldLabel>
