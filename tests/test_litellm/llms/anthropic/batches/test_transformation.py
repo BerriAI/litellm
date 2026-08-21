@@ -619,7 +619,6 @@ def test_transform_response_reraises_unexpected_error(config):
 # automatically. See base_batches_config_test.py.
 # --------------------------------------------------------------------------- #
 
-from litellm.types.utils import LlmProviders  # noqa: E402
 from tests.test_litellm.llms.base_llm.batches.base_batches_config_test import (  # noqa: E402
     BatchesConfigContractTests,
 )

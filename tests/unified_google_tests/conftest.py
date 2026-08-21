@@ -150,7 +150,6 @@ def setup_and_teardown(request):
         0, os.path.abspath("../..")
     )  # Adds the project directory to the system path
 
-    import litellm
 
     if "google_genai_proxy_url" not in request.fixturenames:
         importlib.reload(litellm)

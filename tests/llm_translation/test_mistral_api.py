@@ -11,7 +11,6 @@ from litellm.llms.anthropic.chat import ModelResponseIterator
 
 load_dotenv()
 import io
-import os
 
 sys.path.insert(
     0, os.path.abspath("../..")

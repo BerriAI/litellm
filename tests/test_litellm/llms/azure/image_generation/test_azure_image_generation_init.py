@@ -312,7 +312,6 @@ def test_azure_image_generation_base_model_vs_deployment_name():
       model: azure/gpt-image-15  # deployment name (URL only)
       base_model: gpt-image-1.5  # optional, for LiteLLM metadata
     """
-    from unittest.mock import MagicMock
 
     # Setup test parameters
     azure_chat_completion = AzureChatCompletion()
@@ -385,7 +384,6 @@ async def test_azure_aimage_generation_base_model_vs_deployment_name():
     Async variant of test_azure_image_generation_base_model_vs_deployment_name:
     deployment in URL, no ``model`` in the JSON body sent to Azure.
     """
-    from unittest.mock import MagicMock
 
     # Setup test parameters
     azure_chat_completion = AzureChatCompletion()

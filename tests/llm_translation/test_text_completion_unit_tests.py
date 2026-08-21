@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock
 import pytest
 import httpx
 from respx import MockRouter
-from unittest.mock import patch, MagicMock, AsyncMock
+from unittest.mock import patch, MagicMock
 
 sys.path.insert(
     0, os.path.abspath("../..")

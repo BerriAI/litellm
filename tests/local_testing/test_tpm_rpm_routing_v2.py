@@ -12,7 +12,6 @@ from typing import Dict
 from dotenv import load_dotenv
 
 load_dotenv()
-import os
 
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -399,9 +398,7 @@ async def test_multiple_potential_deployments(sync_mode):
 
 def test_single_deployment_tpm_zero():
     import os
-    from datetime import datetime
 
-    import litellm
 
     model_list = [
         {

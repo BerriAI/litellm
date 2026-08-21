@@ -14,7 +14,6 @@ from unittest.mock import MagicMock, patch
 
 load_dotenv()
 import io
-import os
 import time
 import fakeredis
 

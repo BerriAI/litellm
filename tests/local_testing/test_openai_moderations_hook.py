@@ -9,7 +9,6 @@ import traceback
 from dotenv import load_dotenv
 
 load_dotenv()
-import os
 
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -41,8 +40,6 @@ async def test_openai_moderation_error_raising(monkeypatch):
     _api_key = hash_token("sk-12345")
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key)
     local_cache = DualCache()
-
-    from litellm.proxy.proxy_server import llm_router
 
     llm_router = litellm.Router(
         model_list=[

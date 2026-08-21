@@ -3344,7 +3344,7 @@ async def test_write_config_to_file(monkeypatch):
     """
     Do not write config to file if store_model_in_db is True
     """
-    from unittest.mock import AsyncMock, MagicMock, mock_open, patch
+    from unittest.mock import AsyncMock, MagicMock, patch
 
     from litellm.proxy.proxy_server import ProxyConfig
 
@@ -3392,7 +3392,7 @@ async def test_write_config_to_file_when_store_model_in_db_false(monkeypatch):
     """
     Test that config IS written to file when store_model_in_db is False
     """
-    from unittest.mock import AsyncMock, MagicMock, mock_open, patch
+    from unittest.mock import AsyncMock, MagicMock, patch
 
     from litellm.proxy.proxy_server import ProxyConfig
 

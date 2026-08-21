@@ -12,7 +12,6 @@ from unittest.mock import MagicMock, patch
 
 load_dotenv()
 import io
-import os
 import time
 
 # this file is to test litellm/proxy
@@ -893,9 +892,6 @@ async def test_key_update_with_model_specific_params(prisma_client):
     setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
     await litellm.proxy.proxy_server.prisma_client.connect()
 
-    from litellm.proxy.management_endpoints.key_management_endpoints import (
-        update_key_fn,
-    )
     from litellm.proxy._types import UpdateKeyRequest
 
     new_key = await generate_key_fn(

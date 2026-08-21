@@ -32,7 +32,6 @@ from litellm.proxy.common_request_processing import (
     _get_cost_breakdown_from_logging_obj,
     _has_attribute_error_in_chain,
     _is_azure_model_router_request,
-    _UpstreamClosingStreamingResponse,
     open_sse_before_first_byte,
     ttft_keepalive_interval,
     _override_openai_response_model,

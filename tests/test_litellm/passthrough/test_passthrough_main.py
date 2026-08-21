@@ -14,7 +14,6 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 
-from unittest.mock import MagicMock, patch
 
 import litellm
 from litellm.passthrough.main import allm_passthrough_route, llm_passthrough_route

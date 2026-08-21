@@ -10,7 +10,6 @@ from fastapi.routing import APIRoute
 
 
 import io
-import os
 import time
 
 # this file is to test litellm/proxy
@@ -24,7 +23,6 @@ import logging
 load_dotenv()
 
 import pytest
-from litellm._uuid import uuid
 import litellm
 from litellm._logging import verbose_proxy_logger
 

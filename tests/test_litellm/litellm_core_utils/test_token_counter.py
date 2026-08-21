@@ -13,7 +13,7 @@ import tiktoken
 sys.path.insert(
     0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import litellm
 from litellm import create_pretrained_tokenizer, decode, encode, get_modified_max_tokens
@@ -634,7 +634,6 @@ def test_token_counter():
 
 
 import unittest
-from unittest.mock import MagicMock, patch
 
 from litellm.utils import _select_tokenizer_helper, claude_json_str, encoding
 
