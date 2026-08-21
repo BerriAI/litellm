@@ -95,10 +95,10 @@ class TestOCIChatConfig:
             modified_params = params.copy()
             del modified_params[key]
 
-            with pytest.raises(Exception) as excinfo:
-                config = OCIChatConfig()
-                headers = {}
+            config = OCIChatConfig()
+            headers = {}
 
+            with pytest.raises(Exception) as excinfo:
                 config.validate_environment(
                     headers=headers,
                     model=TEST_MODEL,

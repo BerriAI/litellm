@@ -242,8 +242,8 @@ async def test_can_team_call_model(model, expect_to_work):
 )
 @pytest.mark.asyncio
 async def test_can_key_call_model_wildcard_access(key_models, model, expect_to_work):
+    from litellm.proxy._types import ProxyException
     from litellm.proxy.auth.auth_checks import can_key_call_model
-    from fastapi import HTTPException
 
     llm_model_list = [
         {
@@ -294,15 +294,13 @@ async def test_can_key_call_model_wildcard_access(key_models, model, expect_to_w
             llm_router=router,
         )
     else:
-        with pytest.raises(Exception) as e:
+        with pytest.raises(ProxyException):
             await can_key_call_model(
                 model=model,
                 llm_model_list=llm_model_list,
                 valid_token=user_api_key_object,
                 llm_router=router,
             )
-
-            print(e)
 
 
 @pytest.mark.parametrize(

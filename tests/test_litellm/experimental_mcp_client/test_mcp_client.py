@@ -75,11 +75,10 @@ class TestMCPClient:
         # Test missing stdio_config
         client = MCPClient(transport_type=MCPTransport.stdio)
 
+        async def _noop(session):
+            return None
+
         with pytest.raises(ValueError, match="stdio_config is required for stdio transport"):
-
-            async def _noop(session):
-                return None
-
             await client.run_with_session(_noop)
 
     @pytest.mark.asyncio

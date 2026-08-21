@@ -1999,9 +1999,12 @@ async def test_acompletion_streaming_iterator():
 
     # Collect streamed chunks — the first chunk succeeds, then the error re-raises
     collected_chunks = []
-    with pytest.raises(MidStreamFallbackError):
+    async def _drain():
         async for chunk in result:
             collected_chunks.append(chunk)
+
+    with pytest.raises(MidStreamFallbackError):
+        await _drain()
 
     assert len(collected_chunks) == 1, "one chunk yielded before the error"
     print("✓ MidStreamFallbackError re-raised correctly when content was already generated")
@@ -5557,9 +5560,12 @@ async def test_acompletion_streaming_iterator_does_not_log_success_on_terminal_f
             initial_kwargs=dict(initial_kwargs),
         )
         collected = []
-        with pytest.raises(MidStreamFallbackError):
+        async def _drain():
             async for chunk in result:
                 collected.append(chunk)
+
+        with pytest.raises(MidStreamFallbackError):
+            await _drain()
 
     assert len(collected) == 1
     logging_obj.dispatch_success_handlers.assert_not_called()
@@ -5580,9 +5586,12 @@ async def test_acompletion_streaming_iterator_does_not_log_success_on_terminal_f
             initial_kwargs=dict(initial_kwargs),
         )
         collected = []
-        with pytest.raises(MidStreamFallbackError):
+        async def _drain():
             async for chunk in result:
                 collected.append(chunk)
+
+        with pytest.raises(MidStreamFallbackError):
+            await _drain()
 
     assert len(collected) == 1, "only the partial chunk before the error"
     mock_fallback.assert_not_called()

@@ -310,11 +310,12 @@ def test_redis_semantic_cache_reraises_unexpected_isolated_index_error(monkeypat
         monkeypatch.setenv("REDIS_PORT", "6379")
         monkeypatch.setenv("REDIS_PASSWORD", "test_password")
 
+        cache = RedisSemanticCache(
+            similarity_threshold=0.8,
+            index_name="existing_index",
+        )
+
         with pytest.raises(ValueError, match="connection failed"):
-            cache = RedisSemanticCache(
-                similarity_threshold=0.8,
-                index_name="existing_index",
-            )
             _ = cache.llmcache
 
 
