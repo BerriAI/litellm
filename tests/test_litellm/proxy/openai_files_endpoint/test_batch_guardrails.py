@@ -395,15 +395,29 @@ async def test_a_bom_file_is_rewritten_without_losing_the_untouched_records():
     assert rows[1]["body"]["messages"][0]["content"] == "my *** is here"
 
 
-@pytest.mark.parametrize("prefix", [b"", b"\xef\xbb\xbf"], ids=["plain", "utf8_bom"])
-def test_load_balancing_reads_the_first_record_whatever_its_encoding(prefix):
-    """A file whose routing model cannot be read silently goes to the default provider."""
+@pytest.mark.parametrize(
+    "prefix",
+    [b"", b"\xef\xbb\xbf", b"\n", b"\n\xef\xbb\xbf", b"   \n"],
+    ids=["plain", "utf8_bom", "leading_blank", "blank_then_bom", "whitespace_line"],
+)
+def test_load_balancing_finds_the_routing_record_in_any_file_the_upload_accepts(prefix):
+    """A file whose routing model cannot be read is silently sent to the default provider."""
+    from litellm.proxy.openai_files_endpoints.batch_file_validation import check_batch_file_upload
     from litellm.proxy.openai_files_endpoints.files_endpoints import get_first_json_object
 
     payload = prefix + (json.dumps(_record("a")) + "\n").encode()
+    assert check_batch_file_upload("in.jsonl", io.BytesIO(payload), None) is None, "rejected upfront"
 
     assert get_first_json_object(io.BytesIO(payload))["body"]["model"] == "gpt-4o-mini"
     assert get_first_json_object(payload)["body"]["model"] == "gpt-4o-mini"
+
+
+@pytest.mark.parametrize("payload", [b"", b"\n\n\n"], ids=["empty", "blanks_only"])
+def test_load_balancing_returns_none_when_there_is_no_record(payload):
+    from litellm.proxy.openai_files_endpoints.files_endpoints import get_first_json_object
+
+    assert get_first_json_object(io.BytesIO(payload)) is None
+    assert get_first_json_object(payload) is None
 
 
 @pytest.mark.asyncio

@@ -148,19 +148,20 @@ def get_first_json_object(file_source: bytes | BinaryIO) -> dict | None:
     """
     The first record, used to pick a deployment when batch load balancing is on.
 
-    Parsed as bytes so the json module sniffs the encoding itself, the same way the upload
-    validation does. Decoding to text first rejects a leading byte order mark, and a file that
-    carries one would silently lose its routing and go to the default provider.
+    Read the way the upload validation reads it, since a file it accepted must not lose its
+    routing here: blank lines are not records and are skipped, and the line is parsed as bytes so
+    the json module sniffs the encoding rather than rejecting a leading byte order mark. Either
+    difference makes this return None, which silently sends the batch to the default provider.
     """
     try:
         if isinstance(file_source, (bytes, bytearray)):
-            newline: Final = file_source.find(b"\n")
-            first_line: bytes = file_source if newline == -1 else file_source[:newline]
+            first_record: bytes | None = next((line for line in file_source.splitlines() if line.strip()), None)
         else:
+            # lazily, so a batch file that can be gigabytes is not read past its first record
             file_source.seek(0)
-            first_line = file_source.readline()
+            first_record = next((line for line in file_source if line.strip()), None)
             file_source.seek(0)
-        return json.loads(first_line.strip())
+        return None if first_record is None else json.loads(first_record.strip())
     except (json.JSONDecodeError, UnicodeDecodeError, OSError, ValueError):
         return None
 
