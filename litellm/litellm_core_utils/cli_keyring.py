@@ -17,9 +17,10 @@ throwaway value, because a keychain can answer neither way and block forever.
 
 import os
 import threading
-from contextlib import suppress
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Final, Protocol, TypeAlias
+from queue import Empty, Queue
+from typing import Final, Generic, Protocol, TypeAlias, TypeVar
 
 KEYRING_SERVICE: Final = "litellm-cli"
 KEYRING_ACCOUNT: Final = "credential"
@@ -29,6 +30,9 @@ DISABLE_KEYRING_ENV_VAR: Final = "LITELLM_CLI_DISABLE_KEYRING"
 _DISABLED_VALUES: Final = frozenset(("1", "true", "yes", "on"))
 _PREFLIGHT_VALUE: Final = "preflight"
 _PREFLIGHT_TIMEOUT_SECONDS: Final = 5.0
+_MAX_CREDENTIAL_BLOB_BYTES: Final = 5 * 512
+
+_T = TypeVar("_T")
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,9 +80,14 @@ class KeyringDiscardsWrites:
     pass
 
 
+@dataclass(frozen=True, slots=True)
+class SecretTooLarge:
+    pass
+
+
 KeyringUnusable: TypeAlias = KeyringNotInstalled | KeyringDisabled | KeyringUnreachable
 SecretRead: TypeAlias = SecretFound | SecretMissing | KeyringUnusable
-SecretWrite: TypeAlias = SecretStored | KeyringUnusable | KeyringDiscardsWrites
+SecretWrite: TypeAlias = SecretStored | KeyringUnusable | KeyringDiscardsWrites | SecretTooLarge
 SecretErase: TypeAlias = SecretErased | SecretStranded | KeyringUnusable
 
 
@@ -100,6 +109,24 @@ class KeyringApi(Protocol):
     def delete_password(self, service_name: str, username: str) -> None: ...
 
 
+@dataclass(frozen=True, slots=True)
+class _KeyringCallAnswered(Generic[_T]):
+    value: _T
+
+
+@dataclass(frozen=True, slots=True)
+class _KeyringCallFailed:
+    error: Exception
+
+
+@dataclass(frozen=True, slots=True)
+class _KeyringCallTimedOut:
+    pass
+
+
+_KeyringCallResult: TypeAlias = _KeyringCallAnswered[_T] | _KeyringCallFailed | _KeyringCallTimedOut
+
+
 def _keyring_disabled() -> bool:
     return os.getenv(DISABLE_KEYRING_ENV_VAR, "").strip().lower() in _DISABLED_VALUES
 
@@ -119,6 +146,22 @@ def _keyring_api() -> KeyringApi | KeyringNotInstalled | KeyringDisabled:
     return KeyringNotInstalled() if api is None else api
 
 
+def _bounded_keyring_call(call: Callable[[], _T], timeout_seconds: float) -> _KeyringCallResult[_T]:
+    answers: Final = Queue[_KeyringCallResult[_T]](maxsize=1)
+
+    def run() -> None:
+        try:
+            answers.put(_KeyringCallAnswered(call()))
+        except Exception as error:  # noqa: BLE001  # keyring backends raise outside keyring.errors
+            answers.put(_KeyringCallFailed(error))
+
+    threading.Thread(target=run, daemon=True, name="litellm-cli-keyring-call").start()
+    try:
+        return answers.get(timeout=timeout_seconds)
+    except Empty:
+        return _KeyringCallTimedOut()
+
+
 def _answers_a_write(api: KeyringApi, timeout_seconds: float) -> bool:
     """Whether the keychain answers a write at all, asked with a value worth nothing.
 
@@ -129,25 +172,24 @@ def _answers_a_write(api: KeyringApi, timeout_seconds: float) -> bool:
     it, and keeps the real credential out of a store that might accept it long after we gave up.
     A keychain that refuses the probe outright still answered it, so only silence counts against it.
     """
-    answered: Final = threading.Event()
-
-    def ask() -> None:
-        with suppress(Exception):
-            api.set_password(KEYRING_SERVICE, KEYRING_PREFLIGHT_ACCOUNT, _PREFLIGHT_VALUE)
-        answered.set()
-
-    threading.Thread(target=ask, daemon=True, name="litellm-cli-keyring-preflight").start()
-    return answered.wait(timeout_seconds)
+    result: Final = _bounded_keyring_call(
+        lambda: api.set_password(KEYRING_SERVICE, KEYRING_PREFLIGHT_ACCOUNT, _PREFLIGHT_VALUE),
+        timeout_seconds,
+    )
+    return not isinstance(result, _KeyringCallTimedOut)
 
 
-def _forget_the_preflight(api: KeyringApi) -> None:
+def _forget_the_preflight(api: KeyringApi, timeout_seconds: float) -> bool:
     """Take the throwaway probe back out.
 
     A backend that kept nothing has nothing to remove, and the probe is worth nothing either way,
     so a keychain that refuses to give it up costs the caller nothing.
     """
-    with suppress(Exception):
-        api.delete_password(KEYRING_SERVICE, KEYRING_PREFLIGHT_ACCOUNT)
+    result: Final = _bounded_keyring_call(
+        lambda: api.delete_password(KEYRING_SERVICE, KEYRING_PREFLIGHT_ACCOUNT),
+        timeout_seconds,
+    )
+    return not isinstance(result, _KeyringCallTimedOut)
 
 
 @dataclass(frozen=True, slots=True)
@@ -162,18 +204,26 @@ class KeyringVault:
 
     preflight_timeout_seconds: float = _PREFLIGHT_TIMEOUT_SECONDS
     stopped_answering: threading.Event = field(default_factory=threading.Event, compare=False, repr=False)
+    keyring_api: Callable[[], KeyringApi | KeyringNotInstalled | KeyringDisabled] = _keyring_api
 
     def read(self) -> SecretRead:
         if self.stopped_answering.is_set():
             return KeyringUnreachable()
-        api: Final = _keyring_api()
+        api: Final = self.keyring_api()
         if isinstance(api, (KeyringNotInstalled, KeyringDisabled)):
             return api
-        try:
-            blob: Final = api.get_password(KEYRING_SERVICE, KEYRING_ACCOUNT)
-        except Exception:  # noqa: BLE001  # backends raise outside keyring.errors; never break the SDK
-            return KeyringUnreachable()
-        return SecretMissing() if blob is None else SecretFound(blob)
+        result: Final = _bounded_keyring_call(
+            lambda: api.get_password(KEYRING_SERVICE, KEYRING_ACCOUNT),
+            self.preflight_timeout_seconds,
+        )
+        match result:
+            case _KeyringCallAnswered(value=blob):
+                return SecretMissing() if blob is None else SecretFound(blob)
+            case _KeyringCallFailed():
+                return KeyringUnreachable()
+            case _KeyringCallTimedOut():
+                self.stopped_answering.set()
+                return KeyringUnreachable()
 
     def write(self, blob: str) -> SecretWrite:
         """Store the secret, reporting stored only once the keychain hands the same bytes back.
@@ -188,18 +238,32 @@ class KeyringVault:
         """
         if self.stopped_answering.is_set():
             return KeyringUnreachable()
-        api: Final = _keyring_api()
+        api: Final = self.keyring_api()
         if isinstance(api, (KeyringNotInstalled, KeyringDisabled)):
             return api
         if not _answers_a_write(api, self.preflight_timeout_seconds):
             self.stopped_answering.set()
             return KeyringUnreachable()
-        _forget_the_preflight(api)
-        try:
-            api.set_password(KEYRING_SERVICE, KEYRING_ACCOUNT, blob)
-        except Exception:  # noqa: BLE001  # a keychain that refuses the write falls back to the token file
+        if not _forget_the_preflight(api, self.preflight_timeout_seconds):
+            self.stopped_answering.set()
             return KeyringUnreachable()
-        return SecretStored() if self.read() == SecretFound(blob) else KeyringDiscardsWrites()
+        result: Final = _bounded_keyring_call(
+            lambda: api.set_password(KEYRING_SERVICE, KEYRING_ACCOUNT, blob),
+            self.preflight_timeout_seconds,
+        )
+        match result:
+            case _KeyringCallFailed():
+                return SecretTooLarge() if _payload_exceeds_windows_limit(blob) else KeyringUnreachable()
+            case _KeyringCallTimedOut():
+                self.stopped_answering.set()
+                return KeyringUnreachable()
+            case _KeyringCallAnswered():
+                read_back: Final = self.read()
+                if read_back == SecretFound(blob):
+                    return SecretStored()
+                if read_back == KeyringUnreachable():
+                    return KeyringUnreachable()
+                return KeyringDiscardsWrites()
 
     def erase(self) -> SecretErase:
         """Remove our entry, reporting whether the keychain is guaranteed to be free of it.
@@ -218,14 +282,24 @@ class KeyringVault:
                 return self._delete()
 
     def _delete(self) -> SecretErase:
-        api: Final = _keyring_api()
+        api: Final = self.keyring_api()
         if isinstance(api, (KeyringNotInstalled, KeyringDisabled)):
             return api
-        try:
-            api.delete_password(KEYRING_SERVICE, KEYRING_ACCOUNT)
-        except Exception:  # noqa: BLE001  # report the failure as a value so `lite logout` can warn
-            return SecretStranded()
-        return SecretErased()
+        result: Final = _bounded_keyring_call(
+            lambda: api.delete_password(KEYRING_SERVICE, KEYRING_ACCOUNT),
+            self.preflight_timeout_seconds,
+        )
+        match result:
+            case _KeyringCallAnswered():
+                return SecretErased()
+            case _KeyringCallFailed() | _KeyringCallTimedOut():
+                if isinstance(result, _KeyringCallTimedOut):
+                    self.stopped_answering.set()
+                return SecretStranded()
+
+
+def _payload_exceeds_windows_limit(blob: str) -> bool:
+    return len(blob.encode("utf-16-le")) > _MAX_CREDENTIAL_BLOB_BYTES
 
 
 SYSTEM_KEYRING: Final[SecretVault] = KeyringVault()
