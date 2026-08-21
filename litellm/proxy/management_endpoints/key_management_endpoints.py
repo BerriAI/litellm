@@ -3880,8 +3880,10 @@ async def key_budgets_fn(
           but places no limit on it
         - spend: float | None - Spend as the enforcing check reads it, from the same cross-pod
           counter, not the periodically-synced database column. `null` only when the read failed
-        - spend_state: str - Whether `spend` was read (`live`) or is missing because the entity or its
-          counter could not be read (`unavailable`)
+        - spend_state: str - Whether `spend` was read (`live`), is missing because the entity or its
+          counter could not be read (`unavailable`), or is withheld from this caller (`restricted`).
+          The proxy-wide row is `restricted` for everyone but a proxy admin, since its limit and spend
+          cover the whole deployment rather than this key
         - remaining: float | None - `max_budget - spend`, when both are known
         - comparison: str - The operator the enforcing check uses, which differs per scope
         - budget_duration / budget_reset_at / window_start: When spend next resets to zero
@@ -3985,6 +3987,7 @@ async def key_budgets_fn(
                 user_api_key_cache=user_api_key_cache,
                 proxy_logging_obj=proxy_logging_obj,
                 general_settings=general_settings,
+                proxy_spend_visible=user_api_key_dict.user_role in _PROXY_WIDE_READER_ROLES,
                 custom_auth_enabled=user_custom_auth is not None,
             ),
         )

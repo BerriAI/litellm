@@ -136,6 +136,7 @@ BudgetNoteCode = Literal[
     "end_user_route_only",
     "entity_unavailable",
     "project_spend_not_tracked",
+    "proxy_spend_restricted",
     "request_tags_add_budgets",
     "reservation_blocks_at_limit",
     "rolling_window",
@@ -145,7 +146,7 @@ BudgetNoteCode = Literal[
 
 BudgetNoteSeverity = Literal["info", "warning"]
 
-BudgetSpendState = Literal["live", "unavailable"]
+BudgetSpendState = Literal["live", "unavailable", "restricted"]
 
 
 class KeyBudgetNote(BaseModel):
@@ -171,9 +172,9 @@ class KeyBudgetEntry(BaseModel):
     """
     One budget that can gate requests made with a key, with its live spend.
 
-    ``status`` is ``unknown`` when the row could not be evaluated, either because the entity behind it
-    was unreadable or because its spend was, and it is never ``unlimited`` in that case: an unreadable
-    scope is not a scope the reader may rule out.
+    ``status`` is ``unknown`` when the row could not be evaluated, whether because the entity behind
+    it was unreadable, because its spend was, or because the caller may not read the numbers, and it
+    is never ``unlimited`` in that case: a scope nobody could evaluate is not one to rule out.
     """
 
     scope: BudgetScope

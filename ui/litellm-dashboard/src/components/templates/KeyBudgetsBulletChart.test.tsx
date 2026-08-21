@@ -51,6 +51,14 @@ const UNREADABLE_TEAM: KeyBudgetEntry = {
   status: "unknown",
   notes: [{ code: "entity_unavailable", severity: "warning", text: "could not read" }],
 };
+const RESTRICTED_PROXY: KeyBudgetEntry = {
+  ...OK,
+  scope: "proxy",
+  spend: null,
+  spend_state: "restricted",
+  status: "unknown",
+  notes: [{ code: "proxy_spend_restricted", severity: "warning", text: "admins only" }],
+};
 const DEAD_PROJECT: KeyBudgetEntry = {
   ...OK,
   scope: "project",
@@ -108,11 +116,18 @@ describe("KeyBudgetsBulletChart", () => {
     expect(screen.queryByTestId("key-budget-bullet-blocking")).not.toBeInTheDocument();
   });
 
-  it("names a scope nobody could read, since a verdict that ignores it is a verdict ruling it out", () => {
+  it("names a scope nobody could evaluate, since a verdict that ignores it is a verdict ruling it out", () => {
     render(<KeyBudgetsBulletChart budgets={[TEAM_HALF, UNREADABLE_TEAM]} />);
 
-    expect(verdict()).toHaveTextContent("1 scope could not be read");
+    expect(verdict()).toHaveTextContent("1 scope could not be evaluated");
     expect(verdict()).toHaveTextContent("Team");
+  });
+
+  it("names a scope whose numbers this caller may not read, which is no more ruled out than a failed read", () => {
+    render(<KeyBudgetsBulletChart budgets={[TEAM_HALF, RESTRICTED_PROXY]} />);
+
+    expect(verdict()).toHaveTextContent("1 scope could not be evaluated");
+    expect(verdict()).toHaveTextContent("Proxy");
   });
 
   it("draws each bar in proportion to its budget, and never past the end of its track", () => {

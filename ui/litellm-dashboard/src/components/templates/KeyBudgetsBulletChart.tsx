@@ -113,7 +113,7 @@ function Verdict({ budgets }: { budgets: readonly KeyBudgetEntry[] }) {
       )}
       {unknown.length > 0 && (
         <p className="text-xs text-amber-600">
-          {unknown.length} {unknown.length === 1 ? "scope" : "scopes"} could not be read, so nothing on{" "}
+          {unknown.length} {unknown.length === 1 ? "scope" : "scopes"} could not be evaluated, so nothing on{" "}
           {unknown.length === 1 ? "it" : "them"} can be ruled out: {unknown.map(scopeLabel).join(", ")}.
         </p>
       )}

@@ -275,6 +275,25 @@ const UNRESOLVED: KeyBudgetEntry = {
   notes: [ENTITY_UNAVAILABLE_NOTE],
 };
 
+// The proxy budget applies, but its limit and spend are the whole deployment's, so a caller who is
+// not a proxy admin gets the row without the numbers. Same shape as a failed read, same treatment.
+const RESTRICTED: KeyBudgetEntry = {
+  ...UNRESOLVED,
+  scope: "proxy",
+  entity_id: null,
+  spend_state: "restricted",
+  source: "litellm_settings.max_budget",
+  notes: [],
+};
+
+describe("a scope whose numbers the caller may not read", () => {
+  it("is treated as unknown rather than as a confident zero or an unlimited scope", () => {
+    expect(cannotTrip(RESTRICTED)).toBe(false);
+    expect(isBlockingRow(RESTRICTED)).toBe(false);
+    expect(rowRank(RESTRICTED)).toStrictEqual(rowRank(UNRESOLVED));
+  });
+});
+
 describe("a scope the server could not resolve", () => {
   it("is not dead, since the budget it hides can be the one denying every request", () => {
     expect(cannotTrip(UNRESOLVED)).toBe(false);

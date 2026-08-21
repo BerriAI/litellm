@@ -106,6 +106,14 @@ _RESERVATION_NOTE: Final = KeyBudgetNote(
         "read-time check; requests it cannot price up front are still gated by the read-time check alone"
     ),
 )
+_PROXY_RESTRICTED_NOTE: Final = KeyBudgetNote(
+    code="proxy_spend_restricted",
+    severity="warning",
+    text=(
+        "the proxy-wide budget applies to this key, but its limit and spend cover the whole deployment "
+        "and are only reported to proxy admins, so this row cannot be ruled out from here"
+    ),
+)
 _PROJECT_SPEND_NOTE: Final = KeyBudgetNote(
     code="project_spend_not_tracked",
     severity="warning",
@@ -204,6 +212,7 @@ class KeyBudgetResolverDeps:
     user_api_key_cache: UserApiKeyCache
     proxy_logging_obj: ProxyLogging
     general_settings: Mapping[str, object]
+    proxy_spend_visible: bool
     custom_auth_enabled: bool = False
     read_spend: SpendReader = field(default=_read_counter_spend)
 
@@ -236,7 +245,12 @@ class _RecordedSpend:
     value: float
 
 
-_SpendSource = _CounterSpend | _RecordedSpend | _UnknownSpend
+@dataclass(frozen=True, slots=True)
+class _RestrictedSpend:
+    """Stands in for a number the caller may not read, which is not a number nobody could read."""
+
+
+_SpendSource = _CounterSpend | _RecordedSpend | _UnknownSpend | _RestrictedSpend
 
 
 @dataclass(frozen=True, slots=True)
@@ -352,6 +366,7 @@ class _KeyBudgetContext:
     valid_token: UserAPIKeyAuth
     token_inputs: _TokenBudgetInputs
     end_user_id: str | None
+    proxy_spend_visible: bool
     custom_auth_enabled: bool
     custom_auth_skips_checks: bool
     general_settings: Mapping[str, object]
@@ -396,6 +411,8 @@ async def _read_spend(plan: _PlannedBudget, deps: KeyBudgetResolverDeps) -> _Spe
         match source:
             case _UnknownSpend():
                 return _SpendReading(value=None, state="unavailable")
+            case _RestrictedSpend():
+                return _SpendReading(value=None, state="restricted")
             case _RecordedSpend():
                 return _SpendReading(value=source.value, state="live")
             case _CounterSpend():
@@ -446,10 +463,11 @@ def _status(plan: _PlannedBudget, spend: float | None, exceeded: bool) -> Budget
     """
     A row nobody could evaluate reports ``unknown``, never ``unlimited``.
 
-    Reading it as unset is the failure this endpoint exists to prevent: an unreadable entity and an
-    unreadable counter both leave a budget that may well be the one blocking the key.
+    Reading it as unset is the failure this endpoint exists to prevent: an unreadable entity, an
+    unreadable counter and a number withheld from the caller all leave a budget that may well be the
+    one blocking the key.
     """
-    if isinstance(plan.spend_source, _UnknownSpend):
+    if isinstance(plan.spend_source, _UnknownSpend | _RestrictedSpend):
         return "unknown"
     if plan.max_budget is None:
         return "unlimited"
@@ -529,6 +547,7 @@ async def _load_context(
         valid_token=valid_token,
         token_inputs=token_inputs,
         end_user_id=end_user_id,
+        proxy_spend_visible=deps.proxy_spend_visible,
         custom_auth_enabled=deps.custom_auth_enabled,
         custom_auth_skips_checks=(
             deps.custom_auth_enabled and deps.general_settings.get("custom_auth_run_common_checks") is not True
@@ -659,6 +678,8 @@ async def _load_budget_meta(
 
 
 async def _load_proxy_budget(deps: KeyBudgetResolverDeps) -> _ProxyBudget | _Unavailable | None:
+    if not deps.proxy_spend_visible:
+        return None
     try:
         row: Final = await UserRepository(deps.prisma_client).find_by_id(LITELLM_PROXY_BUDGET_NAME)
     except Exception:  # noqa: BLE001  # every entity load degrades to "unknown" rather than failing the report
@@ -862,8 +883,23 @@ def _budget_meta(context: _KeyBudgetContext, budget_id: str | None) -> _BudgetRo
 
 
 def _plan_proxy(context: _KeyBudgetContext) -> tuple[_PlannedBudget, ...]:
+    """The proxy budget is the whole deployment's spend, so its numbers are not every key holder's."""
     proxy: Final = context.proxy
     max_budget: Final = litellm.max_budget if litellm.max_budget > 0 else None
+    if not context.proxy_spend_visible:
+        return (
+            _PlannedBudget(
+                scope="proxy",
+                entity_id=None,
+                entity_label=None,
+                enforcement="hard",
+                max_budget=None,
+                comparison=">",
+                source="litellm_settings.max_budget",
+                spend_source=_RestrictedSpend(),
+                notes=(_PROXY_RESTRICTED_NOTE,),
+            ),
+        )
     match proxy:
         case _Unavailable():
             return (

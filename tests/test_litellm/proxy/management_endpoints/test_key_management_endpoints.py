@@ -16057,12 +16057,13 @@ class _RecordingSpendReader:
         return self.spend_by_counter_key.get(counter_key, 0.0)
 
 
-def _budgets_deps(read_spend=None, general_settings=None, custom_auth_enabled=False):
+def _budgets_deps(read_spend=None, general_settings=None, custom_auth_enabled=False, proxy_spend_visible=True):
     return KeyBudgetResolverDeps(
         prisma_client=MagicMock(),
         user_api_key_cache=MagicMock(),
         proxy_logging_obj=MagicMock(),
         general_settings=general_settings if general_settings is not None else {},
+        proxy_spend_visible=proxy_spend_visible,
         custom_auth_enabled=custom_auth_enabled,
         read_spend=read_spend or _RecordingSpendReader({}),
     )
@@ -16978,8 +16979,10 @@ def test_key_budgets_classify_every_note_code_and_leave_none_to_a_default():
         "end_user_route_only": "warning",
         "project_spend_not_tracked": "warning",
         "request_tags_add_budgets": "warning",
-        # `status` carries it too, but only as a value no client built before this endpoint can know
+        # `status` and `spend_state` carry these too, but only as values no client built before this
+        # endpoint can know
         "entity_unavailable": "warning",
+        "proxy_spend_restricted": "warning",
     }
 
 
@@ -17255,3 +17258,71 @@ async def test_key_budgets_never_send_an_admin_through_a_teams_permission_list(r
         response = client.get(f"/key/{_BUDGETS_KEY_HASH}/budgets")
 
     assert response.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_key_budgets_withhold_the_proxy_wide_numbers_from_a_caller_who_may_not_read_them():
+    """
+    The proxy row's limit and spend are the whole deployment's, not this key's.
+
+    Every proxy-wide spend route is admin-only, so reporting them on a route any key holder can call
+    would hand one tenant the total spend of all of them.
+    """
+    with _budgets_world(**_fully_populated_world()), patch.object(litellm, "max_budget", 1000.0):
+        budgets = await resolve_key_budgets(
+            valid_token=_budgets_token(), end_user_id=None, deps=_budgets_deps(proxy_spend_visible=False)
+        )
+
+    entry = next(e for e in budgets if e.scope == "proxy")
+    assert (entry.max_budget, entry.spend, entry.remaining) == (None, None, None)
+    assert (entry.spend_state, entry.status) == ("restricted", "unknown")
+    assert [note.code for note in entry.notes] == ["proxy_spend_restricted"]
+
+
+@pytest.mark.asyncio
+async def test_key_budgets_still_report_the_proxy_row_to_a_caller_who_may_not_read_its_numbers():
+    """Dropping the row would read as "no proxy budget applies", which is the guess this route removes."""
+    with _budgets_world(**_fully_populated_world()), patch.object(litellm, "max_budget", 1000.0):
+        budgets = await resolve_key_budgets(
+            valid_token=_budgets_token(), end_user_id=None, deps=_budgets_deps(proxy_spend_visible=False)
+        )
+
+    assert [e.scope for e in budgets].count("proxy") == 1
+    assert next(e for e in budgets if e.scope == "proxy").status != "unlimited"
+
+
+@pytest.mark.asyncio
+async def test_key_budgets_never_read_the_proxy_budget_row_for_a_caller_who_may_not_see_it():
+    """Withholding a number the report already fetched still logs the read and still costs the query."""
+    user_repository = MagicMock()
+    user_repository.return_value.find_by_id = AsyncMock(return_value=None)
+    with (
+        _budgets_world(**_fully_populated_world()),
+        patch(f"{_BUDGETS_RESOLVER}.UserRepository", user_repository),
+    ):
+        await resolve_key_budgets(
+            valid_token=_budgets_token(), end_user_id=None, deps=_budgets_deps(proxy_spend_visible=False)
+        )
+
+    user_repository.return_value.find_by_id.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    ("role", "expected"),
+    [
+        (LitellmUserRoles.PROXY_ADMIN.value, True),
+        (LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value, True),
+        (LitellmUserRoles.INTERNAL_USER.value, False),
+        (LitellmUserRoles.TEAM.value, False),
+        (None, False),
+    ],
+)
+@pytest.mark.asyncio
+async def test_key_budgets_route_shows_the_proxy_numbers_only_to_a_proxy_wide_reader(role, expected):
+    """The gate has to arrive from the request, or the resolver decides it from nothing."""
+    caller = UserAPIKeyAuth(api_key=_BUDGETS_KEY_HASH, user_id="user-budgets", user_role=role)
+    with _budgets_route_world(key_row=_budgets_key_row(), caller=caller) as resolver:
+        response = client.get("/key/budgets")
+
+    assert response.status_code == 200
+    assert resolver.await_args.kwargs["deps"].proxy_spend_visible is expected
