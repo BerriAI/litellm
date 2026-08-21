@@ -59,10 +59,15 @@ class TogetherAIReasoningParam(TypedDict):
 
 @dataclass(frozen=True, slots=True)
 class _ParamFragment:
-    """One rewrite step: keys to drop from the request body, plus keys to set on it."""
+    """One rewrite step: keys to drop, keys to set, and keys to nest under `extra_body`.
+
+    Anything the OpenAI SDK does not accept as a keyword argument has to travel in
+    `extra_body`, which the SDK spreads back into the request body.
+    """
 
     drop: frozenset[str] = frozenset()
     overrides: tuple[tuple[str, object], ...] = ()
+    extra_body: tuple[tuple[str, object], ...] = ()
 
 
 def _reasoning_toggle(enabled: bool) -> TogetherAIReasoningParam:
@@ -104,14 +109,15 @@ def _logprobs_fragment(params: Mapping[str, object]) -> _ParamFragment:
 
 def _reasoning_fragment(params: Mapping[str, object]) -> _ParamFragment:
     """Fold litellm's `thinking` and `reasoning_effort="none"` onto Together's `reasoning` toggle."""
-    dropped: Final = frozenset({"thinking"})
-    if params.get("reasoning") is not None:
-        return _ParamFragment(drop=dropped)
+    dropped: Final = frozenset({"thinking", "reasoning"})
+    native_toggle: Final = params.get("reasoning")
+    if native_toggle is not None:
+        return _ParamFragment(drop=dropped, extra_body=(("reasoning", native_toggle),))
     effort: Final = params.get("reasoning_effort")
     if effort == "none":
         return _ParamFragment(
             drop=dropped | frozenset({"reasoning_effort"}),
-            overrides=(("reasoning", _reasoning_toggle(False)),),
+            extra_body=(("reasoning", _reasoning_toggle(False)),),
         )
     if effort == "minimal":
         return _ParamFragment(drop=dropped, overrides=(("reasoning_effort", "low"),))
@@ -121,7 +127,7 @@ def _reasoning_fragment(params: Mapping[str, object]) -> _ParamFragment:
             verbose_logger.debug("together_ai has no reasoning token budget; dropping thinking.budget_tokens.")
         return _ParamFragment(
             drop=dropped,
-            overrides=(("reasoning", _reasoning_toggle(thinking.get("type") != "disabled")),),
+            extra_body=(("reasoning", _reasoning_toggle(thinking.get("type") != "disabled")),),
         )
     return _ParamFragment(drop=dropped)
 
@@ -142,7 +148,16 @@ def _translation_plan(params: Mapping[str, object]) -> _ParamFragment:
     return _ParamFragment(
         drop=frozenset(key for fragment in fragments for key in fragment.drop),
         overrides=tuple(override for fragment in fragments for override in fragment.overrides),
+        extra_body=tuple(nested for fragment in fragments for nested in fragment.extra_body),
     )
+
+
+def _merged_extra_body(
+    existing: object,
+    additions: tuple[tuple[str, object], ...],
+) -> dict:  # mutable-ok: litellm only merges further params into extra_body when it is a real dict
+    current: Final = existing.items() if isinstance(existing, Mapping) else ()
+    return dict((*current, *additions))  # mutable-ok: same
 
 
 class TogetherAIConfig(OpenAIGPTConfig):
@@ -244,8 +259,17 @@ class TogetherAIConfig(OpenAIGPTConfig):
     ) -> dict:
         mapped: Final = super().map_openai_params(non_default_params, optional_params, model, drop_params)
         plan: Final = _translation_plan(mapped)
-        retained: Final = tuple((key, value) for key, value in mapped.items() if key not in plan.drop)
-        return dict((*retained, *plan.overrides))  # mutable-ok: request body handed to the OpenAI SDK
+        retained: Final = tuple(
+            (key, value) for key, value in mapped.items() if key not in plan.drop and key != "extra_body"
+        )
+        extra_body: Final = _merged_extra_body(mapped.get("extra_body"), plan.extra_body)
+        return dict(  # mutable-ok: request body handed to the OpenAI SDK
+            (
+                *retained,
+                *plan.overrides,
+                *((("extra_body", extra_body),) if extra_body else ()),
+            )
+        )
 
     def get_models(
         self,

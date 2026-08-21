@@ -34,10 +34,10 @@ def no_together_env(monkeypatch):
     return monkeypatch
 
 
-def map_params(model, **non_default_params):
+def map_params(model, optional_params=None, **non_default_params):
     return TogetherAIConfig().map_openai_params(
         non_default_params=non_default_params,
-        optional_params={},
+        optional_params=optional_params if optional_params is not None else {},
         model=model,
         drop_params=False,
     )
@@ -117,10 +117,15 @@ def test_native_params_are_advertised(local_model_cost_map):
 
 
 def test_reasoning_effort_none_disables_thinking(local_model_cost_map):
-    """Together turns thinking off through `reasoning`, not through `reasoning_effort`."""
+    """Together turns thinking off through `reasoning`, not through `reasoning_effort`.
+
+    `reasoning` is not an OpenAI param, so it has to ride in `extra_body`: handed to the
+    SDK as a top-level keyword it raises TypeError before the request is ever sent.
+    """
     mapped = map_params(REASONING_MODEL, reasoning_effort="none")
 
-    assert mapped["reasoning"] == {"enabled": False}
+    assert mapped["extra_body"]["reasoning"] == {"enabled": False}
+    assert "reasoning" not in mapped
     assert "reasoning_effort" not in mapped
 
 
@@ -150,15 +155,30 @@ def test_supported_reasoning_effort_values_pass_through(local_model_cost_map, ef
 def test_anthropic_thinking_param_becomes_the_reasoning_toggle(local_model_cost_map, thinking, expected_enabled):
     mapped = map_params(REASONING_MODEL, thinking=thinking)
 
-    assert mapped["reasoning"] == {"enabled": expected_enabled}
+    assert mapped["extra_body"]["reasoning"] == {"enabled": expected_enabled}
+    assert "reasoning" not in mapped
     assert "thinking" not in mapped
 
 
 def test_native_reasoning_param_wins_over_thinking(local_model_cost_map):
     mapped = map_params(REASONING_MODEL, reasoning={"enabled": True}, thinking={"type": "disabled"})
 
-    assert mapped["reasoning"] == {"enabled": True}
+    assert mapped["extra_body"]["reasoning"] == {"enabled": True}
+    assert "reasoning" not in mapped
     assert "thinking" not in mapped
+
+
+def test_reasoning_toggle_joins_an_existing_extra_body(local_model_cost_map):
+    mapped = map_params(
+        REASONING_MODEL,
+        optional_params={"extra_body": {"safety_model": "meta-llama/Llama-Guard-4-12B"}},
+        reasoning_effort="none",
+    )
+
+    assert mapped["extra_body"] == {
+        "safety_model": "meta-llama/Llama-Guard-4-12B",
+        "reasoning": {"enabled": False},
+    }
 
 
 def test_max_completion_tokens_becomes_max_tokens(local_model_cost_map):
@@ -229,6 +249,9 @@ def test_request_body_reaching_the_openai_sdk(local_model_cost_map, no_together_
 
     sent = mocked_create.call_args.kwargs
     assert sent["model"] == "openai/gpt-oss-120b"
+    # every key here has to be one the SDK's create() accepts, or the call raises TypeError
+    # before it is ever sent; Together-native fields belong in extra_body
+    assert "reasoning" not in sent
     assert sent["max_tokens"] == 100
     assert sent["logprobs"] == 3
     assert sent["reasoning_effort"] == "low"
@@ -240,6 +263,26 @@ def test_request_body_reaching_the_openai_sdk(local_model_cost_map, no_together_
         "repetition_penalty": 1.1,
         "safety_model": "meta-llama/Llama-Guard-4-12B",
     }
+
+
+def test_reasoning_toggle_reaches_the_sdk_in_extra_body(local_model_cost_map, no_together_env):
+    """Regression: `reasoning` handed to the SDK as a keyword raised
+    `AsyncCompletions.create() got an unexpected keyword argument 'reasoning'`."""
+    import openai
+
+    client = openai.OpenAI(api_key="test-key", base_url="https://api.together.xyz/v1")
+    with patch.object(client.chat.completions.with_raw_response, "create", new=MagicMock()) as mocked_create:
+        local_model_cost_map.completion(
+            model="together_ai/moonshotai/Kimi-K3",
+            messages=[{"role": "user", "content": "hi"}],
+            client=client,
+            reasoning_effort="none",
+        )
+
+    sent = mocked_create.call_args.kwargs
+    assert sent["extra_body"]["reasoning"] == {"enabled": False}
+    assert "reasoning" not in sent
+    assert "reasoning_effort" not in sent
 
 
 def test_api_key_resolution_order(no_together_env):
