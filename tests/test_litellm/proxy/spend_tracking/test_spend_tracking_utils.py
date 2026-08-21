@@ -2927,7 +2927,7 @@ class TestSpendLogKeyRedaction:
 
     def test_already_hashed_key_unchanged(self):
         hashed = "bcfe8173f5447f10be0e7fb37aaa8b97829d5c9e0498232152f9d123456789ab"
-        assert _redact_logged_api_key(hashed) == hashed
+        assert _redact_logged_api_key(hashed, already_hashed=True) == hashed
 
     def test_bearer_prefixed_non_sk_key_is_hashed(self):
         raw = "Bearer some-other-token-format"
