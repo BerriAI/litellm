@@ -3562,7 +3562,7 @@ class ProxyBaseLLMRequestProcessing:
     ) -> float | None:
         try:
             cost: Final = litellm_logging_obj._response_cost_calculator(result=model_response)  # pyright: ignore[reportPrivateUsage]  # reuse the call's own cost calc for pricing parity with the logging callback
-        except Exception:
+        except Exception:  # noqa: BLE001  # a pricing failure falls back to model-name pricing instead of breaking the stream
             return None
         return float(cost) if isinstance(cost, (int, float)) and not isinstance(cost, bool) else None
 
