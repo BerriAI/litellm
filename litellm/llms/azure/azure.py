@@ -1389,7 +1389,6 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
             litellm_params=litellm_params,
         )
 
-        ## LOGGING
         logging_obj.pre_call(
             input=input,
             api_key=api_key,
@@ -1434,7 +1433,6 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
             litellm_params=litellm_params,
         )
 
-        ## LOGGING
         logging_obj.pre_call(
             input=input,
             api_key=api_key,

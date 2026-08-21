@@ -1365,9 +1365,6 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 client=client,
             )
 
-            if headers:
-                data["extra_headers"] = headers
-            ## LOGGING
             logging_obj.pre_call(
                 input=prompt,
                 api_key=openai_aclient.api_key,
@@ -1378,6 +1375,9 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                     "complete_input_dict": data,
                 },
             )
+
+            if headers:
+                data["extra_headers"] = headers
             response = await openai_aclient.images.generate(**data, timeout=timeout)
             stringified_response: Final = response.model_dump()
             ## LOGGING
@@ -1544,7 +1544,6 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             shared_session=shared_session,
         )
 
-        ## LOGGING
         logging_obj.pre_call(
             input=input,
             api_key=api_key,
@@ -1591,7 +1590,6 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             ),
         )
 
-        ## LOGGING
         logging_obj.pre_call(
             input=input,
             api_key=api_key,
