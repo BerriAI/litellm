@@ -1182,7 +1182,7 @@ class ResetBudgetJob:
             if not raw:
                 continue
             row_id: str = row[source.id_column]
-            windows: list = raw if isinstance(raw, list) else json.loads(raw)
+            windows: list[dict[str, object]] = raw if isinstance(raw, list) else json.loads(raw)
             changed = False
             for window in windows:
                 counter_key = f"{source.counter_prefix}:{row_id}:window:{window['budget_duration']}"
