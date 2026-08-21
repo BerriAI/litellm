@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import CompareUI from "./CompareUI";
@@ -142,7 +142,7 @@ describe("CompareUI", () => {
     });
 
     const textarea = getByTestId("message-textarea");
-    await user.type(textarea, "Describe this image");
+    fireEvent.change(textarea, { target: { value: "Describe this image" } });
 
     const sendButton = getByTestId("send-button");
     expect(sendButton).toBeEnabled();

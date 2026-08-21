@@ -83,7 +83,7 @@ const ClassifierPromptEditor: React.FC<ClassifierPromptEditorProps> = ({
             <DialogTitle>Classifier prompt</DialogTitle>
           </DialogHeader>
 
-          <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+          <div className="rounded-md border border-warning/30 bg-warning/10 p-3 text-sm text-warning">
             <p className="flex items-center gap-2 font-medium">
               <TriangleAlert className="size-4" aria-hidden />
               Proceed with caution

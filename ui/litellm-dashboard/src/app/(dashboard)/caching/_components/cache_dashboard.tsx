@@ -140,18 +140,18 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
 
   return (
     <Tabs defaultValue="analytics" className="mt-2 mb-8 w-full gap-2 p-8">
-      <div className="mt-2 flex w-full items-center justify-between">
-        <TabsList>
-          <TabsTrigger value="analytics" className="flex-none">
+      <div className="mt-2 flex w-full items-center justify-between border-b">
+        <TabsList variant="line" className="h-auto rounded-none p-0">
+          <TabsTrigger value="analytics" className="flex-none rounded-none px-4 py-2">
             Cache Analytics
           </TabsTrigger>
-          <TabsTrigger value="health" className="flex-none">
+          <TabsTrigger value="health" className="flex-none rounded-none px-4 py-2">
             Cache Health
           </TabsTrigger>
-          <TabsTrigger value="settings" className="flex-none">
+          <TabsTrigger value="settings" className="flex-none rounded-none px-4 py-2">
             Cache Settings
           </TabsTrigger>
-          <TabsTrigger value="coordination" className="flex-none">
+          <TabsTrigger value="coordination" className="flex-none rounded-none px-4 py-2">
             Coordination Redis
           </TabsTrigger>
         </TabsList>
@@ -164,7 +164,7 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
         </div>
       </div>
 
-      <TabsContent value="analytics">
+      <TabsContent value="analytics" keepMounted>
         <Card>
           <CardContent>
             <p className="text-sm text-muted-foreground">
@@ -311,7 +311,7 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
         </Card>
       </TabsContent>
 
-      <TabsContent value="health">
+      <TabsContent value="health" keepMounted>
         <CacheHealthTab
           accessToken={accessToken}
           healthCheckResponse={healthCheckResponse}
@@ -319,11 +319,11 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
         />
       </TabsContent>
 
-      <TabsContent value="settings">
+      <TabsContent value="settings" keepMounted>
         <CacheSettings accessToken={accessToken} userRole={userRole} userID={userID} />
       </TabsContent>
 
-      <TabsContent value="coordination">
+      <TabsContent value="coordination" keepMounted>
         <CoordinationRedisSettings />
       </TabsContent>
     </Tabs>

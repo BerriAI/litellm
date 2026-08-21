@@ -1,10 +1,10 @@
-import { InfoCircleOutlined } from "@ant-design/icons";
+import { Info } from "lucide-react";
 import { SimpleTooltip } from "@/components/ui/tooltip";
-import { InputNumber, Select as AntdSelect, Switch, Typography } from "antd";
+import { SearchSelect } from "@/components/shared/SearchSelect";
+import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
 import React from "react";
 import { ModelGroup } from "@/components/llm_calls/fetch_models";
-
-const { Text } = Typography;
 
 const DEFAULT_MATCH_THRESHOLD = 0.5;
 
@@ -41,49 +41,51 @@ const SemanticKeywordMatching: React.FC<SemanticKeywordMatchingProps> = ({
       <div className="flex items-center justify-between gap-4">
         <div>
           <div className="flex items-center gap-2">
-            <Text className="font-medium">Semantic keyword matching</Text>
+            <span className="font-medium">Semantic keyword matching</span>
             <SimpleTooltip content="Recognize related phrasing beyond exact keyword matches by comparing embeddings instead of plain text. Overrides direct keyword matching">
-              <InfoCircleOutlined className="text-gray-400" />
+              <Info className="size-4 text-muted-foreground" />
             </SimpleTooltip>
           </div>
-          <Text className="text-gray-500 text-sm">
+          <span className="text-muted-foreground text-sm">
             Uses same keyword-tier pairs as above and overrides direct keyword matching. Adds latency based on embedding
             model network request.
-          </Text>
+          </span>
         </div>
-        <Switch checked={enabled} onChange={onEnabledChange} aria-label="Semantic keyword matching" />
+        <Switch checked={enabled} onCheckedChange={onEnabledChange} aria-label="Semantic keyword matching" />
       </div>
 
       {enabled && (
-        <div className="grid gap-4 md:grid-cols-2 mt-4 pt-4 border-t border-gray-200">
+        <div className="grid gap-4 md:grid-cols-2 mt-4 pt-4 border-t border-border">
           <div>
-            <Text className="text-sm font-medium mb-1 block">Embedding model</Text>
-            <AntdSelect
-              value={embeddingModel}
-              onChange={onEmbeddingModelChange}
-              placeholder="Select an embedding model"
-              showSearch
-              style={{ width: "100%" }}
+            <span className="mb-1 block text-sm font-medium">Embedding model</span>
+            <SearchSelect
               options={modelOptions}
-              status={embeddingModelMissing ? "error" : undefined}
+              value={embeddingModel ?? ""}
+              onValueChange={onEmbeddingModelChange}
+              placeholder="Select an embedding model"
+              emptyText="No embedding models found"
+              aria-label="Embedding model"
+              allowClear={false}
+              className={embeddingModelMissing ? "border-destructive" : undefined}
             />
-            {embeddingModelMissing && (
-              <Text type="danger" style={{ fontSize: 12 }}>
-                An embedding model is required
-              </Text>
-            )}
+            {embeddingModelMissing && <span className="text-xs text-destructive">An embedding model is required</span>}
           </div>
           <div>
-            <Text className="text-sm font-medium mb-1 block">Minimum match score</Text>
-            <InputNumber
+            <span className="mb-1 block text-sm font-medium">Minimum match score</span>
+            <Input
+              type="number"
               value={matchThreshold}
-              onChange={(value) => onMatchThresholdChange(value ?? DEFAULT_MATCH_THRESHOLD)}
+              onChange={(event) =>
+                onMatchThresholdChange(event.target.value === "" ? DEFAULT_MATCH_THRESHOLD : event.target.valueAsNumber)
+              }
               min={0}
               max={1}
               step={0.05}
-              style={{ width: "100%" }}
+              className="w-full"
             />
-            <Text className="text-gray-500 text-xs mt-1 block">Match only at or above this similarity score.</Text>
+            <span className="mt-1 block text-xs text-muted-foreground">
+              Match only at or above this similarity score.
+            </span>
           </div>
         </div>
       )}

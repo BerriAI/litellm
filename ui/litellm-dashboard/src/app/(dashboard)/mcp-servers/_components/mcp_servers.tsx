@@ -413,7 +413,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
   }, [refetch]);
 
   if (!accessToken || !userRole || !userID) {
-    return <div className="p-6 text-center text-gray-500">Missing required authentication parameters.</div>;
+    return <div className="p-6 text-center text-muted-foreground">Missing required authentication parameters.</div>;
   }
 
   return (
@@ -543,7 +543,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
               </TabsTrigger>
             )}
           </TabsList>
-          <TabsContent value="servers">
+          <TabsContent value="servers" keepMounted>
             {selectedServerId ? (
               <MCPServerView
                 key={selectedServerId}
@@ -703,24 +703,24 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
               </div>
             )}
           </TabsContent>
-          <TabsContent value="toolsets">
+          <TabsContent value="toolsets" keepMounted>
             <MCPToolsetsTab accessToken={accessToken} userRole={userRole} />
           </TabsContent>
-          <TabsContent value="connect">
+          <TabsContent value="connect" keepMounted>
             <MCPConnect />
           </TabsContent>
           {isAdminRole(userRole) && (
-            <TabsContent value="semantic-filter">
+            <TabsContent value="semantic-filter" keepMounted>
               <MCPSemanticFilterSettings accessToken={accessToken} />
             </TabsContent>
           )}
           {isAdminRole(userRole) && (
-            <TabsContent value="network-settings">
+            <TabsContent value="network-settings" keepMounted>
               <MCPNetworkSettings accessToken={accessToken} />
             </TabsContent>
           )}
           {isAdminRole(userRole) && (
-            <TabsContent value="submitted">
+            <TabsContent value="submitted" keepMounted>
               <MCPSubmissionsTab accessToken={accessToken} />
             </TabsContent>
           )}

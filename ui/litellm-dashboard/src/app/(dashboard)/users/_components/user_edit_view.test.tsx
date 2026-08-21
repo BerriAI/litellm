@@ -12,69 +12,6 @@ vi.mock("@/utils/roles", () => ({
   all_admin_roles: ["Admin", "Admin Viewer", "proxy_admin", "proxy_admin_viewer", "org_admin"],
 }));
 
-vi.mock("antd", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("antd")>();
-  const React = await import("react");
-  const SelectComponent = ({
-    value,
-    onChange,
-    mode,
-    children,
-    placeholder,
-    disabled,
-    style,
-    allowClear,
-    ...props
-  }: any) => {
-    const isMultiple = mode === "multiple";
-    const selectValue = isMultiple ? (Array.isArray(value) ? value : []) : value || "";
-    return React.createElement(
-      "select",
-      {
-        multiple: isMultiple,
-        value: selectValue,
-        onChange: (e: React.ChangeEvent<HTMLSelectElement>) => {
-          const selectedValues = Array.from(e.target.selectedOptions, (option) => option.value);
-          onChange(isMultiple ? selectedValues : selectedValues[0] || undefined);
-        },
-        disabled,
-        placeholder,
-        style,
-        "aria-label": placeholder || "Select",
-        role: "combobox",
-        ...props,
-      },
-      children,
-    );
-  };
-  SelectComponent.displayName = "Select";
-  const SelectOption = ({ value: optionValue, children: optionChildren }: any) =>
-    React.createElement("option", { value: optionValue }, optionChildren);
-  SelectOption.displayName = "SelectOption";
-  SelectComponent.Option = SelectOption;
-  const Tooltip = ({ children }: { children?: React.ReactNode }) => React.createElement(React.Fragment, null, children);
-  Tooltip.displayName = "Tooltip";
-  const Checkbox = ({ checked, onChange, children, ...props }: any) =>
-    React.createElement(
-      "label",
-      { style: { display: "flex", alignItems: "center", gap: "8px" } },
-      React.createElement("input", {
-        type: "checkbox",
-        checked: checked,
-        onChange: (e: React.ChangeEvent<HTMLInputElement>) => onChange({ target: { checked: e.target.checked } }),
-        ...props,
-      }),
-      children,
-    );
-  Checkbox.displayName = "Checkbox";
-  return {
-    ...actual,
-    Select: SelectComponent,
-    Tooltip,
-    Checkbox,
-  };
-});
-
 describe("UserEditView", () => {
   const MOCK_USER_DATA = {
     user_id: "user-123",
@@ -231,8 +168,23 @@ describe("UserEditView", () => {
     renderWithProviders(<UserEditView {...defaultProps} />);
 
     await waitFor(() => {
-      expect(screen.getByLabelText("Unlimited Budget")).toBeInTheDocument();
+      expect(screen.getByRole("checkbox", { name: "Unlimited Budget" })).toBeInTheDocument();
     });
+  });
+
+  it("should check unlimited budget when clicking its visible text", async () => {
+    renderWithProviders(<UserEditView {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(screen.getByRole("spinbutton", { name: /max budget/i })).toBeEnabled();
+    });
+
+    await userEvent.click(screen.getByText("Unlimited Budget"));
+
+    await waitFor(() => {
+      expect(screen.getByRole("checkbox", { name: "Unlimited Budget" })).toBeChecked();
+    });
+    expect(screen.getByRole("spinbutton", { name: /max budget/i })).toBeDisabled();
   });
 
   it("should set unlimited budget checkbox when max_budget is null", async () => {
@@ -247,7 +199,7 @@ describe("UserEditView", () => {
     renderWithProviders(<UserEditView {...defaultProps} userData={userDataWithNullBudget} />);
 
     await waitFor(() => {
-      const checkbox = screen.getByLabelText("Unlimited Budget");
+      const checkbox = screen.getByRole("checkbox", { name: "Unlimited Budget" });
       expect(checkbox).toBeChecked();
     });
   });
@@ -282,10 +234,10 @@ describe("UserEditView", () => {
     renderWithProviders(<UserEditView {...defaultProps} />);
 
     await waitFor(() => {
-      expect(screen.getByLabelText("Unlimited Budget")).toBeInTheDocument();
+      expect(screen.getByRole("checkbox", { name: "Unlimited Budget" })).toBeInTheDocument();
     });
 
-    const checkbox = screen.getByLabelText("Unlimited Budget");
+    const checkbox = screen.getByRole("checkbox", { name: "Unlimited Budget" });
     await userEvent.click(checkbox);
 
     await waitFor(() => {
@@ -400,7 +352,7 @@ describe("UserEditView", () => {
     const budgetInput = screen.getByRole("spinbutton", { name: /max budget/i });
     await userEvent.clear(budgetInput);
 
-    const checkbox = screen.getByLabelText("Unlimited Budget");
+    const checkbox = screen.getByRole("checkbox", { name: "Unlimited Budget" });
     expect(checkbox).not.toBeChecked();
 
     const submitButton = screen.getByRole("button", { name: /save changes/i });
@@ -416,10 +368,10 @@ describe("UserEditView", () => {
     renderWithProviders(<UserEditView {...defaultProps} onSubmit={onSubmitMock} />);
 
     await waitFor(() => {
-      expect(screen.getByLabelText("Unlimited Budget")).toBeInTheDocument();
+      expect(screen.getByRole("checkbox", { name: "Unlimited Budget" })).toBeInTheDocument();
     });
 
-    const checkbox = screen.getByLabelText("Unlimited Budget");
+    const checkbox = screen.getByRole("checkbox", { name: "Unlimited Budget" });
     await userEvent.click(checkbox);
 
     await waitFor(() => {
@@ -494,7 +446,7 @@ describe("UserEditView", () => {
     renderWithProviders(<UserEditView {...defaultProps} userData={userDataWithUndefinedBudget} />);
 
     await waitFor(() => {
-      const checkbox = screen.getByLabelText("Unlimited Budget");
+      const checkbox = screen.getByRole("checkbox", { name: "Unlimited Budget" });
       expect(checkbox).toBeChecked();
     });
   });

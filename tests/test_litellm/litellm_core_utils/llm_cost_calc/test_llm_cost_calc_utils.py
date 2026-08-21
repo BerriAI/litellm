@@ -941,7 +941,7 @@ def test_generic_cost_per_token_gpt56(
     assert model_cost_map["cache_creation_input_token_cost"] == pytest.approx(
         input_cost * 1.25
     )
-    assert model_cost_map["max_input_tokens"] == 1050000
+    assert model_cost_map["max_input_tokens"] == 922000
     assert model_cost_map["input_cost_per_token_above_272k_tokens"] == pytest.approx(
         input_cost * 2
     )
@@ -1056,6 +1056,53 @@ def test_generic_cost_per_token_gpt56_terra_cache_costs_by_tier_and_context(
     assert prompt_cost == pytest.approx(expected_prompt_cost)
 
 
+@pytest.mark.parametrize("model", ["gpt-5.6-cyber", "daybreak-red-latest"])
+@pytest.mark.parametrize(
+    "prompt_tokens,input_rate,cache_write_rate,cache_read_rate,output_rate",
+    [
+        (100000, 1.25e-5, 1.5625e-5, 1.25e-6, 7.5e-5),
+        (300000, 2.5e-5, 3.125e-5, 2.5e-6, 1.125e-4),
+    ],
+)
+def test_generic_cost_per_token_gpt56_cyber(
+    model,
+    prompt_tokens,
+    input_rate,
+    cache_write_rate,
+    cache_read_rate,
+    output_rate,
+    monkeypatch,
+):
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+    cached_tokens = 50000
+    cache_write_tokens = 40000
+    text_tokens = prompt_tokens - cached_tokens - cache_write_tokens
+    completion_tokens = 1000
+    usage = Usage(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=prompt_tokens + completion_tokens,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cached_tokens=cached_tokens, cache_write_tokens=cache_write_tokens
+        ),
+    )
+
+    prompt_cost, completion_cost = generic_cost_per_token(
+        model=model,
+        usage=usage,
+        custom_llm_provider="openai",
+    )
+
+    assert prompt_cost == pytest.approx(
+        text_tokens * input_rate
+        + cached_tokens * cache_read_rate
+        + cache_write_tokens * cache_write_rate
+    )
+    assert completion_cost == pytest.approx(completion_tokens * output_rate)
+
+
 @pytest.mark.parametrize(
     "model,input_cost,output_cost,cache_read_cost",
     [
@@ -1082,6 +1129,7 @@ def test_generic_cost_per_token_azure_gpt56(
     assert model_cost_map["input_cost_per_token"] == input_cost
     assert model_cost_map["output_cost_per_token"] == output_cost
     assert model_cost_map["cache_read_input_token_cost"] == cache_read_cost
+    assert model_cost_map["max_input_tokens"] == 922000
 
     prompt_tokens = 1000
     completion_tokens = 500
@@ -2324,6 +2372,87 @@ def test_data_residency_composes_with_service_tier(_local_model_cost_map):
     assert priority_eu_total == pytest.approx(priority_base_total * 1.10, rel=1e-9)
 
 
+@pytest.mark.parametrize("model", ["gemini-3.5-flash", "claude-haiku-4-5@20251001"])
+@pytest.mark.parametrize("vertex_location", ["us-central1", "us-east5", "europe-west1", "asia-southeast1"])
+def test_vertex_regional_location_applies_uplift(vertex_location, model, _local_model_cost_map):
+    """Google bills every non-global Vertex endpoint at 1.1x the global rate for GA
+    Gemini 3+ and regional-pricing Claude models, so a request served from a regional
+    location must cost 1.1x what the same usage costs on the global endpoint."""
+    from litellm.types.utils import Usage
+
+    usage = Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
+
+    base = generic_cost_per_token(model=model, usage=usage, custom_llm_provider="vertex_ai")
+    regional = generic_cost_per_token(
+        model=model,
+        usage=usage,
+        custom_llm_provider="vertex_ai",
+        vertex_location=vertex_location,
+    )
+
+    base_total = base[0] + base[1]
+    regional_total = regional[0] + regional[1]
+
+    assert base_total > 0
+    assert regional_total == pytest.approx(base_total * 1.10, rel=1e-9)
+    assert regional[0] == pytest.approx(base[0] * 1.10, rel=1e-9)
+    assert regional[1] == pytest.approx(base[1] * 1.10, rel=1e-9)
+
+
+@pytest.mark.parametrize("vertex_location", [None, "global", "GLOBAL"])
+def test_vertex_global_or_absent_location_no_uplift(vertex_location, _local_model_cost_map):
+    """The global endpoint prices at the base rate, whatever the casing, and an
+    unresolved location must never uplift."""
+    from litellm.types.utils import Usage
+
+    usage = Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
+
+    base = generic_cost_per_token(
+        model="claude-haiku-4-5@20251001", usage=usage, custom_llm_provider="vertex_ai"
+    )
+    located = generic_cost_per_token(
+        model="claude-haiku-4-5@20251001",
+        usage=usage,
+        custom_llm_provider="vertex_ai",
+        vertex_location=vertex_location,
+    )
+
+    assert base == located
+
+
+@pytest.mark.parametrize("model", ["claude-opus-4-1", "gemini-2.0-flash-001"])
+def test_vertex_location_no_uplift_for_uniformly_priced_model(model, _local_model_cost_map):
+    """Models Google prices uniformly across endpoints (Gemini 2.x, Claude Opus 4.1
+    and older) carry no multiplier and must not move with the location."""
+    from litellm.types.utils import Usage
+
+    usage = Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
+
+    base = generic_cost_per_token(model=model, usage=usage, custom_llm_provider="vertex_ai")
+    regional = generic_cost_per_token(
+        model=model,
+        usage=usage,
+        custom_llm_provider="vertex_ai",
+        vertex_location="us-east5",
+    )
+
+    assert base == regional, f"{model} should not have a regional-endpoint uplift"
+
+
+def test_vertex_uplift_invalid_multiplier_defaults_to_one():
+    """A malformed multiplier in the cost map degrades to base pricing, never raises."""
+    from litellm.litellm_core_utils.llm_cost_calc.utils import (
+        get_vertex_regional_endpoint_uplift,
+    )
+
+    assert (
+        get_vertex_regional_endpoint_uplift(
+            {"regional_endpoint_uplift_multiplier": "not-a-number"}, "us-east5"
+        )
+        == 1.0
+    )
+
+
 def test_priority_service_tier_above_threshold_uses_priority_tier_rates_for_cached_tokens(
     _local_model_cost_map,
 ):
@@ -2875,6 +3004,57 @@ def test_token_type_cost_breakdown_applies_regional_uplift():
     text_input_cost = 600 * model_info["input_cost_per_token"] * uplift
     assert text_output_cost + eu.reasoning_cost == pytest.approx(completion_cost)
     assert text_input_cost + eu.cache_read_cost == pytest.approx(prompt_cost)
+
+
+def test_token_type_cost_breakdown_applies_vertex_regional_uplift():
+    """
+    Non-global Vertex endpoints apply a flat 1.1x uplift to every token cost. The
+    per-type breakdown must apply the same uplift via vertex_location so it stays
+    reconciled with the uplifted input_cost/output_cost totals, instead of being
+    logged at the global rate.
+    """
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    model = "claude-haiku-4-5@20251001"
+    custom_llm_provider = "vertex_ai"
+    usage = Usage(
+        prompt_tokens=1000,
+        completion_tokens=500,
+        total_tokens=1500,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cached_tokens=400, text_tokens=600
+        ),
+    )
+
+    model_info = litellm.get_model_info(
+        model=model, custom_llm_provider=custom_llm_provider
+    )
+    uplift = model_info["regional_endpoint_uplift_multiplier"]
+    assert uplift > 1.0
+
+    base = get_token_type_cost_breakdown(
+        model=model, custom_llm_provider=custom_llm_provider, usage=usage
+    )
+    regional = get_token_type_cost_breakdown(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        usage=usage,
+        vertex_location="us-east5",
+    )
+
+    assert base.cache_read_cost > 0
+    assert regional.cache_read_cost == pytest.approx(base.cache_read_cost * uplift)
+
+    # The uplifted breakdown must still reconcile with the uplifted totals.
+    prompt_cost, _completion_cost = generic_cost_per_token(
+        model=model,
+        usage=usage,
+        custom_llm_provider=custom_llm_provider,
+        vertex_location="us-east5",
+    )
+    text_input_cost = 600 * model_info["input_cost_per_token"] * uplift
+    assert text_input_cost + regional.cache_read_cost == pytest.approx(prompt_cost)
 
 
 def test_token_type_cost_breakdown_applies_anthropic_geo_multiplier(monkeypatch):
