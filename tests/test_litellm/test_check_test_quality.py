@@ -575,6 +575,68 @@ def test_patch_object_rooted_at_the_sdk_is_flagged(tmp_path):
     assert "TQ008" in _codes(tmp_path, source)
 
 
+def test_patch_object_on_a_from_imported_sdk_module_is_flagged(tmp_path):
+    source = (
+        "from litellm.llms.openai.chat import handler\nfrom unittest.mock import patch\n\n\n"
+        "def test_x():\n"
+        '    with patch.object(handler.OpenAIChatCompletion, "completion"):\n'
+        "        assert True\n"
+    )
+    assert "TQ008" in _codes(tmp_path, source)
+
+
+def test_patch_object_on_an_aliased_sdk_module_is_flagged(tmp_path):
+    source = (
+        "import litellm.llms.openai.chat.handler as oai\nfrom unittest.mock import patch\n\n\n"
+        "def test_x():\n"
+        '    with patch.object(oai.OpenAIChatCompletion, "completion"):\n'
+        "        assert True\n"
+    )
+    assert "TQ008" in _codes(tmp_path, source)
+
+
+def test_patch_object_on_a_renamed_sdk_symbol_is_flagged(tmp_path):
+    source = (
+        "from litellm.utils import get_llm_provider as glp\nfrom unittest.mock import patch\n\n\n"
+        "def test_x():\n"
+        '    with patch.object(glp, "__wrapped__"):\n'
+        "        assert True\n"
+    )
+    assert "TQ008" in _codes(tmp_path, source)
+
+
+def test_the_reported_target_is_the_resolved_sdk_path(tmp_path):
+    source = (
+        "from litellm.llms.openai.chat import handler\nfrom unittest.mock import patch\n\n\n"
+        "def test_x():\n"
+        '    with patch.object(handler.OpenAIChatCompletion, "completion"):\n'
+        "        assert True\n"
+    )
+    reported = [v.message for v in checker.check_file(_written(tmp_path, source)) if v.code == "TQ008"]
+    assert reported
+    assert "litellm.llms.openai.chat.handler.OpenAIChatCompletion" in reported[0]
+
+
+def test_patch_object_on_a_from_imported_third_party_is_not_flagged(tmp_path):
+    source = (
+        "from openai import OpenAI\nfrom unittest.mock import patch\n\n\n"
+        "def test_x():\n"
+        '    with patch.object(OpenAI, "chat"):\n'
+        "        assert True\n"
+    )
+    assert "TQ008" not in _codes(tmp_path, source)
+
+
+def test_a_local_name_with_no_sdk_import_behind_it_is_not_flagged(tmp_path):
+    source = (
+        "from unittest.mock import patch\n\n\n"
+        "def test_x(handler):\n"
+        '    with patch.object(handler, "completion"):\n'
+        "        assert True\n"
+    )
+    assert "TQ008" not in _codes(tmp_path, source)
+
+
 def test_mocking_a_third_party_client_is_not_flagged(tmp_path):
     source = (
         "from unittest.mock import patch\n\n\n"

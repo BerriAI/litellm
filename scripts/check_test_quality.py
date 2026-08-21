@@ -471,25 +471,56 @@ def iter_global_mutation_violations(path: Path, tree: ast.Module) -> Iterator[Vi
                 )
 
 
-def _patch_targets(call: ast.Call) -> Iterator[str]:
-    """What a patch installer is replacing: the dotted string it names, or the
-    attribute chain handed to `patch.object` / `patch.dict`."""
-    for first in call.args[:1]:
-        if isinstance(first, ast.Constant) and isinstance(first.value, str):
-            yield first.value
-        elif dotted := _dotted_name(first):
-            yield dotted
-
-
 def _is_sdk_internal(dotted: str) -> bool:
     return dotted == SDK_MODULE or dotted.startswith(f"{SDK_MODULE}.")
 
 
+def _sdk_import_bindings(tree: ast.Module) -> Iterator[tuple[str, str]]:
+    """(local name, dotted path) for every import that binds something under `litellm`."""
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            yield from (
+                (alias.asname, alias.name) if alias.asname else (root, root)
+                for alias in node.names
+                if _is_sdk_internal(alias.name)
+                for root in (alias.name.partition(".")[0],)
+            )
+        elif isinstance(node, ast.ImportFrom) and node.module and _is_sdk_internal(node.module):
+            yield from ((alias.asname or alias.name, f"{node.module}.{alias.name}") for alias in node.names)
+
+
+def _sdk_aliases(tree: ast.Module) -> Mapping[str, str]:
+    """Local names bound to something under `litellm`, mapped to the path they stand for.
+
+    `from litellm.llms.openai.chat import handler` then `patch.object(handler.X, ...)`
+    reaches the same internal as the dotted string form and has to read the same way.
+    """
+    return MappingProxyType({name: dotted for name, dotted in _sdk_import_bindings(tree)})
+
+
+def _resolved(dotted: str, aliases: Mapping[str, str]) -> str:
+    root, _, rest = dotted.partition(".")
+    base: Final = aliases.get(root, root)
+    return f"{base}.{rest}" if rest else base
+
+
+def _patch_targets(call: ast.Call, aliases: Mapping[str, str]) -> Iterator[str]:
+    """What a patch installer is replacing: the dotted string it names, or the
+    attribute chain handed to `patch.object` / `patch.dict`, resolved through the
+    module's imports so a locally bound SDK object reads as its full path."""
+    for first in call.args[:1]:
+        if isinstance(first, ast.Constant) and isinstance(first.value, str):
+            yield first.value
+        elif dotted := _dotted_name(first):
+            yield _resolved(dotted, aliases)
+
+
 def iter_internal_patch_violations(path: Path, tree: ast.Module) -> Iterator[Violation]:
+    aliases: Final = _sdk_aliases(tree)
     for node in ast.walk(tree):
         if not (isinstance(node, ast.Call) and _is_patch_installer(_dotted_name(node.func))):
             continue
-        for target in _patch_targets(node):
+        for target in _patch_targets(node, aliases):
             if _is_sdk_internal(target):
                 yield Violation(
                     path,
