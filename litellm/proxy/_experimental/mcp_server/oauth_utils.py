@@ -633,6 +633,13 @@ def canonicalize_url_identity(url: str) -> str:
     return urlunparse((scheme, netloc, parsed.path.rstrip("/"), "", "", ""))
 
 
+def issuer_identities_match(claimed_issuer: str, expected_issuer: str) -> bool:
+    """Issuer equality tolerant only of URL-insignificant differences (scheme/host case, the default
+    port, a trailing slash), through the shared canonicalizer. Used for RFC 8414 §3.3 metadata
+    anchoring and for the RFC 9207 ``iss`` an authorization response carries."""
+    return canonicalize_url_identity(claimed_issuer) == canonicalize_url_identity(expected_issuer)
+
+
 def canonical_resource_uri(url: str) -> str | None:
     """Canonicalize an upstream MCP server URL into an RFC 8707 resource identifier.
 

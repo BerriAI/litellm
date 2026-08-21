@@ -58,6 +58,7 @@ from litellm.proxy._experimental.mcp_server.oauth_utils import (
     TOKEN_NO_CACHE_HEADERS,
     build_upstream_oauth2_token_request,
     get_request_base_url,
+    issuer_identities_match,
     resolve_upstream_resource,
     validate_trusted_redirect_uri,
     well_known_root_suffix,
@@ -135,6 +136,7 @@ def encode_state_with_base_url(
     dcr_client_id: str | None = None,
     dcr_client_secret: str | None = None,
     dcr_token_endpoint_auth_method: MCPTokenEndpointAuthMethod | None = None,
+    expected_issuer: str | None = None,
 ) -> str:
     """
     Encode the base_url, original state, and PKCE parameters using encryption.
@@ -160,6 +162,8 @@ def encode_state_with_base_url(
             response granted the minted client, sealed alongside the credentials so the exchange
             authenticates the way the upstream expects instead of falling back to the server row's
             configured method
+        expected_issuer: Issuer identifier of the authorization server this flow is being sent to,
+            sealed so /callback can hold the RFC 9207 ``iss`` of the response against it
 
     Returns:
         An encrypted string that encodes all values
@@ -175,6 +179,7 @@ def encode_state_with_base_url(
         "dcr_client_id": dcr_client_id,
         "dcr_client_secret": dcr_client_secret,
         "dcr_token_endpoint_auth_method": dcr_token_endpoint_auth_method,
+        "expected_issuer": expected_issuer,
     }
     state_json: Final = json.dumps(state_data, sort_keys=True)
     encrypted_state: Final = encrypt_value_helper(state_json)
@@ -833,6 +838,7 @@ async def authorize_with_server(
         dcr_token_endpoint_auth_method=ephemeral_dcr_client.token_endpoint_auth_method
         if ephemeral_dcr_client
         else None,
+        expected_issuer=mcp_server.issuer,
     )
     relay_state: Final = secrets.token_urlsafe(_OAUTH_STATE_HANDLE_BYTES)
 
@@ -1892,11 +1898,29 @@ def _render_oauth_error_html(error: str, description: str | None) -> HTMLRespons
     return HTMLResponse(body, status_code=400)
 
 
+def _authorization_response_issuer_is_trusted(response_issuer: str | None, state_data: Mapping[str, object]) -> bool:
+    """RFC 9207: an authorization response may name the authorization server that issued it in
+    ``iss``. When /authorize sealed the issuer this flow was sent to, an ``iss`` naming a different
+    issuer means the response came back from an authorization server we never sent the user to, which
+    is the mix-up attack the parameter exists to catch, so the code must not be forwarded.
+
+    An absent ``iss`` is trusted: most authorization servers still do not send it, and RFC 9207 only
+    requires rejecting its absence when the server's metadata advertises support, which is not known
+    at this point in the flow. A state minted before this was sealed carries no expected issuer and
+    is likewise trusted, so in-flight authorizations survive the upgrade.
+    """
+    expected_issuer: Final = state_data.get("expected_issuer")
+    if not isinstance(expected_issuer, str) or not expected_issuer or response_issuer is None:
+        return True
+    return issuer_identities_match(response_issuer, expected_issuer)
+
+
 @router.get("/callback")
 async def callback(
     request: Request,
     code: str | None = None,
     state: str | None = None,
+    iss: str | None = None,
     error: str | None = None,
     error_description: str | None = None,
     error_uri: str | None = None,
@@ -1907,7 +1931,9 @@ async def callback(
 
     - A successful authorization response (``code`` + ``state``), which is
       forwarded back to the validated client ``redirect_uri`` with the
-      original (un-wrapped) ``state``.
+      original (un-wrapped) ``state``, once the RFC 9207 ``iss`` (when the
+      authorization server sent one) matches the issuer /authorize sealed
+      into the state.
     - An error response (``error``[+``error_description``/``error_uri``]), per
       RFC 6749 §4.1.2.1. When ``state`` is present and decodes to a trusted
       ``redirect_uri``, the error params are propagated back to the client so
@@ -1973,6 +1999,21 @@ async def callback(
         # the open-redirect + code-theft primitive even for pre-fix
         # states while permitting same-origin / allowlisted clients.
         redirect_uri = _get_validated_client_redirect_uri(request, state_data)
+
+        if not _authorization_response_issuer_is_trusted(iss, state_data):
+            verbose_logger.warning(
+                "MCP /callback rejected an authorization response: RFC 9207 iss=%r does not match the "
+                "issuer this flow was sent to (%r)",
+                iss,
+                state_data.get("expected_issuer"),
+            )
+            response = _render_oauth_error_html(
+                "invalid_issuer",
+                "This authorization response came from a different identity provider than the one this "
+                "MCP server is configured to use.",
+            )
+            _clear_oauth_state_cookie(response, request, state)
+            return response
 
         # Interactive dcr_bridge oauth_delegate: the state carries the litellm user the authorize step
         # captured. Instead of forwarding the raw upstream code (which the client would present at the

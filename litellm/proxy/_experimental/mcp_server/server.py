@@ -75,7 +75,7 @@ from litellm.proxy.litellm_pre_call_utils import (
     LiteLLMProxyRequestSetup,
     get_chain_id_from_headers,
 )
-from litellm.types.mcp import MCPAuth, MCPSpecVersion
+from litellm.types.mcp import MCP_LATEST_SUPPORTED_SPEC_VERSION, MCPAuth
 from litellm.types.mcp_server.mcp_server_manager import MCPInfo, MCPServer
 from litellm.types.utils import CallTypes, StandardLoggingMCPToolCall
 from litellm.utils import Rules, client, function_setup
@@ -3980,7 +3980,7 @@ if MCP_AVAILABLE:
             "id": "litellm-mcp-auth-probe",
             "method": "initialize",
             "params": {
-                "protocolVersion": MCPSpecVersion.jun_2025.value,
+                "protocolVersion": MCP_LATEST_SUPPORTED_SPEC_VERSION.value,
                 "capabilities": {},
                 "clientInfo": {
                     "name": "litellm-mcp-auth-probe",

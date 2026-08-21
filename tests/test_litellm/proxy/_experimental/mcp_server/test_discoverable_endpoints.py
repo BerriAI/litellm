@@ -4004,6 +4004,153 @@ async def test_callback_error_path_reads_cookie_and_clears_it(monkeypatch):
     assert cleared[cookie_name]["max-age"] == "0"
 
 
+def _issuer_anchored_oauth_server(issuer: str | None = "https://idp.example.com"):
+    from litellm.proxy._types import MCPTransport
+    from litellm.types.mcp import MCPAuth
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    return MCPServer(
+        server_id="rfc9207_server",
+        name="rfc9207",
+        server_name="rfc9207",
+        alias="rfc9207",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        client_id="upstream-client-id",
+        issuer=issuer,
+        authorization_url="https://idp.example.com/oauth/authorize",
+        token_url="https://idp.example.com/oauth/token",
+    )
+
+
+async def _authorize_then_callback(server, iss, monkeypatch, expected_issuer_override=...):
+    """Run /authorize for ``server``, then feed the resulting flow back through /callback with the
+    RFC 9207 ``iss`` the authorization server supposedly returned. Returns (callback_response,
+    sealed_state_data)."""
+    from http.cookies import SimpleCookie
+    from urllib.parse import parse_qs, urlparse
+
+    from fastapi import Request
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        _oauth_state_cookie_name,
+        authorize_with_server,
+        callback,
+        decode_state_hash,
+        encode_state_with_base_url,
+    )
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-test-salt-for-LIT-5940")
+    client_redirect_uri = "http://127.0.0.1:6274/oauth/callback/debug"
+
+    authorize_request = MagicMock(spec=Request)
+    authorize_request.base_url = "https://proxy.example.com/"
+    authorize_request.headers = {}
+
+    authorize_response = await authorize_with_server(
+        request=authorize_request,
+        mcp_server=server,
+        client_id="upstream-client-id",
+        redirect_uri=client_redirect_uri,
+        state="client-original-state-9207",
+        code_challenge="challenge",
+        code_challenge_method="S256",
+    )
+    handle = parse_qs(urlparse(authorize_response.headers["location"]).query)["state"][0]
+    jar = SimpleCookie()
+    jar.load(authorize_response.headers["set-cookie"])
+    cookie_name = _oauth_state_cookie_name(handle)
+    sealed_state = jar[cookie_name].value
+    if expected_issuer_override is not ...:
+        # A state minted before the issuer was sealed into it: same shape, key absent.
+        sealed_state = encode_state_with_base_url(
+            base_url=client_redirect_uri,
+            original_state="client-original-state-9207",
+            client_redirect_uri=client_redirect_uri,
+            expected_issuer=expected_issuer_override,
+        )
+
+    callback_request = MagicMock(spec=Request)
+    callback_request.base_url = "https://proxy.example.com/"
+    callback_request.headers = {}
+    callback_request.cookies = {cookie_name: sealed_state}
+
+    response = await callback(
+        request=callback_request,
+        code="upstream-auth-code",
+        state=handle,
+        iss=iss,
+    )
+    return response, decode_state_hash(sealed_state)
+
+
+@pytest.mark.asyncio
+async def test_authorize_seals_the_issuer_and_callback_accepts_a_matching_rfc9207_iss(monkeypatch):
+    """LIT-5940: /authorize seals the issuer it sent the user to, and an authorization response
+    naming that same issuer (modulo URL-insignificant differences) is forwarded to the client."""
+    from urllib.parse import parse_qs, urlparse
+
+    response, state_data = await _authorize_then_callback(
+        _issuer_anchored_oauth_server(),
+        iss="https://IDP.example.com:443/",
+        monkeypatch=monkeypatch,
+    )
+
+    assert state_data["expected_issuer"] == "https://idp.example.com"
+    assert response.status_code == 302
+    query = parse_qs(urlparse(response.headers["location"]).query)
+    assert query["code"] == ["upstream-auth-code"]
+    assert query["state"] == ["client-original-state-9207"]
+
+
+@pytest.mark.asyncio
+async def test_callback_rejects_authorization_response_from_a_different_issuer(monkeypatch):
+    """LIT-5940 / RFC 9207 §2.4: an ``iss`` naming an authorization server we never sent the user to
+    is a mix-up attack, so the code must not reach the client's redirect_uri."""
+    response, _ = await _authorize_then_callback(
+        _issuer_anchored_oauth_server(),
+        iss="https://attacker-idp.example.com",
+        monkeypatch=monkeypatch,
+    )
+
+    assert response.status_code == 400
+    assert "location" not in response.headers
+    assert b"upstream-auth-code" not in response.body
+    assert b"invalid_issuer" in response.body
+
+
+@pytest.mark.asyncio
+async def test_callback_forwards_when_issuer_is_unknown_or_iss_absent(monkeypatch):
+    """Neither an authorization server that omits ``iss`` nor a server row with no issuer configured
+    can be validated, so both keep the pre-RFC-9207 behavior instead of failing closed."""
+    no_iss_response, _ = await _authorize_then_callback(
+        _issuer_anchored_oauth_server(),
+        iss=None,
+        monkeypatch=monkeypatch,
+    )
+    assert no_iss_response.status_code == 302
+
+    unanchored_response, state_data = await _authorize_then_callback(
+        _issuer_anchored_oauth_server(issuer=None),
+        iss="https://whatever-idp.example.com",
+        monkeypatch=monkeypatch,
+    )
+    assert state_data["expected_issuer"] is None
+    assert unanchored_response.status_code == 302
+
+
+@pytest.mark.asyncio
+async def test_callback_accepts_states_minted_before_the_issuer_was_sealed(monkeypatch):
+    """An authorization in flight across the upgrade carries no sealed issuer and must still land."""
+    response, _ = await _authorize_then_callback(
+        _issuer_anchored_oauth_server(),
+        iss="https://some-idp.example.com",
+        monkeypatch=monkeypatch,
+        expected_issuer_override=None,
+    )
+    assert response.status_code == 302
+
+
 @pytest.mark.asyncio
 async def test_oauth_authorize_includes_scopes_from_server_config():
     """Test that authorize endpoint includes scopes from server configuration."""

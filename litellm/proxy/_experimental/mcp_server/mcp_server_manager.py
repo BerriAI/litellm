@@ -76,6 +76,7 @@ from litellm.proxy._experimental.mcp_server.oauth2_token_cache import (
 from litellm.proxy._experimental.mcp_server.oauth_utils import (
     _redact_mcp_resource_url,
     canonicalize_url_identity,
+    issuer_identities_match,
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials import (
     Error,
@@ -476,7 +477,7 @@ def _issuer_matches(claimed_issuer: object, configured_issuer: str) -> bool:
     """
     if not isinstance(claimed_issuer, str) or not claimed_issuer:
         return False
-    return _normalized_authorize_endpoint(claimed_issuer) == _normalized_authorize_endpoint(configured_issuer)
+    return issuer_identities_match(claimed_issuer, configured_issuer)
 
 
 def _flow_endpoints_missing(

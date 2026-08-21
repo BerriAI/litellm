@@ -26,6 +26,13 @@ class MCPSpecVersion(str, enum.Enum):
     nov_2024 = "2024-11-05"
     mar_2025 = "2025-03-26"
     jun_2025 = "2025-06-18"
+    nov_2025 = "2025-11-25"
+
+
+# The highest MCP spec revision LiteLLM speaks, kept in lockstep with the pinned SDK's
+# LATEST_PROTOCOL_VERSION (tests/test_litellm/types/test_mcp.py fails when they diverge). Outbound
+# MCP requests LiteLLM builds itself advertise this instead of a hardcoded historical revision.
+MCP_LATEST_SUPPORTED_SPEC_VERSION: Final = MCPSpecVersion.nov_2025
 
 
 class MCPAuth(str, enum.Enum):
@@ -51,7 +58,9 @@ DEFAULT_SUBJECT_TOKEN_TYPE: Final = "urn:ietf:params:oauth:token-type:access_tok
 
 # MCP Literals
 MCPTransportType = Literal[MCPTransport.sse, MCPTransport.http, MCPTransport.stdio]
-MCPSpecVersionType = Literal[MCPSpecVersion.nov_2024, MCPSpecVersion.mar_2025, MCPSpecVersion.jun_2025]
+MCPSpecVersionType = Literal[
+    MCPSpecVersion.nov_2024, MCPSpecVersion.mar_2025, MCPSpecVersion.jun_2025, MCPSpecVersion.nov_2025
+]
 MCPAuthType = (
     Literal[
         MCPAuth.none,
