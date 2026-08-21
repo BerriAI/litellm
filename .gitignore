@@ -111,6 +111,7 @@ STABILIZATION_TODO.md
 **/*.storageState.json
 **/.dd_session.json
 **/litellm-e2e-dd-session.json
+**/litellm-e2e-*-session.json
 **/coverage
 test-config
 

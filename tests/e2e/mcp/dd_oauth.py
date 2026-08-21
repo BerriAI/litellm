@@ -1,10 +1,12 @@
 """Shared helpers for e2e tests that exercise the Datadog MCP server through
 gateway-managed OAuth2 (authorization_code + PKCE).
 
-Datadog's remote MCP server (mcp.datadoghq.com/v1/mcp) supports OAuth2.1 with
-mandatory S256 PKCE. The authorize endpoint (app.datadoghq.com) serves an
-interactive consent page, so the browser leg is a headless Chromium primed
-with a saved Datadog browser session (E2E_DD_STORAGE_STATE).
+Datadog's remote MCP server supports OAuth2.1 with mandatory S256 PKCE.
+Authorize/token/register URLs and the MCP endpoint are derived from DD_SITE
+(same site resolution as datadog_mcp_url) so non-US1 orgs do not 403.
+The authorize endpoint serves an interactive consent page, so the browser
+leg is a headless Chromium primed with a saved Datadog browser session
+(E2E_DD_STORAGE_STATE).
 
 The gateway discovers the OAuth endpoints via /.well-known metadata, so the
 server is registered with auth_type=oauth2, oauth2_flow=authorization_code
@@ -29,7 +31,7 @@ import httpx
 import pytest
 from pydantic import BaseModel, TypeAdapter
 
-from e2e_config import REQUEST_TIMEOUT
+from e2e_config import REQUEST_TIMEOUT, datadog_app_origin, datadog_mcp_url
 from e2e_http import AuthHeaders, NoBody, unwrap
 from models import McpServerCreateBody, McpServerInfo
 from proxy_client import ProxyClient
@@ -37,12 +39,24 @@ from proxy_client import ProxyClient
 if TYPE_CHECKING:
     from playwright.async_api import Route
 
-DD_MCP_URL = "https://mcp.datadoghq.com/v1/mcp"
-DD_AUTHORIZE_URL = "https://app.datadoghq.com/oauth2/v1/authorize"
-DD_TOKEN_URL = "https://app.datadoghq.com/api/v2/oauth2/token"
-DD_REGISTER_URL = "https://app.datadoghq.com/api/v2/oauth2/register"
 OAUTH_CLIENT_REDIRECT_URI = "http://127.0.0.1:53682/e2e/callback"
 BROWSER_CONSENT_TIMEOUT = 60.0
+
+
+def _dd_mcp_url() -> str:
+    return datadog_mcp_url(toolsets="core")
+
+
+def _dd_authorize_url() -> str:
+    return f"{datadog_app_origin()}/oauth2/v1/authorize"
+
+
+def _dd_token_url() -> str:
+    return f"{datadog_app_origin()}/api/v2/oauth2/token"
+
+
+def _dd_register_url() -> str:
+    return f"{datadog_app_origin()}/api/v2/oauth2/register"
 
 
 @dataclass(frozen=True, slots=True)
@@ -97,7 +111,7 @@ def _generate_pkce() -> PkceChallenge:
 
 def _dcr_register() -> DcrClient:
     resp = httpx.post(
-        DD_REGISTER_URL,
+        _dd_register_url(),
         json={
             "client_name": "e2e-mcp-dd-oauth",
             "redirect_uris": [OAUTH_CLIENT_REDIRECT_URI],
@@ -173,7 +187,7 @@ def _exchange_code(
     code: str, pkce: PkceChallenge, client: DcrClient
 ) -> OAuthToken:
     resp = httpx.post(
-        DD_TOKEN_URL,
+        _dd_token_url(),
         data={
             "grant_type": "authorization_code",
             "code": code,
@@ -211,7 +225,7 @@ def fetch_dd_oauth_token(storage_state_path: str) -> OAuthToken:
         "code_challenge_method": "S256",
         "state": pkce.state,
     }
-    authorize_url = f"{DD_AUTHORIZE_URL}?{urllib.parse.urlencode(params)}"
+    authorize_url = f"{_dd_authorize_url()}?{urllib.parse.urlencode(params)}"
     code, returned_state = asyncio.run(
         _browser_authorize(authorize_url, storage_state_path)
     )
@@ -233,7 +247,7 @@ def register_dd_oauth_server(
             headers=proxy.transport.master,
             json=McpServerCreateBody(
                 alias=alias,
-                url=DD_MCP_URL,
+                url=_dd_mcp_url(),
                 transport="http",
                 allow_all_keys=False,
                 auth_type="oauth2",

@@ -202,7 +202,7 @@ Claude Code / Desktop often use **messages** + OAuth + resources; that is why re
 
 | Feature | Registry | E2E |
 | --- | --- | --- |
-| Content filter `pre_mcp_call` | `guardrail.litellm_content_filter.pre_mcp_call.blocks` | skipped LIT-5052 |
+| Content filter `pre_mcp_call` | `guardrail.litellm_content_filter.pre_mcp_call.blocks` | `test_mcp_guardrail_e2e.py` |
 | MCP security hook | `guardrail.mcp_security.pre_call.blocks` | missing |
 | MCP JWT signer | gap | unit |
 | End-user permission | gap | missing |
@@ -279,7 +279,7 @@ Collector after registry expansion: **MCPs ~2/N live** until tests land; denomin
 
 ## Priority for new e2e (reliability / fewer regressions)
 
-1. **P0** Unskip LIT-5052 (Datadog list/call/deny/guardrail).  
+1. **P0** Unskip LIT-5052 (Datadog list/call/deny); guardrail pre_mcp_call is covered by test_mcp_guardrail_e2e.py.  
 2. **P0** `/mcp` auth status codes 401/429 regression (#2).  
 3. **P0** Empty permission intersection denies (#3).  
 4. **P0** **messages** bridge auto-execute tools (Claude Code path) + **list_resources**.  

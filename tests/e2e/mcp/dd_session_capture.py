@@ -14,6 +14,7 @@ Then set the env var and run the OAuth tests:
 from __future__ import annotations
 
 import os
+import stat
 import tempfile
 from pathlib import Path
 
@@ -26,6 +27,17 @@ def _repo_root() -> Path | None:
         if (parent / ".git").exists():
             return parent
     return None
+
+
+def _datadog_login_url() -> str:
+    site = (
+        os.environ.get("DD_SITE", "datadoghq.com") or "datadoghq.com"
+    ).strip().removeprefix("https://").removeprefix("http://").rstrip("/")
+    if site.startswith("app."):
+        site = site[len("app.") :]
+    site = site or "datadoghq.com"
+    host = "app.datadoghq.com" if site == "datadoghq.com" else f"app.{site}"
+    return f"https://{host}/account/login"
 
 
 def capture(state_path: Path) -> None:
@@ -41,16 +53,18 @@ def capture(state_path: Path) -> None:
 
     from playwright.sync_api import sync_playwright
 
+    login_url = _datadog_login_url()
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=False)
         context = browser.new_context()
         page = context.new_page()
-        page.goto("https://app.datadoghq.com/account/login")
-        print("Log into Datadog in the browser, then press Enter here.")
+        page.goto(login_url)
+        print(f"Log into Datadog at {login_url} in the browser, then press Enter here.")
         input()
         context.storage_state(path=str(state_path))
         browser.close()
-    print(f"Session saved to {state_path}")
+    os.chmod(state_path, stat.S_IRUSR | stat.S_IWUSR)
+    print(f"Session saved to {state_path} (mode 0600)")
     print(f'  export E2E_DD_STORAGE_STATE="{state_path}"')
 
 

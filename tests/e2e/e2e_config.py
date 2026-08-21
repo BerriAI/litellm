@@ -148,6 +148,23 @@ ANOMALY_SPEND_SETTLE_SECONDS = float(
 )
 
 
+def datadog_site() -> str:
+    """Normalized Datadog site hostname for this process (no scheme/app. prefix)."""
+    site = (
+        os.environ.get("DD_SITE", DD_SITE) or "datadoghq.com"
+    ).strip().removeprefix("https://").removeprefix("http://").rstrip("/")
+    if site.startswith("app."):
+        site = site[len("app.") :]
+    return site or "datadoghq.com"
+
+
+def datadog_app_origin() -> str:
+    """Browser/API origin for this process's DD_SITE (app.datadoghq.com, app.us5..., ...)."""
+    site = datadog_site()
+    host = "app.datadoghq.com" if site == "datadoghq.com" else f"app.{site}"
+    return f"https://{host}"
+
+
 def datadog_mcp_url(*, toolsets: str = "core") -> str:
     """Regional Datadog remote MCP endpoint for this process's DD_SITE.
 
@@ -155,12 +172,8 @@ def datadog_mcp_url(*, toolsets: str = "core") -> str:
     mcp.us5.datadoghq.com). A fixed mcp.datadoghq.com URL 403s when the keys
     belong to a non-US1 org.
     """
-    site = (
-        os.environ.get("DD_SITE", DD_SITE) or "datadoghq.com"
-    ).strip().removeprefix("https://").removeprefix("http://").rstrip("/")
-    if site.startswith("app."):
-        site = site[len("app.") :]
-    host = "mcp.datadoghq.com" if site in ("", "datadoghq.com") else f"mcp.{site}"
+    site = datadog_site()
+    host = "mcp.datadoghq.com" if site == "datadoghq.com" else f"mcp.{site}"
     base = f"https://{host}/v1/mcp"
     return f"{base}?toolsets={toolsets}" if toolsets else base
 

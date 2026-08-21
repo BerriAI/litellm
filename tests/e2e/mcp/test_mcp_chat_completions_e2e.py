@@ -92,6 +92,27 @@ class TestChatCompletionMcpAutoExecute:
             "mcp_call_results is empty; the gateway did not execute the tool call upstream"
         )
 
+        listed_names = {
+            t.function.name
+            for t in psf.mcp_list_tools
+            if t.function is not None and t.function.name
+        }
+        called_names = {
+            c.function.name
+            for c in psf.mcp_tool_calls
+            if c.function is not None and c.function.name
+        }
+        assert listed_names, f"mcp_list_tools entries had no function names: {psf.mcp_list_tools}"
+        assert called_names, f"mcp_tool_calls entries had no function names: {psf.mcp_tool_calls}"
+        assert called_names & listed_names, (
+            f"model called {sorted(called_names)} but none appear in "
+            f"mcp_list_tools {sorted(listed_names)}; the chat bridge listed and "
+            f"called disjoint tool sets"
+        )
+        assert any("search_datadog_logs" in n for n in called_names), (
+            f"expected a Datadog log-search tool call, got {sorted(called_names)}"
+        )
+
         result_text = next(
             (r.result for r in psf.mcp_call_results if r.result), None
         )
