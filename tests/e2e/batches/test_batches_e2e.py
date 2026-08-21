@@ -579,7 +579,8 @@ class TestOpenAIFiles:
     def test_list_page_cursors_address_only_the_callers_own_files(
         self, client: BatchClient, resources: ResourceManager
     ) -> None:
-        """A list page's pagination cursors must address rows in that page.
+        """Pins GitHub issue #36087: a list page's pagination cursors must address
+        rows in that page.
 
         The proxy fronts one shared provider account, so the upstream page is the
         whole organization's. The gateway narrows `data` to the files the caller
