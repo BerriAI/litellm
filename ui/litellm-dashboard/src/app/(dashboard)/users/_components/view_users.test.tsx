@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -128,7 +128,7 @@ describe("ViewUserDashboard", () => {
     expect(settingsTab).toHaveAttribute("aria-selected", "true");
     expect(usersTab).toHaveAttribute("aria-selected", "false");
     expect(screen.getByRole("region", { name: "Default user settings panel" })).toBeInTheDocument();
-    await user.type(screen.getByRole("textbox", { name: "Default setting" }), "unsaved change");
+    fireEvent.change(screen.getByRole("textbox", { name: "Default setting" }), { target: { value: "unsaved change" } });
 
     await user.click(usersTab);
 

@@ -514,6 +514,11 @@
           "type": "object",
           "description": "Provider-internal routing hints (e.g. bedrock_invocation_schema)."
         },
+        "regional_endpoint_uplift_multiplier": {
+          "type": "number",
+          "minimum": 1,
+          "description": "Multiplier applied to all token costs when served from a non-global Vertex AI endpoint (e.g. 1.10 = +10%)."
+        },
         "regional_processing_uplift_multiplier_eu": {
           "type": "number",
           "minimum": 1,
@@ -657,6 +662,9 @@
           "type": "boolean"
         },
         "supports_pdf_input": {
+          "type": "boolean"
+        },
+        "supports_prompt_cache_breakpoint": {
           "type": "boolean"
         },
         "supports_prompt_caching": {

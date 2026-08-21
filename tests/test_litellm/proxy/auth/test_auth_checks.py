@@ -13,7 +13,7 @@ from datetime import datetime, timedelta, timezone
 
 import httpx
 import pytest
-from fastapi import status
+from fastapi import Request, status
 
 import litellm
 from litellm.proxy._types import (
@@ -2760,11 +2760,9 @@ async def test_common_checks_metadata_route_keeps_key_tags_out_of_provider_metad
     assert "metadata" not in request_body
 
 
-def _pass_through_request() -> "Request":
+def _pass_through_request() -> Request:
     """A Request whose FastAPI-resolved endpoint carries the pass-through marker,
     i.e. the request was dispatched to a user-defined pass-through handler."""
-    from fastapi import Request
-
     from litellm.types.passthrough_endpoints.pass_through_endpoints import (
         LITELLM_PASS_THROUGH_ENDPOINT_MARKER,
     )
@@ -2776,10 +2774,9 @@ def _pass_through_request() -> "Request":
     return Request(scope={"type": "http", "headers": [], "endpoint": pass_through_endpoint})
 
 
-def _builtin_request() -> "Request":
+def _builtin_request() -> Request:
     """A Request dispatched to a built-in (non-pass-through) handler, e.g. what a
     custom path colliding with a core route actually resolves to."""
-    from fastapi import Request
 
     def chat_completions():
         ...
@@ -5699,6 +5696,64 @@ async def test_get_default_end_user_budget_db_fetch_returns_validated_budget(mon
 
 
 @pytest.mark.asyncio
+async def test_get_team_member_default_budget_caches_json_safe_payload():
+    """The Redis layer json.dumps() the cached value, so datetime columns on the budget row
+    must be dumped to ISO strings before the write, and the read side must give back a model.
+    """
+    from litellm.proxy.auth.auth_checks import get_team_member_default_budget
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    budget_row = MagicMock()
+    budget_row.dict = lambda: {
+        "budget_id": "tm-budget-1",
+        "max_budget": 25.0,
+        "created_at": datetime(2026, 1, 1, tzinfo=timezone.utc),
+        "updated_at": datetime(2026, 1, 2, tzinfo=timezone.utc),
+    }
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_budgettable.find_unique = AsyncMock(return_value=budget_row)
+
+    class _JsonOnlyRedis:
+        """Stands in for RedisCache, which serializes with a bare json.dumps()."""
+
+        def __init__(self):
+            self.writes = []
+
+        async def async_set_cache(self, key, value, **kwargs):
+            self.writes.append((key, json.dumps(value)))
+
+        async def async_get_cache(self, key, **kwargs):
+            return None
+
+    redis_cache = _JsonOnlyRedis()
+    cache = UserApiKeyCache(redis_cache=redis_cache)
+
+    budget = await get_team_member_default_budget(
+        budget_id="tm-budget-1",
+        prisma_client=mock_prisma_client,
+        user_api_key_cache=cache,
+    )
+
+    assert isinstance(budget, LiteLLM_BudgetTable)
+    assert budget.max_budget == 25.0
+    assert len(redis_cache.writes) == 1
+    written_key, written_payload = redis_cache.writes[0]
+    assert written_key == "team_member_default_budget:tm-budget-1"
+    assert json.loads(written_payload)["max_budget"] == 25.0
+
+    cached = await get_team_member_default_budget(
+        budget_id="tm-budget-1",
+        prisma_client=mock_prisma_client,
+        user_api_key_cache=cache,
+    )
+
+    assert isinstance(cached, LiteLLM_BudgetTable)
+    assert cached.max_budget == 25.0
+    mock_prisma_client.db.litellm_budgettable.find_unique.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_get_end_user_object_db_fetch_returns_validated_end_user():
     from litellm.proxy.auth.auth_checks import get_end_user_object
 
@@ -6392,3 +6447,168 @@ def test_is_user_proxy_admin_rejects_view_only_admin():
     assert _is_user_proxy_admin(user_obj=viewer) is False
     assert _is_user_proxy_admin(user_obj=admin) is True
     assert _is_user_proxy_admin(user_obj=None) is False
+
+
+def _make_wildcard_access_group_router():
+    """
+    `openai/*` tagged into an access group, plus an untagged `azure/*`, mirroring a
+    proxy that fronts a whole provider behind one wildcard deployment.
+    """
+    from litellm import Router
+
+    return Router(
+        model_list=[
+            {
+                "model_name": "openai/*",
+                "litellm_params": {"model": "openai/*", "api_key": "fake"},
+                "model_info": {
+                    "id": "wildcard-openai",
+                    "access_groups": ["default-models"],
+                },
+            },
+            {
+                "model_name": "azure/*",
+                "litellm_params": {"model": "azure/*", "api_key": "fake"},
+                "model_info": {"id": "wildcard-azure"},
+            },
+        ]
+    )
+
+
+def test_can_object_call_model_access_group_wildcard_accepts_bare_model_name():
+    """
+    Regression: a key holding only the access group name was denied for `gpt-4o`
+    while `openai/gpt-4o` was allowed, because group membership resolved through the
+    pattern router's raw regex and skipped the `{provider}/{model}` retry that both
+    routing and the direct-wildcard grant already perform.
+    """
+    from litellm.proxy.auth.auth_checks import _can_object_call_model
+
+    router = _make_wildcard_access_group_router()
+
+    assert (
+        _can_object_call_model(
+            model="gpt-4o",
+            llm_router=router,
+            models=["default-models"],
+            object_type="key",
+        )
+        is True
+    )
+
+
+def test_can_object_call_model_access_group_wildcard_accepts_prefixed_model_name():
+    from litellm.proxy.auth.auth_checks import _can_object_call_model
+
+    router = _make_wildcard_access_group_router()
+
+    assert (
+        _can_object_call_model(
+            model="openai/gpt-4o",
+            llm_router=router,
+            models=["default-models"],
+            object_type="key",
+        )
+        is True
+    )
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "totally-made-up-model-zzz",  # no provider can be inferred
+        "azure/some-deployment",  # wildcard exists but carries no access group
+    ],
+)
+def test_can_object_call_model_access_group_wildcard_does_not_over_grant(model):
+    """The bare-name retry must not turn an access group into a blanket grant."""
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.auth.auth_checks import _can_object_call_model
+
+    router = _make_wildcard_access_group_router()
+
+    with pytest.raises(ProxyException):
+        _can_object_call_model(
+            model=model,
+            llm_router=router,
+            models=["default-models"],
+            object_type="key",
+        )
+
+
+def test_can_object_call_model_access_group_rejects_unconsumed_namespace():
+    """
+    `bedrockz/...` infers provider `bedrock` from a fragment of the name, so
+    re-prefixing would smuggle an unrecognized namespace through a `bedrock/*` group.
+    """
+    from litellm import Router
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.auth.auth_checks import _can_object_call_model
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "bedrock/*",
+                "litellm_params": {"model": "bedrock/*"},
+                "model_info": {
+                    "id": "wildcard-bedrock",
+                    "access_groups": ["bedrock-models"],
+                },
+            }
+        ]
+    )
+
+    assert (
+        _can_object_call_model(
+            model="anthropic.claude-3-5-sonnet-20240620-v1:0",
+            llm_router=router,
+            models=["bedrock-models"],
+            object_type="key",
+        )
+        is True
+    )
+
+    with pytest.raises(ProxyException):
+        _can_object_call_model(
+            model="bedrockz/anthropic.claude-3-5-sonnet-20240620-v1:0",
+            llm_router=router,
+            models=["bedrock-models"],
+            object_type="key",
+        )
+
+
+def test_can_object_call_model_team_scoped_wildcard_accepts_bare_model_name():
+    """
+    Same regression as the proxy-wide wildcard, but for a team-scoped deployment
+    whose public name is a wildcard: those live in a separate per-team pattern
+    index that needed the same `{provider}/{model}` retry.
+    """
+    from litellm import Router
+    from litellm.proxy.auth.auth_checks import _can_object_call_model
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "openai/*_team-a_abc",
+                "litellm_params": {"model": "openai/*", "api_key": "fake"},
+                "model_info": {
+                    "id": "team-byok-wildcard",
+                    "team_id": "team-a",
+                    "team_public_model_name": "openai/*",
+                    "access_groups": ["team-models"],
+                },
+            }
+        ]
+    )
+
+    for model in ("gpt-4o", "openai/gpt-4o"):
+        assert (
+            _can_object_call_model(
+                model=model,
+                llm_router=router,
+                models=["team-models"],
+                object_type="team",
+                team_id="team-a",
+            )
+            is True
+        )

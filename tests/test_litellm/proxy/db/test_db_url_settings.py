@@ -3,8 +3,8 @@
 The model assembles ``DATABASE_URL`` (and optionally
 ``DATABASE_URL_READ_REPLICA``) from the discrete ``DATABASE_*`` env vars
 emitted by the ``helm/litellm`` chart, before Prisma initializes. It covers
-both IAM auth (mint a short-lived token) and password auth, for both the
-writer and the read replica.
+both token auth (mint a short-lived AWS RDS IAM or Microsoft Entra ID token)
+and password auth, for both the writer and the read replica.
 
 The reader URL is opt-in via ``DATABASE_HOST_READ_REPLICA`` and must not
 clobber a pre-existing ``DATABASE_URL_READ_REPLICA``. A pre-existing
@@ -15,12 +15,14 @@ import os
 from unittest.mock import patch
 
 import pytest
+from pydantic import ValidationError
 
 from litellm.proxy.db.db_url_settings import (
     DatabaseURLSettings,
     unsupported_db_scheme,
     unsupported_db_scheme_message,
 )
+from litellm.proxy.db.token_auth import AzureEntraTokenAuth, RdsIamTokenAuth
 
 
 def _apply() -> bool:
@@ -30,6 +32,7 @@ def _apply() -> bool:
 
 _MANAGED_DB_ENV_VARS = (
     "IAM_TOKEN_DB_AUTH",
+    "AZURE_POSTGRESQL_AUTH",
     "DATABASE_URL",
     "DIRECT_URL",
     "DATABASE_URL_READ_REPLICA",
@@ -76,6 +79,14 @@ def _stub_iam_token(token: str = "FAKE_TOKEN"):
     )
 
 
+def _stub_entra_token(token: str = "FAKE_TOKEN"):
+    """Patch the Azure-touching token provider so tests don't need azure-identity."""
+    return patch(
+        "litellm.secret_managers.get_azure_ad_token_provider.get_azure_ad_token_provider",
+        return_value=lambda: token,
+    )
+
+
 # ---------------------------------------------------------------------------
 # IAM auth
 # ---------------------------------------------------------------------------
@@ -102,6 +113,35 @@ def test_assembles_writer_url_when_iam_enabled(monkeypatch):
     )
     # Reader was never configured, so it must not have been set.
     assert "DATABASE_URL_READ_REPLICA" not in os.environ
+
+
+def test_a_pre_encoded_iam_user_survives_url_assembly(monkeypatch):
+    """This URL used to be interpolated raw, so pre-encoding ``DATABASE_USER`` was the
+    only way to run IAM auth as a user whose name contains an ``@``. Encoding it again
+    yields ``svc%2540corp``, which Postgres rejects with
+    ``User `svc%40corp` was denied access``."""
+    monkeypatch.setenv("IAM_TOKEN_DB_AUTH", "true")
+    monkeypatch.setenv("DATABASE_HOST", "writer.example.com")
+    monkeypatch.setenv("DATABASE_USER", "svc%40corp")
+    monkeypatch.setenv("DATABASE_NAME", "litellm_db")
+
+    with _stub_iam_token("WRITER_TOKEN"):
+        assert _apply() is True
+
+    assert os.environ["DATABASE_URL"] == "postgresql://svc%40corp:WRITER_TOKEN@writer.example.com:5432/litellm_db"
+
+
+def test_an_unreadable_toggle_fails_the_settings_model(monkeypatch):
+    """Pydantic rejected `IAM_TOKEN_DB_AUTH=enabled` before token auth had its own
+    parser. Reading it as 'off' instead would silently drop an operator who asked for
+    token auth down to password auth, with no log line saying so."""
+    monkeypatch.setenv("IAM_TOKEN_DB_AUTH", "enabled")
+    monkeypatch.setenv("DATABASE_HOST", "writer.example.com")
+    monkeypatch.setenv("DATABASE_USER", "litellm")
+    monkeypatch.setenv("DATABASE_NAME", "litellm_db")
+
+    with pytest.raises(ValidationError, match="IAM_TOKEN_DB_AUTH"):
+        DatabaseURLSettings.from_env()
 
 
 def test_missing_writer_envs_raises(monkeypatch):
@@ -182,6 +222,123 @@ def test_reader_field_fallbacks_default_to_writer_values(monkeypatch):
         os.environ["DATABASE_URL_READ_REPLICA"]
         == "postgresql://litellm:READER_TOKEN@reader.example.com:5432/litellm_db?schema=public"
     )
+
+
+# ---------------------------------------------------------------------------
+# Azure Entra auth
+# ---------------------------------------------------------------------------
+
+
+def test_assembles_writer_url_when_azure_entra_enabled(monkeypatch):
+    monkeypatch.setenv("AZURE_POSTGRESQL_AUTH", "true")
+    monkeypatch.setenv("DATABASE_HOST", "writer.postgres.database.azure.com")
+    monkeypatch.setenv("DATABASE_USER", "litellm@contoso.onmicrosoft.com")
+    monkeypatch.setenv("DATABASE_NAME", "litellm_db")
+
+    with _stub_entra_token("ENTRA_TOKEN"):
+        assert _apply() is True
+
+    assert os.environ["DATABASE_URL"] == (
+        "postgresql://litellm%40contoso.onmicrosoft.com:ENTRA_TOKEN"
+        "@writer.postgres.database.azure.com:5432/litellm_db"
+    )
+    assert os.environ["AZURE_POSTGRESQL_AUTH"] == "True"
+    assert "IAM_TOKEN_DB_AUTH" not in os.environ
+
+
+def test_azure_reader_url_assembled_from_writer_fallbacks(monkeypatch):
+    monkeypatch.setenv("AZURE_POSTGRESQL_AUTH", "true")
+    monkeypatch.setenv("DATABASE_HOST", "writer.postgres.database.azure.com")
+    monkeypatch.setenv("DATABASE_USER", "litellm@contoso.onmicrosoft.com")
+    monkeypatch.setenv("DATABASE_NAME", "litellm_db")
+    monkeypatch.setenv("DATABASE_SCHEMA", "public")
+    monkeypatch.setenv("DATABASE_HOST_READ_REPLICA", "reader.postgres.database.azure.com")
+
+    with _stub_entra_token("ENTRA_TOKEN"):
+        _apply()
+
+    assert os.environ["DATABASE_URL_READ_REPLICA"] == (
+        "postgresql://litellm%40contoso.onmicrosoft.com:ENTRA_TOKEN"
+        "@reader.postgres.database.azure.com:5432/litellm_db?schema=public"
+    )
+
+
+def test_azure_missing_writer_envs_names_the_azure_toggle(monkeypatch):
+    monkeypatch.setenv("AZURE_POSTGRESQL_AUTH", "true")
+    # DATABASE_HOST intentionally unset.
+    monkeypatch.setenv("DATABASE_USER", "litellm@contoso.onmicrosoft.com")
+    monkeypatch.setenv("DATABASE_NAME", "litellm_db")
+
+    with pytest.raises(RuntimeError, match="AZURE_POSTGRESQL_AUTH is enabled but"):
+        _apply()
+
+
+def test_both_token_toggles_is_a_startup_error(monkeypatch):
+    monkeypatch.setenv("IAM_TOKEN_DB_AUTH", "true")
+    monkeypatch.setenv("AZURE_POSTGRESQL_AUTH", "true")
+    monkeypatch.setenv("DATABASE_HOST", "writer.example.com")
+    monkeypatch.setenv("DATABASE_USER", "litellm")
+    monkeypatch.setenv("DATABASE_NAME", "litellm_db")
+
+    with pytest.raises(RuntimeError, match="can only come from one token source"):
+        _apply()
+
+    assert "DATABASE_URL" not in os.environ
+
+
+@pytest.mark.parametrize(
+    "env_var, expected_type",
+    [("IAM_TOKEN_DB_AUTH", RdsIamTokenAuth), ("AZURE_POSTGRESQL_AUTH", AzureEntraTokenAuth)],
+)
+def test_token_auth_reflects_the_enabled_toggle(monkeypatch, env_var, expected_type):
+    monkeypatch.setenv(env_var, "true")
+
+    with _stub_entra_token():
+        assert isinstance(DatabaseURLSettings.from_env().token_auth(), expected_type)
+
+
+def test_the_toggle_agrees_with_the_refresh_loop_on_every_spelling(monkeypatch):
+    """This model and `resolve_database_token_auth` (which arms the refresh loop) both
+    read the same env var. When they disagreed, `AZURE_POSTGRESQL_AUTH=1` minted a token
+    here and left the refresh loop convinced token auth was off."""
+    from litellm.proxy.db.token_auth import resolve_database_token_auth
+
+    monkeypatch.setenv("AZURE_POSTGRESQL_AUTH", "1")
+
+    with _stub_entra_token():
+        settings_says = DatabaseURLSettings.from_env().azure_postgresql_auth
+        refresh_loop_says = resolve_database_token_auth() is not None
+
+    assert settings_says is True
+    assert refresh_loop_says is True
+
+
+def test_an_empty_toggle_is_off_rather_than_a_validation_error(monkeypatch):
+    """`value: ""` is how a Kubernetes manifest spells 'off', and the componentized
+    entrypoints build this model at import time, so a raise there is a crash loop."""
+    monkeypatch.setenv("AZURE_POSTGRESQL_AUTH", "")
+    monkeypatch.setenv("IAM_TOKEN_DB_AUTH", "")
+
+    settings = DatabaseURLSettings.from_env()
+
+    assert (settings.azure_postgresql_auth, settings.iam_token_db_auth) == (False, False)
+    assert settings.token_auth() is None
+
+
+def test_apply_writer_url_to_env_leaves_the_reader_alone(monkeypatch):
+    """The CLI shares the writer minting path but resolves the read replica itself, so
+    it must not start writing DATABASE_URL_READ_REPLICA as a side effect."""
+    monkeypatch.setenv("AZURE_POSTGRESQL_AUTH", "true")
+    monkeypatch.setenv("DATABASE_HOST", "writer.postgres.database.azure.com")
+    monkeypatch.setenv("DATABASE_USER", "litellm")
+    monkeypatch.setenv("DATABASE_NAME", "litellm_db")
+    monkeypatch.setenv("DATABASE_HOST_READ_REPLICA", "reader.postgres.database.azure.com")
+
+    with _stub_entra_token("ENTRA_TOKEN"):
+        assert DatabaseURLSettings.from_env().apply_writer_url_to_env() is True
+
+    assert "DATABASE_URL" in os.environ
+    assert "DATABASE_URL_READ_REPLICA" not in os.environ
 
 
 # ---------------------------------------------------------------------------
