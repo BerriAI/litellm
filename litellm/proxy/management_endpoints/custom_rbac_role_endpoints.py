@@ -97,8 +97,7 @@ async def _reject_unknown_inherits(
     known: Final = (
         frozenset(role.role_name for role in get_config_custom_rbac_roles())
         | frozenset(
-            str(record.dict()["role_name"])
-            for record in await table.find_many(order=prisma_args(_ORDER_BY_ROLE_NAME))
+            str(record.dict()["role_name"]) for record in await table.find_many(order=prisma_args(_ORDER_BY_ROLE_NAME))
         )
         | frozenset((role_name,))
     )
