@@ -1,15 +1,10 @@
 import asyncio
 import json
-import os
-import sys
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 import pytest
 from fastapi import status

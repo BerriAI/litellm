@@ -1,10 +1,8 @@
 import os
-import sys
 import pytest
 from unittest.mock import patch, MagicMock, AsyncMock
 from httpx import Response, Request
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 import litellm
 from litellm.proxy.guardrails.guardrail_hooks.deepkeep.deepkeep import (

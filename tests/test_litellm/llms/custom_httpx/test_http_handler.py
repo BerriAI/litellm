@@ -4,7 +4,6 @@ import io
 import os
 import pathlib
 import ssl
-import sys
 import threading
 import weakref
 from unittest.mock import MagicMock, patch
@@ -14,9 +13,6 @@ import httpx
 import pytest
 from aiohttp import ClientSession, TCPConnector
 
-sys.path.insert(
-    0, os.path.abspath("../../../..")
-)  # Adds the parent directory to the system path
 import litellm
 from litellm.llms.custom_httpx.aiohttp_transport import LiteLLMAiohttpTransport
 from litellm.llms.custom_httpx.http_handler import (

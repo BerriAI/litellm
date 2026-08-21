@@ -17,7 +17,6 @@ from litellm.proxy.management_endpoints import (
     mcp_management_endpoints as mgmt_endpoints,
 )
 
-sys.path.insert(0, os.path.abspath("../../../.."))  # Adds the parent directory to the system path
 
 from litellm.proxy._types import (
     LiteLLM_MCPServerTable,

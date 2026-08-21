@@ -8,11 +8,9 @@ Tests 40 different sentences to validate the conditional matching logic:
 - identifier or block word alone should ALLOW
 """
 
-import sys
 import os
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))
 import litellm
 from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import (
     ContentFilterGuardrail,

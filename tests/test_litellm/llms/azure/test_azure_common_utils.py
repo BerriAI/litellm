@@ -1,15 +1,11 @@
 import json
 import os
-import sys
 import traceback
 from typing import Callable, Optional
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../..")
-)  # Adds the parent directory to the system path
 import litellm
 from litellm.llms.azure.common_utils import BaseAzureLLM, get_azure_ad_token
 from litellm.secret_managers.get_azure_ad_token_provider import (

@@ -1,5 +1,4 @@
 import os
-import sys
 
 import pytest
 
@@ -10,9 +9,6 @@ from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
 from litellm.types.llms.openai import FileSearchTool, WebSearchOptions
 from litellm.types.utils import ModelResponse, StandardBuiltInToolsParams
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 
 @pytest.fixture

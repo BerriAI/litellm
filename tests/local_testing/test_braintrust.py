@@ -2,9 +2,7 @@
 ## This tests the braintrust integration
 
 import asyncio
-import os
 import random
-import sys
 import time
 import traceback
 from datetime import datetime
@@ -13,11 +11,7 @@ from dotenv import load_dotenv
 from fastapi import Request
 
 load_dotenv()
-import os
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 import asyncio
 import logging
 from unittest.mock import AsyncMock, MagicMock, patch

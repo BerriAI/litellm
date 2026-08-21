@@ -2,13 +2,10 @@ import asyncio
 import base64
 import io
 import json
-import os
-import sys
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../../.."))
 
 import httpx
 from fastapi import HTTPException

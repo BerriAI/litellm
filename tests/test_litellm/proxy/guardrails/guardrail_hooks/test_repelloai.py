@@ -1,11 +1,9 @@
 import os
-import sys
 
 import pytest
 from fastapi import HTTPException
 from httpx import ConnectError, Request, Response
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 import litellm
 from litellm import DualCache

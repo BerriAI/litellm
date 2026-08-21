@@ -2,14 +2,10 @@ import asyncio
 import io
 import json
 import os
-import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 
 import litellm
 from litellm.cost_calculator import default_video_cost_calculator

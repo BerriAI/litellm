@@ -1,10 +1,8 @@
 import json
 import os
-import sys
 from datetime import datetime
 from unittest.mock import AsyncMock, Mock, patch, MagicMock
 
-sys.path.insert(0, os.path.abspath("../.."))  #
 
 import unittest
 from unittest.mock import patch

@@ -8,12 +8,9 @@ resolution (get_model_info) including the shipped rules in the bundled cost map.
 """
 
 import logging
-import os
-import sys
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../.."))
 
 import litellm
 from litellm._logging import verbose_logger

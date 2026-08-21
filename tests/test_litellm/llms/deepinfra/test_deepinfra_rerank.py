@@ -4,14 +4,11 @@ Tests for DeepInfra rerank functionality following repository patterns.
 
 import asyncio
 import json
-import os
-import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 # Add litellm to path
-sys.path.insert(0, os.path.abspath("../../../.."))
 import litellm
 
 

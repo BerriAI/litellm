@@ -3,16 +3,12 @@ Unit tests for OVHCloud AI Endpoints chat integration.
 """
 
 import os
-import sys
 
 import pytest
 
 from litellm.llms.ovhcloud.utils import OVHCloudException
 from litellm.utils import get_optional_params
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
 
 from litellm.llms.ovhcloud.chat.transformation import (
     OVHCloudChatCompletionStreamingHandler,

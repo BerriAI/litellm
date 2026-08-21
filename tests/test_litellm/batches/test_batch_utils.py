@@ -16,15 +16,12 @@ deterministic stand-ins so the arithmetic under test is the only variable.
 
 import json
 import logging
-import os
-import sys
 from types import MappingProxyType
 
 import httpx
 import pytest
 import respx
 
-sys.path.insert(0, os.path.abspath("../../../.."))
 
 import litellm
 import litellm.batches.batch_utils as bu

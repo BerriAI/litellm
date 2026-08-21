@@ -3,9 +3,6 @@ import sys
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
 
 """
 Unit tests for OllamaModelInfo.get_models functionality.

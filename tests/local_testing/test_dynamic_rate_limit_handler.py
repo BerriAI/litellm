@@ -1,9 +1,7 @@
 # What is this?
 ## Unit tests for 'dynamic_rate_limiter.py`
 import asyncio
-import os
 import random
-import sys
 import time
 import traceback
 from litellm._uuid import uuid
@@ -13,11 +11,7 @@ from typing import Optional, Tuple
 from dotenv import load_dotenv
 
 load_dotenv()
-import os
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 import pytest
 
 import litellm

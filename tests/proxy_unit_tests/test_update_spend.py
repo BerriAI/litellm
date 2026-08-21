@@ -1,15 +1,10 @@
 import asyncio
-import os
-import sys
 from unittest.mock import Mock
 from litellm.proxy.utils import _get_redoc_url, _get_docs_url
 
 import pytest
 from fastapi import Request
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 import litellm
 from unittest.mock import MagicMock, patch, AsyncMock
 

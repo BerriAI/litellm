@@ -1,5 +1,4 @@
 import os
-import sys
 
 import pytest
 from dotenv import load_dotenv
@@ -8,9 +7,6 @@ load_dotenv()
 import io
 import os
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds-the parent directory to the system path
 
 from litellm.proxy import proxy_server
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (

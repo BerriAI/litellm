@@ -3,7 +3,6 @@
 
 import asyncio
 import os
-import sys
 import traceback
 
 from dotenv import load_dotenv
@@ -16,9 +15,6 @@ load_dotenv()
 import io
 import os
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 from typing import Optional
 from unittest.mock import MagicMock, patch
 

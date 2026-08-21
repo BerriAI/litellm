@@ -1,15 +1,11 @@
 import json
 import os
-import sys
 from datetime import datetime
 from typing import AsyncIterator, Dict, Any
 import asyncio
 import unittest.mock
 from unittest.mock import AsyncMock, MagicMock
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 import litellm
 import pytest
 from dotenv import load_dotenv
@@ -41,7 +37,6 @@ def event_loop():
 @pytest.fixture(scope="function", autouse=True)
 def setup_and_teardown(event_loop):  # Add event_loop as a dependency
     curr_dir = os.getcwd()
-    sys.path.insert(0, os.path.abspath("../.."))
 
     import litellm
     from litellm import Router

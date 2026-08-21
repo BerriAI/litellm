@@ -20,7 +20,6 @@
 # function to validate a request - async def user_auth(request: Request):
 
 import os
-import sys
 import traceback
 from litellm._uuid import uuid
 from datetime import datetime, timezone
@@ -38,9 +37,6 @@ import time
 
 # this file is to test litellm/proxy
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 import asyncio
 import logging
 

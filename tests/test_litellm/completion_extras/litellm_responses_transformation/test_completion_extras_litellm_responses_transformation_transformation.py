@@ -1,7 +1,6 @@
 import datetime
 import json
 import os
-import sys
 import unittest
 from typing import TYPE_CHECKING, List, Literal, Optional, Tuple
 from unittest.mock import ANY, MagicMock, Mock, patch
@@ -9,9 +8,6 @@ from unittest.mock import ANY, MagicMock, Mock, patch
 import httpx
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system-path
 import litellm
 from litellm.completion_extras.litellm_responses_transformation.transformation import (
     LiteLLMResponsesTransformationHandler,

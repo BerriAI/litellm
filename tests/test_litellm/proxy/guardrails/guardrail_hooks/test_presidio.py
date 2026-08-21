@@ -4,14 +4,11 @@ Tests PII detection and masking for different message formats
 """
 
 import asyncio
-import os
-import sys
 from contextlib import asynccontextmanager
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../../../.."))
 
 import litellm
 from litellm.caching.caching import DualCache

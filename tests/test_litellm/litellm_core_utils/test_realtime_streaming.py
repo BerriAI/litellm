@@ -1,6 +1,4 @@
 import json
-import os
-import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -8,7 +6,6 @@ from websockets.exceptions import ConnectionClosed
 
 import litellm
 
-sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system path
 
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.realtime_streaming import (

@@ -1,21 +1,14 @@
 import json
-import os
-import sys
 import traceback
 
 from dotenv import load_dotenv
 
 load_dotenv()
 import io
-import os
 import litellm
 from test_streaming import streaming_format_tests
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 
-import os
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest

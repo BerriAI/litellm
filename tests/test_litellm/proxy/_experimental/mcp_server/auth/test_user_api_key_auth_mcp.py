@@ -1,7 +1,6 @@
 import contextlib
 import json
 import os
-import sys
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -9,7 +8,6 @@ import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
-sys.path.insert(0, os.path.abspath("../../../.."))  # Adds the parent directory to the system path
 
 from starlette.datastructures import Headers
 

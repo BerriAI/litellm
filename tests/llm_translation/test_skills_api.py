@@ -3,7 +3,6 @@ Tests for Skills API operations across providers
 """
 
 import os
-import sys
 import zipfile
 from abc import ABC, abstractmethod
 from contextlib import contextmanager
@@ -12,7 +11,6 @@ from typing import Optional
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 import litellm
 from litellm.types.llms.anthropic_skills import (

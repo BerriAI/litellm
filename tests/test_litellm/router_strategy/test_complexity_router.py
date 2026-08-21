@@ -6,15 +6,12 @@ Tests the rule-based complexity scoring and tier assignment logic.
 
 import asyncio
 import logging
-import os
-import sys
 from typing import Dict, List
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from pydantic import ValidationError
 
-sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system path
 
 import litellm
 from litellm import Router

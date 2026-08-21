@@ -5,13 +5,9 @@ Tests the CometAPIChatConfig class methods using mocks
 """
 
 import os
-import sys
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
 
 from litellm.llms.cometapi.chat.transformation import (
     CometAPIChatCompletionStreamingHandler,

@@ -1,6 +1,5 @@
 import json
 import os
-import sys
 
 import pytest
 from fastapi.testclient import TestClient
@@ -28,9 +27,6 @@ from litellm.types.utils import (
     StandardBuiltInToolsParams,
 )
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
     PromptTokensDetailsResult,
