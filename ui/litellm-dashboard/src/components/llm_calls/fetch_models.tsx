@@ -19,11 +19,18 @@ interface AvailableModel {
   supported_reasoning_efforts?: string[] | null;
 }
 
+const toModelGroup = (item: AvailableModel): ModelGroup => ({
+  model_group: item.model_group || item.id || item.model_name || "",
+  ...(item.mode && { mode: item.mode }),
+  ...(item.supports_reasoning === true && { supports_reasoning: true }),
+  ...(item.supported_reasoning_efforts && { supported_reasoning_efforts: item.supported_reasoning_efforts }),
+});
+
 /**
  * /models carries no capability metadata, so the team-allowed names are joined against
- * /model_group/info; a name without a group entry keeps every capability field absent (unknown).
- * The group-info endpoint serves team-scoped tokens (row-filtered, verified live), and a failed
- * fetch is console.error'd by fetchAvailableModels before the empty fallback here.
+ * /model_group/info (one extra parallel request; the endpoint has no team filter of its own, and it
+ * serves team-scoped tokens row-filtered, verified live). A name without a group entry keeps every
+ * capability field absent; a failed group fetch is console.error'd by fetchAvailableModels.
  */
 export const fetchAvailableModelsForTeam = async (accessToken: string, teamId: string): Promise<ModelGroup[]> => {
   const [response, groups] = await Promise.all([
@@ -44,21 +51,11 @@ export const fetchAvailableModelsForTeam = async (accessToken: string, teamId: s
 export const fetchAvailableModels = async (accessToken: string): Promise<ModelGroup[]> => {
   try {
     const fetchedModels = await modelHubCall(accessToken);
-
-    if (fetchedModels?.data.length > 0) {
-      const models: ModelGroup[] = fetchedModels.data
-        .map((item: AvailableModel) => ({
-          model_group: item.model_group || item.id || item.model_name || "",
-          mode: item.mode || undefined,
-          supports_reasoning: item.supports_reasoning === true || undefined,
-          supported_reasoning_efforts: item.supported_reasoning_efforts ?? undefined,
-        }))
-        .filter((model: ModelGroup) => model.model_group !== "");
-
-      models.sort((a, b) => a.model_group.localeCompare(b.model_group));
-      return Array.from(new Map(models.map((model) => [model.model_group, model])).values());
-    }
-    return [];
+    const models: ModelGroup[] = (fetchedModels?.data ?? [])
+      .map(toModelGroup)
+      .filter((model: ModelGroup) => model.model_group !== "")
+      .sort((a: ModelGroup, b: ModelGroup) => a.model_group.localeCompare(b.model_group));
+    return Array.from(new Map(models.map((model) => [model.model_group, model])).values());
   } catch (error) {
     console.error("Error fetching model info:", error);
     throw error;
