@@ -6897,3 +6897,82 @@ def test_model_has_no_cost_mapping_alias_to_a_group_priced_through_model_info_is
     router = _router_with_a_group_priced_through_model_info()
 
     assert model_has_no_cost_mapping(model="model-info-priced-alias", llm_router=router) is False
+
+@pytest.mark.parametrize(
+    "user_route, expected",
+    [
+        ("/tempus/v1/chat/completions", True),
+        ("/tempus/newly-registered-model/predict", True),
+        ("/tempus-other/v1/chat/completions", False),
+        ("/anthropic/v1/messages", False),
+    ],
+)
+def test_team_allowed_routes_wildcard_prefix_matches_unregistered_passthrough_routes(user_route, expected):
+    """A `/prefix/*` entry in `team_allowed_routes` must cover every route under that prefix, so
+    passthrough endpoints registered after the proxy config was written are reachable without an
+    exact-route config change."""
+    from litellm.proxy._types import LiteLLM_JWTAuth
+    from litellm.proxy.auth.auth_checks import allowed_routes_check
+
+    assert (
+        allowed_routes_check(
+            user_role=LitellmUserRoles.TEAM,
+            user_route=user_route,
+            litellm_proxy_roles=LiteLLM_JWTAuth(team_allowed_routes=["/tempus/*"]),
+        )
+        is expected
+    )
+
+
+def test_team_allowed_routes_exact_route_does_not_become_a_prefix_grant():
+    from litellm.proxy._types import LiteLLM_JWTAuth
+    from litellm.proxy.auth.auth_checks import allowed_routes_check
+
+    roles = LiteLLM_JWTAuth(team_allowed_routes=["/tempus/model-a"])
+
+    assert (
+        allowed_routes_check(user_role=LitellmUserRoles.TEAM, user_route="/tempus/model-a", litellm_proxy_roles=roles)
+        is True
+    )
+    assert (
+        allowed_routes_check(user_role=LitellmUserRoles.TEAM, user_route="/tempus/model-b", litellm_proxy_roles=roles)
+        is False
+    )
+
+
+def test_admin_allowed_routes_wildcard_prefix_is_honored():
+    from litellm.proxy._types import LiteLLM_JWTAuth
+    from litellm.proxy.auth.auth_checks import allowed_routes_check
+
+    roles = LiteLLM_JWTAuth(admin_allowed_routes=["/tempus/*"])
+
+    assert (
+        allowed_routes_check(
+            user_role=LitellmUserRoles.PROXY_ADMIN, user_route="/tempus/anything", litellm_proxy_roles=roles
+        )
+        is True
+    )
+    assert (
+        allowed_routes_check(
+            user_role=LitellmUserRoles.PROXY_ADMIN, user_route="/other/anything", litellm_proxy_roles=roles
+        )
+        is False
+    )
+
+
+def test_team_allowed_routes_named_route_group_still_resolves():
+    from litellm.proxy._types import LiteLLM_JWTAuth
+    from litellm.proxy.auth.auth_checks import allowed_routes_check
+
+    roles = LiteLLM_JWTAuth(team_allowed_routes=["openai_routes"])
+
+    assert (
+        allowed_routes_check(
+            user_role=LitellmUserRoles.TEAM, user_route="/v1/chat/completions", litellm_proxy_roles=roles
+        )
+        is True
+    )
+    assert (
+        allowed_routes_check(user_role=LitellmUserRoles.TEAM, user_route="/key/generate", litellm_proxy_roles=roles)
+        is False
+    )

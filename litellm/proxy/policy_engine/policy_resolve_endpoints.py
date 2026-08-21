@@ -100,7 +100,7 @@ def _filter_keys_by_tags(keys: list, tag_patterns: list) -> tuple:
         key_alias = key.key_alias or ""
         key_tags = _get_tags_from_metadata(key.metadata, getattr(key, "metadata_json", None))
         if key_tags and any(
-            RouteChecks._route_matches_wildcard_pattern(route=tag, pattern=pat)
+            RouteChecks.route_matches_wildcard_pattern(route=tag, pattern=pat)
             for tag in key_tags
             for pat in tag_patterns
         ):
@@ -123,7 +123,7 @@ def _filter_teams_by_tags(teams: list, tag_patterns: list) -> tuple:
         team_alias = team.team_alias or ""
         team_tags = _get_tags_from_metadata(team.metadata)
         if team_tags and any(
-            RouteChecks._route_matches_wildcard_pattern(route=tag, pattern=pat)
+            RouteChecks.route_matches_wildcard_pattern(route=tag, pattern=pat)
             for tag in team_tags
             for pat in tag_patterns
         ):
@@ -152,7 +152,7 @@ async def _find_affected_by_team_patterns(
     for team in all_teams:
         team_alias = team.team_alias or ""
         if team_alias and any(
-            RouteChecks._route_matches_wildcard_pattern(route=team_alias, pattern=pat) for pat in team_patterns
+            RouteChecks.route_matches_wildcard_pattern(route=team_alias, pattern=pat) for pat in team_patterns
         ):
             if team_alias not in existing_teams:
                 new_teams.append(team_alias)
@@ -190,7 +190,7 @@ async def _find_affected_keys_by_alias(prisma_client: object, key_patterns: list
     for key in keys:
         key_alias = key.key_alias or ""
         if key_alias and any(
-            RouteChecks._route_matches_wildcard_pattern(route=key_alias, pattern=pat) for pat in key_patterns
+            RouteChecks.route_matches_wildcard_pattern(route=key_alias, pattern=pat) for pat in key_patterns
         ):
             if key_alias not in existing_keys:
                 affected.append(key_alias)
