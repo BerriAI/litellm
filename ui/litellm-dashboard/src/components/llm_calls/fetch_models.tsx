@@ -22,6 +22,8 @@ interface AvailableModel {
 /**
  * /models carries no capability metadata, so the team-allowed names are joined against
  * /model_group/info; a name without a group entry keeps every capability field absent (unknown).
+ * The group-info endpoint serves team-scoped tokens (row-filtered, verified live), and a failed
+ * fetch is console.error'd by fetchAvailableModels before the empty fallback here.
  */
 export const fetchAvailableModelsForTeam = async (accessToken: string, teamId: string): Promise<ModelGroup[]> => {
   const [response, groups] = await Promise.all([
