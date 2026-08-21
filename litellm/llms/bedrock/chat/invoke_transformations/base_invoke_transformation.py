@@ -20,6 +20,10 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.bedrock.chat.invoke_handler import make_call, make_sync_call
 from litellm.llms.bedrock.common_utils import BedrockError
+from litellm.llms.bedrock.request_metadata import (
+    bedrock_request_metadata_headers,
+    merge_bedrock_invoke_headers,
+)
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
@@ -417,15 +421,13 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         api_base: str | None = None,
     ) -> dict:
         raw_guardrail_config: Final = optional_params.pop("guardrailConfig", None)
-        if raw_guardrail_config is None:
-            return headers
-        existing_header_names: Final = frozenset(name.lower() for name in headers)
-        guardrail_headers: Final = {
-            name: value
-            for name, value in _bedrock_invoke_guardrail_headers(raw_guardrail_config).items()
-            if name.lower() not in existing_header_names
-        }
-        return {**headers, **guardrail_headers}
+        guardrail_headers: Final = (
+            ()
+            if raw_guardrail_config is None
+            else tuple(_bedrock_invoke_guardrail_headers(raw_guardrail_config).items())
+        )
+        owned_names, metadata_headers = bedrock_request_metadata_headers(litellm_params)
+        return merge_bedrock_invoke_headers(headers, guardrail_headers, metadata_headers, owned_names)
 
     def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
         return BedrockError(status_code=status_code, message=error_message)

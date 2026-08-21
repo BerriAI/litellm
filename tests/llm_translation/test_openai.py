@@ -285,12 +285,6 @@ class TestOpenAIChatCompletion(BaseLLMChatTest):
         """Test that tool calls with no arguments is translated correctly. Relevant issue: https://github.com/BerriAI/litellm/issues/6833"""
         pass
 
-    def test_prompt_caching(self):
-        """
-        Test that prompt caching works correctly.
-        Skip for now, as it's working locally but not in CI
-        """
-        pass
 
     def test_prompt_caching(self):
         """
@@ -428,7 +422,7 @@ def test_openai_web_search():
     """Makes a simple web search request and validates the response contains web search annotations and all expected fields are present"""
     litellm._turn_on_debug()
     response = litellm.completion(
-        model="openai/gpt-4o-search-preview",
+        model="openai/gpt-5-search-api",
         messages=[
             {
                 "role": "user",
@@ -448,7 +442,7 @@ def test_openai_web_search_streaming():
     # litellm._turn_on_debug()
     test_openai_web_search: Optional[ChatCompletionAnnotation] = None
     response = litellm.completion(
-        model="openai/gpt-4o-search-preview",
+        model="openai/gpt-5-search-api",
         messages=[
             {
                 "role": "user",

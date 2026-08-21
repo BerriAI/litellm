@@ -8,6 +8,8 @@ from datetime import time as dt_time
 from typing import Any, Dict, List
 from unittest.mock import AsyncMock, MagicMock
 
+import httpx
+import prisma
 import pytest
 
 sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system path
@@ -1932,3 +1934,311 @@ def test_user_and_team_chunks_report_progress_despite_a_failed_row(
     assert client.fetches_by_table[table_name] == 2
     assert len(_batch_writes(client, table_name, op="update")) == 2
     assert [call["call_type"] for call in logging_obj.service_logging_obj.failure_calls] == [call_type]
+
+
+class FlakyPrismaClient(MockPrismaClient):
+    """A client whose first N reads (or first N batch commits) fail with a
+    transport error, and which records every reconnect attempt.
+    """
+
+    def __init__(self, *, read_failures: int = 0, commit_failures: int = 0, error: Exception | None = None):
+        super().__init__()
+        self.reconnect_reasons: List[str] = []
+        self.read_attempts: int = 0
+        self.commit_attempts: int = 0
+        self._read_failures = read_failures
+        self._commit_failures = commit_failures
+        self._error = error or httpx.ConnectError("All connection attempts failed")
+
+        outer = self
+        original_batch = self.db.batch_
+
+        def _batch_():
+            batcher = original_batch()
+            batch_commit = batcher.commit
+
+            async def _maybe_failing_commit():
+                outer.commit_attempts += 1
+                if outer._commit_failures > 0:
+                    outer._commit_failures -= 1
+                    raise outer._error
+                return await batch_commit()
+
+            batcher.commit = _maybe_failing_commit
+            return batcher
+
+        self.db.batch_ = _batch_
+
+    async def attempt_db_reconnect(self, *, reason, timeout_seconds=None, lock_timeout_seconds=None) -> bool:
+        self.reconnect_reasons.append(reason)
+        return True
+
+    async def get_data(self, table_name, query_type, **kwargs):
+        self.read_attempts += 1
+        if self._read_failures > 0:
+            self._read_failures -= 1
+            raise self._error
+        return await super().get_data(table_name, query_type, **kwargs)
+
+
+def _due_row(table: str, identifier: str):
+    now = datetime.now(timezone.utc)
+    id_field = {"key": "token", "user": "user_id", "team": "team_id"}[table]
+    return type(
+        "Row",
+        (),
+        {
+            "spend": _DUE_ROW_SPEND,
+            "budget_duration": "30d",
+            "budget_reset_at": now - timedelta(seconds=1),
+            id_field: identifier,
+        },
+    )
+
+
+@pytest.mark.parametrize(
+    "phase, table_name, reason",
+    [
+        ("reset_budget_for_litellm_keys", "key", "reset_budget_read_keys_failure"),
+        ("reset_budget_for_litellm_users", "user", "reset_budget_read_users_failure"),
+        ("reset_budget_for_litellm_teams", "team", "reset_budget_read_teams_failure"),
+    ],
+    ids=["keys", "users", "teams"],
+)
+def test_transient_transport_error_on_read_reconnects_and_still_resets(phase, table_name, reason):
+    """A dropped connection on the read must cost one reconnect-and-retry, not
+    the whole tick (LIT-5372). Pre-fix the httpx.ConnectError was swallowed and
+    the phase reset nothing until the next tick, 10 minutes later.
+    """
+    client = FlakyPrismaClient(read_failures=1)
+    client.data[table_name] = [_due_row(table_name, "row-1")]
+    job = ResetBudgetJob(proxy_logging_obj=MockProxyLogging(), prisma_client=client)
+
+    asyncio.run(getattr(job, phase)())
+
+    assert client.reconnect_reasons == [reason]
+    assert len(_batch_writes(client, table_name, op="update")) == 1
+
+
+@pytest.mark.parametrize(
+    "phase, table_name, reason",
+    [
+        ("reset_budget_for_litellm_keys", "key", "reset_budget_write_keys_failure"),
+        ("reset_budget_for_litellm_users", "user", "reset_budget_write_users_failure"),
+        ("reset_budget_for_litellm_teams", "team", "reset_budget_write_teams_failure"),
+    ],
+    ids=["keys", "users", "teams"],
+)
+def test_connect_error_on_write_reconnects_and_commits(phase, table_name, reason):
+    """A ConnectError proves the commit never reached the database, so replaying
+    it cannot double-apply anything: the rows still get reset on this tick.
+    """
+    client = FlakyPrismaClient(commit_failures=1)
+    client.data[table_name] = [_due_row(table_name, "row-1")]
+    job = ResetBudgetJob(proxy_logging_obj=MockProxyLogging(), prisma_client=client)
+
+    asyncio.run(getattr(job, phase)())
+
+    assert client.reconnect_reasons == [reason]
+    assert client.commit_attempts == 2
+    assert len(_batch_writes(client, table_name, op="update")) == 1
+
+
+@pytest.mark.parametrize("ambiguous_error_name", ["ReadError", "ReadTimeout"])
+def test_ambiguous_transport_error_on_write_is_not_replayed(ambiguous_error_name):
+    """A post-send transport error leaves the commit outcome unknown. Since the
+    reset zeroes spend unconditionally, replaying it would erase spend accrued
+    after a commit that actually landed, so only reads may retry these.
+    """
+    client = FlakyPrismaClient(
+        commit_failures=1,
+        error=getattr(httpx, ambiguous_error_name)("ambiguous"),
+    )
+    client.data["key"] = [_due_row("key", "tok-1")]
+    job = ResetBudgetJob(proxy_logging_obj=MockProxyLogging(), prisma_client=client)
+
+    asyncio.run(job.reset_budget_for_litellm_keys())
+
+    assert client.reconnect_reasons == []
+    assert client.commit_attempts == 1
+
+
+@pytest.mark.parametrize("ambiguous_error_name", ["ReadError", "ReadTimeout"])
+def test_ambiguous_transport_error_on_read_still_retries(ambiguous_error_name):
+    """Reads have nothing to double-apply, so the full transport class retries."""
+    client = FlakyPrismaClient(read_failures=1, error=getattr(httpx, ambiguous_error_name)("ambiguous"))
+    client.data["key"] = [_due_row("key", "tok-1")]
+    job = ResetBudgetJob(proxy_logging_obj=MockProxyLogging(), prisma_client=client)
+
+    asyncio.run(job.reset_budget_for_litellm_keys())
+
+    assert client.reconnect_reasons == ["reset_budget_read_keys_failure"]
+    assert len(_batch_writes(client, "key", op="update")) == 1
+
+
+def test_transport_error_on_budget_cascade_read_reconnects_and_commits():
+    client = FlakyPrismaClient(read_failures=1)
+    budget = _budget_row(budget_id="b-1", budget_duration="1d")
+    client.data["budget"] = [budget]
+    job = ResetBudgetJob(proxy_logging_obj=MockProxyLogging(), prisma_client=client)
+
+    asyncio.run(job.reset_budget_for_litellm_budget_table())
+
+    assert client.reconnect_reasons == ["reset_budget_read_budgets_failure"]
+    assert [w["where"]["budget_id"] for w in _batch_writes(client, "budget", op="update_many")] == ["b-1"]
+
+
+def test_non_transport_error_still_surfaces_without_a_reconnect():
+    """A UniqueViolationError means the DB is reachable and the statement was
+    refused, so reconnecting would be pointless: the phase must fail as before.
+    """
+    client = FlakyPrismaClient(read_failures=1, error=prisma.errors.UniqueViolationError(MagicMock()))
+    client.data["key"] = [_due_row("key", "tok-1")]
+    job = ResetBudgetJob(proxy_logging_obj=MockProxyLogging(), prisma_client=client)
+
+    asyncio.run(job.reset_budget_for_litellm_keys())
+
+    assert client.reconnect_reasons == []
+    assert client.read_attempts == 1
+    assert _batch_writes(client, "key") == []
+
+
+def test_transport_error_that_outlives_the_reconnect_is_not_retried_forever():
+    client = FlakyPrismaClient(read_failures=2)
+    client.data["key"] = [_due_row("key", "tok-1")]
+    job = ResetBudgetJob(proxy_logging_obj=MockProxyLogging(), prisma_client=client)
+
+    asyncio.run(job.reset_budget_for_litellm_keys())
+
+    assert client.reconnect_reasons == ["reset_budget_read_keys_failure"]
+    assert client.read_attempts == 2
+    assert _batch_writes(client, "key") == []
+
+
+def test_transport_error_on_window_read_reconnects_and_still_resets(monkeypatch):
+    """The raw per-window queries are reads too, so a blip there must not cost
+    the whole window-reset phase."""
+    expired = (datetime.utcnow() - timedelta(minutes=5)).isoformat() + "Z"
+    key_rows = [{"token": "sk-expired", "budget_limits": [{"budget_duration": "1d", "reset_at": expired}]}]
+    job, prisma_client, _ = _make_reset_budget_windows_job(monkeypatch, key_rows=key_rows, team_rows=[])
+    reconnect_reasons: List[str] = []
+    good_query_raw = prisma_client.db.query_raw
+
+    async def failing_once_query_raw(query: str, *args, **kwargs):
+        if '"LiteLLM_VerificationToken"' in query and not reconnect_reasons:
+            raise httpx.ConnectError("All connection attempts failed")
+        return await good_query_raw(query, *args, **kwargs)
+
+    async def record_reconnect(*, reason, timeout_seconds=None, lock_timeout_seconds=None) -> bool:
+        reconnect_reasons.append(reason)
+        return True
+
+    prisma_client.db.query_raw = AsyncMock(side_effect=failing_once_query_raw)
+    prisma_client.attempt_db_reconnect = record_reconnect
+
+    asyncio.run(job.reset_budget_windows())
+
+    assert reconnect_reasons == ["reset_budget_read_key_windows_failure"]
+    prisma_client.db.litellm_verificationtoken.update.assert_awaited_once()
+
+
+def test_connect_error_on_window_write_reconnects_and_writes(monkeypatch):
+    expired = (datetime.utcnow() - timedelta(minutes=5)).isoformat() + "Z"
+    team_rows = [{"team_id": "team-expired", "budget_limits": [{"budget_duration": "1d", "reset_at": expired}]}]
+    job, prisma_client, _ = _make_reset_budget_windows_job(monkeypatch, key_rows=[], team_rows=team_rows)
+    reconnect_reasons: List[str] = []
+
+    async def failing_once_update(**kwargs) -> None:
+        if not reconnect_reasons:
+            raise httpx.ConnectError("All connection attempts failed")
+
+    async def record_reconnect(*, reason, timeout_seconds=None, lock_timeout_seconds=None) -> bool:
+        reconnect_reasons.append(reason)
+        return True
+
+    prisma_client.db.litellm_teamtable.update = AsyncMock(side_effect=failing_once_update)
+    prisma_client.attempt_db_reconnect = record_reconnect
+
+    asyncio.run(job.reset_budget_windows())
+
+    assert reconnect_reasons == ["reset_budget_write_team_windows_failure"]
+    assert prisma_client.db.litellm_teamtable.update.await_count == 2
+
+
+_DUE_ROW_SPEND = 42.0
+_SPEND_ACCRUED_AFTER_COMMIT = 7.5
+
+
+class AmbiguousCommitClient(MockPrismaClient):
+    """A client whose batch commit lands in the database and only then fails in
+    transit, so the caller cannot tell whether it committed.
+
+    The queued spend-zero is applied to `key_spend`, and fresh usage accrues in
+    the window between that landed commit and any replay, so a replay is
+    observable as erased spend rather than merely as an extra commit.
+    """
+
+    def __init__(self, *, error: Exception, spend_accrued_after_commit: float):
+        super().__init__()
+        self.key_spend: float = _DUE_ROW_SPEND
+        self.commit_attempts: int = 0
+        self.reconnect_reasons: list[str] = []
+
+        outer = self
+        original_batch = self.db.batch_
+
+        def _batch_():
+            batcher = original_batch()
+            batch_commit = batcher.commit
+
+            async def _commit_then_lose_the_response():
+                outer.commit_attempts += 1
+                result = await batch_commit()
+                for call in batcher.calls:
+                    if call["table"] == "key" and call["data"].get("spend") == 0:
+                        outer.key_spend = 0.0
+                if outer.commit_attempts > 1:
+                    return result
+                outer.key_spend += spend_accrued_after_commit
+                raise error
+
+            batcher.commit = _commit_then_lose_the_response
+            return batcher
+
+        self.db.batch_ = _batch_
+
+    async def attempt_db_reconnect(self, *, reason, timeout_seconds=None, lock_timeout_seconds=None) -> bool:
+        self.reconnect_reasons.append(reason)
+        return True
+
+
+@pytest.mark.parametrize(
+    "error, expected_commits, expected_spend, expected_reconnects",
+    [
+        (httpx.ReadError("response lost in transit"), 1, _SPEND_ACCRUED_AFTER_COMMIT, []),
+        (httpx.ReadTimeout("response lost in transit"), 1, _SPEND_ACCRUED_AFTER_COMMIT, []),
+        (httpx.ConnectError("never left the client"), 2, 0.0, ["reset_budget_write_keys_failure"]),
+    ],
+    ids=["read_error", "read_timeout", "connect_error_erasure_control"],
+)
+def test_ambiguous_commit_replay_does_not_erase_newly_accrued_spend(
+    error, expected_commits, expected_spend, expected_reconnects
+):
+    """A reset zeroes spend unconditionally, so replaying a commit that already
+    landed erases every dollar spent since it landed (LIT-5372 review finding).
+
+    The `connect_error` case is the control: it is the one error class allowed
+    to replay, and driving it through this same land-then-fail harness proves
+    the spend assertion can actually observe an erasure. In production a
+    ConnectError means the statements never reached the database, so its replay
+    has nothing to erase.
+    """
+    client = AmbiguousCommitClient(error=error, spend_accrued_after_commit=_SPEND_ACCRUED_AFTER_COMMIT)
+    client.data["key"] = [_due_row("key", "tok-1")]
+    job = ResetBudgetJob(proxy_logging_obj=MockProxyLogging(), prisma_client=client)
+
+    asyncio.run(job.reset_budget_for_litellm_keys())
+
+    assert client.key_spend == expected_spend
+    assert client.commit_attempts == expected_commits
+    assert client.reconnect_reasons == expected_reconnects
