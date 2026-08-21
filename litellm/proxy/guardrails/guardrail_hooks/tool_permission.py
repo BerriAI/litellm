@@ -1,6 +1,7 @@
 import json
 import re
-from typing import Any, AsyncGenerator, Dict, List, Literal, Optional, Union
+from collections.abc import AsyncGenerator, AsyncIterable, Mapping, Sequence
+from typing import Any, Final, Literal
 
 from fastapi import HTTPException
 
@@ -16,6 +17,11 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.callback_utils import (
     add_guardrail_to_applied_guardrails_header,
 )
+from litellm.proxy.guardrails.anthropic_sse import (
+    anthropic_sse_chunks_from_response,
+    assemble_anthropic_sse_stream,
+    is_raw_sse_stream,
+)
 from litellm.types.guardrails import GuardrailEventHooks, LitellmParams
 from litellm.types.proxy.guardrails.guardrail_hooks.tool_permission import (
     PermissionError,
@@ -26,18 +32,29 @@ from litellm.types.utils import (
     CallTypesLiteral,
     ChatCompletionMessageToolCall,
     Choices,
+    Function,
     LLMResponseTypes,
     ModelResponse,
     ModelResponseStream,
 )
 
-GUARDRAIL_NAME = "tool_permission"
+GUARDRAIL_NAME: Final = "tool_permission"
+
+
+def _object_mapping(value: object) -> Mapping[str, object] | None:
+    """Return ``value`` as an opaque mapping when it is a dict."""
+    return value if isinstance(value, dict) else None
+
+
+def _object_list(value: object) -> Sequence[object] | None:
+    """Return ``value`` as an opaque sequence when it is a list."""
+    return value if isinstance(value, list) else None
 
 
 class ToolPermissionGuardrail(CustomGuardrail):
     def __init__(
         self,
-        rules: Optional[List[Dict]] = None,
+        rules: list[dict] | None = None,
         default_action: Literal["deny", "allow"] = "deny",
         on_disallowed_action: Literal["block", "rewrite"] = "block",
         **kwargs,
@@ -52,26 +69,16 @@ class ToolPermissionGuardrail(CustomGuardrail):
             **kwargs: Additional arguments passed to CustomGuardrail
         """
         # Set supported event hooks - this guardrail only works on post_call
-        if "supported_event_hooks" not in kwargs:
-            kwargs["supported_event_hooks"] = [
-                GuardrailEventHooks.pre_call,
-                GuardrailEventHooks.post_call,
-            ]
+        kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
 
         super().__init__(**kwargs)
 
         self._load_rules(rules)
 
         # Normalize to lowercase for case-insensitive handling
-        self.default_action = (
-            default_action.lower()
-            if isinstance(default_action, str)
-            else default_action
-        )
+        self.default_action = default_action.lower() if isinstance(default_action, str) else default_action
         self.on_disallowed_action = (
-            on_disallowed_action.lower()
-            if isinstance(on_disallowed_action, str)
-            else on_disallowed_action
+            on_disallowed_action.lower() if isinstance(on_disallowed_action, str) else on_disallowed_action
         )
 
         verbose_proxy_logger.debug(
@@ -80,7 +87,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
             self.default_action,
         )
 
-    def _load_rules(self, rules: Optional[List[Any]]) -> None:
+    def _load_rules(self, rules: list[Any] | None) -> None:
         """Parse ``rules`` and (re)build the compiled target/pattern lookups.
 
         ``self.rules`` plus ``_compiled_rule_targets`` / ``_compiled_rule_patterns``
@@ -89,18 +96,14 @@ class ToolPermissionGuardrail(CustomGuardrail):
         single source of truth, so an in-place update (PUT /guardrails, immediate
         sync) reflects rule changes instead of keeping the construction-time maps.
         """
-        parsed_rules: List[ToolPermissionRule] = []
-        compiled_targets: Dict[str, Dict[str, Optional[re.Pattern]]] = {}
-        compiled_patterns: Dict[str, Dict[str, re.Pattern]] = {}
+        parsed_rules: Final[list[ToolPermissionRule]] = []
+        compiled_targets: Final[dict[str, dict[str, re.Pattern | None]]] = {}
+        compiled_patterns: Final[dict[str, dict[str, re.Pattern]]] = {}
 
         for rule_item in rules or []:
-            rule = (
-                rule_item
-                if isinstance(rule_item, ToolPermissionRule)
-                else ToolPermissionRule(**rule_item)
-            )
+            rule = rule_item if isinstance(rule_item, ToolPermissionRule) else ToolPermissionRule(**rule_item)
 
-            target_patterns: Dict[str, Optional[re.Pattern]] = {
+            target_patterns: dict[str, re.Pattern | None] = {
                 "tool_name": None,
                 "tool_type": None,
             }
@@ -108,25 +111,19 @@ class ToolPermissionGuardrail(CustomGuardrail):
                 try:
                     target_patterns["tool_name"] = re.compile(rule.tool_name)
                 except re.error as exc:
-                    raise ValueError(
-                        f"Invalid regex for tool_name in rule '{rule.id}': {exc}"
-                    ) from exc
+                    raise ValueError(f"Invalid regex for tool_name in rule '{rule.id}': {exc}") from exc
             if rule.tool_type is not None:
                 try:
                     target_patterns["tool_type"] = re.compile(rule.tool_type)
                 except re.error as exc:
-                    raise ValueError(
-                        f"Invalid regex for tool_type in rule '{rule.id}': {exc}"
-                    ) from exc
+                    raise ValueError(f"Invalid regex for tool_type in rule '{rule.id}': {exc}") from exc
 
-            rule_patterns: Dict[str, re.Pattern] = {}
+            rule_patterns: dict[str, re.Pattern] = {}
             for path, pattern in (rule.allowed_param_patterns or {}).items():
                 try:
                     rule_patterns[path] = re.compile(pattern)
                 except re.error as exc:
-                    raise ValueError(
-                        f"Invalid regex in allowed_param_patterns for rule '{rule.id}': {exc}"
-                    ) from exc
+                    raise ValueError(f"Invalid regex in allowed_param_patterns for rule '{rule.id}': {exc}") from exc
 
             parsed_rules.append(rule)
             compiled_targets[rule.id] = target_patterns
@@ -140,9 +137,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
         self._compiled_rule_targets = compiled_targets
         self._compiled_rule_patterns = compiled_patterns
 
-    def update_in_memory_litellm_params(
-        self, litellm_params: Union[LitellmParams, dict]
-    ) -> None:
+    def update_in_memory_litellm_params(self, litellm_params: LitellmParams | dict) -> None:
         """Apply updated params in place, rebuilding the compiled rule state.
 
         The base implementation only ``setattr``s raw fields, which would leave
@@ -155,7 +150,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
         # ``litellm_params`` may arrive as the raw DB dict (the proxy ``cast()``s
         # it to ``LitellmParams`` without converting), so handle both shapes. The
         # base ``setattr`` loop is model-only, so apply the dict case here.
-        previous_rules = self.rules
+        previous_rules: Final = self.rules
         if isinstance(litellm_params, dict):
             params = litellm_params
             for key, value in params.items():
@@ -169,7 +164,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
         # compiled maps. Rebuild them when rules are provided; otherwise restore
         # the previous ruleset so a partial update doesn't silently wipe it. An
         # explicit empty list still clears the rules.
-        rules = params.get("rules")
+        rules: Final = params.get("rules")
         if rules is not None:
             try:
                 self._load_rules(rules)
@@ -182,10 +177,10 @@ class ToolPermissionGuardrail(CustomGuardrail):
                 raise
         else:
             self.rules = previous_rules
-        default_action = params.get("default_action")
+        default_action: Final = params.get("default_action")
         if isinstance(default_action, str):
             self.default_action = default_action.lower()
-        on_disallowed_action = params.get("on_disallowed_action")
+        on_disallowed_action: Final = params.get("on_disallowed_action")
         if isinstance(on_disallowed_action, str):
             self.on_disallowed_action = on_disallowed_action.lower()
 
@@ -197,9 +192,14 @@ class ToolPermissionGuardrail(CustomGuardrail):
 
         return ToolPermissionGuardrailConfigModel
 
-    def _matches_regex(
-        self, pattern: Optional[re.Pattern], value: Optional[str]
-    ) -> bool:
+    @classmethod
+    def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:
+        return [
+            GuardrailEventHooks.pre_call,
+            GuardrailEventHooks.post_call,
+        ]
+
+    def _matches_regex(self, pattern: re.Pattern | None, value: str | None) -> bool:
         if pattern is None:
             return True
         if value is None:
@@ -210,33 +210,29 @@ class ToolPermissionGuardrail(CustomGuardrail):
         self,
         rule: ToolPermissionRule,
         *,
-        tool_name: Optional[str],
-        tool_type: Optional[str] = None,
+        tool_name: str | None,
+        tool_type: str | None = None,
     ) -> tuple[bool, bool]:
-        target_patterns = self._compiled_rule_targets.get(rule.id, {})
-        name_pattern = target_patterns.get("tool_name")
-        type_pattern = target_patterns.get("tool_type")
+        target_patterns: Final = self._compiled_rule_targets.get(rule.id, {})
+        name_pattern: Final = target_patterns.get("tool_name")
+        type_pattern: Final = target_patterns.get("tool_type")
 
-        name_required = rule.tool_name is not None
-        type_required = rule.tool_type is not None
+        name_required: Final = rule.tool_name is not None
+        type_required: Final = rule.tool_type is not None
 
-        name_matched = (
-            self._matches_regex(name_pattern, tool_name) if name_required else True
-        )
-        type_matched = (
-            self._matches_regex(type_pattern, tool_type) if type_required else True
-        )
+        name_matched: Final = self._matches_regex(name_pattern, tool_name) if name_required else True
+        type_matched: Final = self._matches_regex(type_pattern, tool_type) if type_required else True
 
-        overall_match = name_matched and type_matched
-        should_check_params = name_required and name_matched
+        overall_match: Final = name_matched and type_matched
+        should_check_params: Final = name_required and name_matched
 
         return overall_match, should_check_params
 
     def _check_tool_permission(
         self,
-        tool_name: Optional[str],
-        tool_type: Optional[str] = None,
-    ) -> tuple[bool, Optional[str], Optional[str]]:
+        tool_name: str | None,
+        tool_type: str | None = None,
+    ) -> tuple[bool, str | None, str | None]:
         """
         Check if a tool is allowed based on the configured rules
 
@@ -247,9 +243,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
         Returns:
             Tuple of (is_allowed, rule_id, message)
         """
-        verbose_proxy_logger.debug(
-            f"Checking permission for tool: {tool_name or tool_type}"
-        )
+        verbose_proxy_logger.debug("Checking permission for tool: %s", tool_name or tool_type)
 
         # Check each rule in order
         for rule in self.rules:
@@ -261,7 +255,9 @@ class ToolPermissionGuardrail(CustomGuardrail):
             if matches:
                 is_allowed = rule.decision == "allow"
                 tool_identifier = tool_name or tool_type or "unknown_tool"
-                default_message = f"Tool '{tool_identifier}' {'allowed' if is_allowed else 'denied'} by rule '{rule.id}'"
+                default_message = (
+                    f"Tool '{tool_identifier}' {'allowed' if is_allowed else 'denied'} by rule '{rule.id}'"
+                )
                 message = self.render_violation_message(
                     default=default_message,
                     context={
@@ -288,12 +284,12 @@ class ToolPermissionGuardrail(CustomGuardrail):
 
     def _parse_tool_call_arguments(
         self, tool_call: ChatCompletionMessageToolCall
-    ) -> tuple[Optional[Dict[str, Any]], Optional[str]]:
-        arguments = getattr(tool_call.function, "arguments", None)
+    ) -> tuple[Mapping[str, object] | None, str | None]:
+        arguments: Final = getattr(tool_call.function, "arguments", None)
         if not arguments:
             return None, "missing arguments"
 
-        parsed_arguments: Any = {}
+        parsed_arguments: object = {}
         try:
             if isinstance(arguments, str):
                 parsed_arguments = json.loads(arguments)
@@ -320,9 +316,9 @@ class ToolPermissionGuardrail(CustomGuardrail):
 
     def _collect_argument_paths(
         self,
-        value: Any,
+        value: object,
         current_path: str,
-        collected: Dict[str, List[Any]],
+        collected: dict[str, list[object]],
         depth: int = 0,
     ) -> None:
         from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
@@ -330,13 +326,15 @@ class ToolPermissionGuardrail(CustomGuardrail):
         if depth > DEFAULT_MAX_RECURSE_DEPTH:
             return
 
-        if isinstance(value, dict):
-            for key, sub_value in value.items():
+        mapping_value: Final = _object_mapping(value)
+        list_value: Final = _object_list(value)
+        if mapping_value is not None:
+            for key, sub_value in mapping_value.items():
                 next_path = f"{current_path}.{key}" if current_path else key
                 self._collect_argument_paths(sub_value, next_path, collected, depth + 1)
-        elif isinstance(value, list):
-            list_path = f"{current_path}[]" if current_path else "[]"
-            for item in value:
+        elif list_value is not None:
+            list_path: Final = f"{current_path}[]" if current_path else "[]"
+            for item in list_value:
                 self._collect_argument_paths(item, list_path, collected, depth + 1)
         else:
             if not current_path:
@@ -346,15 +344,15 @@ class ToolPermissionGuardrail(CustomGuardrail):
     def _patterns_match_for_rule(
         self,
         *,
-        arguments: Dict[str, Any],
+        arguments: Mapping[str, object],
         rule: ToolPermissionRule,
-        tool_name: Optional[str],
-    ) -> tuple[bool, Optional[str]]:
-        compiled_patterns = self._compiled_rule_patterns.get(rule.id)
+        tool_name: str | None,
+    ) -> tuple[bool, str | None]:
+        compiled_patterns: Final = self._compiled_rule_patterns.get(rule.id)
         if not compiled_patterns:
             return True, None
 
-        path_value_map: Dict[str, List[Any]] = {}
+        path_value_map: Final[dict[str, list[object]]] = {}
         self._collect_argument_paths(arguments, "", path_value_map)
 
         for path, compiled_pattern in compiled_patterns.items():
@@ -376,15 +374,15 @@ class ToolPermissionGuardrail(CustomGuardrail):
 
     def _get_permission_for_tool_call(
         self, tool_call: ChatCompletionMessageToolCall
-    ) -> tuple[bool, Optional[str], Optional[str]]:
-        tool_name = tool_call.function.name if tool_call.function else None
-        tool_type = getattr(tool_call, "type", None)
+    ) -> tuple[bool, str | None, str | None]:
+        tool_name: Final = tool_call.function.name if tool_call.function else None
+        tool_type: Final = getattr(tool_call, "type", None)
         if not tool_name and not tool_type:
             return self.default_action == "allow", None, None
 
-        tool_identifier = tool_name or tool_type or "unknown_tool"
+        tool_identifier: Final = tool_name or tool_type or "unknown_tool"
 
-        last_pattern_failure_msg: Optional[str] = None
+        last_pattern_failure_msg: str | None = None
 
         for rule in self.rules:
             matches, should_check_params = self._rule_matches_tool(
@@ -453,12 +451,12 @@ class ToolPermissionGuardrail(CustomGuardrail):
 
     def _legacy_function_call_to_tool_call(
         self, function_call: Any, choice_index: int
-    ) -> Optional[ChatCompletionMessageToolCall]:
+    ) -> ChatCompletionMessageToolCall | None:
         if function_call is None:
             return None
 
-        function_name = self._get_mapping_value(function_call, "name")
-        arguments = self._get_mapping_value(function_call, "arguments") or ""
+        function_name: Final = self._get_mapping_value(function_call, "name")
+        arguments: Final = self._get_mapping_value(function_call, "arguments") or ""
         if not function_name:
             return None
 
@@ -468,9 +466,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
             function={"name": function_name, "arguments": arguments},
         )
 
-    def _extract_tool_calls_from_response(
-        self, response: ModelResponse
-    ) -> List[ChatCompletionMessageToolCall]:
+    def _extract_tool_calls_from_response(self, response: ModelResponse) -> list[ChatCompletionMessageToolCall]:
         """
         Extract tool_calls from all choices in a model response.
 
@@ -480,7 +476,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
         Returns:
             List of tool_calls blocks found in the response
         """
-        tool_calls = []
+        tool_calls: Final = []
 
         for choice_index, choice in enumerate(response.choices):
             if isinstance(choice, Choices):
@@ -494,40 +490,125 @@ class ToolPermissionGuardrail(CustomGuardrail):
 
         return tool_calls
 
-    def _get_request_tool_name(self, tool: Any) -> tuple[Optional[str], Optional[str]]:
-        tool_type = self._get_mapping_value(tool, "type")
+    @staticmethod
+    def _anthropic_tool_use_to_tool_call(block: object) -> ChatCompletionMessageToolCall | None:
+        if not isinstance(block, dict) or block.get("type") != "tool_use":
+            return None
+        name: Final = block.get("name")
+        if not isinstance(name, str) or not name:
+            return None
+        tool_input: Final[object] = block.get("input")
+        return ChatCompletionMessageToolCall(
+            id=str(block.get("id") or ""),
+            function=Function(name=name, arguments=json.dumps(tool_input) if isinstance(tool_input, dict) else "{}"),
+            type="function",
+        )
+
+    @staticmethod
+    def _get_anthropic_content_blocks(response: object) -> tuple[object, ...] | None:
+        if not isinstance(response, dict):
+            return None
+        content: Final[object] = response.get("content")
+        return tuple(content) if isinstance(content, list) else None
+
+    def _extract_tool_calls_from_anthropic_content(
+        self, content: tuple[object, ...]
+    ) -> tuple[ChatCompletionMessageToolCall, ...]:
+        return tuple(
+            tool_call for block in content if (tool_call := self._anthropic_tool_use_to_tool_call(block)) is not None
+        )
+
+    def _evaluate_tool_calls(
+        self, tool_calls: Sequence[ChatCompletionMessageToolCall]
+    ) -> tuple[tuple[ChatCompletionMessageToolCall, PermissionError], ...]:
+        checked: Final = tuple((tool_call, *self._get_permission_for_tool_call(tool_call)) for tool_call in tool_calls)
+
+        for _tool_call, is_allowed, _rule_id, message in checked:
+            if not is_allowed and message is not None:
+                verbose_proxy_logger.warning("Tool Permission Guardrail: %s", message)
+                if self.on_disallowed_action == "block":
+                    raise GuardrailRaisedException(
+                        guardrail_name=self.guardrail_name, message=message, blocked_content=True
+                    )
+
+        return tuple(
+            (
+                tool_call,
+                PermissionError(
+                    tool_name=(
+                        tool_call.function.name if tool_call.function and tool_call.function.name else "unknown_tool"
+                    ),
+                    rule_id=rule_id,
+                    message=message,
+                ),
+            )
+            for tool_call, is_allowed, rule_id, message in checked
+            if not is_allowed and message is not None
+        )
+
+    def _modify_anthropic_content_with_permission_errors(
+        self,
+        response: object,
+        content: tuple[Any, ...],
+        denied_tools: tuple[tuple[ChatCompletionMessageToolCall, PermissionError], ...],
+    ) -> None:
+        if not denied_tools or not isinstance(response, dict):
+            return
+
+        verbose_proxy_logger.info("Blocking %s unauthorized tool uses", len(denied_tools))
+
+        error_by_tool_use_id: Final = {  # mutable-ok: read-only lookup, never mutated after construction
+            tool_call.id: self._create_permission_error_result(tool_call, error).content
+            for tool_call, error in denied_tools
+        }
+        denied_block_ids: Final = frozenset(error_by_tool_use_id)
+
+        def _is_denied(block: object) -> bool:
+            return isinstance(block, dict) and block.get("type") == "tool_use" and block.get("id") in denied_block_ids
+
+        error_messages: Final = tuple(error_by_tool_use_id[block["id"]] for block in content if _is_denied(block))
+        kept_blocks: Final = tuple(block for block in content if not _is_denied(block))
+        new_content: Final = [  # mutable-ok: response content is a JSON array on the wire
+            *kept_blocks,
+            {"type": "text", "text": "\n".join(error_messages)},  # mutable-ok: content block is a JSON object
+        ]
+
+        response["content"] = new_content  # rebind-ok: the guardrail rewrites the provider response in place
+        if not any(isinstance(block, dict) and block.get("type") == "tool_use" for block in kept_blocks):
+            response["stop_reason"] = "end_turn"  # rebind-ok: dropping every tool_use ends the turn
+
+    def _get_request_tool_name(self, tool: Any) -> tuple[str | None, str | None]:
+        tool_type: Final = self._get_mapping_value(tool, "type")
         if tool_type != "function":
             return None, tool_type
 
-        function = self._get_mapping_value(tool, "function")
-        tool_name = self._get_mapping_value(function, "name")
+        function: Final = self._get_mapping_value(tool, "function")
+        tool_name: Final = self._get_mapping_value(function, "name")
         return tool_name, tool_type
 
-    def _get_legacy_function_name(self, function: Any) -> Optional[str]:
+    def _get_legacy_function_name(self, function: Any) -> str | None:
         return self._get_mapping_value(function, "name")
 
-    def _get_named_tool_choice(self, data: dict) -> Optional[str]:
-        tool_choice = data.get("tool_choice")
+    def _get_named_tool_choice(self, data: dict) -> str | None:
+        tool_choice: Final = data.get("tool_choice")
         if not tool_choice or tool_choice in ("auto", "none", "required"):
             return None
         if isinstance(tool_choice, str):
             return tool_choice
         if self._get_mapping_value(tool_choice, "type") != "function":
             return None
-        return self._get_mapping_value(
-            self._get_mapping_value(tool_choice, "function"), "name"
-        )
+        return self._get_mapping_value(self._get_mapping_value(tool_choice, "function"), "name")
 
-    def _get_named_function_call(self, data: dict) -> Optional[str]:
-        function_call = data.get("function_call")
+    def _get_named_function_call(self, data: dict) -> str | None:
+        function_call: Final = data.get("function_call")
         if not function_call or function_call in ("auto", "none"):
             return None
         if isinstance(function_call, str):
             return function_call
         return self._get_mapping_value(function_call, "name")
 
-    def _collect_request_tools(self, data: dict) -> List[tuple[str, Optional[str]]]:
-        request_tools: List[tuple[str, Optional[str]]] = []
+    def _collect_request_tools(self, data: dict) -> list[tuple[str, str | None]]:
+        request_tools: Final[list[tuple[str, str | None]]] = []
 
         for tool in data.get("tools") or []:
             tool_name, tool_type = self._get_request_tool_name(tool)
@@ -551,7 +632,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
     def _modify_request_with_permission_errors(
         self,
         data: dict,
-        denied_tool_names: List[str],
+        denied_tool_names: list[str],
     ):
         """
         Modify the request to replace denied tool_calls blocks with error results
@@ -563,18 +644,16 @@ class ToolPermissionGuardrail(CustomGuardrail):
         if not denied_tool_names:
             return data
 
-        verbose_proxy_logger.info(
-            f"Blocking {len(denied_tool_names)} unauthorized tool uses"
-        )
+        verbose_proxy_logger.info("Blocking %s unauthorized tool uses", len(denied_tool_names))
 
         # Create a mapping of tool_use_id to error result
-        error_tool_names = set()
+        error_tool_names: Final = set()
         for tool_use in denied_tool_names:
             error_tool_names.add(tool_use)
 
-        tools: Optional[List[ChatCompletionToolParam]] = data.get("tools")
+        tools: Final[list[ChatCompletionToolParam] | None] = data.get("tools")
         if tools is not None:
-            new_tools = []
+            new_tools: Final = []
             for tool in tools:
                 tool_name, tool_type = self._get_request_tool_name(tool)
                 if tool_type == "function" and tool_name in error_tool_names:
@@ -582,19 +661,17 @@ class ToolPermissionGuardrail(CustomGuardrail):
                 new_tools.append(tool)
             data["tools"] = new_tools
 
-        functions = data.get("functions")
+        functions: Final = data.get("functions")
         if functions is not None:
             data["functions"] = [
-                function
-                for function in functions
-                if self._get_legacy_function_name(function) not in error_tool_names
+                function for function in functions if self._get_legacy_function_name(function) not in error_tool_names
             ]
 
-        named_tool_choice = self._get_named_tool_choice(data)
+        named_tool_choice: Final = self._get_named_tool_choice(data)
         if named_tool_choice in error_tool_names:
             data["tool_choice"] = "none"
 
-        named_function_call = self._get_named_function_call(data)
+        named_function_call: Final = self._get_named_function_call(data)
         if named_function_call in error_tool_names:
             data["function_call"] = "none"
 
@@ -617,14 +694,12 @@ class ToolPermissionGuardrail(CustomGuardrail):
         if error.rule_id:
             error_message += f" (Rule: {error.rule_id})"
 
-        return ToolResult(
-            tool_use_id=tool_call.id, content=error_message, is_error=True
-        )
+        return ToolResult(tool_use_id=tool_call.id, content=error_message, is_error=True)
 
     def _modify_response_with_permission_errors(
         self,
         response: ModelResponse,
-        denied_tools: List[tuple[ChatCompletionMessageToolCall, PermissionError]],
+        denied_tools: Sequence[tuple[ChatCompletionMessageToolCall, PermissionError]],
     ) -> None:
         """
         Modify the response to replace denied tool_calls blocks with error results
@@ -636,12 +711,10 @@ class ToolPermissionGuardrail(CustomGuardrail):
         if not denied_tools:
             return
 
-        verbose_proxy_logger.info(
-            f"Blocking {len(denied_tools)} unauthorized tool uses"
-        )
+        verbose_proxy_logger.info("Blocking %s unauthorized tool uses", len(denied_tools))
 
         # Create a mapping of tool_use_id to error result
-        error_results = {}
+        error_results: Final = {}
         for tool_use, error in denied_tools:
             error_result = self._create_permission_error_result(tool_use, error)
             error_results[tool_use.id] = error_result
@@ -661,9 +734,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
                     else:
                         filtered_tool_calls.append(tool_call)
 
-                choice.message.tool_calls = (
-                    filtered_tool_calls if filtered_tool_calls else None
-                )
+                choice.message.tool_calls = filtered_tool_calls if filtered_tool_calls else None
 
                 legacy_tool_call = self._legacy_function_call_to_tool_call(
                     getattr(choice.message, "function_call", None), choice_index
@@ -678,11 +749,16 @@ class ToolPermissionGuardrail(CustomGuardrail):
                 if error_messages:
                     existing_content = choice.message.content
                     if existing_content:
-                        choice.message.content = (
-                            existing_content + "\n\n" + "\n".join(error_messages)
-                        )
+                        choice.message.content = existing_content + "\n\n" + "\n".join(error_messages)
                     else:
                         choice.message.content = "\n".join(error_messages)
+
+                if (
+                    not choice.message.tool_calls
+                    and getattr(choice.message, "function_call", None) is None
+                    and choice.finish_reason in ("tool_calls", "function_call")
+                ):
+                    choice.finish_reason = "stop"
 
     @log_guardrail_information
     async def async_pre_call_hook(
@@ -691,7 +767,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
         cache: DualCache,
         data: dict,
         call_type: CallTypesLiteral,
-    ) -> Union[Exception, str, dict, None]:
+    ) -> Exception | str | dict | None:
         """ """
         verbose_proxy_logger.debug("Tool Permission Guardrail Pre-Call Hook")
 
@@ -699,11 +775,11 @@ class ToolPermissionGuardrail(CustomGuardrail):
             add_guardrail_to_applied_guardrails_header,
         )
 
-        event_type: GuardrailEventHooks = GuardrailEventHooks.pre_call
+        event_type: Final[GuardrailEventHooks] = GuardrailEventHooks.pre_call
         if self.should_run_guardrail(data=data, event_type=event_type) is not True:
             return data
 
-        new_tools = self._collect_request_tools(data)
+        new_tools: Final = self._collect_request_tools(data)
         if not new_tools:
             verbose_proxy_logger.warning(
                 "Tool Permission Guardrail: not running guardrail. No tools or functions in data"
@@ -711,12 +787,12 @@ class ToolPermissionGuardrail(CustomGuardrail):
             return data
 
         # Check permissions for each tool
-        denied_tool_names = []
+        denied_tool_names: Final = []
         for tool_name, tool_type in new_tools:
             is_allowed, _, message = self._check_tool_permission(tool_name, tool_type)
 
             if not is_allowed and message is not None:
-                verbose_proxy_logger.warning(f"Tool Permission Guardrail: {message}")
+                verbose_proxy_logger.warning("Tool Permission Guardrail: %s", message)
                 if self.on_disallowed_action == "block":
                     raise HTTPException(
                         status_code=400,
@@ -730,13 +806,9 @@ class ToolPermissionGuardrail(CustomGuardrail):
         if denied_tool_names:
             data = self._modify_request_with_permission_errors(data, denied_tool_names)
 
-        verbose_proxy_logger.debug(
-            "Tool Permission Guardrail Pre-Call Hook: All tools allowed"
-        )
+        verbose_proxy_logger.debug("Tool Permission Guardrail Pre-Call Hook: All tools allowed")
 
-        add_guardrail_to_applied_guardrails_header(
-            request_data=data, guardrail_name=self.guardrail_name
-        )
+        add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=self.guardrail_name)
         return data
 
     @log_guardrail_information
@@ -754,76 +826,47 @@ class ToolPermissionGuardrail(CustomGuardrail):
             user_api_key_dict: User API key information (unused but required by interface)
             response: The model response to check
         """
-        if not isinstance(response, ModelResponse):
+        anthropic_content: Final = (
+            None if isinstance(response, ModelResponse) else self._get_anthropic_content_blocks(response)
+        )
+        if not isinstance(response, ModelResponse) and anthropic_content is None:
             return response
 
-        verbose_proxy_logger.debug(
-            "Tool Permission Guardrail Post-Call Hook: Checking response"
-        )
+        verbose_proxy_logger.debug("Tool Permission Guardrail Post-Call Hook: Checking response")
 
-        if not self.should_run_guardrail(
-            data=data, event_type=GuardrailEventHooks.post_call
-        ):
-            verbose_proxy_logger.debug(
-                "Tool Permission Guardrail: Skipping check (not enabled)"
-            )
+        if not self.should_run_guardrail(data=data, event_type=GuardrailEventHooks.post_call):
+            verbose_proxy_logger.debug("Tool Permission Guardrail: Skipping check (not enabled)")
             return response
 
         # Extract tool_calls from the response
-        tool_calls = self._extract_tool_calls_from_response(response)
+        tool_calls: Final = (
+            self._extract_tool_calls_from_response(response)
+            if isinstance(response, ModelResponse)
+            else self._extract_tool_calls_from_anthropic_content(anthropic_content or ())
+        )
 
         if not tool_calls:
             verbose_proxy_logger.debug("Tool Permission Guardrail: No tool uses found")
             return response
 
-        verbose_proxy_logger.debug(
-            f"Tool Permission Guardrail: Found {len(tool_calls)} tool calls"
-        )
+        verbose_proxy_logger.debug("Tool Permission Guardrail: Found %s tool calls", len(tool_calls))
 
-        # Check permissions for each tool use
-        denied_tools = []
-        for tool_call in tool_calls:
-            is_allowed, rule_id, message = self._get_permission_for_tool_call(tool_call)
+        denied_tools: Final = self._evaluate_tool_calls(tool_calls)
 
-            if not is_allowed and message is not None:
-                verbose_proxy_logger.warning(f"Tool Permission Guardrail: {message}")
-
-                if self.on_disallowed_action == "block":
-                    raise GuardrailRaisedException(
-                        guardrail_name=self.guardrail_name,
-                        message=message,
-                    )
-                denied_tools.append(
-                    (
-                        tool_call,
-                        PermissionError(
-                            tool_name=(
-                                tool_call.function.name
-                                if tool_call.function and tool_call.function.name
-                                else "unknown_tool"
-                            ),
-                            rule_id=rule_id,
-                            message=message,
-                        ),
-                    )
-                )
-
-        if denied_tools:
+        if not denied_tools:
+            verbose_proxy_logger.debug("Tool Permission Guardrail Post-Call Hook: All tools allowed")
+        elif isinstance(response, ModelResponse):
             self._modify_response_with_permission_errors(response, denied_tools)
         else:
-            verbose_proxy_logger.debug(
-                "Tool Permission Guardrail Post-Call Hook: All tools allowed"
-            )
+            self._modify_anthropic_content_with_permission_errors(response, anthropic_content or (), denied_tools)
 
-        add_guardrail_to_applied_guardrails_header(
-            request_data=data, guardrail_name=self.guardrail_name
-        )
+        add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=self.guardrail_name)
         return response
 
     async def async_post_call_streaming_iterator_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
-        response: Any,
+        response: AsyncIterable[ModelResponseStream],
         request_data: dict,
     ) -> AsyncGenerator[ModelResponseStream, None]:
         """
@@ -841,85 +884,58 @@ class ToolPermissionGuardrail(CustomGuardrail):
         from litellm.types.utils import TextCompletionResponse
 
         # Collect all chunks to process them together
-        all_chunks: List[ModelResponseStream] = []
+        all_chunks: Final[list[ModelResponseStream]] = []
         async for chunk in response:
             all_chunks.append(chunk)
 
-        assembled_model_response: Optional[
-            Union[ModelResponse, TextCompletionResponse]
-        ] = stream_chunk_builder(
-            chunks=all_chunks,
+        assembled_model_response: Final[ModelResponse | TextCompletionResponse | None] = (
+            stream_chunk_builder(chunks=all_chunks) if not is_raw_sse_stream(all_chunks) else None
         )
         if isinstance(assembled_model_response, ModelResponse):
-            verbose_proxy_logger.debug("Tool Permission Guardrail: Checking response")
-
-            # Extract tool_calls from the response
-            tool_calls = self._extract_tool_calls_from_response(
-                assembled_model_response
-            )
-
-            if not tool_calls:
-                verbose_proxy_logger.debug(
-                    "Tool Permission Guardrail: No tool uses found"
-                )
-                mock_response = MockResponseIterator(
-                    model_response=assembled_model_response
-                )
-                async for chunk in mock_response:
-                    yield chunk
-                return
-
-            verbose_proxy_logger.debug(
-                f"Tool Permission Guardrail: Found {len(tool_calls)} tool calls"
-            )
-
-            # Check permissions for each tool use
-            denied_tools = []
-            for tool_call in tool_calls:
-                is_allowed, rule_id, message = self._get_permission_for_tool_call(
-                    tool_call
-                )
-
-                if not is_allowed and message is not None:
-                    verbose_proxy_logger.warning(
-                        f"Tool Permission Guardrail: {message}"
-                    )
-
-                    if self.on_disallowed_action == "block":
-                        raise GuardrailRaisedException(
-                            guardrail_name=self.guardrail_name,
-                            message=message,
-                        )
-                    denied_tools.append(
-                        (
-                            tool_call,
-                            PermissionError(
-                                tool_name=(
-                                    tool_call.function.name
-                                    if tool_call.function and tool_call.function.name
-                                    else "unknown_tool"
-                                ),
-                                rule_id=rule_id,
-                                message=message,
-                            ),
-                        )
-                    )
-
+            denied_tools = self._check_assembled_stream(assembled_model_response)
             if denied_tools:
-                self._modify_response_with_permission_errors(
-                    assembled_model_response, denied_tools
-                )
-            else:
-                verbose_proxy_logger.debug(
-                    "Tool Permission Guardrail Post-Call Hook: All tools allowed"
-                )
+                self._modify_response_with_permission_errors(assembled_model_response, denied_tools)
 
-            mock_response = MockResponseIterator(
-                model_response=assembled_model_response
-            )
+            mock_response: Final = MockResponseIterator(model_response=assembled_model_response)
             # Return the reconstructed stream
             async for chunk in mock_response:
                 yield chunk
-        else:
+            return
+
+        anthropic_response: Final = assemble_anthropic_sse_stream(all_chunks)
+        if anthropic_response is None:
+            if is_raw_sse_stream(all_chunks):
+                raise GuardrailRaisedException(
+                    guardrail_name=self.guardrail_name,
+                    message=(
+                        "Streamed response could not be verified for tool permissions "
+                        "(not a parseable Anthropic SSE stream), blocking it"
+                    ),
+                )
             for chunk in all_chunks:
                 yield chunk
+            return
+
+        anthropic_denials: Final = self._check_assembled_stream(anthropic_response)
+        if not anthropic_denials:
+            for chunk in all_chunks:
+                yield chunk
+            return
+
+        self._modify_response_with_permission_errors(anthropic_response, anthropic_denials)
+        for sse_chunk in anthropic_sse_chunks_from_response(anthropic_response):
+            yield sse_chunk
+
+    def _check_assembled_stream(
+        self, assembled: ModelResponse
+    ) -> tuple[tuple[ChatCompletionMessageToolCall, PermissionError], ...]:
+        verbose_proxy_logger.debug("Tool Permission Guardrail: Checking response")
+        tool_calls: Final = self._extract_tool_calls_from_response(assembled)
+        if not tool_calls:
+            verbose_proxy_logger.debug("Tool Permission Guardrail: No tool uses found")
+            return ()
+        verbose_proxy_logger.debug("Tool Permission Guardrail: Found %s tool calls", len(tool_calls))
+        denied_tools: Final = self._evaluate_tool_calls(tool_calls)
+        if not denied_tools:
+            verbose_proxy_logger.debug("Tool Permission Guardrail Post-Call Hook: All tools allowed")
+        return denied_tools

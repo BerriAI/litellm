@@ -1,6 +1,6 @@
 """LangFlow run API: POST {api_base}/api/v1/run/{flow_id}"""
 
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Final
 from urllib.parse import quote
 
 import httpx
@@ -29,8 +29,6 @@ else:
 class LangFlowError(BaseLLMException):
     """Exception class for LangFlow API errors."""
 
-    pass
-
 
 class LangFlowConfig(BaseConfig):
     """
@@ -45,18 +43,16 @@ class LangFlowConfig(BaseConfig):
 
     def _get_openai_compatible_provider_info(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
-    ) -> Tuple[Optional[str], Optional[str]]:
+        api_base: str | None,
+        api_key: str | None,
+    ) -> tuple[str | None, str | None]:
         from litellm.secret_managers.main import get_secret_str
 
-        api_base = (
-            api_base or get_secret_str("LANGFLOW_API_BASE") or "http://localhost:7860"
-        )
+        api_base = api_base or get_secret_str("LANGFLOW_API_BASE") or "http://localhost:7860"
         api_key = api_key or get_secret_str("LANGFLOW_API_KEY")
         return api_base, api_key
 
-    def get_supported_openai_params(self, model: str) -> List[str]:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         return ["stream"]
 
     def map_openai_params(
@@ -78,13 +74,10 @@ class LangFlowConfig(BaseConfig):
         if optional_params.get("flow_id") is not None:
             raise LangFlowError(
                 status_code=400,
-                message=(
-                    "flow_id cannot be set via request parameters; "
-                    "use model langflow/{flow_id}"
-                ),
+                message=("flow_id cannot be set via request parameters; use model langflow/{flow_id}"),
             )
 
-        flow_id = (model.split("/", 1)[1] if "/" in model else model).strip()
+        flow_id: Final = (model.split("/", 1)[1] if "/" in model else model).strip()
         if not flow_id:
             raise LangFlowError(
                 status_code=400,
@@ -94,12 +87,12 @@ class LangFlowConfig(BaseConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         if api_base is None:
             raise ValueError(
@@ -107,10 +100,10 @@ class LangFlowConfig(BaseConfig):
             )
 
         api_base = api_base.rstrip("/")
-        flow_id = quote(self._get_flow_id(model, optional_params), safe="")
+        flow_id: Final = quote(self._get_flow_id(model, optional_params), safe="")
         return f"{api_base}/api/v1/run/{flow_id}"
 
-    def _get_last_user_message(self, messages: List[AllMessageValues]) -> str:
+    def _get_last_user_message(self, messages: list[AllMessageValues]) -> str:
         """Extract the text of the last user message to use as input_value."""
         for msg in reversed(messages):
             if msg.get("role") == "user":
@@ -145,7 +138,7 @@ class LangFlowConfig(BaseConfig):
     def transform_request(
         self,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
@@ -163,22 +156,22 @@ class LangFlowConfig(BaseConfig):
         """
         self._reject_caller_tweaks(optional_params)
 
-        input_value = self._get_last_user_message(messages)
+        input_value: Final = self._get_last_user_message(messages)
 
-        payload: Dict[str, Any] = {
+        payload: Final[dict[str, Any]] = {
             "input_value": input_value,
             "input_type": optional_params.get("input_type", "chat"),
             "output_type": optional_params.get("output_type", "chat"),
         }
 
-        session_id = optional_params.get("session_id")
+        session_id: Final = optional_params.get("session_id")
         if session_id:
             payload["session_id"] = session_id
 
-        verbose_logger.debug(f"LangFlow request payload: {payload}")
+        verbose_logger.debug("LangFlow request payload: %s", payload)
         return payload
 
-    def _extract_content_from_response(self, response_json: dict) -> Optional[str]:
+    def _extract_content_from_response(self, response_json: dict) -> str | None:
         """
         Extract the assistant text from a LangFlow run response.
 
@@ -188,29 +181,29 @@ class LangFlowConfig(BaseConfig):
         Returns None when no message text is present so the caller can surface an
         explicit error instead of forwarding a raw JSON blob as the answer.
         """
-        outputs = response_json.get("outputs", [])
+        outputs: Final = response_json.get("outputs", [])
         if not (isinstance(outputs, list) and outputs):
             return None
 
-        first_output = outputs[0]
+        first_output: Final = outputs[0]
         if not isinstance(first_output, dict):
             return None
 
-        inner_outputs = first_output.get("outputs", [])
+        inner_outputs: Final = first_output.get("outputs", [])
         if not (isinstance(inner_outputs, list) and inner_outputs):
             return None
 
-        first_inner = inner_outputs[0]
+        first_inner: Final = inner_outputs[0]
         if not isinstance(first_inner, dict):
             return None
 
-        results = first_inner.get("results", {})
+        results: Final = first_inner.get("results", {})
         if isinstance(results, dict):
-            message = results.get("message", {})
+            message: Final = results.get("message", {})
             if isinstance(message, dict) and message.get("text"):
                 return message["text"]
 
-        outputs_dict = first_inner.get("outputs", {})
+        outputs_dict: Final = first_inner.get("outputs", {})
         if isinstance(outputs_dict, dict):
             for val in outputs_dict.values():
                 if isinstance(val, dict):
@@ -227,24 +220,24 @@ class LangFlowConfig(BaseConfig):
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
         request_data: dict,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         encoding: Any,
-        api_key: Optional[str] = None,
-        json_mode: Optional[bool] = None,
+        api_key: str | None = None,
+        json_mode: bool | None = None,
     ) -> ModelResponse:
         try:
-            response_json = raw_response.json()
+            response_json: Final = raw_response.json()
         except Exception as e:
             raise LangFlowError(
                 message=f"LangFlow returned a non-JSON response: {e}",
                 status_code=raw_response.status_code,
             )
 
-        verbose_logger.debug(f"LangFlow response: {response_json}")
+        verbose_logger.debug("LangFlow response: %s", response_json)
 
-        content = self._extract_content_from_response(response_json)
+        content: Final = self._extract_content_from_response(response_json)
         if content is None:
             raise LangFlowError(
                 message=(
@@ -254,8 +247,8 @@ class LangFlowConfig(BaseConfig):
                 status_code=500,
             )
 
-        message = Message(content=content, role="assistant")
-        choice = Choices(finish_reason="stop", index=0, message=message)
+        message: Final = Message(content=content, role="assistant")
+        choice: Final = Choices(finish_reason="stop", index=0, message=message)
 
         model_response.choices = [choice]
         model_response.model = model
@@ -263,18 +256,16 @@ class LangFlowConfig(BaseConfig):
         try:
             from litellm.utils import token_counter
 
-            prompt_tokens = token_counter(model=model, messages=messages)
-            completion_tokens = token_counter(
-                model=model, text=content, count_response_tokens=True
-            )
-            usage = Usage(
+            prompt_tokens: Final = token_counter(model=model, messages=messages)
+            completion_tokens: Final = token_counter(model=model, text=content, count_response_tokens=True)
+            usage: Final = Usage(
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,
                 total_tokens=prompt_tokens + completion_tokens,
             )
             setattr(model_response, "usage", usage)
         except Exception as e:
-            verbose_logger.warning(f"Failed to calculate token usage: {e}")
+            verbose_logger.warning("Failed to calculate token usage: %s", e)
 
         return model_response
 
@@ -284,11 +275,11 @@ class LangFlowConfig(BaseConfig):
         optional_params: dict,
         request_data: dict,
         api_base: str,
-        api_key: Optional[str] = None,
-        model: Optional[str] = None,
-        stream: Optional[bool] = None,
-        fake_stream: Optional[bool] = None,
-    ) -> Tuple[dict, Optional[bytes]]:
+        api_key: str | None = None,
+        model: str | None = None,
+        stream: bool | None = None,
+        fake_stream: bool | None = None,
+    ) -> tuple[dict, bytes | None]:
         self._reject_caller_tweaks(request_data)
         return headers, None
 
@@ -296,11 +287,11 @@ class LangFlowConfig(BaseConfig):
         self,
         headers: dict,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
         headers["Content-Type"] = "application/json"
 
@@ -309,9 +300,7 @@ class LangFlowConfig(BaseConfig):
 
         return headers
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
-    ) -> BaseLLMException:
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
         return LangFlowError(status_code=status_code, message=error_message)
 
     @property
@@ -320,8 +309,8 @@ class LangFlowConfig(BaseConfig):
 
     def should_fake_stream(
         self,
-        model: Optional[str],
-        stream: Optional[bool],
-        custom_llm_provider: Optional[str] = None,
+        model: str | None,
+        stream: bool | None,
+        custom_llm_provider: str | None = None,
     ) -> bool:
         return stream is True

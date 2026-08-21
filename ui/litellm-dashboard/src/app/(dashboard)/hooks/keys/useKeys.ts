@@ -1,4 +1,11 @@
-import { keepPreviousData, useQuery, UseQueryResult } from "@tanstack/react-query";
+import {
+  keepPreviousData,
+  useInfiniteQuery,
+  useQuery,
+  UseQueryResult,
+  type InfiniteData,
+  type QueryKey,
+} from "@tanstack/react-query";
 import { createQueryKeys } from "../common/queryKeysFactory";
 import { getProxyBaseUrl, getGlobalLitellmHeaderName, deriveErrorMessage, handleError } from "@/components/networking";
 import { KeyResponse } from "@/components/key_team_helpers/key_list";
@@ -29,6 +36,7 @@ export interface KeyListCallOptions {
   organizationID?: string | null;
   teamID?: string | null;
   projectID?: string | null;
+  agentID?: string | null;
   selectedKeyAlias?: string | null;
   userID?: string | null;
   keyHash?: string | null;
@@ -49,6 +57,7 @@ const keyListCall = async (accessToken: string, page: number, pageSize: number, 
       Object.entries({
         team_id: options.teamID,
         project_id: options.projectID,
+        agent_id: options.agentID,
         organization_id: options.organizationID,
         key_alias: options.selectedKeyAlias,
         key_hash: options.keyHash,
@@ -88,7 +97,6 @@ const keyListCall = async (accessToken: string, page: number, pageSize: number, 
     }
 
     const data = await response.json();
-    console.log("/key/list API Response:", data);
     return data;
   } catch (error) {
     console.error("Failed to list keys:", error);
@@ -112,15 +120,36 @@ export const useKeys = (
   });
 };
 
+const infiniteKeyKeys = createQueryKeys("infiniteKeys");
+
+export const useInfiniteKeys = (pageSize: number, options: KeyListCallOptions = {}) => {
+  const { accessToken } = useAuthorized();
+
+  const infiniteKeyListOptions = {
+    queryKey: infiniteKeyKeys.list({ limit: pageSize, ...options }),
+    queryFn: async ({ pageParam }: { pageParam: number }) => {
+      if (!accessToken) throw new Error("Access token required");
+      return await keyListCall(accessToken, pageParam, pageSize, options);
+    },
+    initialPageParam: 1,
+    getNextPageParam: (lastPage: KeysResponse) =>
+      lastPage.current_page < lastPage.total_pages ? lastPage.current_page + 1 : undefined,
+    enabled: Boolean(accessToken),
+    staleTime: 30_000,
+  };
+
+  return useInfiniteQuery<KeysResponse, Error, InfiniteData<KeysResponse>, QueryKey, number>(infiniteKeyListOptions);
+};
+
 export const deletedKeyKeys = createQueryKeys("deletedKeys");
 export const useDeletedKeys = (
   page: number,
   pageSize: number,
   options: KeyListCallOptions = {},
-): UseQueryResult<KeysResponse> => {
+): UseQueryResult<DeletedKeysResponse> => {
   const { accessToken } = useAuthorized();
 
-  return useQuery<KeysResponse>({
+  return useQuery<DeletedKeysResponse>({
     queryKey: deletedKeyKeys.list({ page, limit: pageSize, ...options }),
     queryFn: async () => await keyListCall(accessToken!, page, pageSize, { ...options, status: "deleted" }),
     enabled: Boolean(accessToken),

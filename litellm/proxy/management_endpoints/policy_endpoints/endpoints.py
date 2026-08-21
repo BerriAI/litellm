@@ -12,7 +12,8 @@ All /policy management endpoints
 import copy
 import json
 import os
-from typing import TYPE_CHECKING, Any, AsyncIterator, List, Literal, Optional, cast
+from collections.abc import AsyncIterator
+from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response, StreamingResponse
@@ -55,7 +56,7 @@ from litellm.types.utils import GenericGuardrailAPIInputs, ModelResponse
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
-router = APIRouter()
+router: Final = APIRouter()
 
 
 class GuardrailApplyError(Exception):
@@ -83,7 +84,7 @@ class _ApplyPoliciesResultBase(TypedDict):
     """Base result of apply_policies: inputs plus any guardrail failures."""
 
     inputs: GenericGuardrailAPIInputs
-    guardrail_errors: List[GuardrailErrorEntry]
+    guardrail_errors: list[GuardrailErrorEntry]
 
 
 class ApplyPoliciesResult(_ApplyPoliciesResultBase, total=False):
@@ -96,7 +97,7 @@ class _ApplyPoliciesPerItemResultBase(TypedDict):
     """Base result for one input when using inputs_list."""
 
     inputs: GenericGuardrailAPIInputs
-    guardrail_errors: List[GuardrailErrorEntry]
+    guardrail_errors: list[GuardrailErrorEntry]
 
 
 class ApplyPoliciesPerItemResult(_ApplyPoliciesPerItemResultBase, total=False):
@@ -108,16 +109,16 @@ class ApplyPoliciesPerItemResult(_ApplyPoliciesPerItemResultBase, total=False):
 class ApplyPoliciesListResult(TypedDict):
     """Result when using inputs_list: one result per input."""
 
-    results: List[ApplyPoliciesPerItemResult]
+    results: list[ApplyPoliciesPerItemResult]
 
 
 async def apply_policies(
-    policy_names: Optional[list[str]],
+    policy_names: list[str] | None,
     inputs: GenericGuardrailAPIInputs,
     request_data: dict,
     input_type: Literal["request", "response"],
     proxy_logging_obj: "LiteLLMLoggingObj",
-    guardrail_names: Optional[list[str]] = None,
+    guardrail_names: list[str] | None = None,
 ) -> ApplyPoliciesResult:
     """
     Apply guardrails to inputs from policy names and/or a direct list of guardrail names.
@@ -134,21 +135,21 @@ async def apply_policies(
         ApplyPoliciesResult with "inputs" (final GenericGuardrailAPIInputs) and
         "guardrail_errors" (list of {"guardrail_name", "message"} for each failure).
     """
-    guardrail_errors: List[GuardrailErrorEntry] = []
+    guardrail_errors: Final[list[GuardrailErrorEntry]] = []
 
-    guardrail_name_set: set[str] = set()
+    guardrail_name_set: Final[set[str]] = set()
 
     if guardrail_names:
         guardrail_name_set.update(guardrail_names)
 
     if policy_names:
-        registry = get_policy_registry()
+        registry: Final = get_policy_registry()
         if not registry.is_initialized():
             verbose_proxy_logger.debug(
                 "apply_policies: policy engine not initialized, skipping policy-resolved guardrails"
             )
         else:
-            policies = registry.get_all_policies()
+            policies: Final = registry.get_all_policies()
             for policy_name in policy_names:
                 resolved = PolicyResolver.resolve_policy_guardrails(
                     policy_name=policy_name,
@@ -160,13 +161,11 @@ async def apply_policies(
     if not guardrail_name_set:
         return {"inputs": inputs, "guardrail_errors": guardrail_errors}
 
-    guardrail_registry = GuardrailRegistry()
+    guardrail_registry: Final = GuardrailRegistry()
     current_inputs = cast(GenericGuardrailAPIInputs, dict(inputs))
 
     for guardrail_name in sorted(guardrail_name_set):
-        callback = guardrail_registry.get_initialized_guardrail_callback(
-            guardrail_name=guardrail_name
-        )
+        callback = guardrail_registry.get_initialized_guardrail_callback(guardrail_name=guardrail_name)
         if callback is None:
             verbose_proxy_logger.debug(
                 "apply_policies: guardrail '%s' not found, skipping",
@@ -207,15 +206,13 @@ async def apply_policies(
     return {"inputs": current_inputs, "guardrail_errors": guardrail_errors}
 
 
-def _chat_body_from_inputs(
-    inputs: GenericGuardrailAPIInputs, agent_id: str, request_data: dict
-) -> dict:
+def _chat_body_from_inputs(inputs: GenericGuardrailAPIInputs, agent_id: str, request_data: dict) -> dict:
     """Build a chat completion request body from guardrail inputs and agent_id."""
-    messages: List[dict]
-    structured = inputs.get("structured_messages")
-    texts = inputs.get("texts")
+    messages: list[dict]
+    structured: Final = inputs.get("structured_messages")
+    texts: Final = inputs.get("texts")
     if structured:
-        messages = list(structured)  # type: ignore[arg-type]
+        messages = list(structured)
     elif texts:
         if len(texts) == 1:
             messages = [{"role": "user", "content": texts[0]}]
@@ -223,7 +220,7 @@ def _chat_body_from_inputs(
             messages = [{"role": "user", "content": "\n".join(texts)}]
     else:
         messages = [{"role": "user", "content": "Hello"}]
-    body: dict = {"model": agent_id, "messages": messages, "stream": False}
+    body: Final[dict] = {"model": agent_id, "messages": messages, "stream": False}
     if request_data:
         body.setdefault("metadata", {}).update(request_data)
     return body
@@ -231,8 +228,8 @@ def _chat_body_from_inputs(
 
 def _request_with_json_body(body: dict) -> Request:
     """Create a Starlette Request that will return the given dict as parsed JSON body."""
-    body_bytes = json.dumps(body).encode()
-    received: List[bool] = [False]
+    body_bytes: Final = json.dumps(body).encode()
+    received: Final[list[bool]] = [False]
 
     async def receive() -> dict:
         if received[0]:
@@ -240,7 +237,7 @@ def _request_with_json_body(body: dict) -> Request:
         received[0] = True
         return {"type": "http.request", "body": body_bytes, "more_body": False}
 
-    scope: dict = {
+    scope: Final[dict] = {
         "type": "http",
         "method": "POST",
         "path": "/v1/chat/completions",
@@ -259,23 +256,17 @@ def _request_with_json_body(body: dict) -> Request:
 class TestPoliciesAndGuardrailsRequest(BaseModel):
     """Request body for POST /utils/test_policies_and_guardrails."""
 
-    policy_names: Optional[List[str]] = Field(
-        default=None, description="Policy names to resolve guardrails from"
-    )
-    guardrail_names: Optional[List[str]] = Field(
-        default=None, description="Guardrail names to apply directly"
-    )
-    inputs_list: List[GenericGuardrailAPIInputs] = Field(
+    policy_names: list[str] | None = Field(default=None, description="Policy names to resolve guardrails from")
+    guardrail_names: list[str] | None = Field(default=None, description="Guardrail names to apply directly")
+    inputs_list: list[GenericGuardrailAPIInputs] = Field(
         default=[],
         description="List of GenericGuardrailAPIInputs; each item processed separately (for batch compliance testing).",
     )
-    request_data: dict = Field(
-        default_factory=dict, description="Request context (model, user_id, etc.)"
-    )
+    request_data: dict = Field(default_factory=dict, description="Request context (model, user_id, etc.)")
     input_type: Literal["request", "response"] = Field(
         default="request", description="Whether inputs are request or response"
     )
-    agent_id: Optional[str] = Field(
+    agent_id: str | None = Field(
         default=None,
         description="When set, call chat completion with this model/agent for each input and include the response in the result.",
     )
@@ -316,10 +307,10 @@ async def test_policies_and_guardrails(
         agent_id: str,
         user_api_key_dict: UserAPIKeyAuth,
     ) -> Any:
-        body = _chat_body_from_inputs(inputs, agent_id, data.request_data)
-        req = _request_with_json_body(body)
-        resp = Response()
-        result = await chat_completion(
+        body: Final = _chat_body_from_inputs(inputs, agent_id, data.request_data)
+        req: Final = _request_with_json_body(body)
+        resp: Final = Response()
+        result: Final = await chat_completion(
             request=req,
             fastapi_response=resp,
             model=agent_id,
@@ -328,9 +319,9 @@ async def test_policies_and_guardrails(
         return _serialize_chat_response(result)
 
     try:
-        logging_obj = cast(LiteLLMLoggingObj, proxy_logging_obj)
+        logging_obj: Final = cast(LiteLLMLoggingObj, proxy_logging_obj)
 
-        results: List[ApplyPoliciesPerItemResult] = []
+        results: Final[list[ApplyPoliciesPerItemResult]] = []
         for inp in data.inputs_list:
             item_result = await apply_policies(
                 policy_names=data.policy_names,
@@ -356,9 +347,7 @@ async def test_policies_and_guardrails(
                     guardrail_name="response_rejection",
                 )
                 try:
-                    model_response = ModelResponse.model_validate(
-                        item["agent_response"]
-                    )
+                    model_response = ModelResponse.model_validate(item["agent_response"])
                     handler = OpenAIChatCompletionsHandler()
                     await handler.process_output_response(
                         response=model_response,
@@ -443,13 +432,11 @@ async def validate_policy(
     from litellm.proxy.policy_engine.policy_validator import PolicyValidator
     from litellm.proxy.proxy_server import prisma_client
 
-    verbose_proxy_logger.debug(
-        f"Validating policy configuration with {len(data.policies)} policies"
-    )
+    verbose_proxy_logger.debug("Validating policy configuration with %s policies", len(data.policies))
 
-    validator = PolicyValidator(prisma_client=prisma_client)
+    validator: Final = PolicyValidator(prisma_client=prisma_client)
 
-    result = await validator.validate_policy_config(
+    result: Final = await validator.validate_policy_config(
         data.policies,
         validate_db=prisma_client is not None,
     )
@@ -480,7 +467,7 @@ async def list_policies(
     """
     from litellm.proxy.policy_engine.init_policies import get_policies_summary
 
-    summary = get_policies_summary()
+    summary: Final = get_policies_summary()
     return PolicyListResponse(
         policies={
             name: PolicySummaryItem(
@@ -519,7 +506,7 @@ async def get_policy_info(
     from litellm.proxy.policy_engine.policy_registry import get_policy_registry
     from litellm.proxy.policy_engine.policy_resolver import PolicyResolver
 
-    registry = get_policy_registry()
+    registry: Final = get_policy_registry()
 
     if not registry.is_initialized():
         raise HTTPException(
@@ -527,16 +514,14 @@ async def get_policy_info(
             detail="Policy engine not initialized. No policies loaded.",
         )
 
-    policy = registry.get_policy(policy_name)
+    policy: Final = registry.get_policy(policy_name)
     if policy is None:
         raise HTTPException(
             status_code=404,
             detail=f"Policy '{policy_name}' not found",
         )
 
-    resolved = PolicyResolver.resolve_policy_guardrails(
-        policy_name=policy_name, policies=registry.get_all_policies()
-    )
+    resolved = PolicyResolver.resolve_policy_guardrails(policy_name=policy_name, policies=registry.get_all_policies())
 
     return PolicyInfoResponse(
         policy_name=policy_name,
@@ -589,7 +574,7 @@ async def test_policy_matching(
     from litellm.proxy.policy_engine.policy_registry import get_policy_registry
     from litellm.proxy.policy_engine.policy_resolver import PolicyResolver
 
-    registry = get_policy_registry()
+    registry: Final = get_policy_registry()
 
     if not registry.is_initialized():
         return PolicyTestResponse(
@@ -599,15 +584,13 @@ async def test_policy_matching(
             message="Policy engine not initialized. No policies loaded.",
         )
 
-    policies = registry.get_all_policies()
+    policies: Final = registry.get_all_policies()
 
     # Get matching policies
-    matching_policy_names = PolicyMatcher.get_matching_policies(context=context)
+    matching_policy_names: Final = PolicyMatcher.get_matching_policies(context=context)
 
     # Resolve guardrails
-    resolved_guardrails = PolicyResolver.resolve_guardrails_for_context(
-        context=context, policies=policies
-    )
+    resolved_guardrails: Final = PolicyResolver.resolve_guardrails_for_context(context=context, policies=policies)
 
     return PolicyTestResponse(
         context=context,
@@ -616,21 +599,19 @@ async def test_policy_matching(
     )
 
 
-POLICY_TEMPLATES_GITHUB_URL = (
-    "https://raw.githubusercontent.com/BerriAI/litellm/main/policy_templates.json"
-)
+POLICY_TEMPLATES_GITHUB_URL: Final = "https://raw.githubusercontent.com/BerriAI/litellm/main/policy_templates.json"
 
 
 def _load_policy_templates_from_local_backup() -> list:
     """Load policy templates from local backup file (litellm/policy_templates_backup.json)."""
-    backup_path = os.path.join(
+    backup_path: Final = os.path.join(
         os.path.dirname(__file__),
         "..",
         "..",
         "..",
         "policy_templates_backup.json",
     )
-    path = os.path.abspath(backup_path)
+    path: Final = os.path.abspath(backup_path)
     if not os.path.exists(path):
         return []
     with open(path, "r") as f:
@@ -653,7 +634,7 @@ async def get_policy_templates(
     Fetches from GitHub with automatic fallback to local backup on failure.
     Set LITELLM_LOCAL_POLICY_TEMPLATES=true to skip GitHub and use local backup only.
     """
-    use_local = os.getenv("LITELLM_LOCAL_POLICY_TEMPLATES", "").strip().lower() in (
+    use_local: Final = os.getenv("LITELLM_LOCAL_POLICY_TEMPLATES", "").strip().lower() in (
         "true",
         "1",
         "yes",
@@ -665,17 +646,15 @@ async def get_policy_templates(
         from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
         from litellm.types.llms.custom_http import httpxSpecialProvider
 
-        async_client = get_async_httpx_client(
+        async_client: Final = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.UI,
             params={"timeout": 10.0},
         )
-        response = await async_client.get(POLICY_TEMPLATES_GITHUB_URL)
+        response: Final = await async_client.get(POLICY_TEMPLATES_GITHUB_URL)
         if response.status_code == 200:
             return response.json()
     except Exception as e:
-        verbose_proxy_logger.debug(
-            "Failed to fetch policy templates from GitHub, using local backup: %s", e
-        )
+        verbose_proxy_logger.debug("Failed to fetch policy templates from GitHub, using local backup: %s", e)
 
     return _load_policy_templates_from_local_backup()
 
@@ -683,13 +662,13 @@ async def get_policy_templates(
 class EnrichTemplateRequest(BaseModel):
     template_id: str
     parameters: dict
-    model: Optional[str] = None
-    competitors: Optional[List[str]] = Field(
+    model: str | None = None
+    competitors: list[str] | None = Field(
         default=None,
         max_length=MAX_COMPETITOR_NAMES,
         description="Optional list of competitor names",
     )
-    instruction: Optional[str] = Field(
+    instruction: str | None = Field(
         default=None,
         description="Refinement instruction for modifying the competitor list (e.g. 'add 10 more from Asia')",
     )
@@ -701,18 +680,14 @@ def _validate_enrichment_request(data: EnrichTemplateRequest) -> tuple[dict, dic
 
     Raises HTTPException on validation failure.
     """
-    templates = _load_policy_templates_from_local_backup()
-    template = next((t for t in templates if t.get("id") == data.template_id), None)
+    templates: Final = _load_policy_templates_from_local_backup()
+    template: Final = next((t for t in templates if t.get("id") == data.template_id), None)
     if template is None:
-        raise HTTPException(
-            status_code=404, detail=f"Template '{data.template_id}' not found"
-        )
+        raise HTTPException(status_code=404, detail=f"Template '{data.template_id}' not found")
 
-    llm_enrichment = template.get("llm_enrichment")
+    llm_enrichment: Final = template.get("llm_enrichment")
     if llm_enrichment is None:
-        raise HTTPException(
-            status_code=400, detail="Template does not support LLM enrichment"
-        )
+        raise HTTPException(status_code=400, detail="Template does not support LLM enrichment")
 
     # Validate competitors list size if provided
     if data.competitors and len(data.competitors) > MAX_COMPETITOR_NAMES:
@@ -721,7 +696,7 @@ def _validate_enrichment_request(data: EnrichTemplateRequest) -> tuple[dict, dic
             detail=f"competitors list exceeds maximum of {MAX_COMPETITOR_NAMES}",
         )
 
-    brand_name = data.parameters.get(llm_enrichment["parameter"], "")
+    brand_name: Final = data.parameters.get(llm_enrichment["parameter"], "")
     if not brand_name:
         raise HTTPException(
             status_code=400,
@@ -749,19 +724,17 @@ async def enrich_policy_template(
     then returns enriched guardrailDefinitions with the discovered data populated.
     """
     template, llm_enrichment, brand_name = _validate_enrichment_request(data)
-    model = data.model or DEFAULT_COMPETITOR_DISCOVERY_MODEL
+    model: Final = data.model or DEFAULT_COMPETITOR_DISCOVERY_MODEL
 
     if data.competitors:
         competitors = data.competitors
     else:
-        prompt = llm_enrichment["prompt"].replace(
-            "{{" + llm_enrichment["parameter"] + "}}", brand_name
-        )
+        prompt: Final = llm_enrichment["prompt"].replace("{{" + llm_enrichment["parameter"] + "}}", brand_name)
         competitors = await _discover_competitors_via_llm(prompt, model=model)
 
-    variations_map = await _generate_competitor_variations(competitors, model=model)
+    variations_map: Final = await _generate_competitor_variations(competitors, model=model)
 
-    enriched_definitions = _build_competitor_guardrail_definitions(
+    enriched_definitions: Final = _build_competitor_guardrail_definitions(
         template.get("guardrailDefinitions", []),
         competitors,
         brand_name,
@@ -781,7 +754,7 @@ def _build_refinement_prompt(
     brand_name: str,
 ) -> str:
     """Build a prompt for refining the competitor list based on user instruction."""
-    existing_list = ", ".join(existing_competitors)
+    existing_list: Final = ", ".join(existing_competitors)
     return (
         f"I have a brand called '{brand_name}' and the following competitor list:\n"
         f"{existing_list}\n\n"
@@ -796,7 +769,7 @@ async def _stream_llm_competitor_names(
     prompt: str,
     model: str,
     existing: list[str],
-) -> AsyncIterator[tuple[Optional[str], bool]]:
+) -> AsyncIterator[tuple[str | None, bool]]:
     """
     Stream competitor names from LLM. Yields (name, is_error) tuples.
 
@@ -807,8 +780,8 @@ async def _stream_llm_competitor_names(
     if llm_router is None:
         raise ValueError("LLM router not initialized")
 
-    existing_lower = {n.lower() for n in existing}
-    response = await llm_router.acompletion(
+    existing_lower: Final = {n.lower() for n in existing}
+    response: Final = await llm_router.acompletion(
         model=model,
         messages=[{"role": "user", "content": prompt}],
         temperature=COMPETITOR_LLM_TEMPERATURE,
@@ -816,17 +789,13 @@ async def _stream_llm_competitor_names(
     )
     buffer = ""
     count = len(existing)
-    async for chunk in response:  # type: ignore[union-attr]
+    async for chunk in response:
         delta = chunk.choices[0].delta.content or ""
         buffer += delta
         while "\n" in buffer:
             line, buffer = buffer.split("\n", 1)
             name = _clean_competitor_line(line)
-            if (
-                name
-                and name.lower() not in existing_lower
-                and count < MAX_COMPETITOR_NAMES
-            ):
+            if name and name.lower() not in existing_lower and count < MAX_COMPETITOR_NAMES:
                 existing_lower.add(name.lower())
                 count += 1
                 yield name, False
@@ -844,20 +813,16 @@ async def _stream_competitor_events(
     model: str,
 ) -> AsyncIterator[str]:
     """Stream competitor names as SSE events, then emit a final 'done' event."""
-    competitors: list[str] = list(data.competitors or [])
+    competitors: Final[list[str]] = list(data.competitors or [])
 
     if data.instruction and competitors:
         # Refinement mode: keep existing, stream only new names
         for comp in competitors:
             yield f"data: {json.dumps({'type': 'competitor', 'name': comp})}\n\n"
 
-        refinement_prompt = _build_refinement_prompt(
-            data.instruction, competitors, brand_name
-        )
+        refinement_prompt: Final = _build_refinement_prompt(data.instruction, competitors, brand_name)
         try:
-            async for name, _ in _stream_llm_competitor_names(
-                refinement_prompt, model, competitors
-            ):
+            async for name, _ in _stream_llm_competitor_names(refinement_prompt, model, competitors):
                 if name:
                     competitors.append(name)
                     yield f"data: {json.dumps({'type': 'competitor', 'name': name})}\n\n"
@@ -871,9 +836,7 @@ async def _stream_competitor_events(
             yield f"data: {json.dumps({'type': 'competitor', 'name': comp})}\n\n"
     else:
         # Initial discovery mode
-        prompt = llm_enrichment["prompt"].replace(
-            "{{" + llm_enrichment["parameter"] + "}}", brand_name
-        )
+        prompt: Final = llm_enrichment["prompt"].replace("{{" + llm_enrichment["parameter"] + "}}", brand_name)
         try:
             async for name, _ in _stream_llm_competitor_names(prompt, model, []):
                 if name:
@@ -885,11 +848,11 @@ async def _stream_competitor_events(
             return
 
     yield f"data: {json.dumps({'type': 'status', 'message': f'Generating alternate spellings for {len(competitors)} competitors...'})}\n\n"
-    variations_map = await _generate_competitor_variations(competitors, model=model)
+    variations_map: Final = await _generate_competitor_variations(competitors, model=model)
 
-    total_variations = sum(len(v) for v in variations_map.values())
+    total_variations: Final = sum(len(v) for v in variations_map.values())
     yield f"data: {json.dumps({'type': 'status', 'message': f'Building guardrail definitions with {total_variations} variations...'})}\n\n"
-    enriched_definitions = _build_competitor_guardrail_definitions(
+    enriched_definitions: Final = _build_competitor_guardrail_definitions(
         template.get("guardrailDefinitions", []),
         competitors,
         brand_name,
@@ -917,7 +880,7 @@ async def enrich_policy_template_stream(
     - data: {"type": "done", "competitors": [...], "competitor_variations": {...}, "guardrailDefinitions": [...]}
     """
     template, llm_enrichment, brand_name = _validate_enrichment_request(data)
-    model = data.model or DEFAULT_COMPETITOR_DISCOVERY_MODEL
+    model: Final = data.model or DEFAULT_COMPETITOR_DISCOVERY_MODEL
 
     return StreamingResponse(
         _stream_competitor_events(data, template, llm_enrichment, brand_name, model),
@@ -926,23 +889,21 @@ async def enrich_policy_template_stream(
     )
 
 
-def _clean_competitor_line(line: str) -> Optional[str]:
+def _clean_competitor_line(line: str) -> str | None:
     """Strip numbering, bullets, and whitespace from a competitor name line."""
-    name = line.strip().strip(".-) ").strip()
+    name: Final = line.strip().strip(".-) ").strip()
     return name if name and len(name) > 1 else None
 
 
-async def _generate_competitor_variations(
-    competitors: list, model: str = DEFAULT_COMPETITOR_DISCOVERY_MODEL
-) -> dict:
+async def _generate_competitor_variations(competitors: list, model: str = DEFAULT_COMPETITOR_DISCOVERY_MODEL) -> dict:
     """Generate common misspellings, abbreviations, and alternate names for each competitor."""
     if not competitors:
         return {}
 
     # Cap the list to prevent oversized prompts
-    capped = competitors[:MAX_COMPETITOR_NAMES]
-    names_list = "\n".join(capped)
-    prompt = (
+    capped: Final = competitors[:MAX_COMPETITOR_NAMES]
+    names_list: Final = "\n".join(capped)
+    prompt: Final = (
         "For each company/brand name below, list 3-5 common misspellings, abbreviations, "
         "and alternate names that people might type. Include typos, missing spaces, "
         "wrong suffixes (e.g. 'Airlines' vs 'Airways' vs 'Airline'), and common shortcuts.\n\n"
@@ -957,12 +918,12 @@ async def _generate_competitor_variations(
 
         if llm_router is None:
             raise ValueError("LLM router not initialized")
-        response = await llm_router.acompletion(
+        response: Final = await llm_router.acompletion(
             model=model,
             messages=[{"role": "user", "content": prompt}],
             temperature=COMPETITOR_LLM_TEMPERATURE,
         )
-        raw = response.choices[0].message.content or ""  # type: ignore
+        raw: Final = response.choices[0].message.content or ""
         return _parse_variations_response(raw, capped)
     except Exception as e:
         verbose_proxy_logger.error("LLM competitor variation generation failed: %s", e)
@@ -972,8 +933,8 @@ async def _generate_competitor_variations(
 def _parse_variations_response(raw: str, competitors: list) -> dict[str, list[str]]:
     """Parse the LLM response for competitor variations into a name -> variations map."""
     # Build a lowercase lookup for case-insensitive matching
-    lower_to_canonical = {comp.lower(): comp for comp in competitors}
-    variations_map: dict[str, list[str]] = {}
+    lower_to_canonical: Final = {comp.lower(): comp for comp in competitors}
+    variations_map: Final[dict[str, list[str]]] = {}
 
     for line in raw.strip().split("\n"):
         if ":" not in line:
@@ -983,35 +944,27 @@ def _parse_variations_response(raw: str, competitors: list) -> dict[str, list[st
         if canonical is None:
             continue
         variations = [
-            v.strip()
-            for v in variations_str.split(",")
-            if v.strip() and v.strip().lower() != canonical.lower()
+            v.strip() for v in variations_str.split(",") if v.strip() and v.strip().lower() != canonical.lower()
         ]
         variations_map[canonical] = variations
 
     return variations_map
 
 
-async def _discover_competitors_via_llm(
-    prompt: str, model: str = DEFAULT_COMPETITOR_DISCOVERY_MODEL
-) -> list:
+async def _discover_competitors_via_llm(prompt: str, model: str = DEFAULT_COMPETITOR_DISCOVERY_MODEL) -> list:
     """Call an onboarded LLM to discover competitor names."""
     try:
         from litellm.proxy.proxy_server import llm_router
 
         if llm_router is None:
             raise ValueError("LLM router not initialized")
-        response = await llm_router.acompletion(
+        response: Final = await llm_router.acompletion(
             model=model,
             messages=[{"role": "user", "content": prompt}],
             temperature=COMPETITOR_LLM_TEMPERATURE,
         )
-        raw = response.choices[0].message.content or ""  # type: ignore
-        competitors = [
-            name
-            for line in raw.strip().split("\n")
-            if (name := _clean_competitor_line(line)) is not None
-        ]
+        raw: Final = response.choices[0].message.content or ""
+        competitors = [name for line in raw.strip().split("\n") if (name := _clean_competitor_line(line)) is not None]
         return competitors[:MAX_COMPETITOR_NAMES]
     except Exception as e:
         verbose_proxy_logger.error("LLM competitor discovery failed: %s", e)
@@ -1029,20 +982,18 @@ def _build_competitor_guardrail_definitions(
     definitions: list,
     competitors: list,
     brand_name: str,
-    variations_map: Optional[dict] = None,
+    variations_map: dict | None = None,
 ) -> list:
     """Build enriched guardrailDefinitions with competitor names and variations populated."""
     variations_map = variations_map or {}
-    enriched = copy.deepcopy(definitions)
-    all_names = _build_all_names_per_competitor(competitors, variations_map)
+    enriched: Final = copy.deepcopy(definitions)
+    all_names: Final = _build_all_names_per_competitor(competitors, variations_map)
 
-    output_blocked = _build_name_blocked_words(competitors, all_names)
-    recommendation_blocked = _build_recommendation_blocked_words(competitors, all_names)
-    comparison_blocked = _build_comparison_blocked_words(
-        competitors, all_names, brand_name
-    )
+    output_blocked: Final = _build_name_blocked_words(competitors, all_names)
+    recommendation_blocked: Final = _build_recommendation_blocked_words(competitors, all_names)
+    comparison_blocked: Final = _build_comparison_blocked_words(competitors, all_names, brand_name)
 
-    blocked_words_map = {
+    blocked_words_map: Final = {
         "competitor-output-blocker": output_blocked,
         "competitor-input-blocker": output_blocked,
         "competitor-name-blocker": output_blocked,
@@ -1064,27 +1015,19 @@ def _build_competitor_guardrail_definitions(
     return enriched
 
 
-def _build_name_blocked_words(
-    competitors: list[str], all_names: dict[str, list[str]]
-) -> list[dict]:
+def _build_name_blocked_words(competitors: list[str], all_names: dict[str, list[str]]) -> list[dict]:
     """Build blocked word entries for direct competitor name mentions."""
-    result = []
+    result: Final = []
     for comp in competitors:
         for name in all_names[comp]:
-            desc = (
-                f"Competitor: {comp}"
-                if name == comp
-                else f"Competitor variation ({comp}): {name}"
-            )
+            desc = f"Competitor: {comp}" if name == comp else f"Competitor variation ({comp}): {name}"
             result.append({"keyword": name, "action": "BLOCK", "description": desc})
     return result
 
 
-def _build_recommendation_blocked_words(
-    competitors: list[str], all_names: dict[str, list[str]]
-) -> list[dict]:
+def _build_recommendation_blocked_words(competitors: list[str], all_names: dict[str, list[str]]) -> list[dict]:
     """Build blocked word entries for competitor recommendations."""
-    result = []
+    result: Final = []
     for comp in competitors:
         for name in all_names[comp]:
             for prefix in ["try", "use", "switch to", "consider"]:
@@ -1102,7 +1045,7 @@ def _build_comparison_blocked_words(
     competitors: list[str], all_names: dict[str, list[str]], brand_name: str
 ) -> list[dict]:
     """Build blocked word entries for unfavorable competitor comparisons."""
-    result = []
+    result: Final = []
     for comp in competitors:
         for name in all_names[comp]:
             result.append(
@@ -1133,9 +1076,9 @@ def _build_comparison_blocked_words(
 
 
 class SuggestTemplatesRequest(BaseModel):
-    attack_examples: List[str] = Field(default_factory=list)
+    attack_examples: list[str] = Field(default_factory=list)
     description: str = Field(default="")
-    model: Optional[str] = None
+    model: str | None = None
 
 
 @router.post(
@@ -1158,8 +1101,8 @@ async def suggest_policy_templates(
         AiPolicySuggester,
     )
 
-    templates = _load_policy_templates_from_local_backup()
-    suggester = AiPolicySuggester()
+    templates: Final = _load_policy_templates_from_local_backup()
+    suggester: Final = AiPolicySuggester()
     return await suggester.suggest(
         templates=templates,
         attack_examples=data.attack_examples,
@@ -1176,15 +1119,13 @@ class GuardrailTestResultEntry(TypedDict):
 
 
 class TestPolicyTemplateRequest(BaseModel):
-    guardrail_definitions: List[dict] = Field(
-        description="All guardrailDefinitions from the policy template"
-    )
+    guardrail_definitions: list[dict] = Field(description="All guardrailDefinitions from the policy template")
     text: str = Field(description="Test input text to run guardrails against")
 
 
 class TestPolicyTemplateResponse(TypedDict):
     overall_action: str  # worst-case across all guardrails
-    results: List[GuardrailTestResultEntry]
+    results: list[GuardrailTestResultEntry]
 
 
 @router.post(
@@ -1208,11 +1149,11 @@ async def test_policy_template(
     from litellm.proxy.utils import handle_exception_on_proxy
 
     try:
-        results = await _test_guardrail_definitions(
+        results: Final = await _test_guardrail_definitions(
             guardrail_definitions=data.guardrail_definitions,
             text=data.text,
         )
-        overall = _compute_overall_action(results)
+        overall: Final = _compute_overall_action(results)
         return TestPolicyTemplateResponse(
             overall_action=overall,
             results=results,
@@ -1222,15 +1163,15 @@ async def test_policy_template(
 
 
 async def _test_guardrail_definitions(
-    guardrail_definitions: List[dict],
+    guardrail_definitions: list[dict],
     text: str,
-) -> List[GuardrailTestResultEntry]:
+) -> list[GuardrailTestResultEntry]:
     """Instantiate and run each guardrail definition against the text."""
     from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import (
         ContentFilterGuardrail,
     )
 
-    results: List[GuardrailTestResultEntry] = []
+    results: Final[list[GuardrailTestResultEntry]] = []
 
     for guardrail_def in guardrail_definitions:
         guardrail_name = guardrail_def.get("guardrail_name", "unknown")
@@ -1263,9 +1204,7 @@ async def _test_guardrail_definitions(
                 request_data={},
                 input_type="request",
             )
-            output_text = (
-                output.get("texts", [text])[0] if output.get("texts") else text
-            )
+            output_text = output.get("texts", [text])[0] if output.get("texts") else text
 
             if output_text != text:
                 action = "masked"
@@ -1307,9 +1246,9 @@ async def _test_guardrail_definitions(
     return results
 
 
-def _compute_overall_action(results: List[GuardrailTestResultEntry]) -> str:
+def _compute_overall_action(results: list[GuardrailTestResultEntry]) -> str:
     """Return the worst-case action: blocked > masked > error > unsupported > passed."""
-    priority = {"blocked": 4, "masked": 3, "error": 2, "unsupported": 1, "passed": 0}
+    priority: Final = {"blocked": 4, "masked": 3, "error": 2, "unsupported": 1, "passed": 0}
     worst = "passed"
     for r in results:
         if priority.get(r["action"], 0) > priority.get(worst, 0):

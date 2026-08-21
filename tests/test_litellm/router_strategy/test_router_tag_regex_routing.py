@@ -112,6 +112,7 @@ def _make_router_mock(enable_tag_filtering=True, match_any=True):
     mock = MagicMock()
     mock.enable_tag_filtering = enable_tag_filtering
     mock.tag_filtering_match_any = match_any
+    mock.tag_routing_prefix = ""
     return mock
 
 

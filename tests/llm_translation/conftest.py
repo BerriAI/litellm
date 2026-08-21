@@ -31,13 +31,23 @@ from tests._vcr_conftest_common import (  # noqa: E402,F401
     reset_vcr_diag_dir,
     vcr_config_dict,
 )
+from tests.fake_openai_endpoint import ensure_fake_openai_endpoint  # noqa: E402
+
+
+@pytest.fixture(scope="session", autouse=True)
+def fake_openai_endpoint():
+    ensure_fake_openai_endpoint()
+    yield
+
 
 # Per-item respx detection (``apply_vcr_auto_marker_to_items``) handles
-# the vast majority of respx-vs-vcrpy conflicts automatically. The only
-# entry below is the persister's own unit-test file, which exercises
-# ``save_cassette`` / ``load_cassette`` against fakeredis and must not
-# itself run under a live cassette context.
-_VCR_AUTO_MARKER_SKIP_FILES = frozenset({"test_vcr_redis_persister.py"})
+# the vast majority of respx-vs-vcrpy conflicts automatically. The entries
+# below are the persister's and the WebSocket VCR's own unit-test files, which
+# exercise ``save_cassette`` / ``load_cassette`` against fakeredis and must not
+# themselves run under a live cassette context.
+_VCR_AUTO_MARKER_SKIP_FILES = frozenset(
+    {"test_vcr_redis_persister.py", "test_ws_vcr.py"}
+)
 
 _VCR_INCOMPATIBLE_NODEID_SUFFIXES: tuple[str, ...] = ()
 

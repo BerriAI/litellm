@@ -56,4 +56,23 @@ describe("FilterInput", () => {
 
     expect(input.value).toBe("a");
   });
+
+  it("should not call onChange when unmounted mid-debounce", () => {
+    const onChange = vi.fn();
+    const { unmount } = render(<FilterInput value="" onChange={onChange} placeholder="Search..." />);
+
+    const input = screen.getByPlaceholderText("Search...");
+
+    act(() => {
+      fireEvent.change(input, { target: { value: "test" } });
+    });
+
+    unmount();
+
+    act(() => {
+      vi.advanceTimersByTime(300);
+    });
+
+    expect(onChange).not.toHaveBeenCalled();
+  });
 });

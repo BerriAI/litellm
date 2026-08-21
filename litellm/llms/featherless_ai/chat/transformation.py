@@ -1,4 +1,4 @@
-from typing import Optional, Tuple, Union
+from typing import Final
 
 import litellm
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
@@ -12,37 +12,37 @@ class FeatherlessAIConfig(OpenAIGPTConfig):
     The class `FeatherlessAI` provides configuration for the FeatherlessAI's Chat Completions API interface. Below are the parameters:
     """
 
-    frequency_penalty: Optional[int] = None
-    function_call: Optional[Union[str, dict]] = None
-    functions: Optional[list] = None
-    logit_bias: Optional[dict] = None
-    max_tokens: Optional[int] = None
-    n: Optional[int] = None
-    presence_penalty: Optional[int] = None
-    stop: Optional[Union[str, list]] = None
-    temperature: Optional[int] = None
-    top_p: Optional[int] = None
-    response_format: Optional[dict] = None
-    tool_choice: Optional[str] = None
-    tools: Optional[list] = None
+    frequency_penalty: int | None = None
+    function_call: str | dict | None = None
+    functions: list | None = None
+    logit_bias: dict | None = None
+    max_tokens: int | None = None
+    n: int | None = None
+    presence_penalty: int | None = None
+    stop: str | list | None = None
+    temperature: int | None = None
+    top_p: int | None = None
+    response_format: dict | None = None
+    tool_choice: str | None = None
+    tools: list | None = None
 
     def __init__(
         self,
-        frequency_penalty: Optional[int] = None,
-        function_call: Optional[Union[str, dict]] = None,
-        functions: Optional[list] = None,
-        logit_bias: Optional[dict] = None,
-        max_tokens: Optional[int] = None,
-        n: Optional[int] = None,
-        presence_penalty: Optional[int] = None,
-        stop: Optional[Union[str, list]] = None,
-        temperature: Optional[int] = None,
-        top_p: Optional[int] = None,
-        response_format: Optional[dict] = None,
-        tool_choice: Optional[str] = None,
-        tools: Optional[list] = None,
+        frequency_penalty: int | None = None,
+        function_call: str | dict | None = None,
+        functions: list | None = None,
+        logit_bias: dict | None = None,
+        max_tokens: int | None = None,
+        n: int | None = None,
+        presence_penalty: int | None = None,
+        stop: str | list | None = None,
+        temperature: int | None = None,
+        top_p: int | None = None,
+        response_format: dict | None = None,
+        tool_choice: str | None = None,
+        tools: list | None = None,
     ) -> None:
-        locals_ = locals().copy()
+        locals_: Final = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -74,7 +74,7 @@ class FeatherlessAIConfig(OpenAIGPTConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
-        supported_openai_params = self.get_supported_openai_params(model=model)
+        supported_openai_params: Final = self.get_supported_openai_params(model=model)
         for param, value in non_default_params.items():
             if param == "tool_choice" or param == "tools":
                 if param == "tool_choice" and (value == "auto" or value == "none"):
@@ -98,8 +98,8 @@ class FeatherlessAIConfig(OpenAIGPTConfig):
         return optional_params
 
     def _get_openai_compatible_provider_info(
-        self, api_base: Optional[str], api_key: Optional[str]
-    ) -> Tuple[Optional[str], Optional[str]]:
+        self, api_base: str | None, api_key: str | None
+    ) -> tuple[str | None, str | None]:
         # FeatherlessAI is openai compatible, set to custom_openai and use FeatherlessAI's endpoint
         api_base = (
             api_base
@@ -107,11 +107,7 @@ class FeatherlessAIConfig(OpenAIGPTConfig):
             or get_secret_str("FEATHERLESS_API_BASE")
             or "https://api.featherless.ai/v1"
         )
-        dynamic_api_key = (
-            api_key
-            or get_secret_str("FEATHERLESS_AI_API_KEY")
-            or get_secret_str("FEATHERLESS_API_KEY")
-        )
+        dynamic_api_key = api_key or get_secret_str("FEATHERLESS_AI_API_KEY") or get_secret_str("FEATHERLESS_API_KEY")
         return api_base, dynamic_api_key
 
     def validate_environment(
@@ -121,8 +117,8 @@ class FeatherlessAIConfig(OpenAIGPTConfig):
         messages: list,
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
         if not api_key:
             raise ValueError("Missing Featherless AI API Key")

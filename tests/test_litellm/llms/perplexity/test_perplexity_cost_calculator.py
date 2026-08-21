@@ -9,7 +9,7 @@ import json
 import math
 import os
 import sys
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -120,10 +120,10 @@ class TestPerplexityCostCalculator:
         # Expected costs:
         # Input: 100 tokens * $2e-6 = $0.0002
         # Output: 50 tokens * $8e-6 = $0.0004
-        # Search: 3 queries * ($0.005 / 1000) = $0.000015
-        # Total completion cost: $0.000415
+        # Search: 3 queries * $0.005 per request = $0.015
+        # Total completion cost: $0.0154
         expected_prompt_cost = 100 * 2e-6
-        expected_completion_cost = (50 * 8e-6) + (3 / 1000 * 0.005)
+        expected_completion_cost = (50 * 8e-6) + (3 * 0.005)
 
         assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-6)
         assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-6)
@@ -195,10 +195,10 @@ class TestPerplexityCostCalculator:
         # Total prompt cost                        = $0.00026
         # Output (text): (50 - 15) tokens  * $8e-6 = $0.00028
         # Reasoning:      15 tokens        * $3e-6 = $0.000045
-        # Search:          2 queries * ($0.005 / 1000) = $0.00001
-        # Total completion cost                    = $0.000335
+        # Search:          2 queries * $0.005 per request = $0.01
+        # Total completion cost                    = $0.010325
         expected_prompt_cost = (100 * 2e-6) + (30 * 2e-6)
-        expected_completion_cost = ((50 - 15) * 8e-6) + (15 * 3e-6) + (2 / 1000 * 0.005)
+        expected_completion_cost = ((50 - 15) * 8e-6) + (15 * 3e-6) + (2 * 0.005)
 
         assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-6)
         assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-6)
@@ -311,7 +311,7 @@ class TestPerplexityCostCalculator:
         # Calculate expected total cost (reasoning is a subset of completion_tokens)
         expected_prompt_cost = (100 * 2e-6) + (15 * 2e-6)  # Input + citation
         expected_completion_cost = (
-            ((50 - 10) * 8e-6) + (10 * 3e-6) + (1 / 1000 * 0.005)
+            ((50 - 10) * 8e-6) + (10 * 3e-6) + (1 * 0.005)
         )  # Output (text) + reasoning + search
         expected_total = expected_prompt_cost + expected_completion_cost
 
@@ -361,7 +361,7 @@ class TestPerplexityCostCalculator:
         expected_completion_cost = (
             ((50 - reasoning_tokens) * 8e-6)
             + (reasoning_tokens * 3e-6)
-            + (search_queries / 1000 * 0.005)
+            + (search_queries * 0.005)
         )
 
         assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-6)

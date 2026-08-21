@@ -6,15 +6,15 @@ Credit to the maintainers of SecretiveShell for their SSE Transport implementati
 """
 
 from contextlib import asynccontextmanager
-from typing import Any
+from typing import Any, Final
 from urllib.parse import quote
 from uuid import UUID, uuid4
 
 import anyio
-import mcp.types as types
 from anyio.streams.memory import MemoryObjectReceiveStream, MemoryObjectSendStream
 from fastapi.requests import Request
 from fastapi.responses import Response
+from mcp import types
 from pydantic import ValidationError
 from sse_starlette import EventSourceResponse
 from starlette.types import Receive, Scope, Send
@@ -35,9 +35,7 @@ class SseServerTransport:
     """
 
     _endpoint: str
-    _read_stream_writers: dict[
-        UUID, MemoryObjectSendStream[types.JSONRPCMessage | Exception]
-    ]
+    _read_stream_writers: dict[UUID, MemoryObjectSendStream[types.JSONRPCMessage | Exception]]
 
     def __init__(self, endpoint: str) -> None:
         """
@@ -48,9 +46,7 @@ class SseServerTransport:
         super().__init__()
         self._endpoint = endpoint
         self._read_stream_writers = {}
-        verbose_logger.debug(
-            f"SseServerTransport initialized with endpoint: {endpoint}"
-        )
+        verbose_logger.debug("SseServerTransport initialized with endpoint: %s", endpoint)
 
     @asynccontextmanager
     async def connect_sse(self, request: Request):
@@ -68,83 +64,75 @@ class SseServerTransport:
         read_stream_writer, read_stream = anyio.create_memory_object_stream(0)
         write_stream, write_stream_reader = anyio.create_memory_object_stream(0)
 
-        session_id = uuid4()
-        session_uri = f"{quote(self._endpoint)}?session_id={session_id.hex}"
+        session_id: Final = uuid4()
+        session_uri: Final = f"{quote(self._endpoint)}?session_id={session_id.hex}"
         self._read_stream_writers[session_id] = read_stream_writer
-        verbose_logger.debug(f"Created new session with ID: {session_id}")
+        verbose_logger.debug("Created new session with ID: %s", session_id)
 
         sse_stream_writer: MemoryObjectSendStream[dict[str, Any]]
         sse_stream_reader: MemoryObjectReceiveStream[dict[str, Any]]
-        sse_stream_writer, sse_stream_reader = anyio.create_memory_object_stream(
-            0, dict[str, Any]
-        )
+        sse_stream_writer, sse_stream_reader = anyio.create_memory_object_stream(0, dict[str, Any])
 
         async def sse_writer():
             verbose_logger.debug("Starting SSE writer")
             async with sse_stream_writer, write_stream_reader:
                 await sse_stream_writer.send({"event": "endpoint", "data": session_uri})
-                verbose_logger.debug(f"Sent endpoint event: {session_uri}")
+                verbose_logger.debug("Sent endpoint event: %s", session_uri)
 
                 async for message in write_stream_reader:
-                    verbose_logger.debug(f"Sending message via SSE: {message}")
+                    verbose_logger.debug("Sending message via SSE: %s", message)
                     await sse_stream_writer.send(
                         {
                             "event": "message",
-                            "data": message.model_dump_json(
-                                by_alias=True, exclude_none=True
-                            ),
+                            "data": message.model_dump_json(by_alias=True, exclude_none=True),
                         }
                     )
 
         async with anyio.create_task_group() as tg:
-            response = EventSourceResponse(
-                content=sse_stream_reader, data_sender_callable=sse_writer
-            )
+            response: Final = EventSourceResponse(content=sse_stream_reader, data_sender_callable=sse_writer)
             verbose_logger.debug("Starting SSE response task")
             tg.start_soon(response, request.scope, request.receive, request._send)
 
             verbose_logger.debug("Yielding read and write streams")
             yield (read_stream, write_stream)
 
-    async def handle_post_message(
-        self, scope: Scope, receive: Receive, send: Send
-    ) -> Response:
+    async def handle_post_message(self, scope: Scope, receive: Receive, send: Send) -> Response:
         verbose_logger.debug("Handling POST message")
-        request = Request(scope, receive)
+        request: Final = Request(scope, receive)
 
-        session_id_param = request.query_params.get("session_id")
+        session_id_param: Final = request.query_params.get("session_id")
         if session_id_param is None:
             verbose_logger.warning("Received request without session_id")
             response = Response("session_id is required", status_code=400)
             return response
 
         try:
-            session_id = UUID(hex=session_id_param)
-            verbose_logger.debug(f"Parsed session ID: {session_id}")
+            session_id: Final = UUID(hex=session_id_param)
+            verbose_logger.debug("Parsed session ID: %s", session_id)
         except ValueError:
-            verbose_logger.warning(f"Received invalid session ID: {session_id_param}")
+            verbose_logger.warning("Received invalid session ID: %s", session_id_param)
             response = Response("Invalid session ID", status_code=400)
             return response
 
-        writer = self._read_stream_writers.get(session_id)
+        writer: Final = self._read_stream_writers.get(session_id)
         if not writer:
-            verbose_logger.warning(f"Could not find session for ID: {session_id}")
+            verbose_logger.warning("Could not find session for ID: %s", session_id)
             response = Response("Could not find session", status_code=404)
             return response
 
-        json = await request.json()
-        verbose_logger.debug(f"Received JSON: {json}")
+        json: Final = await request.json()
+        verbose_logger.debug("Received JSON: %s", json)
 
         try:
-            message = types.JSONRPCMessage.model_validate(json)
-            verbose_logger.debug(f"Validated client message: {message}")
+            message: Final = types.JSONRPCMessage.model_validate(json)
+            verbose_logger.debug("Validated client message: %s", message)
         except ValidationError as err:
-            verbose_logger.error(f"Failed to parse message: {err}")
+            verbose_logger.error("Failed to parse message: %s", err)
             response = Response("Could not parse message", status_code=400)
             await writer.send(err)
             return response
 
-        verbose_logger.debug(f"Sending message to writer: {message}")
+        verbose_logger.debug("Sending message to writer: %s", message)
         response = Response("Accepted", status_code=202)
         await writer.send(message)
         return response

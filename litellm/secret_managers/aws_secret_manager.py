@@ -12,7 +12,7 @@ import ast
 import base64
 import os
 import re
-from typing import Any, Dict, Optional
+from typing import Any, Final
 
 import litellm
 from litellm.proxy._types import KeyManagementSystem
@@ -23,7 +23,7 @@ def validate_environment():
         raise ValueError("Missing required environment variable - AWS_REGION_NAME")
 
 
-def load_aws_kms(use_aws_kms: Optional[bool]):
+def load_aws_kms(use_aws_kms: bool | None):
     if use_aws_kms is None or use_aws_kms is False:
         return
     try:
@@ -32,7 +32,7 @@ def load_aws_kms(use_aws_kms: Optional[bool]):
         validate_environment()
 
         # Create a Secrets Manager client
-        kms_client = boto3.client("kms", region_name=os.getenv("AWS_REGION_NAME"))
+        kms_client: Final = boto3.client("kms", region_name=os.getenv("AWS_REGION_NAME"))
 
         litellm.secret_manager_client = kms_client
         litellm._key_management_system = KeyManagementSystem.AWS_KMS
@@ -59,16 +59,17 @@ class AWSKeyManagementService_V2:
         ## CHECK IF LICENSE IN ENV ## - premium feature
         is_litellm_license_in_env: bool = False
 
-        if os.getenv("LITELLM_LICENSE", None) is not None:
-            is_litellm_license_in_env = True
-        elif os.getenv("LITELLM_SECRET_AWS_KMS_LITELLM_LICENSE", None) is not None:
+        if (
+            os.getenv("LITELLM_LICENSE", None) is not None
+            or os.getenv("LITELLM_SECRET_AWS_KMS_LITELLM_LICENSE", None) is not None
+        ):
             is_litellm_license_in_env = True
         if is_litellm_license_in_env is False:
             raise ValueError(
                 "AWSKeyManagementService V2 is an Enterprise Feature. Please add a valid LITELLM_LICENSE to your envionment."
             )
 
-    def load_aws_kms(self, use_aws_kms: Optional[bool]):
+    def load_aws_kms(self, use_aws_kms: bool | None):
         if use_aws_kms is None or use_aws_kms is False:
             return
         try:
@@ -77,7 +78,7 @@ class AWSKeyManagementService_V2:
             validate_environment()
 
             # Create a Secrets Manager client
-            kms_client = boto3.client("kms", region_name=os.getenv("AWS_REGION_NAME"))
+            kms_client: Final = boto3.client("kms", region_name=os.getenv("AWS_REGION_NAME"))
 
             return kms_client
         except Exception as e:
@@ -88,27 +89,25 @@ class AWSKeyManagementService_V2:
             raise ValueError("kms_client is None")
         encrypted_value = os.getenv(secret_name, None)
         if encrypted_value is None:
-            raise Exception(
-                "AWS KMS - Encrypted Value of Key={} is None".format(secret_name)
-            )
+            raise Exception(f"AWS KMS - Encrypted Value of Key={secret_name} is None")
         if isinstance(encrypted_value, str) and encrypted_value.startswith("aws_kms/"):
             encrypted_value = encrypted_value.replace("aws_kms/", "")
 
         # Decode the base64 encoded ciphertext
-        ciphertext_blob = base64.b64decode(encrypted_value)
+        ciphertext_blob: Final = base64.b64decode(encrypted_value)
 
         # Set up the parameters for the decrypt call
-        params = {"CiphertextBlob": ciphertext_blob}
+        params: Final = {"CiphertextBlob": ciphertext_blob}
         # Perform the decryption
-        response = self.kms_client.decrypt(**params)
+        response: Final = self.kms_client.decrypt(**params)
 
         # Extract and decode the plaintext
-        plaintext = response["Plaintext"]
+        plaintext: Final = response["Plaintext"]
         secret = plaintext.decode("utf-8")
         if isinstance(secret, str):
             secret = secret.strip()
         try:
-            secret_value_as_bool = ast.literal_eval(secret)
+            secret_value_as_bool: Final = ast.literal_eval(secret)
             if isinstance(secret_value_as_bool, bool):
                 return secret_value_as_bool
         except Exception:
@@ -124,17 +123,15 @@ class AWSKeyManagementService_V2:
 """
 
 
-def decrypt_env_var() -> Dict[str, Any]:
+def decrypt_env_var() -> dict[str, Any]:
     # setup client class
-    aws_kms = AWSKeyManagementService_V2()
+    aws_kms: Final = AWSKeyManagementService_V2()
     # iterate through env - for `aws_kms/`
-    new_values = {}
+    new_values: Final = {}
     for k, v in os.environ.items():
-        if (
-            k is not None
-            and isinstance(k, str)
-            and k.lower().startswith("litellm_secret_aws_kms")
-        ) or (v is not None and isinstance(v, str) and v.startswith("aws_kms/")):
+        if (k is not None and isinstance(k, str) and k.lower().startswith("litellm_secret_aws_kms")) or (
+            v is not None and isinstance(v, str) and v.startswith("aws_kms/")
+        ):
             decrypted_value = aws_kms.decrypt_value(secret_name=k)
             # reset env var
             k = re.sub("litellm_secret_aws_kms_", "", k, flags=re.IGNORECASE)

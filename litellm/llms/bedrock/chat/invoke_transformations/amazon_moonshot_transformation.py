@@ -7,8 +7,8 @@ Model format: bedrock/moonshot.kimi-k2-thinking-v1:0
 Reference: https://aws.amazon.com/about-aws/whats-new/2025/12/amazon-bedrock-fully-managed-open-weight-models/
 """
 
-from typing import TYPE_CHECKING, Any, List, Optional, Union
 import re
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
@@ -56,7 +56,7 @@ class AmazonMoonshotConfig(AmazonInvokeConfig, MoonshotChatConfig):
         MoonshotChatConfig.__init__(self, **kwargs)
 
     @property
-    def custom_llm_provider(self) -> Optional[str]:
+    def custom_llm_provider(self) -> str | None:
         return "bedrock"
 
     def _get_model_id(self, model: str) -> str:
@@ -69,22 +69,20 @@ class AmazonMoonshotConfig(AmazonInvokeConfig, MoonshotChatConfig):
         - moonshot.kimi-k2-thinking -> moonshot.kimi-k2-thinking
         """
         # Remove bedrock/ prefix if present
-        if model.startswith("bedrock/"):
-            model = model[8:]
+        model = model.removeprefix("bedrock/")
 
         # Remove invoke/ prefix if present
-        if model.startswith("invoke/"):
-            model = model[7:]
+        model = model.removeprefix("invoke/")
 
         # Remove any provider prefix (e.g., moonshot/)
         if "/" in model and not model.startswith("arn:"):
-            parts = model.split("/", 1)
+            parts: Final = model.split("/", 1)
             if len(parts) == 2:
                 model = parts[1]
 
         return model
 
-    def get_supported_openai_params(self, model: str) -> List[str]:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         """
         Get the supported OpenAI params for Moonshot AI models on Bedrock.
 
@@ -96,15 +94,13 @@ class AmazonMoonshotConfig(AmazonInvokeConfig, MoonshotChatConfig):
         Note: kimi-k2-thinking DOES support tool calls (unlike kimi-thinking-preview)
         The parent MoonshotChatConfig class handles the kimi-thinking-preview exclusion.
         """
-        excluded_params: List[str] = [
+        excluded_params: Final[list[str]] = [
             "functions",
             "stop",
         ]  # Bedrock doesn't support stopSequences
 
-        base_openai_params = super(
-            MoonshotChatConfig, self
-        ).get_supported_openai_params(model=model)
-        final_params: List[str] = []
+        base_openai_params: Final = super(MoonshotChatConfig, self).get_supported_openai_params(model=model)
+        final_params: Final[list[str]] = []
         for param in base_openai_params:
             if param not in excluded_params:
                 final_params.append(param)
@@ -137,7 +133,7 @@ class AmazonMoonshotConfig(AmazonInvokeConfig, MoonshotChatConfig):
     def transform_request(
         self,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
@@ -155,7 +151,7 @@ class AmazonMoonshotConfig(AmazonInvokeConfig, MoonshotChatConfig):
         self._get_boto_credentials_from_optional_params(optional_params, model)
 
         # Strip routing prefixes to get the actual model ID
-        clean_model_id = self._get_model_id(model)
+        clean_model_id: Final = self._get_model_id(model)
 
         # Use Moonshot's transform_request which handles message transformation
         # and tool_choice="required" workaround
@@ -168,9 +164,7 @@ class AmazonMoonshotConfig(AmazonInvokeConfig, MoonshotChatConfig):
             headers=headers,
         )
 
-    def _extract_reasoning_from_content(
-        self, content: str
-    ) -> tuple[Optional[str], str]:
+    def _extract_reasoning_from_content(self, content: str) -> tuple[str | None, str]:
         """
         Extract reasoning content from <reasoning> tags in the response.
 
@@ -187,13 +181,11 @@ class AmazonMoonshotConfig(AmazonInvokeConfig, MoonshotChatConfig):
             return None, content
 
         # Match <reasoning>...</reasoning> tags
-        reasoning_match = re.match(
-            r"<reasoning>(.*?)</reasoning>\s*(.*)", content, re.DOTALL
-        )
+        reasoning_match: Final = re.match(r"<reasoning>(.*?)</reasoning>\s*(.*)", content, re.DOTALL)
 
         if reasoning_match:
-            reasoning_content = reasoning_match.group(1).strip()
-            main_content = reasoning_match.group(2).strip()
+            reasoning_content: Final = reasoning_match.group(1).strip()
+            main_content: Final = reasoning_match.group(2).strip()
             return reasoning_content, main_content
 
         return None, content
@@ -205,12 +197,12 @@ class AmazonMoonshotConfig(AmazonInvokeConfig, MoonshotChatConfig):
         model_response: "ModelResponse",
         logging_obj: LiteLLMLoggingObj,
         request_data: dict,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         encoding: Any,
-        api_key: Optional[str] = None,
-        json_mode: Optional[bool] = None,
+        api_key: str | None = None,
+        json_mode: bool | None = None,
     ) -> "ModelResponse":
         """
         Transform the response from Bedrock Moonshot AI models.
@@ -241,11 +233,7 @@ class AmazonMoonshotConfig(AmazonInvokeConfig, MoonshotChatConfig):
         if model_response.choices and len(model_response.choices) > 0:
             for choice in model_response.choices:
                 # Only process Choices (not StreamingChoices) which have message attribute
-                if (
-                    isinstance(choice, Choices)
-                    and choice.message
-                    and choice.message.content
-                ):
+                if isinstance(choice, Choices) and choice.message and choice.message.content:
                     (
                         reasoning_content,
                         main_content,
@@ -259,8 +247,6 @@ class AmazonMoonshotConfig(AmazonInvokeConfig, MoonshotChatConfig):
 
         return model_response
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
-    ) -> BedrockError:
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BedrockError:
         """Return the appropriate error class for Bedrock."""
         return BedrockError(status_code=status_code, message=error_message)

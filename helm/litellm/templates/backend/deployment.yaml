@@ -23,9 +23,16 @@ spec:
       {{- end }}
       labels:
         {{- include "litellm.backend.selectorLabels" . | nindent 8 }}
+        {{- with .Values.backend.podLabels }}
+        {{- include "litellm.podLabels" (dict "podLabels" . "componentName" "backend") | nindent 8 }}
+        {{- end }}
     spec:
       serviceAccountName: {{ include "litellm.backend.serviceAccountName" . }}
       automountServiceAccountToken: {{ .Values.serviceAccounts.backend.automount }}
+      {{- with .Values.backend.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
@@ -34,6 +41,10 @@ spec:
         - name: backend
           image: "{{ .Values.backend.image.repository }}:{{ .Values.backend.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.backend.image.pullPolicy }}
+          {{- with .Values.backend.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           ports:
             - name: http
               containerPort: 4001
@@ -44,12 +55,23 @@ spec:
             - name: CONFIG_FILE_PATH
               value: /app/config/config.yaml
             {{- end }}
+            {{- if .Values.billingMetrics.enabled }}
+            {{- include "litellm.billingMetricsEnv" . | nindent 12 }}
+            {{- end }}
           {{- include "litellm.envFrom" .Values.backend | nindent 10 }}
-          {{- if .Values.gateway.config.create }}
+          {{- if or .Values.gateway.config.create .Values.backend.volumeMounts .Values.billingMetrics.enabled }}
           volumeMounts:
+            {{- if .Values.gateway.config.create }}
             - name: gateway-config
               mountPath: /app/config/config.yaml
               subPath: config.yaml
+            {{- end }}
+            {{- if .Values.billingMetrics.enabled }}
+            {{- include "litellm.billingMetricsVolumeMounts" . | nindent 12 }}
+            {{- end }}
+            {{- with .Values.backend.volumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
           {{- end }}
           {{- with .Values.backend.livenessProbe }}
           livenessProbe:
@@ -59,13 +81,32 @@ spec:
           readinessProbe:
             {{- toYaml . | nindent 12 }}
           {{- end }}
+          {{- with .Values.backend.startupProbe }}
+          startupProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.backend.lifecycle }}
+          lifecycle:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           resources:
             {{- toYaml .Values.backend.resources | nindent 12 }}
-      {{- if .Values.gateway.config.create }}
+      {{- with .Values.backend.extraContainers }}
+        {{- tpl (toYaml .) $ | nindent 8 }}
+      {{- end }}
+      {{- if or .Values.gateway.config.create .Values.backend.volumes .Values.billingMetrics.enabled }}
       volumes:
+        {{- if .Values.gateway.config.create }}
         - name: gateway-config
           configMap:
             name: {{ include "litellm.gateway.fullname" . }}-config
+        {{- end }}
+        {{- if .Values.billingMetrics.enabled }}
+        {{- include "litellm.billingMetricsVolumes" . | nindent 8 }}
+        {{- end }}
+        {{- with .Values.backend.volumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
       {{- end }}
       {{- with .Values.backend.nodeSelector }}
       nodeSelector:
@@ -78,5 +119,13 @@ spec:
       {{- with .Values.backend.tolerations }}
       tolerations:
         {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.backend.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- $gracePeriod := .Values.backend.terminationGracePeriodSeconds }}
+      {{- if not (or (kindIs "invalid" $gracePeriod) (eq (printf "%v" $gracePeriod) "")) }}
+      terminationGracePeriodSeconds: {{ $gracePeriod }}
       {{- end }}
 {{- end }}

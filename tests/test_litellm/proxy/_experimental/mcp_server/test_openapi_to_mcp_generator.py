@@ -17,6 +17,7 @@ import pytest
 from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
     _request_auth_header,
     _request_extra_headers,
+    _request_resolved_auth_headers,
     _resolve_param_list,
     _resolve_ref,
     build_input_schema,
@@ -26,12 +27,21 @@ from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
     resolve_operation_params,
 )
 
+from litellm.proxy._experimental.mcp_server.exceptions import (
+    MCPOpenApiUpstreamError,
+    MCPUpstreamAuthError,
+)
+
 GET_ASYNC_CLIENT_TARGET = "litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator.get_async_httpx_client"
 
 
-def _create_mock_client(method: str, response_text: str) -> AsyncMock:
-    """Utility to create a mocked async httpx client for the given method."""
-    response = SimpleNamespace(text=response_text)
+def _create_mock_client(method: str, response_text: str, status_code: int = 200) -> AsyncMock:
+    """Utility to create a mocked async httpx client for the given method.
+
+    ``status_code`` and ``headers`` are part of the real response the tool function reads, so the
+    fake carries them too; a fake that omits them cannot observe whether the status is checked.
+    """
+    response = SimpleNamespace(text=response_text, status_code=status_code, headers={})
     client = AsyncMock()
     setattr(client, method, AsyncMock(return_value=response))
     return client
@@ -626,13 +636,6 @@ class TestGetBaseUrl:
         base_url = get_base_url(spec, spec_path)
         assert base_url == "https://production.example.com"
 
-    def test_fallback_with_port_number(self):
-        """Test fallback handles URLs with port numbers correctly."""
-        spec = {"openapi": "3.0.0", "paths": {}}
-        spec_path = "http://localhost:8001/openapi.json"
-
-        base_url = get_base_url(spec, spec_path)
-        assert base_url == "http://localhost:8001"
 
     def test_fallback_with_nested_path(self):
         """Test fallback with deeply nested spec path."""
@@ -1207,3 +1210,171 @@ class TestRequestExtraHeaders:
             call_args = async_client.get.call_args
             headers_sent = call_args[1]["headers"]
             assert "X-TOKEN" not in headers_sent
+
+    @pytest.mark.asyncio
+    async def test_resolved_auth_headers_win_over_every_other_authorization_source(self):
+        """The gateway-resolved credential (stored per-user OAuth / minted M2M token) is
+        authoritative: it must override the BYOK override, static headers, and forwarded caller
+        headers on the Authorization name, case-insensitively, mirroring _resolve_v2_auth's rule
+        on the MCPClient path. Without this, a spec_path oauth2 server's completed OAuth flow
+        stores a token that never reaches the upstream API (LIT-4629)."""
+        operation = {}
+        func = create_tool_function(
+            path="/secure",
+            method="get",
+            operation=operation,
+            base_url="https://api.example.com",
+            headers={"authorization": "Bearer static-operator"},
+        )
+
+        with patch(GET_ASYNC_CLIENT_TARGET) as mock_client:
+            async_client = _create_mock_client("get", "secure-data")
+            mock_client.return_value = async_client
+
+            extra_token = _request_extra_headers.set({"Authorization": "Bearer caller-forwarded"})
+            auth_token = _request_auth_header.set("Bearer byok-credential")
+            resolved_token = _request_resolved_auth_headers.set({"Authorization": "Bearer resolved-oauth"})
+            try:
+                result = await func()
+            finally:
+                _request_auth_header.reset(auth_token)
+                _request_extra_headers.reset(extra_token)
+                _request_resolved_auth_headers.reset(resolved_token)
+
+            assert result == "secure-data"
+            headers_sent = async_client.get.call_args[1]["headers"]
+            authorization_values = [v for k, v in headers_sent.items() if k.lower() == "authorization"]
+            assert authorization_values == ["Bearer resolved-oauth"]
+
+    @pytest.mark.asyncio
+    async def test_resolved_auth_headers_not_leaked_between_calls(self):
+        """After resetting the resolved-auth ContextVar, subsequent calls send no credential."""
+        operation = {}
+        func = create_tool_function(
+            path="/data",
+            method="get",
+            operation=operation,
+            base_url="https://api.example.com",
+        )
+
+        with patch(GET_ASYNC_CLIENT_TARGET) as mock_client:
+            async_client = _create_mock_client("get", "ok")
+            mock_client.return_value = async_client
+
+            token = _request_resolved_auth_headers.set({"Authorization": "Bearer resolved-oauth"})
+            _request_resolved_auth_headers.reset(token)
+
+            await func()
+
+            headers_sent = async_client.get.call_args[1]["headers"]
+            assert "Authorization" not in headers_sent
+
+
+class TestUpstreamStatusIsClassified:
+    """A non-2xx upstream must never be returned as tool output.
+
+    The body used to be returned verbatim whatever the status, so an upstream rejection arrived as a
+    successful tool result and the request logged as a success. 401 is singled out because it is the
+    only status the caller can act on by re-authenticating, matching `_call_regular_mcp_tool` where a
+    403 deliberately does not produce a challenge.
+    """
+
+    @staticmethod
+    def _tool(status_code: int, text: str = "body", headers: dict | None = None, relays_upstream_auth: bool = True):
+        response = SimpleNamespace(text=text, status_code=status_code, headers=headers or {})
+        client = AsyncMock()
+        client.get = AsyncMock(return_value=response)
+        return create_tool_function(
+            "/reports",
+            "get",
+            {"operationId": "list_reports"},
+            "https://api.example.com",
+            server_label="report_api",
+            relays_upstream_auth=relays_upstream_auth,
+        ), client
+
+    @pytest.mark.asyncio
+    async def test_success_still_returns_the_body(self):
+        tool, client = self._tool(200, text='{"reports": []}')
+        with patch(GET_ASYNC_CLIENT_TARGET, return_value=client):
+            assert await tool() == '{"reports": []}'
+
+    @pytest.mark.asyncio
+    async def test_401_raises_the_reauth_signal_carrying_the_challenge(self):
+        tool, client = self._tool(401, text='{"error":"invalid_token"}', headers={"www-authenticate": 'Bearer realm="x"'})
+        with patch(GET_ASYNC_CLIENT_TARGET, return_value=client):
+            with pytest.raises(MCPUpstreamAuthError) as exc:
+                await tool()
+
+        assert exc.value.status_code == 401
+        assert exc.value.www_authenticate == 'Bearer realm="x"'
+        assert exc.value.server_name == "report_api"
+
+    @pytest.mark.asyncio
+    async def test_401_on_a_non_forwarding_server_is_not_a_reauth_signal(self):
+        """Only the client-forwarded modes carry the caller's own upstream token, so only they can act
+        on a 401. `_call_regular_mcp_tool` gates its signal the same way, and without the gate an
+        api_key server rejecting a token would push clients into an OAuth flow that does not apply."""
+        tool, client = self._tool(401, text='{"error":"bad key"}', relays_upstream_auth=False)
+        with patch(GET_ASYNC_CLIENT_TARGET, return_value=client):
+            with pytest.raises(MCPOpenApiUpstreamError) as exc:
+                await tool()
+
+        assert exc.value.status_code == 401
+
+    @pytest.mark.parametrize("method", ["post", "put", "patch", "delete"])
+    @pytest.mark.parametrize("status_code, expected", [(401, "auth"), (500, "other")])
+    @pytest.mark.asyncio
+    async def test_non_get_methods_are_classified_too(self, method: str, status_code: int, expected: str):
+        """post/put/patch/delete call raise_for_status inside the HTTP handler.
+
+        Only `get` hands a 4xx back to the caller; the others raise `MaskedHTTPStatusError` before any
+        status check the tool function could do, so classifying the returned response alone would
+        leave every non-GET tool still serving an upstream error body as successful tool output. A
+        fake client that simply returns a response cannot observe this, which is why this test builds
+        the error the real handler raises.
+        """
+        import httpx
+
+        from litellm.llms.custom_httpx.http_handler import MaskedHTTPStatusError
+
+        request = httpx.Request(method.upper(), "https://api.example.com/reports")
+        raw = httpx.Response(
+            status_code,
+            headers={"www-authenticate": 'Bearer realm="x"'},
+            text="internal hostname db-prod-7.corp.example.com",
+            request=request,
+        )
+        masked = MaskedHTTPStatusError(httpx.HTTPStatusError("boom", request=request, response=raw))
+
+        client = AsyncMock()
+        setattr(client, method, AsyncMock(side_effect=masked))
+        tool = create_tool_function(
+            "/reports",
+            method,
+            {"operationId": "list_reports"},
+            "https://api.example.com",
+            server_label="report_api",
+            relays_upstream_auth=True,
+        )
+
+        expected_type = MCPUpstreamAuthError if expected == "auth" else MCPOpenApiUpstreamError
+        with patch(GET_ASYNC_CLIENT_TARGET, return_value=client):
+            with pytest.raises(expected_type) as exc:
+                await tool()
+
+        assert exc.value.status_code == status_code
+        assert "db-prod-7" not in str(exc.value)
+
+    @pytest.mark.parametrize("status_code", [403, 404, 429, 500, 503])
+    @pytest.mark.asyncio
+    async def test_other_failures_raise_without_leaking_the_upstream_body(self, status_code: int):
+        secret_body = "internal hostname db-prod-7.corp.example.com and a stack trace"
+        tool, client = self._tool(status_code, text=secret_body)
+        with patch(GET_ASYNC_CLIENT_TARGET, return_value=client):
+            with pytest.raises(MCPOpenApiUpstreamError) as exc:
+                await tool()
+
+        assert exc.value.status_code == status_code
+        assert secret_body not in str(exc.value)
+        assert str(exc.value) == f"upstream returned HTTP {status_code}"

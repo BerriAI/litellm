@@ -1,13 +1,13 @@
 import { render, screen } from "@testing-library/react";
-import { Form } from "antd";
 import { describe, expect, it } from "vitest";
+import { MountedFormHost } from "../../../tests/mounted-form-host";
 import ConditionalPublicModelName from "./conditional_public_model_name";
 
 describe("ConditionalPublicModelName", () => {
   it("should render", () => {
     render(
-      <Form
-        initialValues={{
+      <MountedFormHost
+        defaultValues={{
           model: ["gpt-4"],
           model_mappings: [
             {
@@ -18,7 +18,7 @@ describe("ConditionalPublicModelName", () => {
         }}
       >
         <ConditionalPublicModelName />
-      </Form>,
+      </MountedFormHost>,
     );
 
     expect(screen.getByText("Model Mappings")).toBeInTheDocument();

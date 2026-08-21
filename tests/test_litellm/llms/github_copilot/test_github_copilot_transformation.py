@@ -878,3 +878,107 @@ class TestGithubCopilotTransformResponse:
                 litellm_params={},
                 encoding=None,
             )
+
+
+class TestGithubCopilotTransformParsedResponseDict:
+    """
+    Tests for GithubCopilotConfig.transform_parsed_response_dict, the hook the
+    OpenAI SDK handler calls on its parsed response. That handler bypasses
+    transform_response, so this is the seam that repairs empty-choices responses
+    from newer Copilot Claude models on the live completion path.
+
+    See: https://github.com/BerriAI/litellm/issues/30927
+    """
+
+    def test_synthesizes_choices_from_anthropic_content(self):
+        config = GithubCopilotConfig()
+
+        parsed = {
+            "id": "msg_vrtx_01",
+            "model": "claude-opus-4.8",
+            "object": "chat.completion",
+            "choices": [],
+            "content": [{"type": "text", "text": "Hello!"}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 10, "output_tokens": 5},
+        }
+
+        repaired = config.transform_parsed_response_dict(parsed)
+
+        assert len(repaired["choices"]) == 1
+        choice = repaired["choices"][0]
+        assert choice["message"]["content"] == "Hello!"
+        assert choice["finish_reason"] == "stop"
+        assert repaired["usage"]["prompt_tokens"] == 10
+        assert repaired["usage"]["completion_tokens"] == 5
+        assert repaired["usage"]["total_tokens"] == 15
+
+    def test_passthrough_when_choices_present(self):
+        config = GithubCopilotConfig()
+
+        parsed = {
+            "id": "chatcmpl-1",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "ok"},
+                    "finish_reason": "stop",
+                }
+            ],
+        }
+
+        assert config.transform_parsed_response_dict(parsed) is parsed
+
+
+@patch("litellm.llms.openai.openai.OpenAIChatCompletion._get_openai_client")
+@patch(
+    "litellm.llms.openai.openai.OpenAIChatCompletion.make_sync_openai_chat_completion_request"
+)
+def test_openai_handler_repairs_github_copilot_empty_choices(
+    mock_request, mock_get_client
+):
+    """
+    The OpenAI SDK handler calls convert_to_model_response_object directly on the
+    SDK's parsed output, bypassing transform_response. convert raises APIError on
+    empty choices, so the handler must route github_copilot responses through
+    transform_parsed_response_dict first. Removing that wiring (or resolving a
+    config without the override) fails this test with APIError.
+
+    See: https://github.com/BerriAI/litellm/issues/30927
+    """
+    from litellm.llms.openai.openai import OpenAIChatCompletion
+
+    mock_get_client.return_value = MagicMock()
+
+    class _FakeSDKResponse:
+        def model_dump(self):
+            return {
+                "id": "msg_vrtx_01",
+                "model": "claude-opus-4.8",
+                "object": "chat.completion",
+                "choices": [],
+                "content": [{"type": "text", "text": "Hi there"}],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 12, "output_tokens": 3},
+            }
+
+    mock_request.return_value = ({}, _FakeSDKResponse())
+
+    result = OpenAIChatCompletion().completion(
+        model="claude-opus-4.8",
+        messages=[{"role": "user", "content": "Hi"}],
+        model_response=ModelResponse(),
+        timeout=60.0,
+        optional_params={},
+        litellm_params={},
+        logging_obj=MagicMock(),
+        custom_llm_provider="github_copilot",
+        client=MagicMock(),
+        api_key="gh.test-key-123456789",
+        acompletion=False,
+    )
+
+    assert isinstance(result, ModelResponse)
+    assert result.choices[0].message.content == "Hi there"
+    assert result.choices[0].finish_reason == "stop"
+    mock_request.assert_called_once()

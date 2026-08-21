@@ -2,7 +2,7 @@
 Legacy /v1/embedding transformation logic for Bedrock Cohere.
 """
 
-from typing import Any, List, Optional, Union
+from typing import Any, Final
 
 import httpx
 
@@ -24,12 +24,10 @@ class CohereEmbeddingConfig:
     def __init__(self) -> None:
         pass
 
-    def get_supported_openai_params(self) -> List[str]:
+    def get_supported_openai_params(self) -> list[str]:
         return ["encoding_format"]
 
-    def map_openai_params(
-        self, non_default_params: dict, optional_params: dict
-    ) -> dict:
+    def map_openai_params(self, non_default_params: dict, optional_params: dict) -> dict:
         for k, v in non_default_params.items():
             if k == "encoding_format":
                 optional_params["embedding_types"] = v
@@ -39,7 +37,7 @@ class CohereEmbeddingConfig:
         return "3" in model
 
     def _transform_request(
-        self, model: str, input: List[str], inference_params: dict
+        self, model: str, input: list[str], inference_params: dict
     ) -> CohereEmbeddingRequestWithModel:
         is_encoded = False
         for input_str in input:
@@ -59,18 +57,18 @@ class CohereEmbeddingConfig:
             )
 
         for k, v in inference_params.items():
-            transformed_request[k] = v  # type: ignore
+            transformed_request[k] = v
 
         return transformed_request
 
-    def _calculate_usage(self, input: List[str], encoding: Any, meta: dict) -> Usage:
+    def _calculate_usage(self, input: list[str], encoding: Any, meta: dict) -> Usage:
         input_tokens = 0
 
-        text_tokens: Optional[int] = meta.get("billed_units", {}).get("input_tokens")
+        text_tokens: Final[int | None] = meta.get("billed_units", {}).get("input_tokens")
 
-        image_tokens: Optional[int] = meta.get("billed_units", {}).get("images")
+        image_tokens: Final[int | None] = meta.get("billed_units", {}).get("images")
 
-        prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = None
+        prompt_tokens_details: PromptTokensDetailsWrapper | None = None
         if image_tokens is None and text_tokens is None:
             for text in input:
                 input_tokens += len(encoding.encode(text))
@@ -94,15 +92,15 @@ class CohereEmbeddingConfig:
     def _transform_response(
         self,
         response: httpx.Response,
-        api_key: Optional[str],
+        api_key: str | None,
         logging_obj: LiteLLMLoggingObj,
-        data: Union[dict, CohereEmbeddingRequest],
+        data: dict | CohereEmbeddingRequest,
         model_response: EmbeddingResponse,
         model: str,
         encoding: Any,
         input: list,
     ) -> EmbeddingResponse:
-        response_json = response.json()
+        response_json: Final = response.json()
         ## LOGGING
         logging_obj.post_call(
             input=input,
@@ -141,11 +139,9 @@ class CohereEmbeddingConfig:
                 'usage',
             }
         """
-        embeddings = response_json["embeddings"]
-        output_data = []
-        is_embeddings_by_type = (
-            response_json.get("response_type") == "embeddings_by_type"
-        )
+        embeddings: Final = response_json["embeddings"]
+        output_data: Final = []
+        is_embeddings_by_type = response_json.get("response_type") == "embeddings_by_type"
 
         if isinstance(embeddings, dict):
             is_embeddings_by_type = True
@@ -163,9 +159,7 @@ class CohereEmbeddingConfig:
                     )
         else:
             for idx, embedding in enumerate(embeddings):
-                output_data.append(
-                    {"object": "embedding", "index": idx, "embedding": embedding}
-                )
+                output_data.append({"object": "embedding", "index": idx, "embedding": embedding})
         model_response.object = "list"
         model_response.data = output_data
         model_response.model = model

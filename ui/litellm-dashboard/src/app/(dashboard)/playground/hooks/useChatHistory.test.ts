@@ -1,5 +1,5 @@
 import { renderHook, act } from "@testing-library/react";
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useChatHistory } from "./useChatHistory";
 
 describe("useChatHistory", () => {
@@ -496,6 +496,80 @@ describe("useChatHistory", () => {
       expect(sessionStorage.getItem("chatHistory")).toBeNull();
 
       vi.useRealTimers();
+    });
+  });
+
+  describe("debounced chatHistory persistence", () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+      vi.runOnlyPendingTimers();
+      vi.useRealTimers();
+    });
+
+    it("should not write chatHistory to sessionStorage before the debounce wait elapses", () => {
+      const setItemSpy = vi.spyOn(Storage.prototype, "setItem");
+      const { result } = renderHook(() => useChatHistory({ simplified: false }));
+
+      act(() => {
+        result.current.updateTextUI("user", "hello");
+      });
+      act(() => {
+        vi.advanceTimersByTime(499);
+      });
+
+      expect(setItemSpy.mock.calls.filter(([key]) => key === "chatHistory")).toHaveLength(0);
+
+      setItemSpy.mockRestore();
+    });
+
+    it("should write chatHistory exactly once with the last value after the wait", () => {
+      const setItemSpy = vi.spyOn(Storage.prototype, "setItem");
+      const { result } = renderHook(() => useChatHistory({ simplified: false }));
+
+      act(() => {
+        result.current.updateTextUI("user", "h");
+      });
+      act(() => {
+        vi.advanceTimersByTime(300);
+      });
+      act(() => {
+        result.current.updateTextUI("user", "i");
+      });
+      act(() => {
+        vi.advanceTimersByTime(499);
+      });
+
+      expect(setItemSpy.mock.calls.filter(([key]) => key === "chatHistory")).toHaveLength(0);
+
+      act(() => {
+        vi.advanceTimersByTime(1);
+      });
+
+      const writes = setItemSpy.mock.calls.filter(([key]) => key === "chatHistory");
+      expect(writes).toHaveLength(1);
+      expect(JSON.parse(writes[0][1])).toEqual([{ role: "user", content: "hi" }]);
+
+      setItemSpy.mockRestore();
+    });
+
+    it("should not write chatHistory when unmounted mid-wait", () => {
+      const setItemSpy = vi.spyOn(Storage.prototype, "setItem");
+      const { result, unmount } = renderHook(() => useChatHistory({ simplified: false }));
+
+      act(() => {
+        result.current.updateTextUI("user", "hello");
+      });
+      unmount();
+      act(() => {
+        vi.advanceTimersByTime(1000);
+      });
+
+      expect(setItemSpy.mock.calls.filter(([key]) => key === "chatHistory")).toHaveLength(0);
+
+      setItemSpy.mockRestore();
     });
   });
 

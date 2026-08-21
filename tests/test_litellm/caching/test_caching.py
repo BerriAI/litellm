@@ -1,6 +1,8 @@
 import logging
 import re
 
+import pytest
+
 from litellm.caching.caching import Cache
 from litellm.types.caching import LiteLLMCacheType
 from litellm.types.utils import Embedding, EmbeddingResponse, Usage
@@ -76,3 +78,106 @@ def test_get_per_item_prompt_tokens_distributes_with_remainder():
     per_item = [cache._get_per_item_prompt_tokens(result, i) for i in range(3)]
     assert sum(per_item) == 10  # 4 + 3 + 3
     assert per_item == [4, 3, 3]
+
+
+def _semantic_cache():
+    return Cache(
+        type=LiteLLMCacheType.VALKEY_SEMANTIC,
+        host="localhost",
+        port="6379",
+        similarity_threshold=0.8,
+    )
+
+
+@pytest.mark.parametrize(
+    "cache_type",
+    [LiteLLMCacheType.REDIS_SEMANTIC, LiteLLMCacheType.VALKEY_SEMANTIC],
+)
+def test_semantic_cache_embedding_max_input_tokens_reaches_backend(cache_type):
+    cache = Cache(
+        type=cache_type,
+        redis_url="redis://localhost:6379",
+        similarity_threshold=0.8,
+        semantic_cache_embedding_max_input_tokens=2048,
+    )
+    assert cache.cache.embedding_max_input_tokens == 2048
+
+
+def test_semantic_cache_key_excludes_prompt_so_paraphrases_share_a_bucket():
+    cache = _semantic_cache()
+    tenant = {"user_api_key": "hash-abc"}
+    key_a = cache.get_cache_key(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "What color is the sky?"}],
+        metadata=dict(tenant),
+    )
+    key_b = cache.get_cache_key(
+        model="gpt-4o-mini",
+        messages=[
+            {"role": "user", "content": "Tell me the colour of the daytime sky."}
+        ],
+        metadata=dict(tenant),
+    )
+    assert key_a == key_b
+
+
+def test_semantic_cache_key_isolates_tenants():
+    messages = [{"role": "user", "content": "What color is the sky?"}]
+    cache = _semantic_cache()
+    key_a = cache.get_cache_key(
+        model="gpt-4o-mini", messages=messages, metadata={"user_api_key": "hash-A"}
+    )
+    key_b = cache.get_cache_key(
+        model="gpt-4o-mini", messages=messages, metadata={"user_api_key": "hash-B"}
+    )
+    key_team = cache.get_cache_key(
+        model="gpt-4o-mini",
+        messages=messages,
+        metadata={"user_api_key": "hash-A", "user_api_key_team_id": "team-1"},
+    )
+    assert key_a != key_b
+    assert key_a != key_team
+
+
+def test_semantic_cache_key_still_separates_models_and_params():
+    cache = _semantic_cache()
+    messages = [{"role": "user", "content": "hi"}]
+    tenant = {"user_api_key": "hash-A"}
+    assert cache.get_cache_key(
+        model="gpt-4o-mini", messages=messages, metadata=dict(tenant)
+    ) != cache.get_cache_key(model="gpt-4o", messages=messages, metadata=dict(tenant))
+    assert cache.get_cache_key(
+        model="gpt-4o-mini", messages=messages, temperature=0, metadata=dict(tenant)
+    ) != cache.get_cache_key(
+        model="gpt-4o-mini", messages=messages, temperature=1, metadata=dict(tenant)
+    )
+
+
+def test_exact_cache_key_still_includes_prompt():
+    cache = Cache(type=LiteLLMCacheType.LOCAL)
+    key_a = cache.get_cache_key(
+        model="gpt-4o-mini", messages=[{"role": "user", "content": "a"}]
+    )
+    key_b = cache.get_cache_key(
+        model="gpt-4o-mini", messages=[{"role": "user", "content": "b"}]
+    )
+    assert key_a != key_b
+
+
+@pytest.mark.parametrize(
+    "anthropic_param",
+    [
+        {"system": "answer ALPHA"},
+        {"top_k": 5},
+        {"stop_sequences": ["STOP"]},
+    ],
+)
+def test_exact_cache_key_includes_anthropic_messages_params(anthropic_param):
+    """Anthropic /v1/messages params with no OpenAI equivalent must still key the
+    cache; without them two requests that differ only by system prompt collide."""
+    cache = Cache(type=LiteLLMCacheType.LOCAL)
+    messages = [{"role": "user", "content": "which greek letter?"}]
+    baseline = cache.get_cache_key(model="claude-sonnet-4-5", messages=messages)
+    assert baseline != cache.get_cache_key(
+        model="claude-sonnet-4-5", messages=messages, **anthropic_param
+    )

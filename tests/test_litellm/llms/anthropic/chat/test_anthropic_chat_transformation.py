@@ -9,13 +9,21 @@ sys.path.insert(
 from unittest.mock import MagicMock, patch
 
 import litellm
-from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
+from litellm.constants import (
+    ANTHROPIC_MIN_THINKING_BUDGET_TOKENS,
+    DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
+    DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
+    DEFAULT_REASONING_EFFORT_MAX_THINKING_BUDGET,
+    DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
+    DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET,
+    RESPONSE_FORMAT_TOOL_NAME,
+)
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
     AnthropicMessagesConfig,
 )
 from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES
-from litellm.types.utils import ServerToolUse
+from litellm.types.utils import ServerToolUse, Usage
 
 
 def test_response_format_transformation_unit_test():
@@ -97,6 +105,108 @@ def test_calculate_usage():
     assert usage._cache_read_input_tokens == 0
 
 
+def test_calculate_usage_aggregates_cache_creation_split_across_iterations():
+    """
+    In the iterations path each iteration can carry the 5m/1h cache_creation
+    breakdown. calculate_usage must aggregate it into cache_creation_token_details
+    so 1h writes are priced at the 1h rate instead of silently falling back to 5m.
+
+    Regression for LIT-4868.
+    """
+    from litellm.llms.anthropic.cost_calculation import cost_per_token
+
+    config = AnthropicConfig()
+    usage_object = {
+        "input_tokens": 0,
+        "output_tokens": 5,
+        "iterations": [
+            {
+                "type": "message",
+                "input_tokens": 0,
+                "output_tokens": 3,
+                "cache_creation_input_tokens": 10000,
+                "cache_read_input_tokens": 0,
+                "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 10000},
+            },
+            {
+                "type": "message",
+                "input_tokens": 0,
+                "output_tokens": 2,
+                "cache_creation_input_tokens": 10000,
+                "cache_read_input_tokens": 0,
+                "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 10000},
+            },
+        ],
+    }
+
+    usage = config.calculate_usage(usage_object=usage_object, reasoning_content=None)
+
+    details = usage.prompt_tokens_details.cache_creation_token_details
+    assert details is not None
+    assert details.ephemeral_5m_input_tokens == 0
+    assert details.ephemeral_1h_input_tokens == 20000
+    assert usage.prompt_tokens_details.cache_creation_tokens == 20000
+
+    info = litellm.get_model_info(model="claude-opus-4-8", custom_llm_provider="anthropic")
+    rate_5m = info["cache_creation_input_token_cost"]
+    rate_1h = info["cache_creation_input_token_cost_above_1hr"]
+    assert rate_1h > rate_5m
+
+    prompt_cost, _ = cost_per_token(model="claude-opus-4-8", usage=usage)
+    assert prompt_cost == pytest.approx(20000 * rate_1h)
+    assert prompt_cost != pytest.approx(20000 * rate_5m)
+
+
+def test_calculate_usage_bills_undetailed_iteration_cache_writes_at_5m_rate():
+    """
+    When only some iterations carry the cache_creation breakdown, the writes
+    without a breakdown must still be billed (at the default 5m rate) instead
+    of silently priced at zero once details exist.
+
+    Regression for the Cursor Bugbot finding on the LIT-4868 fix.
+    """
+    from litellm.llms.anthropic.cost_calculation import cost_per_token
+
+    config = AnthropicConfig()
+    usage_object = {
+        "input_tokens": 0,
+        "output_tokens": 5,
+        "iterations": [
+            {
+                "type": "message",
+                "input_tokens": 0,
+                "output_tokens": 3,
+                "cache_creation_input_tokens": 10000,
+                "cache_read_input_tokens": 0,
+                "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 10000},
+            },
+            {
+                "type": "message",
+                "input_tokens": 0,
+                "output_tokens": 2,
+                "cache_creation_input_tokens": 7000,
+                "cache_read_input_tokens": 0,
+            },
+        ],
+    }
+
+    usage = config.calculate_usage(usage_object=usage_object, reasoning_content=None)
+
+    details = usage.prompt_tokens_details.cache_creation_token_details
+    assert details is not None
+    assert details.ephemeral_5m_input_tokens == 7000
+    assert details.ephemeral_1h_input_tokens == 10000
+    assert usage.prompt_tokens_details.cache_creation_tokens == 17000
+
+    info = litellm.get_model_info(model="claude-opus-4-8", custom_llm_provider="anthropic")
+    rate_5m = info["cache_creation_input_token_cost"]
+    rate_1h = info["cache_creation_input_token_cost_above_1hr"]
+
+    prompt_cost, _ = cost_per_token(model="claude-opus-4-8", usage=usage)
+    assert prompt_cost == pytest.approx(7000 * rate_5m + 10000 * rate_1h)
+    assert prompt_cost != pytest.approx(10000 * rate_1h)
+
+
 def test_calculate_usage_clamps_text_tokens_when_reasoning_estimate_exceeds_output():
     config = AnthropicConfig()
 
@@ -109,6 +219,162 @@ def test_calculate_usage_clamps_text_tokens_when_reasoning_estimate_exceeds_outp
     assert usage.completion_tokens_details is not None
     assert usage.completion_tokens_details.reasoning_tokens == usage.completion_tokens
     assert usage.completion_tokens_details.text_tokens == 0
+
+
+def test_calculate_usage_prefers_provider_reported_thinking_tokens():
+    config = AnthropicConfig()
+
+    usage = config.calculate_usage(
+        usage_object={
+            "input_tokens": 32,
+            "output_tokens": 421,
+            "output_tokens_details": {"thinking_tokens": 372},
+        },
+        reasoning_content="",
+        completion_response={
+            "content": [
+                {"type": "thinking", "thinking": "", "signature": "sig"},
+                {"type": "text", "text": "10"},
+            ]
+        },
+    )
+
+    assert usage.completion_tokens_details is not None
+    assert usage.completion_tokens_details.reasoning_tokens == 372
+    assert usage.completion_tokens_details.text_tokens == 49
+
+
+def test_calculate_usage_provider_thinking_tokens_win_over_visible_reasoning_estimate():
+    config = AnthropicConfig()
+
+    usage = config.calculate_usage(
+        usage_object={
+            "input_tokens": 50,
+            "output_tokens": 811,
+            "output_tokens_details": {"thinking_tokens": 747},
+        },
+        reasoning_content="short visible reasoning that tokenizes to far fewer than 747 tokens",
+    )
+
+    assert usage.completion_tokens_details is not None
+    assert usage.completion_tokens_details.reasoning_tokens == 747
+    assert usage.completion_tokens_details.text_tokens == 64
+
+
+def test_calculate_usage_sums_provider_thinking_tokens_across_iterations():
+    config = AnthropicConfig()
+
+    usage = config.calculate_usage(
+        usage_object={
+            "input_tokens": 10,
+            "output_tokens": 300,
+            "iterations": [
+                {"input_tokens": 5, "output_tokens": 100, "output_tokens_details": {"thinking_tokens": 60}},
+                {"input_tokens": 5, "output_tokens": 200, "output_tokens_details": {"thinking_tokens": 90}},
+            ],
+        },
+        reasoning_content=None,
+    )
+
+    assert usage.completion_tokens == 300
+    assert usage.completion_tokens_details is not None
+    assert usage.completion_tokens_details.reasoning_tokens == 150
+    assert usage.completion_tokens_details.text_tokens == 150
+
+
+def test_calculate_usage_falls_back_when_only_some_iterations_report_thinking_tokens():
+    config = AnthropicConfig()
+
+    usage = config.calculate_usage(
+        usage_object={
+            "input_tokens": 10,
+            "output_tokens": 300,
+            "output_tokens_details": {"thinking_tokens": 240},
+            "iterations": [
+                {"input_tokens": 5, "output_tokens": 100, "output_tokens_details": {"thinking_tokens": 60}},
+                {"input_tokens": 5, "output_tokens": 200},
+            ],
+        },
+        reasoning_content=None,
+    )
+
+    assert usage.completion_tokens == 300
+    assert usage.completion_tokens_details is not None
+    assert usage.completion_tokens_details.reasoning_tokens == 240
+    assert usage.completion_tokens_details.text_tokens == 60
+
+
+def test_calculate_usage_reports_unknown_split_when_only_some_iterations_report_thinking_tokens():
+    config = AnthropicConfig()
+
+    usage = config.calculate_usage(
+        usage_object={
+            "input_tokens": 10,
+            "output_tokens": 300,
+            "iterations": [
+                {"input_tokens": 5, "output_tokens": 100, "output_tokens_details": {"thinking_tokens": 60}},
+                {"input_tokens": 5, "output_tokens": 200},
+            ],
+        },
+        reasoning_content="",
+        completion_response={"content": [{"type": "thinking", "thinking": "", "signature": "sig"}]},
+    )
+
+    assert usage.completion_tokens == 300
+    assert usage.completion_tokens_details is not None
+    assert usage.completion_tokens_details.reasoning_tokens is None
+    assert usage.completion_tokens_details.text_tokens is None
+
+
+def test_calculate_usage_reports_unknown_split_when_thinking_ran_without_a_count():
+    config = AnthropicConfig()
+
+    usage = config.calculate_usage(
+        usage_object={"input_tokens": 32, "output_tokens": 580},
+        reasoning_content="",
+        completion_response={
+            "content": [
+                {"type": "redacted_thinking", "data": "encrypted"},
+                {"type": "text", "text": "10"},
+            ]
+        },
+    )
+
+    assert usage.completion_tokens == 580
+    assert usage.completion_tokens_details is not None
+    assert usage.completion_tokens_details.reasoning_tokens is None
+    assert usage.completion_tokens_details.text_tokens is None
+
+
+def test_calculate_usage_without_thinking_reports_all_output_as_text():
+    config = AnthropicConfig()
+
+    usage = config.calculate_usage(
+        usage_object={"input_tokens": 32, "output_tokens": 171},
+        reasoning_content=None,
+        completion_response={"content": [{"type": "text", "text": "10"}]},
+    )
+
+    assert usage.completion_tokens_details is not None
+    assert usage.completion_tokens_details.reasoning_tokens == 0
+    assert usage.completion_tokens_details.text_tokens == 171
+
+
+def test_calculate_usage_ignores_malformed_provider_thinking_tokens():
+    config = AnthropicConfig()
+
+    usage = config.calculate_usage(
+        usage_object={
+            "input_tokens": 32,
+            "output_tokens": 100,
+            "output_tokens_details": {"thinking_tokens": "not-a-number"},
+        },
+        reasoning_content=None,
+    )
+
+    assert usage.completion_tokens_details is not None
+    assert usage.completion_tokens_details.reasoning_tokens == 0
+    assert usage.completion_tokens_details.text_tokens == 100
 
 
 def test_calculate_usage_handles_mocked_output_tokens_with_reasoning_content():
@@ -949,15 +1215,15 @@ def test_anthropic_structured_output_beta_header():
 @pytest.mark.parametrize(
     "model_name",
     [
-        "claude-opus-4-6-20250918",
-        "claude-opus-4.6-20250918",
+        "claude-opus-4-8",
+        "claude-opus-4-6-20260205",
         "claude-opus-4-5-20251101",
         "claude-opus-4.5-20251101",
     ],
 )
 def test_opus_uses_native_structured_output(model_name):
     """
-    Test that Opus 4.5 and 4.6 models use native Anthropic structured outputs
+    Test that supported Opus models use native Anthropic structured outputs
     (output_format) rather than the tool-based workaround.
     """
     config = AnthropicConfig()
@@ -995,6 +1261,43 @@ def test_opus_uses_native_structured_output(model_name):
 
     # Should set json_mode
     assert optional_params.get("json_mode") is True
+
+
+def test_native_structured_output_uses_bundled_capability_when_remote_map_lags(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model = "claude-opus-4-8"
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {model: {"supports_response_schema": True}},
+    )
+    litellm.get_model_info.cache_clear()
+
+    try:
+        optional_params = AnthropicConfig().map_openai_params(
+            non_default_params={
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "answer",
+                        "schema": {
+                            "type": "object",
+                            "properties": {"answer": {"type": "string"}},
+                            "required": ["answer"],
+                        },
+                    },
+                }
+            },
+            optional_params={},
+            model=model,
+            drop_params=False,
+        )
+    finally:
+        litellm.get_model_info.cache_clear()
+
+    assert "output_format" in optional_params
+    assert "tools" not in optional_params
 
 
 def test_non_structured_output_model_uses_tool_workaround():
@@ -1654,7 +1957,7 @@ def test_effort_beta_header_injection():
     # Test with effort parameter
     optional_params = {"output_config": {"effort": "low"}}
 
-    effort_used = model_info.is_effort_used(optional_params=optional_params)
+    effort_used = model_info.is_effort_used(optional_params=optional_params, custom_llm_provider="anthropic")
     assert effort_used is True
 
     headers = model_info.get_anthropic_headers(
@@ -1870,7 +2173,7 @@ def test_anthropic_drop_params_false_forwards_to_unsupported_model():
     ],
 )
 def test_anthropic_model_supports_effort_param_recognizes_supporting_models(model):
-    assert AnthropicConfig._model_supports_effort_param(model) is True
+    assert AnthropicConfig._model_supports_effort_param(model, "anthropic") is True
 
 
 @pytest.mark.parametrize(
@@ -1883,7 +2186,90 @@ def test_anthropic_model_supports_effort_param_recognizes_supporting_models(mode
     ],
 )
 def test_anthropic_model_supports_effort_param_rejects_non_supporting_models(model):
-    assert AnthropicConfig._model_supports_effort_param(model) is False
+    assert AnthropicConfig._model_supports_effort_param(model, "anthropic") is False
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "claude-opus-4-6",
+        "claude-opus-4-7",
+        "claude-opus-4-8",
+        "claude-opus-4-6-20260205",
+        "claude-opus-4-7-20260416",
+    ],
+)
+def test_anthropic_model_supports_speed_param_recognizes_supporting_models(model):
+    assert AnthropicConfig._model_supports_speed_param(model) is True
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "claude-sonnet-4-6",
+        "claude-fable-5",
+        "claude-3-haiku-20240307",
+        "vertex_ai/claude-opus-4-8",
+        "azure_ai/claude-opus-4-8",
+        "anthropic.claude-opus-4-8",
+    ],
+)
+def test_anthropic_model_supports_speed_param_rejects_non_supporting_models(model):
+    assert AnthropicConfig._model_supports_speed_param(model) is False
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["vertex_ai", "azure_ai", "bedrock"])
+def test_anthropic_model_supports_speed_param_rejects_non_anthropic_providers(
+    custom_llm_provider,
+):
+    """Fast mode is direct-Anthropic-only. Vertex/Azure/Bedrock strip their prefix
+    before the shared transform runs, so the bare Opus id must still be rejected."""
+    assert (
+        AnthropicConfig._model_supports_speed_param(
+            "claude-opus-4-8", custom_llm_provider
+        )
+        is False
+    )
+    assert (
+        AnthropicConfig._model_supports_speed_param("claude-opus-4-8", "anthropic")
+        is True
+    )
+
+
+def test_vertex_anthropic_drops_speed_for_opus_with_drop_params(monkeypatch):
+    """Regression: vertex_ai Opus must drop ``speed`` even though the prefix-stripped
+    ``claude-opus-4-8`` maps to a fast-mode-capable direct-Anthropic entry."""
+    from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation import (
+        VertexAIAnthropicConfig,
+    )
+
+    monkeypatch.setattr(litellm, "drop_params", True)
+    result = VertexAIAnthropicConfig().transform_request(
+        model="claude-opus-4-8",
+        messages=[{"role": "user", "content": "Hello"}],
+        optional_params={"speed": "fast", "max_tokens": 1024},
+        litellm_params={},
+        headers={},
+    )
+
+    assert "speed" not in result
+
+
+def test_vertex_anthropic_raises_on_speed_without_drop_params(monkeypatch):
+    """Regression: vertex_ai Opus raises rather than forwarding an unsupported
+    ``speed`` when neither global nor per-request drop_params is set."""
+    from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation import (
+        VertexAIAnthropicConfig,
+    )
+
+    monkeypatch.setattr(litellm, "drop_params", False)
+    with pytest.raises(litellm.utils.UnsupportedParamsError, match="drop_params"):
+        VertexAIAnthropicConfig().map_openai_params(
+            non_default_params={"speed": "fast"},
+            optional_params={},
+            model="claude-opus-4-8",
+            drop_params=False,
+        )
 
 
 def test_translate_system_message_skips_empty_string_content():
@@ -2127,7 +2513,7 @@ def test_get_config_does_not_leak_module_constants():
 )
 def test_supports_effort_level_handles_provider_prefixes(model, level, expected):
     """``_supports_effort_level`` resolves bedrock/vertex/azure-prefixed model ids."""
-    assert AnthropicConfig._supports_effort_level(model, level) is expected
+    assert AnthropicConfig._supports_effort_level(model, level, "anthropic") is expected
 
 
 @pytest.mark.parametrize(
@@ -2149,7 +2535,7 @@ def test_supports_effort_level_handles_provider_prefixes(model, level, expected)
 def test_validate_effort_for_model_centralises_per_model_gating(
     model, effort, expect_error
 ):
-    err = AnthropicConfig._validate_effort_for_model(model, effort)
+    err = AnthropicConfig._validate_effort_for_model(model, effort, "anthropic")
     if expect_error:
         assert err is not None
         assert effort in err
@@ -2353,7 +2739,131 @@ def test_reasoning_effort_maps_to_adaptive_thinking_for_claude_4_6_models():
             assert result["output_config"]["effort"] == effort_map[effort]
 
 
-def test_get_supported_params_includes_reasoning_for_sonnet_4_6_alias():
+def test_raw_adaptive_thinking_translates_to_legacy_for_pre_46_model():
+    """Clients like Claude Code send ``thinking={"type": "adaptive"}`` directly
+    (not via ``reasoning_effort``) on every request, regardless of which model
+    the request routes to. For a pre-4.6 model that doesn't understand
+    adaptive thinking, this must be translated to the legacy
+    ``thinking={type: enabled, budget_tokens}`` interface instead of being
+    forwarded raw, which Anthropic would reject."""
+    config = AnthropicConfig()
+
+    result = config.map_openai_params(
+        non_default_params={"thinking": {"type": "adaptive"}, "max_tokens": 8192},
+        optional_params={},
+        model="claude-haiku-4-5-20251001",
+        drop_params=False,
+    )
+
+    assert result["thinking"]["type"] == "enabled"
+    assert result["thinking"]["budget_tokens"] == DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET
+
+
+def test_raw_adaptive_thinking_budget_capped_below_max_tokens():
+    """Anthropic requires ``max_tokens > thinking.budget_tokens``. When the
+    default medium budget wouldn't fit, it must be capped below max_tokens
+    rather than forwarded as an invalid combination."""
+    config = AnthropicConfig()
+
+    max_tokens = DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET - 100
+    result = config.map_openai_params(
+        non_default_params={"thinking": {"type": "adaptive"}, "max_tokens": max_tokens},
+        optional_params={},
+        model="claude-haiku-4-5-20251001",
+        drop_params=False,
+    )
+
+    assert result["thinking"]["type"] == "enabled"
+    assert result["thinking"]["budget_tokens"] == max_tokens - 1
+
+
+def test_raw_adaptive_thinking_dropped_when_max_tokens_too_small():
+    """When max_tokens can't fit even the minimum thinking budget, thinking
+    must be dropped entirely so the request still succeeds, matching how the
+    native /v1/messages passthrough already handles this."""
+    config = AnthropicConfig()
+
+    result = config.map_openai_params(
+        non_default_params={
+            "thinking": {"type": "adaptive"},
+            "max_tokens": ANTHROPIC_MIN_THINKING_BUDGET_TOKENS,
+        },
+        optional_params={},
+        model="claude-haiku-4-5-20251001",
+        drop_params=False,
+    )
+
+    assert "thinking" not in result
+
+
+def test_raw_adaptive_thinking_untouched_for_46_plus_model():
+    """Adaptive-thinking models understand ``thinking={"type": "adaptive"}``
+    natively, so it must pass through unmodified."""
+    config = AnthropicConfig()
+
+    result = config.map_openai_params(
+        non_default_params={"thinking": {"type": "adaptive"}, "max_tokens": 8192},
+        optional_params={},
+        model="claude-sonnet-4-6-20260219",
+        drop_params=False,
+    )
+
+    assert result["thinking"] == {"type": "adaptive"}
+
+
+@pytest.fixture
+def local_model_cost_map(monkeypatch):
+    original_model_cost = litellm.model_cost
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    litellm.get_model_info.cache_clear()
+    try:
+        yield
+    finally:
+        litellm.model_cost = original_model_cost
+        litellm.get_model_info.cache_clear()
+
+
+@pytest.mark.parametrize(
+    "model, expected",
+    [
+        # explicit cost-map entries, across provider routes / separators / date suffix
+        ("claude-opus-4-8", True),
+        ("anthropic.claude-opus-4-8", True),
+        ("vertex_ai/claude-opus-4-6@default", True),
+        ("openrouter/anthropic/claude-opus-4.7", True),
+        ("us.anthropic.claude-sonnet-4-6", True),
+        ("claude-opus-4-6-20260205", True),
+        # unmapped future models -> anthropic-claude fallback rule
+        ("claude-opus-4-9", True),
+        ("claude-sonnet-5-0", True),
+        # Claude 4.0 (dated): "4-20250514" must not be read as minor 4.20250514
+        ("claude-opus-4-20250514", False),
+        ("us.anthropic.claude-opus-4-20250514-v1:0", False),
+        ("bedrock/invoke/us.anthropic.claude-opus-4-20250514", False),
+        # sub-4.6 and legacy names
+        ("claude-opus-4-5", False),
+        ("claude-sonnet-4-5-20250929", False),
+        ("claude-3-7-sonnet", False),
+        ("claude-3-opus-20240229", False),
+        ("gpt-4o", False),
+    ],
+)
+def test_is_adaptive_thinking_model_is_sourced_from_cost_map(
+    local_model_cost_map, model, expected
+):
+    """Adaptive thinking resolves from the cost map first (an explicit
+    supports_adaptive_thinking entry, or the anthropic-claude fallback rule for unmapped
+    future Claudes), then from a date-safe opus/sonnet/haiku >= 4.6 name version as a
+    fallback for ids the cost map cannot resolve. The dated Claude 4.0 names stay
+    non-adaptive because the date suffix is not read as a minor version, while 4.8/4.9/5.x
+    are covered without a code change."""
+    assert AnthropicConfig._is_adaptive_thinking_model(model, "anthropic") is expected
+
+
+def test_get_supported_params_includes_reasoning_for_sonnet_4_6_alias(
+    local_model_cost_map,
+):
     """Sonnet 4.6 aliases should expose thinking + reasoning_effort in supported params."""
     config = AnthropicConfig()
 
@@ -2363,8 +2873,12 @@ def test_get_supported_params_includes_reasoning_for_sonnet_4_6_alias():
     assert "reasoning_effort" in params
 
 
-def test_get_supported_params_includes_reasoning_for_sonnet_4_6_dotted_alias():
-    """Dotted Sonnet 4.6 aliases should expose thinking + reasoning_effort in supported params."""
+def test_get_supported_params_includes_reasoning_for_sonnet_4_6_dotted_alias(
+    local_model_cost_map,
+):
+    """Dotted Sonnet 4.6 aliases should expose thinking + reasoning_effort in supported
+    params. The anthropic-claude fallback rule accepts a dotted minor (4.6) as well as
+    a dashed one, so an unmapped dotted alias still degrades to adaptive thinking."""
     config = AnthropicConfig()
 
     params = config.get_supported_openai_params(model="claude-sonnet-4.6")
@@ -2410,9 +2924,9 @@ def test_reasoning_effort_maps_to_budget_thinking_for_non_opus_4_6():
 
     # ``minimal`` floors at ANTHROPIC_MIN_THINKING_BUDGET_TOKENS (1024).
     test_cases = [
-        ("low", 1024),
-        ("medium", 2048),
-        ("high", 4096),
+        ("low", DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET),
+        ("medium", DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET),
+        ("high", DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET),
         ("minimal", 1024),
     ]
 
@@ -2690,6 +3204,7 @@ def test_effort_beta_header_not_injected_for_46_models():
         result = model_info.is_effort_used(
             optional_params={"output_config": {"effort": "high"}},
             model=model,
+            custom_llm_provider="anthropic",
         )
         assert result is False, f"is_effort_used should return False for {model}"
 
@@ -2737,7 +3252,10 @@ def test_reasoning_effort_garbage_raises_bad_request(effort):
 
 @pytest.mark.parametrize(
     "effort,expected_budget",
-    [("xhigh", 8192), ("max", 16384)],
+    [
+        ("xhigh", DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET),
+        ("max", DEFAULT_REASONING_EFFORT_MAX_THINKING_BUDGET),
+    ],
 )
 def test_reasoning_effort_xhigh_max_maps_to_budget_on_budget_model(
     effort, expected_budget
@@ -2798,6 +3316,7 @@ def test_effort_beta_header_still_injected_for_older_models():
     result = model_info.is_effort_used(
         optional_params={"output_config": {"effort": "low"}},
         model="claude-opus-4-5-20251101",
+        custom_llm_provider="anthropic",
     )
     assert result is True
 
@@ -3764,6 +4283,61 @@ def test_fast_mode_parameter_mapping():
 
     assert "speed" in result
     assert result["speed"] == "fast"
+
+
+def test_anthropic_drop_params_strips_speed_for_unsupported_models():
+    """``drop_params=True`` strips unsupported ``speed`` for non-Opus models."""
+    config = AnthropicConfig()
+    messages = [{"role": "user", "content": "Hello"}]
+
+    original = litellm.drop_params
+    litellm.drop_params = True
+    try:
+        result = config.transform_request(
+            model="claude-sonnet-4-6",
+            messages=messages,
+            optional_params={"speed": "fast", "max_tokens": 1024},
+            litellm_params={},
+            headers={},
+        )
+    finally:
+        litellm.drop_params = original
+
+    assert "speed" not in result
+
+
+def test_anthropic_drop_params_keeps_speed_for_supporting_models():
+    """``drop_params=True`` must not strip ``speed`` on Opus fast-mode models."""
+    config = AnthropicConfig()
+    messages = [{"role": "user", "content": "Hello"}]
+
+    original = litellm.drop_params
+    litellm.drop_params = True
+    try:
+        result = config.transform_request(
+            model="claude-opus-4-6",
+            messages=messages,
+            optional_params={"speed": "fast", "max_tokens": 1024},
+            litellm_params={},
+            headers={},
+        )
+    finally:
+        litellm.drop_params = original
+
+    assert result.get("speed") == "fast"
+
+
+def test_speed_raises_clean_error_without_drop_params(monkeypatch):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    config = AnthropicConfig()
+
+    with pytest.raises(litellm.utils.UnsupportedParamsError, match="drop_params"):
+        config.map_openai_params(
+            non_default_params={"speed": "fast"},
+            optional_params={},
+            model="claude-sonnet-4-6",
+            drop_params=False,
+        )
 
 
 def test_map_openai_params_max_tokens_normalized_to_int():
@@ -5529,3 +6103,41 @@ def test_top_k_forwarded_at_transform_on_models_that_accept_it():
     )
 
     assert result["top_k"] == 40
+
+
+def test_is_anthropic_usage_object_distinguishes_chat_usage():
+    """Chat-shaped Usage mirrors cache_read_input_tokens alongside prompt_tokens that already
+    include the cache tokens, so treating it as Anthropic usage would re-add them and
+    double-count the prompt. Only the Anthropic shape, where input_tokens excludes cache
+    tokens, may take the Anthropic mapping."""
+    assert AnthropicConfig.is_anthropic_usage_object(
+        {"input_tokens": 3, "output_tokens": 5, "cache_read_input_tokens": 4014}
+    )
+    assert AnthropicConfig.is_anthropic_usage_object(
+        {"input_tokens": 3, "output_tokens": 5, "cache_creation_input_tokens": 10}
+    )
+    assert not AnthropicConfig.is_anthropic_usage_object(
+        Usage(
+            prompt_tokens=4017,
+            completion_tokens=5,
+            total_tokens=4022,
+            cache_read_input_tokens=4014,
+        ).model_dump()
+    )
+    assert not AnthropicConfig.is_anthropic_usage_object({"input_tokens": 3, "output_tokens": 5})
+
+
+def test_is_anthropic_usage_object_rejects_responses_api_usage():
+    """completion_cost checks the Anthropic shape before the Responses API shape, so a
+    Responses API usage payload, whose cache reads live in nested input_tokens_details,
+    must never match; matching would route it past the converter that reads the nested
+    field and its cache reads would be billed at the full input rate."""
+    assert not AnthropicConfig.is_anthropic_usage_object(
+        {
+            "input_tokens": 4017,
+            "output_tokens": 5,
+            "total_tokens": 4022,
+            "input_tokens_details": {"cached_tokens": 4014},
+            "output_tokens_details": {"reasoning_tokens": 0},
+        }
+    )

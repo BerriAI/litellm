@@ -3,6 +3,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import MCPServerPermissions from "./MCPServerPermissions";
 import * as networking from "../networking";
+import { ALL_PROXY_MCP_SERVERS_SENTINEL, NO_MCP_SERVERS_SENTINEL } from "../mcp_tools/constants";
 
 vi.mock("../networking");
 
@@ -353,5 +354,56 @@ describe("MCPServerPermissions", () => {
 
     // API should not be called without token
     expect(networking.fetchMCPServers).not.toHaveBeenCalled();
+  });
+
+  it("should display the All Proxy MCP Servers state instead of the raw sentinel string", async () => {
+    vi.mocked(networking.fetchMCPServers).mockResolvedValue([]);
+
+    render(
+      <MCPServerPermissions
+        mcpServers={[ALL_PROXY_MCP_SERVERS_SENTINEL]}
+        mcpAccessGroups={[]}
+        mcpToolPermissions={{}}
+        accessToken={mockAccessToken}
+      />,
+    );
+
+    expect(await screen.findByText("All Proxy MCP Servers")).toBeInTheDocument();
+    expect(screen.getByText("All")).toBeInTheDocument();
+    expect(screen.queryByText(ALL_PROXY_MCP_SERVERS_SENTINEL)).not.toBeInTheDocument();
+  });
+
+  it("should use the neutral badge variant unless MCP access is blocked", async () => {
+    vi.mocked(networking.fetchMCPServers).mockResolvedValue([]);
+
+    const { rerender } = render(
+      <MCPServerPermissions
+        mcpServers={[]}
+        mcpAccessGroups={[]}
+        mcpToolPermissions={{}}
+        accessToken={mockAccessToken}
+      />,
+    );
+    expect(screen.getByText("0")).toHaveAttribute("data-variant", "secondary");
+
+    rerender(
+      <MCPServerPermissions
+        mcpServers={[ALL_PROXY_MCP_SERVERS_SENTINEL]}
+        mcpAccessGroups={[]}
+        mcpToolPermissions={{}}
+        accessToken={mockAccessToken}
+      />,
+    );
+    await waitFor(() => expect(screen.getByText("All")).toHaveAttribute("data-variant", "secondary"));
+
+    rerender(
+      <MCPServerPermissions
+        mcpServers={[NO_MCP_SERVERS_SENTINEL]}
+        mcpAccessGroups={[]}
+        mcpToolPermissions={{}}
+        accessToken={mockAccessToken}
+      />,
+    );
+    await waitFor(() => expect(screen.getByText("Blocked")).toHaveAttribute("data-variant", "destructive"));
   });
 });

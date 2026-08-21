@@ -7,7 +7,7 @@ OpenRouter is OpenAI-compatible and supports embeddings via the /v1/embeddings e
 Docs: https://openrouter.ai/docs
 """
 
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
@@ -40,8 +40,8 @@ class OpenrouterEmbeddingConfig(BaseEmbeddingConfig):
         messages: list,
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
         """
         Validate environment and set up headers for OpenRouter API.
@@ -54,10 +54,10 @@ class OpenrouterEmbeddingConfig(BaseEmbeddingConfig):
         from litellm import get_secret
 
         # Get OpenRouter-specific headers
-        openrouter_site_url = get_secret("OR_SITE_URL") or "https://litellm.ai"
-        openrouter_app_name = get_secret("OR_APP_NAME") or "liteLLM"
+        openrouter_site_url: Final = get_secret("OR_SITE_URL") or "https://litellm.ai"
+        openrouter_app_name: Final = get_secret("OR_APP_NAME") or "liteLLM"
 
-        openrouter_headers = {
+        openrouter_headers: Final = {
             "HTTP-Referer": openrouter_site_url,
             "X-Title": openrouter_app_name,
             "Content-Type": "application/json",
@@ -68,18 +68,18 @@ class OpenrouterEmbeddingConfig(BaseEmbeddingConfig):
             openrouter_headers["Authorization"] = f"Bearer {api_key}"
 
         # Merge with existing headers (user's extra_headers take priority)
-        merged_headers = {**openrouter_headers, **headers}
+        merged_headers: Final = {**openrouter_headers, **headers}
 
         return merged_headers
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         """
         Get the complete URL for OpenRouter Embedding API endpoint.
@@ -125,7 +125,7 @@ class OpenrouterEmbeddingConfig(BaseEmbeddingConfig):
         raw_response: httpx.Response,
         model_response: EmbeddingResponse,
         logging_obj: LiteLLMLoggingObj,
-        api_key: Optional[str],
+        api_key: str | None,
         request_data: dict,
         optional_params: dict,
         litellm_params: dict,
@@ -136,7 +136,7 @@ class OpenrouterEmbeddingConfig(BaseEmbeddingConfig):
         logging_obj.post_call(original_response=raw_response.text)
 
         # OpenRouter returns standard OpenAI-compatible embedding response
-        response_json = raw_response.json()
+        response_json: Final = raw_response.json()
 
         return convert_to_model_response_object(
             response_object=response_json,
@@ -170,9 +170,7 @@ class OpenrouterEmbeddingConfig(BaseEmbeddingConfig):
                 optional_params[param] = value
         return optional_params
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Any
-    ) -> Any:
+    def get_error_class(self, error_message: str, status_code: int, headers: Any) -> Any:
         """
         Get the error class for OpenRouter errors.
         """

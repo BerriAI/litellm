@@ -8,9 +8,10 @@ that use the generic container handler.
 import asyncio
 import contextvars
 import json
+from collections.abc import Callable
 from functools import partial
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Literal, Optional, Type
+from typing import Any, Final, Literal
 
 import litellm
 from litellm.constants import request_timeout as DEFAULT_REQUEST_TIMEOUT
@@ -27,45 +28,45 @@ from litellm.types.router import GenericLiteLLMParams
 from litellm.utils import ProviderConfigManager, client
 
 # Response type mapping
-RESPONSE_TYPES: Dict[str, Type] = {
+RESPONSE_TYPES: Final[dict[str, type]] = {
     "ContainerFileListResponse": ContainerFileListResponse,
     "ContainerFileObject": ContainerFileObject,
     "DeleteContainerFileResponse": DeleteContainerFileResponse,
 }
 
 
-def _load_endpoints_config() -> Dict:
+def _load_endpoints_config() -> dict:
     """Load the endpoints configuration from JSON file."""
-    config_path = Path(__file__).parent / "endpoints.json"
+    config_path: Final = Path(__file__).parent / "endpoints.json"
     with open(config_path) as f:
         return json.load(f)
 
 
-def create_sync_endpoint_function(endpoint_config: Dict) -> Callable:
+def create_sync_endpoint_function(endpoint_config: dict) -> Callable:
     """
     Create a sync SDK function from endpoint config.
 
     Uses the generic container handler instead of individual handler methods.
     """
-    endpoint_name = endpoint_config["name"]
-    response_type = RESPONSE_TYPES.get(endpoint_config["response_type"])
-    path_params = endpoint_config.get("path_params", [])
+    endpoint_name: Final = endpoint_config["name"]
+    response_type: Final = RESPONSE_TYPES.get(endpoint_config["response_type"])
+    path_params: Final = endpoint_config.get("path_params", [])
 
     @client
     def endpoint_func(
         timeout: int = 600,
         custom_llm_provider: Literal["openai", "azure", "azure_text"] = "openai",
-        extra_headers: Optional[Dict[str, Any]] = None,
-        extra_query: Optional[Dict[str, Any]] = None,
-        extra_body: Optional[Dict[str, Any]] = None,
+        extra_headers: dict[str, Any] | None = None,
+        extra_query: dict[str, Any] | None = None,
+        extra_body: dict[str, Any] | None = None,
         **kwargs,
     ):
-        local_vars = locals()
+        local_vars: Final = locals()
         try:
             resolved_custom_llm_provider: str = custom_llm_provider
-            litellm_logging_obj: LiteLLMLoggingObj = kwargs.pop("litellm_logging_obj")
-            litellm_call_id: Optional[str] = kwargs.get("litellm_call_id")
-            _is_async = kwargs.pop("async_call", False) is True
+            litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.pop("litellm_logging_obj")
+            litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id")
+            _is_async: Final = kwargs.pop("async_call", False) is True
 
             # Check for mock response
             mock_response = kwargs.get("mock_response")
@@ -90,19 +91,15 @@ def create_sync_endpoint_function(endpoint_config: Dict) -> Callable:
                     custom_llm_provider=resolved_custom_llm_provider,
                     litellm_params=litellm_params,
                 )
-            container_provider_config: Optional[BaseContainerConfig] = (
-                ProviderConfigManager.get_provider_container_config(
-                    provider=litellm.LlmProviders(resolved_custom_llm_provider),
-                )
+            container_provider_config: BaseContainerConfig | None = ProviderConfigManager.get_provider_container_config(
+                provider=litellm.LlmProviders(resolved_custom_llm_provider),
             )
 
             if container_provider_config is None:
-                raise ValueError(
-                    f"Container provider config not found for: {resolved_custom_llm_provider}"
-                )
+                raise ValueError(f"Container provider config not found for: {resolved_custom_llm_provider}")
 
             # Build optional params for logging
-            optional_params = {k: kwargs.get(k) for k in path_params if k in kwargs}
+            optional_params: Final = {k: kwargs.get(k) for k in path_params if k in kwargs}
 
             # Pre-call logging
             litellm_logging_obj.update_from_kwargs(
@@ -140,7 +137,7 @@ def create_sync_endpoint_function(endpoint_config: Dict) -> Callable:
 
 def create_async_endpoint_function(
     sync_func: Callable,
-    endpoint_config: Dict,
+    endpoint_config: dict,
 ) -> Callable:
     """Create an async SDK function that wraps the sync function."""
 
@@ -148,17 +145,17 @@ def create_async_endpoint_function(
     async def async_endpoint_func(
         timeout: int = 600,
         custom_llm_provider: Literal["openai", "azure", "azure_text"] = "openai",
-        extra_headers: Optional[Dict[str, Any]] = None,
-        extra_query: Optional[Dict[str, Any]] = None,
-        extra_body: Optional[Dict[str, Any]] = None,
+        extra_headers: dict[str, Any] | None = None,
+        extra_query: dict[str, Any] | None = None,
+        extra_body: dict[str, Any] | None = None,
         **kwargs,
     ):
-        local_vars = locals()
+        local_vars: Final = locals()
         try:
-            loop = asyncio.get_event_loop()
+            loop: Final = asyncio.get_event_loop()
             kwargs["async_call"] = True
 
-            func = partial(
+            func: Final = partial(
                 sync_func,
                 timeout=timeout,
                 custom_llm_provider=custom_llm_provider,
@@ -168,9 +165,9 @@ def create_async_endpoint_function(
                 **kwargs,
             )
 
-            ctx = contextvars.copy_context()
-            func_with_context = partial(ctx.run, func)
-            init_response = await loop.run_in_executor(None, func_with_context)
+            ctx: Final = contextvars.copy_context()
+            func_with_context: Final = partial(ctx.run, func)
+            init_response: Final = await loop.run_in_executor(None, func_with_context)
 
             if asyncio.iscoroutine(init_response):
                 response = await init_response
@@ -190,14 +187,14 @@ def create_async_endpoint_function(
     return async_endpoint_func
 
 
-def generate_container_endpoints() -> Dict[str, Callable]:
+def generate_container_endpoints() -> dict[str, Callable]:
     """
     Generate all container endpoint functions from the JSON config.
 
     Returns a dict mapping function names to their implementations.
     """
-    config = _load_endpoints_config()
-    endpoints = {}
+    config: Final = _load_endpoints_config()
+    endpoints: Final = {}
 
     for endpoint_config in config["endpoints"]:
         # Create sync function
@@ -211,37 +208,33 @@ def generate_container_endpoints() -> Dict[str, Callable]:
     return endpoints
 
 
-def get_all_endpoint_names() -> List[str]:
+def get_all_endpoint_names() -> list[str]:
     """Get all endpoint names (sync and async) from config."""
-    config = _load_endpoints_config()
-    names = []
+    config: Final = _load_endpoints_config()
+    names: Final = []
     for endpoint in config["endpoints"]:
         names.append(endpoint["name"])
         names.append(endpoint["async_name"])
     return names
 
 
-def get_async_endpoint_names() -> List[str]:
+def get_async_endpoint_names() -> list[str]:
     """Get all async endpoint names for router registration."""
-    config = _load_endpoints_config()
+    config: Final = _load_endpoints_config()
     return [endpoint["async_name"] for endpoint in config["endpoints"]]
 
 
 # Generate endpoints on module load
-_generated_endpoints = generate_container_endpoints()
+_generated_endpoints: Final = generate_container_endpoints()
 
 # Export generated functions dynamically
-list_container_files = _generated_endpoints.get("list_container_files")
-alist_container_files = _generated_endpoints.get("alist_container_files")
-upload_container_file = _generated_endpoints.get("upload_container_file")
-aupload_container_file = _generated_endpoints.get("aupload_container_file")
-retrieve_container_file = _generated_endpoints.get("retrieve_container_file")
-aretrieve_container_file = _generated_endpoints.get("aretrieve_container_file")
-delete_container_file = _generated_endpoints.get("delete_container_file")
-adelete_container_file = _generated_endpoints.get("adelete_container_file")
-retrieve_container_file_content = _generated_endpoints.get(
-    "retrieve_container_file_content"
-)
-aretrieve_container_file_content = _generated_endpoints.get(
-    "aretrieve_container_file_content"
-)
+list_container_files: Final = _generated_endpoints.get("list_container_files")
+alist_container_files: Final = _generated_endpoints.get("alist_container_files")
+upload_container_file: Final = _generated_endpoints.get("upload_container_file")
+aupload_container_file: Final = _generated_endpoints.get("aupload_container_file")
+retrieve_container_file: Final = _generated_endpoints.get("retrieve_container_file")
+aretrieve_container_file: Final = _generated_endpoints.get("aretrieve_container_file")
+delete_container_file: Final = _generated_endpoints.get("delete_container_file")
+adelete_container_file: Final = _generated_endpoints.get("adelete_container_file")
+retrieve_container_file_content: Final = _generated_endpoints.get("retrieve_container_file_content")
+aretrieve_container_file_content: Final = _generated_endpoints.get("aretrieve_container_file_content")

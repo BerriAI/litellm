@@ -18,6 +18,8 @@ import litellm
 from litellm import Router
 from litellm.integrations.custom_logger import CustomLogger
 
+from tests.fake_openai_endpoint import FAKE_OPENAI_API_BASE
+
 
 class MyCustomHandler(CustomLogger):
     success: bool = False
@@ -1328,6 +1330,8 @@ def test_router_fallbacks_with_custom_model_costs():
     Goal: make sure custom model doesn't override default model costs.
     """
 
+    default_model_info = litellm.get_model_info(model="claude-sonnet-4-5-20250929")
+
     model_list = [
         {
             "model_name": "claude-sonnet-4-5-20250929",
@@ -1345,7 +1349,7 @@ def test_router_fallbacks_with_custom_model_costs():
                 "model": "openai/claude-sonnet-4-5-20250929",
                 "input_cost_per_token": 0.000003,  # 3$/M
                 "output_cost_per_token": 0.000015,  # 15$/M
-                "api_base": "https://exampleopenaiendpoint-production.up.railway.app",
+                "api_base": FAKE_OPENAI_API_BASE,
                 "api_key": "my-fake-key",
                 "mock_response": "Hello! How can I help you today?",
             },
@@ -1381,8 +1385,8 @@ def test_router_fallbacks_with_custom_model_costs():
 
     print(f"key: {model_info['key']}")
 
-    assert model_info["input_cost_per_token"] == 30
-    assert model_info["output_cost_per_token"] == 60
+    assert model_info["input_cost_per_token"] == default_model_info["input_cost_per_token"]
+    assert model_info["output_cost_per_token"] == default_model_info["output_cost_per_token"]
 
 
 @pytest.mark.parametrize("sync_mode", [True, False])
@@ -1594,7 +1598,7 @@ async def test_router_attempted_fallbacks_in_response(expected_attempted_fallbac
                 "litellm_params": {
                     "model": "openai/working-fake-endpoint",
                     "api_key": "my-fake-key",
-                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app",
+                    "api_base": FAKE_OPENAI_API_BASE,
                 },
             },
             {

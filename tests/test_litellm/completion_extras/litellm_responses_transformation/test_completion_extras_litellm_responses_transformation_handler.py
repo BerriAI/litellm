@@ -203,3 +203,65 @@ async def test_acompletion_preserves_top_level_stream_flag_in_responses_request(
 
     assert result is stream
     assert transform_request.call_args.kwargs["optional_params"]["stream"] is True
+
+
+def _completed_chat_response() -> ModelResponse:
+    return ModelResponse(
+        id="chatcmpl-completed",
+        model="gpt-5.4",
+        choices=[
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "pong"},
+                "finish_reason": "stop",
+            }
+        ],
+    )
+
+
+@pytest.mark.asyncio
+async def test_acompletion_streams_completed_model_response():
+    """A streaming request whose bridge call comes back already completed must still be
+    handed back as an async-iterable stream. Returning the bare ModelResponse crashed the
+    proxy's SSE generator with "'async for' requires an object with __aiter__ method".
+    Regression for #33154."""
+    completed = _completed_chat_response()
+    bridge = ResponsesToCompletionBridgeHandler()
+
+    with (
+        patch.object(
+            bridge.transformation_handler,
+            "transform_request",
+            return_value={"model": "gpt-5.4", "input": "hi"},
+        ),
+        patch("litellm.aresponses", new=AsyncMock(return_value=completed)),
+    ):
+        result = await bridge.acompletion(**_bridge_kwargs(stream=True))
+
+    assert isinstance(result, CustomStreamWrapper), f"streaming request got {type(result)}"
+    chunks = [chunk async for chunk in result]
+    assert "".join(
+        chunk.choices[0].delta.content or "" for chunk in chunks
+    ) == "pong", f"completed response did not stream its content: {chunks}"
+    assert [c for c in chunks if c.choices[0].finish_reason], "stream never emitted a finish_reason"
+
+
+def test_completion_streams_completed_model_response():
+    completed = _completed_chat_response()
+    bridge = ResponsesToCompletionBridgeHandler()
+
+    with (
+        patch.object(
+            bridge.transformation_handler,
+            "transform_request",
+            return_value={"model": "gpt-5.4", "input": "hi"},
+        ),
+        patch("litellm.responses", return_value=completed),
+    ):
+        result = bridge.completion(**_bridge_kwargs(stream=True))
+
+    assert isinstance(result, CustomStreamWrapper), f"streaming request got {type(result)}"
+    chunks = list(result)
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks) == "pong", (
+        f"completed response did not stream its content: {chunks}"
+    )

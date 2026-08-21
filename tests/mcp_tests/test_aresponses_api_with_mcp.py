@@ -86,6 +86,15 @@ async def test_mcp_helper_methods():
         LiteLLM_Proxy_MCP_Handler._should_auto_execute_tools(mcp_tools_always) == False
     )
 
+    # A single approval-required reference must disable auto-execution for the
+    # whole request; otherwise a "never" reference alongside an "always" one
+    # would let the approval-gated tool run without approval.
+    mcp_tools_mixed = [{"require_approval": "never"}, {"require_approval": "always"}]
+    assert LiteLLM_Proxy_MCP_Handler._should_auto_execute_tools(mcp_tools_mixed) == False
+    mcp_tools_manual = [{"require_approval": "never"}, {"require_approval": "manual"}]
+    assert LiteLLM_Proxy_MCP_Handler._should_auto_execute_tools(mcp_tools_manual) == False
+    assert LiteLLM_Proxy_MCP_Handler._should_auto_execute_tools([]) == False
+
     print("✓ MCP helper methods test passed!")
 
 

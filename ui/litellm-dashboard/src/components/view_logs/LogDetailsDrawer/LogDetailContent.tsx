@@ -1,8 +1,16 @@
 import { useState } from "react";
-import { Typography, Descriptions, Card, Tag, Tabs, Alert, Collapse, Radio, Space, Spin } from "antd";
+import { Check, ChevronDown, ChevronRight, CircleAlert, Copy, Info } from "lucide-react";
 import moment from "moment";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { LogEntry } from "../columns";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
+import { PROMPT_CACHE_CREATION_TOOLTIP, PROMPT_CACHE_READ_TOOLTIP } from "@/utils/promptCacheUsage";
 import GuardrailViewer from "../GuardrailViewer/GuardrailViewer";
 import EvalViewer from "../EvalViewer/EvalViewer";
 import { CostBreakdownViewer } from "../CostBreakdownViewer";
@@ -11,6 +19,7 @@ import { VectorStoreViewer } from "../VectorStoreViewer";
 import { TruncatedValue } from "./TruncatedValue";
 import { TokenFlow } from "./TokenFlow";
 import { JsonViewer } from "./JsonViewer";
+import { RoutingDecisionCard, type RoutingDecision } from "./RoutingDecisionCard";
 import {
   formatData,
   checkHasMessages,
@@ -29,12 +38,9 @@ import {
   FONT_SIZE_SMALL,
   FONT_FAMILY_MONO,
   SPACING_XLARGE,
-  SPACING_MEDIUM,
 } from "./constants";
 import { ToolsSection } from "../ToolsSection";
 import { PrettyMessagesView } from "./PrettyMessagesView";
-
-const { Text } = Typography;
 
 export interface LogDetailContentProps {
   logEntry: LogEntry;
@@ -97,13 +103,16 @@ export function LogDetailContent({ logEntry, isLoadingDetails = false, accessTok
     <div style={{ padding: `${DRAWER_CONTENT_PADDING} ${DRAWER_CONTENT_PADDING} 0` }}>
       {/* Error Alert */}
       {hasError && errorInfo && (
-        <Alert
-          type="error"
-          showIcon
-          message="Request Failed"
-          description={<ErrorDescription errorInfo={errorInfo} />}
-          className="mb-6"
-        />
+        <div
+          role="alert"
+          className="mb-6 flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm"
+        >
+          <CircleAlert className="size-4 shrink-0 text-destructive" />
+          <div>
+            <div className="font-medium text-destructive">Request Failed</div>
+            <ErrorDescription errorInfo={errorInfo} />
+          </div>
+        </div>
       )}
 
       {/* Tags */}
@@ -112,29 +121,37 @@ export function LogDetailContent({ logEntry, isLoadingDetails = false, accessTok
       )}
 
       {/* Request Details */}
-      <div className="bg-white rounded-lg shadow w-full max-w-full overflow-hidden mb-6">
-        <Card title="Request Details" size="small" bordered={false} style={{ marginBottom: 0 }}>
-          <Descriptions column={2} size="small">
-            <Descriptions.Item label="Model">{logEntry.model}</Descriptions.Item>
-            <Descriptions.Item label="Provider">{logEntry.custom_llm_provider || "-"}</Descriptions.Item>
-            <Descriptions.Item label="Call Type">{logEntry.call_type}</Descriptions.Item>
-            <Descriptions.Item label="Model ID">
-              <TruncatedValue value={logEntry.model_id} />
-            </Descriptions.Item>
-            <Descriptions.Item label="API Base">
-              <TruncatedValue value={logEntry.api_base} maxWidth={API_BASE_MAX_WIDTH} />
-            </Descriptions.Item>
-            {logEntry.requester_ip_address && (
-              <Descriptions.Item label="IP Address">{logEntry.requester_ip_address}</Descriptions.Item>
-            )}
-            {hasGuardrailData && (
-              <Descriptions.Item label="Guardrail">
-                <GuardrailLabel label={primaryGuardrailLabel} maskedCount={totalMaskedEntities} />
-              </Descriptions.Item>
-            )}
-          </Descriptions>
+      <div className="bg-card rounded-lg shadow-sm w-full max-w-full overflow-hidden mb-6">
+        <Card size="sm" style={{ marginBottom: 0 }}>
+          <CardHeader>
+            <CardTitle>Request Details</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <DescriptionList>
+              <DescriptionItem label="Model">{logEntry.model}</DescriptionItem>
+              <DescriptionItem label="Provider">{logEntry.custom_llm_provider || "-"}</DescriptionItem>
+              <DescriptionItem label="Call Type">{logEntry.call_type}</DescriptionItem>
+              <DescriptionItem label="Model ID">
+                <TruncatedValue value={logEntry.model_id} />
+              </DescriptionItem>
+              <DescriptionItem label="API Base">
+                <TruncatedValue value={logEntry.api_base} maxWidth={API_BASE_MAX_WIDTH} />
+              </DescriptionItem>
+              {logEntry.requester_ip_address && (
+                <DescriptionItem label="IP Address">{logEntry.requester_ip_address}</DescriptionItem>
+              )}
+              {hasGuardrailData && (
+                <DescriptionItem label="Guardrail">
+                  <GuardrailLabel label={primaryGuardrailLabel} maskedCount={totalMaskedEntities} />
+                </DescriptionItem>
+              )}
+            </DescriptionList>
+          </CardContent>
         </Card>
       </div>
+
+      {/* Routing */}
+      <RoutingDecisionCard decision={metadata?.routing_decision as RoutingDecision | undefined} />
 
       {/* Metrics */}
       <MetricsSection logEntry={logEntry} metadata={metadata} />
@@ -163,9 +180,11 @@ export function LogDetailContent({ logEntry, isLoadingDetails = false, accessTok
 
       {/* Request/Response JSON */}
       {isLoadingDetails ? (
-        <div className="bg-white rounded-lg shadow w-full max-w-full overflow-hidden mb-6 p-8 text-center">
-          <Spin size="default" />
-          <div style={{ marginTop: 8, color: "#999" }}>Loading request &amp; response data...</div>
+        <div className="bg-card rounded-lg shadow-sm w-full max-w-full overflow-hidden mb-6 p-8 text-center">
+          <UiLoadingSpinner className="inline-block size-5" />
+          <div style={{ marginTop: 8, color: "var(--color-muted-foreground)" }}>
+            Loading request &amp; response data...
+          </div>
         </div>
       ) : (
         <RequestResponseSection
@@ -215,17 +234,64 @@ export function LogDetailContent({ logEntry, isLoadingDetails = false, accessTok
 // Helper Components
 // ============================================================================
 
+function DescriptionList({ children }: { children: React.ReactNode }) {
+  return <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">{children}</div>;
+}
+
+function DescriptionItem({ label, children }: { label: React.ReactNode; children: React.ReactNode }) {
+  return (
+    <div className="flex min-w-0 flex-wrap items-start gap-x-2 gap-y-0.5">
+      <span className="shrink-0 text-muted-foreground after:content-[':']">{label}</span>
+      <span className="min-w-0 break-words">{children}</span>
+    </div>
+  );
+}
+
+function CopyButton({
+  getText,
+  label,
+  disabled = false,
+}: {
+  getText: () => string;
+  label: string;
+  disabled?: boolean;
+}) {
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(getText());
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1200);
+    } catch {
+      /* clipboard unavailable in non-secure contexts */
+    }
+  };
+
+  return (
+    <Button
+      variant="ghost"
+      size="icon-sm"
+      onClick={handleCopy}
+      disabled={disabled}
+      aria-label={copied ? "Copied!" : label}
+    >
+      {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
+    </Button>
+  );
+}
+
 function ErrorDescription({ errorInfo }: { errorInfo: any }) {
   return (
     <div>
       {errorInfo.error_code && (
         <div>
-          <Text strong>Error Code:</Text> {errorInfo.error_code}
+          <span className="font-semibold">Error Code:</span> {errorInfo.error_code}
         </div>
       )}
       {errorInfo.error_message && (
         <div>
-          <Text strong>Message:</Text> {errorInfo.error_message}
+          <span className="font-semibold">Message:</span> {errorInfo.error_message}
         </div>
       )}
     </div>
@@ -234,17 +300,17 @@ function ErrorDescription({ errorInfo }: { errorInfo: any }) {
 
 function TagsSection({ tags }: { tags: Record<string, any> }) {
   return (
-    <div className="bg-white rounded-lg shadow w-full max-w-full overflow-hidden p-4 mb-6">
-      <Text strong style={{ display: "block", marginBottom: 8, fontSize: 16 }}>
+    <div className="bg-card rounded-lg shadow-sm w-full max-w-full overflow-hidden p-4 mb-6">
+      <span className="font-semibold" style={{ display: "block", marginBottom: 8, fontSize: 16 }}>
         Tags
-      </Text>
-      <Space size={SPACING_MEDIUM} wrap>
+      </span>
+      <div className="flex flex-wrap items-center gap-2">
         {Object.entries(tags).map(([key, value]) => (
-          <Tag key={key}>
+          <Badge key={key} variant="outline">
             {key}: {String(value)}
-          </Tag>
+          </Badge>
         ))}
-      </Space>
+      </div>
     </div>
   );
 }
@@ -256,12 +322,12 @@ function GuardrailLabel({ label, maskedCount }: { label: string; maskedCount: nu
   };
 
   return (
-    <Space size={SPACING_MEDIUM}>
+    <span className="inline-flex items-center gap-2">
       <a onClick={handleClick} style={{ cursor: "pointer" }}>
         {label}
       </a>
-      {maskedCount > 0 && <Tag color="blue">{maskedCount} masked</Tag>}
-    </Space>
+      {maskedCount > 0 && <Badge variant="secondary">{maskedCount} masked</Badge>}
+    </span>
   );
 }
 
@@ -278,6 +344,34 @@ function getUncachedInputTextTokens(metadata: Record<string, any>): number | und
   return Number.isFinite(n) ? n : undefined;
 }
 
+const RESPONSE_CACHE_TOOLTIP =
+  "Whether this request was served from LiteLLM's response cache (e.g. Redis / in-memory), skipping the LLM provider call entirely. This is separate from provider prompt caching; a Miss here does not mean prompt caching failed.";
+const RESPONSE_CACHE_DOCS_URL = "https://docs.litellm.ai/docs/proxy/caching";
+const PROMPT_CACHE_DOCS_URL = "https://docs.litellm.ai/docs/completion/prompt_caching";
+
+function MetricLabel({ label, tooltip, docsUrl }: { label: string; tooltip: string; docsUrl: string }) {
+  return (
+    <span className="inline-flex items-center gap-1">
+      {label}
+      <TooltipProvider>
+        <Tooltip>
+          <TooltipTrigger
+            render={<span role="img" aria-label={`${label} info`} className="inline-flex text-muted-foreground" />}
+          >
+            <Info className="size-3.5" />
+          </TooltipTrigger>
+          <TooltipContent>
+            {tooltip}{" "}
+            <a href={docsUrl} target="_blank" rel="noreferrer" className="underline">
+              Docs
+            </a>
+          </TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
+    </span>
+  );
+}
+
 function MetricsSection({ logEntry, metadata }: { logEntry: LogEntry; metadata: Record<string, any> }) {
   const completionStartTime = logEntry.completionStartTime;
   const ttftMs =
@@ -285,95 +379,123 @@ function MetricsSection({ logEntry, metadata }: { logEntry: LogEntry; metadata: 
       ? new Date(completionStartTime).getTime() - new Date(logEntry.startTime).getTime()
       : null;
 
-  const hasCacheActivity =
-    logEntry.cache_hit ||
-    (metadata?.additional_usage_values?.cache_read_input_tokens &&
-      metadata.additional_usage_values.cache_read_input_tokens > 0);
-
-  const cacheHitValue = String(logEntry.cache_hit ?? "None");
-  const cacheHitColor =
-    cacheHitValue.toLowerCase() === "true" ? "green" : cacheHitValue.toLowerCase() === "false" ? "red" : "default";
+  const responseCacheValue = String(logEntry.cache_hit ?? "").toLowerCase();
+  const isResponseCacheHit = responseCacheValue === "true";
+  const showResponseCache = isResponseCacheHit || responseCacheValue === "false";
+  const promptCacheReadTokens = Number(metadata?.additional_usage_values?.cache_read_input_tokens) || 0;
+  const promptCacheCreationTokens = Number(metadata?.additional_usage_values?.cache_creation_input_tokens) || 0;
 
   const uncachedInputTokens = getUncachedInputTextTokens(metadata);
   const showAnthropicMessagesInputOutput =
     logEntry.call_type === "anthropic_messages" && uncachedInputTokens !== undefined;
 
   return (
-    <div className="bg-white rounded-lg shadow w-full max-w-full overflow-hidden mb-6">
-      <Card title="Metrics" size="small" style={{ marginBottom: 0 }}>
-        <Descriptions column={2} size="small">
-          {showAnthropicMessagesInputOutput ? (
-            <>
-              <Descriptions.Item label="Input Tokens">{formatNumberWithCommas(uncachedInputTokens)}</Descriptions.Item>
-              <Descriptions.Item label="Output Tokens">
-                {formatNumberWithCommas(logEntry.completion_tokens)}
-              </Descriptions.Item>
-            </>
-          ) : (
-            <Descriptions.Item label="Tokens">
-              <TokenFlow
-                prompt={logEntry.prompt_tokens}
-                completion={logEntry.completion_tokens}
-                total={logEntry.total_tokens}
-              />
-            </Descriptions.Item>
-          )}
-          <Descriptions.Item label="Cost">${formatNumberWithCommas(logEntry.spend || 0, 8)}</Descriptions.Item>
-          <Descriptions.Item label="Duration">
-            {logEntry.request_duration_ms != null ? (logEntry.request_duration_ms / 1000).toFixed(3) : "-"} s
-          </Descriptions.Item>
-          {ttftMs != null && ttftMs > 0 && (
-            <Descriptions.Item label="Time to First Token">{(ttftMs / 1000).toFixed(3)} s</Descriptions.Item>
-          )}
-
-          {hasCacheActivity && (
-            <>
-              <Descriptions.Item label="Cache Hit">
-                <Tag color={cacheHitColor}>{cacheHitValue}</Tag>
-              </Descriptions.Item>
-              {metadata?.additional_usage_values?.cache_read_input_tokens > 0 && (
-                <Descriptions.Item label="Cache Read Tokens">
-                  {formatNumberWithCommas(metadata.additional_usage_values.cache_read_input_tokens)}
-                </Descriptions.Item>
-              )}
-              {metadata?.additional_usage_values?.cache_creation_input_tokens > 0 && (
-                <Descriptions.Item label="Cache Creation Tokens">
-                  {formatNumberWithCommas(metadata.additional_usage_values.cache_creation_input_tokens)}
-                </Descriptions.Item>
-              )}
-            </>
-          )}
-
-          {metadata?.litellm_overhead_time_ms !== undefined && metadata.litellm_overhead_time_ms !== null && (
-            <Descriptions.Item label="LiteLLM Overhead">
-              {metadata.litellm_overhead_time_ms.toFixed(2)} ms
-            </Descriptions.Item>
-          )}
-
-          <Descriptions.Item label="Retries">
-            {metadata?.attempted_retries !== undefined && metadata?.attempted_retries !== null ? (
-              metadata.attempted_retries > 0 ? (
-                <>
-                  {metadata.attempted_retries}
-                  {metadata.max_retries !== undefined && metadata.max_retries !== null
-                    ? ` / ${metadata.max_retries}`
-                    : ""}
-                </>
-              ) : (
-                <Tag color="green">None</Tag>
-              )
+    <div className="bg-card rounded-lg shadow-sm w-full max-w-full overflow-hidden mb-6">
+      <Card size="sm" style={{ marginBottom: 0 }}>
+        <CardHeader>
+          <CardTitle>Metrics</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <DescriptionList>
+            {showAnthropicMessagesInputOutput ? (
+              <>
+                <DescriptionItem label="Input Tokens">{formatNumberWithCommas(uncachedInputTokens)}</DescriptionItem>
+                <DescriptionItem label="Output Tokens">
+                  {formatNumberWithCommas(logEntry.completion_tokens)}
+                </DescriptionItem>
+              </>
             ) : (
-              "-"
+              <DescriptionItem label="Tokens">
+                <TokenFlow
+                  prompt={logEntry.prompt_tokens}
+                  completion={logEntry.completion_tokens}
+                  total={logEntry.total_tokens}
+                />
+              </DescriptionItem>
             )}
-          </Descriptions.Item>
+            <DescriptionItem label="Cost">${formatNumberWithCommas(logEntry.spend || 0, 8)}</DescriptionItem>
+            <DescriptionItem label="Duration">
+              {logEntry.request_duration_ms != null ? (logEntry.request_duration_ms / 1000).toFixed(3) : "-"} s
+            </DescriptionItem>
+            {ttftMs != null && ttftMs > 0 && (
+              <DescriptionItem label="Time to First Token">{(ttftMs / 1000).toFixed(3)} s</DescriptionItem>
+            )}
 
-          <Descriptions.Item label="Start Time">
-            {moment(logEntry.startTime).format("YYYY-MM-DDTHH:mm:ss.SSS[Z]")}
-          </Descriptions.Item>
-          <Descriptions.Item label="End Time">
-            {moment(logEntry.endTime).format("YYYY-MM-DDTHH:mm:ss.SSS[Z]")}
-          </Descriptions.Item>
-        </Descriptions>
+            {showResponseCache && (
+              <DescriptionItem
+                label={
+                  <MetricLabel
+                    label="Response Cache"
+                    tooltip={RESPONSE_CACHE_TOOLTIP}
+                    docsUrl={RESPONSE_CACHE_DOCS_URL}
+                  />
+                }
+              >
+                <Badge variant="secondary" className={isResponseCacheHit ? "bg-success/15 text-success" : undefined}>
+                  {isResponseCacheHit ? "Hit" : "Miss"}
+                </Badge>
+              </DescriptionItem>
+            )}
+            {promptCacheReadTokens > 0 && (
+              <DescriptionItem
+                label={
+                  <MetricLabel
+                    label="Prompt Cache Read Tokens"
+                    tooltip={PROMPT_CACHE_READ_TOOLTIP}
+                    docsUrl={PROMPT_CACHE_DOCS_URL}
+                  />
+                }
+              >
+                {formatNumberWithCommas(promptCacheReadTokens)}
+              </DescriptionItem>
+            )}
+            {promptCacheCreationTokens > 0 && (
+              <DescriptionItem
+                label={
+                  <MetricLabel
+                    label="Prompt Cache Creation Tokens"
+                    tooltip={PROMPT_CACHE_CREATION_TOOLTIP}
+                    docsUrl={PROMPT_CACHE_DOCS_URL}
+                  />
+                }
+              >
+                {formatNumberWithCommas(promptCacheCreationTokens)}
+              </DescriptionItem>
+            )}
+
+            {metadata?.litellm_overhead_time_ms !== undefined && metadata.litellm_overhead_time_ms !== null && (
+              <DescriptionItem label="LiteLLM Overhead">
+                {metadata.litellm_overhead_time_ms.toFixed(2)} ms
+              </DescriptionItem>
+            )}
+
+            <DescriptionItem label="Retries">
+              {metadata?.attempted_retries !== undefined && metadata?.attempted_retries !== null ? (
+                metadata.attempted_retries > 0 ? (
+                  <>
+                    {metadata.attempted_retries}
+                    {metadata.max_retries !== undefined && metadata.max_retries !== null
+                      ? ` / ${metadata.max_retries}`
+                      : ""}
+                  </>
+                ) : (
+                  <Badge variant="secondary" className="bg-success/15 text-success">
+                    None
+                  </Badge>
+                )
+              ) : (
+                "-"
+              )}
+            </DescriptionItem>
+
+            <DescriptionItem label="Start Time">
+              {moment(logEntry.startTime).format("YYYY-MM-DDTHH:mm:ss.SSS[Z]")}
+            </DescriptionItem>
+            <DescriptionItem label="End Time">
+              {moment(logEntry.endTime).format("YYYY-MM-DDTHH:mm:ss.SSS[Z]")}
+            </DescriptionItem>
+          </DescriptionList>
+        </CardContent>
       </Card>
     </div>
   );
@@ -394,6 +516,7 @@ function RequestResponseSection({
   getFormattedResponse,
   logEntry,
 }: RequestResponseSectionProps) {
+  const [open, setOpen] = useState(true);
   const [activeTab, setActiveTab] = useState<typeof TAB_REQUEST | typeof TAB_RESPONSE>(TAB_REQUEST);
   const [viewMode, setViewMode] = useState<"pretty" | "json">("pretty");
 
@@ -420,91 +543,84 @@ function RequestResponseSection({
       : 0;
 
   return (
-    <div className="bg-white rounded-lg shadow w-full max-w-full overflow-hidden mb-6">
-      <Collapse
-        defaultActiveKey={["1"]}
-        expandIconPosition="start"
-        items={[
-          {
-            key: "1",
-            label: (
-              <div
-                style={{ display: "flex", alignItems: "center", justifyContent: "space-between", width: "100%" }}
-                onClick={(e) => {
-                  const target = e.target as HTMLElement;
-                  if (target.closest(".ant-radio-group")) {
-                    e.stopPropagation();
-                  }
-                }}
-              >
-                <h3 className="text-lg font-medium text-gray-900" style={{ margin: 0 }}>
-                  Request & Response
-                </h3>
-                <Radio.Group size="small" value={viewMode} onChange={(e) => setViewMode(e.target.value)}>
-                  <Radio.Button value="pretty">Pretty</Radio.Button>
-                  <Radio.Button value="json">JSON</Radio.Button>
-                </Radio.Group>
-              </div>
-            ),
-            children: (
-              <div>
-                {viewMode === "pretty" ? (
-                  <PrettyMessagesView
-                    request={getRawRequest()}
-                    response={getFormattedResponse()}
-                    metrics={{
-                      prompt_tokens: promptTokens,
-                      completion_tokens: completionTokens,
-                      input_cost: inputCost,
-                      output_cost: outputCost,
-                    }}
-                  />
-                ) : (
-                  <Tabs
-                    activeKey={activeTab}
-                    onChange={(key) => setActiveTab(key as typeof TAB_REQUEST | typeof TAB_RESPONSE)}
-                    tabBarExtraContent={
-                      <Text
-                        copyable={{
-                          text: getCopyText(),
-                          tooltips: ["Copy JSON", "Copied!"],
-                        }}
-                        disabled={activeTab === TAB_RESPONSE && !hasResponse && !hasError}
-                      />
-                    }
-                    items={[
-                      {
-                        key: TAB_REQUEST,
-                        label: "Request",
-                        children: (
-                          <div style={{ paddingTop: SPACING_XLARGE, paddingBottom: SPACING_XLARGE }}>
-                            <JsonViewer data={getRawRequest()} mode="formatted" />
-                          </div>
-                        ),
-                      },
-                      {
-                        key: TAB_RESPONSE,
-                        label: "Response",
-                        children: (
-                          <div style={{ paddingTop: SPACING_XLARGE, paddingBottom: SPACING_XLARGE }}>
-                            {hasResponse || hasError ? (
-                              <JsonViewer data={getFormattedResponse()} mode="formatted" />
-                            ) : (
-                              <div style={{ textAlign: "center", padding: 20, color: "#999", fontStyle: "italic" }}>
-                                Response data not available
-                              </div>
-                            )}
-                          </div>
-                        ),
-                      },
-                    ]}
-                  />
-                )}
-              </div>
-            ),
-          },
-        ]}
-      />
+    <div className="bg-card rounded-lg shadow-sm w-full max-w-full overflow-hidden mb-6">
+      <Collapsible open={open} onOpenChange={setOpen}>
+        <Tabs value={viewMode} onValueChange={(value) => setViewMode(value as "pretty" | "json")}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", width: "100%" }}>
+            <CollapsibleTrigger className="flex flex-1 items-center gap-3 px-4 py-3 text-left">
+              {open ? (
+                <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
+              ) : (
+                <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" />
+              )}
+              <h3 className="text-lg font-medium text-foreground" style={{ margin: 0 }}>
+                Request & Response
+              </h3>
+            </CollapsibleTrigger>
+            <TabsList className="mr-4">
+              <TabsTrigger value="pretty">Pretty</TabsTrigger>
+              <TabsTrigger value="json">JSON</TabsTrigger>
+            </TabsList>
+          </div>
+          <CollapsibleContent>
+            <div>
+              <TabsContent value="pretty">
+                <PrettyMessagesView
+                  request={getRawRequest()}
+                  response={getFormattedResponse()}
+                  metrics={{
+                    prompt_tokens: promptTokens,
+                    completion_tokens: completionTokens,
+                    input_cost: inputCost,
+                    output_cost: outputCost,
+                  }}
+                />
+              </TabsContent>
+              <TabsContent value="json">
+                <Tabs
+                  value={activeTab}
+                  onValueChange={(key) => setActiveTab(key as typeof TAB_REQUEST | typeof TAB_RESPONSE)}
+                >
+                  <div className="flex items-center justify-between">
+                    <TabsList>
+                      <TabsTrigger value={TAB_REQUEST}>Request</TabsTrigger>
+                      <TabsTrigger value={TAB_RESPONSE}>Response</TabsTrigger>
+                    </TabsList>
+                    <CopyButton
+                      getText={getCopyText}
+                      label="Copy JSON"
+                      disabled={activeTab === TAB_RESPONSE && !hasResponse && !hasError}
+                    />
+                  </div>
+                  <TabsContent value={TAB_REQUEST}>
+                    <div style={{ paddingTop: SPACING_XLARGE, paddingBottom: SPACING_XLARGE }}>
+                      <JsonViewer data={getRawRequest()} mode="formatted" />
+                    </div>
+                  </TabsContent>
+                  <TabsContent value={TAB_RESPONSE}>
+                    <div style={{ paddingTop: SPACING_XLARGE, paddingBottom: SPACING_XLARGE }}>
+                      {hasResponse || hasError ? (
+                        <JsonViewer data={getFormattedResponse()} mode="formatted" />
+                      ) : (
+                        <div
+                          style={{
+                            textAlign: "center",
+                            padding: 20,
+                            color: "var(--color-muted-foreground)",
+                            fontStyle: "italic",
+                          }}
+                        >
+                          Response data not available
+                        </div>
+                      )}
+                    </div>
+                  </TabsContent>
+                </Tabs>
+              </TabsContent>
+            </div>
+          </CollapsibleContent>
+        </Tabs>
+      </Collapsible>
     </div>
   );
 }
@@ -524,6 +640,11 @@ export function GuardrailJumpLink({ guardrailEntries }: { guardrailEntries: any[
     <div style={{ textAlign: "left", marginBottom: 12 }}>
       <div
         onClick={handleClick}
+        className={
+          allPassed
+            ? "border border-success/20 bg-success/10 text-success"
+            : "border border-destructive/20 bg-destructive/10 text-destructive"
+        }
         style={{
           display: "inline-flex",
           alignItems: "center",
@@ -533,9 +654,6 @@ export function GuardrailJumpLink({ guardrailEntries }: { guardrailEntries: any[
           cursor: "pointer",
           fontSize: 13,
           fontWeight: 500,
-          backgroundColor: allPassed ? "#f0fdf4" : "#fef2f2",
-          color: allPassed ? "#15803d" : "#b91c1c",
-          border: `1px solid ${allPassed ? "#bbf7d0" : "#fecaca"}`,
         }}
       >
         {allPassed ? "\u2713" : "\u2717"} {guardrailEntries.length} guardrail{guardrailEntries.length !== 1 ? "s" : ""}{" "}
@@ -547,43 +665,40 @@ export function GuardrailJumpLink({ guardrailEntries }: { guardrailEntries: any[
 }
 
 function MetadataSection({ metadata }: { metadata: Record<string, any> }) {
+  const [open, setOpen] = useState(true);
+
   return (
-    <div className="bg-white rounded-lg shadow w-full max-w-full overflow-hidden mb-6">
-      <Collapse
-        defaultActiveKey={["1"]}
-        expandIconPosition="start"
-        items={[
-          {
-            key: "1",
-            label: <h3 className="text-lg font-medium text-gray-900">Metadata</h3>,
-            children: (
-              <div>
-                <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 8 }}>
-                  <Text
-                    copyable={{
-                      text: JSON.stringify(metadata, null, 2),
-                      tooltips: ["Copy Metadata", "Copied!"],
-                    }}
-                  />
-                </div>
-                <pre
-                  style={{
-                    maxHeight: METADATA_MAX_HEIGHT,
-                    overflowY: "auto",
-                    fontSize: FONT_SIZE_SMALL,
-                    fontFamily: FONT_FAMILY_MONO,
-                    whiteSpace: "pre-wrap",
-                    wordBreak: "break-all",
-                    margin: 0,
-                  }}
-                >
-                  {JSON.stringify(metadata, null, 2)}
-                </pre>
-              </div>
-            ),
-          },
-        ]}
-      />
+    <div className="bg-card rounded-lg shadow-sm w-full max-w-full overflow-hidden mb-6">
+      <Collapsible open={open} onOpenChange={setOpen}>
+        <CollapsibleTrigger className="flex w-full items-center gap-3 px-4 py-3 text-left">
+          {open ? (
+            <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
+          ) : (
+            <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" />
+          )}
+          <h3 className="text-lg font-medium text-foreground">Metadata</h3>
+        </CollapsibleTrigger>
+        <CollapsibleContent>
+          <div>
+            <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 8 }}>
+              <CopyButton getText={() => JSON.stringify(metadata, null, 2)} label="Copy Metadata" />
+            </div>
+            <pre
+              style={{
+                maxHeight: METADATA_MAX_HEIGHT,
+                overflowY: "auto",
+                fontSize: FONT_SIZE_SMALL,
+                fontFamily: FONT_FAMILY_MONO,
+                whiteSpace: "pre-wrap",
+                wordBreak: "break-all",
+                margin: 0,
+              }}
+            >
+              {JSON.stringify(metadata, null, 2)}
+            </pre>
+          </div>
+        </CollapsibleContent>
+      </Collapsible>
     </div>
   );
 }

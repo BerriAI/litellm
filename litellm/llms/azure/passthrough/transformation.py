@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, List, Optional, Tuple
+from typing import TYPE_CHECKING, Final, Optional
 
 import httpx
 from httpx import Response
@@ -22,24 +22,24 @@ class AzurePassthroughConfig(BasePassthroughConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         endpoint: str,
-        request_query_params: Optional[dict],
+        request_query_params: dict | None,
         litellm_params: dict,
-    ) -> Tuple["URL", str]:
-        base_target_url = self.get_api_base(api_base)
+    ) -> tuple["URL", str]:
+        base_target_url: Final = self.get_api_base(api_base)
 
         if base_target_url is None:
             raise Exception("Azure api base not found")
 
-        litellm_metadata = litellm_params.get("litellm_metadata") or {}
-        model_group = litellm_metadata.get("model_group")
+        litellm_metadata: Final = litellm_params.get("litellm_metadata") or {}
+        model_group: Final = litellm_metadata.get("model_group")
         if model_group and model_group in endpoint:
             endpoint = endpoint.replace(model_group, model)
 
-        complete_url = BaseAzureLLM._get_base_azure_url(
+        complete_url: Final = BaseAzureLLM._get_base_azure_url(
             api_base=base_target_url,
             litellm_params=litellm_params,
             route=endpoint,
@@ -54,38 +54,34 @@ class AzurePassthroughConfig(BasePassthroughConfig):
         self,
         headers: dict,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
         return BaseAzureLLM._base_validate_azure_environment(
             headers=headers,
-            litellm_params=GenericLiteLLMParams(
-                **{**litellm_params, "api_key": api_key}
-            ),
+            litellm_params=GenericLiteLLMParams(**{**litellm_params, "api_key": api_key}),
         )
 
     @staticmethod
     def get_api_base(
-        api_base: Optional[str] = None,
-    ) -> Optional[str]:
+        api_base: str | None = None,
+    ) -> str | None:
         return api_base or get_secret_str("AZURE_API_BASE")
 
     @staticmethod
     def get_api_key(
-        api_key: Optional[str] = None,
-    ) -> Optional[str]:
+        api_key: str | None = None,
+    ) -> str | None:
         return api_key or get_secret_str("AZURE_API_KEY")
 
     @staticmethod
-    def get_base_model(model: str) -> Optional[str]:
+    def get_base_model(model: str) -> str | None:
         return model
 
-    def get_models(
-        self, api_key: Optional[str] = None, api_base: Optional[str] = None
-    ) -> List[str]:
+    def get_models(self, api_key: str | None = None, api_base: str | None = None) -> list[str]:
         return super().get_models(api_key, api_base)
 
     def logging_non_streaming_response(
@@ -104,9 +100,9 @@ class AzurePassthroughConfig(BasePassthroughConfig):
         if "chat/completions" not in endpoint:
             return None
 
-        openai_chat_config = OpenAIGPTConfig()
+        openai_chat_config: Final = OpenAIGPTConfig()
 
-        litellm_model_response: ModelResponse = openai_chat_config.transform_response(
+        litellm_model_response: Final[ModelResponse] = openai_chat_config.transform_response(
             model=model,
             messages=[{"role": "user", "content": "no-message-pass-through-endpoint"}],
             raw_response=httpx_response,

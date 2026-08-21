@@ -88,10 +88,11 @@ async def test_delete_deployment():
     )
 
     db_models = [db_model]
-    deleted_deployments = await pc._delete_deployment(db_models=db_models)
+    still_desired = await pc._delete_deployment(db_models=db_models)
 
-    assert deleted_deployments == 1
+    assert still_desired == frozenset({deployment.model_info.id})
     assert len(llm_router.model_list) == 1
+    assert llm_router.get_model_ids() == [deployment.model_info.id]
 
     """
     Scenario 2 - if model id != model_info["id"]
@@ -115,10 +116,11 @@ async def test_delete_deployment():
     )
 
     db_models = [db_model]
-    deleted_deployments = await pc._delete_deployment(db_models=db_models)
+    still_desired = await pc._delete_deployment(db_models=db_models)
 
-    assert deleted_deployments == 1
+    assert still_desired == frozenset({deployment.model_info.id})
     assert len(llm_router.model_list) == 1
+    assert llm_router.get_model_ids() == [deployment.model_info.id]
 
 
 @pytest.mark.asyncio
@@ -239,10 +241,16 @@ async def test_db_error_new_model_check():
         new=AsyncMock(return_value={"model_list": config_model_list}),
     ):
         db_models = []
-        deleted_deployments = await pc._delete_deployment(db_models=db_models)
-    assert deleted_deployments == 0
+        still_desired = await pc._delete_deployment(db_models=db_models)
+    assert still_desired == frozenset(
+        {deployment.model_info.id, deployment_2.model_info.id}
+    )
 
     assert init_len_list == len(llm_router.model_list)
+    assert set(llm_router.get_model_ids()) == {
+        deployment.model_info.id,
+        deployment_2.model_info.id,
+    }
 
 
 litellm_params = LiteLLM_Params(

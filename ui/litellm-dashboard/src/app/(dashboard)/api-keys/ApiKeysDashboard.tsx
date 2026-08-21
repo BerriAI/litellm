@@ -1,22 +1,23 @@
 "use client";
 
 import { teamListCall as v2TeamListCall } from "@/app/(dashboard)/hooks/teams/useTeams";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { KeyResponse, Team } from "@/components/key_team_helpers/key_list";
-import { Organization } from "@/components/networking";
 import { CreateKeyPrefillData } from "@/components/organisms/create_key_button";
-import { fetchOrganizations } from "@/components/organizations";
 import UserDashboard from "@/components/user_dashboard";
 import { useAuth } from "@/contexts/AuthContext";
 import { useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 
 export default function ApiKeysDashboard() {
-  const { userID, userRole, userEmail, accessToken, premiumUser, setUserRole, setUserEmail } = useAuth();
+  // Identity comes from useAuthorized (synchronous cookie decode) so userID is set whenever the
+  // route is authorized; useAuth only supplies the backfill setters UserDashboard still expects.
+  const { userId: userID, userRole, userEmail, accessToken, premiumUser } = useAuthorized();
+  const { setUserRole, setUserEmail } = useAuth();
   const searchParams = useSearchParams()!;
 
   const [teams, setTeams] = useState<Team[] | null>(null);
   const [keys, setKeys] = useState<KeyResponse[] | null>([]);
-  const [organizations, setOrganizations] = useState<Organization[]>([]);
   const [createClicked, setCreateClicked] = useState<boolean>(false);
 
   const autoOpenCreate = searchParams.get("create") === "true";
@@ -73,16 +74,13 @@ export default function ApiKeysDashboard() {
         .then((response) => setTeams(response.teams ?? []))
         .catch(console.error);
     }
-    if (accessToken) {
-      fetchOrganizations(accessToken, setOrganizations);
-    }
   }, [accessToken, userID, userRole]);
 
   return (
     <UserDashboard
       userID={userID}
       userRole={userRole}
-      premiumUser={premiumUser}
+      premiumUser={premiumUser ?? false}
       teams={teams}
       keys={keys}
       setUserRole={setUserRole}
@@ -90,7 +88,6 @@ export default function ApiKeysDashboard() {
       setUserEmail={setUserEmail}
       setTeams={setTeams}
       setKeys={setKeys}
-      organizations={organizations}
       addKey={addKey}
       createClicked={createClicked}
       autoOpenCreate={autoOpenCreate}

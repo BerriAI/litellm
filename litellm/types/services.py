@@ -1,10 +1,8 @@
 import enum
-from typing import List, Optional
+from typing import Final
 
 from pydantic import BaseModel, Field
 from typing_extensions import TypedDict
-
-from litellm._uuid import uuid
 
 
 class ServiceMetrics(enum.Enum):
@@ -49,7 +47,7 @@ class ServiceConfig(TypedDict):
     Configuration for services and their metrics
     """
 
-    metrics: List[ServiceMetrics]  # What metrics this service should support
+    metrics: list[ServiceMetrics]  # What metrics this service should support
 
 
 """
@@ -58,48 +56,22 @@ Metric types to use for each service
 - REDIS only needs Counter, Histogram
 - Pod Lock Manager only needs a gauge metric
 """
-DEFAULT_SERVICE_CONFIGS = {
-    ServiceTypes.REDIS.value: {
-        "metrics": [ServiceMetrics.COUNTER, ServiceMetrics.HISTOGRAM]
-    },
-    ServiceTypes.DB.value: {
-        "metrics": [ServiceMetrics.COUNTER, ServiceMetrics.HISTOGRAM]
-    },
-    ServiceTypes.BATCH_WRITE_TO_DB.value: {
-        "metrics": [ServiceMetrics.COUNTER, ServiceMetrics.HISTOGRAM]
-    },
-    ServiceTypes.RESET_BUDGET_JOB.value: {
-        "metrics": [ServiceMetrics.COUNTER, ServiceMetrics.HISTOGRAM]
-    },
-    ServiceTypes.LITELLM.value: {
-        "metrics": [ServiceMetrics.COUNTER, ServiceMetrics.HISTOGRAM]
-    },
-    ServiceTypes.ROUTER.value: {
-        "metrics": [ServiceMetrics.COUNTER, ServiceMetrics.HISTOGRAM]
-    },
-    ServiceTypes.AUTH.value: {
-        "metrics": [ServiceMetrics.COUNTER, ServiceMetrics.HISTOGRAM]
-    },
-    ServiceTypes.PROXY_PRE_CALL.value: {
-        "metrics": [ServiceMetrics.COUNTER, ServiceMetrics.HISTOGRAM]
-    },
+DEFAULT_SERVICE_CONFIGS: Final = {
+    ServiceTypes.REDIS.value: {"metrics": [ServiceMetrics.COUNTER, ServiceMetrics.HISTOGRAM]},
+    ServiceTypes.DB.value: {"metrics": [ServiceMetrics.COUNTER, ServiceMetrics.HISTOGRAM]},
+    ServiceTypes.BATCH_WRITE_TO_DB.value: {"metrics": [ServiceMetrics.COUNTER, ServiceMetrics.HISTOGRAM]},
+    ServiceTypes.RESET_BUDGET_JOB.value: {"metrics": [ServiceMetrics.COUNTER, ServiceMetrics.HISTOGRAM]},
+    ServiceTypes.LITELLM.value: {"metrics": [ServiceMetrics.COUNTER, ServiceMetrics.HISTOGRAM]},
+    ServiceTypes.ROUTER.value: {"metrics": [ServiceMetrics.COUNTER, ServiceMetrics.HISTOGRAM]},
+    ServiceTypes.AUTH.value: {"metrics": [ServiceMetrics.COUNTER, ServiceMetrics.HISTOGRAM]},
+    ServiceTypes.PROXY_PRE_CALL.value: {"metrics": [ServiceMetrics.COUNTER, ServiceMetrics.HISTOGRAM]},
     # Operational metrics for DB Transaction Queues
     ServiceTypes.POD_LOCK_MANAGER.value: {"metrics": [ServiceMetrics.GAUGE]},
-    ServiceTypes.IN_MEMORY_DAILY_SPEND_UPDATE_QUEUE.value: {
-        "metrics": [ServiceMetrics.GAUGE]
-    },
-    ServiceTypes.REDIS_DAILY_SPEND_UPDATE_QUEUE.value: {
-        "metrics": [ServiceMetrics.GAUGE]
-    },
-    ServiceTypes.REDIS_DAILY_END_USER_SPEND_UPDATE_QUEUE.value: {
-        "metrics": [ServiceMetrics.GAUGE]
-    },
-    ServiceTypes.REDIS_DAILY_AGENT_SPEND_UPDATE_QUEUE.value: {
-        "metrics": [ServiceMetrics.GAUGE]
-    },
-    ServiceTypes.IN_MEMORY_SPEND_UPDATE_QUEUE.value: {
-        "metrics": [ServiceMetrics.GAUGE]
-    },
+    ServiceTypes.IN_MEMORY_DAILY_SPEND_UPDATE_QUEUE.value: {"metrics": [ServiceMetrics.GAUGE]},
+    ServiceTypes.REDIS_DAILY_SPEND_UPDATE_QUEUE.value: {"metrics": [ServiceMetrics.GAUGE]},
+    ServiceTypes.REDIS_DAILY_END_USER_SPEND_UPDATE_QUEUE.value: {"metrics": [ServiceMetrics.GAUGE]},
+    ServiceTypes.REDIS_DAILY_AGENT_SPEND_UPDATE_QUEUE.value: {"metrics": [ServiceMetrics.GAUGE]},
+    ServiceTypes.IN_MEMORY_SPEND_UPDATE_QUEUE.value: {"metrics": [ServiceMetrics.GAUGE]},
     ServiceTypes.REDIS_SPEND_UPDATE_QUEUE.value: {"metrics": [ServiceMetrics.GAUGE]},
 }
 
@@ -112,8 +84,8 @@ class ServiceEventMetadata(TypedDict, total=False):
     """
 
     # Dynamically control gauge labels and values
-    gauge_labels: Optional[str]
-    gauge_value: Optional[float]
+    gauge_labels: str | None
+    gauge_value: float | None
 
 
 class ServiceLoggerPayload(BaseModel):
@@ -122,17 +94,15 @@ class ServiceLoggerPayload(BaseModel):
     """
 
     is_error: bool = Field(description="did an error occur")
-    error: Optional[str] = Field(None, description="what was the error")
+    error: str | None = Field(None, description="what was the error")
     service: ServiceTypes = Field(description="who is this for? - postgres/redis")
     duration: float = Field(description="How long did the request take?")
     call_type: str = Field(description="The call of the service, being made")
-    event_metadata: Optional[dict] = Field(
-        description="The metadata logged during service success/failure"
-    )
+    event_metadata: dict | None = Field(description="The metadata logged during service success/failure")
 
     def to_json(self, **kwargs):
         try:
-            return self.model_dump(**kwargs)  # noqa
-        except Exception as e:
+            return self.model_dump(**kwargs)
+        except Exception:
             # if using pydantic v1
             return self.dict(**kwargs)

@@ -20,7 +20,7 @@ Configuration in proxy config YAML:
         mode: post_call
 """
 
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Final, Literal, Optional
 
 from fastapi import HTTPException
 
@@ -36,12 +36,12 @@ from litellm.types.utils import GenericGuardrailAPIInputs
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
-GUARDRAIL_NAME = "tool_policy"
+GUARDRAIL_NAME: Final = "tool_policy"
 
 
 def _get_request_object_permission_ids(
     request_data: dict,
-) -> Tuple[Optional[str], Optional[str]]:
+) -> tuple[str | None, str | None]:
     """Extract object_permission_id and team_object_permission_id from request_data."""
     if not request_data:
         return None, None
@@ -68,21 +68,21 @@ def _get_request_object_permission_ids(
     return None, None
 
 
-def _get_request_route_from_data(request_data: dict) -> Optional[str]:
+def _get_request_route_from_data(request_data: dict) -> str | None:
     """Get request route from request_data (metadata or top-level)."""
-    route = request_data.get("user_api_key_request_route")
+    route: Final = request_data.get("user_api_key_request_route")
     if route:
         return route
-    meta = request_data.get("metadata") or request_data.get("litellm_metadata") or {}
+    meta: Final = request_data.get("metadata") or request_data.get("litellm_metadata") or {}
     return meta.get("user_api_key_request_route")
 
 
-def _resolve_tool_names_from_messages(messages: List[dict]) -> Dict[str, str]:
+def _resolve_tool_names_from_messages(messages: list[dict]) -> dict[str, str]:
     """
     Build a map of tool_call_id -> tool_name from assistant messages' tool_calls.
     Used to resolve which tool produced each tool result in the conversation.
     """
-    mapping: Dict[str, str] = {}
+    mapping: Final[dict[str, str]] = {}
     for msg in messages:
         if msg.get("role") != "assistant":
             continue
@@ -127,20 +127,18 @@ class ToolPolicyGuardrail(CustomGuardrail):
         Enforce input_policy and output_policy trust chain on request tools / response tool_calls.
         """
         if input_type == "request":
-            tools = inputs.get("tools") or []
+            tools: Final = inputs.get("tools") or []
             tool_names = [
                 t["function"]["name"]
                 for t in tools
-                if isinstance(t, dict)
-                and isinstance(t.get("function"), dict)
-                and t["function"].get("name")
+                if isinstance(t, dict) and isinstance(t.get("function"), dict) and t["function"].get("name")
             ]
             if not tool_names:
-                route = _get_request_route_from_data(request_data)
+                route: Final = _get_request_route_from_data(request_data)
                 if route:
                     tool_names = extract_request_tool_names(route, request_data)
         else:
-            tool_calls = inputs.get("tool_calls") or []
+            tool_calls: Final = inputs.get("tool_calls") or []
             tool_names = []
             for tc in tool_calls:
                 fn = None
@@ -160,17 +158,17 @@ class ToolPolicyGuardrail(CustomGuardrail):
         ) = _get_request_object_permission_ids(request_data)
         from litellm.proxy.db.tool_registry_writer import get_tool_policy_registry
 
-        registry = get_tool_policy_registry()
+        registry: Final = get_tool_policy_registry()
         if not registry.is_initialized():
             return inputs
 
         # Stage 1: Check for blocked tools (input_policy=blocked or per-key/team override)
-        policy_map = registry.get_effective_policies(
+        policy_map: Final = registry.get_effective_policies(
             tool_names,
             object_permission_id=object_permission_id,
             team_object_permission_id=team_object_permission_id,
         )
-        blocked = [name for name in tool_names if policy_map.get(name) == "blocked"]
+        blocked: Final = [name for name in tool_names if policy_map.get(name) == "blocked"]
         if blocked:
             verbose_proxy_logger.warning(
                 "ToolPolicyGuardrail: blocking tool(s) %s (input_policy=blocked)",
@@ -189,21 +187,17 @@ class ToolPolicyGuardrail(CustomGuardrail):
         # For each tool with input_policy=trusted, check if conversation
         # contains output from tools with output_policy=untrusted
         if input_type == "response":
-            trusted_input_tools = [
-                name for name in tool_names if policy_map.get(name) == "trusted"
-            ]
+            trusted_input_tools: Final = [name for name in tool_names if policy_map.get(name) == "trusted"]
             if trusted_input_tools:
-                messages = request_data.get("messages") or []
-                tc_id_to_name = _resolve_tool_names_from_messages(messages)
+                messages: Final = request_data.get("messages") or []
+                tc_id_to_name: Final = _resolve_tool_names_from_messages(messages)
 
-                untrusted_sources: List[str] = []
+                untrusted_sources: Final[list[str]] = []
                 for msg in messages:
                     if msg.get("role") != "tool":
                         continue
                     tool_call_id = msg.get("tool_call_id")
-                    source_tool = (
-                        tc_id_to_name.get(tool_call_id, "") if tool_call_id else ""
-                    )
+                    source_tool = tc_id_to_name.get(tool_call_id, "") if tool_call_id else ""
                     if not source_tool:
                         continue
                     if registry.get_output_policy(source_tool) == "untrusted":

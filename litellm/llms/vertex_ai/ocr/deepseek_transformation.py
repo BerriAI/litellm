@@ -3,7 +3,7 @@ Vertex AI DeepSeek OCR transformation implementation.
 """
 
 import json
-from typing import TYPE_CHECKING, Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
@@ -18,6 +18,8 @@ from litellm.llms.base_llm.ocr.transformation import (
 )
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 
+VERTEX_AI_DEEPSEEK_OCR_API_KEY_ENV_VAR: Final = "VERTEX_AI_API_KEY"
+
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 else:
@@ -28,38 +30,44 @@ class VertexAIDeepSeekOCRConfig(BaseOCRConfig):
     """
     Vertex AI DeepSeek OCR transformation configuration.
 
-    Vertex AI DeepSeek OCR uses the chat completion API format through the openapi endpoint.
-    This transformation converts OCR requests to chat completion format and vice versa.
+    This transformation converts standard LiteLLM OCR requests to the
+    Vertex AI DeepSeek OCR OpenAPI endpoint shape and normalizes the response.
     """
 
     def __init__(self) -> None:
         super().__init__()
         self.vertex_base = VertexBase()
 
+    def get_api_key_env_var(self) -> str | None:
+        return VERTEX_AI_DEEPSEEK_OCR_API_KEY_ENV_VAR
+
     def validate_environment(
         self,
-        headers: Dict,
+        headers: dict,
         model: str,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
-        litellm_params: Optional[dict] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
+        litellm_params: dict | None = None,
         **kwargs,
-    ) -> Dict:
+    ) -> dict:
         """
         Validate environment and return headers for Vertex AI OCR.
 
         Vertex AI uses Bearer token authentication with access token from credentials.
         """
+        if api_key is not None:
+            return {
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+                **headers,
+            }
+
         # Extract Vertex AI parameters using safe helpers from VertexBase
         # Use safe_get_* methods that don't mutate litellm_params dict
         litellm_params = litellm_params or {}
 
-        vertex_project = VertexBase.safe_get_vertex_ai_project(
-            litellm_params=litellm_params
-        )
-        vertex_credentials = VertexBase.safe_get_vertex_ai_credentials(
-            litellm_params=litellm_params
-        )
+        vertex_project: Final = VertexBase.safe_get_vertex_ai_project(litellm_params=litellm_params)
+        vertex_credentials: Final = VertexBase.safe_get_vertex_ai_credentials(litellm_params=litellm_params)
 
         # Get access token from Vertex credentials
         access_token, project_id = self.vertex_base.get_access_token(
@@ -77,17 +85,14 @@ class VertexAIDeepSeekOCRConfig(BaseOCRConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
+        api_base: str | None,
         model: str,
         optional_params: dict,
-        litellm_params: Optional[dict] = None,
+        litellm_params: dict | None = None,
         **kwargs,
     ) -> str:
         """
         Get complete URL for Vertex AI DeepSeek OCR endpoint.
-
-        Vertex AI endpoint format:
-        https://{location}-aiplatform.googleapis.com/v1/projects/{project}/locations/{location}/endpoints/openapi/chat/completions
 
         Args:
             api_base: Vertex AI API base URL (optional)
@@ -101,12 +106,8 @@ class VertexAIDeepSeekOCRConfig(BaseOCRConfig):
         # Use safe_get_* methods that don't mutate litellm_params dict
         litellm_params = litellm_params or {}
 
-        vertex_project = VertexBase.safe_get_vertex_ai_project(
-            litellm_params=litellm_params
-        )
-        vertex_location = VertexBase.safe_get_vertex_ai_location(
-            litellm_params=litellm_params
-        )
+        vertex_project: Final = VertexBase.safe_get_vertex_ai_project(litellm_params=litellm_params)
+        vertex_location = VertexBase.safe_get_vertex_ai_location(litellm_params=litellm_params)
 
         if vertex_project is None:
             raise ValueError(
@@ -123,8 +124,6 @@ class VertexAIDeepSeekOCRConfig(BaseOCRConfig):
         # Ensure no trailing slash
         api_base = api_base.rstrip("/")
 
-        # Vertex AI DeepSeek OCR endpoint format
-        # Format: https://{region}-aiplatform.googleapis.com/v1/projects/{project}/locations/{region}/endpoints/openapi/chat/completions
         return f"{api_base}/v1/projects/{vertex_project}/locations/{vertex_location}/endpoints/openapi/chat/completions"
 
     def transform_ocr_request(
@@ -136,9 +135,9 @@ class VertexAIDeepSeekOCRConfig(BaseOCRConfig):
         **kwargs,
     ) -> OCRRequestData:
         """
-        Transform OCR request to chat completion format for Vertex AI DeepSeek OCR.
+        Transform OCR request for Vertex AI DeepSeek OCR.
 
-        Converts OCR document format to chat completion messages format:
+        Converts OCR document format to the Vertex AI DeepSeek OCR payload:
         - Input: {"type": "image_url", "image_url": "gs://..."}
         - Output: {"model": "deepseek-ai/deepseek-ocr-maas", "messages": [{"role": "user", "content": [{"type": "image_url", "image_url": "gs://..."}]}]}
 
@@ -150,17 +149,15 @@ class VertexAIDeepSeekOCRConfig(BaseOCRConfig):
             **kwargs: Additional arguments
 
         Returns:
-            OCRRequestData with JSON data in chat completion format
+            OCRRequestData with JSON data for the DeepSeek OCR endpoint
         """
-        verbose_logger.debug(
-            "Vertex AI DeepSeek OCR transform_ocr_request (sync) called"
-        )
+        verbose_logger.debug("Vertex AI DeepSeek OCR transform_ocr_request (sync) called")
 
         if not isinstance(document, dict):
             raise ValueError(f"Expected document dict, got {type(document)}")
 
         # Extract document type and URL
-        doc_type = document.get("type")
+        doc_type: Final = document.get("type")
         image_url = None
         document_url = None
 
@@ -169,11 +166,9 @@ class VertexAIDeepSeekOCRConfig(BaseOCRConfig):
         elif doc_type == "document_url":
             document_url = document.get("document_url", "")
         else:
-            raise ValueError(
-                f"Unsupported document type: {doc_type}. Expected 'image_url' or 'document_url'"
-            )
+            raise ValueError(f"Unsupported document type: {doc_type}. Expected 'image_url' or 'document_url'")
 
-        # Build chat completion message content
+        # Build DeepSeek OCR message content
         content_item = {}
         if image_url:
             content_item = {"type": "image_url", "image_url": image_url}
@@ -181,25 +176,21 @@ class VertexAIDeepSeekOCRConfig(BaseOCRConfig):
             # For document URLs, we use image_url type as well (Vertex AI supports both)
             content_item = {"type": "image_url", "image_url": document_url}
 
-        # Build chat completion request
-        data = {
+        # Build DeepSeek OCR request
+        data: Final = {
             "model": "deepseek-ai/" + model,
             "messages": [{"role": "user", "content": [content_item]}],
         }
 
         # Add optional parameters (stream, temperature, etc.)
-        # Filter out OCR-specific params that don't apply to chat completion
-        chat_completion_params = {}
+        deepseek_ocr_params: Final = {}
         for key, value in optional_params.items():
-            # Include common chat completion params
             if key in ["stream", "temperature", "max_tokens", "top_p", "n", "stop"]:
-                chat_completion_params[key] = value
+                deepseek_ocr_params[key] = value
 
-        data.update(chat_completion_params)
+        data.update(deepseek_ocr_params)
 
-        verbose_logger.debug(
-            "Vertex AI DeepSeek OCR: Transformed request to chat completion format"
-        )
+        verbose_logger.debug("Vertex AI DeepSeek OCR: Transformed request")
 
         return OCRRequestData(data=data, files=None)
 
@@ -212,7 +203,7 @@ class VertexAIDeepSeekOCRConfig(BaseOCRConfig):
         **kwargs,
     ) -> OCRRequestData:
         """
-        Transform OCR request to chat completion format for Vertex AI DeepSeek OCR (async).
+        Transform OCR request for Vertex AI DeepSeek OCR (async).
 
         Same as sync version - no async-specific logic needed.
 
@@ -224,7 +215,7 @@ class VertexAIDeepSeekOCRConfig(BaseOCRConfig):
             **kwargs: Additional arguments
 
         Returns:
-            OCRRequestData with JSON data in chat completion format
+            OCRRequestData with JSON data for the DeepSeek OCR endpoint
         """
         return self.transform_ocr_request(
             model=model,
@@ -242,12 +233,11 @@ class VertexAIDeepSeekOCRConfig(BaseOCRConfig):
         **kwargs,
     ) -> OCRResponse:
         """
-        Transform chat completion response to OCR format.
+        Transform Vertex AI DeepSeek OCR response to OCR format.
 
-        Vertex AI DeepSeek OCR returns chat completion format:
+        Vertex AI DeepSeek OCR returns an OpenAPI response:
         {
             "id": "...",
-            "object": "chat.completion",
             "choices": [{
                 "message": {
                     "role": "assistant",
@@ -269,21 +259,21 @@ class VertexAIDeepSeekOCRConfig(BaseOCRConfig):
             OCRResponse in standard format
         """
         verbose_logger.debug("Vertex AI DeepSeek OCR transform_ocr_response called")
-        verbose_logger.debug(f"Raw response: {raw_response.text}")
+        verbose_logger.debug("Raw response: %s", raw_response.text)
 
         try:
-            response_json = raw_response.json()
+            response_json: Final = raw_response.json()
 
-            # Extract content from chat completion response
-            choices = response_json.get("choices", [])
+            # Extract OCR content from provider response
+            choices: Final = response_json.get("choices", [])
             if not choices:
-                raise ValueError("No choices in chat completion response")
+                raise ValueError("No choices in DeepSeek OCR response")
 
-            message = choices[0].get("message", {})
-            content = message.get("content", "")
+            message: Final = choices[0].get("message", {})
+            content: Final = message.get("content", "")
 
             if not content:
-                raise ValueError("No content in chat completion response")
+                raise ValueError("No content in DeepSeek OCR response")
 
             # Try to parse content as JSON (OCR result might be JSON string)
             ocr_data = None
@@ -315,23 +305,17 @@ class VertexAIDeepSeekOCRConfig(BaseOCRConfig):
                     "pages": [
                         {
                             "index": 0,
-                            "markdown": (
-                                content
-                                if isinstance(content, str)
-                                else json.dumps(content)
-                            ),
+                            "markdown": (content if isinstance(content, str) else json.dumps(content)),
                         }
                     ],
                     "model": ocr_data.get("model", model),
-                    "usage_info": ocr_data.get(
-                        "usage_info", response_json.get("usage", {})
-                    ),
+                    "usage_info": ocr_data.get("usage_info", response_json.get("usage", {})),
                 }
 
             # Convert usage info if present
             usage_info = None
             if "usage_info" in ocr_data:
-                usage_dict = ocr_data["usage_info"]
+                usage_dict: Final = ocr_data["usage_info"]
                 if isinstance(usage_dict, dict):
                     usage_info = OCRUsageInfo(**usage_dict)
 
@@ -350,11 +334,7 @@ class VertexAIDeepSeekOCRConfig(BaseOCRConfig):
 
             if not pages:
                 # Create a default page if none exist
-                pages = [
-                    OCRPage(
-                        index=0, markdown=content if isinstance(content, str) else ""
-                    )
-                ]
+                pages = [OCRPage(index=0, markdown=content if isinstance(content, str) else "")]
 
             return OCRResponse(
                 pages=pages,
@@ -365,7 +345,7 @@ class VertexAIDeepSeekOCRConfig(BaseOCRConfig):
             )
 
         except Exception as e:
-            verbose_logger.error(f"Error parsing Vertex AI DeepSeek OCR response: {e}")
+            verbose_logger.error("Error parsing Vertex AI DeepSeek OCR response: %s", e)
             raise e
 
     async def async_transform_ocr_response(
@@ -376,7 +356,7 @@ class VertexAIDeepSeekOCRConfig(BaseOCRConfig):
         **kwargs,
     ) -> OCRResponse:
         """
-        Async transform chat completion response to OCR format.
+        Async transform Vertex AI DeepSeek OCR response to OCR format.
 
         Same as sync version - no async-specific logic needed.
 

@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any, List, Optional
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
@@ -21,16 +21,37 @@ else:
     LiteLLMLoggingObj = Any
 
 
+OPENAI_STYLE_IMAGE_MODEL_PREFIXES: Final[tuple[str, ...]] = ("openai/",)
+
+
 class AimlImageGenerationConfig(BaseImageGenerationConfig):
     DEFAULT_BASE_URL: str = "https://api.aimlapi.com"
     IMAGE_GENERATION_ENDPOINT: str = "v1/images/generations"
 
-    def get_supported_openai_params(
-        self, model: str
-    ) -> List[OpenAIImageGenerationOptionalParams]:
+    @staticmethod
+    def _is_openai_style_model(model: str) -> bool:
+        """
+        OpenAI image models routed through AI/ML API (e.g. ``openai/gpt-image-2``)
+        use the upstream OpenAI request schema, not the flux-style schema used by
+        the rest of the AI/ML catalog.
+        """
+        return model.startswith(OPENAI_STYLE_IMAGE_MODEL_PREFIXES)
+
+    def get_supported_openai_params(self, model: str) -> list[OpenAIImageGenerationOptionalParams]:
         """
         https://api.aimlapi.com/v1/images/generations
         """
+        if self._is_openai_style_model(model):
+            return [
+                "n",
+                "size",
+                "quality",
+                "response_format",
+                "output_format",
+                "background",
+                "moderation",
+                "output_compression",
+            ]
         return ["n", "response_format", "size"]
 
     def map_openai_params(
@@ -40,63 +61,59 @@ class AimlImageGenerationConfig(BaseImageGenerationConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
-        supported_params = self.get_supported_openai_params(model)
+        supported_params: Final = self.get_supported_openai_params(model)
+        is_openai_style: Final = self._is_openai_style_model(model)
 
-        for k in non_default_params.keys():
-            if k not in optional_params.keys():
-                if k in supported_params:
-                    # Map OpenAI params to AI/ML params
-                    if k == "n":
-                        optional_params["num_images"] = non_default_params[k]
-                    elif k == "response_format":
-                        optional_params["output_format"] = non_default_params[k]
-                    elif k == "size":
-                        # Map OpenAI size format to AI/ML image_size
-                        size_value = non_default_params[k]
-                        if isinstance(size_value, str):
-                            # Handle standard OpenAI sizes like "1024x1024"
-                            if "x" in size_value:
-                                width, height = map(int, size_value.split("x"))
-                                optional_params["image_size"] = {
-                                    "width": width,
-                                    "height": height,
-                                }
-                            else:
-                                # Pass through predefined sizes
-                                optional_params["image_size"] = size_value
-                        else:
-                            optional_params["image_size"] = size_value
-                    else:
-                        optional_params[k] = non_default_params[k]
-                elif drop_params:
-                    pass
+        for k in non_default_params:
+            if k in optional_params:
+                continue
+            if k not in supported_params:
+                if drop_params:
+                    continue
+                raise ValueError(
+                    f"Parameter {k} is not supported for model {model}. Supported parameters are {supported_params}. Set drop_params=True to drop unsupported parameters."
+                )
+
+            if is_openai_style:
+                optional_params[k] = non_default_params[k]
+                continue
+
+            if k == "n":
+                optional_params["num_images"] = non_default_params[k]
+            elif k == "response_format":
+                optional_params["output_format"] = non_default_params[k]
+            elif k == "size":
+                size_value = non_default_params[k]
+                if isinstance(size_value, str) and "x" in size_value:
+                    width, height = map(int, size_value.split("x"))
+                    optional_params["image_size"] = {
+                        "width": width,
+                        "height": height,
+                    }
                 else:
-                    raise ValueError(
-                        f"Parameter {k} is not supported for model {model}. Supported parameters are {supported_params}. Set drop_params=True to drop unsupported parameters."
-                    )
+                    optional_params["image_size"] = size_value
+            else:
+                optional_params[k] = non_default_params[k]
 
         return optional_params
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         """
         Get the complete url for the request
         """
-        complete_url: str = (
-            api_base or get_secret_str("AIML_API_BASE") or self.DEFAULT_BASE_URL
-        )
+        complete_url: str = api_base or get_secret_str("AIML_API_BASE") or self.DEFAULT_BASE_URL
 
         complete_url = complete_url.rstrip("/")
         # Strip /v1 suffix if present since IMAGE_GENERATION_ENDPOINT already includes v1
-        if complete_url.endswith("/v1"):
-            complete_url = complete_url[:-3]
+        complete_url = complete_url.removesuffix("/v1")
         complete_url = f"{complete_url}/{self.IMAGE_GENERATION_ENDPOINT}"
         return complete_url
 
@@ -104,16 +121,14 @@ class AimlImageGenerationConfig(BaseImageGenerationConfig):
         self,
         headers: dict,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
-        final_api_key: Optional[str] = (
-            api_key
-            or get_secret_str("AIML_API_KEY")
-            or get_secret_str("AIMLAPI_KEY")  # Alternative name
+        final_api_key: Final[str | None] = (
+            api_key or get_secret_str("AIML_API_KEY") or get_secret_str("AIMLAPI_KEY")  # Alternative name
         )
         if not final_api_key:
             raise ValueError("AIML_API_KEY or AIMLAPI_KEY is not set")
@@ -131,16 +146,17 @@ class AimlImageGenerationConfig(BaseImageGenerationConfig):
         headers: dict,
     ) -> dict:
         """
-        Transform the image generation request to the AI/ML flux image generation request body
+        Transform the image generation request to the AI/ML image generation request body
 
         https://api.aimlapi.com/v1/images/generations
         """
-        aiml_image_generation_request_body: AimlImageGenerationRequestParams = (
-            AimlImageGenerationRequestParams(
-                prompt=prompt,
-                model=model,
-                **optional_params,
-            )
+        if self._is_openai_style_model(model):
+            return {"model": model, "prompt": prompt, **optional_params}
+
+        aiml_image_generation_request_body: Final[AimlImageGenerationRequestParams] = AimlImageGenerationRequestParams(
+            prompt=prompt,
+            model=model,
+            **optional_params,
         )
         return dict(aiml_image_generation_request_body)
 
@@ -154,8 +170,8 @@ class AimlImageGenerationConfig(BaseImageGenerationConfig):
         optional_params: dict,
         litellm_params: dict,
         encoding: Any,
-        api_key: Optional[str] = None,
-        json_mode: Optional[bool] = None,
+        api_key: str | None = None,
+        json_mode: bool | None = None,
     ) -> ImageResponse:
         """
         Transform the image generation response to the litellm image response
@@ -163,7 +179,7 @@ class AimlImageGenerationConfig(BaseImageGenerationConfig):
         https://api.aimlapi.com/v1/images/generations
         """
         try:
-            response_data = raw_response.json()
+            response_data: Final = raw_response.json()
         except Exception as e:
             raise self.get_error_class(
                 error_message=f"Error transforming image generation response: {e}",

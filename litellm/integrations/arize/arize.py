@@ -6,7 +6,7 @@ this file has Arize ai specific helper functions
 
 import os
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Optional, Union
+from typing import TYPE_CHECKING, Any, Final
 
 from litellm.integrations.arize import _utils
 from litellm.integrations.arize._utils import ArizeOTELAttributes
@@ -21,7 +21,7 @@ if TYPE_CHECKING:
     from litellm.types.integrations.arize import Protocol as _Protocol
 
     Protocol = _Protocol
-    Span = Union[_Span, Any]
+    Span = _Span | Any
 else:
     Protocol = Any
     Span = Any
@@ -50,7 +50,7 @@ class ArizeLogger(OpenTelemetry):
             self.span_kind = SpanKind
             return
 
-        provider = TracerProvider(resource=self._get_litellm_resource(self.config))
+        provider: Final = TracerProvider(resource=self._get_litellm_resource(self.config))
         provider.add_span_processor(self._get_span_processor())
         self.tracer = provider.get_tracer("litellm")
         self.span_kind = SpanKind
@@ -61,16 +61,13 @@ class ArizeLogger(OpenTelemetry):
         ``open_telemetry_logger``.  That attribute is reserved for the
         primary ``otel`` callback which handles proxy-level parent spans.
         """
-        pass
 
-    def set_attributes(self, span: Span, kwargs, response_obj: Optional[Any]):
+    def set_attributes(self, span: Span, kwargs, response_obj: Any | None):
         ArizeLogger.set_arize_attributes(span, kwargs, response_obj)
-        return
 
     @staticmethod
     def set_arize_attributes(span: Span, kwargs, response_obj):
         _utils.set_attributes(span, kwargs, response_obj, ArizeOTELAttributes)
-        return
 
     @staticmethod
     def get_arize_config() -> ArizeConfig:
@@ -83,13 +80,13 @@ class ArizeLogger(OpenTelemetry):
         Raises:
             ValueError: If required environment variables are not set.
         """
-        space_id = os.environ.get("ARIZE_SPACE_ID")
-        space_key = os.environ.get("ARIZE_SPACE_KEY")
-        api_key = os.environ.get("ARIZE_API_KEY")
-        project_name = os.environ.get("ARIZE_PROJECT_NAME")
+        space_id: Final = os.environ.get("ARIZE_SPACE_ID")
+        space_key: Final = os.environ.get("ARIZE_SPACE_KEY")
+        api_key: Final = os.environ.get("ARIZE_API_KEY")
+        project_name: Final = os.environ.get("ARIZE_PROJECT_NAME")
 
-        grpc_endpoint = os.environ.get("ARIZE_ENDPOINT")
-        http_endpoint = os.environ.get("ARIZE_HTTP_ENDPOINT")
+        grpc_endpoint: Final = os.environ.get("ARIZE_ENDPOINT")
+        http_endpoint: Final = os.environ.get("ARIZE_HTTP_ENDPOINT")
 
         endpoint = None
         protocol: Protocol = "otlp_grpc"
@@ -116,25 +113,23 @@ class ArizeLogger(OpenTelemetry):
     async def async_service_success_hook(
         self,
         payload: ServiceLoggerPayload,
-        parent_otel_span: Optional[Span] = None,
-        start_time: Optional[Union[datetime, float]] = None,
-        end_time: Optional[Union[datetime, float]] = None,
-        event_metadata: Optional[dict] = None,
+        parent_otel_span: Span | None = None,
+        start_time: datetime | float | None = None,
+        end_time: datetime | float | None = None,
+        event_metadata: dict | None = None,
     ):
         """Arize is used mainly for LLM I/O tracing, sending router+caching metrics adds bloat to arize logs"""
-        pass
 
     async def async_service_failure_hook(
         self,
         payload: ServiceLoggerPayload,
-        error: Optional[str] = "",
-        parent_otel_span: Optional[Span] = None,
-        start_time: Optional[Union[datetime, float]] = None,
-        end_time: Optional[Union[float, datetime]] = None,
-        event_metadata: Optional[dict] = None,
+        error: str | None = "",
+        parent_otel_span: Span | None = None,
+        start_time: datetime | float | None = None,
+        end_time: float | datetime | None = None,
+        event_metadata: dict | None = None,
     ):
         """Arize is used mainly for LLM I/O tracing, sending router+caching metrics adds bloat to arize logs"""
-        pass
 
     # def create_litellm_proxy_request_started_span(
     #     self,
@@ -152,7 +147,7 @@ class ArizeLogger(OpenTelemetry):
             dict: Health check result with status and message
         """
         try:
-            config = self.get_arize_config()
+            config: Final = self.get_arize_config()
 
             if not config.space_id and not config.space_key:
                 return {
@@ -174,12 +169,12 @@ class ArizeLogger(OpenTelemetry):
         except Exception as e:
             return {
                 "status": "unhealthy",
-                "error_message": f"Arize health check failed: {str(e)}",
+                "error_message": f"Arize health check failed: {e}",
             }
 
     def construct_dynamic_otel_headers(
         self, standard_callback_dynamic_params: StandardCallbackDynamicParams
-    ) -> Optional[dict]:
+    ) -> dict | None:
         """
         Construct dynamic Arize headers from standard callback dynamic params
 
@@ -188,27 +183,21 @@ class ArizeLogger(OpenTelemetry):
         Returns:
             dict: A dictionary of dynamic Arize headers
         """
-        dynamic_headers = {}
+        dynamic_headers: Final = {}
 
         #########################################################
         # `arize-space-id` handling
         # the suggested param is `arize_space_key`
         #########################################################
         if standard_callback_dynamic_params.get("arize_space_id"):
-            dynamic_headers["arize-space-id"] = standard_callback_dynamic_params.get(
-                "arize_space_id"
-            )
+            dynamic_headers["arize-space-id"] = standard_callback_dynamic_params.get("arize_space_id")
         if standard_callback_dynamic_params.get("arize_space_key"):
-            dynamic_headers["arize-space-id"] = standard_callback_dynamic_params.get(
-                "arize_space_key"
-            )
+            dynamic_headers["arize-space-id"] = standard_callback_dynamic_params.get("arize_space_key")
 
         #########################################################
         # `api_key` handling
         #########################################################
         if standard_callback_dynamic_params.get("arize_api_key"):
-            dynamic_headers["api_key"] = standard_callback_dynamic_params.get(
-                "arize_api_key"
-            )
+            dynamic_headers["api_key"] = standard_callback_dynamic_params.get("arize_api_key")
 
         return dynamic_headers

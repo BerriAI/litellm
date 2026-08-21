@@ -21,7 +21,7 @@ Admins can opt out via two ``litellm`` globals (wired from proxy config):
 
 import socket
 from ipaddress import ip_address, ip_network
-from typing import Any, List, Optional, Set, Tuple
+from typing import Any, Final
 from urllib.parse import quote, urlparse, urlunparse
 
 import httpx
@@ -33,17 +33,15 @@ import litellm
 # Python's ``ipaddress`` module). This list only holds IPs that are
 # publicly routable *and* point to cloud-fabric services reachable from
 # inside a VM via special in-fabric routing.
-_CLOUD_METADATA_EXCEPTIONS = [
+_CLOUD_METADATA_EXCEPTIONS: Final = [
     ip_network("168.63.129.16/32"),  # Azure Wire Server
 ]
 
-_ALLOWED_SCHEMES = ("http", "https")
+_ALLOWED_SCHEMES: Final = ("http", "https")
 
 
 class SSRFError(ValueError):
     """Raised when a URL targets a blocked network."""
-
-    pass
 
 
 def encode_url_path_segment(value: Any, *, field_name: str = "path parameter") -> str:
@@ -57,7 +55,7 @@ def encode_url_path_segment(value: Any, *, field_name: str = "path parameter") -
     if value is None:
         raise ValueError(f"{field_name} is required")
 
-    value_str = str(value)
+    value_str: Final = str(value)
     if value_str == "":
         raise ValueError(f"{field_name} is required")
     if value_str in {".", ".."}:
@@ -75,11 +73,11 @@ def encode_url_path_segments(value: Any, *, field_name: str = "path") -> str:
     if value is None:
         raise ValueError(f"{field_name} is required")
 
-    value_str = str(value)
+    value_str: Final = str(value)
     if value_str == "":
         raise ValueError(f"{field_name} is required")
 
-    encoded_segments = []
+    encoded_segments: Final = []
     for segment in value_str.split("/"):
         encoded_segments.append(encode_url_path_segment(segment, field_name=field_name))
 
@@ -116,7 +114,7 @@ def _default_port_for_scheme(scheme: str) -> int:
 
 def _parse_url_destination_allowlist_entry(
     entry: str,
-) -> Optional[Tuple[str, Optional[str], Optional[int]]]:
+) -> tuple[str, str | None, int | None] | None:
     """Parse an admin allowlist entry into host, optional scheme, optional port.
 
     Entries may be bare hosts (``api.example.com``), host+port
@@ -127,8 +125,8 @@ def _parse_url_destination_allowlist_entry(
     if not entry:
         return None
 
-    has_scheme = "://" in entry
-    parsed = urlparse(entry if has_scheme else f"//{entry}")
+    has_scheme: Final = "://" in entry
+    parsed: Final = urlparse(entry if has_scheme else f"//{entry}")
     if has_scheme and parsed.scheme not in _ALLOWED_SCHEMES:
         return None
     if parsed.username is not None or parsed.password is not None:
@@ -141,21 +139,30 @@ def _parse_url_destination_allowlist_entry(
     except ValueError:
         return None
 
-    scheme: Optional[str] = parsed.scheme if has_scheme else None
+    scheme: Final[str | None] = parsed.scheme if has_scheme else None
     if scheme is not None and port is None:
         port = _default_port_for_scheme(scheme)
 
     return _normalize_host(parsed.hostname), scheme, port
 
 
-def is_url_destination_allowed_by_host(url: str, allowed_hosts: List[str]) -> bool:
+def provider_url_destination_candidates(value: str) -> tuple[str, ...]:
+    return tuple(
+        candidate
+        for part in value.split(",")
+        for candidate in (part.strip(), part.strip().split("/", 1)[1] if "/" in part.strip() else "")
+        if candidate
+    )
+
+
+def is_url_destination_allowed_by_host(url: str, allowed_hosts: list[str]) -> bool:
     """Return True when a credential-bearing provider URL is admin-allowlisted.
 
     This does not fetch, resolve, or rewrite URLs. It only answers whether the
     destination origin is explicitly trusted by configuration. Use ``safe_get``
     for user-controlled content fetches that require SSRF protection.
     """
-    parsed = urlparse(url)
+    parsed: Final = urlparse(url)
     if parsed.scheme not in _ALLOWED_SCHEMES:
         return False
     if parsed.username is not None or parsed.password is not None:
@@ -164,14 +171,12 @@ def is_url_destination_allowed_by_host(url: str, allowed_hosts: List[str]) -> bo
         return False
 
     try:
-        effective_port = parsed.port or _default_port_for_scheme(parsed.scheme)
+        effective_port: Final = parsed.port or _default_port_for_scheme(parsed.scheme)
     except ValueError:
         return False
 
-    normalized_host = _normalize_host(parsed.hostname)
-    configured_entries = (
-        [allowed_hosts] if isinstance(allowed_hosts, str) else allowed_hosts
-    )
+    normalized_host: Final = _normalize_host(parsed.hostname)
+    configured_entries: Final = [allowed_hosts] if isinstance(allowed_hosts, str) else allowed_hosts
     for entry in configured_entries or []:
         if not isinstance(entry, str):
             continue
@@ -191,7 +196,7 @@ def is_url_destination_allowed_by_host(url: str, allowed_hosts: List[str]) -> bo
 
 def _format_host_header(hostname: str, port: int, default_port: int) -> str:
     """Build an RFC 7230 Host header value, bracketing IPv6 literals."""
-    bracketed = f"[{hostname}]" if ":" in hostname else hostname
+    bracketed: Final = f"[{hostname}]" if ":" in hostname else hostname
     if port == default_port:
         return bracketed
     return f"{bracketed}:{port}"
@@ -207,7 +212,7 @@ def _sockaddr_host(sockaddr: Any) -> str:
     unexpected — a non-string here would mean we have no IP to check against
     the SSRF blocklist.
     """
-    host = sockaddr[0]
+    host: Final = sockaddr[0]
     if not isinstance(host, str):
         raise SSRFError(f"getaddrinfo returned non-string host: {host!r}")
     return host
@@ -220,17 +225,17 @@ def _is_host_allowlisted(hostname: str, effective_port: int) -> bool:
     literals are written bracketed (``[::1]`` / ``[::1]:8080``). Matching
     is case-insensitive on the hostname.
     """
-    configured: List[str] = getattr(litellm, "user_url_allowed_hosts", []) or []
+    configured: Final[list[str]] = getattr(litellm, "user_url_allowed_hosts", []) or []
     if not configured:
         return False
-    normalized_host = _normalize_host(hostname)
-    host_repr = f"[{normalized_host}]" if ":" in normalized_host else normalized_host
-    candidates: Set[str] = {host_repr, f"{host_repr}:{effective_port}"}
-    allowlist: Set[str] = {_normalize_host(entry) for entry in configured if entry}
+    normalized_host: Final = _normalize_host(hostname)
+    host_repr: Final = f"[{normalized_host}]" if ":" in normalized_host else normalized_host
+    candidates: Final[set[str]] = {host_repr, f"{host_repr}:{effective_port}"}
+    allowlist: Final[set[str]] = {_normalize_host(entry) for entry in configured if entry}
     return bool(candidates & allowlist)
 
 
-def validate_url(url: str) -> Tuple[str, str]:
+def validate_url(url: str) -> tuple[str, str]:
     """
     Validate a user-supplied URL and rewrite it to connect to a validated IP.
 
@@ -254,27 +259,25 @@ def validate_url(url: str) -> Tuple[str, str]:
         SSRFError: If the URL scheme is invalid or the hostname resolves
             to a private/internal IP address.
     """
-    parsed = urlparse(url)
+    parsed: Final = urlparse(url)
 
     if parsed.scheme not in _ALLOWED_SCHEMES:
         raise SSRFError(f"URL scheme '{parsed.scheme}' is not allowed")
 
-    hostname = parsed.hostname
+    hostname: Final = parsed.hostname
     if not hostname:
         raise SSRFError("URL has no hostname")
 
-    port = parsed.port
-    default_port = _default_port_for_scheme(parsed.scheme)
-    effective_port = port if port is not None else default_port
-    host_header = _format_host_header(hostname, effective_port, default_port)
+    port: Final = parsed.port
+    default_port: Final = _default_port_for_scheme(parsed.scheme)
+    effective_port: Final = port if port is not None else default_port
+    host_header: Final = _format_host_header(hostname, effective_port, default_port)
 
-    is_allowlisted = _is_host_allowlisted(hostname, effective_port)
+    is_allowlisted: Final = _is_host_allowlisted(hostname, effective_port)
 
     # Resolve hostname and validate ALL addresses
     try:
-        addrinfo = socket.getaddrinfo(
-            hostname, effective_port, proto=socket.IPPROTO_TCP
-        )
+        addrinfo: Final = socket.getaddrinfo(hostname, effective_port, proto=socket.IPPROTO_TCP)
     except socket.gaierror as e:
         raise SSRFError(f"DNS resolution failed for '{hostname}': {e}")
 
@@ -296,24 +299,22 @@ def validate_url(url: str) -> Tuple[str, str]:
     # to a different server because the cert wouldn't match.
     # When SSL verification is disabled, this defense doesn't apply, so
     # we rewrite to the validated IP like HTTP.
-    ssl_verify = getattr(litellm, "ssl_verify", True)
+    ssl_verify: Final = getattr(litellm, "ssl_verify", True)
     if parsed.scheme == "https" and ssl_verify is not False:
         return url, host_header
 
     # For HTTP, rewrite URL to connect to the validated IP directly
     # to prevent DNS rebinding (no TLS to bind the connection).
-    validated_ip = _sockaddr_host(addrinfo[0][4])
-    is_ipv6 = addrinfo[0][0] == socket.AF_INET6
-    ip_host = f"[{validated_ip}]" if is_ipv6 else validated_ip
+    validated_ip: Final = _sockaddr_host(addrinfo[0][4])
+    is_ipv6: Final = addrinfo[0][0] == socket.AF_INET6
+    ip_host: Final = f"[{validated_ip}]" if is_ipv6 else validated_ip
 
     if port is not None:
         new_netloc = f"{ip_host}:{port}"
     else:
         new_netloc = ip_host
 
-    rewritten = urlunparse(
-        (parsed.scheme, new_netloc, parsed.path, parsed.params, parsed.query, "")
-    )
+    rewritten: Final = urlunparse((parsed.scheme, new_netloc, parsed.path, parsed.params, parsed.query, ""))
 
     return rewritten, host_header
 
@@ -338,8 +339,8 @@ def assert_same_origin(candidate_url: str, expected_url: str) -> None:
     and reflecting host info would be a secondary leak of operator
     infrastructure details.
     """
-    candidate = urlparse(candidate_url)
-    expected = urlparse(expected_url)
+    candidate: Final = urlparse(candidate_url)
+    expected: Final = urlparse(expected_url)
 
     if candidate.scheme not in _ALLOWED_SCHEMES:
         raise SSRFError("URL scheme is not allowed")
@@ -347,24 +348,24 @@ def assert_same_origin(candidate_url: str, expected_url: str) -> None:
     if candidate.scheme != expected.scheme:
         raise SSRFError("Origin mismatch on scheme")
 
-    candidate_host = _normalize_host(candidate.hostname or "")
-    expected_host = _normalize_host(expected.hostname or "")
+    candidate_host: Final = _normalize_host(candidate.hostname or "")
+    expected_host: Final = _normalize_host(expected.hostname or "")
     if not candidate_host or candidate_host != expected_host:
         raise SSRFError("Origin mismatch on host")
 
-    default_port = 443 if candidate.scheme == "https" else 80
-    candidate_port = candidate.port if candidate.port is not None else default_port
-    expected_port = expected.port if expected.port is not None else default_port
+    default_port: Final = 443 if candidate.scheme == "https" else 80
+    candidate_port: Final = candidate.port if candidate.port is not None else default_port
+    expected_port: Final = expected.port if expected.port is not None else default_port
     if candidate_port != expected_port:
         raise SSRFError("Origin mismatch on port")
 
 
-_MAX_REDIRECTS = 10
+_MAX_REDIRECTS: Final = 10
 
 
 def _extract_redirect_url(response: Any, request_url: str) -> str:
     """Extract and resolve the redirect target from a response's Location header."""
-    location = response.headers.get("location")
+    location: Final = response.headers.get("location")
     if not isinstance(location, str) or not location:
         raise SSRFError("Redirect response has no Location header")
     # Resolve relative URLs against the request URL
@@ -394,7 +395,7 @@ def safe_get(client: Any, url: str, **kwargs: Any) -> Any:
         kwargs.setdefault("follow_redirects", True)
         return client.get(url, **kwargs)
     kwargs.pop("follow_redirects", None)
-    caller_headers = kwargs.pop("headers", {})
+    caller_headers: Final = kwargs.pop("headers", {})
     for _ in range(_MAX_REDIRECTS):
         validated_url, original_host = validate_url(url)
         response = client.get(
@@ -417,7 +418,7 @@ async def async_safe_get(client: Any, url: str, **kwargs: Any) -> Any:
         kwargs.setdefault("follow_redirects", True)
         return await client.get(url, **kwargs)
     kwargs.pop("follow_redirects", None)
-    caller_headers = kwargs.pop("headers", {})
+    caller_headers: Final = kwargs.pop("headers", {})
     for _ in range(_MAX_REDIRECTS):
         validated_url, original_host = validate_url(url)
         response = await client.get(

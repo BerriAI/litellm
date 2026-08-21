@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Union
+from typing import TYPE_CHECKING, Final
 
 from litellm.types.guardrails import SupportedGuardrailIntegrations
 
@@ -17,17 +17,16 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
     if not litellm_params.api_base:
         raise ValueError("Azure Content Safety: api_base is required")
 
-    azure_guardrail = litellm_params.guardrail.split("/")[1]
+    azure_guardrail: Final = litellm_params.guardrail.split("/")[1]
 
-    guardrail_name = guardrail.get("guardrail_name")
+    guardrail_name: Final = guardrail.get("guardrail_name")
     if not guardrail_name:
         raise ValueError("Azure Content Safety: guardrail_name is required")
 
     if azure_guardrail == "prompt_shield":
-        azure_content_safety_guardrail: Union[
-            AzureContentSafetyPromptShieldGuardrail,
-            AzureContentSafetyTextModerationGuardrail,
-        ] = AzureContentSafetyPromptShieldGuardrail(
+        azure_content_safety_guardrail: (
+            AzureContentSafetyPromptShieldGuardrail | AzureContentSafetyTextModerationGuardrail
+        ) = AzureContentSafetyPromptShieldGuardrail(
             guardrail_name=guardrail_name,
             **{
                 **litellm_params.model_dump(exclude_none=True),
@@ -49,23 +48,19 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
             },
         )
     else:
-        raise ValueError(
-            f"Azure Content Safety: {azure_guardrail} is not a valid guardrail"
-        )
+        raise ValueError(f"Azure Content Safety: {azure_guardrail} is not a valid guardrail")
 
-    litellm.logging_callback_manager.add_litellm_callback(
-        azure_content_safety_guardrail
-    )
+    litellm.logging_callback_manager.add_litellm_callback(azure_content_safety_guardrail)
     return azure_content_safety_guardrail
 
 
-guardrail_initializer_registry = {
+guardrail_initializer_registry: Final = {
     SupportedGuardrailIntegrations.AZURE_PROMPT_SHIELD.value: initialize_guardrail,
     SupportedGuardrailIntegrations.AZURE_TEXT_MODERATIONS.value: initialize_guardrail,
 }
 
 
-guardrail_class_registry = {
+guardrail_class_registry: Final = {
     SupportedGuardrailIntegrations.AZURE_PROMPT_SHIELD.value: AzureContentSafetyPromptShieldGuardrail,
     SupportedGuardrailIntegrations.AZURE_TEXT_MODERATIONS.value: AzureContentSafetyTextModerationGuardrail,
 }

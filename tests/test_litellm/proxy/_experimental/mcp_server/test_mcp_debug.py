@@ -41,9 +41,13 @@ class TestMask:
     def test_empty_returns_none_label(self):
         assert MCPDebug._mask("") == "(none)"
 
-    def test_short_value_unchanged(self):
-        # visible_prefix=6 + visible_suffix=4 = 10, so <= 10 chars unchanged
-        assert MCPDebug._mask("sk-1234") == "sk-1234"
+    def test_short_value_masked(self):
+        # Short auth values must not be echoed verbatim in debug headers, even though
+        # visible_prefix + visible_suffix would otherwise reveal the whole value.
+        masked = MCPDebug._mask("sk-1234")
+        assert "sk-1234" not in masked
+        assert set(masked) == {"*"}
+        assert len(masked) == len("sk-1234")
 
     def test_long_value_masked(self):
         result = MCPDebug._mask("Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9")

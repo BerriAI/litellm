@@ -19,6 +19,8 @@ import pytest
 from litellm.llms.triton.embedding.transformation import TritonEmbeddingConfig
 import litellm
 
+from tests.fake_openai_endpoint import FAKE_OPENAI_API_BASE
+
 
 def test_split_embedding_by_shape_passes():
     try:
@@ -360,7 +362,7 @@ async def test_triton_embeddings():
         litellm.set_verbose = True
         response = await litellm.aembedding(
             model="triton/my-triton-model",
-            api_base="https://exampleopenaiendpoint-production.up.railway.app/triton/embeddings",
+            api_base=f"{FAKE_OPENAI_API_BASE}/triton/embeddings",
             input=["good morning from litellm"],
         )
         print(f"response: {response}")

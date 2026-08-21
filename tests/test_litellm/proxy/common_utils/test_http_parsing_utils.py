@@ -447,6 +447,56 @@ async def test_json_parsing_error_handling():
     assert result["tools"][0]["type"] == "mcp"
 
 
+def _make_json_request(body: bytes) -> MagicMock:
+    mock_request = MagicMock()
+    mock_request.body = AsyncMock(return_value=body)
+    mock_request.headers = {"content-type": "application/json"}
+    mock_request.scope = {}
+    return mock_request
+
+
+@pytest.mark.asyncio
+async def test_surrogate_repair_skipped_above_size_limit(monkeypatch):
+    """
+    The surrogate-repair fallback runs two full-body re.sub passes that block the
+    event loop on multi-MB malformed bodies. Above MAX_REQUEST_BODY_SIZE_TO_REPAIR_MB
+    the repair must be skipped and the existing 400 raised immediately, while bodies
+    at or below the limit still get repaired.
+
+    `\\ud83d` is a lone high-surrogate escape: orjson rejects it, the json fallback
+    accepts it, so a body containing it is only salvaged when the repair path runs.
+    """
+    import litellm.proxy.common_utils.http_parsing_utils as http_parsing_utils
+
+    # Cap the repair at ~100 bytes so the test stays fast and independent of the default.
+    monkeypatch.setattr(
+        http_parsing_utils, "MAX_REQUEST_BODY_SIZE_TO_REPAIR_MB", 100 / (1024 * 1024)
+    )
+
+    small_body = b'{"model":"gpt-4o","x":"\\ud83d"}'
+    assert len(small_body) <= 100
+    repaired = await _read_request_body(_make_json_request(small_body))
+    assert repaired["model"] == "gpt-4o"
+
+    padding = "a" * 200
+    large_body = (
+        b'{"model":"gpt-4o","pad":"' + padding.encode() + b'","x":"\\ud83d"}'
+    )
+    assert len(large_body) > 100
+    with pytest.raises(ProxyException) as exc_info:
+        await _read_request_body(_make_json_request(large_body))
+    assert exc_info.value.code == "400"
+    assert "Invalid JSON payload" in exc_info.value.message
+
+    # Disabling the cap (0) restores repair for the same large body, proving the cap
+    # — not the malformed content — is what short-circuits the repair.
+    monkeypatch.setattr(
+        http_parsing_utils, "MAX_REQUEST_BODY_SIZE_TO_REPAIR_MB", 0
+    )
+    repaired_large = await _read_request_body(_make_json_request(large_body))
+    assert repaired_large["model"] == "gpt-4o"
+
+
 @pytest.mark.asyncio
 async def test_get_form_data():
     """

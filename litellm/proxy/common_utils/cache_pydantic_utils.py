@@ -16,7 +16,7 @@ are encoded; pass a Pydantic model or convert with e.g. ``dataclasses.asdict`` f
 
 from __future__ import annotations
 
-from typing import Any, Optional, Type, TypeVar
+from typing import Any, TypeVar
 
 from pydantic import BaseModel, ValidationError
 
@@ -37,12 +37,12 @@ class CacheCodec:
     """
 
     @staticmethod
-    def serialize(value: Any, model_type: Optional[Type[T]] = None) -> Any:
+    def serialize(value: Any, model_type: type[T] | None = None) -> Any:
         """
         Encode a value for DualCache / Redis (``json.dumps``-safe).
 
         If ``model_type`` is set, the payload is validated with that model, then
-        ``model_dump(mode="json", exclude_none=True)`` — symmetric with ``deserialize``.
+        ``model_dump(mode="json")`` — symmetric with ``deserialize``.
 
         If the value is already an instance of ``model_type`` (or a subclass),
         ``model_validate`` is skipped to avoid an unnecessary Pydantic copy — the
@@ -54,18 +54,16 @@ class CacheCodec:
         if model_type is not None:
             if isinstance(value, model_type):
                 # Already the right type: dump directly, skip re-validation copy.
-                return value.model_dump(mode="json", exclude_none=True)
+                return value.model_dump(mode="json")
             if isinstance(value, (dict, BaseModel)):
-                return model_type.model_validate(value).model_dump(
-                    mode="json", exclude_none=True
-                )
+                return model_type.model_validate(value).model_dump(mode="json")
             return value
         if isinstance(value, BaseModel):
-            return value.model_dump(mode="json", exclude_none=True)
+            return value.model_dump(mode="json")
         return value
 
     @staticmethod
-    def deserialize(cached: Any, model_type: Type[T]) -> Optional[T]:
+    def deserialize(cached: Any, model_type: type[T]) -> T | None:
         """
         Decode a cache entry to ``model_type``.
 

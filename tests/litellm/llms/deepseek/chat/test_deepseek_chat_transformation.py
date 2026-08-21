@@ -166,3 +166,24 @@ class TestDeepSeekThinkingParams:
         )
 
         assert "thinking" not in result
+
+    def test_drop_unsupported_tools_removes_dangling_tool_choice(self):
+        optional_params = {
+            "tools": [
+                {"type": "namespace", "name": "local_shell"},
+                {"type": "function", "function": {"name": "get_weather"}},
+            ],
+            "tool_choice": {
+                "type": "function",
+                "function": {"name": "local_shell"},
+            },
+            "parallel_tool_calls": True,
+        }
+
+        result = self.config._drop_unsupported_tools(optional_params)
+
+        assert result["tools"] == [
+            {"type": "function", "function": {"name": "get_weather"}}
+        ]
+        assert "tool_choice" not in result
+        assert result["parallel_tool_calls"] is True

@@ -8,7 +8,7 @@ Translations handled by LiteLLM:
 - Other parameters follow base Azure OpenAI Responses API behavior
 """
 
-from typing import TYPE_CHECKING, Any, Dict
+from typing import TYPE_CHECKING, Any, Final
 
 from litellm._logging import verbose_logger
 from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams
@@ -39,16 +39,14 @@ class AzureOpenAIOSeriesResponsesAPIConfig(AzureOpenAIResponsesAPIConfig):
         O-series models don't support temperature parameter in responses API.
         """
         # Get the base Azure supported params
-        base_supported_params = super().get_supported_openai_params(model)
+        base_supported_params: Final = super().get_supported_openai_params(model)
 
         # O-series models don't support temperature parameter in responses API
-        o_series_unsupported_params = ["temperature"]
+        o_series_unsupported_params: Final = ["temperature"]
 
         # Filter out unsupported parameters for O-series models
-        o_series_supported_params = [
-            param
-            for param in base_supported_params
-            if param not in o_series_unsupported_params
+        o_series_supported_params: Final = [
+            param for param in base_supported_params if param not in o_series_unsupported_params
         ]
 
         return o_series_supported_params
@@ -58,19 +56,19 @@ class AzureOpenAIOSeriesResponsesAPIConfig(AzureOpenAIResponsesAPIConfig):
         response_api_optional_params: ResponsesAPIOptionalRequestParams,
         model: str,
         drop_params: bool,
-    ) -> Dict:
+    ) -> dict:
         """
         Map OpenAI parameters for Azure OpenAI O-series Responses API.
 
         Drops temperature parameter if drop_params is True since O-series models
         don't support temperature in the responses API.
         """
-        mapped_params = dict(response_api_optional_params)
+        mapped_params: Final = dict(response_api_optional_params)
 
         # If drop_params is enabled, remove temperature parameter for O-series models
         if drop_params and "temperature" in mapped_params:
             verbose_logger.debug(
-                f"Dropping unsupported parameter 'temperature' for Azure OpenAI O-series responses API model {model}"
+                "Dropping unsupported parameter 'temperature' for Azure OpenAI O-series responses API model %s", model
             )
             mapped_params.pop("temperature", None)
 

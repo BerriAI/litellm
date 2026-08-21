@@ -1,7 +1,8 @@
 import React from "react";
-import { Tag } from "antd";
+import { Badge } from "@/components/ui/badge";
 import { CogIcon, BanIcon } from "@heroicons/react/outline";
 import { callbackInfo, callback_map, reverse_callback_map } from "./callback_info_helpers";
+import { Logo } from "@/components/molecules/logo/Logo";
 
 interface LoggingConfig {
   callback_name: string;
@@ -28,16 +29,16 @@ export function LoggingSettingsView({
     return callbackDisplayName || callbackName;
   };
 
-  const getEventTypeColor = (eventType: string): string | undefined => {
+  const getEventTypeVariant = (eventType: string): React.ComponentProps<typeof Badge>["variant"] => {
     switch (eventType) {
       case "success":
-        return "green";
+        return "default";
       case "failure":
-        return "red";
+        return "destructive";
       case "success_and_failure":
-        return "blue";
+        return "secondary";
       default:
-        return undefined;
+        return "outline";
     }
   };
 
@@ -59,44 +60,45 @@ export function LoggingSettingsView({
       {/* Logging Integrations Section */}
       <div className="space-y-3">
         <div className="flex items-center gap-2">
-          <CogIcon className="h-4 w-4 text-blue-600" />
-          <span className="font-semibold text-gray-900">Logging Integrations</span>
-          <Tag color="blue">{loggingConfigs.length}</Tag>
+          <CogIcon className="h-4 w-4 text-info" />
+          <span className="font-semibold text-foreground">Logging Integrations</span>
+          <Badge variant="secondary">{loggingConfigs.length}</Badge>
         </div>
 
         {loggingConfigs.length > 0 ? (
           <div className="space-y-3">
             {loggingConfigs.map((config, index) => {
               const displayName = getLoggingDisplayName(config.callback_name);
-              const logoUrl = callbackInfo[displayName]?.logo;
 
               return (
                 <div
                   key={index}
-                  className="flex items-center justify-between p-3 rounded-lg bg-blue-50 border border-blue-200"
+                  className="flex items-center justify-between p-3 rounded-lg bg-info/10 border border-info/20"
                 >
                   <div className="flex items-center gap-3">
-                    {logoUrl ? (
-                      <img src={logoUrl} alt={displayName} className="w-5 h-5 object-contain" />
-                    ) : (
-                      <CogIcon className="h-5 w-5 text-gray-400" />
-                    )}
+                    <Logo
+                      src={callbackInfo[displayName]?.logo}
+                      label={displayName}
+                      className="w-5 h-5 object-contain"
+                    />
                     <div>
-                      <span className="block font-medium text-blue-800">{displayName}</span>
-                      <span className="block text-xs text-blue-600">
+                      <span className="block font-medium text-info">{displayName}</span>
+                      <span className="block text-xs text-info">
                         {Object.keys(config.callback_vars).length} parameters configured
                       </span>
                     </div>
                   </div>
-                  <Tag color={getEventTypeColor(config.callback_type)}>{getEventTypeLabel(config.callback_type)}</Tag>
+                  <Badge variant={getEventTypeVariant(config.callback_type)}>
+                    {getEventTypeLabel(config.callback_type)}
+                  </Badge>
                 </div>
               );
             })}
           </div>
         ) : (
-          <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-gray-50 border border-gray-200">
-            <CogIcon className="h-4 w-4 text-gray-400" />
-            <span className="text-gray-500 text-sm">No logging integrations configured</span>
+          <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-muted border border-border">
+            <CogIcon className="h-4 w-4 text-muted-foreground" />
+            <span className="text-muted-foreground text-sm">No logging integrations configured</span>
           </div>
         )}
       </div>
@@ -104,9 +106,9 @@ export function LoggingSettingsView({
       {/* Disabled Callbacks Section */}
       <div className="space-y-3">
         <div className="flex items-center gap-2">
-          <BanIcon className="h-4 w-4 text-red-600" />
-          <span className="font-semibold text-gray-900">Disabled Callbacks</span>
-          <Tag color="red">{disabledCallbacks.length}</Tag>
+          <BanIcon className="h-4 w-4 text-destructive" />
+          <span className="font-semibold text-foreground">Disabled Callbacks</span>
+          <Badge variant="destructive">{disabledCallbacks.length}</Badge>
         </div>
 
         {disabledCallbacks.length > 0 ? (
@@ -114,33 +116,32 @@ export function LoggingSettingsView({
             {disabledCallbacks.map((callbackName, index) => {
               // Handle both display names and internal values
               const displayName = reverse_callback_map[callbackName] || callbackName;
-              const logoUrl = callbackInfo[displayName]?.logo;
 
               return (
                 <div
                   key={index}
-                  className="flex items-center justify-between p-3 rounded-lg bg-red-50 border border-red-200"
+                  className="flex items-center justify-between p-3 rounded-lg bg-destructive/10 border border-destructive/20"
                 >
                   <div className="flex items-center gap-3">
-                    {logoUrl ? (
-                      <img src={logoUrl} alt={displayName} className="w-5 h-5 object-contain" />
-                    ) : (
-                      <BanIcon className="h-5 w-5 text-gray-400" />
-                    )}
+                    <Logo
+                      src={callbackInfo[displayName]?.logo}
+                      label={displayName}
+                      className="w-5 h-5 object-contain"
+                    />
                     <div>
-                      <span className="block font-medium text-red-800">{displayName}</span>
-                      <span className="block text-xs text-red-600">Disabled for this key</span>
+                      <span className="block font-medium text-destructive">{displayName}</span>
+                      <span className="block text-xs text-destructive">Disabled for this key</span>
                     </div>
                   </div>
-                  <Tag color="red">Disabled</Tag>
+                  <Badge variant="destructive">Disabled</Badge>
                 </div>
               );
             })}
           </div>
         ) : (
-          <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-gray-50 border border-gray-200">
-            <BanIcon className="h-4 w-4 text-gray-400" />
-            <span className="text-gray-500 text-sm">No callbacks disabled</span>
+          <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-muted border border-border">
+            <BanIcon className="h-4 w-4 text-muted-foreground" />
+            <span className="text-muted-foreground text-sm">No callbacks disabled</span>
           </div>
         )}
       </div>
@@ -149,11 +150,11 @@ export function LoggingSettingsView({
 
   if (variant === "card") {
     return (
-      <div className={`bg-white border border-gray-200 rounded-lg p-6 ${className}`}>
+      <div className={`bg-card border border-border rounded-lg p-6 ${className}`}>
         <div className="flex items-center gap-2 mb-6">
           <div>
-            <span className="block font-semibold text-gray-900">Logging Settings</span>
-            <span className="block text-xs text-gray-500">
+            <span className="block font-semibold text-foreground">Logging Settings</span>
+            <span className="block text-xs text-muted-foreground">
               Active logging integrations and disabled callbacks for this key
             </span>
           </div>
@@ -165,7 +166,7 @@ export function LoggingSettingsView({
 
   return (
     <div className={`${className}`}>
-      <span className="block font-medium text-gray-900 mb-3">Logging Settings</span>
+      <span className="block font-medium text-foreground mb-3">Logging Settings</span>
       {content}
     </div>
   );

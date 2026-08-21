@@ -23,17 +23,15 @@ if ! command -v nvm &> /dev/null; then
 fi
 
 # Use nvm to set the required Node.js version
-nvm use v20
+nvm install
+nvm use
 
 # Check if nvm use was successful
 if [ $? -ne 0 ]; then
-  echo "Error: Failed to switch to Node.js v20. Deployment aborted."
+  echo "Error: Failed to switch to the Node.js version in .nvmrc. Deployment aborted."
   exit 1
 fi
 
-# print contents of ui_colors.json
-echo "Contents of ui_colors.json:"
-cat ui_colors.json
 
 # Run npm build
 npm run build

@@ -6,7 +6,7 @@ Why separate file? Make it easy to see how transformation works
 Docs - https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-marengo.html
 """
 
-from typing import List, Optional, Union, cast
+from typing import Final, cast
 
 from litellm.types.llms.bedrock import (
     TWELVELABS_EMBEDDING_INPUT_TYPES,
@@ -31,7 +31,7 @@ class TwelveLabsMarengoEmbeddingConfig:
     def __init__(self) -> None:
         pass
 
-    def get_supported_openai_params(self) -> List[str]:
+    def get_supported_openai_params(self) -> list[str]:
         return [
             "encoding_format",
             "textTruncate",
@@ -43,9 +43,7 @@ class TwelveLabsMarengoEmbeddingConfig:
             "input_type",
         ]
 
-    def map_openai_params(
-        self, non_default_params: dict, optional_params: dict
-    ) -> dict:
+    def map_openai_params(self, non_default_params: dict, optional_params: dict) -> dict:
         for k, v in non_default_params.items():
             if k == "encoding_format":
                 # TwelveLabs doesn't have encoding_format, but we can map it to embeddingOption
@@ -77,9 +75,9 @@ class TwelveLabsMarengoEmbeddingConfig:
         input: str,
         inference_params: dict,
         async_invoke_route: bool = False,
-        model_id: Optional[str] = None,
-        output_s3_uri: Optional[str] = None,
-    ) -> Union[TwelveLabsMarengoEmbeddingRequest, TwelveLabsAsyncInvokeRequest]:
+        model_id: str | None = None,
+        output_s3_uri: str | None = None,
+    ) -> TwelveLabsMarengoEmbeddingRequest | TwelveLabsAsyncInvokeRequest:
         """
         Transform OpenAI-style input to TwelveLabs Marengo format/async-invoke format.
 
@@ -91,11 +89,9 @@ class TwelveLabsMarengoEmbeddingConfig:
         - S3 URLs for all media types (async-invoke only)
         """
         # Get input_type or default to "text"
-        input_type = cast(
+        input_type: Final = cast(
             TWELVELABS_EMBEDDING_INPUT_TYPES,
-            inference_params.get("inputType")
-            or inference_params.get("input_type")
-            or "text",
+            inference_params.get("inputType") or inference_params.get("input_type") or "text",
         )
 
         # Validate that async-invoke is used for video/audio
@@ -105,9 +101,7 @@ class TwelveLabsMarengoEmbeddingConfig:
                 f"Use model format: 'bedrock/async_invoke/model_id'"
             )
 
-        transformed_request: TwelveLabsMarengoEmbeddingRequest = {
-            "inputType": input_type
-        }
+        transformed_request: Final[TwelveLabsMarengoEmbeddingRequest] = {"inputType": input_type}
 
         if input_type == "text":
             transformed_request["inputText"] = input
@@ -118,8 +112,8 @@ class TwelveLabsMarengoEmbeddingConfig:
         elif input_type in ["image", "video", "audio"]:
             if self._is_s3_url(input):
                 # S3 URL input
-                s3_location: TwelveLabsS3Location = {"uri": input}
-                bucket_owner = self._extract_bucket_owner_from_params(inference_params)
+                s3_location: Final[TwelveLabsS3Location] = {"uri": input}
+                bucket_owner: Final = self._extract_bucket_owner_from_params(inference_params)
                 if bucket_owner:
                     s3_location["bucketOwner"] = bucket_owner
 
@@ -146,7 +140,7 @@ class TwelveLabsMarengoEmbeddingConfig:
                 "mediaSource",
                 "bucketOwner",  # Don't include bucketOwner in the request
             ]:  # Don't override core fields
-                transformed_request[k] = v  # type: ignore
+                transformed_request[k] = v
 
         # If async invoke route, wrap in the async invoke format
         if async_invoke_route and model_id:
@@ -162,7 +156,7 @@ class TwelveLabsMarengoEmbeddingConfig:
         self,
         model_input: TwelveLabsMarengoEmbeddingRequest,
         model_id: str,
-        output_s3_uri: Optional[str] = None,
+        output_s3_uri: str | None = None,
     ) -> TwelveLabsAsyncInvokeRequest:
         """
         Wrap the transformed request in the correct AWS Bedrock async invoke format.
@@ -194,14 +188,12 @@ class TwelveLabsMarengoEmbeddingConfig:
             ),
         )
 
-    def _transform_response(
-        self, response_list: List[dict], model: str
-    ) -> EmbeddingResponse:
+    def _transform_response(self, response_list: list[dict], model: str) -> EmbeddingResponse:
         """
         Transform TwelveLabs response to OpenAI format.
         Handles the actual TwelveLabs response format: {"data": [{"embedding": [...]}]}
         """
-        embeddings: List[Embedding] = []
+        embeddings: Final[list[Embedding]] = []
         total_tokens = 0
 
         for response in response_list:
@@ -249,13 +241,11 @@ class TwelveLabsMarengoEmbeddingConfig:
                     embeddings.append(embedding)
                     total_tokens += len(emb["embedding"]) // 4  # Rough estimate
 
-        usage = Usage(prompt_tokens=total_tokens, total_tokens=total_tokens)
+        usage: Final = Usage(prompt_tokens=total_tokens, total_tokens=total_tokens)
 
         return EmbeddingResponse(data=embeddings, model=model, usage=usage)
 
-    def _transform_async_invoke_response(
-        self, response: dict, model: str
-    ) -> EmbeddingResponse:
+    def _transform_async_invoke_response(self, response: dict, model: str) -> EmbeddingResponse:
         """
         Transform async invoke response (invocation ARN) to OpenAI format.
 
@@ -278,22 +268,22 @@ class TwelveLabsMarengoEmbeddingConfig:
             "usage": {}
         }
         """
-        invocation_arn = response.get("invocationArn", "")
+        invocation_arn: Final = response.get("invocationArn", "")
 
         # Create a placeholder embedding object for the job
-        embedding = Embedding(
+        embedding: Final = Embedding(
             embedding=[],  # Empty embedding for async jobs
             index=0,
             object="embedding",
         )
 
         # Create usage object (empty for async jobs)
-        usage = Usage(prompt_tokens=0, total_tokens=0)
+        usage: Final = Usage(prompt_tokens=0, total_tokens=0)
 
         # Create hidden params with job ID
         from litellm.types.llms.base import HiddenParams
 
-        hidden_params = HiddenParams()
+        hidden_params: Final = HiddenParams()
         setattr(hidden_params, "_invocation_arn", invocation_arn)
 
         return EmbeddingResponse(

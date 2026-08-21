@@ -1,7 +1,12 @@
 import React from "react";
-import { Form, Input, InputNumber, Button as Button2 } from "antd";
-import { TrashIcon, CheckCircleIcon } from "@heroicons/react/outline";
-import { Button, Badge, Icon, Text, TableRow, TableCell, Switch } from "@tremor/react";
+import { useForm } from "react-hook-form";
+import { CircleCheck, Trash2 } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
+import { TableCell, TableRow } from "@/components/ui/table";
+
 interface AlertingSetting {
   field_name: string;
   field_description: string;
@@ -19,6 +24,8 @@ interface DynamicFormProps {
   premiumUser: boolean;
 }
 
+type AlertingFormValues = Record<string, string | boolean>;
+
 const DynamicForm: React.FC<DynamicFormProps> = ({
   alertingSettings,
   handleInputChange,
@@ -26,121 +33,107 @@ const DynamicForm: React.FC<DynamicFormProps> = ({
   handleSubmit,
   premiumUser,
 }) => {
-  const [form] = Form.useForm();
+  const form = useForm<AlertingFormValues>({ defaultValues: {} });
 
-  const onFinish = () => {
-    console.log(`INSIDE ONFINISH`);
-    const formData = form.getFieldsValue();
-    const isEmpty = Object.entries(formData).every(([key, value]) => {
+  const onFinish = (formData: AlertingFormValues) => {
+    const isEmpty = Object.entries(formData).every(([, value]) => {
       if (typeof value === "boolean") {
-        return false; // Boolean values are never considered empty
+        return false;
       }
       return value === "" || value === null || value === undefined;
     });
-    console.log(`formData: ${JSON.stringify(formData)}, isEmpty: ${isEmpty}`);
     if (!isEmpty) {
       handleSubmit(formData);
-    } else {
-      console.log("Some form fields are empty.");
     }
   };
 
+  const handleNumericChange = (setting: AlertingSetting, raw: string) => {
+    form.setValue(setting.field_name, raw);
+    handleInputChange(setting.field_name, raw === "" ? null : Number(raw));
+  };
+
+  const handleTextChange = (setting: AlertingSetting, event: React.ChangeEvent<HTMLInputElement>) => {
+    form.setValue(setting.field_name, event.target.value);
+    handleInputChange(setting.field_name, event);
+  };
+
+  const handleToggle = (setting: AlertingSetting, checked: boolean) => {
+    form.setValue(setting.field_name, checked);
+    handleInputChange(setting.field_name, checked);
+  };
+
+  const renderControl = (setting: AlertingSetting) => {
+    if (setting.field_type === "Integer") {
+      return (
+        <Input
+          type="number"
+          step={1}
+          value={setting.field_value ?? ""}
+          onChange={(event) => handleNumericChange(setting, event.target.value)}
+        />
+      );
+    }
+    if (setting.field_type === "Boolean") {
+      return (
+        <Switch
+          aria-label={setting.field_name}
+          checked={setting.field_value}
+          onCheckedChange={(checked) => handleToggle(setting, checked)}
+        />
+      );
+    }
+    return <Input value={setting.field_value ?? ""} onChange={(event) => handleTextChange(setting, event)} />;
+  };
+
   return (
-    <Form form={form} onFinish={onFinish} labelAlign="left">
+    <form onSubmit={form.handleSubmit(onFinish)} noValidate>
       {alertingSettings.map((value, index) => (
         <TableRow key={index}>
-          <TableCell align="center">
-            <Text>{value.field_name}</Text>
-            <p
-              style={{
-                fontSize: "0.65rem",
-                color: "#808080",
-                fontStyle: "italic",
-              }}
-              className="mt-1"
-            >
-              {value.field_description}
-            </p>
+          <TableCell>
+            <p className="text-sm">{value.field_name}</p>
+            <p className="mt-1 text-[0.65rem] italic text-muted-foreground">{value.field_description}</p>
           </TableCell>
-          {value.premium_field ? (
-            premiumUser ? (
-              <Form.Item name={value.field_name}>
-                <TableCell>
-                  {value.field_type === "Integer" ? (
-                    <InputNumber
-                      step={1}
-                      value={value.field_value}
-                      onChange={(e) => handleInputChange(value.field_name, e)}
-                    />
-                  ) : value.field_type === "Boolean" ? (
-                    <Switch
-                      checked={value.field_value}
-                      onChange={(checked) => handleInputChange(value.field_name, checked)}
-                    />
-                  ) : (
-                    <Input value={value.field_value} onChange={(e) => handleInputChange(value.field_name, e)} />
-                  )}
-                </TableCell>
-              </Form.Item>
-            ) : (
-              <TableCell>
-                <Button className="flex items-center justify-center">
-                  <a href="https://forms.gle/W3U4PZpJGFHWtHyA9" target="_blank">
-                    ✨ Enterprise Feature
-                  </a>
-                </Button>
-              </TableCell>
-            )
+          {value.premium_field && !premiumUser ? (
+            <TableCell>
+              <Button className="flex items-center justify-center">
+                <a href="https://forms.gle/W3U4PZpJGFHWtHyA9" target="_blank">
+                  ✨ Enterprise Feature
+                </a>
+              </Button>
+            </TableCell>
           ) : (
-            <Form.Item
-              name={value.field_name}
-              className="mb-0"
-              valuePropName={value.field_type === "Boolean" ? "checked" : "value"}
-            >
-              <TableCell>
-                {value.field_type === "Integer" ? (
-                  <InputNumber
-                    step={1}
-                    value={value.field_value}
-                    onChange={(e) => handleInputChange(value.field_name, e)}
-                    className="p-0"
-                  />
-                ) : value.field_type === "Boolean" ? (
-                  <Switch
-                    checked={value.field_value}
-                    onChange={(checked) => {
-                      handleInputChange(value.field_name, checked);
-                      form.setFieldsValue({ [value.field_name]: checked });
-                    }}
-                  />
-                ) : (
-                  <Input value={value.field_value} onChange={(e) => handleInputChange(value.field_name, e)} />
-                )}
-              </TableCell>
-            </Form.Item>
+            <TableCell>{renderControl(value)}</TableCell>
           )}
           <TableCell>
             {value.stored_in_db == true ? (
-              <Badge icon={CheckCircleIcon} className="text-white">
+              <Badge variant="secondary">
+                <CircleCheck />
                 In DB
               </Badge>
             ) : value.stored_in_db == false ? (
-              <Badge className="text-gray bg-white outline">In Config</Badge>
+              <Badge variant="outline">In Config</Badge>
             ) : (
-              <Badge className="text-gray bg-white outline">Not Set</Badge>
+              <Badge variant="outline">Not Set</Badge>
             )}
           </TableCell>
           <TableCell>
-            <Icon icon={TrashIcon} color="red" onClick={() => handleResetField(value.field_name, index)}>
-              Reset
-            </Icon>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              aria-label={`Reset ${value.field_name}`}
+              onClick={() => handleResetField(value.field_name, index)}
+              className="text-destructive"
+            >
+              <Trash2 className="size-5" />
+            </Button>
           </TableCell>
         </TableRow>
       ))}
       <div>
-        <Button2 htmlType="submit">Update Settings</Button2>
+        <Button type="submit">Update Settings</Button>
       </div>
-    </Form>
+    </form>
   );
 };
 

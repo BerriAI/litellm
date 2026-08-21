@@ -1,4 +1,5 @@
-from typing import Any, Dict, List, Optional, Type
+from collections.abc import Mapping, Sequence
+from typing import Any, Final
 
 from litellm._logging import verbose_proxy_logger
 
@@ -26,7 +27,7 @@ class CustomOpenAPISpec:
     RESPONSES_API_PATHS = ["/v1/responses", "/responses"]
 
     @staticmethod
-    def get_pydantic_schema(model_class) -> Optional[Dict[str, Any]]:
+    def get_pydantic_schema(model_class) -> Mapping[str, object] | None:
         """
         Get JSON schema from a Pydantic model, handling both v1 and v2 APIs.
 
@@ -38,25 +39,23 @@ class CustomOpenAPISpec:
         """
         try:
             # Try Pydantic v2 method first
-            return model_class.model_json_schema()  # type: ignore
+            return model_class.model_json_schema()
         except AttributeError:
             try:
                 # Fallback to Pydantic v1 method
-                return model_class.schema()  # type: ignore
+                return model_class.schema()
             except AttributeError:
                 # If both methods fail, return None
                 return None
         except Exception as e:
             # FastAPI 0.120+ may fail schema generation for certain types (e.g., openai.Timeout)
             # Log the error and return None to skip schema generation for this model
-            verbose_proxy_logger.debug(
-                f"Failed to generate schema for {model_class}: {e}"
-            )
+            verbose_proxy_logger.debug("Failed to generate schema for %s: %s", model_class, e)
             return None
 
     @staticmethod
     def add_schema_to_components(
-        openapi_schema: Dict[str, Any], schema_name: str, schema_def: Dict[str, Any]
+        openapi_schema: dict[str, Any], schema_name: str, schema_def: Mapping[str, object]
     ) -> None:
         """
         Add a schema definition to the OpenAPI components/schemas section.
@@ -73,14 +72,10 @@ class CustomOpenAPISpec:
             openapi_schema["components"]["schemas"] = {}
 
         # Add the schema
-        CustomOpenAPISpec._move_defs_to_components(
-            openapi_schema, {schema_name: schema_def}
-        )
+        CustomOpenAPISpec._move_defs_to_components(openapi_schema, {schema_name: schema_def})
 
     @staticmethod
-    def add_request_body_to_paths(
-        openapi_schema: Dict[str, Any], paths: List[str], schema_ref: str
-    ) -> None:
+    def add_request_body_to_paths(openapi_schema: dict[str, Any], paths: Sequence[str], schema_ref: str) -> None:
         """
         Add request body with expanded form fields for better Swagger UI display.
         This keeps the request body but expands it to show individual fields in the UI.
@@ -91,28 +86,17 @@ class CustomOpenAPISpec:
             schema_ref: Reference to the schema component (e.g., "#/components/schemas/ModelName")
         """
         for path in paths:
-            if (
-                path in openapi_schema.get("paths", {})
-                and "post" in openapi_schema["paths"][path]
-            ):
+            if path in openapi_schema.get("paths", {}) and "post" in openapi_schema["paths"][path]:
                 # Get the actual schema to extract ALL field definitions
-                schema_name = schema_ref.split("/")[
-                    -1
-                ]  # Extract "ProxyChatCompletionRequest" from the ref
-                actual_schema = (
-                    openapi_schema.get("components", {})
-                    .get("schemas", {})
-                    .get(schema_name, {})
-                )
+                schema_name = schema_ref.split("/")[-1]  # Extract "ProxyChatCompletionRequest" from the ref
+                actual_schema = openapi_schema.get("components", {}).get("schemas", {}).get(schema_name, {})
                 schema_properties = actual_schema.get("properties", {})
                 required_fields = actual_schema.get("required", [])
 
                 # Extract $defs and add them to components/schemas
                 # This fixes Pydantic v2 $defs not being resolvable in Swagger/OpenAPI
                 if "$defs" in actual_schema:
-                    CustomOpenAPISpec._move_defs_to_components(
-                        openapi_schema, actual_schema["$defs"]
-                    )
+                    CustomOpenAPISpec._move_defs_to_components(openapi_schema, actual_schema["$defs"])
 
                 # Create an expanded inline schema instead of just a $ref
                 # This makes Swagger UI show all individual fields in the request body editor
@@ -124,20 +108,14 @@ class CustomOpenAPISpec:
 
                 # Add all properties with their full definitions
                 for field_name, field_def in schema_properties.items():
-                    expanded_field = CustomOpenAPISpec._expand_field_definition(
-                        field_def
-                    )
+                    expanded_field = CustomOpenAPISpec._expand_field_definition(field_def)
 
                     # Rewrite $defs references to use components/schemas instead
-                    expanded_field = CustomOpenAPISpec._rewrite_defs_refs(
-                        expanded_field
-                    )
+                    expanded_field = CustomOpenAPISpec._rewrite_defs_refs(expanded_field)
 
                     # Add a simple example for the messages field
                     if field_name == "messages":
-                        expanded_field["example"] = [
-                            {"role": "user", "content": "Hello, how are you?"}
-                        ]
+                        expanded_field["example"] = [{"role": "user", "content": "Hello, how are you?"}]
 
                     expanded_schema["properties"][field_name] = expanded_field
 
@@ -149,21 +127,13 @@ class CustomOpenAPISpec:
 
                 # Keep any existing parameters (like path parameters) but remove conflicting query params
                 if "parameters" in openapi_schema["paths"][path]["post"]:
-                    existing_params = openapi_schema["paths"][path]["post"][
-                        "parameters"
-                    ]
+                    existing_params = openapi_schema["paths"][path]["post"]["parameters"]
                     # Only keep path parameters, remove query params that conflict with request body
-                    filtered_params = [
-                        param for param in existing_params if param.get("in") == "path"
-                    ]
-                    openapi_schema["paths"][path]["post"][
-                        "parameters"
-                    ] = filtered_params
+                    filtered_params = [param for param in existing_params if param.get("in") == "path"]
+                    openapi_schema["paths"][path]["post"]["parameters"] = filtered_params
 
     @staticmethod
-    def _move_defs_to_components(
-        openapi_schema: Dict[str, Any], defs: Dict[str, Any]
-    ) -> None:
+    def _move_defs_to_components(openapi_schema: dict[str, Any], defs: Mapping[str, Mapping[str, Any]]) -> None:
         """
         Move $defs from Pydantic v2 schema to OpenAPI components/schemas.
         This makes the definitions resolvable in Swagger/OpenAPI viewers.
@@ -189,9 +159,7 @@ class CustomOpenAPISpec:
 
             # If this definition also has $defs, process them recursively
             if "$defs" in def_schema:
-                CustomOpenAPISpec._move_defs_to_components(
-                    openapi_schema, def_schema["$defs"]
-                )
+                CustomOpenAPISpec._move_defs_to_components(openapi_schema, def_schema["$defs"])
 
     @staticmethod
     def _rewrite_defs_refs(schema: Any) -> Any:
@@ -206,13 +174,9 @@ class CustomOpenAPISpec:
             Schema with rewritten references
         """
         if isinstance(schema, dict):
-            result = {}
+            result: Final = {}
             for key, value in schema.items():
-                if (
-                    key == "$ref"
-                    and isinstance(value, str)
-                    and value.startswith("#/$defs/")
-                ):
+                if key == "$ref" and isinstance(value, str) and value.startswith("#/$defs/"):
                     # Rewrite the reference to use components/schemas
                     def_name = value.replace("#/$defs/", "")
                     result[key] = f"#/components/schemas/{def_name}"
@@ -229,7 +193,7 @@ class CustomOpenAPISpec:
             return schema
 
     @staticmethod
-    def _extract_field_schema(field_def: Dict[str, Any]) -> Dict[str, Any]:
+    def _extract_field_schema(field_def: dict[str, Any]) -> dict[str, Any]:
         """
         Extract a simple schema from a Pydantic field definition for parameter display.
 
@@ -245,7 +209,7 @@ class CustomOpenAPISpec:
 
         # Handle anyOf (Optional fields in Pydantic v2)
         if "anyOf" in field_def:
-            any_of = field_def["anyOf"]
+            any_of: Final = field_def["anyOf"]
             # Find the non-null type
             for option in any_of:
                 if option.get("type") != "null":
@@ -257,7 +221,7 @@ class CustomOpenAPISpec:
         return {"type": "string"}
 
     @staticmethod
-    def _expand_field_definition(field_def: Dict[str, Any]) -> Dict[str, Any]:
+    def _expand_field_definition(field_def: dict[str, object]) -> dict[str, object]:
         """
         Expand a Pydantic field definition for inline use in OpenAPI schema.
         This creates a full field definition that Swagger UI can render as individual form fields.
@@ -273,12 +237,12 @@ class CustomOpenAPISpec:
 
     @staticmethod
     def add_request_schema(
-        openapi_schema: Dict[str, Any],
-        model_class: Type,
+        openapi_schema: dict[str, object],
+        model_class: type,
         schema_name: str,
-        paths: List[str],
+        paths: Sequence[str],
         operation_name: str,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, object]:
         """
         Generic method to add a request schema to OpenAPI specification.
 
@@ -294,38 +258,32 @@ class CustomOpenAPISpec:
         """
         try:
             # Get the schema for the model class
-            request_schema = CustomOpenAPISpec.get_pydantic_schema(model_class)
+            request_schema: Final = CustomOpenAPISpec.get_pydantic_schema(model_class)
 
             # Only proceed if we successfully got the schema
             if request_schema is not None:
                 # Add schema to components
-                CustomOpenAPISpec.add_schema_to_components(
-                    openapi_schema, schema_name, request_schema
-                )
+                CustomOpenAPISpec.add_schema_to_components(openapi_schema, schema_name, request_schema)
 
                 # Add request body to specified endpoints
                 CustomOpenAPISpec.add_request_body_to_paths(
                     openapi_schema, paths, f"#/components/schemas/{schema_name}"
                 )
 
-                verbose_proxy_logger.debug(
-                    f"Successfully added {schema_name} schema to OpenAPI spec"
-                )
+                verbose_proxy_logger.debug("Successfully added %s schema to OpenAPI spec", schema_name)
             else:
-                verbose_proxy_logger.debug(f"Could not get schema for {schema_name}")
+                verbose_proxy_logger.debug("Could not get schema for %s", schema_name)
 
         except Exception as e:
             # If schema addition fails, continue without it
-            verbose_proxy_logger.debug(
-                f"Failed to add {operation_name} request schema: {str(e)}"
-            )
+            verbose_proxy_logger.debug("Failed to add %s request schema: %s", operation_name, e)
 
         return openapi_schema
 
     @staticmethod
     def add_chat_completion_request_schema(
-        openapi_schema: Dict[str, Any],
-    ) -> Dict[str, Any]:
+        openapi_schema: dict[str, object],
+    ) -> dict[str, object]:
         """
         Add ProxyChatCompletionRequest schema to chat completion endpoints for documentation.
         This shows the request body in Swagger without runtime validation.
@@ -347,13 +305,11 @@ class CustomOpenAPISpec:
                 operation_name="chat completion",
             )
         except ImportError as e:
-            verbose_proxy_logger.debug(
-                f"Failed to import ProxyChatCompletionRequest: {str(e)}"
-            )
+            verbose_proxy_logger.debug("Failed to import ProxyChatCompletionRequest: %s", e)
             return openapi_schema
 
     @staticmethod
-    def add_embedding_request_schema(openapi_schema: Dict[str, Any]) -> Dict[str, Any]:
+    def add_embedding_request_schema(openapi_schema: dict[str, object]) -> dict[str, object]:
         """
         Add EmbeddingRequest schema to embedding endpoints for documentation.
         This shows the request body in Swagger without runtime validation.
@@ -375,13 +331,13 @@ class CustomOpenAPISpec:
                 operation_name="embedding",
             )
         except ImportError as e:
-            verbose_proxy_logger.debug(f"Failed to import EmbeddingRequest: {str(e)}")
+            verbose_proxy_logger.debug("Failed to import EmbeddingRequest: %s", e)
             return openapi_schema
 
     @staticmethod
     def add_responses_api_request_schema(
-        openapi_schema: Dict[str, Any],
-    ) -> Dict[str, Any]:
+        openapi_schema: dict[str, object],
+    ) -> dict[str, object]:
         """
         Add ResponsesAPIRequestParams schema to responses API endpoints for documentation.
         This shows the request body in Swagger without runtime validation.
@@ -403,15 +359,13 @@ class CustomOpenAPISpec:
                 operation_name="responses API",
             )
         except ImportError as e:
-            verbose_proxy_logger.debug(
-                f"Failed to import ResponsesAPIRequestParams: {str(e)}"
-            )
+            verbose_proxy_logger.debug("Failed to import ResponsesAPIRequestParams: %s", e)
             return openapi_schema
 
     @staticmethod
     def add_llm_api_request_schema_body(
-        openapi_schema: Dict[str, Any],
-    ) -> Dict[str, Any]:
+        openapi_schema: dict[str, object],
+    ) -> dict[str, object]:
         """
         Add LLM API request schema bodies to OpenAPI specification for documentation.
 
@@ -422,16 +376,12 @@ class CustomOpenAPISpec:
             OpenAPI schema with added request body schemas
         """
         # Add chat completion request schema
-        openapi_schema = CustomOpenAPISpec.add_chat_completion_request_schema(
-            openapi_schema
-        )
+        openapi_schema = CustomOpenAPISpec.add_chat_completion_request_schema(openapi_schema)
 
         # Add embedding request schema
         openapi_schema = CustomOpenAPISpec.add_embedding_request_schema(openapi_schema)
 
         # Add responses API request schema
-        openapi_schema = CustomOpenAPISpec.add_responses_api_request_schema(
-            openapi_schema
-        )
+        openapi_schema = CustomOpenAPISpec.add_responses_api_request_schema(openapi_schema)
 
         return openapi_schema

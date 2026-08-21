@@ -18,8 +18,23 @@ from litellm.llms.vertex_ai.common_utils import (
     pop_vertex_request_labels,
     set_schema_property_ordering,
     supports_response_json_schema,
+    validate_vertex_location,
     vertex_request_labels_from_litellm_params,
 )
+
+
+@pytest.mark.parametrize("location", ["us", "eu", "us-central1", "europe-west1", "global"])
+def test_validate_vertex_location_accepts_valid(location):
+    assert validate_vertex_location(location) == location
+
+
+@pytest.mark.parametrize(
+    "location",
+    ["attacker.example/", "evil.com#", "us.attacker.example", "us/../..", "US", "us_central1", "-us", "", None],
+)
+def test_validate_vertex_location_rejects_invalid(location):
+    with pytest.raises(ValueError):
+        validate_vertex_location(location)
 
 
 @pytest.mark.asyncio

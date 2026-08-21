@@ -6,7 +6,7 @@ Configuration structure:
 - policy_attachments: Define WHERE policies apply (teams, keys, models)
 """
 
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Final, Optional
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.policy_engine.attachment_registry import get_attachment_registry
@@ -18,15 +18,15 @@ if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
 
 # ANSI color codes for terminal output
-_green_color_code = "\033[92m"
-_blue_color_code = "\033[94m"
-_yellow_color_code = "\033[93m"
-_reset_color_code = "\033[0m"
+_green_color_code: Final = "\033[92m"
+_blue_color_code: Final = "\033[94m"
+_yellow_color_code: Final = "\033[93m"
+_reset_color_code: Final = "\033[0m"
 
 
 def _print_policies_on_startup(
-    policies_config: Dict[str, Any],
-    policy_attachments_config: Optional[List[Dict[str, Any]]] = None,
+    policies_config: dict[str, Any],
+    policy_attachments_config: list[dict[str, Any]] | None = None,
 ) -> None:
     """
     Print loaded policies to console on startup (similar to model list).
@@ -44,12 +44,8 @@ def _print_policies_on_startup(
         condition = policy_data.get("condition")
         description = policy_data.get("description")
 
-        guardrails_add = (
-            guardrails.get("add", []) if isinstance(guardrails, dict) else []
-        )
-        guardrails_remove = (
-            guardrails.get("remove", []) if isinstance(guardrails, dict) else []
-        )
+        guardrails_add = guardrails.get("add", []) if isinstance(guardrails, dict) else []
+        guardrails_remove = guardrails.get("remove", []) if isinstance(guardrails, dict) else []
         inherit_str = f" (inherits: {inherit})" if inherit else ""
 
         print(  # noqa: T201
@@ -62,9 +58,7 @@ def _print_policies_on_startup(
         if guardrails_remove:
             print(f"      guardrails.remove: {guardrails_remove}")  # noqa: T201
         if condition:
-            model_condition = (
-                condition.get("model") if isinstance(condition, dict) else None
-            )
+            model_condition = condition.get("model") if isinstance(condition, dict) else None
             if model_condition:
                 print(f"      condition.model: {model_condition}")  # noqa: T201
 
@@ -102,8 +96,8 @@ def _print_policies_on_startup(
 
 
 async def init_policies(
-    policies_config: Dict[str, Any],
-    policy_attachments_config: Optional[List[Dict[str, Any]]] = None,
+    policies_config: dict[str, Any],
+    policy_attachments_config: list[dict[str, Any]] | None = None,
     prisma_client: Optional["PrismaClient"] = None,
     validate_db: bool = True,
     fail_on_error: bool = True,
@@ -130,20 +124,20 @@ async def init_policies(
     Raises:
         ValueError: If fail_on_error is True and validation errors are found
     """
-    verbose_proxy_logger.info(f"Initializing {len(policies_config)} policies...")
+    verbose_proxy_logger.info("Initializing %s policies...", len(policies_config))
 
     # Print policies to console on startup
     _print_policies_on_startup(policies_config, policy_attachments_config)
 
     # Get the global registries
-    policy_registry = get_policy_registry()
-    attachment_registry = get_attachment_registry()
+    policy_registry: Final = get_policy_registry()
+    attachment_registry: Final = get_attachment_registry()
 
     # Create validator
-    validator = PolicyValidator(prisma_client=prisma_client)
+    validator: Final = PolicyValidator(prisma_client=prisma_client)
 
     # Validate the configuration
-    validation_result = await validator.validate_policy_config(
+    validation_result: Final = await validator.validate_policy_config(
         policies_config,
         validate_db=validate_db,
     )
@@ -152,54 +146,45 @@ async def init_policies(
     if validation_result.errors:
         for error in validation_result.errors:
             verbose_proxy_logger.error(
-                f"Policy validation error in '{error.policy_name}': "
-                f"[{error.error_type}] {error.message}"
+                "Policy validation error in '%s': [%s] %s", error.policy_name, error.error_type, error.message
             )
 
     if validation_result.warnings:
         for warning in validation_result.warnings:
             verbose_proxy_logger.warning(
-                f"Policy validation warning in '{warning.policy_name}': "
-                f"[{warning.error_type}] {warning.message}"
+                "Policy validation warning in '%s': [%s] %s", warning.policy_name, warning.error_type, warning.message
             )
 
     # Fail if there are errors and fail_on_error is True
     if not validation_result.valid and fail_on_error:
-        error_messages = [
-            f"[{e.policy_name}] {e.message}" for e in validation_result.errors
-        ]
+        error_messages: Final = [f"[{e.policy_name}] {e.message}" for e in validation_result.errors]
         raise ValueError(
-            f"Policy validation failed with {len(validation_result.errors)} error(s):\n"
-            + "\n".join(error_messages)
+            f"Policy validation failed with {len(validation_result.errors)} error(s):\n" + "\n".join(error_messages)
         )
 
     # Load policies into registry (even with warnings)
     try:
         policy_registry.load_policies(policies_config)
-        verbose_proxy_logger.info(
-            f"Successfully loaded {len(policies_config)} policies"
-        )
+        verbose_proxy_logger.info("Successfully loaded %s policies", len(policies_config))
     except Exception as e:
-        verbose_proxy_logger.error(f"Failed to load policies: {str(e)}")
+        verbose_proxy_logger.error("Failed to load policies: %s", e)
         raise
 
     # Load attachments if provided
     if policy_attachments_config:
         try:
             attachment_registry.load_attachments(policy_attachments_config)
-            verbose_proxy_logger.info(
-                f"Successfully loaded {len(policy_attachments_config)} policy attachments"
-            )
+            verbose_proxy_logger.info("Successfully loaded %s policy attachments", len(policy_attachments_config))
         except Exception as e:
-            verbose_proxy_logger.error(f"Failed to load policy attachments: {str(e)}")
+            verbose_proxy_logger.error("Failed to load policy attachments: %s", e)
             raise
 
     return validation_result
 
 
 def init_policies_sync(
-    policies_config: Dict[str, Any],
-    policy_attachments_config: Optional[List[Dict[str, Any]]] = None,
+    policies_config: dict[str, Any],
+    policy_attachments_config: list[dict[str, Any]] | None = None,
     fail_on_error: bool = True,
 ) -> None:
     """
@@ -232,7 +217,7 @@ def init_policies_sync(
     )
 
 
-def get_policies_summary() -> Dict[str, Any]:
+def get_policies_summary() -> dict[str, Any]:
     """
     Get a summary of loaded policies for debugging/display.
 
@@ -241,15 +226,15 @@ def get_policies_summary() -> Dict[str, Any]:
     """
     from litellm.proxy.policy_engine.policy_resolver import PolicyResolver
 
-    policy_registry = get_policy_registry()
-    attachment_registry = get_attachment_registry()
+    policy_registry: Final = get_policy_registry()
+    attachment_registry: Final = get_attachment_registry()
 
     if not policy_registry.is_initialized():
         return {"initialized": False, "policies": {}, "attachments": []}
 
-    resolved = PolicyResolver.get_all_resolved_policies()
+    resolved: Final = PolicyResolver.get_all_resolved_policies()
 
-    summary: Dict[str, Any] = {
+    summary: Final[dict[str, Any]] = {
         "initialized": True,
         "policy_count": len(resolved),
         "attachment_count": len(attachment_registry.get_all_attachments()),
@@ -264,9 +249,7 @@ def get_policies_summary() -> Dict[str, Any]:
             "description": policy.description if policy else None,
             "guardrails_add": policy.guardrails.get_add() if policy else [],
             "guardrails_remove": policy.guardrails.get_remove() if policy else [],
-            "condition": (
-                policy.condition.model_dump() if policy and policy.condition else None
-            ),
+            "condition": (policy.condition.model_dump() if policy and policy.condition else None),
             "resolved_guardrails": resolved_policy.guardrails,
             "inheritance_chain": resolved_policy.inheritance_chain,
         }

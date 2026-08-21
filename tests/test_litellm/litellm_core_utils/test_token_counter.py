@@ -97,6 +97,50 @@ def test_token_counter_normal_plus_function_calling():
 # test_token_counter_normal_plus_function_calling()
 
 
+def test_token_counter_legacy_function_call_counts_arguments():
+    """
+    Regression for VERIA-492 (Token-counter function_call bypass).
+
+    The legacy OpenAI assistant `function_call` field carries arbitrary text in
+    `arguments`. Before the fix, `_count_messages` had no branch for
+    `function_call` and fell through to the unsupported-key `continue`, so an
+    assistant turn could smuggle unlimited text past `token_counter` and the
+    proxy `/utils/token_counter` endpoint (and downstream pre-call budget /
+    `get_modified_max_tokens` math). After the fix it must be counted the
+    same as the equivalent `tool_calls` payload.
+    """
+    long_arg = "A" * 4000
+    fc_messages = [
+        {"role": "user", "content": "hi"},
+        {
+            "role": "assistant",
+            "content": None,
+            "function_call": {"name": "search", "arguments": long_arg},
+        },
+    ]
+    tc_messages = [
+        {"role": "user", "content": "hi"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "search", "arguments": long_arg},
+                }
+            ],
+        },
+    ]
+    fc_tokens = token_counter(model="gpt-3.5-turbo", messages=fc_messages)
+    tc_tokens = token_counter(model="gpt-3.5-turbo", messages=tc_messages)
+    assert fc_tokens == tc_tokens, (
+        f"function_call arguments must count like tool_calls arguments; "
+        f"got function_call={fc_tokens}, tool_calls={tc_tokens}"
+    )
+    assert fc_tokens > 500, f"4000-char arguments payload must contribute real tokens, got {fc_tokens}"
+
+
 @pytest.mark.parametrize(
     "message_count_pair",
     MESSAGES_TEXT,

@@ -6,3 +6,5 @@ export const { cva, cx, compose } = defineConfig({
     onComplete: (className) => twMerge(className),
   },
 });
+
+export const cn = cx;

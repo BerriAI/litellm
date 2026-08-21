@@ -1,101 +1,88 @@
-import { screen } from "@testing-library/react";
+import { screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { vi, it, expect, beforeEach } from "vitest";
 import { renderWithProviders } from "../../../../tests/test-utils";
 import { DeletedKeysTable } from "./DeletedKeysTable";
 import { DeletedKeyResponse } from "@/app/(dashboard)/hooks/keys/useKeys";
 
-const mockDeletedKey: DeletedKeyResponse = {
-  token: "sk-1234567890abcdef",
-  token_id: "key-1",
-  key_name: "test-key",
-  key_alias: "Test Key Alias",
-  spend: 5.5,
-  max_budget: 100,
-  expires: "2024-12-31T23:59:59Z",
-  models: ["gpt-3.5-turbo"],
-  aliases: {},
-  config: {},
-  user_id: "user-1",
-  team_id: "team-1",
-  max_parallel_requests: 10,
-  metadata: {},
-  tpm_limit: 1000,
-  rpm_limit: 100,
-  duration: "30d",
-  budget_duration: "1m",
-  budget_reset_at: "2024-12-01T00:00:00Z",
-  allowed_cache_controls: [],
-  allowed_routes: [],
-  permissions: {},
-  model_spend: {},
-  model_max_budget: {},
-  soft_budget_cooldown: false,
-  blocked: false,
-  litellm_budget_table: {},
-  organization_id: "org-1",
-  created_at: "2024-11-01T10:00:00Z",
-  updated_at: "2024-11-15T10:00:00Z",
-  team_spend: 5.5,
-  team_alias: "Test Team",
-  team_tpm_limit: 5000,
-  team_rpm_limit: 500,
-  team_max_budget: 500,
-  team_models: ["gpt-3.5-turbo"],
-  team_blocked: false,
-  soft_budget: 50,
-  team_model_aliases: {},
-  team_member_spend: 0,
-  team_metadata: {},
-  end_user_id: "end-user-1",
-  end_user_tpm_limit: 100,
-  end_user_rpm_limit: 10,
-  end_user_max_budget: 10,
-  last_refreshed_at: Date.now(),
-  api_key: "sk-1234567890abcdef",
-  user_role: "user",
-  rpm_limit_per_model: {},
-  tpm_limit_per_model: {},
-  user_tpm_limit: 1000,
-  user_rpm_limit: 100,
-  user_email: "user@example.com",
-  deleted_at: "2024-11-15T10:00:00Z",
-  deleted_by: "user-1",
+const makeDeletedKey = (overrides: Partial<DeletedKeyResponse> = {}): DeletedKeyResponse =>
+  ({
+    token: "sk-1234567890abcdef",
+    token_id: "key-1",
+    key_name: "test-key",
+    key_alias: "Test Key Alias",
+    spend: 5.5,
+    max_budget: 100,
+    models: ["gpt-3.5-turbo"],
+    user_id: "user-1",
+    team_id: "team-1",
+    organization_id: "org-1",
+    created_at: "2024-11-01T10:00:00Z",
+    updated_at: "2024-11-15T10:00:00Z",
+    created_by: "creator-1",
+    team_alias: "Test Team",
+    user_email: "user@example.com",
+    deleted_at: "2024-11-15T10:00:00Z",
+    deleted_by: "user-1",
+    ...overrides,
+  }) as DeletedKeyResponse;
+
+const defaultProps = {
+  keys: [makeDeletedKey()],
+  totalCount: 1,
+  isLoading: false,
+  pagination: { pageIndex: 0, pageSize: 50 },
+  onPaginationChange: vi.fn(),
 };
 
 beforeEach(() => {
   vi.clearAllMocks();
 });
 
-it("should render DeletedKeysTable component", () => {
-  renderWithProviders(
-    <DeletedKeysTable
-      keys={[mockDeletedKey]}
-      totalCount={1}
-      isLoading={false}
-      isFetching={false}
-      pageIndex={0}
-      pageSize={50}
-      onPageChange={vi.fn()}
-    />,
-  );
-
-  expect(screen.getByText("Test Key Alias")).toBeInTheDocument();
-});
-
-it("should display key information correctly", () => {
-  renderWithProviders(
-    <DeletedKeysTable
-      keys={[mockDeletedKey]}
-      totalCount={1}
-      isLoading={false}
-      isFetching={false}
-      pageIndex={0}
-      pageSize={50}
-      onPageChange={vi.fn()}
-    />,
-  );
+it("should display key information", () => {
+  renderWithProviders(<DeletedKeysTable {...defaultProps} />);
 
   expect(screen.getByText("Test Key Alias")).toBeInTheDocument();
   expect(screen.getByText("sk-1234567890abcdef")).toBeInTheDocument();
-  expect(screen.getByText("Showing 1 - 1 of 1 results")).toBeInTheDocument();
+  expect(screen.getByText("user@example.com")).toBeInTheDocument();
+});
+
+it("should show the total count in the pagination footer", () => {
+  renderWithProviders(<DeletedKeysTable {...defaultProps} totalCount={120} />);
+
+  expect(screen.getByTestId("pagination-range")).toHaveTextContent("Showing 1-50 of 120");
+  expect(screen.getByTestId("pagination-page")).toHaveTextContent("Page 1 of 3");
+});
+
+it("should propagate pagination changes when the next page button is clicked", async () => {
+  const user = userEvent.setup();
+  renderWithProviders(<DeletedKeysTable {...defaultProps} totalCount={120} />);
+
+  await user.click(screen.getByTestId("pagination-next"));
+
+  expect(defaultProps.onPaginationChange).toHaveBeenCalled();
+});
+
+it("should sort the current page by deleted_at descending by default", () => {
+  const keys = [
+    makeDeletedKey({ token: "sk-older", key_alias: "older-key", deleted_at: "2024-01-01T10:00:00Z" }),
+    makeDeletedKey({ token: "sk-newer", key_alias: "newer-key", deleted_at: "2024-06-01T10:00:00Z" }),
+  ];
+  renderWithProviders(<DeletedKeysTable {...defaultProps} keys={keys} totalCount={2} />);
+
+  const rows = screen.getAllByRole("row").slice(1);
+  expect(within(rows[0]).getByText("newer-key")).toBeInTheDocument();
+  expect(within(rows[1]).getByText("older-key")).toBeInTheDocument();
+});
+
+it("should show skeleton rows when loading", () => {
+  renderWithProviders(<DeletedKeysTable {...defaultProps} keys={[]} isLoading />);
+
+  expect(screen.getAllByTestId("skeleton-row").length).toBeGreaterThan(0);
+});
+
+it("should show the empty state when there are no deleted keys", () => {
+  renderWithProviders(<DeletedKeysTable {...defaultProps} keys={[]} totalCount={0} />);
+
+  expect(screen.getByText("No deleted keys found")).toBeInTheDocument();
 });

@@ -1,4 +1,5 @@
-from typing import Optional
+from typing import Final
+
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 
 
@@ -9,35 +10,35 @@ class BasetenConfig(OpenAIGPTConfig):
     Below are the parameters:
     """
 
-    max_tokens: Optional[int] = None
-    response_format: Optional[dict] = None
-    seed: Optional[int] = None
-    stream: Optional[bool] = None
-    top_p: Optional[int] = None
-    tool_choice: Optional[str] = None
-    tools: Optional[list] = None
-    user: Optional[str] = None
-    presence_penalty: Optional[int] = None
-    frequency_penalty: Optional[int] = None
-    stream_options: Optional[dict] = None
+    max_tokens: int | None = None
+    response_format: dict | None = None
+    seed: int | None = None
+    stream: bool | None = None
+    top_p: int | None = None
+    tool_choice: str | None = None
+    tools: list | None = None
+    user: str | None = None
+    presence_penalty: int | None = None
+    frequency_penalty: int | None = None
+    stream_options: dict | None = None
 
     def __init__(
         self,
-        max_tokens: Optional[int] = None,
-        response_format: Optional[dict] = None,
-        seed: Optional[int] = None,
-        stop: Optional[list] = None,
-        stream: Optional[bool] = None,
-        temperature: Optional[float] = None,
-        top_p: Optional[int] = None,
-        tool_choice: Optional[str] = None,
-        tools: Optional[list] = None,
-        user: Optional[str] = None,
-        presence_penalty: Optional[int] = None,
-        frequency_penalty: Optional[int] = None,
-        stream_options: Optional[dict] = None,
+        max_tokens: int | None = None,
+        response_format: dict | None = None,
+        seed: int | None = None,
+        stop: list | None = None,
+        stream: bool | None = None,
+        temperature: float | None = None,
+        top_p: int | None = None,
+        tool_choice: str | None = None,
+        tools: list | None = None,
+        user: str | None = None,
+        presence_penalty: int | None = None,
+        frequency_penalty: int | None = None,
+        stream_options: dict | None = None,
     ) -> None:
-        locals_ = locals().copy()
+        locals_: Final = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -74,7 +75,7 @@ class BasetenConfig(OpenAIGPTConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
-        supported_openai_params = self.get_supported_openai_params(model=model)
+        supported_openai_params: Final = self.get_supported_openai_params(model=model)
         for param, value in non_default_params.items():
             if param == "max_completion_tokens":
                 optional_params["max_tokens"] = value
@@ -82,15 +83,13 @@ class BasetenConfig(OpenAIGPTConfig):
                 optional_params[param] = value
         return optional_params
 
-    def _get_openai_compatible_provider_info(
-        self, api_base: str, api_key: str
-    ) -> tuple:
+    def _get_openai_compatible_provider_info(self, api_base: str, api_key: str) -> tuple:
         """
         Get the OpenAI compatible provider info for Baseten
         """
         # Default to Model API
-        default_api_base = "https://inference.baseten.co/v1"
-        default_api_key = api_key or "BASETEN_API_KEY"
+        default_api_base: Final = "https://inference.baseten.co/v1"
+        default_api_key: Final = api_key or "BASETEN_API_KEY"
 
         return default_api_base, default_api_key
 
@@ -100,7 +99,7 @@ class BasetenConfig(OpenAIGPTConfig):
         Check if the model is a dedicated deployment (8-digit alphanumeric code)
         """
         # Remove 'baseten/' prefix if present
-        model_id = model.replace("baseten/", "")
+        model_id: Final = model.replace("baseten/", "")
 
         # Check if it's an 8-digit alphanumeric code
         import re
@@ -114,7 +113,7 @@ class BasetenConfig(OpenAIGPTConfig):
         """
         if BasetenConfig.is_dedicated_deployment(model):
             # Extract the model ID (remove 'baseten/' prefix if present)
-            model_id = model.replace("baseten/", "")
+            model_id: Final = model.replace("baseten/", "")
             return f"https://model-{model_id}.api.baseten.co/environments/production/sync/v1"
         else:
             # Use Model API

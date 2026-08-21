@@ -1,5 +1,6 @@
 import json
-from typing import Any, Callable, Optional
+from collections.abc import Callable
+from typing import Any, Final
 
 import litellm
 from litellm.llms.custom_httpx.http_handler import _get_httpx_client
@@ -8,13 +9,13 @@ from litellm.utils import EmbeddingResponse, ModelResponse, Usage
 from ..common_utils import OobaboogaError
 from .transformation import OobaboogaConfig
 
-oobabooga_config = OobaboogaConfig()
+oobabooga_config: Final = OobaboogaConfig()
 
 
 def completion(
     model: str,
     messages: list,
-    api_base: Optional[str],
+    api_base: str | None,
     model_response: ModelResponse,
     print_verbose: Callable,
     encoding,
@@ -26,7 +27,7 @@ def completion(
     logger_fn=None,
     default_max_tokens_to_sample=None,
 ):
-    headers = oobabooga_config.validate_environment(
+    headers: Final = oobabooga_config.validate_environment(
         api_key=api_key,
         headers={},
         model=model,
@@ -34,7 +35,7 @@ def completion(
         optional_params=optional_params,
         litellm_params=litellm_params,
     )
-    if "https" in model:
+    if model.startswith(("http://", "https://")):
         completion_url = model
     elif api_base:
         completion_url = api_base
@@ -46,7 +47,7 @@ def completion(
     model = model
 
     completion_url = completion_url + "/v1/chat/completions"
-    data = oobabooga_config.transform_request(
+    data: Final = oobabooga_config.transform_request(
         model=model,
         messages=messages,
         optional_params=optional_params,
@@ -61,8 +62,8 @@ def completion(
         additional_args={"complete_input_dict": data},
     )
     ## COMPLETION CALL
-    client = _get_httpx_client()
-    response = client.post(
+    client: Final = _get_httpx_client()
+    response: Final = client.post(
         completion_url,
         headers=headers,
         data=json.dumps(data),
@@ -89,14 +90,14 @@ def embedding(
     model: str,
     input: list,
     model_response: EmbeddingResponse,
-    api_key: Optional[str],
-    api_base: Optional[str],
+    api_key: str | None,
+    api_base: str | None,
     logging_obj: Any,
     optional_params: dict,
     encoding=None,
 ):
     # Create completion URL
-    if "https" in model:
+    if model.startswith(("http://", "https://")):
         embeddings_url = model
     elif api_base:
         embeddings_url = f"{api_base}/v1/embeddings"
@@ -107,18 +108,16 @@ def embedding(
         )
 
     # Prepare request data
-    data = {"input": input}
+    data: Final = {"input": input}
     if optional_params:
         data.update(optional_params)
 
     # Logging before API call
     if logging_obj:
-        logging_obj.pre_call(
-            input=input, api_key=api_key, additional_args={"complete_input_dict": data}
-        )
+        logging_obj.pre_call(input=input, api_key=api_key, additional_args={"complete_input_dict": data})
 
     # Send POST request
-    headers = oobabooga_config.validate_environment(
+    headers: Final = oobabooga_config.validate_environment(
         api_key=api_key,
         headers={},
         model=model,
@@ -126,10 +125,8 @@ def embedding(
         optional_params=optional_params,
         litellm_params={},
     )
-    response = litellm.module_level_client.post(
-        embeddings_url, headers=headers, json=data
-    )
-    completion_response = response.json()
+    response: Final = litellm.module_level_client.post(embeddings_url, headers=headers, json=data)
+    completion_response: Final = response.json()
 
     # Check for errors in response
     if "error" in completion_response:
@@ -147,7 +144,7 @@ def embedding(
         }
     ]
 
-    num_tokens = len(completion_response["data"][0]["embedding"])
+    num_tokens: Final = len(completion_response["data"][0]["embedding"])
     # Adding metadata to response
     setattr(
         model_response,

@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from "react";
-import { Text, Badge } from "@tremor/react";
 import { ServerIcon, ChevronDownIcon, ChevronRightIcon } from "@heroicons/react/outline";
-import { Tooltip } from "antd";
+import { Badge } from "@/components/ui/badge";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { fetchMCPServers, fetchMCPToolsets } from "../networking";
 import { MCPServer, MCPToolset } from "../mcp_tools/types";
+import { ALL_PROXY_MCP_SERVERS_SENTINEL, NO_MCP_SERVERS_SENTINEL } from "../mcp_tools/constants";
 
 interface MCPServerPermissionsProps {
   mcpServers: string[];
@@ -89,14 +90,19 @@ export function MCPServerPermissions({
     const serverDetail = mcpServerDetails.find((server) => server.server_id === serverId);
     if (serverDetail) {
       const truncatedId = serverId.length > 7 ? `${serverId.slice(0, 3)}...${serverId.slice(-4)}` : serverId;
-      return `${serverDetail.alias} (${truncatedId})`;
+      return `${serverDetail.alias || serverDetail.server_name || serverId} (${truncatedId})`;
     }
     return serverId;
   };
 
+  const blocksAllMcpServers = mcpServers.includes(NO_MCP_SERVERS_SENTINEL);
+  const grantsAllProxyMcpServers = mcpServers.includes(ALL_PROXY_MCP_SERVERS_SENTINEL);
+
   // Merge servers and access groups into one list
   const mergedItems = [
-    ...mcpServers.map((server) => ({ type: "server", value: server })),
+    ...mcpServers
+      .filter((server) => server !== NO_MCP_SERVERS_SENTINEL && server !== ALL_PROXY_MCP_SERVERS_SENTINEL)
+      .map((server) => ({ type: "server", value: server })),
     ...mcpAccessGroups.map((group) => ({ type: "accessGroup", value: group })),
   ];
   const totalCount = mergedItems.length + mcpToolsets.length;
@@ -104,14 +110,26 @@ export function MCPServerPermissions({
   return (
     <div className="space-y-3">
       <div className="flex items-center gap-2">
-        <ServerIcon className="h-4 w-4 text-blue-600" />
-        <Text className="font-semibold text-gray-900">MCP Servers</Text>
-        <Badge color="blue" size="xs">
-          {totalCount}
+        <ServerIcon className="h-4 w-4 text-info" />
+        <p className="text-sm font-semibold text-foreground">MCP Servers</p>
+        <Badge variant={blocksAllMcpServers ? "destructive" : "secondary"}>
+          {blocksAllMcpServers ? "Blocked" : grantsAllProxyMcpServers ? "All" : totalCount}
         </Badge>
       </div>
 
-      {totalCount > 0 ? (
+      {blocksAllMcpServers ? (
+        <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-destructive/10 border border-destructive/20">
+          <ServerIcon className="h-4 w-4 text-destructive" />
+          <p className="text-destructive text-sm">
+            No MCP servers — this key is blocked from all MCP servers, including its team&apos;s servers
+          </p>
+        </div>
+      ) : grantsAllProxyMcpServers ? (
+        <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-info/10 border border-info/20">
+          <ServerIcon className="h-4 w-4 text-info" />
+          <p className="text-info text-sm">All Proxy MCP Servers</p>
+        </div>
+      ) : totalCount > 0 ? (
         <div className="max-h-[400px] overflow-y-auto space-y-2 pr-1">
           {mergedItems.map((item, index) => {
             const toolsForServer = item.type === "server" ? mcpToolPermissions[item.value] : undefined;
@@ -122,25 +140,26 @@ export function MCPServerPermissions({
               <div key={index} className="space-y-2">
                 <div
                   onClick={() => hasToolRestrictions && toggleServerExpansion(item.value)}
-                  className={`flex items-center gap-3 py-2 px-3 rounded-lg border border-gray-200 transition-all ${
-                    hasToolRestrictions ? "cursor-pointer hover:bg-gray-50 hover:border-gray-300" : "bg-white"
+                  className={`flex items-center gap-3 py-2 px-3 rounded-lg border border-border transition-all ${
+                    hasToolRestrictions ? "cursor-pointer hover:bg-accent" : "bg-card"
                   }`}
                 >
                   <div className="flex items-center gap-2 flex-1 min-w-0">
                     {item.type === "server" ? (
-                      <Tooltip title={`Full ID: ${item.value}`} placement="top">
-                        <div className="inline-flex items-center gap-2 min-w-0">
-                          <span className="inline-block w-1.5 h-1.5 bg-blue-500 rounded-full flex-shrink-0"></span>
-                          <span className="text-sm font-medium text-gray-900 truncate">
+                      <Tooltip>
+                        <TooltipTrigger render={<div className="inline-flex items-center gap-2 min-w-0" />}>
+                          <span className="inline-block w-1.5 h-1.5 bg-info rounded-full shrink-0"></span>
+                          <span className="text-sm font-medium text-foreground truncate">
                             {getMCPServerDisplayName(item.value)}
                           </span>
-                        </div>
+                        </TooltipTrigger>
+                        <TooltipContent>{`Full ID: ${item.value}`}</TooltipContent>
                       </Tooltip>
                     ) : (
                       <div className="inline-flex items-center gap-2 min-w-0">
-                        <span className="inline-block w-1.5 h-1.5 bg-green-500 rounded-full flex-shrink-0"></span>
-                        <span className="text-sm font-medium text-gray-900 truncate">{item.value}</span>
-                        <span className="ml-1 px-1.5 py-0.5 text-[9px] font-semibold text-green-600 bg-green-50 border border-green-200 rounded uppercase tracking-wide flex-shrink-0">
+                        <span className="inline-block w-1.5 h-1.5 bg-success rounded-full shrink-0"></span>
+                        <span className="text-sm font-medium text-foreground truncate">{item.value}</span>
+                        <span className="ml-1 px-1.5 py-0.5 text-[9px] font-semibold text-success bg-success/10 border border-success/20 rounded-sm uppercase tracking-wide shrink-0">
                           Group
                         </span>
                       </div>
@@ -148,13 +167,15 @@ export function MCPServerPermissions({
                   </div>
 
                   {hasToolRestrictions && (
-                    <div className="flex items-center gap-1 flex-shrink-0 whitespace-nowrap">
-                      <span className="text-xs font-medium text-gray-600">{toolsForServer.length}</span>
-                      <span className="text-xs text-gray-500">{toolsForServer.length === 1 ? "tool" : "tools"}</span>
+                    <div className="flex items-center gap-1 shrink-0 whitespace-nowrap">
+                      <span className="text-xs font-medium text-muted-foreground">{toolsForServer.length}</span>
+                      <span className="text-xs text-muted-foreground">
+                        {toolsForServer.length === 1 ? "tool" : "tools"}
+                      </span>
                       {isExpanded ? (
-                        <ChevronDownIcon className="h-3.5 w-3.5 text-gray-400 ml-0.5" />
+                        <ChevronDownIcon className="h-3.5 w-3.5 text-muted-foreground ml-0.5" />
                       ) : (
-                        <ChevronRightIcon className="h-3.5 w-3.5 text-gray-400 ml-0.5" />
+                        <ChevronRightIcon className="h-3.5 w-3.5 text-muted-foreground ml-0.5" />
                       )}
                     </div>
                   )}
@@ -162,12 +183,12 @@ export function MCPServerPermissions({
 
                 {/* Show tool permissions if expanded */}
                 {hasToolRestrictions && isExpanded && (
-                  <div className="ml-4 pl-4 border-l-2 border-blue-200 pb-1">
+                  <div className="ml-4 pl-4 border-l-2 border-info/20 pb-1">
                     <div className="flex flex-wrap gap-1.5">
                       {toolsForServer.map((tool, toolIndex) => (
                         <span
                           key={toolIndex}
-                          className="inline-flex items-center px-2.5 py-1 rounded-lg bg-blue-50 border border-blue-200 text-blue-800 text-xs font-medium"
+                          className="inline-flex items-center px-2.5 py-1 rounded-lg bg-info/10 border border-info/20 text-info text-xs font-medium"
                         >
                           {tool}
                         </span>
@@ -191,26 +212,28 @@ export function MCPServerPermissions({
                   <div
                     onClick={() => toolCount > 0 && toggleToolsetExpansion(toolsetId)}
                     className={`flex items-center gap-3 py-2 px-3 rounded-lg border border-purple-200 transition-all ${
-                      toolCount > 0 ? "cursor-pointer hover:bg-purple-50 hover:border-purple-300" : "bg-white"
+                      toolCount > 0
+                        ? "cursor-pointer hover:bg-purple-50 hover:border-purple-300 dark:hover:bg-purple-950 dark:hover:border-purple-700"
+                        : "bg-card"
                     }`}
                   >
                     <div className="flex items-center gap-2 flex-1 min-w-0">
-                      <span className="inline-block w-1.5 h-1.5 bg-purple-500 rounded-full flex-shrink-0"></span>
-                      <span className="text-sm font-medium text-gray-900 truncate">
+                      <span className="inline-block w-1.5 h-1.5 bg-purple-500 rounded-full shrink-0"></span>
+                      <span className="text-sm font-medium text-foreground truncate">
                         {detail?.toolset_name ?? toolsetId}
                       </span>
-                      <span className="ml-1 px-1.5 py-0.5 text-[9px] font-semibold text-purple-600 bg-purple-50 border border-purple-200 rounded uppercase tracking-wide flex-shrink-0">
+                      <span className="ml-1 px-1.5 py-0.5 text-[9px] font-semibold text-purple-600 bg-purple-50 border border-purple-200 rounded-sm uppercase tracking-wide shrink-0 dark:text-purple-300 dark:bg-purple-950 dark:border-purple-800">
                         Toolset
                       </span>
                     </div>
                     {toolCount > 0 && (
-                      <div className="flex items-center gap-1 flex-shrink-0 whitespace-nowrap">
-                        <span className="text-xs font-medium text-gray-600">{toolCount}</span>
-                        <span className="text-xs text-gray-500">{toolCount === 1 ? "tool" : "tools"}</span>
+                      <div className="flex items-center gap-1 shrink-0 whitespace-nowrap">
+                        <span className="text-xs font-medium text-muted-foreground">{toolCount}</span>
+                        <span className="text-xs text-muted-foreground">{toolCount === 1 ? "tool" : "tools"}</span>
                         {isExpanded ? (
-                          <ChevronDownIcon className="h-3.5 w-3.5 text-gray-400 ml-0.5" />
+                          <ChevronDownIcon className="h-3.5 w-3.5 text-muted-foreground ml-0.5" />
                         ) : (
-                          <ChevronRightIcon className="h-3.5 w-3.5 text-gray-400 ml-0.5" />
+                          <ChevronRightIcon className="h-3.5 w-3.5 text-muted-foreground ml-0.5" />
                         )}
                       </div>
                     )}
@@ -222,7 +245,7 @@ export function MCPServerPermissions({
                         {detail.tools.map((tool, toolIndex) => (
                           <span
                             key={toolIndex}
-                            className="inline-flex items-center px-2.5 py-1 rounded-lg bg-purple-50 border border-purple-200 text-purple-800 text-xs font-medium"
+                            className="inline-flex items-center px-2.5 py-1 rounded-lg bg-purple-50 border border-purple-200 text-purple-800 text-xs font-medium dark:bg-purple-950 dark:border-purple-800 dark:text-purple-300"
                           >
                             <span className="text-purple-400 mr-1 text-[10px]">{tool.server_id.slice(0, 6)}…</span>
                             {tool.tool_name}
@@ -236,9 +259,9 @@ export function MCPServerPermissions({
             })}
         </div>
       ) : (
-        <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-gray-50 border border-gray-200">
-          <ServerIcon className="h-4 w-4 text-gray-400" />
-          <Text className="text-gray-500 text-sm">No MCP servers, access groups, or toolsets configured</Text>
+        <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-muted border border-border">
+          <ServerIcon className="h-4 w-4 text-muted-foreground" />
+          <p className="text-muted-foreground text-sm">No MCP servers, access groups, or toolsets configured</p>
         </div>
       )}
     </div>

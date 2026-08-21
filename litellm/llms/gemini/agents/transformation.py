@@ -9,7 +9,7 @@ Proxies the Gemini v1beta Agents API:
   GET    /v1beta/agents/{name}/versions         list versions
 """
 
-from typing import Any, Dict, Optional, Tuple, Union
+from typing import Any, Final
 
 import httpx
 
@@ -25,10 +25,10 @@ from litellm.types.agents import (
 
 # Keys inside litellm_params that should be forwarded to the Gemini
 # create-agent body verbatim.
-_GEMINI_AGENT_BODY_KEYS = ("base_agent", "instructions", "base_environment")
+_GEMINI_AGENT_BODY_KEYS: Final = ("base_agent", "instructions", "base_environment")
 
 # LiteLLM-internal keys that must never be forwarded to Gemini.
-_LITELLM_INTERNAL_KEYS = frozenset(
+_LITELLM_INTERNAL_KEYS: Final = frozenset(
     {
         "custom_llm_provider",
         "api_key",
@@ -65,7 +65,7 @@ class GeminiAgentsConfig(BaseAgentsAPIConfig):
     def api_version(self) -> str:
         return "v1beta"
 
-    def _base_url(self, api_base: Optional[str]) -> str:
+    def _base_url(self, api_base: str | None) -> str:
         return f"{GeminiModelInfo.get_api_base(api_base)}/{self.api_version}"
 
     # ------------------------------------------------------------------ #
@@ -76,7 +76,7 @@ class GeminiAgentsConfig(BaseAgentsAPIConfig):
         self,
         error_message: str,
         status_code: int,
-        headers: Union[dict, httpx.Headers],
+        headers: dict | httpx.Headers,
     ) -> Exception:
         return GeminiError(
             message=error_message,
@@ -86,19 +86,19 @@ class GeminiAgentsConfig(BaseAgentsAPIConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        litellm_params: Dict[str, Any],
+        api_base: str | None,
+        litellm_params: dict[str, Any],
     ) -> str:
         return f"{self._base_url(api_base)}/agents"
 
     def validate_environment(
         self,
-        headers: Dict[str, str],
-        litellm_params: Dict[str, Any],
-    ) -> Dict[str, str]:
+        headers: dict[str, str],
+        litellm_params: dict[str, Any],
+    ) -> dict[str, str]:
         headers = dict(headers)
         headers["Content-Type"] = "application/json"
-        explicit_api_key = litellm_params.get("api_key")
+        explicit_api_key: Final = litellm_params.get("api_key")
         # SECURITY: when the caller overrides ``api_base``, refuse to fall back
         # to the process-wide GOOGLE_API_KEY / GEMINI_API_KEY env vars. Otherwise
         # an authenticated proxy user could set ``api_base`` to an attacker-
@@ -111,12 +111,9 @@ class GeminiAgentsConfig(BaseAgentsAPIConfig):
                 "GEMINI_API_KEY env vars with a custom api_base is refused "
                 "to prevent leaking the shared provider key to arbitrary hosts."
             )
-        api_key = GeminiModelInfo.get_api_key(explicit_api_key)
+        api_key: Final = GeminiModelInfo.get_api_key(explicit_api_key)
         if not api_key:
-            raise ValueError(
-                "Google API key is required. "
-                "Set GOOGLE_API_KEY or GEMINI_API_KEY, or pass api_key."
-            )
+            raise ValueError("Google API key is required. Set GOOGLE_API_KEY or GEMINI_API_KEY, or pass api_key.")
         headers["x-goog-api-key"] = api_key
         return headers
 
@@ -135,9 +132,9 @@ class GeminiAgentsConfig(BaseAgentsAPIConfig):
     def transform_create_request(
         self,
         name: str,
-        litellm_params: Dict[str, Any],
-    ) -> Dict[str, Any]:
-        body: Dict[str, Any] = {"name": name}
+        litellm_params: dict[str, Any],
+    ) -> dict[str, Any]:
+        body: Final[dict[str, Any]] = {"name": name}
         for key in _GEMINI_AGENT_BODY_KEYS:
             value = litellm_params.get(key)
             if value is not None:
@@ -157,7 +154,7 @@ class GeminiAgentsConfig(BaseAgentsAPIConfig):
         """
         self._raise_for_status(raw_response)
         try:
-            data: Dict[str, Any] = raw_response.json()
+            data: dict[str, Any] = raw_response.json()
         except Exception:
             verbose_logger.warning(
                 "GeminiAgentsConfig: non-JSON create response (status=%d).",
@@ -176,11 +173,11 @@ class GeminiAgentsConfig(BaseAgentsAPIConfig):
 
     def transform_list_request(
         self,
-        api_base: Optional[str],
-        litellm_params: Dict[str, Any],
-    ) -> Tuple[str, Dict[str, Any]]:
-        url = f"{self._base_url(api_base)}/agents"
-        params: Dict[str, Any] = {}
+        api_base: str | None,
+        litellm_params: dict[str, Any],
+    ) -> tuple[str, dict[str, Any]]:
+        url: Final = f"{self._base_url(api_base)}/agents"
+        params: Final[dict[str, Any]] = {}
         if litellm_params.get("page_size"):
             params["pageSize"] = litellm_params["page_size"]
         if litellm_params.get("page_token"):
@@ -209,10 +206,10 @@ class GeminiAgentsConfig(BaseAgentsAPIConfig):
     def transform_get_request(
         self,
         name: str,
-        api_base: Optional[str],
-        litellm_params: Dict[str, Any],
-    ) -> Tuple[str, Dict[str, Any]]:
-        url = f"{self._base_url(api_base)}/agents/{name}"
+        api_base: str | None,
+        litellm_params: dict[str, Any],
+    ) -> tuple[str, dict[str, Any]]:
+        url: Final = f"{self._base_url(api_base)}/agents/{name}"
         return url, {}
 
     def transform_get_response(
@@ -238,8 +235,8 @@ class GeminiAgentsConfig(BaseAgentsAPIConfig):
     def transform_delete_request(
         self,
         name: str,
-        api_base: Optional[str],
-        litellm_params: Dict[str, Any],
+        api_base: str | None,
+        litellm_params: dict[str, Any],
     ) -> str:
         return f"{self._base_url(api_base)}/agents/{name}"
 
@@ -264,11 +261,11 @@ class GeminiAgentsConfig(BaseAgentsAPIConfig):
     def transform_list_versions_request(
         self,
         name: str,
-        api_base: Optional[str],
-        litellm_params: Dict[str, Any],
-    ) -> Tuple[str, Dict[str, Any]]:
-        url = f"{self._base_url(api_base)}/agents/{name}/versions"
-        params: Dict[str, Any] = {}
+        api_base: str | None,
+        litellm_params: dict[str, Any],
+    ) -> tuple[str, dict[str, Any]]:
+        url: Final = f"{self._base_url(api_base)}/agents/{name}/versions"
+        params: Final[dict[str, Any]] = {}
         if litellm_params.get("page_size"):
             params["pageSize"] = litellm_params["page_size"]
         if litellm_params.get("page_token"):
@@ -289,9 +286,7 @@ class GeminiAgentsConfig(BaseAgentsAPIConfig):
             data = raw_response.json()
         except Exception:
             data = {}
-        verbose_logger.debug(
-            "GeminiAgentsConfig list_versions response for '%s': %s", name, data
-        )
+        verbose_logger.debug("GeminiAgentsConfig list_versions response for '%s': %s", name, data)
         return AgentVersionsResponse(
             agent_versions=data.get("agentVersions", []),
             next_page_token=data.get("nextPageToken"),

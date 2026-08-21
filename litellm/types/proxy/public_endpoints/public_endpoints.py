@@ -1,57 +1,58 @@
-from typing import Dict, List, Literal, Optional, Union, Any
+from collections.abc import Mapping
+from typing import Any, Literal
 
 from pydantic import BaseModel
 
 
 class PublicModelHubInfo(BaseModel):
     docs_title: str
-    custom_docs_description: Optional[str]
+    custom_docs_description: str | None
     litellm_version: str
     # Supports both old format (Dict[str, str]) and new format (Dict[str, Dict[str, Any]])
     # New format: { "displayName": { "url": "...", "index": 0 } }
     # Old format: { "displayName": "url" } (for backward compatibility)
-    useful_links: Optional[Dict[str, Union[str, Dict[str, Any]]]]
+    useful_links: dict[str, str | dict[str, Any]] | None
 
 
 class ProviderCredentialField(BaseModel):
     key: str
     label: str
-    placeholder: Optional[str] = None
-    tooltip: Optional[str] = None
+    placeholder: str | None = None
+    tooltip: str | None = None
     required: bool = False
     field_type: Literal["text", "password", "select", "upload", "textarea"] = "text"
-    options: Optional[List[str]] = None
-    default_value: Optional[str] = None
+    options: list[str] | None = None
+    default_value: str | None = None
 
 
 class ProviderCreateInfo(BaseModel):
     provider: str
     provider_display_name: str
     litellm_provider: str
-    credential_fields: List[ProviderCredentialField]
-    default_model_placeholder: Optional[str] = None
+    credential_fields: list[ProviderCredentialField]
+    default_model_placeholder: str | None = None
 
 
 class AgentCredentialField(BaseModel):
     key: str
     label: str
-    placeholder: Optional[str] = None
-    tooltip: Optional[str] = None
+    placeholder: str | None = None
+    tooltip: str | None = None
     required: bool = False
     field_type: Literal["text", "password", "select", "upload", "textarea"] = "text"
-    options: Optional[List[str]] = None
-    default_value: Optional[str] = None
-    include_in_litellm_params: Optional[bool] = None
+    options: list[str] | None = None
+    default_value: str | None = None
+    include_in_litellm_params: bool | None = None
 
 
 class AgentCreateInfo(BaseModel):
     agent_type: str
     agent_type_display_name: str
-    description: Optional[str] = None
-    logo_url: Optional[str] = None
-    credential_fields: List[AgentCredentialField]
-    litellm_params_template: Optional[Dict[str, str]] = None
-    model_template: Optional[str] = None
+    description: str | None = None
+    logo_url: str | None = None
+    credential_fields: list[AgentCredentialField]
+    litellm_params_template: dict[str, str] | None = None
+    model_template: str | None = None
 
 
 class EndpointProvider(BaseModel):
@@ -63,8 +64,20 @@ class SupportedEndpoint(BaseModel):
     key: str
     label: str
     endpoint: str
-    providers: List[EndpointProvider]
+    providers: list[EndpointProvider]
 
 
 class SupportedEndpointsResponse(BaseModel):
-    endpoints: List[SupportedEndpoint]
+    endpoints: list[SupportedEndpoint]
+
+
+class ComplexityScorerDefaults(BaseModel):
+    """The complexity router's shipped heuristic scorer defaults.
+
+    The dashboard prefills its Advanced scoring controls from these rather than keeping its own copy, so
+    a recalibration of the defaults cannot leave the form reporting numbers the router no longer uses.
+    """
+
+    tier_boundaries: Mapping[str, float]
+    token_thresholds: Mapping[str, int]
+    dimension_weights: Mapping[str, float]

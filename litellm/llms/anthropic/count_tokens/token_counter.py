@@ -3,7 +3,7 @@ Anthropic Token Counter implementation using the CountTokens API.
 """
 
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any, Final
 
 from litellm._logging import verbose_logger
 from litellm.llms.anthropic.count_tokens.handler import AnthropicCountTokensHandler
@@ -11,7 +11,7 @@ from litellm.llms.base_llm.base_utils import BaseTokenCounter
 from litellm.types.utils import LlmProviders, TokenCountResponse
 
 # Global handler instance - reuse across all token counting requests
-anthropic_count_tokens_handler = AnthropicCountTokensHandler()
+anthropic_count_tokens_handler: Final = AnthropicCountTokensHandler()
 
 
 class AnthropicTokenCounter(BaseTokenCounter):
@@ -19,20 +19,20 @@ class AnthropicTokenCounter(BaseTokenCounter):
 
     def should_use_token_counting_api(
         self,
-        custom_llm_provider: Optional[str] = None,
+        custom_llm_provider: str | None = None,
     ) -> bool:
         return custom_llm_provider == LlmProviders.ANTHROPIC.value
 
     async def count_tokens(
         self,
         model_to_use: str,
-        messages: Optional[List[Dict[str, Any]]],
-        contents: Optional[List[Dict[str, Any]]],
-        deployment: Optional[Dict[str, Any]] = None,
+        messages: list[dict[str, Any]] | None,
+        contents: list[dict[str, Any]] | None,
+        deployment: dict[str, Any] | None = None,
         request_model: str = "",
-        tools: Optional[List[Dict[str, Any]]] = None,
-        system: Optional[Any] = None,
-    ) -> Optional[TokenCountResponse]:
+        tools: list[dict[str, Any]] | None = None,
+        system: Any | None = None,
+    ) -> TokenCountResponse | None:
         """
         Count tokens using Anthropic's CountTokens API.
 
@@ -52,7 +52,7 @@ class AnthropicTokenCounter(BaseTokenCounter):
             return None
 
         deployment = deployment or {}
-        litellm_params = deployment.get("litellm_params", {})
+        litellm_params: Final = deployment.get("litellm_params", {})
 
         # Get Anthropic API key from deployment config or environment
         api_key = litellm_params.get("api_key")
@@ -64,7 +64,7 @@ class AnthropicTokenCounter(BaseTokenCounter):
             return None
 
         try:
-            result = await anthropic_count_tokens_handler.handle_count_tokens_request(
+            result: Final = await anthropic_count_tokens_handler.handle_count_tokens_request(
                 model=model_to_use,
                 messages=messages,
                 api_key=api_key,
@@ -81,9 +81,7 @@ class AnthropicTokenCounter(BaseTokenCounter):
                     original_response=result,
                 )
         except AnthropicError as e:
-            verbose_logger.warning(
-                f"Anthropic CountTokens API error: status={e.status_code}, message={e.message}"
-            )
+            verbose_logger.warning("Anthropic CountTokens API error: status=%s, message=%s", e.status_code, e.message)
             return TokenCountResponse(
                 total_tokens=0,
                 request_model=request_model,
@@ -94,7 +92,7 @@ class AnthropicTokenCounter(BaseTokenCounter):
                 status_code=e.status_code,
             )
         except Exception as e:
-            verbose_logger.warning(f"Error calling Anthropic CountTokens API: {e}")
+            verbose_logger.warning("Error calling Anthropic CountTokens API: %s", e)
             return TokenCountResponse(
                 total_tokens=0,
                 request_model=request_model,

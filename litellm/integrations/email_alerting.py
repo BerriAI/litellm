@@ -3,21 +3,19 @@ Functions for sending Email Alerts
 """
 
 import os
-from typing import List, Optional
+from typing import Final
 
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm.proxy._types import WebhookEvent
 from litellm.repositories.team_repository import TeamRepository
 
 # we use this for the email header, please send a test email if you change this. verify it looks good on email
-LITELLM_LOGO_URL = "https://litellm-listing.s3.amazonaws.com/litellm_logo.png"
-LITELLM_SUPPORT_CONTACT = "support@berri.ai"
+LITELLM_LOGO_URL: Final = "https://litellm-listing.s3.amazonaws.com/litellm_logo.png"
+LITELLM_SUPPORT_CONTACT: Final = "support@berri.ai"
 
 
-async def get_all_team_member_emails(team_id: Optional[str] = None) -> list:
-    verbose_logger.debug(
-        "Email Alerting: Getting all team members for team_id=%s", team_id
-    )
+async def get_all_team_member_emails(team_id: str | None = None) -> list:
+    verbose_logger.debug("Email Alerting: Getting all team members for team_id=%s", team_id)
     if team_id is None:
         return []
     from litellm.proxy.proxy_server import prisma_client
@@ -25,7 +23,7 @@ async def get_all_team_member_emails(team_id: Optional[str] = None) -> list:
     if prisma_client is None:
         raise Exception("Not connected to DB!")
 
-    team_row = await TeamRepository(prisma_client).table.find_unique(
+    team_row: Final = await TeamRepository(prisma_client).table.find_unique(
         where={
             "team_id": team_id,
         }
@@ -34,33 +32,33 @@ async def get_all_team_member_emails(team_id: Optional[str] = None) -> list:
     if team_row is None:
         return []
 
-    _team_members = team_row.members_with_roles
+    _team_members: Final = team_row.members_with_roles
     verbose_logger.debug(
         "Email Alerting: Got team members for team_id=%s Team Members: %s",
         team_id,
         _team_members,
     )
-    _team_member_user_ids: List[str] = []
+    _team_member_user_ids: Final[list[str]] = []
     for member in _team_members:
         if member and isinstance(member, dict):
             _user_id = member.get("user_id")
             if _user_id and isinstance(_user_id, str):
                 _team_member_user_ids.append(_user_id)
 
-    sql_query = """
+    sql_query: Final = """
         SELECT user_email
         FROM "LiteLLM_UserTable"
         WHERE user_id = ANY($1::TEXT[]);
     """
 
-    _result = await prisma_client.db.query_raw(sql_query, _team_member_user_ids)
+    _result: Final = await prisma_client.db.query_raw(sql_query, _team_member_user_ids)
 
     verbose_logger.debug("Email Alerting: Got all Emails for team, emails=%s", _result)
 
     if _result is None:
         return []
 
-    emails = []
+    emails: Final = []
     for user in _result:
         if user and isinstance(user, dict) and user.get("user_email", None) is not None:
             emails.append(user.get("user_email"))
@@ -74,11 +72,9 @@ async def send_team_budget_alert(webhook_event: WebhookEvent) -> bool:
     """
     from litellm.proxy.utils import send_email
 
-    _team_id = webhook_event.team_id
-    team_alias = webhook_event.team_alias
-    verbose_logger.debug(
-        "Email Alerting: Sending Team Budget Alert for team=%s", team_alias
-    )
+    _team_id: Final = webhook_event.team_id
+    team_alias: Final = webhook_event.team_alias
+    verbose_logger.debug("Email Alerting: Sending Team Budget Alert for team=%s", team_alias)
 
     email_logo_url = os.getenv("SMTP_SENDER_LOGO", os.getenv("EMAIL_LOGO_URL", None))
     email_support_contact = os.getenv("EMAIL_SUPPORT_CONTACT", None)
@@ -91,14 +87,12 @@ async def send_team_budget_alert(webhook_event: WebhookEvent) -> bool:
         email_logo_url = LITELLM_LOGO_URL
     if email_support_contact is None:
         email_support_contact = LITELLM_SUPPORT_CONTACT
-    recipient_emails = await get_all_team_member_emails(_team_id)
-    recipient_emails_str: str = ",".join(recipient_emails)
-    verbose_logger.debug(
-        "Email Alerting: Sending team budget alert to %s", recipient_emails_str
-    )
+    recipient_emails: Final = await get_all_team_member_emails(_team_id)
+    recipient_emails_str: Final[str] = ",".join(recipient_emails)
+    verbose_logger.debug("Email Alerting: Sending team budget alert to %s", recipient_emails_str)
 
-    event_name = webhook_event.event_message
-    max_budget = webhook_event.max_budget
+    event_name: Final = webhook_event.event_message
+    max_budget: Final = webhook_event.max_budget
     email_html_content = "Alert from LiteLLM Server"
 
     if recipient_emails_str is None:
@@ -122,7 +116,7 @@ async def send_team_budget_alert(webhook_event: WebhookEvent) -> bool:
     The LiteLLM team <br />
     """
 
-    email_event = {
+    email_event: Final = {
         "to": recipient_emails_str,
         "subject": f"LiteLLM {event_name} for Team {team_alias}",
         "html": email_html_content,

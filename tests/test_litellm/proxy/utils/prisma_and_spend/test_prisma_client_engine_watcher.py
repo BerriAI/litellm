@@ -42,6 +42,7 @@ def test_get_engine_pid_extracts_process_pid(prisma_client: PrismaClient) -> Non
     fake_engine.process = MagicMock()
     fake_engine.process.pid = 4242
     prisma_client.db._original_prisma = MagicMock()
+    prisma_client.db._original_prisma.is_connected = MagicMock(return_value=True)
     prisma_client.db._original_prisma._engine = fake_engine
     actual = {
         "pid": prisma_client._get_engine_pid(),
@@ -55,6 +56,15 @@ def test_get_engine_pid_returns_zero_when_engine_attr_missing(
     prisma_client: PrismaClient,
 ) -> None:
     prisma_client.db._original_prisma = MagicMock(spec=[])
+    assert prisma_client._get_engine_pid() == 0
+
+
+def test_get_engine_pid_returns_zero_when_client_disconnected(
+    prisma_client: PrismaClient, disconnected_prisma
+) -> None:
+    """The reconnect path calls this on an arbitrarily-broken client; it must
+    report "no engine" instead of re-raising ClientNotConnectedError."""
+    prisma_client.db._original_prisma = disconnected_prisma
     assert prisma_client._get_engine_pid() == 0
 
 

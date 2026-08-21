@@ -1,11 +1,12 @@
+from typing import Any, Final
+
 import requests
-from typing import Dict, Any, Optional, Union
 
 from .exceptions import UnauthorizedError
 
 
 class CredentialsManagementClient:
-    def __init__(self, base_url: str, api_key: Optional[str] = None):
+    def __init__(self, base_url: str, api_key: str | None = None):
         """
         Initialize the CredentialsManagementClient.
 
@@ -16,14 +17,14 @@ class CredentialsManagementClient:
         self._base_url = base_url.rstrip("/")  # Remove trailing slash if present
         self._api_key = api_key
 
-    def _get_headers(self) -> Dict[str, str]:
+    def _get_headers(self) -> dict[str, str]:
         """
         Get the headers for API requests, including authorization if api_key is set.
 
         Returns:
             Dict[str, str]: Headers to use for API requests
         """
-        headers = {"Content-Type": "application/json"}
+        headers: Final = {"Content-Type": "application/json"}
         if self._api_key:
             headers["Authorization"] = f"Bearer {self._api_key}"
         return headers
@@ -31,7 +32,7 @@ class CredentialsManagementClient:
     def list(
         self,
         return_request: bool = False,
-    ) -> Union[Dict[str, Any], requests.Request]:
+    ) -> dict[str, Any] | requests.Request:
         """
         List all credentials.
 
@@ -46,16 +47,16 @@ class CredentialsManagementClient:
             UnauthorizedError: If the request fails with a 401 status code
             requests.exceptions.RequestException: If the request fails with any other error
         """
-        url = f"{self._base_url}/credentials"
+        url: Final = f"{self._base_url}/credentials"
 
-        request = requests.Request("GET", url, headers=self._get_headers())
+        request: Final = requests.Request("GET", url, headers=self._get_headers())
 
         if return_request:
             return request
 
-        session = requests.Session()
+        session: Final = requests.Session()
         try:
-            response = session.send(request.prepare())
+            response: Final = session.send(request.prepare())
             response.raise_for_status()
             return response.json()
         except requests.exceptions.HTTPError as e:
@@ -66,10 +67,10 @@ class CredentialsManagementClient:
     def create(
         self,
         credential_name: str,
-        credential_info: Dict[str, Any],
-        credential_values: Dict[str, Any],
+        credential_info: dict[str, Any],
+        credential_values: dict[str, Any],
         return_request: bool = False,
-    ) -> Union[Dict[str, Any], requests.Request]:
+    ) -> dict[str, Any] | requests.Request:
         """
         Create a new credential.
 
@@ -87,22 +88,22 @@ class CredentialsManagementClient:
             UnauthorizedError: If the request fails with a 401 status code
             requests.exceptions.RequestException: If the request fails with any other error
         """
-        url = f"{self._base_url}/credentials"
+        url: Final = f"{self._base_url}/credentials"
 
-        data = {
+        data: Final = {
             "credential_name": credential_name,
             "credential_info": credential_info,
             "credential_values": credential_values,
         }
 
-        request = requests.Request("POST", url, headers=self._get_headers(), json=data)
+        request: Final = requests.Request("POST", url, headers=self._get_headers(), json=data)
 
         if return_request:
             return request
 
-        session = requests.Session()
+        session: Final = requests.Session()
         try:
-            response = session.send(request.prepare())
+            response: Final = session.send(request.prepare())
             response.raise_for_status()
             return response.json()
         except requests.exceptions.HTTPError as e:
@@ -114,7 +115,7 @@ class CredentialsManagementClient:
         self,
         credential_name: str,
         return_request: bool = False,
-    ) -> Union[Dict[str, Any], requests.Request]:
+    ) -> dict[str, Any] | requests.Request:
         """
         Delete a credential by name.
 
@@ -130,16 +131,16 @@ class CredentialsManagementClient:
             UnauthorizedError: If the request fails with a 401 status code
             requests.exceptions.RequestException: If the request fails with any other error
         """
-        url = f"{self._base_url}/credentials/{credential_name}"
+        url: Final = f"{self._base_url}/credentials/{credential_name}"
 
-        request = requests.Request("DELETE", url, headers=self._get_headers())
+        request: Final = requests.Request("DELETE", url, headers=self._get_headers())
 
         if return_request:
             return request
 
-        session = requests.Session()
+        session: Final = requests.Session()
         try:
-            response = session.send(request.prepare())
+            response: Final = session.send(request.prepare())
             response.raise_for_status()
             return response.json()
         except requests.exceptions.HTTPError as e:
@@ -151,7 +152,7 @@ class CredentialsManagementClient:
         self,
         credential_name: str,
         return_request: bool = False,
-    ) -> Union[Dict[str, Any], requests.Request]:
+    ) -> dict[str, Any] | requests.Request:
         """
         Get a credential by name.
 
@@ -167,16 +168,16 @@ class CredentialsManagementClient:
             UnauthorizedError: If the request fails with a 401 status code
             requests.exceptions.RequestException: If the request fails with any other error
         """
-        url = f"{self._base_url}/credentials/by_name/{credential_name}"
+        url: Final = f"{self._base_url}/credentials/by_name/{credential_name}"
 
-        request = requests.Request("GET", url, headers=self._get_headers())
+        request: Final = requests.Request("GET", url, headers=self._get_headers())
 
         if return_request:
             return request
 
-        session = requests.Session()
+        session: Final = requests.Session()
         try:
-            response = session.send(request.prepare())
+            response: Final = session.send(request.prepare())
             response.raise_for_status()
             return response.json()
         except requests.exceptions.HTTPError as e:

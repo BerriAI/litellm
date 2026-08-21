@@ -4,7 +4,7 @@ BitBucket API client for fetching .prompt files from BitBucket repositories.
 
 import base64
 import urllib.parse
-from typing import Any, Dict, List, Optional
+from typing import Any, Final
 
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
@@ -12,15 +12,11 @@ from litellm.llms.custom_httpx.http_handler import HTTPHandler
 def _sanitize_file_path(file_path: str) -> str:
     """Reject path traversal and URL-encode each path segment."""
     if "#" in file_path or "?" in file_path:
-        raise ValueError(
-            f"Invalid file path {file_path!r}: contains URL special characters"
-        )
-    parts = file_path.split("/")
+        raise ValueError(f"Invalid file path {file_path!r}: contains URL special characters")
+    parts: Final = file_path.split("/")
     for part in parts:
         if part == "..":
-            raise ValueError(
-                f"Invalid file path {file_path!r}: path traversal detected"
-            )
+            raise ValueError(f"Invalid file path {file_path!r}: path traversal detected")
     return "/".join(urllib.parse.quote(part, safe="") for part in parts)
 
 
@@ -35,7 +31,7 @@ class BitBucketClient:
     - Branch-specific file fetching
     """
 
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: dict[str, Any]):
         """
         Initialize the BitBucket client.
 
@@ -68,8 +64,8 @@ class BitBucketClient:
 
         if self.auth_method == "basic" and self.username:
             # Use basic auth with username and app password
-            credentials = f"{self.username}:{self.access_token}"
-            encoded_credentials = base64.b64encode(credentials.encode()).decode()
+            credentials: Final = f"{self.username}:{self.access_token}"
+            encoded_credentials: Final = base64.b64encode(credentials.encode()).decode()
             self.headers["Authorization"] = f"Basic {encoded_credentials}"
         else:
             # Use token-based authentication (default)
@@ -78,7 +74,7 @@ class BitBucketClient:
         # Initialize HTTPHandler
         self.http_handler = HTTPHandler()
 
-    def get_file_content(self, file_path: str) -> Optional[str]:
+    def get_file_content(self, file_path: str) -> str | None:
         """
         Fetch the content of a file from the BitBucket repository.
 
@@ -88,11 +84,11 @@ class BitBucketClient:
         Returns:
             File content as string, or None if file not found
         """
-        safe_path = _sanitize_file_path(file_path)
-        url = f"{self.base_url}/repositories/{self.workspace}/{self.repository}/src/{self.branch}/{safe_path}"
+        safe_path: Final = _sanitize_file_path(file_path)
+        url: Final = f"{self.base_url}/repositories/{self.workspace}/{self.repository}/src/{self.branch}/{safe_path}"
 
         try:
-            response = self.http_handler.get(url, headers=self.headers)
+            response: Final = self.http_handler.get(url, headers=self.headers)
             response.raise_for_status()
 
             # BitBucket returns file content as base64 encoded
@@ -115,17 +111,13 @@ class BitBucketClient:
                         f"Access denied to file '{file_path}'. Check your BitBucket permissions for workspace '{self.workspace}' and repository '{self.repository}'."
                     )
                 elif e.response.status_code == 401:
-                    raise Exception(
-                        "Authentication failed. Check your BitBucket access token and permissions."
-                    )
+                    raise Exception("Authentication failed. Check your BitBucket access token and permissions.")
                 else:
                     raise Exception(f"Failed to fetch file '{file_path}': {e}")
             else:
                 raise Exception(f"Error fetching file '{file_path}': {e}")
 
-    def list_files(
-        self, directory_path: str = "", file_extension: str = ".prompt"
-    ) -> List[str]:
+    def list_files(self, directory_path: str = "", file_extension: str = ".prompt") -> list[str]:
         """
         List files in a directory with a specific extension.
 
@@ -136,15 +128,15 @@ class BitBucketClient:
         Returns:
             List of file paths
         """
-        safe_dir = _sanitize_file_path(directory_path) if directory_path else ""
-        url = f"{self.base_url}/repositories/{self.workspace}/{self.repository}/src/{self.branch}/{safe_dir}"
+        safe_dir: Final = _sanitize_file_path(directory_path) if directory_path else ""
+        url: Final = f"{self.base_url}/repositories/{self.workspace}/{self.repository}/src/{self.branch}/{safe_dir}"
 
         try:
-            response = self.http_handler.get(url, headers=self.headers)
+            response: Final = self.http_handler.get(url, headers=self.headers)
             response.raise_for_status()
 
-            data = response.json()
-            files = []
+            data: Final = response.json()
+            files: Final = []
 
             for item in data.get("values", []):
                 if item.get("type") == "commit_file":
@@ -164,25 +156,23 @@ class BitBucketClient:
                         f"Access denied to directory '{directory_path}'. Check your BitBucket permissions for workspace '{self.workspace}' and repository '{self.repository}'."
                     )
                 elif e.response.status_code == 401:
-                    raise Exception(
-                        "Authentication failed. Check your BitBucket access token and permissions."
-                    )
+                    raise Exception("Authentication failed. Check your BitBucket access token and permissions.")
                 else:
                     raise Exception(f"Failed to list files in '{directory_path}': {e}")
             else:
                 raise Exception(f"Error listing files in '{directory_path}': {e}")
 
-    def get_repository_info(self) -> Dict[str, Any]:
+    def get_repository_info(self) -> dict[str, Any]:
         """
         Get information about the repository.
 
         Returns:
             Dictionary containing repository information
         """
-        url = f"{self.base_url}/repositories/{self.workspace}/{self.repository}"
+        url: Final = f"{self.base_url}/repositories/{self.workspace}/{self.repository}"
 
         try:
-            response = self.http_handler.get(url, headers=self.headers)
+            response: Final = self.http_handler.get(url, headers=self.headers)
             response.raise_for_status()
             return response.json()
         except Exception as e:
@@ -201,25 +191,25 @@ class BitBucketClient:
         except Exception:
             return False
 
-    def get_branches(self) -> List[Dict[str, Any]]:
+    def get_branches(self) -> list[dict[str, Any]]:
         """
         Get list of branches in the repository.
 
         Returns:
             List of branch information dictionaries
         """
-        url = f"{self.base_url}/repositories/{self.workspace}/{self.repository}/refs/branches"
+        url: Final = f"{self.base_url}/repositories/{self.workspace}/{self.repository}/refs/branches"
 
         try:
-            response = self.http_handler.get(url, headers=self.headers)
+            response: Final = self.http_handler.get(url, headers=self.headers)
             response.raise_for_status()
 
-            data = response.json()
+            data: Final = response.json()
             return data.get("values", [])
         except Exception as e:
             raise Exception(f"Failed to get branches: {e}")
 
-    def get_file_metadata(self, file_path: str) -> Optional[Dict[str, Any]]:
+    def get_file_metadata(self, file_path: str) -> dict[str, Any] | None:
         """
         Get metadata about a file (size, last modified, etc.).
 
@@ -229,15 +219,15 @@ class BitBucketClient:
         Returns:
             Dictionary containing file metadata, or None if file not found
         """
-        safe_path = _sanitize_file_path(file_path)
-        url = f"{self.base_url}/repositories/{self.workspace}/{self.repository}/src/{self.branch}/{safe_path}"
+        safe_path: Final = _sanitize_file_path(file_path)
+        url: Final = f"{self.base_url}/repositories/{self.workspace}/{self.repository}/src/{self.branch}/{safe_path}"
 
         try:
             # Use GET with Range header to get just the headers (HEAD equivalent)
-            headers = self.headers.copy()
+            headers: Final = self.headers.copy()
             headers["Range"] = "bytes=0-0"  # Request only first byte to get headers
 
-            response = self.http_handler.get(url, headers=headers)
+            response: Final = self.http_handler.get(url, headers=headers)
             response.raise_for_status()
 
             return {

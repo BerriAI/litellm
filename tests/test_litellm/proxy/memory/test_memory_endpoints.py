@@ -19,7 +19,7 @@ from fastapi.testclient import TestClient
 sys.path.insert(0, os.path.abspath("../../.."))
 
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
-from litellm.proxy.memory.memory_endpoints import router
+from litellm.proxy.memory.memory_endpoints import _visibility_filter, router
 
 
 def _make_row(
@@ -215,6 +215,14 @@ def _admin_auth() -> UserAPIKeyAuth:
         api_key="sk-admin",
         user_id="admin",
         user_role=LitellmUserRoles.PROXY_ADMIN,
+    )
+
+
+def _admin_viewer_auth() -> UserAPIKeyAuth:
+    return UserAPIKeyAuth(
+        api_key="sk-viewer",
+        user_id="viewer",
+        user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
     )
 
 
@@ -913,3 +921,67 @@ class TestMemoryEndpoints:
         with _patch_prisma(self.prisma):
             resp = client.delete("/v1/memory/notes")
         assert resp.status_code == 404
+
+    def test_visibility_filter_unscoped_for_admin_viewer(self):
+        """
+        proxy_admin_viewer reads with the same unscoped filter as proxy_admin;
+        every other role stays row-restricted.
+        """
+        assert _visibility_filter(_admin_viewer_auth()) is None
+        assert _visibility_filter(_user_auth("user-a", "team-a")) is not None
+
+    def test_list_memory_admin_viewer_sees_all(self):
+        """Read parity end-to-end: the viewer's own user_id/team_id must not filter the list."""
+        table = self.prisma.db.litellm_memorytable
+        table.rows.extend(
+            [
+                _make_row(memory_id="m1", key="a", user_id="user-a", team_id=None),
+                _make_row(memory_id="m2", key="b", user_id="user-b", team_id="team-b"),
+            ]
+        )
+        client = _make_client(_admin_viewer_auth())
+        with _patch_prisma(self.prisma):
+            resp = client.get("/v1/memory")
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert {m["key"] for m in body["memories"]} == {"a", "b"}
+        assert body["total"] == 2
+
+    def test_put_memory_admin_viewer_cannot_overwrite_foreign_row(self):
+        """
+        Read parity must not become write parity: the viewer now SEES this row
+        (403, not 404) but `_assert_write_access` still refuses the write.
+        """
+        table = self.prisma.db.litellm_memorytable
+        table.rows.append(
+            _make_row(
+                memory_id="m1",
+                key="user_role",
+                value="A's notes",
+                user_id="user-a",
+                team_id="team-a",
+            )
+        )
+        client = _make_client(_admin_viewer_auth())
+        with _patch_prisma(self.prisma):
+            resp = client.put("/v1/memory/user_role", json={"value": "viewer overwrite"})
+        assert resp.status_code == 403, resp.text
+        assert table.rows[0].value == "A's notes"
+
+    def test_delete_memory_admin_viewer_cannot_delete_foreign_row(self):
+        """Same write gate as the PUT case, for DELETE."""
+        table = self.prisma.db.litellm_memorytable
+        table.rows.append(
+            _make_row(
+                memory_id="m1",
+                key="user_role",
+                value="A's notes",
+                user_id="user-a",
+                team_id="team-a",
+            )
+        )
+        client = _make_client(_admin_viewer_auth())
+        with _patch_prisma(self.prisma):
+            resp = client.delete("/v1/memory/user_role")
+        assert resp.status_code == 403, resp.text
+        assert len(table.rows) == 1

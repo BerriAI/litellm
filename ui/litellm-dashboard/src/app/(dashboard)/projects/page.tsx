@@ -1,6 +1,6 @@
 "use client";
 
-import { ProjectsPage } from "./components/ProjectsPage";
+import { ProjectsPage } from "./_components/ProjectsPage";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 
 export default function Projects() {

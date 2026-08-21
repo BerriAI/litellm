@@ -1,6 +1,7 @@
 import os
 import sys
 
+import httpx
 import pytest
 
 import litellm
@@ -77,6 +78,18 @@ context_window_test_cases = [
         "CerebrasException - Please reduce the length of the messages or completion. Current length is 50000 while limit is 40000",
         True,
     ),
+    (
+        "Invalid 'input[0]': maximum input length is 8192 tokens.",
+        True,
+    ),
+    (
+        "OpenAIException - Error code: 400 - {'error': {'message': \"Invalid 'input[0]': maximum input length is 8192 tokens.\", 'type': 'invalid_request_error'}}",
+        True,
+    ),
+    (
+        "Invalid 'metadata': maximum input length is 512 characters.",
+        False,
+    ),
     # Negative cases (should return False)
     ("A generic API error occurred.", False),
     ("Invalid API Key provided.", False),
@@ -119,6 +132,40 @@ class TestExceptionCheckers:
         error_str = "RateLimitError: OpenAIException - You exceeded your current quota. (status code 429)"
         result = ExceptionCheckers.is_error_str_rate_limit(error_str)
         assert result is True
+
+    def test_bare_429_in_body_is_ignored_when_status_code_says_otherwise(self):
+        """A 429 echoed back inside a 400's body is not a rate limit.
+
+        Word boundaries don't help: 429 is an ordinary token id (" that" in several
+        tokenisers), so an echoed prompt_token_ids array reads as a standalone 429.
+        """
+        error_str = (
+            '{"error":{"message":"`tools` must not be an empty array",'
+            '"type":"invalid_request_error"},'
+            '"prompt_token_ids":[9906,429,1234]}'
+        )
+        assert ExceptionCheckers.is_error_str_rate_limit(error_str, status_code=400) is False
+
+    def test_bare_429_still_detected_without_a_status_code(self):
+        """With no status available, a standalone 429 still counts (unchanged behaviour)."""
+
+        assert ExceptionCheckers.is_error_str_rate_limit("HTTP 429 Too Many Requests") is True
+        assert ExceptionCheckers.is_error_str_rate_limit("HTTP 429 Too Many Requests", status_code=None) is True
+        assert ExceptionCheckers.is_error_str_rate_limit("HTTP 429 Too Many Requests", status_code=429) is True
+
+    def test_non_integer_status_code_does_not_suppress_bare_429(self):
+        """A non-integer status counts as unknown, not as a contradiction."""
+
+        assert ExceptionCheckers.is_error_str_rate_limit("HTTP 429 Too Many Requests", status_code="not-an-int") is True
+
+    def test_rate_limit_phrase_is_honoured_under_a_non_429_status(self):
+        """Phrase matching stays ungated: some providers report a real rate limit in
+        the text under a non-429 status (#11455)."""
+
+        assert (
+            ExceptionCheckers.is_error_str_rate_limit("FireworksException - rate limit exceeded", status_code=400)
+            is True
+        )
 
     def test_is_azure_content_policy_violation_error_with_policy_violation_text(self):
         """Test detection of Azure content policy violation with explicit policy violation text"""
@@ -285,6 +332,54 @@ def test_lemonade_context_window_error_mapping():
     assert excinfo.value.status_code == 400
     assert excinfo.value.llm_provider == "lemonade"
     assert excinfo.value.model == model
+
+
+def test_openai_compatible_400_with_bare_429_in_body_maps_to_bad_request():
+    """A provider 400 whose echoed body contains a 429 must stay a 400.
+
+    ``is_error_str_rate_limit`` runs before the status-code branch for
+    openai-compatible providers, so a validation error echoing the request back came
+    out as RateLimitError, which tells the caller to retry a request that cannot
+    succeed and books the failure against provider throttling.
+    """
+    error_message = (
+        '{"error":{"message":"`tools` must not be an empty array",'
+        '"type":"invalid_request_error","code":400},'
+        '"prompt_token_ids":[9906,429,1234]}'
+    )
+    original_exception = OpenAIError(
+        status_code=400,
+        message=error_message,
+        headers={},
+    )
+
+    with pytest.raises(litellm.BadRequestError) as excinfo:
+        exception_type(
+            model="deepseek-ai/DeepSeek-V3",
+            original_exception=original_exception,
+            custom_llm_provider="deepinfra",
+        )
+
+    assert excinfo.value.status_code == 400
+    assert excinfo.value.llm_provider == "deepinfra"
+
+
+def test_openai_compatible_429_still_maps_to_rate_limit():
+    """A real 429 still maps to RateLimitError."""
+    original_exception = OpenAIError(
+        status_code=429,
+        message='{"error":{"message":"Too Many Requests","type":"rate_limit_error"}}',
+        headers={},
+    )
+
+    with pytest.raises(litellm.RateLimitError) as excinfo:
+        exception_type(
+            model="deepseek-ai/DeepSeek-V3",
+            original_exception=original_exception,
+            custom_llm_provider="deepinfra",
+        )
+
+    assert excinfo.value.status_code == 429
 
 
 @pytest.mark.parametrize(
@@ -550,3 +645,120 @@ class TestExtractAndRaiseLitellmException:
         )
 
         assert result is None
+
+
+class ModelError(Exception):
+    """Mimics replicate's SDK exception, whose mapping keys on the class name."""
+
+
+class CohereConnectionError(Exception):
+    """Mimics cohere's SDK exception, whose mapping keys on the class name."""
+
+
+def test_replicate_model_error_maps_to_bad_request():
+    """The replicate branch keys on ``type(original_exception).__name__ ==
+    "ModelError"`` rather than on the error string. The dispatch now lives in a
+    per-provider helper, so this class-name value has to be threaded into the
+    helper; if it is not, the bare name ``exception_type`` resolves to the
+    module-level function and the comparison is always False, silently mismapping
+    to APIConnectionError."""
+    original_exception = ModelError("the deployed model failed to return a prediction")
+
+    with pytest.raises(litellm.BadRequestError) as excinfo:
+        exception_type(
+            model="replicate/meta/llama-2-70b-chat",
+            original_exception=original_exception,
+            custom_llm_provider="replicate",
+        )
+
+    assert excinfo.value.llm_provider == "replicate"
+
+
+def test_cohere_connection_error_maps_to_rate_limit():
+    """The cohere branch keys on ``"CohereConnectionError" in
+    type(original_exception).__name__``. With the dispatch extracted into a helper
+    the class-name value must be passed in; otherwise ``in`` runs against the
+    module-level ``exception_type`` function object and raises TypeError, which the
+    outer handler swallows into a generic APIConnectionError."""
+    original_exception = CohereConnectionError("connection reset by peer")
+    original_exception.message = "connection reset by peer"
+
+    with pytest.raises(litellm.RateLimitError) as excinfo:
+        exception_type(
+            model="command-r",
+            original_exception=original_exception,
+            custom_llm_provider="cohere",
+        )
+
+    assert excinfo.value.llm_provider == "cohere"
+
+
+class ReplicateError(Exception):
+    """Mimics a replicate HTTP error carrying a status_code and response."""
+
+    def __init__(self, message: str, status_code: int) -> None:
+        super().__init__(message)
+        self.message = message
+        self.status_code = status_code
+        self.response = httpx.Response(
+            status_code=status_code,
+            request=httpx.Request("POST", "https://api.replicate.com/v1/predictions"),
+        )
+
+
+def test_replicate_422_maps_to_unprocessable_entity():
+    """The replicate status-code ladder carried two identical ``status_code == 422``
+    branches; the second was unreachable dead code. After dropping the duplicate the
+    surviving branch must still map 422 to UnprocessableEntityError."""
+    original_exception = ReplicateError("validation failed for the input", 422)
+
+    with pytest.raises(litellm.UnprocessableEntityError) as excinfo:
+        exception_type(
+            model="replicate/meta/llama-2-70b-chat",
+            original_exception=original_exception,
+            custom_llm_provider="replicate",
+        )
+
+    assert excinfo.value.llm_provider == "replicate"
+
+
+def test_upstream_4xx_without_model_maps_to_bad_request():
+    """Responses API follow-ups (cancel/get/delete) call ``exception_type`` with
+    ``model=None``; the provider mapping used to be gated on ``if model:``, so an
+    upstream 400 like Azure's "Cannot cancel a synchronous response." fell through to
+    the generic 500 APIConnectionError instead of surfacing as a 400."""
+    from litellm.llms.base_llm.chat.transformation import BaseLLMException
+
+    original_exception = BaseLLMException(
+        status_code=400,
+        message='{"error": {"message": "Cannot cancel a synchronous response.", "type": "invalid_request_error"}}',
+    )
+
+    with pytest.raises(litellm.BadRequestError) as excinfo:
+        exception_type(
+            model=None,
+            original_exception=original_exception,
+            custom_llm_provider="azure",
+        )
+
+    assert excinfo.value.status_code == 400
+    assert "Cannot cancel a synchronous response." in excinfo.value.message
+
+
+def test_azure_404_with_invalid_request_error_type_maps_to_not_found():
+    from litellm.llms.base_llm.chat.transformation import BaseLLMException
+
+    original_exception = BaseLLMException(
+        status_code=404,
+        message='{"error": {"message": "Response with id \'resp_abc\' not found.", "type": "invalid_request_error"}}',
+    )
+
+    with pytest.raises(litellm.NotFoundError) as excinfo:
+        exception_type(
+            model=None,
+            original_exception=original_exception,
+            custom_llm_provider="azure",
+        )
+
+    assert excinfo.value.status_code == 404
+    assert "Response with id 'resp_abc' not found." in excinfo.value.message

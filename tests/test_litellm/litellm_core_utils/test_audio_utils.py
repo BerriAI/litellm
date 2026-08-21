@@ -326,3 +326,24 @@ class TestGetAudioFileContentHash:
 
         assert isinstance(hash_result, str)
         assert len(hash_result) == 64, "Should return valid hash even on fallback"
+
+
+class TestNormalizeTranscriptionLanguageToBcp47:
+    @pytest.mark.parametrize(
+        "language,expected",
+        [
+            ("en", "en-US"),
+            ("EN", "en-US"),
+            ("ja", "ja-JP"),
+            ("en-US", "en-US"),
+            ("en-GB", "en-GB"),
+            ("auto", "auto"),
+            ("xx", "xx"),
+        ],
+    )
+    def test_normalization(self, language, expected):
+        from litellm.litellm_core_utils.audio_utils.utils import (
+            normalize_transcription_language_to_bcp47,
+        )
+
+        assert normalize_transcription_language_to_bcp47(language) == expected
