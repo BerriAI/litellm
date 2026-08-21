@@ -33,7 +33,7 @@ class TestOpenMeterIntegration:
     def test_openmeter_logger_missing_api_key(self):
         """Test that OpenMeterLogger raises exception when API key is missing"""
         os.environ.pop("OPENMETER_API_KEY", None)
-        with pytest.raises(Exception, match="Missing keys.*OPENMETER_API_KEY"):
+        with pytest.raises(Exception, match=r"Missing keys.*OPENMETER_API_KEY"):
             OpenMeterLogger()
 
     def test_common_logic_with_string_user(self):
