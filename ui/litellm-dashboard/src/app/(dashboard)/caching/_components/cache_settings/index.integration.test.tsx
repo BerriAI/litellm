@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import CacheSettings from "./index";
 
@@ -99,7 +99,7 @@ describe("CacheSettings advanced settings round-trip", () => {
     await screen.findByText("Connection Settings");
 
     await user.click(screen.getByText("Advanced Settings"));
-    await user.type(await screen.findByLabelText("Namespace"), "typed-ns");
+    fireEvent.change(await screen.findByLabelText("Namespace"), { target: { value: "typed-ns" } });
     await user.click(screen.getByText("Advanced Settings"));
     await waitFor(() => expect(screen.queryByLabelText("Namespace")).not.toBeInTheDocument());
 
@@ -116,7 +116,7 @@ describe("CacheSettings advanced settings round-trip", () => {
     await screen.findByText("Connection Settings");
 
     await user.click(screen.getByText("Advanced Settings"));
-    await user.type(await screen.findByLabelText("Namespace"), "typed-ns");
+    fireEvent.change(await screen.findByLabelText("Namespace"), { target: { value: "typed-ns" } });
     await user.click(screen.getByText("Advanced Settings"));
     await waitFor(() => expect(screen.queryByLabelText("Namespace")).not.toBeInTheDocument());
     await user.click(screen.getByText("Advanced Settings"));
@@ -145,7 +145,7 @@ describe("CacheSettings advanced settings round-trip", () => {
     await screen.findByText("Connection Settings");
 
     await user.click(screen.getByText("Advanced Settings"));
-    await user.type(await screen.findByLabelText("TTL (seconds)"), "not-a-number");
+    fireEvent.change(await screen.findByLabelText("TTL (seconds)"), { target: { value: "not-a-number" } });
     await user.click(screen.getByText("Advanced Settings"));
     await waitFor(() => expect(screen.queryByLabelText("TTL (seconds)")).not.toBeInTheDocument());
 

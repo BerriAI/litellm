@@ -658,6 +658,7 @@ def _build_aggregated_sql_query(
     api_key: str | list[str] | None,  # mutable-ok: filter union shared with the paginated path
     exclude_entity_ids: list[str] | None = None,  # mutable-ok: filter union shared with the paginated path
     timezone_offset_minutes: int | None = None,
+    include_current_utc_day: bool = False,
 ) -> tuple[str, list[str]]:  # mutable-ok: SQL text plus its ordered $N params
     """Build a parameterized SQL GROUP BY query for aggregated daily activity.
 
@@ -673,7 +674,9 @@ def _build_aggregated_sql_query(
     if pg_table is None:
         raise ValueError(f"Unknown table name: {table_name}")
 
-    adjusted_start, adjusted_end = _adjust_dates_for_timezone(start_date, end_date, timezone_offset_minutes)
+    adjusted_start, adjusted_end = _adjust_dates_for_timezone(
+        start_date, end_date, timezone_offset_minutes, include_current_utc_day
+    )
 
     where_clause, sql_params = _build_aggregated_where_clause(
         entity_id_field=entity_id_field,
@@ -755,6 +758,7 @@ def _build_entity_rollup_sql_query(
     api_key: str | list[str] | None,  # mutable-ok: filter union shared with the paginated path
     exclude_entity_ids: list[str] | None = None,  # mutable-ok: filter union shared with the paginated path
     timezone_offset_minutes: int | None = None,
+    include_current_utc_day: bool = False,
 ) -> tuple[str, list[str]]:  # mutable-ok: SQL text plus its ordered $N params
     """Per-entity companion to _build_aggregated_sql_query.
 
@@ -766,7 +770,9 @@ def _build_entity_rollup_sql_query(
     if pg_table is None:
         raise ValueError(f"Unknown table name: {table_name}")
 
-    adjusted_start, adjusted_end = _adjust_dates_for_timezone(start_date, end_date, timezone_offset_minutes)
+    adjusted_start, adjusted_end = _adjust_dates_for_timezone(
+        start_date, end_date, timezone_offset_minutes, include_current_utc_day
+    )
 
     where_clause, sql_params = _build_aggregated_where_clause(
         entity_id_field=entity_id_field,
@@ -1256,6 +1262,7 @@ async def get_daily_activity_aggregated(
     exclude_entity_ids: list[str] | None = None,
     timezone_offset_minutes: int | None = None,
     include_entity_breakdown: bool = False,
+    include_current_utc_day: bool = False,
 ) -> SpendAnalyticsPaginatedResponse:
     """Aggregated variant that returns the full result set (no pagination).
 
@@ -1291,6 +1298,7 @@ async def get_daily_activity_aggregated(
             api_key=api_key,
             exclude_entity_ids=exclude_entity_ids,
             timezone_offset_minutes=timezone_offset_minutes,
+            include_current_utc_day=include_current_utc_day,
         )
 
         entity_query: Final = (
@@ -1304,6 +1312,7 @@ async def get_daily_activity_aggregated(
                 api_key=api_key,
                 exclude_entity_ids=exclude_entity_ids,
                 timezone_offset_minutes=timezone_offset_minutes,
+                include_current_utc_day=include_current_utc_day,
             )
             if include_entity_breakdown
             else None

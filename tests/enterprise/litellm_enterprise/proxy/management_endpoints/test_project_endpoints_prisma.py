@@ -29,6 +29,7 @@ from litellm_enterprise.proxy.management_endpoints.project_endpoints import (
 from litellm.proxy.proxy_server import (
     LitellmUserRoles,
 )
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 
 verbose_proxy_logger.setLevel(level=logging.DEBUG)
@@ -1039,3 +1040,70 @@ async def test_project_eviction_publishes_cross_worker_invalidation(monkeypatch)
         )
 
     mock_publish.assert_awaited_once_with(cache_key=f"project_id:{project_id}")
+
+
+def _project_update_mocks(monkeypatch, stored_metadata: dict) -> mock.MagicMock:
+    existing_row = mock.MagicMock(
+        team_id=None, budget_id=None, object_permission_id=None, metadata=stored_metadata
+    )
+    mock_prisma = mock.MagicMock()
+    mock_prisma.jsonify_object = lambda data: data
+    mock_prisma.db.litellm_projecttable.find_unique = mock.AsyncMock(return_value=existing_row)
+    mock_prisma.db.litellm_projecttable.update = mock.AsyncMock(return_value=mock.MagicMock())
+
+    monkeypatch.setattr(litellm.proxy.proxy_server, "premium_user", True)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "prisma_client", mock_prisma)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "user_api_key_cache", UserApiKeyCache())
+    return mock_prisma
+
+
+async def _run_project_update(project_id: str, **fields) -> None:
+    await update_project(
+        data=UpdateProjectRequest(project_id=project_id, **fields),
+        http_request=Request(scope={"type": "http"}),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            api_key="sk-1234",
+            user_id="1234",
+        ),
+    )
+
+
+def _written_project_data(mock_prisma: mock.MagicMock) -> dict:
+    return mock_prisma.db.litellm_projecttable.update.await_args.kwargs["data"]
+
+
+@pytest.mark.asyncio
+async def test_update_project_clears_model_itpm_limit_sent_as_an_empty_map(monkeypatch):
+    """
+    LIT-4693 regression: an omitted key means "leave this alone", so the only way to drop a
+    per-model input/output TPM quota is to send it as an explicitly empty map. The written
+    metadata must stop carrying the quota, otherwise the proxy keeps enforcing a limit the
+    operator has already removed in the UI.
+    """
+    project_id = f"project-{uuid.uuid4()}"
+    mock_prisma = _project_update_mocks(
+        monkeypatch,
+        {"owner": "platform", "model_itpm_limit": {"gpt-4": 60}, "model_otpm_limit": {"gpt-4": 40}},
+    )
+
+    await _run_project_update(project_id, model_itpm_limit={}, model_otpm_limit={})
+
+    written_metadata = _written_project_data(mock_prisma)["metadata"]
+    assert written_metadata["model_itpm_limit"] == {}
+    assert written_metadata["model_otpm_limit"] == {}
+
+
+@pytest.mark.asyncio
+async def test_update_project_leaves_metadata_untouched_when_no_limit_is_sent(monkeypatch):
+    """
+    The other half of the same contract: an update that says nothing about the limits must not
+    write metadata at all. That is what makes a dropped key silently preserve the old quota, so
+    the UI has to send the empty map instead of omitting it.
+    """
+    project_id = f"project-{uuid.uuid4()}"
+    mock_prisma = _project_update_mocks(monkeypatch, {"model_itpm_limit": {"gpt-4": 60}})
+
+    await _run_project_update(project_id, description="renamed only")
+
+    assert "metadata" not in _written_project_data(mock_prisma)

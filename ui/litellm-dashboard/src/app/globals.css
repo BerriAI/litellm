@@ -1,4 +1,4 @@
-@layer theme, base, antd, components, utilities;
+@layer theme, base, components, utilities;
 
 @import "tailwindcss";
 @import "tw-animate-css";
@@ -92,9 +92,13 @@
   --accent: oklch(0.967 0.003 264.542);
   --accent-foreground: oklch(0.21 0.034 264.665);
   --destructive: oklch(0.577 0.245 27.325);
+  --destructive-foreground: oklch(1 0 0);
   --success: oklch(0.527 0.154 150.069);
+  --success-foreground: oklch(1 0 0);
   --warning: oklch(0.555 0.163 48.998);
+  --warning-foreground: oklch(1 0 0);
   --info: oklch(0.546 0.245 262.881);
+  --info-foreground: oklch(1 0 0);
   --border: oklch(0.928 0.006 264.531);
   --input: oklch(0.928 0.006 264.531);
   --ring: oklch(0.707 0.022 261.325);
@@ -115,40 +119,45 @@
 }
 
 .dark {
-  --background: oklch(0.13 0.028 261.692);
-  --foreground: oklch(0.985 0.002 247.839);
-  --card: oklch(0.21 0.034 264.665);
-  --card-foreground: oklch(0.985 0.002 247.839);
-  --popover: oklch(0.21 0.034 264.665);
-  --popover-foreground: oklch(0.985 0.002 247.839);
-  --primary: oklch(0.928 0.006 264.531);
-  --primary-foreground: oklch(0.21 0.034 264.665);
-  --secondary: oklch(0.278 0.033 256.848);
-  --secondary-foreground: oklch(0.985 0.002 247.839);
-  --muted: oklch(0.278 0.033 256.848);
-  --muted-foreground: oklch(0.707 0.022 261.325);
-  --accent: oklch(0.278 0.033 256.848);
-  --accent-foreground: oklch(0.985 0.002 247.839);
+  --background: oklch(0.248 0 0);
+  --foreground: oklch(0.964 0 0);
+  --card: oklch(0.248 0 0);
+  --card-foreground: oklch(0.964 0 0);
+  --popover: oklch(0.286 0 0);
+  --popover-foreground: oklch(0.964 0 0);
+  --primary: oklch(0.928 0 0);
+  --primary-foreground: oklch(0.209 0 0);
+  --secondary: oklch(0.356 0 0);
+  --secondary-foreground: oklch(0.964 0 0);
+  --muted: oklch(0.209 0 0);
+  --muted-foreground: oklch(0.754 0 0);
+  --accent: oklch(0.309 0 0);
+  --accent-foreground: oklch(0.964 0 0);
   --destructive: oklch(0.704 0.191 22.216);
+  --destructive-foreground: oklch(0.209 0 0);
   --success: oklch(0.792 0.209 151.711);
+  --success-foreground: oklch(0.209 0 0);
   --warning: oklch(0.828 0.189 84.429);
+  --warning-foreground: oklch(0.209 0 0);
   --info: oklch(0.707 0.165 254.624);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.551 0.027 264.364);
+  --info-foreground: oklch(0.209 0 0);
+  --border: oklch(0.309 0 0);
+  --input: oklch(0.56 0 0);
+  --ring: oklch(0.569 0 0);
   --chart-1: oklch(0.488 0.243 264.376);
   --chart-2: oklch(0.696 0.17 162.48);
   --chart-3: oklch(0.769 0.188 70.08);
   --chart-4: oklch(0.627 0.265 303.9);
   --chart-5: oklch(0.645 0.246 16.439);
-  --sidebar: oklch(0.21 0.034 264.665);
-  --sidebar-foreground: oklch(0.985 0.002 247.839);
+  --sidebar: oklch(0.187 0 0);
+  --sidebar-foreground: oklch(0.964 0 0);
   --sidebar-primary: oklch(0.488 0.243 264.376);
-  --sidebar-primary-foreground: oklch(0.985 0.002 247.839);
-  --sidebar-accent: oklch(0.278 0.033 256.848);
-  --sidebar-accent-foreground: oklch(0.985 0.002 247.839);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.551 0.027 264.364);
+  --sidebar-primary-foreground: oklch(0.964 0 0);
+  --sidebar-accent: oklch(0.309 0 0);
+  --sidebar-accent-foreground: oklch(0.964 0 0);
+  --sidebar-border: oklch(0.187 0 0);
+  --sidebar-ring: oklch(0.569 0 0);
+  --neutral-border: var(--border);
 }
 
 @theme inline {
@@ -171,9 +180,13 @@
   --color-accent: var(--accent);
   --color-accent-foreground: var(--accent-foreground);
   --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
   --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
   --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
   --color-info: var(--info);
+  --color-info-foreground: var(--info-foreground);
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
@@ -229,6 +242,13 @@
     letter-spacing: inherit;
   }
 
+  /* Same plugin's white fill, on the hand-rolled controls outside components/ui that the audit
+     above did not cover. Tracks --background so light mode keeps the white it already painted.
+     Delete along with the plugin. */
+  :is(input, textarea, select):not([type="checkbox"], [type="radio"], [data-slot="combobox-chip-input"]) {
+    background-color: var(--color-background);
+  }
+
   button:not(:disabled),
   [role="button"]:not(:disabled) {
     cursor: pointer;
@@ -236,7 +256,7 @@
 
   input::placeholder,
   textarea::placeholder {
-    color: var(--color-gray-400);
+    color: var(--color-muted-foreground);
   }
 
   body {
@@ -259,14 +279,4 @@
    showing its own edges around a differently sized child. */
 [data-slot="dialog-content"][data-nested-dialog-open] {
   visibility: hidden;
-}
-
-/* Base UI portals a popup into an `isolate z-50` positioner, which an antd Modal at z-index 1000
-   then paints over, so options on a half-migrated page are visible but not clickable. The
-   positioner is not reachable from the call site, hence the parent selector. Delete this once no
-   route renders an antd Modal. */
-body:has(.ant-modal-wrap) div:has(> [data-slot="select-content"]),
-body:has(.ant-modal-wrap) div:has(> [data-slot="combobox-content"]),
-body:has(.ant-modal-wrap) div:has(> [data-slot="tooltip-content"]) {
-  z-index: 1100;
 }

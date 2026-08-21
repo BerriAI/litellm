@@ -40,13 +40,13 @@ const AutoRotationView: React.FC<AutoRotationViewProps> = ({
     <div className="space-y-6">
       <div className="space-y-3">
         <div className="flex items-center gap-2">
-          <RefreshIcon className="h-4 w-4 text-blue-600" />
-          <p className="text-sm font-semibold text-gray-900">Auto-Rotation</p>
+          <RefreshIcon className="h-4 w-4 text-info" />
+          <p className="text-sm font-semibold text-foreground">Auto-Rotation</p>
           <StatusBadge tone={autoRotate ? "success" : "neutral"} label={autoRotate ? "Enabled" : "Disabled"} />
           {autoRotate && rotationInterval && (
             <>
-              <p className="text-sm text-gray-400">•</p>
-              <p className="text-sm text-gray-600">Every {rotationInterval}</p>
+              <p className="text-sm text-muted-foreground">•</p>
+              <p className="text-sm text-muted-foreground">Every {rotationInterval}</p>
             </>
           )}
         </div>
@@ -55,38 +55,40 @@ const AutoRotationView: React.FC<AutoRotationViewProps> = ({
       {(autoRotate || lastRotationAt || keyRotationAt || nextRotationAt) && (
         <div className="space-y-3">
           {lastRotationAt && (
-            <div className="flex items-center gap-2 rounded-md border border-gray-200 bg-gray-50 p-3">
-              <ClockIcon className="h-4 w-4 text-gray-500" />
+            <div className="flex items-center gap-2 rounded-md border border-border bg-muted p-3">
+              <ClockIcon className="h-4 w-4 text-muted-foreground" />
               <div className="flex-1">
-                <p className="text-sm font-medium text-gray-700">Last Rotation</p>
-                <p className="text-sm text-gray-600">{formatTimestamp(lastRotationAt)}</p>
+                <p className="text-sm font-medium text-foreground">Last Rotation</p>
+                <p className="text-sm text-muted-foreground">{formatTimestamp(lastRotationAt)}</p>
               </div>
             </div>
           )}
 
           {(keyRotationAt || nextRotationAt) && (
-            <div className="flex items-center gap-2 rounded-md border border-gray-200 bg-gray-50 p-3">
-              <ClockIcon className="h-4 w-4 text-gray-500" />
+            <div className="flex items-center gap-2 rounded-md border border-border bg-muted p-3">
+              <ClockIcon className="h-4 w-4 text-muted-foreground" />
               <div className="flex-1">
-                <p className="text-sm font-medium text-gray-700">Next Scheduled Rotation</p>
-                <p className="text-sm text-gray-600">{formatTimestamp(nextRotationAt || keyRotationAt || "")}</p>
+                <p className="text-sm font-medium text-foreground">Next Scheduled Rotation</p>
+                <p className="text-sm text-muted-foreground">
+                  {formatTimestamp(nextRotationAt || keyRotationAt || "")}
+                </p>
               </div>
             </div>
           )}
 
           {autoRotate && !lastRotationAt && !keyRotationAt && !nextRotationAt && (
-            <div className="flex items-center gap-2 rounded-md border border-gray-100 bg-gray-50 p-3">
-              <ClockIcon className="h-4 w-4 text-gray-500" />
-              <p className="text-sm text-gray-600">No rotation history available</p>
+            <div className="flex items-center gap-2 rounded-md border border-border bg-muted p-3">
+              <ClockIcon className="h-4 w-4 text-muted-foreground" />
+              <p className="text-sm text-muted-foreground">No rotation history available</p>
             </div>
           )}
         </div>
       )}
 
       {!autoRotate && !lastRotationAt && !keyRotationAt && !nextRotationAt && (
-        <div className="flex items-center gap-2 rounded-md border border-gray-100 bg-gray-50 p-3">
-          <RefreshIcon className="h-4 w-4 text-gray-400" />
-          <p className="text-sm text-gray-600">Auto-rotation is not enabled for this key</p>
+        <div className="flex items-center gap-2 rounded-md border border-border bg-muted p-3">
+          <RefreshIcon className="h-4 w-4 text-muted-foreground" />
+          <p className="text-sm text-muted-foreground">Auto-rotation is not enabled for this key</p>
         </div>
       )}
     </div>
@@ -94,11 +96,11 @@ const AutoRotationView: React.FC<AutoRotationViewProps> = ({
 
   if (variant === "card") {
     return (
-      <div className={`rounded-lg border border-gray-200 bg-white p-6 ${className}`}>
+      <div className={`rounded-lg border border-border bg-card p-6 ${className}`}>
         <div className="mb-6 flex items-center gap-2">
           <div>
-            <p className="text-sm font-semibold text-gray-900">Auto-Rotation</p>
-            <p className="text-xs text-gray-500">Automatic key rotation settings and status for this key</p>
+            <p className="text-sm font-semibold text-foreground">Auto-Rotation</p>
+            <p className="text-xs text-muted-foreground">Automatic key rotation settings and status for this key</p>
           </div>
         </div>
         {content}
@@ -108,7 +110,7 @@ const AutoRotationView: React.FC<AutoRotationViewProps> = ({
 
   return (
     <div className={`${className}`}>
-      <p className="mb-3 text-sm font-medium text-gray-900">Auto-Rotation</p>
+      <p className="mb-3 text-sm font-medium text-foreground">Auto-Rotation</p>
       {content}
     </div>
   );

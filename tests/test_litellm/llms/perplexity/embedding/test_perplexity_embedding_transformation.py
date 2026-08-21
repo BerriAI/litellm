@@ -8,6 +8,7 @@ import struct
 from unittest.mock import MagicMock
 
 import httpx
+import pytest
 
 from litellm.llms.perplexity.embedding.transformation import (
     PerplexityEmbeddingConfig,
@@ -245,7 +246,7 @@ class TestPerplexityEmbeddingConfig:
                 model_response=model_response,
                 logging_obj=self.logging_obj,
             )
-            assert False, "Should have raised PerplexityEmbeddingError"
+            pytest.fail("Should have raised PerplexityEmbeddingError")
         except PerplexityEmbeddingError as e:
             assert e.status_code == 500
             assert "Server error" in e.message

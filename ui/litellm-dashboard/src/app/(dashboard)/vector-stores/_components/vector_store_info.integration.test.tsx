@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -78,7 +78,7 @@ describe("VectorStoreInfoView save payload", () => {
 
     const nameInput = await screen.findByDisplayValue("support-docs-store");
     await user.clear(nameInput);
-    await user.type(nameInput, "renamed-store");
+    fireEvent.change(nameInput, { target: { value: "renamed-store" } });
     await user.click(screen.getByRole("button", { name: "Save Changes" }));
 
     await vi.waitFor(() => expect(mockUpdate).toHaveBeenCalledTimes(1));
@@ -100,7 +100,7 @@ describe("VectorStoreInfoView save payload", () => {
     await user.click(editButtons[0]);
     const descriptionInput = await screen.findByDisplayValue("Docs for support");
     await user.clear(descriptionInput);
-    await user.type(descriptionInput, "new description");
+    fireEvent.change(descriptionInput, { target: { value: "new description" } });
     await user.click(screen.getByRole("button", { name: "Save Changes" }));
 
     await vi.waitFor(() => expect(mockUpdate).toHaveBeenCalledTimes(1));
@@ -139,7 +139,7 @@ describe("VectorStoreInfoView save payload", () => {
 
     const metadataInput = await screen.findByPlaceholderText('{"key": "value"}');
     await user.clear(metadataInput);
-    await user.type(metadataInput, "not json");
+    fireEvent.change(metadataInput, { target: { value: "not json" } });
     await user.click(screen.getByRole("button", { name: "Save Changes" }));
 
     await vi.waitFor(() => expect(mockToast.fromError).toHaveBeenCalledWith("Invalid JSON in metadata field"));

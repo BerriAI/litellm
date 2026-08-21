@@ -4,7 +4,6 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Button as AntButton, Modal } from "antd";
 import {
   getPromptInfo,
   getPromptVersions,
@@ -17,6 +16,7 @@ import { ArrowLeft, CheckIcon, CopyIcon, Pencil, Trash2 } from "lucide-react";
 import { toast } from "@/lib/toast";
 import PromptCodeSnippets from "./prompt_editor_view/PromptCodeSnippets";
 import { extractModel, extractTemplateVariables, getBasePromptId, getCurrentVersion } from "./prompt_utils";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 export interface PromptInfoProps {
   promptId: string;
@@ -190,18 +190,19 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({ promptId, onClose, accessTo
           <div>
             <h1 className="text-2xl font-semibold">Prompt Details</h1>
             <div className="flex items-center cursor-pointer">
-              <p className="text-sm text-gray-500 font-mono">{basePromptId}</p>
-              <AntButton
-                type="text"
-                size="small"
-                icon={copiedStates["prompt-id"] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
+              <p className="text-sm text-muted-foreground font-mono">{basePromptId}</p>
+              <Button
+                variant="ghost"
+                size="icon-xs"
                 onClick={() => copyToClipboard(basePromptId, "prompt-id")}
                 className={`left-2 z-10 transition-all duration-200 ${
                   copiedStates["prompt-id"]
-                    ? "text-green-600 bg-green-50 border-green-200"
-                    : "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
+                    ? "text-success bg-success/10 border-success/20"
+                    : "text-muted-foreground hover:text-foreground hover:bg-accent"
                 }`}
-              />
+              >
+                {copiedStates["prompt-id"] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
+              </Button>
             </div>
           </div>
           <div className="flex gap-2">
@@ -244,11 +245,11 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({ promptId, onClose, accessTo
                 className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
                   selectedEnv === env
                     ? env === "production"
-                      ? "bg-red-100 text-red-800 border-2 border-red-300"
+                      ? "bg-destructive/15 text-destructive border-2 border-destructive/30"
                       : env === "staging"
-                        ? "bg-yellow-100 text-yellow-800 border-2 border-yellow-300"
-                        : "bg-green-100 text-green-800 border-2 border-green-300"
-                    : "bg-gray-100 text-gray-600 border-2 border-transparent hover:bg-gray-200"
+                        ? "bg-warning/15 text-warning border-2 border-warning/30"
+                        : "bg-success/15 text-success border-2 border-success/30"
+                    : "bg-muted text-muted-foreground border-2 border-transparent hover:bg-accent"
                 }`}
               >
                 {env}
@@ -262,8 +263,8 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({ promptId, onClose, accessTo
 
       {/* Old version banner */}
       {isViewingOldVersion && (
-        <div className="mb-4 p-3 bg-amber-50 border border-amber-200 rounded-lg flex items-center justify-between">
-          <p className="text-sm text-amber-800">
+        <div className="mb-4 p-3 bg-warning/10 border border-warning/20 rounded-lg flex items-center justify-between">
+          <p className="text-sm text-warning">
             Viewing v{selectedVersion} — not the latest version (v{latestVersion})
           </p>
           <Button
@@ -354,8 +355,8 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({ promptId, onClose, accessTo
                       return (
                         <TableRow
                           key={vNum}
-                          className={`cursor-pointer hover:bg-blue-50 transition-colors ${
-                            isSelected ? "bg-blue-50" : ""
+                          className={`cursor-pointer hover:bg-info/10 transition-colors ${
+                            isSelected ? "bg-info/10" : ""
                           }`}
                           onClick={() => handleVersionClick(v)}
                         >
@@ -401,7 +402,7 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({ promptId, onClose, accessTo
                   </TableBody>
                 </Table>
               ) : (
-                <p className="text-gray-400">No versions found in {selectedEnv}</p>
+                <p className="text-muted-foreground">No versions found in {selectedEnv}</p>
               )}
             </Card>
           </TabsContent>
@@ -412,41 +413,39 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({ promptId, onClose, accessTo
               <Card className="block p-6">
                 <div className="flex justify-between items-center mb-4">
                   <h3 className="text-lg font-medium">Prompt Template</h3>
-                  <AntButton
-                    type="text"
-                    size="small"
-                    icon={copiedStates["prompt-content"] ? <CheckIcon size={16} /> : <CopyIcon size={16} />}
+                  <Button
+                    variant="ghost"
+                    size="sm"
                     onClick={() => copyToClipboard(promptTemplate.content, "prompt-content")}
                     className={`transition-all duration-200 ${
                       copiedStates["prompt-content"]
-                        ? "text-green-600 bg-green-50 border-green-200"
-                        : "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
+                        ? "text-success bg-success/10 border-success/20"
+                        : "text-muted-foreground hover:text-foreground hover:bg-accent"
                     }`}
                   >
+                    {copiedStates["prompt-content"] ? <CheckIcon size={16} /> : <CopyIcon size={16} />}
                     {copiedStates["prompt-content"] ? "Copied!" : "Copy Content"}
-                  </AntButton>
+                  </Button>
                 </div>
 
                 <div className="space-y-4">
                   <div>
                     <p className="font-medium">Template ID</p>
-                    <div className="font-mono text-sm bg-gray-50 p-2 rounded-sm">
-                      {promptTemplate.litellm_prompt_id}
-                    </div>
+                    <div className="font-mono text-sm bg-muted p-2 rounded-sm">{promptTemplate.litellm_prompt_id}</div>
                   </div>
 
                   <div>
                     <p className="font-medium">Content</p>
-                    <div className="mt-2 p-4 bg-gray-50 rounded-md border overflow-auto max-h-96">
-                      <pre className="text-sm text-gray-800 whitespace-pre-wrap">{promptTemplate.content}</pre>
+                    <div className="mt-2 p-4 bg-muted rounded-md border overflow-auto max-h-96">
+                      <pre className="text-sm text-foreground whitespace-pre-wrap">{promptTemplate.content}</pre>
                     </div>
                   </div>
 
                   {promptTemplate.metadata && Object.keys(promptTemplate.metadata).length > 0 && (
                     <div>
                       <p className="font-medium">Template Metadata</p>
-                      <div className="mt-2 p-3 bg-gray-50 rounded-md border">
-                        <pre className="text-xs text-gray-800 whitespace-pre-wrap overflow-auto max-h-64">
+                      <div className="mt-2 p-3 bg-muted rounded-md border">
+                        <pre className="text-xs text-foreground whitespace-pre-wrap overflow-auto max-h-64">
                           {JSON.stringify(promptTemplate.metadata, null, 2)}
                         </pre>
                       </div>
@@ -462,23 +461,23 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({ promptId, onClose, accessTo
             <Card className="block p-6">
               <div className="flex justify-between items-center mb-4">
                 <h3 className="text-lg font-medium">Raw API Response</h3>
-                <AntButton
-                  type="text"
-                  size="small"
-                  icon={copiedStates["raw-json"] ? <CheckIcon size={16} /> : <CopyIcon size={16} />}
+                <Button
+                  variant="ghost"
+                  size="sm"
                   onClick={() => copyToClipboard(JSON.stringify(rawApiResponse, null, 2), "raw-json")}
                   className={`transition-all duration-200 ${
                     copiedStates["raw-json"]
-                      ? "text-green-600 bg-green-50 border-green-200"
-                      : "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
+                      ? "text-success bg-success/10 border-success/20"
+                      : "text-muted-foreground hover:text-foreground hover:bg-accent"
                   }`}
                 >
+                  {copiedStates["raw-json"] ? <CheckIcon size={16} /> : <CopyIcon size={16} />}
                   {copiedStates["raw-json"] ? "Copied!" : "Copy JSON"}
-                </AntButton>
+                </Button>
               </div>
 
-              <div className="p-4 bg-gray-50 rounded-md border overflow-auto">
-                <pre className="text-xs text-gray-800 whitespace-pre-wrap">
+              <div className="p-4 bg-muted rounded-md border overflow-auto">
+                <pre className="text-xs text-foreground whitespace-pre-wrap">
                   {JSON.stringify(rawApiResponse, null, 2)}
                 </pre>
               </div>
@@ -488,20 +487,25 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({ promptId, onClose, accessTo
       </Tabs>
 
       {/* Delete Confirmation Modal */}
-      <Modal
-        title="Delete Prompt"
-        open={showDeleteConfirm}
-        onOk={handleDeleteConfirm}
-        onCancel={handleDeleteCancel}
-        confirmLoading={isDeleting}
-        okText="Delete"
-        okButtonProps={{ danger: true }}
-      >
-        <p>
-          Are you sure you want to delete prompt: <strong>{basePromptId}</strong>?
-        </p>
-        <p>This action cannot be undone.</p>
-      </Modal>
+      <Dialog open={showDeleteConfirm} onOpenChange={(open) => !open && handleDeleteCancel()}>
+        <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Delete Prompt</DialogTitle>
+          </DialogHeader>
+          <p>
+            Are you sure you want to delete prompt: <strong>{basePromptId}</strong>?
+          </p>
+          <p>This action cannot be undone.</p>
+          <DialogFooter>
+            <Button variant="outline" onClick={handleDeleteCancel}>
+              Cancel
+            </Button>
+            <Button onClick={handleDeleteConfirm} variant="destructive" disabled={isDeleting} aria-busy={isDeleting}>
+              Delete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };

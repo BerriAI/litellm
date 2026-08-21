@@ -436,7 +436,7 @@ def test_ui_token_route_access(route, user_role, should_be_allowed):
         )
         assert result is True
     else:
-        with pytest.raises(Exception):
+        with pytest.raises(Exception, match="Only proxy admin can be used to generate"):
             _is_api_route_allowed(
                 route=route,
                 request=request,

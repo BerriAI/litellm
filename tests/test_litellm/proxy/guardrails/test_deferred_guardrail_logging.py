@@ -625,7 +625,7 @@ class TestDeferredStreamingClosure:
         """If a guardrail raises HTTPException, the production
         _run_deferred_stream_guardrails must still fire logging
         and set guardrail_blocked in metadata."""
-        from fastapi import HTTPException  # noqa: local import for test isolation
+        from fastapi import HTTPException  # local import for test isolation
 
         logging_called = False
 

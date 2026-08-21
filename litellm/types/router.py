@@ -4,6 +4,7 @@ litellm.Router Types - includes RouterConfig, UpdateRouterConfig, ModelInfo etc
 
 import datetime
 import enum
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, ClassVar, Final, Generic, Literal, TypeVar, get_type_hints
 
@@ -897,6 +898,7 @@ class PreRoutingHookResponse(BaseModel):
     messages: list[dict[str, Any]] | None
     routing_decision: StandardLoggingRoutingDecision | None = None
     session_affinity_ttl_seconds: int | None = None
+    litellm_params: Mapping[str, object] | None = None
 
 
 _PreRoutingStrategyT_co = TypeVar("_PreRoutingStrategyT_co", covariant=True)

@@ -113,6 +113,58 @@ def _build_reasoning_item(
     }
 
 
+def _reasoning_item_from_output_item(item: object) -> _BuiltReasoningItem | None:
+    from openai.types.responses import ResponseReasoningItem
+
+    if isinstance(item, ResponseReasoningItem):
+        return _build_reasoning_item(
+            item_id=item.id,
+            encrypted_content=getattr(item, "encrypted_content", None),
+            summary_raw=item.summary,
+        )
+    if isinstance(item, dict) and item.get("type") == "reasoning":
+        return _build_reasoning_item(
+            item_id=item.get("id", ""),
+            encrypted_content=item.get("encrypted_content"),
+            summary_raw=item.get("summary"),
+        )
+    return None
+
+
+def _reasoning_items_from_output_items(output_items: Sequence[object]) -> tuple[_BuiltReasoningItem, ...]:
+    return tuple(
+        reasoning_item
+        for reasoning_item in (_reasoning_item_from_output_item(item) for item in output_items)
+        if reasoning_item is not None
+    )
+
+
+def _as_chat_reasoning_items(
+    reasoning_items: Sequence[_BuiltReasoningItem],
+) -> list[ChatCompletionReasoningItem] | None:
+    if not reasoning_items:
+        return None
+    # cast-ok: _BuiltReasoningItem is the structural shape ChatCompletionReasoningItem
+    # describes, and TypedDict invariance is what stops the two from unifying here.
+    return cast(list[ChatCompletionReasoningItem], list(reasoning_items))
+
+
+def _map_incomplete_reason_to_finish_reason(incomplete_reason: str | None) -> Literal["length", "content_filter"]:
+    if incomplete_reason == "content_filter":
+        return "content_filter"
+    return "length"
+
+
+def _incomplete_reason_from_response_payload(response_payload: object) -> str | None:
+    if not isinstance(response_payload, Mapping):
+        return None
+    incomplete_details: Final = response_payload.get("incomplete_details")
+    if not isinstance(incomplete_details, Mapping):
+        return None
+    reason: Final = incomplete_details.get("reason")
+    return reason if isinstance(reason, str) else None
+
+
 class _ChatToolCallDict(ChatCompletionToolCallChunk, total=False):
     provider_specific_fields: Mapping[str, object]
 
@@ -657,6 +709,27 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
         return choices
 
+    @staticmethod
+    def _build_empty_incomplete_choice(
+        output_items: Sequence[object],
+        finish_reason: Literal["length", "content_filter"],
+    ) -> "Choices":
+        from litellm.types.utils import Choices, Message
+
+        reasoning_items: Final = _reasoning_items_from_output_items(output_items)
+        reasoning_content: Final = " ".join(
+            summary_block["text"]
+            for reasoning_item in reasoning_items
+            for summary_block in reasoning_item["summary"]
+            if summary_block.get("text")
+        )
+        message: Final = Message(
+            content="",
+            reasoning_content=reasoning_content if reasoning_content else None,
+            reasoning_items=_as_chat_reasoning_items(reasoning_items),
+        )
+        return Choices(message=message, finish_reason=finish_reason, index=0)
+
     @classmethod
     def _extract_output_from_completed_event(cls, parsed_chunk: Mapping[str, object]) -> list[dict[str, object]] | None:
         response_payload: Final = parsed_chunk.get("response")
@@ -763,11 +836,22 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             handle_raw_dict_callback=self._handle_raw_dict_response_item,
         )
 
-        if len(choices) == 0:
-            if raw_response.incomplete_details is not None and raw_response.incomplete_details.reason is not None:
-                raise ValueError(f"{model} unable to complete request: {raw_response.incomplete_details.reason}")
+        response_is_incomplete: Final = raw_response.status == "incomplete" or (
+            raw_response.incomplete_details is not None and raw_response.incomplete_details.reason is not None
+        )
+
+        if len(choices) == 0 and not response_is_incomplete:
+            raise ValueError(f"Unknown items in responses API response: {output_items}")
+
+        if response_is_incomplete:
+            incomplete_finish_reason: Final = _map_incomplete_reason_to_finish_reason(
+                raw_response.incomplete_details.reason if raw_response.incomplete_details is not None else None
+            )
+            if len(choices) == 0:
+                choices.append(self._build_empty_incomplete_choice(output_items, incomplete_finish_reason))
             else:
-                raise ValueError(f"Unknown items in responses API response: {output_items}")
+                for choice in choices:
+                    choice.finish_reason = incomplete_finish_reason
 
         setattr(model_response, "choices", choices)
 
@@ -1392,12 +1476,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                         )
                     ]
                 )
-        elif event_type == "response.completed":
-            # Response is fully complete - now we can signal is_finished=True
-            # This ensures we don't prematurely end the stream before tool_calls arrive
-
-            # Check if response contains function_call items in output
-            # to determine correct finish_reason
+        elif event_type in ("response.completed", "response.incomplete"):
             response_data: Final = parsed_chunk.get("response", {})
             output_items: Final = response_data.get("output", []) if response_data else []
 
@@ -1407,25 +1486,14 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                 if isinstance(item, dict)
             )
 
-            finish_reason: Final = "tool_calls" if has_function_calls else "stop"
+            finish_reason: Final = (
+                _map_incomplete_reason_to_finish_reason(_incomplete_reason_from_response_payload(response_data))
+                if event_type == "response.incomplete"
+                else ("tool_calls" if has_function_calls else "stop")
+            )
 
-            # Extract reasoning items with encrypted_content for round-tripping
-            completed_reasoning_items: list[_BuiltReasoningItem] | None = None
-            for item in output_items:
-                if not isinstance(item, dict) or item.get("type") != "reasoning":
-                    continue
-                if completed_reasoning_items is None:
-                    completed_reasoning_items = []
-                completed_reasoning_items.append(
-                    _build_reasoning_item(
-                        item_id=item.get("id", ""),
-                        encrypted_content=item.get("encrypted_content"),
-                        summary_raw=item.get("summary"),
-                    )
-                )
-            completed_reasoning_items_typed: Final = cast(
-                list[ChatCompletionReasoningItem] | None,
-                completed_reasoning_items,
+            terminal_reasoning_items_typed: Final = _as_chat_reasoning_items(
+                _reasoning_items_from_output_items(output_items)
             )
 
             usage = None
@@ -1439,7 +1507,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                         index=0,
                         delta=Delta(
                             content="",
-                            reasoning_items=completed_reasoning_items_typed,
+                            reasoning_items=terminal_reasoning_items_typed,
                         ),
                         finish_reason=finish_reason,
                     )

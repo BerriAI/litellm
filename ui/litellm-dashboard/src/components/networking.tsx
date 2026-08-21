@@ -2502,11 +2502,12 @@ export const userDailyActivityAggregatedCall = async (
   accessToken: string,
   startTime: Date,
   endTime: Date,
-  userId: string | null = null,
+  ...options: [userId?: string | null, includeCurrentUtcDay?: boolean]
 ) => {
   /**
    * Get aggregated daily user activity (no pagination)
    */
+  const [userId = null, includeCurrentUtcDay = false] = options;
   try {
     const formatDate = (date: Date) => {
       const year = date.getFullYear();
@@ -2521,6 +2522,7 @@ export const userDailyActivityAggregatedCall = async (
         end_date: formatDate(endTime),
         timezone: new Date().getTimezoneOffset().toString(),
         user_id: userId || undefined,
+        include_current_utc_day: includeCurrentUtcDay ? "true" : undefined,
       },
     });
   } catch (error) {

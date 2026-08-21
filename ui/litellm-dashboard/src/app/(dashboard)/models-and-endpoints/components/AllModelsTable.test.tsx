@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
@@ -342,7 +342,7 @@ describe("AllModelsTable", () => {
         />,
       );
 
-      await user.type(screen.getByTestId("datatable-search"), "gpt");
+      fireEvent.change(screen.getByTestId("datatable-search"), { target: { value: "gpt" } });
       expect(onSearchChange).toHaveBeenCalled();
 
       await user.click(screen.getByTestId("datatable-refresh"));

@@ -28,7 +28,7 @@ const CreatedKeyDisplay: React.FC<CreatedKeyDisplayProps> = ({ apiKey }) => {
         need to generate a new one.
       </p>
 
-      <p className="text-sm text-gray-600 mt-3 mb-1">Virtual Key:</p>
+      <p className="text-sm text-muted-foreground mt-3 mb-1">Virtual Key:</p>
       <div
         style={{
           background: "#f8f8f8",

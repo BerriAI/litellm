@@ -1324,7 +1324,7 @@ def test_gemini_exception_message_format():
             extra_kwargs={},
         )
         # Should not reach here - exception should be raised
-        assert False, "Expected BadRequestError to be raised"
+        pytest.fail("Expected BadRequestError to be raised")
     except BadRequestError as e:
         # The test should FAIL initially (before fix) because it will show VertexAIException
         # After the fix, it should show GeminiException
@@ -1401,9 +1401,7 @@ def l(status_code, expected_exception):
             completion_kwargs={},
             extra_kwargs={},
         )
-        assert (
-            False
-        ), f"Expected {expected_exception} to be raised for status {status_code}"
+        pytest.fail(f"Expected {expected_exception} to be raised for status {status_code}")
     except Exception as e:
         # Verify the correct exception type is raised
         exception_classes = {

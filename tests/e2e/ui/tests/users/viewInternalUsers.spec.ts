@@ -13,7 +13,7 @@ test.skip("Internal Users Page", () => {
 
     const firstRow = page.locator("tbody tr").first();
     await expect(firstRow).toBeVisible();
-    await expect(page.locator(".ant-skeleton")).toHaveCount(0);
+    await expect(page.locator('[data-slot="skeleton"]')).toHaveCount(0);
   }
 
   test("renders internal users table correctly", async ({ page }) => {

@@ -53,7 +53,7 @@ async def test_read_config_from_bad_file_path():
     """
     proxy_config_instance = ProxyConfig()
     config_path = "non-existent-file.yaml"
-    with pytest.raises(Exception):
+    with pytest.raises(Exception, match="Config file not found"):
         config = await proxy_config_instance.get_config(config_file_path=config_path)
 
 

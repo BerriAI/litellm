@@ -189,13 +189,13 @@ function NavigationSection({
   onClose: () => void;
 }) {
   const keyboardShortcutStyle = {
-    border: "1px solid #d9d9d9",
+    border: "1px solid var(--color-border)",
     borderRadius: 4,
     padding: "0 4px",
     fontSize: 12,
     fontFamily: "monospace",
     marginLeft: 4,
-    background: "#fafafa",
+    background: "var(--color-muted)",
   };
   const splitStyle = { width: 1, height: 20, background: COLOR_BORDER };
 

@@ -105,7 +105,7 @@ async def test_openai_web_search_logging_cost_tracking(
     from litellm._uuid import uuid
 
     request_kwargs = {
-        "model": "openai/gpt-4o-search-preview",
+        "model": "openai/gpt-5-search-api",
         "messages": [
             {
                 "role": "user",

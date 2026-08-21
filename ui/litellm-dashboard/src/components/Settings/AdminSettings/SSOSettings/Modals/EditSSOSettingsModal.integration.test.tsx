@@ -1,4 +1,4 @@
-import { screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "../../../../../../tests/test-utils";
@@ -54,7 +54,7 @@ describe("EditSSOSettingsModal (real form tree)", () => {
     renderWithProviders(<EditSSOSettingsModal isVisible={true} onCancel={vi.fn()} onSuccess={vi.fn()} />);
 
     await user.clear(await screen.findByLabelText("Google Client ID"));
-    await user.type(screen.getByLabelText("Google Client ID"), "rotated-client-id");
+    fireEvent.change(screen.getByLabelText("Google Client ID"), { target: { value: "rotated-client-id" } });
     await user.click(saveButton());
 
     await waitFor(() => expect(mutateAsync).toHaveBeenCalledTimes(1));

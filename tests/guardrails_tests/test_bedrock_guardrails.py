@@ -197,6 +197,7 @@ async def test_bedrock_guardrails_block_responses_api():
 
 @pytest.mark.asyncio
 async def test_bedrock_guardrails_with_streaming():
+    from fastapi import HTTPException
     from litellm.proxy.utils import ProxyLogging
     from litellm.types.guardrails import GuardrailEventHooks
 
@@ -204,7 +205,7 @@ async def test_bedrock_guardrails_with_streaming():
     mock_user_api_key_cache = MagicMock(spec=DualCache)
     mock_user_api_key_dict = UserAPIKeyAuth()
 
-    with pytest.raises(Exception):  # Assert that this raises an exception
+    with pytest.raises(HTTPException):
         proxy_logging_obj = ProxyLogging(
             user_api_key_cache=mock_user_api_key_cache,
             premium_user=True,
