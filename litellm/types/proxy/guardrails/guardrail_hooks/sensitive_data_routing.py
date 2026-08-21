@@ -1,5 +1,6 @@
 """Types for the built-in Sensitive Data Routing guardrail."""
 
+from collections.abc import Sequence
 from typing import Final
 
 from pydantic import Field
@@ -16,15 +17,15 @@ class SensitiveDataRoutingGuardrailConfigModel(GuardrailConfigModel):
         default=None,
         description="Model group (from model_list) to route the request to when sensitive data is detected.",
     )
-    prebuilt_patterns: list[str] | None = Field(
+    prebuilt_patterns: Sequence[str] | None = Field(
         default=None,
         description="Prebuilt pattern names to match (e.g. us_ssn, credit_card, email).",
     )
-    regex_patterns: list[str] | None = Field(
+    regex_patterns: Sequence[str] | None = Field(
         default=None,
         description="Custom regular expressions; a match in any message reroutes the request.",
     )
-    keywords: list[str] | None = Field(
+    keywords: Sequence[str] | None = Field(
         default=None,
         description="Case-insensitive keywords; a match in any message reroutes the request.",
     )
