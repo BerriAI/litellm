@@ -29,21 +29,23 @@ class DashScopeAnthropicMessagesConfig(AnthropicMessagesConfig):
     """Adapter for Alibaba Bailian's Anthropic-compatible Messages endpoint."""
 
     def should_strip_billing_metadata(self) -> bool:
+        """Adapter for Alibaba Bailian's Anthropic-compatible Messages endpoint."""
         return True
-    """Adapter for Alibaba Bailian's Anthropic-compatible Messages endpoint."""
 
     # Models Bailian explicitly documents on the Anthropic-compatible endpoint.
     # Extend this set when Bailian onboards more models.
-    SUPPORTED_MODELS = frozenset({
-        # DeepSeek
-        "deepseek-v4-pro",
-        "deepseek-v4-flash",
-        "deepseek-v4-flash-0731",
-        # Qwen
-        #"qwen3.7-max", "qwen3.7-plus",
-        #"qwen3.6-flash", "qwen3.6-plus",
-        #"qwen-turbo", "qwen-plus", "qwen-max",
-    })
+    SUPPORTED_MODELS = frozenset(
+        {
+            # DeepSeek
+            "deepseek-v4-pro",
+            "deepseek-v4-flash",
+            "deepseek-v4-flash-0731",
+            # Qwen
+            # "qwen3.7-max", "qwen3.7-plus",
+            # "qwen3.6-flash", "qwen3.6-plus",
+            # "qwen-turbo", "qwen-plus", "qwen-max",
+        }
+    )
 
     @property
     def custom_llm_provider(self) -> Optional[str]:
