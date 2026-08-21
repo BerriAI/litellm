@@ -441,26 +441,16 @@ def test_completion_bedrock_invalid_role_exception():
     Test if litellm raises a BadRequestError for an invalid role on Bedrock
     """
     litellm.set_verbose = True
-    response = completion(
-        model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
-        messages=[{"role": "very-bad-role", "content": "hello"}],
-    )
-    print(f"response: {response}")
-
     with pytest.raises(litellm.BadRequestError) as exc_info:
-        print(response)
-    e = exc_info.value
-    assert isinstance(
-        e, litellm.BadRequestError
-    ), "Expected BadRequestError but got {}".format(type(e))
-    print("str(e) = {}".format(str(e)))
+        completion(
+            model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
+            messages=[{"role": "very-bad-role", "content": "hello"}],
+        )
 
     # This is important - We we previously returning a poorly formatted error string. Which was
     #  litellm.BadRequestError: litellm.BadRequestError: Invalid Message passed in {'role': 'very-bad-role', 'content': 'hello'}
-
-    # IMPORTANT ASSERTION
     assert (
-        (str(e))
+        str(exc_info.value)
         == "litellm.BadRequestError: Invalid Message passed in {'role': 'very-bad-role', 'content': 'hello'}"
     )
 
