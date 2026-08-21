@@ -22,7 +22,8 @@ async function openUsage(page: PlaywrightPage): Promise<Locator> {
   const card = topKeysCard(page);
   await expect(card).toBeVisible({ timeout: 30_000 });
   // Widen past the default top-5 so other keys in the database cannot crowd this one out.
-  await card.locator(".ant-segmented-item").filter({ hasText: /^50$/ }).click();
+  // The radio itself is sr-only and its label covers it, so click the label.
+  await card.getByRole("radiogroup", { name: "Number of top keys to show" }).getByText("50", { exact: true }).click();
   return card;
 }
 

@@ -141,6 +141,7 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_tool_choice: bool | None
     supports_assistant_prefill: bool | None
     supports_prompt_caching: bool | None
+    supports_prompt_cache_breakpoint: ReadOnly[bool | None]
     supports_computer_use: bool | None
     supports_audio_input: bool | None
     supports_embedding_image_input: bool | None
@@ -3781,6 +3782,7 @@ class LlmProviders(str, Enum):
     TENSORMESH = "tensormesh"
     LIBERTAI = "libertai"
     PINSTRIPES = "pinstripes"
+    COGNITION = "cognition"
     DARKBLOOM = "darkbloom"
     META = "meta"
     LITELLM_AGENT = "litellm_agent"

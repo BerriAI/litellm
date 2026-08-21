@@ -2143,10 +2143,13 @@ def test_raise_on_model_repetition(
     chunks = _build_chunks(chunks_pattern, len(chunks_pattern))
 
     if should_raise:
-        with pytest.raises(litellm.InternalServerError) as exc_info:
+        def _feed():
             for chunk in chunks:
                 wrapper.chunks.append(chunk)
                 wrapper.raise_on_model_repetition()
+
+        with pytest.raises(litellm.InternalServerError) as exc_info:
+            _feed()
         assert "repeating the same chunk" in str(exc_info.value)
     else:
         for chunk in chunks:
@@ -3616,9 +3619,12 @@ async def test_transport_read_error_before_finish_reason_raises(logging_obj: Log
     )
 
     received = []
-    with pytest.raises(MidStreamFallbackError):
+    async def _drain():
         async for chunk in response:
             received.append(chunk)
+
+    with pytest.raises(MidStreamFallbackError):
+        await _drain()
 
     fabricated_finish_reasons = [
         chunk.choices[0].finish_reason
@@ -4176,7 +4182,7 @@ async def test_stream_wrapper_anext_max_duration_timeout_restores_consumer_corre
 
         wrapper._stream_created_time = time.time() - 10
 
-        with pytest.raises(Exception):
+        with pytest.raises(litellm.Timeout):
             await wrapper.__anext__()
 
         assert trace_id_var.get() == "outer-trace-max-duration"
@@ -4323,7 +4329,9 @@ def test_handle_stream_fallback_error_restores_context_only_after_exception_mapp
 
         monkeypatch.setattr("litellm.litellm_core_utils.streaming_handler.exception_type", fake_exception_type)
 
-        with pytest.raises(Exception):
+        from litellm.exceptions import MidStreamFallbackError
+
+        with pytest.raises(MidStreamFallbackError):
             wrapper._handle_stream_fallback_error(RuntimeError("boom"))
 
         # The mapper ran while the stream's own ids were still active.

@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Upload as UploadIcon } from "lucide-react";
 import React from "react";
 import { useFormContext } from "react-hook-form";
-import { antdRequired } from "../common_components/antdFormRules";
+import { requiredRule } from "../common_components/formRules";
 import {
   MountedFormField,
   type MountedFieldControlProps,
@@ -327,7 +327,7 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({ selecte
             label={field.tooltip ? labelWithHint(field.label, field.tooltip) : field.label}
             name={field.key}
             required={field.required}
-            rules={field.required ? { validate: { required: antdRequired("Required") } } : undefined}
+            rules={field.required ? { validate: { required: requiredRule("Required") } } : undefined}
             className={field.key === "vertex_credentials" ? "mb-0" : "mb-4"}
           >
             {(control) => renderFieldControl(field, control)}

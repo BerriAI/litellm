@@ -15,7 +15,7 @@ import { SearchSelect } from "@/components/shared/SearchSelect";
 import { labelWithDocsHint, labelWithHint } from "@/components/shared/form/LabelWithHint";
 import { useZodForm } from "@/lib/forms/useZodForm";
 import { TagsInput } from "@/app/(dashboard)/guardrails/_components/content_filter/TagsInput";
-import { Layout, Tabs } from "antd";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ChevronDown, Plus, Users } from "lucide-react";
 import React, { useEffect, useMemo, useState } from "react";
 import { z } from "zod/v4";
@@ -542,8 +542,6 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
     return false;
   };
 
-  const { Content } = Layout;
-
   const tabItems = [
     {
       key: "your-teams",
@@ -611,7 +609,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
   ];
 
   return (
-    <Content className={selectedTeamId ? "px-12 py-6" : "p-8"}>
+    <main className={selectedTeamId ? "px-12 py-6" : "p-8"}>
       {selectedTeamId ? (
         <TeamInfoView
           teamId={selectedTeamId}
@@ -631,26 +629,43 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
           premiumUser={premiumUser}
         />
       ) : (
-        <PageHeader
-          icon={<Users />}
-          title="Teams"
-          subtitle="Manage teams, members, and their access to models and budgets"
-          primaryAction={
-            canCreateOrManageTeams(userRole, userID, organizations) ? (
-              <UIButton onClick={() => setIsTeamModalVisible(true)} data-testid="create-team-button">
-                <Plus className="size-4" />
-                Create Team
-              </UIButton>
-            ) : undefined
-          }
-          tabs={({ leadingControls }) => (
-            <Tabs
-              items={tabItems}
-              tabBarExtraContent={{ left: leadingControls }}
-              className="[&>.ant-tabs-nav]:!mb-6 [&>.ant-tabs-nav]:before:!border-b-0 [&_.ant-tabs-ink-bar]:!h-0.5 [&_.ant-tabs-tab]:!py-[7px] [&_.ant-tabs-tab+_.ant-tabs-tab]:!ml-[22px] [&_.ant-tabs-tab-active]:font-semibold"
-            />
-          )}
-        />
+        <Tabs defaultValue={tabItems[0].key} className="gap-6">
+          <PageHeader
+            icon={<Users />}
+            title="Teams"
+            subtitle="Manage teams, members, and their access to models and budgets"
+            primaryAction={
+              canCreateOrManageTeams(userRole, userID, organizations) ? (
+                <UIButton onClick={() => setIsTeamModalVisible(true)} data-testid="create-team-button">
+                  <Plus className="size-4" />
+                  Create Team
+                </UIButton>
+              ) : undefined
+            }
+            tabs={({ leadingControls }) => (
+              <TabsList
+                variant="line"
+                className="gap-0 p-0 [&>[data-slot=tabs-trigger]+[data-slot=tabs-trigger]]:ml-[22px]"
+              >
+                {leadingControls}
+                {tabItems.map((item) => (
+                  <TabsTrigger
+                    key={item.key}
+                    value={item.key}
+                    className="flex-none px-0 py-[7px] data-active:font-semibold"
+                  >
+                    {item.label}
+                  </TabsTrigger>
+                ))}
+              </TabsList>
+            )}
+          />
+          {tabItems.map((item) => (
+            <TabsContent key={item.key} value={item.key}>
+              {item.children}
+            </TabsContent>
+          ))}
+        </Tabs>
       )}
 
       {canCreateOrManageTeams(userRole, userID, organizations) && (
@@ -717,8 +732,8 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
                         </FormField>
 
                         {isOrgAdmin && !isSingleOrg && adminOrgs.length > 1 && (
-                          <div className="mb-8 rounded-md border border-blue-200 bg-blue-50 p-4">
-                            <span className="text-sm text-blue-800">
+                          <div className="mb-8 rounded-md border border-info/20 bg-info/10 p-4">
+                            <span className="text-sm text-info">
                               Please select an organization to create a team for. You can only create teams within
                               organizations where you are an admin.
                             </span>
@@ -798,7 +813,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
                   >
                     <CollapsibleTrigger className="group/section flex w-full items-center justify-between px-4 py-3 text-left">
                       <b>Additional Settings</b>
-                      <ChevronDown className="size-5 shrink-0 text-gray-500 transition-transform group-data-[panel-open]/section:rotate-180" />
+                      <ChevronDown className="size-5 shrink-0 text-muted-foreground transition-transform group-data-[panel-open]/section:rotate-180" />
                     </CollapsibleTrigger>
                     <CollapsibleContent className="px-4 pb-3">
                       <FieldGroup>
@@ -1032,7 +1047,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
                   >
                     <CollapsibleTrigger className="group/section flex w-full items-center justify-between px-4 py-3 text-left">
                       <b>MCP Settings</b>
-                      <ChevronDown className="size-5 shrink-0 text-gray-500 transition-transform group-data-[panel-open]/section:rotate-180" />
+                      <ChevronDown className="size-5 shrink-0 text-muted-foreground transition-transform group-data-[panel-open]/section:rotate-180" />
                     </CollapsibleTrigger>
                     <CollapsibleContent className="px-4 pb-3">
                       <FormField
@@ -1074,7 +1089,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
                   >
                     <CollapsibleTrigger className="group/section flex w-full items-center justify-between px-4 py-3 text-left">
                       <b>Agent Settings</b>
-                      <ChevronDown className="size-5 shrink-0 text-gray-500 transition-transform group-data-[panel-open]/section:rotate-180" />
+                      <ChevronDown className="size-5 shrink-0 text-muted-foreground transition-transform group-data-[panel-open]/section:rotate-180" />
                     </CollapsibleTrigger>
                     <CollapsibleContent className="px-4 pb-3">
                       <FormField
@@ -1106,7 +1121,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
                   >
                     <CollapsibleTrigger className="group/section flex w-full items-center justify-between px-4 py-3 text-left">
                       <b>Search Tool Settings</b>
-                      <ChevronDown className="size-5 shrink-0 text-gray-500 transition-transform group-data-[panel-open]/section:rotate-180" />
+                      <ChevronDown className="size-5 shrink-0 text-muted-foreground transition-transform group-data-[panel-open]/section:rotate-180" />
                     </CollapsibleTrigger>
                     <CollapsibleContent className="px-4 pb-3">
                       <FormField
@@ -1134,7 +1149,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
                   <Collapsible className="mt-8 mb-8 overflow-hidden rounded-lg border">
                     <CollapsibleTrigger className="group/section flex w-full items-center justify-between px-4 py-3 text-left">
                       <b>Logging Settings</b>
-                      <ChevronDown className="size-5 shrink-0 text-gray-500 transition-transform group-data-[panel-open]/section:rotate-180" />
+                      <ChevronDown className="size-5 shrink-0 text-muted-foreground transition-transform group-data-[panel-open]/section:rotate-180" />
                     </CollapsibleTrigger>
                     <CollapsibleContent className="px-4 pb-3">
                       <div className="mt-4">
@@ -1153,7 +1168,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
                   >
                     <CollapsibleTrigger className="group/section flex w-full items-center justify-between px-4 py-3 text-left">
                       <b>Router Settings</b>
-                      <ChevronDown className="size-5 shrink-0 text-gray-500 transition-transform group-data-[panel-open]/section:rotate-180" />
+                      <ChevronDown className="size-5 shrink-0 text-muted-foreground transition-transform group-data-[panel-open]/section:rotate-180" />
                     </CollapsibleTrigger>
                     <CollapsibleContent className="px-4 pb-3">
                       <div className="mt-4 w-full">
@@ -1175,7 +1190,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
                   <Collapsible className="mt-8 mb-8 overflow-hidden rounded-lg border">
                     <CollapsibleTrigger className="group/section flex w-full items-center justify-between px-4 py-3 text-left">
                       <b>Model Aliases</b>
-                      <ChevronDown className="size-5 shrink-0 text-gray-500 transition-transform group-data-[panel-open]/section:rotate-180" />
+                      <ChevronDown className="size-5 shrink-0 text-muted-foreground transition-transform group-data-[panel-open]/section:rotate-180" />
                     </CollapsibleTrigger>
                     <CollapsibleContent className="px-4 pb-3">
                       <div className="mt-4">
@@ -1203,7 +1218,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
           </DialogContent>
         </Dialog>
       )}
-    </Content>
+    </main>
   );
 };
 

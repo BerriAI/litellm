@@ -8537,9 +8537,7 @@ async def test_get_team_daily_activity_member_with_permission_sees_all_spend(
                 hasattr(mock_db_client.db.litellm_verificationtoken, "find_many")
                 and mock_db_client.db.litellm_verificationtoken.find_many.called
             ):
-                assert (
-                    False
-                ), "API keys should not be fetched for members with /team/daily/activity permission"
+                pytest.fail("API keys should not be fetched for members with /team/daily/activity permission")
 
 
 @pytest.mark.asyncio
@@ -8891,7 +8889,7 @@ async def test_get_team_daily_activity_team_admin_sees_all_spend(mock_db_client)
                 and mock_db_client.db.litellm_verificationtoken.find_many.called
             ):
                 # If it was called, that's unexpected for admin users
-                assert False, "API keys should not be fetched for team admin users"
+                pytest.fail("API keys should not be fetched for team admin users")
 
 
 @pytest.mark.asyncio
@@ -11780,6 +11778,63 @@ async def test_new_team_output_token_estimate_rejected_for_non_admin():
     with pytest.raises(ProxyException) as exc:
         await new_team(
             data=NewTeamRequest(team_alias="t", default_estimated_output_tokens=1),
+            http_request=Mock(spec=Request),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.INTERNAL_USER,
+                api_key="sk-alice",
+                user_id="alice",
+            ),
+        )
+
+    assert str(exc.value.code) == "403"
+    assert "on a team" in str(exc.value.message)
+
+
+_TEAM_BATCH_LIMIT = "batch_enqueued_token_limit"
+
+
+@pytest.mark.asyncio
+async def test_update_team_batch_enqueued_token_limit_raised_rejected_for_team_admin():
+    """_verify_team_access admits a team admin, so the gate has to fire inside
+    update_team itself to keep the team's batch quota admin-owned."""
+    import contextlib
+    from unittest.mock import Mock
+
+    from fastapi import Request
+
+    from litellm.proxy._types import UpdateTeamRequest
+    from litellm.proxy.management_endpoints.team_endpoints import update_team
+
+    with contextlib.ExitStack() as stack:
+        _wire_update_team(stack, {_TEAM_BATCH_LIMIT: 100000})
+        with pytest.raises(ProxyException) as exc:
+            await update_team(
+                data=UpdateTeamRequest(team_id="test_team_id", metadata={_TEAM_BATCH_LIMIT: 10**12}),
+                http_request=Mock(spec=Request),
+                user_api_key_dict=UserAPIKeyAuth(
+                    user_role=LitellmUserRoles.INTERNAL_USER,
+                    api_key="sk-team-admin",
+                    user_id="team-admin",
+                ),
+            )
+
+    assert str(exc.value.code) == "403"
+    assert "on a team" in str(exc.value.message)
+
+
+@pytest.mark.asyncio
+async def test_new_team_batch_enqueued_token_limit_rejected_for_non_admin():
+    """/team/new is the other write path into the same stored metadata."""
+    from unittest.mock import Mock
+
+    from fastapi import Request
+
+    from litellm.proxy._types import NewTeamRequest
+    from litellm.proxy.management_endpoints.team_endpoints import new_team
+
+    with pytest.raises(ProxyException) as exc:
+        await new_team(
+            data=NewTeamRequest(team_alias="t", metadata={_TEAM_BATCH_LIMIT: 100000}),
             http_request=Mock(spec=Request),
             user_api_key_dict=UserAPIKeyAuth(
                 user_role=LitellmUserRoles.INTERNAL_USER,

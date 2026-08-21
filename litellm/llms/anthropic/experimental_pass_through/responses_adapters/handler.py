@@ -105,7 +105,8 @@ def _build_responses_kwargs(
 
     # Forward litellm-specific kwargs (api_key, api_base, logging obj, etc.)
     excluded: Final = {"anthropic_messages"}
-    for key, value in _forwarded_kwargs(extra_kwargs).items():
+    forwarded_kwargs: Final = _forwarded_kwargs(extra_kwargs)
+    for key, value in forwarded_kwargs.items():
         if key == "litellm_logging_obj" and value is not None:
             from litellm.litellm_core_utils.litellm_logging import (
                 Logging as LiteLLMLoggingObject,
@@ -120,6 +121,10 @@ def _build_responses_kwargs(
             responses_kwargs[key] = value
         elif key not in excluded and key not in responses_kwargs and value is not None:
             responses_kwargs[key] = value
+
+    explicit_prompt_cache_key: Final = forwarded_kwargs.get("prompt_cache_key")
+    if explicit_prompt_cache_key is not None:
+        responses_kwargs["prompt_cache_key"] = explicit_prompt_cache_key
 
     return responses_kwargs
 
