@@ -96,27 +96,21 @@ async def test_check_end_user_budget(customer_spend, customer_budget):
     
     should_exceed = customer_spend > customer_budget
     
-    try:
+    if not should_exceed:
         await _check_end_user_budget(
             end_user_obj=end_user_obj,
             route="/v1/chat/completions",
         )
-        if should_exceed:
-            pytest.fail(
-                "Expected BudgetExceededError. Customer Spend={}, Customer Budget={}".format(
-                    customer_spend, customer_budget
-                )
-            )
-    except litellm.BudgetExceededError as e:
-        if not should_exceed:
-            pytest.fail(
-                "Unexpected BudgetExceededError. Customer Spend={}, Customer Budget={}, Error={}".format(
-                    customer_spend, customer_budget, str(e)
-                )
-            )
-        # Verify the error has correct info
-        assert e.current_cost == customer_spend
-        assert e.max_budget == customer_budget
+        return
+
+    with pytest.raises(litellm.BudgetExceededError) as exc_info:
+        await _check_end_user_budget(
+            end_user_obj=end_user_obj,
+            route="/v1/chat/completions",
+        )
+    # Verify the error has correct info
+    assert exc_info.value.current_cost == customer_spend
+    assert exc_info.value.max_budget == customer_budget
 
 
 @pytest.mark.parametrize(
@@ -450,13 +444,12 @@ async def test_is_valid_fallback_model():
     except Exception as e:
         pytest.fail(f"Expected is_valid_fallback_model to work, got exception: {e}")
 
-    try:
+    with pytest.raises(Exception, match="Invalid") as exc_info:
         await is_valid_fallback_model(
             model="gpt-4o", llm_router=router, user_model=None
         )
-        pytest.fail("Expected is_valid_fallback_model to fail")
-    except Exception as e:
-        assert "Invalid" in str(e)
+    e = exc_info.value
+    assert "Invalid" in str(e)
 
 
 @pytest.mark.parametrize(
@@ -506,23 +499,21 @@ async def test_virtual_key_max_budget_check(
 
     proxy_logging_obj.budget_alerts = mock_budget_alert
 
-    try:
+    if expect_budget_error:
+        with pytest.raises(litellm.BudgetExceededError) as exc_info:
+            await _virtual_key_max_budget_check(
+                valid_token=valid_token,
+                proxy_logging_obj=proxy_logging_obj,
+                user_obj=user_obj,
+            )
+        assert exc_info.value.current_cost == token_spend
+        assert exc_info.value.max_budget == max_budget
+    else:
         await _virtual_key_max_budget_check(
             valid_token=valid_token,
             proxy_logging_obj=proxy_logging_obj,
             user_obj=user_obj,
         )
-        if expect_budget_error:
-            pytest.fail(
-                f"Expected BudgetExceededError for spend={token_spend}, max_budget={max_budget}"
-            )
-    except litellm.BudgetExceededError as e:
-        if not expect_budget_error:
-            pytest.fail(
-                f"Unexpected BudgetExceededError for spend={token_spend}, max_budget={max_budget}"
-            )
-        assert e.current_cost == token_spend
-        assert e.max_budget == max_budget
 
     await asyncio.sleep(1)
 

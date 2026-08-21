@@ -266,10 +266,10 @@ def test_is_prisma_engine_internal_error_excludes_data_layer_prisma_error():
     data_layer_error = UniqueViolationError(
         data={"user_facing_error": {"meta": {"table": "t"}}}
     )
-    try:
+    with pytest.raises(UniqueViolationError) as exc_info:
         raise data_layer_error
-    except UniqueViolationError as e:
-        assert PrismaDBExceptionHandler.is_prisma_engine_internal_error(e) is False
+    e = exc_info.value
+    assert PrismaDBExceptionHandler.is_prisma_engine_internal_error(e) is False
 
 
 @pytest.mark.parametrize(
