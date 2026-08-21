@@ -593,7 +593,7 @@ def _extract_generic_session_id_from_headers(
 
 
 def _extract_codex_session_id_from_headers(
-    normalized: dict[str, str],
+    normalized: Mapping[str, str],
 ) -> str | None:
     """
     Read Codex's conversation uuid off one of ``_CODEX_SESSION_ID_HEADERS``.
