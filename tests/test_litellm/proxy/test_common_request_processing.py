@@ -5555,7 +5555,7 @@ class TestStreamingClientDisconnectBilling:
         assert standard_logging_object["response_cost"] > 0.0
 
     @pytest.mark.asyncio
-    async def test_disconnect_billing_zero_fills_missing_cache_fields(self):
+    async def test_disconnect_billing_backfills_missing_cache_fields(self):
         event = await self._bill_and_collect_success_event()
 
         usage = event["response_obj"].usage
@@ -5563,6 +5563,48 @@ class TestStreamingClientDisconnectBilling:
         assert getattr(usage, "cache_read_input_tokens", None) == 0
         assert usage.prompt_tokens_details is not None
         assert usage.prompt_tokens_details.cached_tokens == 0
+
+    @pytest.mark.asyncio
+    async def test_disconnect_billing_carries_up_openai_style_cached_tokens(self):
+        from litellm.types.utils import (
+            Delta,
+            ModelResponseStream,
+            PromptTokensDetailsWrapper,
+            StreamingChoices,
+            Usage,
+        )
+
+        def append_openai_style_cached_usage_chunk(response):
+            response.chunks.append(
+                ModelResponseStream(
+                    id=response.chunks[0].id,
+                    model="gpt-4o-mini",
+                    object="chat.completion.chunk",
+                    choices=[
+                        StreamingChoices(
+                            finish_reason=None,
+                            index=0,
+                            delta=Delta(content=" and more", role="assistant"),
+                        )
+                    ],
+                    usage=Usage(
+                        prompt_tokens=1000,
+                        completion_tokens=10,
+                        total_tokens=1010,
+                        prompt_tokens_details=PromptTokensDetailsWrapper(
+                            cached_tokens=500
+                        ),
+                    ),
+                )
+            )
+
+        event = await self._bill_and_collect_success_event(
+            append_openai_style_cached_usage_chunk
+        )
+
+        usage = event["response_obj"].usage
+        assert getattr(usage, "cache_read_input_tokens", None) == 500
+        assert getattr(usage, "cache_creation_input_tokens", None) == 0
 
     @pytest.mark.asyncio
     async def test_disconnect_billing_keeps_cache_values_recovered_from_chunks(self):

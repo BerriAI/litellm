@@ -2326,7 +2326,7 @@ class CustomStreamWrapper:
                 return
             if self.model:
                 partial_response.model = self.model
-            zero_fill_missing_cache_usage_fields(usage)
+            backfill_missing_cache_usage_fields(usage)
             self.logging_obj.model_call_details["combined_usage_object"] = usage
             self.logging_obj.model_call_details["response_cost"] = (
                 self.logging_obj._response_cost_calculator(result=partial_response) or 0.0
@@ -2447,13 +2447,33 @@ class CustomStreamWrapper:
         return chunk
 
 
-def zero_fill_missing_cache_usage_fields(usage: Usage) -> None:
-    if getattr(usage, "cache_creation_input_tokens", None) is None:
-        usage.cache_creation_input_tokens = 0  # rebind-ok: in-place zero-fill is the contract
+def _cache_token_count(details: PromptTokensDetailsWrapper | None, keys: tuple[str, ...]) -> int:
+    for key in keys:
+        value = getattr(details, key, None)
+        if isinstance(value, int) and not isinstance(value, bool) and value:
+            return value
+    return 0
+
+
+def backfill_missing_cache_usage_fields(usage: Usage) -> None:
+    """Give partial-stream usage the same cache fields a complete stream reports.
+
+    Carries OpenAI-style ``prompt_tokens_details`` counts up to the Anthropic-style
+    top-level keys, defaulting to zero. It must carry the real count rather than a
+    flat zero: downstream readers treat these keys as authoritative once present and
+    skip their own normalization, so a zero here would overwrite a real cache read.
+    """
+    details: Final = usage.prompt_tokens_details
     if getattr(usage, "cache_read_input_tokens", None) is None:
-        usage.cache_read_input_tokens = 0  # rebind-ok: in-place zero-fill is the contract
+        usage.cache_read_input_tokens = _cache_token_count(  # rebind-ok: in-place backfill is the contract
+            details, ("cached_tokens",)
+        )
+    if getattr(usage, "cache_creation_input_tokens", None) is None:
+        usage.cache_creation_input_tokens = _cache_token_count(  # rebind-ok: in-place backfill is the contract
+            details, ("cache_write_tokens", "cache_creation_tokens")
+        )
     if usage.prompt_tokens_details is None:
-        usage.prompt_tokens_details = PromptTokensDetailsWrapper(cached_tokens=0)  # rebind-ok: zero-fill in place
+        usage.prompt_tokens_details = PromptTokensDetailsWrapper(cached_tokens=0)  # rebind-ok: backfill in place
 
 
 _TokenDetails = TypeVar("_TokenDetails", PromptTokensDetailsWrapper, CompletionTokensDetailsWrapper)
