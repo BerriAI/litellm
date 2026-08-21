@@ -432,12 +432,20 @@ def _policy_state_metadata(data: Mapping[str, object]) -> Mapping[str, object]:
 
 def _policy_pipelines(data: Mapping[str, object]) -> tuple[tuple[str, "GuardrailPipeline"], ...]:
     pipelines: Final = _policy_state_metadata(data).get("_guardrail_pipelines")
-    return tuple(cast("Sequence[tuple[str, GuardrailPipeline]]", pipelines)) if pipelines else ()
+    return (
+        tuple(cast("Sequence[tuple[str, GuardrailPipeline]]", pipelines))  # cast-ok: the policy engine wrote the slot
+        if pipelines
+        else ()
+    )
 
 
 def _pipeline_managed_guardrail_names(data: Mapping[str, object]) -> frozenset[str]:
     managed: Final = _policy_state_metadata(data).get("_pipeline_managed_guardrails")
-    return frozenset(cast("Collection[str]", managed)) if managed else frozenset()
+    return (
+        frozenset(cast("Collection[str]", managed))  # cast-ok: the policy engine wrote these guardrail names
+        if managed
+        else frozenset()
+    )
 
 
 def _prompt_block_text(block: object) -> str:
