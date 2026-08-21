@@ -169,6 +169,27 @@ class TestSingulrRequestPayload:
         assert result == {"texts": []}
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "extra_inputs",
+        [
+            {"tools": [{"type": "function", "function": {"name": "delete_file", "description": "", "parameters": {}}}]},
+            {"images": ["data:image/png;base64,abc123"]},
+        ],
+        ids=["tools_alone", "images_alone"],
+    )
+    async def test_tools_or_images_alone_still_trigger_the_api_call(self, singulr_guardrail, extra_inputs):
+        """Regression: a request with only tool definitions or only images and
+        no text must still be checked, not skipped for lack of a message."""
+        resp = _make_response({"should_block": False})
+        with patch.object(singulr_guardrail.async_handler, "post", return_value=resp) as mock_post:
+            await singulr_guardrail.apply_guardrail(
+                inputs={"texts": [], **extra_inputs},
+                request_data={},
+                input_type="request",
+            )
+        mock_post.assert_called_once()
+
+    @pytest.mark.asyncio
     async def test_tools_are_forwarded(self, singulr_guardrail):
         """Regression: tool/function definitions are client-controlled and can
         carry prompt-injection content, so they must reach Singulr for
@@ -188,33 +209,6 @@ class TestSingulrRequestPayload:
             )
         sent_payload = mock_post.call_args.kwargs["json"]
         assert sent_payload["tools"] == tools
-
-    @pytest.mark.asyncio
-    async def test_tools_alone_still_triggers_the_api_call(self, singulr_guardrail):
-        """Regression: a request with tool definitions but no text or images
-        must still be checked, not skipped for lack of a message."""
-        resp = _make_response({"should_block": False})
-        tools = [{"type": "function", "function": {"name": "delete_file", "description": "", "parameters": {}}}]
-        with patch.object(singulr_guardrail.async_handler, "post", return_value=resp) as mock_post:
-            await singulr_guardrail.apply_guardrail(
-                inputs={"texts": [], "tools": tools},
-                request_data={},
-                input_type="request",
-            )
-        mock_post.assert_called_once()
-
-    @pytest.mark.asyncio
-    async def test_images_alone_still_triggers_the_api_call(self, singulr_guardrail):
-        """Regression: an image-only request (no text) must still be checked,
-        not skipped just because `texts` is empty."""
-        resp = _make_response({"should_block": False})
-        with patch.object(singulr_guardrail.async_handler, "post", return_value=resp) as mock_post:
-            await singulr_guardrail.apply_guardrail(
-                inputs={"texts": [], "images": ["data:image/png;base64,abc123"]},
-                request_data={},
-                input_type="request",
-            )
-        mock_post.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_user_api_key_alias_is_forwarded_in_metadata(self, singulr_guardrail):
@@ -329,27 +323,20 @@ class TestSingulrResponsePayload:
 
 class TestSingulrAllowAction:
     @pytest.mark.asyncio
-    async def test_should_block_false_returns_inputs_unchanged_on_request(self, singulr_guardrail):
-        resp = _make_response({"should_block": False})
+    @pytest.mark.parametrize(
+        "guard_response",
+        [{"should_block": False}, {}],
+        ids=["should_block_false", "should_block_omitted"],
+    )
+    async def test_should_block_falsy_returns_inputs_unchanged_on_request(self, singulr_guardrail, guard_response):
+        """should_block is optional on the wire; a response that omits it
+        entirely must be treated as allow, not block."""
+        resp = _make_response(guard_response)
         inputs = {"texts": ["How do I reset my password?"]}
         with patch.object(singulr_guardrail.async_handler, "post", return_value=resp):
             result = await singulr_guardrail.apply_guardrail(
                 inputs=inputs,
                 request_data={"model": "gpt-4o"},
-                input_type="request",
-            )
-            assert result is inputs
-
-    @pytest.mark.asyncio
-    async def test_should_block_none_returns_inputs_unchanged_on_request(self, singulr_guardrail):
-        """should_block is optional on the wire; a response that omits it
-        entirely must be treated as allow, not block."""
-        resp = _make_response({})
-        inputs = {"texts": ["hi"]}
-        with patch.object(singulr_guardrail.async_handler, "post", return_value=resp):
-            result = await singulr_guardrail.apply_guardrail(
-                inputs=inputs,
-                request_data={},
                 input_type="request",
             )
             assert result is inputs
@@ -435,21 +422,6 @@ class TestSingulrMcpRequest:
         assert sent_payload["tool_arguments"] == {"query": "reset password"}
         assert sent_payload["mcp_server_name"] == "docs-server"
         assert result == {"texts": []}
-
-    @pytest.mark.asyncio
-    async def test_mcp_request_ignores_texts_and_always_calls_api(self, singulr_guardrail):
-        """Unlike the plain text-message path, an MCP tool call has no
-        `texts`/`images` gate: it must always be checked even with empty
-        inputs, since the tool name/arguments alone are the payload."""
-        resp = _make_response({"should_block": False})
-        request_data = {"mcp_tool_name": "delete_file", "mcp_arguments": {}}
-        with patch.object(singulr_guardrail.async_handler, "post", return_value=resp) as mock_post:
-            await singulr_guardrail.apply_guardrail(
-                inputs={"texts": []},
-                request_data=request_data,
-                input_type="request",
-            )
-        mock_post.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_mcp_request_should_block_true_raises(self, singulr_guardrail):
@@ -577,9 +549,7 @@ class TestSingulrLoggingHook:
                 return "<Unserializable>"
 
         with patch.object(singulr_guardrail.async_handler, "post", return_value=resp) as mock_post:
-            await singulr_guardrail.async_logging_hook(
-                kwargs={}, result=Unserializable(), call_type="acompletion"
-            )
+            await singulr_guardrail.async_logging_hook(kwargs={}, result=Unserializable(), call_type="acompletion")
 
         response_payload = mock_post.call_args.kwargs["json"]
         assert response_payload["response"] == "<Unserializable>"
@@ -643,7 +613,7 @@ class TestSingulrLoggingHook:
 
 class TestSingulrRequestWiring:
     @pytest.mark.asyncio
-    async def test_sends_configured_timeout(self):
+    async def test_sends_configured_timeout_and_calls_the_guard_endpoint(self):
         """litellm_params.timeout must reach the httpx call so operators can
         tighten or loosen the latency budget instead of being stuck with a
         hardcoded 30s regardless of configuration."""
@@ -659,17 +629,7 @@ class TestSingulrRequestWiring:
                 request_data={},
                 input_type="request",
             )
-            assert mock_post.call_args.kwargs["timeout"] == 5.0
-
-    @pytest.mark.asyncio
-    async def test_calls_the_guard_endpoint(self, singulr_guardrail):
-        resp = _make_response({"should_block": False})
-        with patch.object(singulr_guardrail.async_handler, "post", return_value=resp) as mock_post:
-            await singulr_guardrail.apply_guardrail(
-                inputs={"texts": ["test"]},
-                request_data={},
-                input_type="request",
-            )
+        assert mock_post.call_args.kwargs["timeout"] == 5.0
         assert mock_post.call_args.kwargs["url"] == "https://api.test.singulr.ai/api/v1/ai-gateway/litellm"
 
 
