@@ -8,7 +8,6 @@ import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle }
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import useCan from "@/app/(dashboard)/hooks/useCan";
 import { getToolSpend, ToolSpendResponse } from "@/components/networking";
-import { formatNumberWithCommas } from "@/utils/dataUtils";
 import {
   autorouterOf,
   buildDailyToolSeries,
@@ -17,7 +16,6 @@ import {
   formatRangeLabel,
   localIsoDay,
   MAX_POINTS_WITH_DOTS,
-  savedTokensOf,
   SAVINGS_COLORS,
   SAVINGS_DRIVERS,
   SAVINGS_SERIES,
@@ -29,7 +27,7 @@ import {
   usd,
   withStartAnchor,
 } from "./costOptimizationUtils";
-import SummaryCard from "@/components/shared/SummaryCard";
+import SavingsTiles, { useSavingsTotals } from "@/components/shared/SavingsTiles";
 import { DailyActivityRange } from "./useDailyActivityRange";
 
 interface UsageTabProps {
@@ -75,11 +73,7 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
   const toolSpend = toolSpendState?.key === rangeKey ? toolSpendState.data : null;
   const toolSpendLoading = toolSpendEnabled && toolSpend === null;
 
-  const compressionTotal = useMemo(() => results.reduce((sum, d) => sum + compressionOf(d.metrics), 0), [results]);
-  const cachingTotal = useMemo(() => results.reduce((sum, d) => sum + cachingOf(d.metrics), 0), [results]);
-  const autorouterTotal = useMemo(() => results.reduce((sum, d) => sum + autorouterOf(d.metrics), 0), [results]);
-  const savedTokensTotal = useMemo(() => results.reduce((sum, d) => sum + savedTokensOf(d.metrics), 0), [results]);
-  const totalSaved = compressionTotal + cachingTotal + autorouterTotal;
+  const totals = useSavingsTotals(results);
 
   const [accumulation, setAccumulation] = useState<SavingsAccumulation>("cumulative");
 
@@ -125,9 +119,11 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
       SAVINGS_DRIVERS.map(({ name, color }) => ({
         driver: name,
         color,
-        usd: { Compression: compressionTotal, "Prompt caching": cachingTotal, "Auto-router": autorouterTotal }[name],
+        usd: { Compression: totals.compression, "Prompt caching": totals.caching, "Auto-router": totals.autorouter }[
+          name
+        ],
       })).filter((d) => d.usd > 0),
-    [compressionTotal, cachingTotal, autorouterTotal],
+    [totals],
   );
   const plottedDriverTotal = useMemo(() => byDriver.reduce((sum, d) => sum + d.usd, 0), [byDriver]);
 
@@ -154,31 +150,7 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
         <AdvancedDatePicker value={dateValue} onValueChange={onDateChange} />
       </div>
 
-      <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-4">
-        <SummaryCard
-          label="Total saved"
-          value={usd(totalSaved)}
-          hint={loading || isFetchingMore ? "Loading..." : "Compression + prompt caching + auto-router"}
-        />
-        <SummaryCard
-          label="Compression savings"
-          value={usd(compressionTotal)}
-          hint={`${formatNumberWithCommas(savedTokensTotal)} tokens compressed`}
-          info="Tokens Headroom removed before the call, priced at the model's input rate."
-        />
-        <SummaryCard
-          label="Prompt caching savings"
-          value={usd(cachingTotal)}
-          hint="Cache reads, net of write premium"
-          info="What caching saved against paying the input rate for every token: the discount on tokens served from cache, less the premium providers charge to write a cache entry. Can be negative on traffic that writes more cache than it reuses."
-        />
-        <SummaryCard
-          label="Auto-router savings"
-          value={usd(autorouterTotal)}
-          hint="vs. the priciest model it could pick"
-          info="What this traffic would have cost had every request gone to the most expensive model the auto-router can route to, minus what it actually cost. Switching leaves the new model with a cold cache, so it pays to write the prompt again while the baseline is priced as already warm; a route that thrashes the cache can total below zero, and a genuine first turn, where neither side had anything cached, is undercounted."
-        />
-      </div>
+      <SavingsTiles results={results} isLoading={loading || isFetchingMore} />
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
         <Card className="lg:col-span-2">

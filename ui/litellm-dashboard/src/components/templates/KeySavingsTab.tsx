@@ -4,10 +4,9 @@ import React, { useMemo, useState } from "react";
 
 import { AreaChart, BarChart, CustomLegend } from "@/components/shared/charts";
 import AdvancedDatePicker from "@/components/shared/advanced_date_picker";
-import SummaryCard from "@/components/shared/SummaryCard";
+import SavingsTiles from "@/components/shared/SavingsTiles";
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { hasProxyWideSpendView, spendScopeUserId } from "@/utils/roles";
 import {
   autorouterOf,
@@ -16,7 +15,6 @@ import {
   formatRangeLabel,
   localIsoDay,
   MAX_POINTS_WITH_DOTS,
-  savedTokensOf,
   SAVINGS_COLORS,
   SAVINGS_SERIES,
   SavingsAccumulation,
@@ -49,12 +47,6 @@ const KeySavingsTab: React.FC<KeySavingsTabProps> = ({ accessToken, keyToken, us
   const { dateValue, onDateChange, results, loading, isFetchingMore } = activity;
   const startTime = dateValue.from ?? null;
   const endTime = dateValue.to ?? null;
-
-  const compressionTotal = useMemo(() => results.reduce((sum, d) => sum + compressionOf(d.metrics), 0), [results]);
-  const cachingTotal = useMemo(() => results.reduce((sum, d) => sum + cachingOf(d.metrics), 0), [results]);
-  const autorouterTotal = useMemo(() => results.reduce((sum, d) => sum + autorouterOf(d.metrics), 0), [results]);
-  const savedTokensTotal = useMemo(() => results.reduce((sum, d) => sum + savedTokensOf(d.metrics), 0), [results]);
-  const totalSaved = compressionTotal + cachingTotal + autorouterTotal;
 
   const [accumulation, setAccumulation] = useState<SavingsAccumulation>("cumulative");
 
@@ -113,31 +105,7 @@ const KeySavingsTab: React.FC<KeySavingsTabProps> = ({ accessToken, keyToken, us
         </p>
       )}
 
-      <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-4">
-        <SummaryCard
-          label="Total saved"
-          value={usd(totalSaved)}
-          hint={isLoading ? "Loading..." : "Compression + prompt caching + auto-router"}
-        />
-        <SummaryCard
-          label="Compression savings"
-          value={usd(compressionTotal)}
-          hint={`${formatNumberWithCommas(savedTokensTotal)} tokens compressed`}
-          info="Tokens Headroom removed before the call, priced at the model's input rate."
-        />
-        <SummaryCard
-          label="Prompt caching savings"
-          value={usd(cachingTotal)}
-          hint="Cache reads, net of write premium"
-          info="What caching saved against paying the input rate for every token: the discount on tokens served from cache, less the premium providers charge to write a cache entry. Can be negative on traffic that writes more cache than it reuses."
-        />
-        <SummaryCard
-          label="Auto-router savings"
-          value={usd(autorouterTotal)}
-          hint="vs. the priciest model it could pick"
-          info="What this traffic would have cost had every request gone to the most expensive model the auto-router can route to, minus what it actually cost. Switching leaves the new model with a cold cache, so it pays to write the prompt again while the baseline is priced as already warm; a route that thrashes the cache can total below zero, and a genuine first turn, where neither side had anything cached, is undercounted."
-        />
-      </div>
+      <SavingsTiles results={results} isLoading={isLoading} />
 
       <Card>
         <CardHeader>
