@@ -214,6 +214,10 @@ class ParallelAISearchConfig(BaseSearchConfig):
         # unified-spec param with no v1 equivalent
         params.pop("max_tokens_per_page", None)
 
+        # reserved for the provider's own reported usage, which prices the request;
+        # a caller-supplied value would otherwise set its own cost
+        params.pop(PARALLEL_AI_USAGE_PARAM, None)
+
         return {**request_data, **params}
 
     def transform_search_response(
@@ -237,11 +241,12 @@ class ParallelAISearchConfig(BaseSearchConfig):
         """
         parsed: Final = _ParallelAIV1SearchResponse.model_validate(raw_response.json())
 
-        if parsed.usage is not None:
-            logging_obj.optional_params = {
-                **logging_obj.optional_params,
-                PARALLEL_AI_USAGE_PARAM: parsed.usage,
-            }
+        # written unconditionally: leaving a caller-supplied value in place when the
+        # provider reports no usage would let the caller price its own request
+        logging_obj.optional_params = {
+            **logging_obj.optional_params,
+            PARALLEL_AI_USAGE_PARAM: parsed.usage,
+        }
 
         results: Final = tuple(
             SearchResult.model_validate(

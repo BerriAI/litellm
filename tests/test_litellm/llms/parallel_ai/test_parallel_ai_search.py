@@ -472,3 +472,27 @@ class TestParallelAISearch:
             )
 
             assert response._hidden_params["response_cost"] == pytest.approx(0.005)
+
+    @pytest.mark.asyncio
+    async def test_caller_cannot_supply_provider_usage(self, bundled_cost_map):
+        """`_parallel_ai_usage` prices the request, so a caller must not be able to set it.
+
+        The provider reports no usage here, which is the case where a caller-supplied
+        value would otherwise survive into the cost calculation.
+        """
+        response_payload = {k: v for k, v in MOCK_V1_RESPONSE.items() if k != "usage"}
+        with patch(
+            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+            new_callable=AsyncMock,
+        ) as mock_post:
+            mock_post.return_value = _mock_response(response_payload)
+
+            response = await litellm.asearch(
+                query="AI developments",
+                search_provider="parallel_ai",
+                mode="basic",
+                _parallel_ai_usage=[{"name": "sku_search", "count": 0}],
+            )
+
+            assert response._hidden_params["response_cost"] == pytest.approx(0.005)
+            assert "_parallel_ai_usage" not in mock_post.call_args.kwargs["json"]
