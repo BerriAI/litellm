@@ -43,6 +43,9 @@ from litellm.litellm_core_utils.llm_response_utils.get_headers import (
     get_response_headers,
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+from litellm.litellm_core_utils.streaming_handler import (
+    backfill_missing_cache_usage_fields,
+)
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import can_key_call_resolved_model
 from litellm.proxy.auth.auth_utils import check_response_size_is_safe
@@ -274,6 +277,43 @@ def _deferred_stream_logging_is_armed(request_data: dict) -> bool:
     )
 
 
+def _assembled_model_came_from_a_later_chunk(chunks: list, assembled_model: object) -> bool:
+    """Report whether stream_chunk_builder picked a model the first chunk did not carry.
+
+    Azure Model Router puts the routed model on the chunks after the first one, and the
+    proxy deliberately leaves those chunks unrestamped so the builder can recover it.
+
+    A stored chunk that carries usage is a pre-restamp copy of the one the proxy saw, so
+    an alias-restamped stream reaches the builder with the same shape: a first chunk that
+    disagrees with the rest. Those two are only told apart by what the client asked for.
+    """
+    first_chunk: Final = chunks[0]
+    first_chunk_model: Final = (
+        first_chunk.get("model") if isinstance(first_chunk, dict) else getattr(first_chunk, "model", None)
+    )
+    return (
+        isinstance(first_chunk_model, str)
+        and isinstance(assembled_model, str)
+        and bool(assembled_model)
+        and assembled_model != first_chunk_model
+    )
+
+
+def _assembled_model_is_the_name_the_client_asked_for(request_data: dict, assembled_model: object) -> bool:
+    """Report whether the assembled model is the public name the proxy stamps onto chunks.
+
+    That stamp is what leaves an unpriced alias on the partial response, so the deployment's
+    own model has to go back on before the row is costed. Pre-call processing rewrites
+    `request_data["model"]` for aliasing and routing, so the client's own name wins when it
+    is there, in the same order the proxy picks the name it stamps.
+    """
+    client_requested_model: Final = request_data.get("_litellm_client_requested_model")
+    stamped_model: Final = (
+        client_requested_model if isinstance(client_requested_model, str) else request_data.get("model")
+    )
+    return isinstance(stamped_model, str) and assembled_model == stamped_model
+
+
 async def _bill_partial_streamed_spend_on_disconnect(request_data: dict, response: object) -> bool:
     """
     A client disconnect throws GeneratorExit/CancelledError into the streaming
@@ -324,6 +364,15 @@ async def _bill_partial_streamed_spend_on_disconnect(request_data: dict, respons
         return False
     if partial_response is None:
         return False
+    wrapper_model: Final = getattr(response, "model", None)
+    builder_recovered_the_routed_model: Final = _assembled_model_came_from_a_later_chunk(
+        chunks, partial_response.model
+    ) and not _assembled_model_is_the_name_the_client_asked_for(request_data, partial_response.model)
+    if isinstance(wrapper_model, str) and wrapper_model and not builder_recovered_the_routed_model:
+        partial_response.model = wrapper_model
+    partial_usage: Final = getattr(partial_response, "usage", None)
+    if isinstance(partial_usage, Usage):
+        backfill_missing_cache_usage_fields(partial_usage)
     try:
         await logging_obj.dispatch_success_handlers(
             partial_response,
