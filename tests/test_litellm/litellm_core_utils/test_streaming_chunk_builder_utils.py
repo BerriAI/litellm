@@ -1342,3 +1342,106 @@ def test_calculate_usage_fills_unknown_split_from_reasoning_estimate(
     assert usage.completion_tokens == 100
     assert usage.completion_tokens_details.reasoning_tokens == expected_reasoning_tokens
     assert usage.completion_tokens_details.text_tokens == expected_text_tokens
+
+
+def _empty_choices_chunk(**extra):
+    chunk = {
+        "id": "chatcmpl-empty-choices",
+        "object": "chat.completion.chunk",
+        "created": 1,
+        "model": "claude-opus-4-8",
+        "choices": [],
+    }
+    chunk.update(extra)
+    return chunk
+
+
+@pytest.mark.parametrize(
+    "chunks",
+    [
+        pytest.param(
+            [_empty_choices_chunk(), _empty_choices_chunk()],
+            id="all_chunks_have_empty_choices",
+        ),
+        pytest.param(
+            [
+                _empty_choices_chunk(usage={"prompt_tokens": 10}),
+                _empty_choices_chunk(usage={"completion_tokens": 0}),
+            ],
+            id="usage_only_chunks",
+        ),
+    ],
+)
+def test_build_base_response_handles_empty_choices(chunks):
+    """Empty `choices` arrays must not raise IndexError.
+
+    `next((c for c in chunks if c.get("choices")), chunk)` used to fall back to the
+    first chunk, whose `choices` may be `[]`, so `["choices"][0]` went out of range.
+    The resulting error is surfaced to the client mid-stream and the request never
+    reaches SpendLogs.
+    """
+    processor = ChunkProcessor(chunks=list(chunks))
+
+    response = processor.build_base_response(list(chunks))
+
+    assert response.choices[0].message.role == "assistant"
+
+
+@pytest.mark.parametrize(
+    "delta",
+    [
+        pytest.param({"content": "Hello"}, id="delta_without_role"),
+        pytest.param({}, id="delta_empty_dict"),
+    ],
+)
+def test_build_base_response_handles_delta_without_role(delta):
+    """A `delta` that omits `role` must not raise KeyError."""
+    chunks = [
+        {
+            "id": "chatcmpl-no-role",
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": "claude-opus-4-8",
+            "choices": [{"index": 0, "delta": delta, "finish_reason": None}],
+        }
+    ]
+    processor = ChunkProcessor(chunks=list(chunks))
+
+    response = processor.build_base_response(list(chunks))
+
+    assert response.choices[0].message.role == "assistant"
+
+
+def test_build_base_response_still_reads_role_and_finish_reason():
+    """Regression guard: well-formed chunks keep their role and finish_reason."""
+    chunks = [
+        _empty_choices_chunk(),
+        {
+            "id": "chatcmpl-normal",
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": "claude-opus-4-8",
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {"role": "assistant", "content": "Hi"},
+                    "finish_reason": None,
+                }
+            ],
+        },
+        {
+            "id": "chatcmpl-normal",
+            "object": "chat.completion.chunk",
+            "created": 2,
+            "model": "claude-opus-4-8",
+            "choices": [
+                {"index": 0, "delta": {"content": "!"}, "finish_reason": "stop"}
+            ],
+        },
+    ]
+    processor = ChunkProcessor(chunks=list(chunks))
+
+    response = processor.build_base_response(list(chunks))
+
+    assert response.choices[0].message.role == "assistant"
+    assert response.choices[0].finish_reason == "stop"
