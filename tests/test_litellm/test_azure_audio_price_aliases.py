@@ -7,16 +7,7 @@ import pytest
 
 import litellm
 
-
-@pytest.fixture(autouse=True)
-def _use_local_model_cost_map(monkeypatch):
-    original_model_cost = litellm.model_cost
-    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    litellm.model_cost = litellm.get_model_cost_map(url="")
-    try:
-        yield
-    finally:
-        litellm.model_cost = original_model_cost
+pytestmark = pytest.mark.usefixtures("local_model_cost_map")
 
 
 COST_FIELDS = (
@@ -40,8 +31,6 @@ def test_undated_azure_audio_alias_matches_dated_entry(undated, dated):
 
     for field in COST_FIELDS:
         assert undated_info.get(field) == dated_info.get(field), field
-        # the production symptom was text tokens billed at $0 — make sure the
-        # alias carries real, non-zero prices
         assert (undated_info.get(field) or 0) > 0, f"{undated}.{field} must be non-zero"
 
     assert undated_info.get("litellm_provider") == "azure"
