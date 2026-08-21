@@ -706,7 +706,9 @@ class DBSpendUpdateWriter:
                     # Track spend of the team member within this team
                     if user_id is not None:
                         # key is "team_id::<value>::user_id::<value>"
-                        team_member_key: Final = f"team_id::{target_team_id}::user_id::{user_id}"
+                        team_member_key = (
+                            f"team_id::{target_team_id}::user_id::{user_id}"  # rebind-ok: one per attributed team
+                        )
                         await self.spend_update_queue.add_update(
                             update=SpendUpdateQueueItem(
                                 entity_type=Litellm_EntityType.TEAM_MEMBER,

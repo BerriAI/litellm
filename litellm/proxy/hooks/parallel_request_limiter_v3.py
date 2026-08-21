@@ -1198,17 +1198,24 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         if self.batch_rate_limiter_script is None:
             return []
 
+        # Bound here, not read off self inside the closure: the None check above
+        # narrows the attribute, but that narrowing does not reach into a nested
+        # function, so reading it there would be an optional call.
+        run_script: Final = self.batch_rate_limiter_script
         key_groups: Final = self._group_keys_by_hash_tag(keys_to_fetch)
         all_cache_values: Final[list[CacheCounterValue | None]] = []
 
-        async def _read_group(hash_tag: str, group_keys: Sequence[str]) -> CacheCounterValues:
+        # Both callees below (the Lua script and the in-memory fallback) declare
+        # `keys: list[str]`, and _group_keys_by_hash_tag hands back exactly that,
+        # so a read-only view here would not be assignable.
+        async def _read_group(tag: str, group_keys: list[str]) -> CacheCounterValues:  # mutable-ok: callee needs list
             try:
-                return await self.batch_rate_limiter_script(
+                return await run_script(
                     keys=group_keys,
                     args=[now_int, self.window_size],  # Use integer timestamp
                 )
             except Exception as e:
-                verbose_proxy_logger.warning("Redis Lua script failed for hash tag %s: %s", hash_tag, e)
+                verbose_proxy_logger.warning("Redis Lua script failed for hash tag %s: %s", tag, e)
                 # Fallback to in-memory cache for this group
                 return await self.in_memory_cache_sliding_window(
                     keys=group_keys,

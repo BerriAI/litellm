@@ -2740,10 +2740,7 @@ async def increment_spend_counters(
         for coro in (
             _key_scope(token) if token is not None else None,
             *(_team_scope(scope_team_id) for scope_team_id in target_team_ids),
-            *(
-                _team_member_scope(user_id, scope_team_id)
-                for scope_team_id in (target_team_ids if user_id is not None else ())
-            ),
+            *(_team_member_scope(user_id, scope_team_id) for scope_team_id in target_team_ids if user_id is not None),
             _user_scope(user_id) if user_id is not None else None,
             _increment_end_user_and_tag_spend_counters(
                 end_user_id=end_user_id,

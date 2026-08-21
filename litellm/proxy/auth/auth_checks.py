@@ -4738,7 +4738,7 @@ async def _attributed_teams_max_budget_check(
         except Exception:  # noqa: BLE001  # a team that cannot be loaded contributes no ceiling
             return
 
-        if team_object is None or team_object.max_budget is None or not math.isfinite(team_object.max_budget):
+        if team_object.max_budget is None or not math.isfinite(team_object.max_budget):
             return
 
         spend: Final = await get_current_spend(
