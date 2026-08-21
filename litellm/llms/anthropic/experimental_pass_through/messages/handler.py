@@ -533,7 +533,7 @@ def anthropic_messages_handler(
         _shared_kwargs: Final = dict(
             max_tokens=max_tokens,
             messages=messages,
-            model=model,
+            model=original_model,
             metadata=metadata,
             stop_sequences=stop_sequences,
             stream=stream,
