@@ -317,7 +317,7 @@ def test_deepinfra_rerank_defaults_api_base_when_missing(mock_post, monkeypatch)
     mock_response.headers = {"content-type": "application/json"}
     mock_post.return_value = mock_response
 
-    litellm.rerank(
+    response = litellm.rerank(
         model="deepinfra/Qwen/Qwen3-Reranker-0.6B",
         query="hello",
         documents=["hello", "world"],
@@ -327,6 +327,7 @@ def test_deepinfra_rerank_defaults_api_base_when_missing(mock_post, monkeypatch)
     )
 
     assert "api.deepinfra.com" in mock_post.call_args.kwargs["url"]
+    assert [result["relevance_score"] for result in response.results] == [0.9, 0.1]
 
 
 @patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post")
@@ -390,14 +391,10 @@ def test_deepinfra_rerank_models():
     ]
 
     for model in models:
-        # This should not raise any validation errors
-        try:
-            litellm.get_llm_provider(model=model)
-        except Exception as e:
-            # We expect this to potentially fail due to missing api_base/key
-            # but the model format should be recognized
-            if "api_base" not in str(e) and "API key" not in str(e):
-                raise
+        resolved_model, provider, _, api_base = litellm.get_llm_provider(model=model)
+        assert provider == "deepinfra"
+        assert resolved_model == model.removeprefix("deepinfra/")
+        assert api_base == "https://api.deepinfra.com/v1/openai"
 
 
 @patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post")
