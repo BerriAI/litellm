@@ -209,10 +209,6 @@ class TestBedrockMoonshotInvoke(BaseLLMChatTest):
         endpoint with the messages body. Iteration of the stream itself is
         not exercised here — moonshot streaming delegates to the OpenAI
         parser and is covered by the OpenAI test suite.
-
-        Patch ``make_sync_call`` at its import site in
-        ``base_invoke_transformation`` so we observe the exact kwargs it is
-        called with at stream-wrapper construction time.
         """
         from litellm.utils import CustomStreamWrapper
 
