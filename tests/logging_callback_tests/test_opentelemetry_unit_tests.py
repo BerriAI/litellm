@@ -4,6 +4,7 @@
 # What is this?
 ## Unit test for presidio pii masking
 import sys, os, asyncio, time, random
+from contextlib import contextmanager
 from datetime import datetime
 import traceback
 from dotenv import load_dotenv
@@ -20,6 +21,27 @@ from base_test import BaseLoggingCallbackTest
 from litellm.types.utils import ModelResponse
 
 
+@contextmanager
+def temporary_litellm_redaction(enabled: bool):
+    original_flag = litellm.redact_user_api_key_info
+    litellm.redact_user_api_key_info = enabled  # test-quality-ok: redaction flag is tested here
+    try:
+        yield
+    finally:
+        litellm.redact_user_api_key_info = original_flag  # test-quality-ok: restore test global
+
+
+@contextmanager
+def temporary_litellm_callbacks(callbacks: list[str]):
+    original_callbacks = litellm.callbacks
+    litellm.callbacks = callbacks  # test-quality-ok: callback registration is tested here
+    try:
+        yield
+    finally:
+        litellm.logging_callback_manager._reset_all_callbacks()
+        litellm.callbacks = original_callbacks  # test-quality-ok: restore test global
+
+
 class TestOpentelemetryRedaction:
     """Regression tests for user_api_key_info redaction in OTEL spans (#36758)."""
 
@@ -28,11 +50,8 @@ class TestOpentelemetryRedaction:
         """When redact_user_api_key_info is True, metadata.user_api_key_* span
         attributes must not be emitted."""
         litellm.logging_callback_manager._reset_all_callbacks()
-        original_callbacks = litellm.callbacks
-        litellm.redact_user_api_key_info = True
-        litellm.callbacks = ["otel"]
 
-        try:
+        with temporary_litellm_redaction(True), temporary_litellm_callbacks(["otel"]):
             await litellm.acompletion(
                 model="gpt-5-mini",
                 messages=[{"role": "user", "content": "test"}],
@@ -70,10 +89,6 @@ class TestOpentelemetryRedaction:
             assert "user_api_key_user_email" not in redacted
             assert "user_api_key_team_id" not in redacted
             assert "generation_name" in redacted
-        finally:
-            litellm.redact_user_api_key_info = False
-            litellm.logging_callback_manager._reset_all_callbacks()
-            litellm.callbacks = original_callbacks
 
     def test_redact_user_api_key_info_filters_correctly(self):
         """Direct unit test for the redaction function used by the OTEL path."""
@@ -81,9 +96,7 @@ class TestOpentelemetryRedaction:
             redact_user_api_key_info,
         )
 
-        original_flag = litellm.redact_user_api_key_info
-        litellm.redact_user_api_key_info = True
-        try:
+        with temporary_litellm_redaction(True):
             metadata = {
                 "user_api_key_hash": "secret-hash",
                 "user_api_key_user_id": "uid",
@@ -100,8 +113,6 @@ class TestOpentelemetryRedaction:
                     assert key not in result, f"{key} should be redacted"
                 else:
                     assert key in result, f"{key} should be preserved"
-        finally:
-            litellm.redact_user_api_key_info = original_flag
 
     def test_redact_user_api_key_info_noop_when_disabled(self):
         """When the flag is off, metadata passes through unchanged."""
@@ -109,25 +120,19 @@ class TestOpentelemetryRedaction:
             redact_user_api_key_info,
         )
 
-        original_flag = litellm.redact_user_api_key_info
-        litellm.redact_user_api_key_info = False
-        try:
+        with temporary_litellm_redaction(False):
             metadata = {
                 "user_api_key_hash": "secret-hash",
                 "model": "gpt-5",
             }
             result = redact_user_api_key_info(metadata=metadata)
             assert result == metadata
-        finally:
-            litellm.redact_user_api_key_info = original_flag
 
     def test_team_attributes_are_not_added_to_auxiliary_spans_when_redacted(self):
         """Auxiliary spans must respect the same user_api_key redaction flag."""
         from litellm.integrations.opentelemetry import OpenTelemetry
 
-        original_flag = litellm.redact_user_api_key_info
-        litellm.redact_user_api_key_info = True
-        try:
+        with temporary_litellm_redaction(True):
             otel_logger = OpenTelemetry()
             otel_logger.safe_set_attribute = MagicMock()
 
@@ -138,16 +143,12 @@ class TestOpentelemetryRedaction:
             )
 
             otel_logger.safe_set_attribute.assert_not_called()
-        finally:
-            litellm.redact_user_api_key_info = original_flag
 
     def test_set_attributes_redacts_user_api_key_metadata_before_span_export(self):
         """The OTEL attribute path must filter user_api_key_* metadata."""
         from litellm.integrations.opentelemetry import OpenTelemetry
 
-        original_flag = litellm.redact_user_api_key_info
-        litellm.redact_user_api_key_info = True
-        try:
+        with temporary_litellm_redaction(True):
             otel_logger = OpenTelemetry()
             otel_logger.safe_set_attribute = MagicMock()
             otel_logger._set_inference_identity_attributes = MagicMock()
@@ -179,8 +180,6 @@ class TestOpentelemetryRedaction:
             assert "metadata.user_api_key_user_id" not in attribute_keys
             assert "metadata.user_api_key_user_email" not in attribute_keys
             assert "metadata.user_api_key_team_id" not in attribute_keys
-        finally:
-            litellm.redact_user_api_key_info = original_flag
 
 
 class TestOpentelemetryUnitTests(BaseLoggingCallbackTest):
