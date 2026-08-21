@@ -121,7 +121,7 @@ def test_set_and_snapshot_roundtrip():
     assert not accumulator
 
 
-def test_append_never_calls_raw_decode():
+def test_append_never_calls_raw_decode():  # test-quality-ok: TQ002 - laziness contract has no caller-observable proxy other than spying on the stdlib call it must defer
     """Appending must be O(1) bookkeeping only; the O(n) join+decode is
     deferred entirely to pop_next_value."""
     accumulator = JSONFragmentAccumulator()
