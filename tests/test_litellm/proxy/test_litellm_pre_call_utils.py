@@ -3172,6 +3172,46 @@ CODEX_SESSION_UUID = "0199f0c2-8b41-7c3e-9a52-6d1f4b8e2a77"
 
 
 @pytest.mark.parametrize(
+    "user_agent",
+    [
+        "codex-tui",
+        "codex-tui/0.149.0 (Mac OS 26.5.1; arm64) ghostty/1.3.1 (codex-tui; 0.149.0)",
+        "codex_cli_rs/0.62.0 (Mac OS 25.5.0; arm64) Apple_Terminal",
+        "codex_exec/0.62.0 (Linux 6.1; x86_64) unknown",
+        "codex_vscode/0.62.0 (Mac OS 26.5.1; arm64) vscode/1.99.0",
+        "Codex CLI/1.0",
+    ],
+)
+def test_is_codex_user_agent_accepts_every_first_party_originator(user_agent: str):
+    """Codex ships several originators sharing only the `codex` stem, and the TUI
+    sends a bare `codex-tui` with no version, so matching one spelling misses real clients."""
+    from litellm.proxy.litellm_pre_call_utils import is_codex_user_agent
+
+    assert is_codex_user_agent(user_agent) is True
+
+
+@pytest.mark.parametrize(
+    "user_agent",
+    ["codexify/1.0", "mycodex-tui/1.0", "curl/8.7.1", "claude-cli/2.1.0 (external, cli)", ""],
+)
+def test_is_codex_user_agent_rejects_non_codex_clients(user_agent: str):
+    from litellm.proxy.litellm_pre_call_utils import is_codex_user_agent
+
+    assert is_codex_user_agent(user_agent) is False
+
+
+def test_get_chain_id_from_headers_codex_tui_user_agent():
+    """The real Codex TUI user agent must group turns, not just the codex_cli_rs spelling."""
+    from litellm.proxy.litellm_pre_call_utils import get_chain_id_from_headers
+
+    ua = "codex-tui/0.149.0 (Mac OS 26.5.1; arm64) ghostty/1.3.1 (codex-tui; 0.149.0)"
+    assert get_chain_id_from_headers({"user-agent": ua, "session-id": CODEX_SESSION_UUID}) == CODEX_SESSION_UUID
+    assert (
+        get_chain_id_from_headers({"user-agent": "codex-tui", "session-id": CODEX_SESSION_UUID}) == CODEX_SESSION_UUID
+    )
+
+
+@pytest.mark.parametrize(
     "header",
     ["session-id", "session_id", "thread-id", "conversation_id", "Session-Id"],
 )
