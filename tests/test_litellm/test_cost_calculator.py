@@ -1743,15 +1743,15 @@ def test_azure_ai_cache_cost_calculation():
 
 
 @pytest.mark.parametrize("model_name", ["gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"])
-def test_azure_gpt_5_6_cache_creation_pricing_matches_openai(model_name):
+def test_azure_gpt_5_6_cache_creation_pricing_matches_openai(model_name, monkeypatch):
     """
     Regression test for azure/gpt-5.6* price map entries missing
     cache_creation_input_token_cost, which billed Azure cache writes at zero (#37631).
     """
     from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
 
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-    litellm.model_cost = litellm.get_model_cost_map(url="")
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
 
     azure_model_name = f"azure/{model_name}"
     assert (
