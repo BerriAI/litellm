@@ -230,6 +230,8 @@ class TestOpenAIPassthroughPrefix:
     def test_passthrough_prefix_uploads_a_file_to_openai(
         self, client: PassthroughClient, resources: ResourceManager, scoped_key: str
     ) -> None:
+        """Pins GitHub issue #36086: a file upload through the dedicated prefix
+        reaches OpenAI's file API instead of 500ing on a provider-name lookup."""
         content = f'{{"marker":"{unique_marker()}"}}\n'.encode()
         uploaded = unwrap(
             client.openai_passthrough_upload_file(
@@ -250,6 +252,8 @@ class TestOpenAIPassthroughPrefix:
     def test_passthrough_prefix_lists_batches_from_openai(
         self, client: PassthroughClient, scoped_key: str
     ) -> None:
+        """Pins GitHub issue #36086 on the batches route: the dedicated prefix
+        relays OpenAI's own batch page instead of dying on the provider lookup."""
         listed = unwrap(client.openai_passthrough_list_batches(scoped_key))
 
         assert listed.object == "list", (
@@ -270,6 +274,9 @@ class TestOpenAIPassthroughSpend:
     def test_streamed_responses_call_logs_its_cost(
         self, client: PassthroughClient, scoped_key: str
     ) -> None:
+        """Pins GitHub issue #36523: a streamed passthrough Responses call is billed
+        under the provider id the caller was served, never a $0 row under a random
+        id."""
         result = client.openai_passthrough_responses(
             scoped_key,
             CHEAP_OPENAI_MODEL,
@@ -311,6 +318,8 @@ class TestOpenAIPassthroughSpend:
     def test_embeddings_call_logs_its_cost(
         self, client: PassthroughClient, scoped_key: str
     ) -> None:
+        """Pins GitHub issue #36646: a passthrough embeddings call writes a priced
+        spend row instead of no row at all."""
         result = client.openai_passthrough_embed(
             scoped_key, EMBEDDING_MODEL, f"cost this sentence {unique_marker()}"
         )
