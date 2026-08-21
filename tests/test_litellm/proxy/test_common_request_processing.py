@@ -5519,6 +5519,196 @@ class TestStreamingClientDisconnectBilling:
 
         proxy_logging_obj._arelease_max_parallel_requests_on_disconnect.assert_awaited_once()
 
+    async def _bill_and_collect_success_event(self, prepare=None, request_data=None):
+        recorder = _RecordingSuccessLogger()
+        original_callbacks = litellm.callbacks
+        litellm.callbacks = [recorder]
+        try:
+            response = await self._start_partial_stream()
+            if prepare is not None:
+                prepare(response)
+            billed = await _bill_partial_streamed_spend_on_disconnect(
+                {"litellm_logging_obj": response.logging_obj, **(request_data or {})}, response
+            )
+            assert billed is True
+            for _ in range(50):
+                if recorder.success_events:
+                    break
+                await asyncio.sleep(0.1)
+        finally:
+            litellm.callbacks = original_callbacks
+        assert len(recorder.success_events) == 1
+        return recorder.success_events[0]
+
+    @pytest.mark.asyncio
+    async def test_disconnect_billing_prices_alias_restamped_chunks_at_real_model(self):
+        assert "openai/my-public-alias" not in litellm.model_cost
+
+        def restamp_chunks_to_alias(response):
+            for chunk in response.chunks:
+                chunk.model = "my-public-alias"
+
+        event = await self._bill_and_collect_success_event(restamp_chunks_to_alias)
+
+        assert event["response_obj"].model == "gpt-4o-mini"
+        standard_logging_object = event["kwargs"]["standard_logging_object"]
+        assert standard_logging_object["response_cost"] > 0.0
+
+    @pytest.mark.asyncio
+    async def test_disconnect_billing_prices_a_partly_restamped_chunk_list_at_real_model(self):
+        """
+        A chunk that carries usage is stored as a copy before the proxy restamps the
+        one it forwards, so an aliased stream can reach billing with its first chunk
+        still on the deployment model and the rest on the client's name.
+        """
+        assert "openai/my-public-alias" not in litellm.model_cost
+
+        def restamp_only_the_chunks_the_proxy_forwarded(response):
+            for chunk in response.chunks[1:]:
+                chunk.model = "my-public-alias"
+
+        event = await self._bill_and_collect_success_event(
+            restamp_only_the_chunks_the_proxy_forwarded,
+            request_data={"model": "my-public-alias"},
+        )
+
+        assert event["response_obj"].model == "gpt-4o-mini"
+        standard_logging_object = event["kwargs"]["standard_logging_object"]
+        assert standard_logging_object["response_cost"] > 0.0
+
+    @pytest.mark.asyncio
+    async def test_disconnect_billing_keeps_the_model_azure_model_router_picked(self):
+        def restamp_like_azure_model_router(response):
+            response.chunks[0].model = "azure-model-router"
+            for chunk in response.chunks[1:]:
+                chunk.model = "gpt-4.1-nano-2025-04-14"
+
+        event = await self._bill_and_collect_success_event(
+            restamp_like_azure_model_router,
+            request_data={"model": "azure-model-router"},
+        )
+
+        assert event["response_obj"].model == "gpt-4.1-nano-2025-04-14"
+        standard_logging_object = event["kwargs"]["standard_logging_object"]
+        assert standard_logging_object["response_cost"] > 0.0
+
+    @pytest.mark.asyncio
+    async def test_disconnect_billing_keeps_the_routed_model_when_request_data_model_was_rewritten(self):
+        """
+        Pre-call processing rewrites request_data["model"] for aliasing and routing, so the
+        routed model on the later chunks can end up matching it. Only the name the client
+        sent says whether the proxy restamped this stream.
+        """
+
+        def restamp_like_azure_model_router(response):
+            response.chunks[0].model = "azure-model-router"
+            for chunk in response.chunks[1:]:
+                chunk.model = "gpt-4.1-nano-2025-04-14"
+
+        event = await self._bill_and_collect_success_event(
+            restamp_like_azure_model_router,
+            request_data={
+                "model": "gpt-4.1-nano-2025-04-14",
+                "_litellm_client_requested_model": "azure-model-router",
+            },
+        )
+
+        assert event["response_obj"].model == "gpt-4.1-nano-2025-04-14"
+        standard_logging_object = event["kwargs"]["standard_logging_object"]
+        assert standard_logging_object["response_cost"] > 0.0
+
+    @pytest.mark.asyncio
+    async def test_disconnect_billing_backfills_missing_cache_fields(self):
+        event = await self._bill_and_collect_success_event()
+
+        usage = event["response_obj"].usage
+        assert getattr(usage, "cache_creation_input_tokens", None) == 0
+        assert getattr(usage, "cache_read_input_tokens", None) == 0
+        assert usage.prompt_tokens_details is not None
+        assert usage.prompt_tokens_details.cached_tokens == 0
+
+    @pytest.mark.asyncio
+    async def test_disconnect_billing_carries_up_openai_style_cached_tokens(self):
+        from litellm.types.utils import (
+            Delta,
+            ModelResponseStream,
+            PromptTokensDetailsWrapper,
+            StreamingChoices,
+            Usage,
+        )
+
+        def append_openai_style_cached_usage_chunk(response):
+            response.chunks.append(
+                ModelResponseStream(
+                    id=response.chunks[0].id,
+                    model="gpt-4o-mini",
+                    object="chat.completion.chunk",
+                    choices=[
+                        StreamingChoices(
+                            finish_reason=None,
+                            index=0,
+                            delta=Delta(content=" and more", role="assistant"),
+                        )
+                    ],
+                    usage=Usage(
+                        prompt_tokens=1000,
+                        completion_tokens=10,
+                        total_tokens=1010,
+                        prompt_tokens_details=PromptTokensDetailsWrapper(
+                            cached_tokens=500
+                        ),
+                    ),
+                )
+            )
+
+        event = await self._bill_and_collect_success_event(
+            append_openai_style_cached_usage_chunk
+        )
+
+        usage = event["response_obj"].usage
+        assert getattr(usage, "cache_read_input_tokens", None) == 500
+        assert getattr(usage, "cache_creation_input_tokens", None) == 0
+
+    @pytest.mark.asyncio
+    async def test_disconnect_billing_keeps_cache_values_recovered_from_chunks(self):
+        from litellm.types.utils import (
+            Delta,
+            ModelResponseStream,
+            StreamingChoices,
+            Usage,
+        )
+
+        def append_usage_chunk(response):
+            response.chunks.append(
+                ModelResponseStream(
+                    id=response.chunks[0].id,
+                    model="gpt-4o-mini",
+                    object="chat.completion.chunk",
+                    choices=[
+                        StreamingChoices(
+                            finish_reason=None,
+                            index=0,
+                            delta=Delta(content=" and more", role="assistant"),
+                        )
+                    ],
+                    usage=Usage(
+                        prompt_tokens=40,
+                        completion_tokens=5,
+                        total_tokens=45,
+                        cache_read_input_tokens=7,
+                        cache_creation_input_tokens=3,
+                    ),
+                )
+            )
+
+        event = await self._bill_and_collect_success_event(append_usage_chunk)
+
+        usage = event["response_obj"].usage
+        assert getattr(usage, "cache_read_input_tokens", None) == 7
+        assert getattr(usage, "cache_creation_input_tokens", None) == 3
+        assert usage.prompt_tokens_details is not None
+        assert usage.prompt_tokens_details.cached_tokens == 7
+
 
 def _apply_stream_usage_tracking(
     data: dict,
