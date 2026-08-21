@@ -99,6 +99,34 @@ def test_prompt_tokens_details_maps_nested_cache_creation_input_tokens():
     assert not hasattr(non_int, "cache_write_tokens")
 
 
+def test_usage_maps_flat_cached_tokens_into_prompt_tokens_details():
+    """Some providers report cache hits as a flat usage.cached_tokens (Together AI does this
+    on its non-reasoning models). Without this mapping the hit never reaches the cost
+    calculator, which reads prompt_tokens_details.cached_tokens, so a warm prefix bills at
+    the full input rate. The nested count is more specific, so it wins when both arrive."""
+    from litellm.types.utils import Usage
+
+    flat: Final = Usage(prompt_tokens=1000, completion_tokens=10, total_tokens=1010, cached_tokens=800)
+    assert flat.prompt_tokens_details is not None
+    assert flat.prompt_tokens_details.cached_tokens == 800
+
+    both: Final = Usage(
+        prompt_tokens=1000,
+        completion_tokens=10,
+        total_tokens=1010,
+        prompt_tokens_details={"cached_tokens": 640},
+        cached_tokens=800,
+    )
+    assert both.prompt_tokens_details is not None
+    assert both.prompt_tokens_details.cached_tokens == 640
+
+    non_int: Final = Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2, cached_tokens=True)
+    assert non_int.prompt_tokens_details is None
+
+    absent: Final = Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2)
+    assert absent.prompt_tokens_details is None
+
+
 def test_usage_server_tool_use_dict_is_coerced_and_round_trips():
     from litellm.types.utils import ServerToolUse, Usage
 

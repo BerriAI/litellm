@@ -1763,6 +1763,22 @@ class Usage(SafeAttributeModel, CompletionUsage):
             else:
                 _prompt_tokens_details.cached_tokens = params["prompt_cache_hit_tokens"]
 
+        ## FLAT `cached_tokens` MAPPING ##
+        # Some providers report cache hits at the top level of `usage` instead of nesting them
+        # under `prompt_tokens_details` (Together AI does this on its non-reasoning models), which
+        # would otherwise bill a cached prefix at the full input rate. The nested count is the more
+        # specific signal, so it wins when both are present.
+        if (
+            "cached_tokens" in params
+            and isinstance(params["cached_tokens"], int)
+            and not isinstance(params["cached_tokens"], bool)
+            and (_prompt_tokens_details is None or _prompt_tokens_details.cached_tokens is None)
+        ):
+            if _prompt_tokens_details is None:
+                _prompt_tokens_details = PromptTokensDetailsWrapper(cached_tokens=params["cached_tokens"])
+            else:
+                _prompt_tokens_details.cached_tokens = params["cached_tokens"]
+
         ## ANTHROPIC MAPPING ##
         if "cache_read_input_tokens" in params and isinstance(params["cache_read_input_tokens"], int):
             if _prompt_tokens_details is None:
