@@ -5555,6 +5555,19 @@ class TestStreamingClientDisconnectBilling:
         assert standard_logging_object["response_cost"] > 0.0
 
     @pytest.mark.asyncio
+    async def test_disconnect_billing_keeps_the_model_azure_model_router_picked(self):
+        def restamp_like_azure_model_router(response):
+            response.chunks[0].model = "azure-model-router"
+            for chunk in response.chunks[1:]:
+                chunk.model = "gpt-4.1-nano-2025-04-14"
+
+        event = await self._bill_and_collect_success_event(restamp_like_azure_model_router)
+
+        assert event["response_obj"].model == "gpt-4.1-nano-2025-04-14"
+        standard_logging_object = event["kwargs"]["standard_logging_object"]
+        assert standard_logging_object["response_cost"] > 0.0
+
+    @pytest.mark.asyncio
     async def test_disconnect_billing_backfills_missing_cache_fields(self):
         event = await self._bill_and_collect_success_event()
 
