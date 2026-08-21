@@ -530,6 +530,7 @@ async def acompletion(
             tools=tools,
             prompt_label=kwargs.get("prompt_label", None),
             prompt_version=kwargs.get("prompt_version", None),
+            request_kwargs=kwargs,
         )
         #########################################################
         # if the chat completion logging hook removed all tools,
@@ -5192,6 +5193,7 @@ def completion(
             prompt_variables=prompt_variables,
             prompt_label=kwargs.get("prompt_label", None),
             prompt_version=kwargs.get("prompt_version", None),
+            request_kwargs=kwargs,
         )
 
     ### LITELLM SYSTEM PROMPT ###

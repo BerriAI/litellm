@@ -3538,6 +3538,7 @@ class SpendLogsMetadata(TypedDict):
     cost_breakdown: CostBreakdown | None  # Detailed cost breakdown (input_cost, output_cost, margin, discount, etc.)
     compression_savings: CompressionSavingsMetadata | None
     autorouter_savings: ReadOnly[float | None]  # stamped by the logging payload; None = not auto-routed
+    litellm_injected_cache_breakpoints: ReadOnly[int | None]
 
 
 class SpendLogsPayload(TypedDict):

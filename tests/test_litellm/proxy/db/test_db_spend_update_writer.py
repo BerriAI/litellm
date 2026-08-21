@@ -2336,6 +2336,7 @@ async def test_daily_transaction_carries_compression_saved_tokens():
 
     metadata = {
         "usage_object": {"cache_read_input_tokens": 40, "cache_creation_input_tokens": 15},
+        "litellm_injected_cache_breakpoints": 1,
         "compression_savings": {
             "tokens_before": 12000,
             "tokens_after": 5000,
@@ -2717,3 +2718,43 @@ async def test_commit_spend_updates_retries_deadlock_on_every_entity_path(monkey
 
     assert mock_prisma_client.db.tx.call_count == 2
     proxy_logging.failure_handler.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_daily_transaction_zeroes_caching_savings_without_injection_marker():
+    """Cached usage with no litellm_injected_cache_breakpoints marker earns no caching savings.
+
+    Client-sent cache_control and implicit provider caching leave no marker, so the
+    caching leg reads zero while the cache token counts still land on the row.
+    """
+    writer = DBSpendUpdateWriter()
+    mock_prisma = MagicMock()
+    mock_prisma.get_request_status = MagicMock(return_value="success")
+
+    payload = {
+        "request_id": "req-ungated-caching",
+        "user": "test-user",
+        "startTime": "2026-07-17T00:00:00",
+        "api_key": "test-key",
+        "model": "claude-sonnet-5",
+        "custom_llm_provider": "anthropic",
+        "model_group": "claude-sonnet-5",
+        "call_type": "anthropic_messages",
+        "prompt_tokens": 5000,
+        "completion_tokens": 10,
+        "spend": 0.05,
+        "metadata": json.dumps(
+            {"usage_object": {"cache_read_input_tokens": 4242, "cache_creation_input_tokens": 1111}}
+        ),
+    }
+
+    transaction = await writer._common_add_spend_log_transaction_to_daily_transaction(
+        payload=payload,
+        prisma_client=mock_prisma,
+        type="user",
+    )
+
+    assert transaction is not None
+    assert transaction["cache_read_input_tokens"] == 4242
+    assert transaction["cache_creation_input_tokens"] == 1111
+    assert transaction["prompt_caching_savings_spend"] == 0.0

@@ -62,6 +62,7 @@ from litellm.proxy.spend_tracking.savings import (
     compute_savings_spend,
     extract_cache_creation_tokens,
     extract_cache_read_tokens,
+    extract_injected_cache_breakpoints,
 )
 from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
 from litellm.repositories.prisma_protocols import BatchTable
@@ -311,6 +312,7 @@ class DBSpendUpdateWriter:
                 model=payload.get("model"),
                 custom_llm_provider=payload.get("custom_llm_provider"),
                 compression_saved_tokens=0,
+                injected_cache_breakpoints=extract_injected_cache_breakpoints(metadata),
                 routing_decision=metadata.get("routing_decision"),
                 usage_object=usage_object_raw if isinstance(usage_object_raw, dict) else None,
                 model_id=payload.get("model_id"),
@@ -1873,6 +1875,7 @@ class DBSpendUpdateWriter:
                 model=payload.get("model", None),
                 custom_llm_provider=payload.get("custom_llm_provider", None),
                 compression_saved_tokens=compression_saved_tokens,
+                injected_cache_breakpoints=extract_injected_cache_breakpoints(_metadata),
                 routing_decision=_metadata.get("routing_decision"),
                 model_id=payload.get("model_id"),
                 llm_router=_get_llm_router,

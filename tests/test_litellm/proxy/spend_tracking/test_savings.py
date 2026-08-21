@@ -11,6 +11,7 @@ from litellm.proxy.spend_tracking.savings import (
     _baseline_usage,
     compute_autorouter_savings,
     compute_savings_spend,
+    extract_injected_cache_breakpoints,
 )
 from litellm.router import Router
 from litellm.types.utils import Usage
@@ -62,6 +63,7 @@ def test_compression_savings_priced_at_input_rate():
         model="claude-sonnet-5",
         custom_llm_provider="anthropic",
         compression_saved_tokens=4389,
+        injected_cache_breakpoints=1,
     )
     assert result.compression == pytest.approx(4389 * input_cost)
     assert result.compression > 0
@@ -77,6 +79,7 @@ def test_prompt_caching_savings_priced_at_input_minus_cache_read():
         model="claude-sonnet-5",
         custom_llm_provider="anthropic",
         compression_saved_tokens=0,
+        injected_cache_breakpoints=1,
         usage_object={"cache_read_input_tokens": 8200},
     )
     assert result.prompt_caching == pytest.approx(8200 * (input_cost - cache_read_cost))
@@ -129,6 +132,7 @@ def test_prompt_caching_savings_nets_out_the_cache_write_premium():
         model="claude-sonnet-5",
         custom_llm_provider="anthropic",
         compression_saved_tokens=0,
+        injected_cache_breakpoints=1,
         usage_object=usage_object,
     )
     assert result.prompt_caching == pytest.approx(_net_caching_savings_against_biller(usage_object))
@@ -144,6 +148,7 @@ def test_prompt_caching_savings_go_negative_on_a_write_only_request():
         model="claude-sonnet-5",
         custom_llm_provider="anthropic",
         compression_saved_tokens=0,
+        injected_cache_breakpoints=1,
         usage_object=usage_object,
     )
     true_savings = _net_caching_savings_against_biller(usage_object)
@@ -159,6 +164,7 @@ def test_prompt_caching_savings_negative_when_writes_outweigh_reads():
         model="claude-sonnet-5",
         custom_llm_provider="anthropic",
         compression_saved_tokens=0,
+        injected_cache_breakpoints=1,
         usage_object=usage_object,
     )
     true_savings = _net_caching_savings_against_biller(usage_object)
@@ -175,6 +181,7 @@ def test_read_only_request_is_unchanged_by_the_write_premium():
         model="claude-sonnet-5",
         custom_llm_provider="anthropic",
         compression_saved_tokens=0,
+        injected_cache_breakpoints=1,
         usage_object=_caching_usage(read=20000, written=0),
     )
     assert result.prompt_caching == pytest.approx(20000 * (input_cost - cache_read_cost))
@@ -188,12 +195,14 @@ def test_openai_style_cache_write_tokens_are_netted_out():
         model="claude-sonnet-5",
         custom_llm_provider="anthropic",
         compression_saved_tokens=0,
+        injected_cache_breakpoints=1,
         usage_object={"cache_read_input_tokens": 5000, "cache_creation_input_tokens": 800},
     )
     nested_only = compute_savings_spend(
         model="claude-sonnet-5",
         custom_llm_provider="anthropic",
         compression_saved_tokens=0,
+        injected_cache_breakpoints=1,
         usage_object={
             "prompt_tokens_details": {"cached_tokens": 5000, "cache_write_tokens": 800},
         },
@@ -224,6 +233,7 @@ def test_model_without_a_cache_write_price_takes_no_premium():
         model=model,
         custom_llm_provider=None,
         compression_saved_tokens=0,
+        injected_cache_breakpoints=1,
         usage_object=_caching_usage(read=5000, written=5000),
     )
     assert result.prompt_caching == pytest.approx(5000 * (input_cost - cache_read_cost))
@@ -247,6 +257,7 @@ def test_zero_cache_write_price_is_read_as_unpublished():
         model="deepseek-chat",
         custom_llm_provider="deepseek",
         compression_saved_tokens=0,
+        injected_cache_breakpoints=1,
         usage_object=_caching_usage(read=0, written=10000),
     )
     assert result.prompt_caching == pytest.approx(0.0)
@@ -271,6 +282,7 @@ def test_zero_cache_read_price_stays_literal():
         model=model,
         custom_llm_provider=None,
         compression_saved_tokens=0,
+        injected_cache_breakpoints=1,
         usage_object=_caching_usage(read=10000, written=0),
     )
     # free reads => the whole input rate is saved, not zero
@@ -296,6 +308,7 @@ def test_sub_input_cache_write_price_is_an_extra_saving():
         model=model,
         custom_llm_provider=None,
         compression_saved_tokens=0,
+        injected_cache_breakpoints=1,
         usage_object=_caching_usage(read=1000, written=4000),
     )
     assert result.prompt_caching == pytest.approx(4000 * (input_cost - cheap_write))
@@ -309,6 +322,7 @@ def test_negative_cache_write_count_clamps_to_zero():
         model="claude-sonnet-5",
         custom_llm_provider="anthropic",
         compression_saved_tokens=0,
+        injected_cache_breakpoints=1,
         usage_object={"cache_read_input_tokens": 1000, "cache_creation_input_tokens": -5000},
     )
     assert result.prompt_caching == pytest.approx(1000 * (input_cost - cache_read_cost))
@@ -319,6 +333,7 @@ def test_unknown_model_fails_open_to_zero():
         model="totally-made-up-model-xyz",
         custom_llm_provider="anthropic",
         compression_saved_tokens=1000,
+        injected_cache_breakpoints=1,
         usage_object={"cache_read_input_tokens": 1000},
     )
     assert result.compression == 0.0
@@ -330,6 +345,7 @@ def test_missing_model_fails_open_to_zero():
         model=None,
         custom_llm_provider=None,
         compression_saved_tokens=1000,
+        injected_cache_breakpoints=1,
         usage_object={"cache_read_input_tokens": 1000},
     )
     assert result.compression == 0.0
@@ -341,6 +357,7 @@ def test_negative_token_counts_clamp_to_zero():
         model="claude-sonnet-5",
         custom_llm_provider="anthropic",
         compression_saved_tokens=-500,
+        injected_cache_breakpoints=1,
         usage_object={"cache_read_input_tokens": -500},
     )
     assert result.compression == 0.0
@@ -519,6 +536,7 @@ def test_autorouter_savings_zero_without_baseline():
         model="claude-haiku-4-5",
         custom_llm_provider="anthropic",
         compression_saved_tokens=0,
+        injected_cache_breakpoints=1,
         routing_decision=None,
         usage_object=_cached_usage_object(),
     )
@@ -533,6 +551,7 @@ def test_compute_savings_spend_carries_a_losing_switch_through(monkeypatch):
         model="claude-haiku-4-5",
         custom_llm_provider="anthropic",
         compression_saved_tokens=0,
+        injected_cache_breakpoints=1,
         routing_decision={"conversation_continuing": True},
         usage_object=_cached_usage_object(),
     )
@@ -546,6 +565,7 @@ def test_the_driver_is_off_until_a_baseline_is_configured():
         model="claude-haiku-4-5",
         custom_llm_provider="anthropic",
         compression_saved_tokens=1000,
+        injected_cache_breakpoints=1,
         routing_decision={"conversation_continuing": True},
         usage_object=_cached_usage_object(),
     )
@@ -560,6 +580,7 @@ def test_malformed_usage_object_does_not_fail_the_spend_write():
         model="claude-haiku-4-5",
         custom_llm_provider="anthropic",
         compression_saved_tokens=1000,
+        injected_cache_breakpoints=1,
         routing_decision={"conversation_continuing": True},
         usage_object={"prompt_tokens": ["not", "a", "number"]},
     )
@@ -576,6 +597,7 @@ def test_model_without_cache_read_pricing_yields_no_caching_savings():
         model=model,
         custom_llm_provider="azure",
         compression_saved_tokens=0,
+        injected_cache_breakpoints=1,
         usage_object={"cache_read_input_tokens": 5000},
     )
     assert result.prompt_caching == 0.0
@@ -885,6 +907,7 @@ def test_a_baseline_recorded_on_the_decision_turns_the_driver_on():
         model="claude-haiku-4-5",
         custom_llm_provider="anthropic",
         compression_saved_tokens=0,
+        injected_cache_breakpoints=1,
         routing_decision={"conversation_continuing": True, "savings_baseline_model": "anthropic/claude-opus-5"},
         usage_object=_cached_usage_object(),
     )
@@ -898,6 +921,7 @@ def test_the_configured_baseline_overrides_the_recorded_one(monkeypatch):
         model="claude-haiku-4-5",
         custom_llm_provider="anthropic",
         compression_saved_tokens=0,
+        injected_cache_breakpoints=1,
         routing_decision={
             "conversation_continuing": True,
             "savings_baseline_model": "anthropic/claude-opus-5",
@@ -926,6 +950,7 @@ def test_a_non_string_recorded_baseline_is_ignored():
         model="claude-haiku-4-5",
         custom_llm_provider="anthropic",
         compression_saved_tokens=0,
+        injected_cache_breakpoints=1,
         routing_decision={"conversation_continuing": True, "savings_baseline_model": ["anthropic/claude-opus-5"]},
         usage_object=_cached_usage_object(),
     )
@@ -957,6 +982,7 @@ def test_prompt_caching_prices_at_the_deployment_rate_not_the_public_one():
         model="claude-sonnet-4-5",
         custom_llm_provider="anthropic",
         compression_saved_tokens=0,
+        injected_cache_breakpoints=1,
         usage_object=_caching_usage(read=1000, written=20000),
         model_id=deployment_id,
         llm_router=lambda: router,
@@ -968,6 +994,7 @@ def test_prompt_caching_prices_at_the_deployment_rate_not_the_public_one():
         model="claude-sonnet-4-5",
         custom_llm_provider="anthropic",
         compression_saved_tokens=0,
+        injected_cache_breakpoints=1,
         usage_object=_caching_usage(read=1000, written=20000),
     )
     assert result.prompt_caching > at_public_rates.prompt_caching
@@ -998,6 +1025,7 @@ def test_a_recorded_baseline_deployment_prices_at_its_configured_rate():
         model="claude-haiku-4-5",
         custom_llm_provider="anthropic",
         compression_saved_tokens=0,
+        injected_cache_breakpoints=1,
         routing_decision=decision,
         usage_object=_cached_usage_object(),
         llm_router=lambda: router,
@@ -1006,6 +1034,7 @@ def test_a_recorded_baseline_deployment_prices_at_its_configured_rate():
         model="claude-haiku-4-5",
         custom_llm_provider="anthropic",
         compression_saved_tokens=0,
+        injected_cache_breakpoints=1,
         routing_decision={k: v for k, v in decision.items() if k != "savings_baseline_deployment_id"},
         usage_object=_cached_usage_object(),
         llm_router=lambda: router,
@@ -1024,6 +1053,7 @@ def test_recorded_savings_win_over_recomputation():
         model="claude-haiku-4-5",
         custom_llm_provider="anthropic",
         compression_saved_tokens=0,
+        injected_cache_breakpoints=0,
         routing_decision=_routed_decision(),
         usage_object=_cached_usage_object(),
         recorded_autorouter_savings=0.5,
@@ -1038,6 +1068,7 @@ def test_recorded_savings_survive_an_unusable_usage_object():
         model="claude-haiku-4-5",
         custom_llm_provider="anthropic",
         compression_saved_tokens=0,
+        injected_cache_breakpoints=0,
         routing_decision=_routed_decision(),
         usage_object={"prompt_tokens": ["not", "a", "number"]},
         recorded_autorouter_savings=0.25,
@@ -1050,6 +1081,7 @@ def test_a_boolean_is_not_a_recorded_savings_figure():
         model="claude-haiku-4-5",
         custom_llm_provider="anthropic",
         compression_saved_tokens=0,
+        injected_cache_breakpoints=0,
         routing_decision=None,
         usage_object=_cached_usage_object(),
         recorded_autorouter_savings=True,
@@ -1066,6 +1098,7 @@ def test_rows_written_before_the_field_shipped_recompute():
         model="claude-haiku-4-5",
         custom_llm_provider="anthropic",
         compression_saved_tokens=0,
+        injected_cache_breakpoints=0,
         routing_decision=_routed_decision(),
         usage_object=_cached_usage_object(),
     )
@@ -1130,3 +1163,76 @@ def test_logging_payload_never_stamps_internal_calls():
         cost_breakdown=None,
     )
     assert internal is None
+
+def test_caching_savings_require_a_gateway_injected_breakpoint():
+    """The same cached usage earns nothing when the gateway added no breakpoint.
+
+    Client-sent cache_control and implicit provider caching (OpenAI, Gemini) produce
+    cache reads the gateway had no hand in; crediting them was the inflation the
+    injection gate removes. This is the regression pin: on pre-gate code the
+    zero-marker call still returns the full read discount.
+    """
+    input_cost, cache_read_cost = _anthropic_costs("claude-sonnet-5")
+    credited = compute_savings_spend(
+        model="claude-sonnet-5",
+        custom_llm_provider="anthropic",
+        compression_saved_tokens=0,
+        injected_cache_breakpoints=1,
+        usage_object=_caching_usage(read=8200, written=0),
+    )
+    assert credited.prompt_caching == pytest.approx(8200 * (input_cost - cache_read_cost))
+    ungated = compute_savings_spend(
+        model="claude-sonnet-5",
+        custom_llm_provider="anthropic",
+        compression_saved_tokens=0,
+        injected_cache_breakpoints=0,
+        usage_object=_caching_usage(read=8200, written=0),
+    )
+    assert ungated.prompt_caching == 0.0
+
+
+def test_ungated_request_is_not_charged_the_write_premium_either():
+    """Zero marker zeroes the whole leg: the gateway caused neither the reads nor the writes."""
+    result = compute_savings_spend(
+        model="claude-sonnet-5",
+        custom_llm_provider="anthropic",
+        compression_saved_tokens=0,
+        injected_cache_breakpoints=0,
+        usage_object=_caching_usage(read=0, written=20000),
+    )
+    assert result.prompt_caching == 0.0
+
+
+def test_injected_request_keeps_its_negative_net():
+    """A gateway-injected write-heavy request still reports its real loss."""
+    result = compute_savings_spend(
+        model="claude-sonnet-5",
+        custom_llm_provider="anthropic",
+        compression_saved_tokens=0,
+        injected_cache_breakpoints=2,
+        usage_object=_caching_usage(read=0, written=20000),
+    )
+    assert result.prompt_caching < 0
+
+
+def test_gate_does_not_touch_compression_or_autorouter_legs():
+    input_cost, _ = _anthropic_costs("claude-sonnet-5")
+    result = compute_savings_spend(
+        model="claude-sonnet-5",
+        custom_llm_provider="anthropic",
+        compression_saved_tokens=4389,
+        injected_cache_breakpoints=0,
+        usage_object=_caching_usage(read=8200, written=0),
+    )
+    assert result.compression == pytest.approx(4389 * input_cost)
+    assert result.prompt_caching == 0.0
+
+
+def test_extract_injected_cache_breakpoints_reads_only_a_positive_int():
+    assert extract_injected_cache_breakpoints(None) == 0
+    assert extract_injected_cache_breakpoints({}) == 0
+    assert extract_injected_cache_breakpoints({"litellm_injected_cache_breakpoints": 3}) == 3
+    assert extract_injected_cache_breakpoints({"litellm_injected_cache_breakpoints": 0}) == 0
+    assert extract_injected_cache_breakpoints({"litellm_injected_cache_breakpoints": -2}) == 0
+    assert extract_injected_cache_breakpoints({"litellm_injected_cache_breakpoints": True}) == 0
+    assert extract_injected_cache_breakpoints({"litellm_injected_cache_breakpoints": "3"}) == 0

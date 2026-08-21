@@ -1,8 +1,10 @@
-from typing import Literal
+from typing import Final, Literal
 
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm.types.llms.openai import ChatCompletionCachedContent
+
+INJECTED_CACHE_BREAKPOINTS_METADATA_KEY: Final = "litellm_injected_cache_breakpoints"
 
 
 class CacheControlMessageInjectionPoint(TypedDict):
