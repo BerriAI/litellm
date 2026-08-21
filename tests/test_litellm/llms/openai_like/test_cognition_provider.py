@@ -114,7 +114,7 @@ class TestCognitionCostTracking:
         "model, input_cost, output_cost",
         [
             ("cognition/swe-1.6", 5e-07, 2.5e-06),
-            ("cognition/swe-1.7", 2.5e-06, 1.25e-05),
+            ("cognition/swe-1.7", 5e-07, 2.5e-06),
         ],
     )
     def test_cost_map_entries(self, model: str, input_cost: float, output_cost: float):
@@ -136,8 +136,8 @@ class TestCognitionCostTracking:
             custom_llm_provider="cognition",
         )
 
-        assert prompt_cost == pytest.approx(2.5)
-        assert completion_cost == pytest.approx(12.5)
+        assert prompt_cost == pytest.approx(0.5)
+        assert completion_cost == pytest.approx(2.5)
 
     def test_supported_endpoints_matrix(self):
         matrix = json.loads((Path(litellm.__file__).parent / "provider_endpoints_support_backup.json").read_text())
@@ -169,5 +169,5 @@ class TestCognitionRouting:
         )
 
         usage = response.usage
-        expected = usage.prompt_tokens * 2.5e-06 + usage.completion_tokens * 1.25e-05
+        expected = usage.prompt_tokens * 5e-07 + usage.completion_tokens * 2.5e-06
         assert response._hidden_params["response_cost"] == pytest.approx(expected)
