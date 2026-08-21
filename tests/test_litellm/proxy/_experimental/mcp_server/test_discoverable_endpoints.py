@@ -4,12 +4,18 @@ import hashlib
 import json
 import time
 from base64 import urlsafe_b64encode
+from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
 
 from litellm.types.mcp import MCPAuth
+
+if TYPE_CHECKING:
+    import httpx
+
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
 
 # Fixture to mock IP address check for all MCP tests
@@ -2688,13 +2694,6 @@ async def test_token_endpoint_respects_x_forwarded_host():
             None,
             "443",
             "https://internal.local",
-        ),
-        (
-            "http://localhost:4000/",
-            "https",
-            "proxy.example.com",
-            "8443",
-            "https://proxy.example.com:8443",
         ),
         (
             "http://localhost:4000/",

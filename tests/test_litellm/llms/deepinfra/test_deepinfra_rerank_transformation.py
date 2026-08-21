@@ -258,7 +258,7 @@ class TestDeepinfraRerankTransform:
         status_code = 401
         headers = {"content-type": "application/json"}
 
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(Exception, match='Authentication failed') as exc_info:
             self.config.get_error_class(error_message, status_code, headers)
 
         # The method should raise a BaseLLMException
@@ -271,7 +271,7 @@ class TestDeepinfraRerankTransform:
         status_code = 404
         headers = {"content-type": "application/json"}
 
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(Exception, match='Model not found') as exc_info:
             self.config.get_error_class(error_message, status_code, headers)
 
         # Should extract the nested error message
@@ -284,7 +284,7 @@ class TestDeepinfraRerankTransform:
         status_code = 503
         headers = {"content-type": "application/json"}
 
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(Exception, match='Service unavailable') as exc_info:
             self.config.get_error_class(error_message, status_code, headers)
 
         # Should extract the string detail
@@ -296,7 +296,7 @@ class TestDeepinfraRerankTransform:
         status_code = 500
         headers = {"content-type": "application/json"}
 
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(Exception, match='Invalid JSON error message') as exc_info:
             self.config.get_error_class(error_message, status_code, headers)
 
         # Should use the original error message when JSON parsing fails

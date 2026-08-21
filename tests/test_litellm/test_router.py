@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import sys
+import threading
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -366,7 +367,7 @@ async def test_arouter_with_tags_and_fallbacks():
         enable_tag_filtering=True,
     )
 
-    with pytest.raises(Exception):
+    with pytest.raises(litellm.InternalServerError):
         response = await router.acompletion(
             model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": "Hello, world!"}],
@@ -952,7 +953,7 @@ async def test_arouter_filter_team_based_models():
     assert result is not None
 
     # FAILS
-    with pytest.raises(Exception) as e:
+    with pytest.raises(Exception, match='No deployments available for selected model, Try again in') as e:
         result = await router.acompletion(
             model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": "Hello, world!"}],
@@ -1224,7 +1225,7 @@ def test_add_invalid_provider_to_router():
         ],
     )
 
-    with pytest.raises(Exception) as e:
+    with pytest.raises(Exception, match='Unsupported provider - vertex_ai_eu') as e:
         router.add_deployment(
             Deployment(
                 model_name="vertex_ai/*",
@@ -1319,7 +1320,7 @@ async def test_router_ageneric_api_call_with_fallbacks_helper():
     with patch.object(router, "async_get_available_deployment") as mock_get_deployment:
         mock_get_deployment.side_effect = Exception("No deployment available")
 
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(Exception, match='No deployment available') as exc_info:
             await router._ageneric_api_call_with_fallbacks_helper(
                 model="gpt-3.5-turbo",
                 original_generic_function=mock_generic_function,
@@ -1393,7 +1394,7 @@ async def test_router_ageneric_api_call_with_fallbacks_helper():
                 with patch.object(
                     router, "async_routing_strategy_pre_call_checks"
                 ) as mock_pre_call_checks:
-                    with pytest.raises(Exception) as exc_info:
+                    with pytest.raises(Exception, match='Mock failure') as exc_info:
                         await router._ageneric_api_call_with_fallbacks_helper(
                             model="gpt-3.5-turbo",
                             original_generic_function=mock_failing_function,
@@ -1998,9 +1999,12 @@ async def test_acompletion_streaming_iterator():
 
     # Collect streamed chunks — the first chunk succeeds, then the error re-raises
     collected_chunks = []
-    with pytest.raises(MidStreamFallbackError):
+    async def _drain():
         async for chunk in result:
             collected_chunks.append(chunk)
+
+    with pytest.raises(MidStreamFallbackError):
+        await _drain()
 
     assert len(collected_chunks) == 1, "one chunk yielded before the error"
     print("✓ MidStreamFallbackError re-raised correctly when content was already generated")
@@ -3344,6 +3348,277 @@ def test_pre_call_checks_counts_once_and_filters_on_max_input_tokens(monkeypatch
     assert calls == [1]
 
 
+def test_pre_call_checks_uses_precounted_tokens(monkeypatch):
+    """
+    An async caller counts off the event loop and passes the result in. _pre_call_checks
+    must filter on that count instead of re-counting on the loop.
+    """
+    router = litellm.Router(
+        model_list=[
+            {"model_name": "m", "litellm_params": {"model": "gpt-3.5-turbo"}},
+        ],
+        enable_pre_call_checks=True,
+    )
+    monkeypatch.setattr(
+        router, "get_router_model_info", lambda **kwargs: {"max_input_tokens": 5}
+    )
+
+    calls = []
+    monkeypatch.setattr(
+        litellm, "token_counter", lambda *a, **k: calls.append(1) or 1
+    )
+
+    deployments = [
+        {"litellm_params": {"model": "gpt-3.5-turbo"}, "model_info": {"id": "d1"}},
+    ]
+    with pytest.raises(litellm.ContextWindowExceededError):
+        router._pre_call_checks(
+            model="m",
+            healthy_deployments=deployments,
+            messages=[{"role": "user", "content": "hi"}],
+            input_token_count=1000,
+        )
+
+    assert calls == []
+
+
+async def test_async_get_healthy_deployments_counts_tokens_off_the_event_loop(monkeypatch):
+    """
+    The async deployment path must hand _pre_call_checks a count taken in a worker thread,
+    so a multi-MB prompt never blocks the proxy during deployment selection.
+    """
+    router = litellm.Router(
+        model_list=[
+            {"model_name": "m", "litellm_params": {"model": "gpt-3.5-turbo"}},
+        ],
+        enable_pre_call_checks=True,
+    )
+    monkeypatch.setattr(
+        router, "get_router_model_info", lambda **kwargs: {"max_input_tokens": 1_000_000}
+    )
+
+    counting_threads = []
+    monkeypatch.setattr(
+        litellm,
+        "token_counter",
+        lambda *a, **k: counting_threads.append(threading.current_thread()) or 42,
+    )
+
+    counts_passed_in = []
+    original_pre_call_checks = router._pre_call_checks
+
+    def spy(**kwargs):
+        counts_passed_in.append(kwargs.get("input_token_count"))
+        return original_pre_call_checks(**kwargs)
+
+    monkeypatch.setattr(router, "_pre_call_checks", spy)
+
+    result = await router.async_get_healthy_deployments(
+        model="m",
+        request_kwargs={},
+        messages=[{"role": "user", "content": "hi"}],
+        input=None,
+        specific_deployment=False,
+        parent_otel_span=None,
+    )
+
+    assert len(result) == 1
+    assert counts_passed_in == [42]
+    assert len(counting_threads) == 1
+    assert counting_threads[0] is not threading.current_thread()
+
+
+@pytest.mark.parametrize(
+    "model_info,expected",
+    [
+        ({"max_input_tokens": 100}, True),
+        ({"max_input_tokens": None}, False),
+        ({}, False),
+    ],
+)
+def test_pre_call_checks_need_token_count(monkeypatch, model_info, expected):
+    """Only a deployment that declares an integer context window makes a token count worth taking."""
+    router = litellm.Router(
+        model_list=[
+            {"model_name": "m", "litellm_params": {"model": "gpt-3.5-turbo"}},
+        ],
+        enable_pre_call_checks=True,
+    )
+    monkeypatch.setattr(router, "get_router_model_info", lambda **kwargs: model_info)
+
+    deployments = [
+        {"litellm_params": {"model": "gpt-3.5-turbo"}, "model_info": {"id": "d1"}},
+    ]
+    assert router._pre_call_checks_need_token_count("m", deployments) is expected
+
+
+def test_deployment_max_input_tokens_survives_an_unmappable_deployment(monkeypatch):
+    """
+    _pre_call_checks skips a deployment it cannot resolve and carries on. The off-loop
+    pre-count must do the same, or an unmapped first deployment hides the limit declared by
+    a later one and the count lands back on the event loop.
+    """
+    router = litellm.Router(
+        model_list=[
+            {"model_name": "m", "litellm_params": {"model": "gpt-3.5-turbo"}},
+        ],
+        enable_pre_call_checks=True,
+    )
+
+    def flaky_model_info(deployment, received_model_name, id=None):
+        if deployment["model_info"]["id"] == "unmapped":
+            raise ValueError("This model isn't mapped yet.")
+        return {"max_input_tokens": 100}
+
+    monkeypatch.setattr(router, "get_router_model_info", flaky_model_info)
+
+    unmapped = {"litellm_params": {"model": "gpt-3.5-turbo"}, "model_info": {"id": "unmapped"}}
+    mapped = {"litellm_params": {"model": "gpt-3.5-turbo"}, "model_info": {"id": "mapped"}}
+
+    assert router._deployment_max_input_tokens("m", unmapped) is None
+    assert router._deployment_max_input_tokens("m", mapped) == 100
+    assert router._pre_call_checks_need_token_count("m", [unmapped, mapped]) is True
+
+
+def test_pre_call_checks_does_not_recount_inline_after_an_off_loop_failure(monkeypatch):
+    """
+    When the off-loop count failed there is nothing left to filter on, so _pre_call_checks must
+    return the deployments unfiltered rather than repeating the count on the event loop.
+    """
+    router = litellm.Router(
+        model_list=[
+            {"model_name": "m", "litellm_params": {"model": "gpt-3.5-turbo"}},
+        ],
+        enable_pre_call_checks=True,
+    )
+    monkeypatch.setattr(
+        router, "get_router_model_info", lambda **kwargs: {"max_input_tokens": 5}
+    )
+
+    calls = []
+    monkeypatch.setattr(
+        litellm, "token_counter", lambda *a, **k: calls.append(1) or 1000
+    )
+
+    deployments = [
+        {"litellm_params": {"model": "gpt-3.5-turbo"}, "model_info": {"id": "d1"}},
+    ]
+    result = router._pre_call_checks(
+        model="m",
+        healthy_deployments=deployments,
+        messages=[{"role": "user", "content": "hi"}],
+        input_token_count=None,
+        skip_inline_token_count=True,
+    )
+
+    assert calls == []
+    assert len(result) == 1
+
+
+async def test_async_get_healthy_deployments_never_recounts_on_the_loop(monkeypatch):
+    """
+    An off-loop count that raises must not send the same work back onto the event loop through
+    _pre_call_checks' inline fallback.
+    """
+    router = litellm.Router(
+        model_list=[
+            {"model_name": "m", "litellm_params": {"model": "gpt-3.5-turbo"}},
+        ],
+        enable_pre_call_checks=True,
+    )
+    monkeypatch.setattr(
+        router, "get_router_model_info", lambda **kwargs: {"max_input_tokens": 5}
+    )
+
+    counting_threads = []
+
+    def exploding_counter(*args, **kwargs):
+        counting_threads.append(threading.current_thread())
+        raise ValueError("Invalid content item type: image")
+
+    monkeypatch.setattr(litellm, "token_counter", exploding_counter)
+
+    result = await router.async_get_healthy_deployments(
+        model="m",
+        request_kwargs={},
+        messages=[{"role": "user", "content": "hi"}],
+        input=None,
+        specific_deployment=False,
+        parent_otel_span=None,
+    )
+
+    assert len(result) == 1
+    assert len(counting_threads) == 1
+    assert counting_threads[0] is not threading.current_thread()
+
+
+async def test_acount_pre_call_check_tokens_leaves_the_event_loop_free(monkeypatch):
+    """
+    A multi-MB prompt must not stall the proxy: a competing coroutine has to get
+    scheduled while the router's context-window count is in flight.
+    """
+    router = litellm.Router(
+        model_list=[
+            {"model_name": "m", "litellm_params": {"model": "gpt-3.5-turbo"}},
+        ],
+        enable_pre_call_checks=True,
+    )
+    monkeypatch.setattr(
+        router, "get_router_model_info", lambda **kwargs: {"max_input_tokens": 5}
+    )
+
+    deployments = [
+        {"litellm_params": {"model": "gpt-3.5-turbo"}, "model_info": {"id": "d1"}},
+    ]
+    ran = []
+
+    async def competitor():
+        ran.append("competitor")
+
+    task = asyncio.create_task(competitor())
+    count = await router._acount_pre_call_check_tokens(
+        model="m",
+        healthy_deployments=deployments,
+        messages=[{"role": "user", "content": "A" * 512 * 1024}],
+        input=None,
+        request_kwargs=None,
+    )
+    ran.append("count")
+    await task
+
+    assert count is not None and count > 0
+    assert ran == ["competitor", "count"]
+
+
+async def test_acount_pre_call_check_tokens_skips_without_max_input_tokens(monkeypatch):
+    """No deployment limits its context window, so there is nothing to count."""
+    router = litellm.Router(
+        model_list=[
+            {"model_name": "m", "litellm_params": {"model": "gpt-3.5-turbo"}},
+        ],
+        enable_pre_call_checks=True,
+    )
+    monkeypatch.setattr(router, "get_router_model_info", lambda **kwargs: {})
+
+    calls = []
+    monkeypatch.setattr(
+        litellm, "token_counter", lambda *a, **k: calls.append(1) or 1000
+    )
+
+    count = await router._acount_pre_call_check_tokens(
+        model="m",
+        healthy_deployments=[
+            {"litellm_params": {"model": "gpt-3.5-turbo"}, "model_info": {"id": "d1"}},
+        ],
+        messages=[{"role": "user", "content": "hi"}],
+        input=None,
+        request_kwargs=None,
+    )
+
+    assert count is None
+    assert calls == []
+
+
 def test_pre_call_checks_counts_tokens_from_responses_input_string(monkeypatch):
     """
     Responses API calls pass `input` (str) instead of `messages`. Context-window
@@ -3462,7 +3737,7 @@ def test_count_pre_call_check_tokens_across_api_surfaces():
     assert string_input_tokens > 0
     assert list_input_tokens > 0
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match='Either messages or input must be provided to count tokens'):
         router._count_pre_call_check_tokens(messages=None, input=None)
 
 
@@ -5285,9 +5560,12 @@ async def test_acompletion_streaming_iterator_does_not_log_success_on_terminal_f
             initial_kwargs=dict(initial_kwargs),
         )
         collected = []
-        with pytest.raises(MidStreamFallbackError):
+        async def _drain():
             async for chunk in result:
                 collected.append(chunk)
+
+        with pytest.raises(MidStreamFallbackError):
+            await _drain()
 
     assert len(collected) == 1
     logging_obj.dispatch_success_handlers.assert_not_called()
@@ -5308,9 +5586,12 @@ async def test_acompletion_streaming_iterator_does_not_log_success_on_terminal_f
             initial_kwargs=dict(initial_kwargs),
         )
         collected = []
-        with pytest.raises(MidStreamFallbackError):
+        async def _drain():
             async for chunk in result:
                 collected.append(chunk)
+
+        with pytest.raises(MidStreamFallbackError):
+            await _drain()
 
     assert len(collected) == 1, "only the partial chunk before the error"
     mock_fallback.assert_not_called()
@@ -5435,7 +5716,7 @@ async def test_team_scoped_model_fallback_cross_team_blocked():
         fallbacks=[{"primary-model": ["fallback-model"]}],
     )
 
-    with pytest.raises(Exception):
+    with pytest.raises(litellm.InternalServerError):
         await router.acompletion(
             model="primary-model",
             messages=[{"role": "user", "content": "Hello"}],
@@ -8268,3 +8549,93 @@ def test_get_router_model_info_keeps_explicit_pricing_overrides():
 
     assert merged["input_cost_per_token"] == 1e-08
     assert litellm.get_model_info(model="anthropic/claude-sonnet-4-5")["input_cost_per_token"] != 1e-08
+
+
+class TestAutoRoutedRequestMarker:
+    """The proxy exposes the routed model group in the response body only when an
+    auto-routing strategy actually picked it. The marker is what separates that from
+    ordinary model-group routing, so it must clear on any re-entry (fallbacks reuse the
+    same request_kwargs) that routes plainly."""
+
+    class _RewriteStrategy:
+        async def async_pre_routing_hook(
+            self, model, request_kwargs, messages=None, input=None, specific_deployment=False
+        ):
+            from litellm.types.router import PreRoutingHookResponse
+
+            return PreRoutingHookResponse(model="gemini-flash", messages=messages)
+
+    class _AbstainStrategy:
+        async def async_pre_routing_hook(
+            self, model, request_kwargs, messages=None, input=None, specific_deployment=False
+        ):
+            return None
+
+    @classmethod
+    def _router(cls, strategy) -> "litellm.Router":
+        from litellm.types.router import TaggedPreRoutingStrategy
+
+        router = litellm.Router(
+            model_list=[
+                {"model_name": "smart-route", "litellm_params": {"model": "openai/gpt-4o"}},
+                {"model_name": "gemini-flash", "litellm_params": {"model": "gemini/gemini-3.6-flash"}},
+            ],
+        )
+        router.auto_routers = {"smart-route": [TaggedPreRoutingStrategy(tags=(), strategy=strategy)]}
+        return router
+
+    @pytest.mark.asyncio
+    async def test_marks_the_request_when_an_auto_routing_strategy_picked_the_group(self):
+        from litellm.constants import AUTO_ROUTED_REQUEST_METADATA_KEY
+
+        router = self._router(self._RewriteStrategy())
+        request_kwargs = {"metadata": {}}
+
+        await router.async_pre_routing_hook(model="smart-route", request_kwargs=request_kwargs)
+
+        assert request_kwargs["metadata"][AUTO_ROUTED_REQUEST_METADATA_KEY] is True
+
+    @pytest.mark.asyncio
+    async def test_marks_into_litellm_metadata_when_the_request_uses_that_bucket(self):
+        from litellm.constants import AUTO_ROUTED_REQUEST_METADATA_KEY
+
+        router = self._router(self._RewriteStrategy())
+        request_kwargs = {"litellm_metadata": {}}
+
+        await router.async_pre_routing_hook(model="smart-route", request_kwargs=request_kwargs)
+
+        assert request_kwargs["litellm_metadata"][AUTO_ROUTED_REQUEST_METADATA_KEY] is True
+
+    @pytest.mark.asyncio
+    async def test_no_marker_when_the_group_has_no_auto_routing_strategy(self):
+        from litellm.constants import AUTO_ROUTED_REQUEST_METADATA_KEY
+
+        router = self._router(self._RewriteStrategy())
+        request_kwargs = {"metadata": {}}
+
+        await router.async_pre_routing_hook(model="gemini-flash", request_kwargs=request_kwargs)
+
+        assert AUTO_ROUTED_REQUEST_METADATA_KEY not in request_kwargs["metadata"]
+
+    @pytest.mark.asyncio
+    async def test_no_marker_when_the_strategy_declined_to_route(self):
+        from litellm.constants import AUTO_ROUTED_REQUEST_METADATA_KEY
+
+        router = self._router(self._AbstainStrategy())
+        request_kwargs = {"metadata": {}}
+
+        await router.async_pre_routing_hook(model="smart-route", request_kwargs=request_kwargs)
+
+        assert AUTO_ROUTED_REQUEST_METADATA_KEY not in request_kwargs["metadata"]
+
+    @pytest.mark.asyncio
+    async def test_fallback_reentry_with_a_plain_group_clears_the_stale_marker(self):
+        from litellm.constants import AUTO_ROUTED_REQUEST_METADATA_KEY
+
+        router = self._router(self._RewriteStrategy())
+        request_kwargs = {"metadata": {}}
+
+        await router.async_pre_routing_hook(model="smart-route", request_kwargs=request_kwargs)
+        await router.async_pre_routing_hook(model="gemini-flash", request_kwargs=request_kwargs)
+
+        assert AUTO_ROUTED_REQUEST_METADATA_KEY not in request_kwargs["metadata"]

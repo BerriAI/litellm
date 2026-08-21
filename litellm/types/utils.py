@@ -11,6 +11,7 @@ from typing import (
     get_args,
 )
 
+import httpx
 from openai._models import BaseModel as OpenAIObject
 from openai.types.audio.transcription_create_params import (
     FileTypes as FileTypes,
@@ -49,7 +50,7 @@ from litellm.types.llms.base import (
 )
 from litellm.types.mcp import MCPServerCostInfo
 
-from ..litellm_core_utils.core_helpers import map_finish_reason
+from ..litellm_core_utils.core_helpers import map_finish_reason, process_response_headers
 from .agents import LiteLLMSendMessageResponse
 from .guardrails import GuardrailEventHooks
 from .llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
@@ -153,6 +154,7 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_web_search: bool | None
     supports_reasoning: bool | None
     supports_adaptive_thinking: bool | None
+    thinking_always_on: ReadOnly[bool | None]
     supports_tool_search: bool | None
     supports_mid_conversation_system: bool | None
     supports_url_context: bool | None
@@ -1915,6 +1917,10 @@ class ModelResponseBase(OpenAIObject):
     _hidden_params: dict = {}
 
     _response_headers: dict | None = None
+
+    def set_provider_response_headers(self, headers: httpx.Headers) -> None:
+        """Surface a provider's raw response headers to the caller as `llm_provider-*` headers."""
+        self._hidden_params["additional_headers"] = process_response_headers(headers)
 
     def model_dump(self, **kwargs):
         """Default to exclude_unset to avoid Pydantic serializer warnings for OpenAIObject-derived types."""
@@ -3782,6 +3788,7 @@ class LlmProviders(str, Enum):
     TENSORMESH = "tensormesh"
     LIBERTAI = "libertai"
     PINSTRIPES = "pinstripes"
+    COGNITION = "cognition"
     DARKBLOOM = "darkbloom"
     META = "meta"
     LITELLM_AGENT = "litellm_agent"

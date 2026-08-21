@@ -30,12 +30,17 @@ const day = (date: string, overrides: Partial<SpendMetrics>): DailyData => ({
   },
 });
 
-const mockActivity = (overrides: Partial<useScopedDailyActivityRangeModule.DailyActivityRange> = {}) => ({
+const mockActivity = (
+  overrides: Partial<useScopedDailyActivityRangeModule.DailyActivityRange> = {},
+): useScopedDailyActivityRangeModule.DailyActivityRange => ({
   dateValue: { from: new Date("2025-01-01"), to: new Date("2025-01-31") },
   onDateChange: vi.fn(),
   results: [] as DailyData[],
   loading: false,
   isFetchingMore: false,
+  progress: { currentPage: 1, totalPages: 1 },
+  cancelled: false,
+  cancel: vi.fn(),
   ...overrides,
 });
 

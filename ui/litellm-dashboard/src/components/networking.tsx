@@ -58,6 +58,7 @@ import { TagNewRequest, TagUpdateRequest, TagListResponse, TagInfoResponse } fro
 import { Team } from "./key_team_helpers/key_list";
 import { EmailEventSettingsResponse, EmailEventSettingsUpdateRequest } from "./email_events/types";
 import type { SkillRegisterRequest } from "./claude_code_plugins/types";
+import type { ModelBudgetUsage, ModelMaxBudget } from "./key_team_helpers/ModelMaxBudgetEditor";
 import type { ObjectPermission } from "./object_permission_types";
 import { jsonFields } from "./common_components/check_openapi_schema";
 import type { MCPUserEnvVarsStatus } from "./mcp_tools/types";
@@ -1045,6 +1046,8 @@ export interface UserInfoV2Response {
   sso_user_id: string | null;
   teams: string[];
   object_permission?: ObjectPermission | null;
+  model_max_budget?: ModelMaxBudget | null;
+  model_max_budget_usage?: Record<string, ModelBudgetUsage> | null;
 }
 
 /**

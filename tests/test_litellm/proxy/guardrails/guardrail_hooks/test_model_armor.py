@@ -2334,7 +2334,7 @@ async def test_async_moderation_hook_api_error_fail_on_error_true():
         }
 
         # Should raise the exception since fail_on_error is True
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(Exception, match="API Error") as exc_info:
             await guardrail.async_moderation_hook(
                 data=request_data,
                 user_api_key_dict=mock_user_api_key_dict,
@@ -2374,7 +2374,7 @@ async def test_async_moderation_hook_api_error_fail_on_error_false():
 
         # Even with fail_on_error=False, the decorator may still raise the exception
         # This test verifies that the exception is properly logged and handled
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(Exception, match="API Error") as exc_info:
             await guardrail.async_moderation_hook(
                 data=request_data,
                 user_api_key_dict=mock_user_api_key_dict,
@@ -2865,7 +2865,7 @@ async def test_skip_unscannable_still_fails_closed_on_api_error():
         "post",
         AsyncMock(side_effect=Exception("model armor upstream 500")),
     ):
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(Exception, match='model armor upstream') as exc_info:
             await guardrail.async_pre_call_hook(
                 user_api_key_dict=UserAPIKeyAuth(),
                 cache=MagicMock(spec=DualCache),
