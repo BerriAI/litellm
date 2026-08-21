@@ -20,13 +20,6 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
-# The suites that need a real Postgres, ported off CircleCI where they were four
-# near-identical jobs differing only in how the schema is seeded and which tree
-# they run. `seed` is that difference and nothing else:
-#
-#   db-push     `prisma db push`, the schema the code expects
-#   none        tests/proxy_migration_tests applies every committed migration
-#               itself and needs the database empty to do it
 jobs:
   postgres:
     name: ${{ matrix.shard }}
