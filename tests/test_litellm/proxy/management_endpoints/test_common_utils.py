@@ -1222,4 +1222,3 @@ class TestUpdateMetadataFieldsPremiumCheck:
         }
         _update_metadata_fields(updated_kv)
         mock_check.assert_called()
->>>>>>> origin/litellm_internal_staging
