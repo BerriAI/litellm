@@ -277,6 +277,26 @@ def _deferred_stream_logging_is_armed(request_data: dict) -> bool:
     )
 
 
+def _assembled_model_came_from_a_later_chunk(chunks: list, assembled_model: object) -> bool:
+    """Report whether stream_chunk_builder picked a model the first chunk did not carry.
+
+    Azure Model Router puts the routed model on the chunks after the first one, and the
+    proxy deliberately leaves those chunks unrestamped so the builder can recover it. The
+    assembled model is then more specific than the wrapper's, so the caller has to leave
+    it alone rather than stamping the wrapper's model over it.
+    """
+    first_chunk: Final = chunks[0]
+    first_chunk_model: Final = (
+        first_chunk.get("model") if isinstance(first_chunk, dict) else getattr(first_chunk, "model", None)
+    )
+    return (
+        isinstance(first_chunk_model, str)
+        and isinstance(assembled_model, str)
+        and bool(assembled_model)
+        and assembled_model != first_chunk_model
+    )
+
+
 async def _bill_partial_streamed_spend_on_disconnect(request_data: dict, response: object) -> bool:
     """
     A client disconnect throws GeneratorExit/CancelledError into the streaming
@@ -328,7 +348,11 @@ async def _bill_partial_streamed_spend_on_disconnect(request_data: dict, respons
     if partial_response is None:
         return False
     wrapper_model: Final = getattr(response, "model", None)
-    if isinstance(wrapper_model, str) and wrapper_model:
+    if (
+        isinstance(wrapper_model, str)
+        and wrapper_model
+        and not _assembled_model_came_from_a_later_chunk(chunks, partial_response.model)
+    ):
         partial_response.model = wrapper_model
     partial_usage: Final = getattr(partial_response, "usage", None)
     if isinstance(partial_usage, Usage):
