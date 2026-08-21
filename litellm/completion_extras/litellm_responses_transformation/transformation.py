@@ -1114,8 +1114,9 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         )
 
         # Level-agnostic: providers own effort validation, so an unknown level (max, ultra, future
-        # ones) passes through instead of being silently dropped here.
-        if reasoning_effort:
+        # ones) passes through instead of being silently dropped here. "default" means no override,
+        # so it maps to nothing rather than reaching a provider as a literal effort value.
+        if reasoning_effort and reasoning_effort != "default":
             return (
                 Reasoning(effort=reasoning_effort, summary="detailed")
                 if auto_summary_enabled
