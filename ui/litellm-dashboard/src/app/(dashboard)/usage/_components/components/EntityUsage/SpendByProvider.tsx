@@ -2,10 +2,11 @@ import { DonutChart } from "@/components/shared/charts";
 import { DataTable } from "@/components/shared/DataTable";
 import { MoneyCell } from "@/components/shared/table_cells";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
-import { InfoCircleOutlined } from "@ant-design/icons";
+import { Info } from "lucide-react";
 import type { ColumnDef } from "@tanstack/react-table";
-import { Card, Col, Grid, Switch, Title } from "@tremor/react";
-import { Tooltip } from "antd";
+import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Switch } from "@/components/ui/switch";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import React, { useState } from "react";
 import { ProviderLogo } from "@/components/molecules/models/ProviderLogo";
 import { ChartLoader } from "@/components/shared/chart_loader";
@@ -45,13 +46,13 @@ const columns: ColumnDef<ProviderSpendData>[] = [
   {
     header: "Successful",
     accessorKey: "successful_requests",
-    meta: { numeric: true, className: "text-green-600" },
+    meta: { numeric: true, className: "text-success" },
     cell: ({ row }) => row.original.successful_requests.toLocaleString(),
   },
   {
     header: "Failed",
     accessorKey: "failed_requests",
-    meta: { numeric: true, className: "text-red-600" },
+    meta: { numeric: true, className: "text-destructive" },
     cell: ({ row }) => row.original.failed_requests.toLocaleString(),
   },
   {
@@ -85,29 +86,30 @@ const SpendByProvider: React.FC<SpendByProviderProps> = ({ loading, isDateChangi
 
   return (
     <Card className="h-full">
-      <div className="flex justify-between items-center mb-4">
-        <Title>Spend by Provider</Title>
-        <div className="flex items-center gap-4">
+      <CardHeader>
+        <CardTitle>Spend by Provider</CardTitle>
+        <CardAction className="flex items-center gap-4">
           <div className="flex items-center gap-2">
-            <label className="text-sm text-gray-700">Show Zero Spend</label>
-            <Switch checked={includeZeroSpend} onChange={setIncludeZeroSpend} />
+            <label className="text-sm text-foreground">Show Zero Spend</label>
+            <Switch checked={includeZeroSpend} onCheckedChange={setIncludeZeroSpend} />
           </div>
           <div className="flex items-center gap-2">
             <div className="flex items-center gap-1">
-              <label className="text-sm text-gray-700">Show Unknown</label>
-              <Tooltip title="Requests that failed to route to a provider">
-                <InfoCircleOutlined className="text-gray-400 hover:text-gray-600" />
+              <label className="text-sm text-foreground">Show Unknown</label>
+              <Tooltip>
+                <TooltipTrigger render={<Info className="size-4 text-muted-foreground hover:text-foreground" />} />
+                <TooltipContent>Requests that failed to route to a provider</TooltipContent>
               </Tooltip>
             </div>
-            <Switch checked={includeUnknown} onChange={setIncludeUnknown} />
+            <Switch checked={includeUnknown} onCheckedChange={setIncludeUnknown} />
           </div>
-        </div>
-      </div>
-      {loading ? (
-        <ChartLoader isDateChanging={isDateChanging} />
-      ) : (
-        <Grid numItems={2}>
-          <Col numColSpan={1}>
+        </CardAction>
+      </CardHeader>
+      <CardContent>
+        {loading ? (
+          <ChartLoader isDateChanging={isDateChanging} />
+        ) : (
+          <div className="grid grid-cols-2">
             <DonutChart
               className="mt-4 h-40"
               data={filteredProviderSpend}
@@ -119,8 +121,6 @@ const SpendByProvider: React.FC<SpendByProviderProps> = ({ loading, isDateChangi
               startAngle={90}
               endAngle={-270}
             />
-          </Col>
-          <Col numColSpan={1}>
             <DataTable
               columns={columns}
               data={filteredProviderSpend}
@@ -128,9 +128,9 @@ const SpendByProvider: React.FC<SpendByProviderProps> = ({ loading, isDateChangi
               noDataMessage="No provider usage data"
               size="compact"
             />
-          </Col>
-        </Grid>
-      )}
+          </div>
+        )}
+      </CardContent>
     </Card>
   );
 };

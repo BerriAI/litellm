@@ -6,7 +6,7 @@ import httpx
 from fastapi import HTTPException, status
 
 import litellm
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.router_utils.common_utils import _is_proxy_admin_request
 
 # Client-supplied params that make the router or the call path fabricate a
@@ -141,38 +141,46 @@ ROUTE_ENDPOINT_MAPPING: Final = {
     "aget_run": "/evals/{eval_id}/runs/{run_id}",
     "acancel_run": "/evals/{eval_id}/runs/{run_id}/cancel",
     "adelete_run": "/evals/{eval_id}/runs/{run_id}",
+    "acreate_batch": "/batches",
 }
 
 
 class ProxyModelNotFoundError(HTTPException):
-    def __init__(self, route: str, model_name: str):
+    def __init__(self, route: str, model_name: str, retryable_with_model_read_through: bool = True):
+        self.retryable_with_model_read_through: Final = retryable_with_model_read_through
         detail: Final = {
             "error": f"{route}: Invalid model name passed in model={model_name}. Call `/v1/models` to view available models for your key."
         }
         super().__init__(status_code=status.HTTP_400_BAD_REQUEST, detail=detail)
 
 
-REQUIRED_BODY_PARAM_BY_ROUTE: Final[Mapping[str, str]] = {
-    "acompletion": "messages",
-    "aembedding": "input",
+REQUIRED_BODY_PARAMS_BY_ROUTE: Final[Mapping[str, tuple[str, ...]]] = {
+    "acompletion": ("messages",),
+    "aembedding": ("input",),
+    "acreate_batch": ("input_file_id", "endpoint", "completion_window"),
 }
 
 
-class ProxyMissingRequiredParamError(HTTPException):
+class ProxyMissingRequiredParamError(ProxyException):
     def __init__(self, route: str, param: str):
-        detail: Final = {"error": f"{route}: Missing required parameter: '{param}'."}
-        super().__init__(status_code=status.HTTP_400_BAD_REQUEST, detail=detail)
-        self.type = "invalid_request_error"
-        self.param = param
+        super().__init__(
+            message=f"{route}: Missing required parameter: '{param}'.",
+            type="invalid_request_error",
+            param=param,
+            code=status.HTTP_400_BAD_REQUEST,
+        )
 
 
 def raise_if_required_body_param_missing(route_type: str, data: Mapping[str, object]) -> None:
-    required_param: Final = REQUIRED_BODY_PARAM_BY_ROUTE.get(route_type)
-    if required_param is None or data.get(required_param) is not None:
+    missing_param: Final = next(
+        (param for param in REQUIRED_BODY_PARAMS_BY_ROUTE.get(route_type, ()) if data.get(param) is None),
+        None,
+    )
+    if missing_param is None:
         return
     raise ProxyMissingRequiredParamError(
         route=ROUTE_ENDPOINT_MAPPING.get(route_type, route_type),
-        param=required_param,
+        param=missing_param,
     )
 
 
@@ -313,112 +321,150 @@ async def add_shared_session_to_data(data: dict) -> None:
             pass
 
 
+RouteType = Literal[
+    "acompletion",
+    "atext_completion",
+    "aembedding",
+    "aimage_generation",
+    "aspeech",
+    "atranscription",
+    "amoderation",
+    "arerank",
+    "aresponses",
+    "aget_responses",
+    "adelete_responses",
+    "acancel_responses",
+    "acompact_responses",
+    "acreate_response_reply",
+    "alist_input_items",
+    "_arealtime",  # private function for realtime API
+    "acreate_realtime_client_secret",
+    "arealtime_calls",
+    "acreate_realtime_transcription_session",
+    "_aresponses_websocket",  # private function for responses WebSocket mode
+    "aimage_edit",
+    "agenerate_content",
+    "agenerate_content_stream",
+    "allm_passthrough_route",
+    "acreate_batch",
+    "aretrieve_batch",
+    "alist_batches",
+    "afile_content",
+    "afile_retrieve",
+    "acreate_fine_tuning_job",
+    "acancel_fine_tuning_job",
+    "alist_fine_tuning_jobs",
+    "aretrieve_fine_tuning_job",
+    "avector_store_search",
+    "avector_store_create",
+    "avector_store_retrieve",
+    "avector_store_list",
+    "avector_store_update",
+    "avector_store_delete",
+    "avector_store_file_create",
+    "avector_store_file_list",
+    "avector_store_file_retrieve",
+    "avector_store_file_content",
+    "avector_store_file_update",
+    "avector_store_file_delete",
+    "aocr",
+    "asearch",
+    "avideo_generation",
+    "avideo_list",
+    "avideo_status",
+    "avideo_content",
+    "avideo_remix",
+    "avideo_create_character",
+    "avideo_get_character",
+    "avideo_edit",
+    "avideo_extension",
+    "acreate_container",
+    "alist_containers",
+    "aretrieve_container",
+    "adelete_container",
+    "aupload_container_file",
+    "alist_container_files",
+    "aretrieve_container_file",
+    "adelete_container_file",
+    "aretrieve_container_file_content",
+    "acreate_skill",
+    "alist_skills",
+    "aget_skill",
+    "adelete_skill",
+    "aingest",
+    "anthropic_messages",
+    "acreate_interaction",
+    "aget_interaction",
+    "adelete_interaction",
+    "acancel_interaction",
+    "acreate_agent",
+    "alist_agents",
+    "aget_agent",
+    "adelete_agent",
+    "alist_agent_versions",
+    "asend_message",
+    "call_mcp_tool",
+    "acancel_batch",
+    "afile_delete",
+    "acreate_eval",
+    "alist_evals",
+    "aget_eval",
+    "aupdate_eval",
+    "adelete_eval",
+    "acancel_eval",
+    "acreate_run",
+    "alist_runs",
+    "aget_run",
+    "acancel_run",
+    "adelete_run",
+]
+
+
 async def route_request(
     data: dict,
     llm_router: LitellmRouter | None,
     user_model: str | None,
-    route_type: Literal[
-        "acompletion",
-        "atext_completion",
-        "aembedding",
-        "aimage_generation",
-        "aspeech",
-        "atranscription",
-        "amoderation",
-        "arerank",
-        "aresponses",
-        "aget_responses",
-        "adelete_responses",
-        "acancel_responses",
-        "acompact_responses",
-        "acreate_response_reply",
-        "alist_input_items",
-        "_arealtime",  # private function for realtime API
-        "acreate_realtime_client_secret",
-        "arealtime_calls",
-        "acreate_realtime_transcription_session",
-        "_aresponses_websocket",  # private function for responses WebSocket mode
-        "aimage_edit",
-        "agenerate_content",
-        "agenerate_content_stream",
-        "allm_passthrough_route",
-        "acreate_batch",
-        "aretrieve_batch",
-        "alist_batches",
-        "afile_content",
-        "afile_retrieve",
-        "acreate_fine_tuning_job",
-        "acancel_fine_tuning_job",
-        "alist_fine_tuning_jobs",
-        "aretrieve_fine_tuning_job",
-        "avector_store_search",
-        "avector_store_create",
-        "avector_store_retrieve",
-        "avector_store_list",
-        "avector_store_update",
-        "avector_store_delete",
-        "avector_store_file_create",
-        "avector_store_file_list",
-        "avector_store_file_retrieve",
-        "avector_store_file_content",
-        "avector_store_file_update",
-        "avector_store_file_delete",
-        "aocr",
-        "asearch",
-        "avideo_generation",
-        "avideo_list",
-        "avideo_status",
-        "avideo_content",
-        "avideo_remix",
-        "avideo_create_character",
-        "avideo_get_character",
-        "avideo_edit",
-        "avideo_extension",
-        "acreate_container",
-        "alist_containers",
-        "aretrieve_container",
-        "adelete_container",
-        "aupload_container_file",
-        "alist_container_files",
-        "aretrieve_container_file",
-        "adelete_container_file",
-        "aretrieve_container_file_content",
-        "acreate_skill",
-        "alist_skills",
-        "aget_skill",
-        "adelete_skill",
-        "aingest",
-        "anthropic_messages",
-        "acreate_interaction",
-        "aget_interaction",
-        "adelete_interaction",
-        "acancel_interaction",
-        "acreate_agent",
-        "alist_agents",
-        "aget_agent",
-        "adelete_agent",
-        "alist_agent_versions",
-        "asend_message",
-        "call_mcp_tool",
-        "acancel_batch",
-        "afile_delete",
-        "acreate_eval",
-        "alist_evals",
-        "aget_eval",
-        "aupdate_eval",
-        "adelete_eval",
-        "acancel_eval",
-        "acreate_run",
-        "alist_runs",
-        "aget_run",
-        "acancel_run",
-        "adelete_run",
-    ],
+    route_type: RouteType,
     user_api_key_dict: UserAPIKeyAuth | None = None,
 ):
     """
     Common helper to route the request
     """
+    try:
+        return await _route_request_single_attempt(
+            data=data,
+            llm_router=llm_router,
+            user_model=user_model,
+            route_type=route_type,
+            user_api_key_dict=user_api_key_dict,
+        )
+    except ProxyModelNotFoundError as e:
+        requested_model: Final = data.get("model", "")
+        if not e.retryable_with_model_read_through or not isinstance(requested_model, str) or not requested_model:
+            raise
+        from litellm.proxy import proxy_server
+        from litellm.proxy.common_utils.registry_read_through import (
+            model_registry_read_through,
+        )
+
+        if not await model_registry_read_through.attempt(requested_model):
+            raise
+        return await _route_request_single_attempt(
+            data=data,
+            llm_router=proxy_server.llm_router,
+            user_model=user_model,
+            route_type=route_type,
+            user_api_key_dict=user_api_key_dict,
+        )
+
+
+async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited provider coroutines; the inferred union keeps route_request's callers typed
+    data: dict,  # mutable-ok: request body is the proxy-wide mutable dict contract shared with route_request
+    llm_router: LitellmRouter | None,
+    user_model: str | None,
+    route_type: RouteType,
+    user_api_key_dict: UserAPIKeyAuth | None = None,
+):
     raise_if_required_body_param_missing(route_type=route_type, data=data)
 
     await add_shared_session_to_data(data)

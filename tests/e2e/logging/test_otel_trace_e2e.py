@@ -269,8 +269,12 @@ def _assert_error_span_contract(span: JaegerSpan) -> None:
         provider_error = _ProviderError.model_validate_json(message[start : end + 1])
     except ValidationError:
         pytest.fail(f"the embedded provider error JSON does not parse (truncated?): {message[:300]}")
-    assert provider_error.error.message == "invalid x-api-key", (
-        f"the embedded provider error must survive untruncated; parsed: {provider_error}"
+    assert provider_error.error.type == "authentication_error", (
+        f"the span must carry anthropic's own auth error object rather than a litellm "
+        f"stand-in; parsed: {provider_error}"
+    )
+    assert provider_error.error.message.strip(), (
+        f"the embedded provider error must carry a non-empty message; parsed: {provider_error}"
     )
     assert _tag(span, "otel.status_description") == message, (
         "the span status description must carry the same untruncated message as error.message"

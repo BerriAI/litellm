@@ -75,6 +75,8 @@ class NetworkError(BaseModel):
 
 class UnauthorizedError(BaseModel):
     kind: Literal["unauthorized"] = "unauthorized"
+    # litellm 401s for key auth, model access, and tag routing alike, so keep the body to tell them apart.
+    body: str = ""
 
 
 class RateLimitedError(BaseModel):
@@ -289,7 +291,7 @@ def _classify[R: BaseModel](
     resp: requests.Response, response_type: type[R]
 ) -> Result[R]:
     if resp.status_code == 401:
-        return UnauthorizedError()
+        return UnauthorizedError(body=resp.text)
     if resp.status_code == 429:
         return RateLimitedError(body=resp.text)
     if not resp.ok:
@@ -644,4 +646,38 @@ def download(
         call_id=_hdr(resp, "x-litellm-call-id"),
         content_type=_hdr(resp, "content-type"),
         body=resp.text,
+    )
+
+
+class RawResponse(BaseModel):
+    """A verbatim upstream HTTP response for the provider edge (provider_edge.py):
+    status, lowercased headers, raw bytes. No Result classification because the
+    edge relays provider errors to the proxy untouched."""
+
+    status_code: int
+    headers: dict[str, str]
+    body: bytes
+
+
+def forward(
+    method: str,
+    url: str,
+    *,
+    headers: dict[str, str],
+    body: bytes | None,
+    timeout: float = 60.0,
+) -> RawResponse | NetworkError:
+    """Relay one provider-bound request verbatim for the provider edge's record
+    mode. No retries, no redirects, no schema: the proxy owns retry policy and
+    the recorded bundle must hold exactly what the provider returned."""
+    try:
+        resp = requests.request(
+            method, url, headers=headers, data=body, timeout=timeout, allow_redirects=False
+        )
+    except requests.RequestException as exc:
+        return NetworkError(message=str(exc))
+    return RawResponse(
+        status_code=resp.status_code,
+        headers={name.lower(): value for name, value in resp.headers.items()},
+        body=resp.content,
     )

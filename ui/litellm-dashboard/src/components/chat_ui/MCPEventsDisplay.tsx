@@ -1,12 +1,23 @@
-import React from "react";
-import { Collapse } from "antd";
+import React, { useState } from "react";
+import { ChevronRight } from "lucide-react";
 import type { MCPEvent } from "@/components/mcp_tools/types";
-
-const { Panel } = Collapse;
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { cn } from "@/lib/cva.config";
 
 interface MCPEventsDisplayProps {
   events: MCPEvent[];
   className?: string;
+}
+
+function formatArguments(raw: string | undefined): string {
+  if (!raw) {
+    return "";
+  }
+  try {
+    return JSON.stringify(JSON.parse(raw), null, 2);
+  } catch {
+    return raw;
+  }
 }
 
 const MCPEventsDisplay: React.FC<MCPEventsDisplayProps> = ({ events, className }) => {
@@ -14,211 +25,157 @@ const MCPEventsDisplay: React.FC<MCPEventsDisplayProps> = ({ events, className }
     return null;
   }
 
-  // Find the list tools event
-  const toolsEvent = events.find(
-    (event) =>
-      event.type === "response.output_item.done" &&
-      event.item?.type === "mcp_list_tools" &&
-      event.item.tools &&
-      event.item.tools.length > 0,
-  );
+  const isListToolsEvent = (event: MCPEvent): boolean => {
+    if (event.type !== "response.output_item.done") {
+      return false;
+    }
+    if (event.item?.type !== "mcp_list_tools") {
+      return false;
+    }
+    return Boolean(event.item.tools && event.item.tools.length > 0);
+  };
 
-  // Find MCP call events
-  const mcpCallEvents = events.filter(
-    (event) => event.type === "response.output_item.done" && event.item?.type === "mcp_call",
-  );
+  const isMcpCallEvent = (event: MCPEvent): boolean =>
+    event.type === "response.output_item.done" && event.item?.type === "mcp_call";
+
+  const toolsEvent = events.find(isListToolsEvent);
+  const mcpCallEvents = events.filter(isMcpCallEvent);
 
   if (!toolsEvent && mcpCallEvents.length === 0) {
     return null;
   }
 
-  return (
-    <div className={`mcp-events-display ${className || ""}`}>
-      <style jsx>{`
-        .openai-mcp-tools {
-          position: relative;
-          margin: 0;
-          padding: 0;
-        }
-        .openai-mcp-tools .ant-collapse {
-          background: transparent !important;
-          border: none !important;
-        }
-        .openai-mcp-tools .ant-collapse-item {
-          border: none !important;
-          background: transparent !important;
-        }
-        .openai-mcp-tools .ant-collapse-header {
-          padding: 0 0 0 20px !important;
-          background: transparent !important;
-          border: none !important;
-          font-size: 14px !important;
-          color: #9ca3af !important;
-          font-weight: 400 !important;
-          line-height: 20px !important;
-          min-height: 20px !important;
-        }
-        .openai-mcp-tools .ant-collapse-header:hover {
-          background: transparent !important;
-          color: #6b7280 !important;
-        }
-        .openai-mcp-tools .ant-collapse-content {
-          border: none !important;
-          background: transparent !important;
-        }
-        .openai-mcp-tools .ant-collapse-content-box {
-          padding: 4px 0 0 20px !important;
-        }
-        .openai-mcp-tools .ant-collapse-expand-icon {
-          position: absolute !important;
-          left: 2px !important;
-          top: 2px !important;
-          color: #9ca3af !important;
-          font-size: 10px !important;
-          width: 16px !important;
-          height: 16px !important;
-          display: flex !important;
-          align-items: center !important;
-          justify-content: center !important;
-        }
-        .openai-mcp-tools .ant-collapse-expand-icon:hover {
-          color: #6b7280 !important;
-        }
-        .openai-vertical-line {
-          position: absolute;
-          left: 9px;
-          top: 18px;
-          bottom: 0;
-          width: 0.5px;
-          background-color: #f3f4f6;
-          opacity: 0.8;
-        }
-        .tool-item {
-          font-family: ui-monospace, SFMono-Regular, "SF Mono", Monaco, Consolas, "Liberation Mono", "Courier New",
-            monospace;
-          font-size: 13px;
-          color: #4b5563;
-          line-height: 18px;
-          padding: 0;
-          margin: 0;
-          background: white;
-          position: relative;
-          z-index: 1;
-        }
-        .mcp-section {
-          margin-bottom: 12px;
-          background: white;
-          position: relative;
-          z-index: 1;
-        }
-        .mcp-section:last-child {
-          margin-bottom: 0;
-        }
-        .mcp-section-header {
-          font-size: 13px;
-          color: #6b7280;
-          font-weight: 500;
-          margin-bottom: 4px;
-        }
-        .mcp-code-block {
-          background: #f9fafb;
-          border: 1px solid #f3f4f6;
-          border-radius: 6px;
-          padding: 8px;
-          font-size: 12px;
-        }
-        .mcp-json {
-          font-family: ui-monospace, SFMono-Regular, "SF Mono", Monaco, Consolas, "Liberation Mono", "Courier New",
-            monospace;
-          color: #374151;
-          margin: 0;
-          white-space: pre-wrap;
-          word-wrap: break-word;
-        }
-        .mcp-approved {
-          display: flex;
-          align-items: center;
-          font-size: 13px;
-          color: #6b7280;
-        }
-        .mcp-checkmark {
-          color: #10b981;
-          margin-right: 6px;
-          font-weight: bold;
-        }
-        .mcp-response-content {
-          font-size: 13px;
-          color: #374151;
-          line-height: 1.5;
-          white-space: pre-wrap;
-          font-family: ui-monospace, SFMono-Regular, "SF Mono", Monaco, Consolas, "Liberation Mono", "Courier New",
-            monospace;
-        }
-      `}</style>
-      <div className="openai-mcp-tools">
-        <div className="openai-vertical-line"></div>
-        <Collapse
-          ghost
-          size="small"
-          expandIconPosition="start"
-          defaultActiveKey={toolsEvent ? ["list-tools"] : mcpCallEvents.map((_, index) => `mcp-call-${index}`)}
-        >
-          {/* List Tools Panel */}
-          {toolsEvent && (
-            <Panel header="List tools" key="list-tools">
-              <div>
-                {toolsEvent.item?.tools?.map((tool, index) => (
-                  <div key={index} className="tool-item">
-                    {tool.name}
-                  </div>
-                ))}
-              </div>
-            </Panel>
-          )}
+  const defaultOpenKeys = new Set<string>(
+    toolsEvent ? ["list-tools"] : mcpCallEvents.map((_, index) => `mcp-call-${index}`),
+  );
 
-          {/* MCP Call Panels */}
-          {mcpCallEvents.map((callEvent, index) => (
-            <Panel header={callEvent.item?.name || "Tool call"} key={`mcp-call-${index}`}>
+  return (
+    <div className={cn("mcp-events-display", className)}>
+      <MCPEventsPanels toolsEvent={toolsEvent} mcpCallEvents={mcpCallEvents} defaultOpenKeys={defaultOpenKeys} />
+    </div>
+  );
+};
+
+interface MCPEventsPanelsProps {
+  toolsEvent: MCPEvent | undefined;
+  mcpCallEvents: MCPEvent[];
+  defaultOpenKeys: Set<string>;
+}
+
+function MCPEventsPanels({ toolsEvent, mcpCallEvents, defaultOpenKeys }: MCPEventsPanelsProps) {
+  const [openKeys, setOpenKeys] = useState<Set<string>>(defaultOpenKeys);
+
+  const toggleKey = (key: string, open: boolean) => {
+    setOpenKeys((prev) => {
+      const next = new Set(prev);
+      if (open) {
+        next.add(key);
+      } else {
+        next.delete(key);
+      }
+      return next;
+    });
+  };
+
+  return (
+    <div className="relative m-0 p-0">
+      <div className="absolute bottom-0 left-[9px] top-[18px] w-px bg-muted opacity-80" aria-hidden="true" />
+
+      <div className="space-y-1">
+        {toolsEvent && (
+          <MCPEventPanel
+            panelKey="list-tools"
+            title="List tools"
+            open={openKeys.has("list-tools")}
+            onOpenChange={(open) => toggleKey("list-tools", open)}
+          >
+            <div>
+              {toolsEvent.item?.tools?.map((tool, index) => (
+                <div
+                  key={index}
+                  className="relative z-[1] bg-card font-mono text-[13px] leading-[18px] text-muted-foreground"
+                >
+                  {tool.name}
+                </div>
+              ))}
+            </div>
+          </MCPEventPanel>
+        )}
+
+        {mcpCallEvents.map((callEvent, index) => {
+          const key = `mcp-call-${index}`;
+          return (
+            <MCPEventPanel
+              key={key}
+              panelKey={key}
+              title={callEvent.item?.name || "Tool call"}
+              open={openKeys.has(key)}
+              onOpenChange={(open) => toggleKey(key, open)}
+            >
               <div>
-                {/* Request section */}
-                <div className="mcp-section">
-                  <div className="mcp-section-header">Request</div>
-                  <div className="mcp-code-block">
+                <div className="relative z-[1] mb-3 bg-card last:mb-0">
+                  <div className="mb-1 text-[13px] font-medium text-muted-foreground">Request</div>
+                  <div className="rounded-md border border-border bg-muted p-2 text-xs">
                     {callEvent.item?.arguments && (
-                      <pre className="mcp-json">
-                        {(() => {
-                          try {
-                            return JSON.stringify(JSON.parse(callEvent.item.arguments), null, 2);
-                          } catch (e) {
-                            return callEvent.item.arguments;
-                          }
-                        })()}
+                      <pre className="m-0 whitespace-pre-wrap break-words font-mono text-foreground">
+                        {formatArguments(callEvent.item.arguments)}
                       </pre>
                     )}
                   </div>
                 </div>
 
-                {/* Approved section */}
-                <div className="mcp-section">
-                  <div className="mcp-approved">
-                    <span className="mcp-checkmark">✓</span> Approved
+                <div className="relative z-[1] mb-3 bg-card last:mb-0">
+                  <div className="flex items-center text-[13px] text-muted-foreground">
+                    <span className="mr-1.5 font-bold text-success" aria-hidden="true">
+                      ✓
+                    </span>
+                    Approved
                   </div>
                 </div>
 
-                {/* Response section */}
                 {callEvent.item?.output && (
-                  <div className="mcp-section">
-                    <div className="mcp-section-header">Response</div>
-                    <div className="mcp-response-content">{callEvent.item.output}</div>
+                  <div className="relative z-[1] mb-3 bg-card last:mb-0">
+                    <div className="mb-1 text-[13px] font-medium text-muted-foreground">Response</div>
+                    <div className="whitespace-pre-wrap font-mono text-[13px] leading-normal text-foreground">
+                      {callEvent.item.output}
+                    </div>
                   </div>
                 )}
               </div>
-            </Panel>
-          ))}
-        </Collapse>
+            </MCPEventPanel>
+          );
+        })}
       </div>
     </div>
   );
-};
+}
+
+interface MCPEventPanelProps {
+  panelKey: string;
+  title: string;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  children: React.ReactNode;
+}
+
+function MCPEventPanel({ title, open, onOpenChange, children }: MCPEventPanelProps) {
+  return (
+    <Collapsible open={open} onOpenChange={onOpenChange}>
+      <CollapsibleTrigger className="relative flex min-h-5 w-full items-center gap-1 pl-5 text-left text-sm font-normal leading-5 text-muted-foreground hover:text-foreground">
+        <ChevronRight
+          className={cn(
+            "absolute left-0.5 top-0.5 size-4 text-muted-foreground transition-transform",
+            open && "rotate-90",
+          )}
+          aria-hidden="true"
+        />
+        {title}
+      </CollapsibleTrigger>
+      <CollapsibleContent>
+        <div className="pt-1 pl-5">{children}</div>
+      </CollapsibleContent>
+    </Collapsible>
+  );
+}
 
 export default MCPEventsDisplay;
