@@ -15,7 +15,6 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-import litellm
 from litellm import completion
 from litellm._logging import verbose_logger
 from litellm.integrations.gcs_pubsub.pub_sub import *

@@ -13,7 +13,6 @@ import litellm.types
 
 load_dotenv()
 import io
-import os
 import json
 
 sys.path.insert(

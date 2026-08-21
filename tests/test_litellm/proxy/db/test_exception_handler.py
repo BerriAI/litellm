@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
-from fastapi import HTTPException, Request, status
+from fastapi import HTTPException, Request
 from prisma import errors as prisma_errors
 from prisma.errors import (
     ClientNotConnectedError,

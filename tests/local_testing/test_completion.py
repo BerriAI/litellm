@@ -7,7 +7,6 @@ from dotenv import load_dotenv
 
 load_dotenv()
 import io
-import os
 
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -1380,7 +1379,6 @@ def test_ollama_image():
     """
 
     import base64
-    import io
 
     from PIL import Image
 
