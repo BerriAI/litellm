@@ -53,3 +53,8 @@ max-args = 5
 "typing_extensions.TypeGuard".msg = "Same as typing.TypeGuard."
 "typing.TypeIs".msg = "Unverified narrowing (the body is trusted). Parse into a concrete type instead."
 "typing_extensions.TypeIs".msg = "Same as typing.TypeIs."
+# Frozen-instance bypass. TID251 only resolves imported qualified names, so it sees the
+# `builtins.` form and never the bare `object.__setattr__` builtin, which is LIT012 in
+# scripts/check_type_discipline.py.
+"builtins.object.__setattr__".msg = "Writes through a frozen dataclass' guard. Build the final value and construct once, or dataclasses.replace()."
+"builtins.object.__delattr__".msg = "Same as builtins.object.__setattr__."

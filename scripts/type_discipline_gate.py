@@ -17,8 +17,9 @@ without codes or reason), LIT006 (cast), LIT008 (`**kwargs`), LIT009 (inert
 LIT012 (TypedDict field without a `ReadOnly[...]` qualifier; suppress with
 `# writable-ok: <reason>`) carry limits at or above their current count to
 ratchet down; LIT005 (`*-ok` suppression without a reason) is frozen at limit 0
-so any net-new reasonless suppression trips the gate; and LIT007
-(TypeGuard/TypeIs) is a hard zero.
+so any net-new reasonless suppression trips the gate; LIT007 (TypeGuard/TypeIs)
+is a hard zero; and LIT013 (`object.__setattr__`/`__delattr__` frozen-instance
+bypass) is capped at the handful that exist today.
 LIT010 and LIT011 were seeded at 1.5x the count left after the sweep that
 annotated every never-rebound name with Final, so that headroom is the hard
 line new code cannot cross.

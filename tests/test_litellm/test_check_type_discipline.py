@@ -684,6 +684,44 @@ def test_writable_ok_without_reason_is_lit005_and_does_not_suppress(tmp_path):
 
 
 # --------------------------------------------------------------------------- #
+# Frozen-instance bypass (LIT013) — only the `object` receiver counts
+# --------------------------------------------------------------------------- #
+
+
+def test_object_setattr_and_delattr_are_flagged(tmp_path):
+    assert "LIT013" in _codes(tmp_path, "def f(o: object) -> None:\n    object.__setattr__(o, 'a', 1)\n")
+    assert "LIT013" in _codes(tmp_path, "def f(o: object) -> None:\n    object.__delattr__(o, 'a')\n")
+    qualified = "import builtins\ndef f(o: object) -> None:\n    builtins.object.__setattr__(o, 'a', 1)\n"
+    assert "LIT013" in _codes(tmp_path, qualified)
+
+
+def test_cooperative_setattr_is_not_flagged(tmp_path):
+    # An owner writing through its own __setattr__ (directly or via super()) is not a
+    # bypass; only the builtin that steps around the owner's guard is.
+    src = (
+        "class X:\n"
+        "    def __setattr__(self, name: str, value: int) -> None:\n"
+        "        super().__setattr__(name, value)\n"
+        "        self.__setattr__(name, value)\n"
+    )
+    assert "LIT013" not in _codes(tmp_path, src)
+
+
+def test_setattr_ok_with_reason_suppresses(tmp_path):
+    src = (
+        "def f(o: object) -> None:\n"
+        "    object.__setattr__(o, 'a', 1)  # setattr-ok: rehydrating a frozen row from the DB\n"
+    )
+    assert "LIT013" not in _codes(tmp_path, src)
+
+
+def test_setattr_ok_without_reason_is_lit005(tmp_path):
+    codes = _codes(tmp_path, "def f(o: object) -> None:\n    object.__setattr__(o, 'a', 1)  # setattr-ok\n")
+    assert "LIT005" in codes
+    assert "LIT013" in codes
+
+
+# --------------------------------------------------------------------------- #
 # Budget integrity: every emittable LIT rule (bar the LIT000 read/parse error) is gated
 # --------------------------------------------------------------------------- #
 
