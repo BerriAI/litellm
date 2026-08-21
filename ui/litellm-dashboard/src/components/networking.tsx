@@ -2523,9 +2523,12 @@ export const userDailyActivityAggregatedCall = async (
         start_date: formatDate(startTime),
         end_date: formatDate(endTime),
         timezone: new Date().getTimezoneOffset().toString(),
-        user_id: userId ?? undefined,
+        // Passed raw, matching the paginated caller: both serializers drop null and undefined,
+        // and both keep "". An empty filter must not vanish, or a request scoped to one user or
+        // key would silently widen into an unscoped, proxy-wide read.
+        user_id: userId,
         include_current_utc_day: includeCurrentUtcDay ? "true" : undefined,
-        api_key: apiKey ?? undefined,
+        api_key: apiKey,
       },
     });
   } catch (error) {

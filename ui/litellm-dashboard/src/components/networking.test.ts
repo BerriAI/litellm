@@ -694,4 +694,18 @@ describe("daily activity api_key filter", () => {
 
     expect(requestedUrl(mockFetch)).toContain("api_key=");
   });
+
+  // user_id rides the same two transports and widens the same way, so it gets the same guard.
+  // The aggregated caller used to drop "" via `||`; without this the two filters could drift
+  // apart again on one side only.
+  it.each([
+    ["paginated", () => Networking.userDailyActivityCall("sk-key", start, end, 1, "", false, null)],
+    ["aggregated", () => Networking.userDailyActivityAggregatedCall("sk-key", start, end, "", false, null)],
+  ])("keeps an empty user_id as a filter rather than widening the %s read", async (_label, call) => {
+    const mockFetch = captureFetch();
+
+    await call();
+
+    expect(requestedUrl(mockFetch)).toContain("user_id=");
+  });
 });
