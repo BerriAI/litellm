@@ -302,8 +302,15 @@ class ChunkProcessor:
         model: Final = ChunkProcessor._get_model_from_chunks(chunks, first_chunk_model)
         system_fingerprint: Final = chunk.get("system_fingerprint", None)
 
-        first_chunk_with_choices: Final = next((c for c in chunks if c.get("choices")), chunk)
-        role: Final = first_chunk_with_choices["choices"][0]["delta"]["role"]
+        # Fall back to None rather than `chunk`: if no chunk carries a non-empty
+        # `choices` array, indexing [0] on the first chunk raises IndexError.
+        first_chunk_with_choices = next((c for c in chunks if c.get("choices")), None)
+        role: str = "assistant"
+        if first_chunk_with_choices is not None:
+            _choices = first_chunk_with_choices["choices"]
+            if len(_choices) > 0:
+                # `delta` may be absent or omit `role` (e.g. content-only deltas).
+                role = _choices[0].get("delta", {}).get("role") or "assistant"
         finish_reason = "stop"
         for chunk in chunks:
             if "choices" in chunk and len(chunk["choices"]) > 0:
