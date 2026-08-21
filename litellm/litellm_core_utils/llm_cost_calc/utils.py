@@ -55,7 +55,7 @@ _ABOVE_TOKEN_THRESHOLD_COST_KEY: Final[re.Pattern[str]] = re.compile(
     r"output_cost_per_token|"
     r"cache_creation_input_token_cost(?:_above_1hr)?|"
     r"cache_read_input_token_cost"
-    r")_above_\d+k?_tokens$"
+    r")_above_\d+k?_tokens(?:_(?P<tier>priority|flex|ultrafast))?$"
 )
 
 _SERVICE_TIER_TO_COST_KEY_SUFFIX: Final[Mapping[str, str]] = MappingProxyType(
@@ -323,14 +323,18 @@ def _get_token_base_cost(
     cache_read_cost = cast(float, _get_cost_per_unit(model_info, cache_read_cost_key))
 
     ## CHECK IF ABOVE THRESHOLD
-    selected_threshold_keys: dict[str, tuple[float, str]] = {}  # mutable-ok: threshold accumulator
+    selected_threshold_keys: dict[str, tuple[float, str, str | None]] = {}  # mutable-ok: threshold accumulator
 
     for key in model_info:
-        if "_above_" not in key or not key.endswith("_tokens"):
+        if "_above_" not in key or not key.endswith(("_tokens", "_priority", "_flex", "_ultrafast")):
             continue
 
         match = _ABOVE_TOKEN_THRESHOLD_COST_KEY.fullmatch(key)
         if match is None or model_info.get(key) is None:
+            continue
+
+        threshold_key_tier = match.group("tier")
+        if threshold_key_tier is not None and threshold_key_tier != service_tier:
             continue
 
         try:
@@ -348,6 +352,7 @@ def _get_token_base_cost(
             selected_threshold_keys[base_key] = (
                 threshold,
                 key,
+                threshold_key_tier,
             )
 
     costs_by_base_key = {  # mutable-ok: selected-rate updates
@@ -358,16 +363,15 @@ def _get_token_base_cost(
         "cache_read_input_token_cost": cache_read_cost,
     }
 
-    for base_key, (_, threshold_key) in selected_threshold_keys.items():
-        tiered_key = _get_service_tier_cost_key(
-            threshold_key,
-            service_tier,
+    for base_key, (_, threshold_key, threshold_key_tier) in selected_threshold_keys.items():
+        cost_key = (
+            threshold_key if threshold_key_tier is not None else _get_service_tier_cost_key(threshold_key, service_tier)
         )
         costs_by_base_key[base_key] = cast(
             float,
             _get_cost_per_unit(
                 model_info,
-                tiered_key,
+                cost_key,
                 costs_by_base_key[base_key],
             ),
         )

@@ -73,6 +73,41 @@ def test_is_custom_pricing_field_recognizes_declared_and_arbitrary_threshold_fie
     assert not _is_custom_pricing_field("input_cost_per_token_above_32k_tokens_extra")
 
 
+def test_is_custom_pricing_field_recognizes_tier_qualified_threshold_fields():
+    assert _is_custom_pricing_field("input_cost_per_token_above_200k_tokens_priority")
+    assert _is_custom_pricing_field("output_cost_per_token_above_200k_tokens_flex")
+    assert _is_custom_pricing_field("cache_read_input_token_cost_above_200k_tokens_priority")
+    assert _is_custom_pricing_field("cache_creation_input_token_cost_above_1hr_above_200k_tokens_ultrafast")
+    assert not _is_custom_pricing_field("api_key_above_32k_tokens_priority")
+    assert not _is_custom_pricing_field("secret_above_32k_tokens_flex")
+    assert not _is_custom_pricing_field("credential_above_200k_tokens_ultrafast")
+    assert not _is_custom_pricing_field("custom_provider_param_above_32k_tokens_priority")
+
+
+def test_custom_tier_qualified_threshold_key_is_registered():
+    """A deployment declaring only a tier-qualified threshold rate (e.g.
+    output_cost_per_token_above_200k_tokens_priority, which is not enumerated in
+    CustomPricingLiteLLMParams) must keep it in its model_cost entry so matching-tier
+    requests bill it."""
+    model_id = "custom-tier-only-threshold"
+    Router(
+        model_list=[
+            {
+                "model_name": "tier-only-model",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "fake-key",
+                    "input_cost_per_token": 1e-6,
+                    "output_cost_per_token_above_32k_tokens_priority": 1.5e-6,
+                },
+                "model_info": {"id": model_id},
+            }
+        ]
+    )
+
+    registered = litellm.model_cost[model_id]
+    assert registered["output_cost_per_token_above_32k_tokens_priority"] == 1.5e-6
+
 def test_copy_custom_pricing_fields_preserves_declared_and_arbitrary_threshold_fields():
     """Copy supported pricing fields without copying unrelated LiteLLM params."""
     model_info = {}
