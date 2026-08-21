@@ -941,19 +941,25 @@ def generic_cost_per_token(
     # 1. If text_tokens is explicitly provided and > 0, use it
     # 2. If there's a breakdown (reasoning/audio/image/video tokens), calculate text_tokens as the remainder
     # 3. If no breakdown at all, assume all completion_tokens are text_tokens
+    # 4. If text_tokens is the total with reasoning nested inside it, take the remainder too:
+    #    Together AI reports that shape on Qwen3.6/3.7 Plus (text_tokens == completion_tokens
+    #    alongside a non-zero reasoning_tokens) and the disjoint shape on Qwen3.7 Max, and
+    #    reasoning is billed on its own below, so the overlap charged those tokens twice.
+    #    Mirrors the prompt-side guard above; scoped to reasoning, the overlap seen on the wire.
     has_token_breakdown: Final = image_tokens > 0 or audio_tokens > 0 or reasoning_tokens > 0 or video_tokens > 0
-    if text_tokens == 0:
-        if has_token_breakdown:
-            # Calculate text tokens as remainder when we have a breakdown
-            # This handles cases like OpenAI's reasoning models where text_tokens isn't provided
-            text_tokens = max(
-                0,
-                usage.completion_tokens - reasoning_tokens - audio_tokens - image_tokens - video_tokens,
-            )
-        else:
-            # No breakdown at all, all tokens are text tokens
-            text_tokens = usage.completion_tokens
-            is_text_tokens_total = True
+    reasoning_overlaps_text: Final = reasoning_tokens > 0 and text_tokens + reasoning_tokens > usage.completion_tokens
+    if text_tokens == 0 and not has_token_breakdown:
+        # No breakdown at all, all tokens are text tokens
+        text_tokens = usage.completion_tokens
+        is_text_tokens_total = True
+    elif text_tokens == 0 or reasoning_overlaps_text:
+        # Calculate text tokens as remainder when we have a breakdown
+        # This handles cases like OpenAI's reasoning models where text_tokens isn't provided
+        text_tokens = max(
+            0,
+            usage.completion_tokens - reasoning_tokens - audio_tokens - image_tokens - video_tokens,
+        )
+
     ## TEXT COST
     completion_cost = float(text_tokens) * completion_base_cost
 

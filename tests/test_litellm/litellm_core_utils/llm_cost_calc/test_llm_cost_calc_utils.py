@@ -301,6 +301,40 @@ def test_cache_hit_tokens_fall_back_to_the_input_rate():
     assert round(completion_cost, 12) == round(10 * 2e-6, 12)
 
 
+def test_completion_text_tokens_that_include_reasoning_are_not_billed_twice():
+    """Some providers report completion text_tokens as the total with reasoning nested inside
+    it (Together AI does this on Qwen3.6/3.7 Plus, and not on Qwen3.7 Max), and text, audio,
+    reasoning, image and video are each billed separately below, so the overlap charged the
+    reasoning tokens a second time: 140 completion tokens billed as 274."""
+    from unittest.mock import patch
+
+    model_info = {"input_cost_per_token": 1e-6, "output_cost_per_token": 2e-6}
+    overlapping = Usage(
+        prompt_tokens=17,
+        completion_tokens=140,
+        total_tokens=157,
+        completion_tokens_details=CompletionTokensDetailsWrapper(reasoning_tokens=134, text_tokens=140),
+    )
+    disjoint = Usage(
+        prompt_tokens=17,
+        completion_tokens=140,
+        total_tokens=157,
+        completion_tokens_details=CompletionTokensDetailsWrapper(reasoning_tokens=134),
+    )
+
+    with patch(
+        "litellm.litellm_core_utils.llm_cost_calc.utils.get_model_info",
+        return_value=model_info,
+    ):
+        overlapping_cost = generic_cost_per_token(
+            model="test-model", usage=overlapping, custom_llm_provider="together_ai"
+        )
+        disjoint_cost = generic_cost_per_token(model="test-model", usage=disjoint, custom_llm_provider="together_ai")
+
+    assert round(overlapping_cost[1], 12) == round(140 * 2e-6, 12)
+    assert overlapping_cost == disjoint_cost
+
+
 def test_published_cache_read_rate_still_wins():
     """A published cached-input rate keeps its discount."""
     from unittest.mock import patch
