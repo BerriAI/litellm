@@ -2812,7 +2812,7 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
     request_route: str | None = None
     is_session_token: bool = False
     # Server-only marker set exclusively by the MCP gateway admission path
-    # (_reload_admitted_user) for a keyless user-subject admitted via a gateway DCR session
+    # (reload_admitted_user) for a keyless user-subject admitted via a gateway DCR session
     # bearer or bridge envelope. Not a DB column and never populated from caller-controlled key
     # metadata or JWT claims, so it cannot be forged to gain the team-inherited MCP grant union
     # or to escape the caller-Authorization egress scrub. exclude=True keeps it out of serialization.
