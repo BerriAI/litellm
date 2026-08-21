@@ -167,10 +167,15 @@ def get_first_json_object(file_source: bytes | BinaryIO) -> dict | None:
 
 
 def get_model_from_json_obj(json_object: dict) -> str | None:
-    body: Final = json_object.get("body", {}) or {}
-    model: Final = body.get("model")
+    """
+    The model a record names, or None when it does not name one readably.
 
-    return model
+    The upload validation only checks that `body` is present, not that it is an object, so a
+    record can carry a string there and reach this. Returning None sends the upload down the
+    default-provider branch, which is what a record with no resolvable model already did.
+    """
+    body: Final = json_object.get("body")
+    return body.get("model") if isinstance(body, dict) else None
 
 
 async def _deprecated_loadbalanced_create_file(

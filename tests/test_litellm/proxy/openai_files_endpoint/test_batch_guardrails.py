@@ -412,6 +412,27 @@ def test_load_balancing_finds_the_routing_record_in_any_file_the_upload_accepts(
     assert get_first_json_object(payload)["body"]["model"] == "gpt-4o-mini"
 
 
+@pytest.mark.parametrize(
+    "body",
+    ["summarize this", ["a"], None, 12345],
+    ids=["string", "list", "null", "number"],
+)
+def test_a_record_whose_body_is_not_an_object_does_not_crash_deployment_selection(body):
+    """Validation only checks that `body` is present, so a record can carry anything there."""
+    from litellm.proxy.openai_files_endpoints.batch_file_validation import check_batch_file_upload
+    from litellm.proxy.openai_files_endpoints.files_endpoints import (
+        get_first_json_object,
+        get_model_from_json_obj,
+    )
+
+    record = {"custom_id": "r1", "method": "POST", "url": "/v1/chat/completions", "body": body}
+    payload = b"\xef\xbb\xbf" + (json.dumps(record) + "\n").encode()
+    assert check_batch_file_upload("in.jsonl", io.BytesIO(payload), None) is None, "rejected upfront"
+
+    found = get_first_json_object(io.BytesIO(payload))
+    assert get_model_from_json_obj(json_object=found) is None
+
+
 @pytest.mark.parametrize("payload", [b"", b"\n\n\n"], ids=["empty", "blanks_only"])
 def test_load_balancing_returns_none_when_there_is_no_record(payload):
     from litellm.proxy.openai_files_endpoints.files_endpoints import get_first_json_object
