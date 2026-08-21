@@ -502,8 +502,11 @@ class OpenTelemetryV2(CustomLogger):
         """Remember an in-flight LLM call, evicting the oldest if over budget.
 
         A call that opens but never closes (a stream that only fires stream
-        events) would linger otherwise; the evicted span is simply dropped
-        (never exported).
+        events) would linger otherwise. Eviction only drops the boundary carrier,
+        not the call: if that call later closes as a real completed call, it still
+        emits through the deferred branch in ``_close_llm_call`` (the same path a
+        team/key-scoped logger uses, since it never opens a carrier), deduplicated
+        by call id. Only a call that is evicted and never closes goes unexported.
         """
         self._open_llm_calls[call_id] = carrier
         if len(self._open_llm_calls) > _OPEN_CALLS_MAX:

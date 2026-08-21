@@ -341,6 +341,35 @@ def test_idempotent_on_repeat_callback():
     assert len(exporter.get_finished_spans()) == 1
 
 
+def test_evicted_carrier_completed_call_emits_one_deferred_span():
+    """Eviction over the concurrency budget drops only the boundary carrier, not
+    the call. When an evicted call later closes as a real completed call
+    (``upstream_started``, payload present) it still emits exactly one span
+    through the deferred branch, and a second close for the same id dedups. Only
+    an evicted call that never closes goes unexported."""
+    logger, exporter = _logger()
+    kwargs = {**_kwargs(), "api_call_start_time": datetime(2026, 5, 26, 12, 0, 0, tzinfo=timezone.utc)}
+    logger.log_pre_api_call(model="gpt-4o", messages=[], kwargs=kwargs)
+    assert "call_1" in logger._open_llm_calls
+
+    # Evict exactly as ``_store_open_call`` does over budget: drop the oldest
+    # carrier and release its routed provider.
+    _, evicted = logger._open_llm_calls.popitem(last=False)
+    logger._release_carrier(evicted)
+    assert not logger._open_llm_calls
+    assert exporter.get_finished_spans() == ()  # the evicted boundary span is never exported
+
+    asyncio.run(logger.async_log_success_event(kwargs, None, None, None))
+    spans = exporter.get_finished_spans()
+    assert len(spans) == 1, "the evicted call's real close re-emits one deferred span, not zero"
+    assert spans[0].name == "chat gpt-4o"
+    assert spans[0].attributes[LiteLLM.CALL_ID] == "call_1"
+
+    # Success-then-failure on one logging object: the deferred branch dedups by id.
+    asyncio.run(logger.async_log_failure_event(kwargs, None, None, None))
+    assert len(exporter.get_finished_spans()) == 1, "second close for the same id must not duplicate"
+
+
 # --------------------------------------------------------------------------- #
 #  MCP tool-call spans
 # --------------------------------------------------------------------------- #
