@@ -642,8 +642,7 @@ describe("daily activity api_key filter", () => {
     return mockFetch;
   };
 
-  const requestedUrl = (mockFetch: ReturnType<typeof captureFetch>): string =>
-    String(mockFetch.mock.calls[0][0]);
+  const requestedUrl = (mockFetch: ReturnType<typeof captureFetch>): string => String(mockFetch.mock.calls[0][0]);
 
   const start = new Date("2025-01-01T00:00:00Z");
   const end = new Date("2025-01-31T00:00:00Z");

@@ -58,27 +58,24 @@ describe("KeySavingsTab", () => {
   });
 
   it("totals each savings driver across the days in range", () => {
+    const firstDay: Partial<SpendMetrics> = {
+      compression_savings_spend: 1.5,
+      prompt_caching_savings_spend: 0.25,
+      autorouter_savings_spend: 2,
+      compression_saved_tokens: 400,
+      cache_read_input_tokens: 300,
+      prompt_tokens: 1000,
+    };
+    const secondDay: Partial<SpendMetrics> = {
+      compression_savings_spend: 0.5,
+      prompt_caching_savings_spend: 0.75,
+      autorouter_savings_spend: 1,
+      compression_saved_tokens: 600,
+      cache_read_input_tokens: 200,
+      prompt_tokens: 1000,
+    };
     scopedRange().mockReturnValue(
-      mockActivity({
-        results: [
-          day("2025-01-01", {
-            compression_savings_spend: 1.5,
-            prompt_caching_savings_spend: 0.25,
-            autorouter_savings_spend: 2,
-            compression_saved_tokens: 400,
-            cache_read_input_tokens: 300,
-            prompt_tokens: 1000,
-          }),
-          day("2025-01-02", {
-            compression_savings_spend: 0.5,
-            prompt_caching_savings_spend: 0.75,
-            autorouter_savings_spend: 1,
-            compression_saved_tokens: 600,
-            cache_read_input_tokens: 200,
-            prompt_tokens: 1000,
-          }),
-        ],
-      }),
+      mockActivity({ results: [day("2025-01-01", firstDay), day("2025-01-02", secondDay)] }),
     );
 
     renderTab();
