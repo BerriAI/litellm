@@ -67,6 +67,17 @@ jobs:
         with:
           version: "0.10.9"
 
+      - name: Cache uv dependencies
+        if: steps.changes.outputs.decision != 'skip'
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.cache/uv
+            .venv
+          key: ${{ runner.os }}-uv-lint-${{ hashFiles('uv.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-uv-lint-
+
       - name: Clean Python cache
         if: steps.changes.outputs.decision != 'skip'
         run: |
