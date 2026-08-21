@@ -10496,8 +10496,7 @@ class TestKeyAliasSkipValidationOnUnchanged:
 
         assert new_alias != existing_alias
         with pytest.raises(ProxyException):
-            if new_alias != existing_alias:
-                _validate_key_alias_format(new_alias)
+            _validate_key_alias_format(new_alias)
 
     @pytest.mark.asyncio
     async def test_update_key_changed_to_valid_alias_passes(self, mock_prisma, existing_key_with_legacy_alias):

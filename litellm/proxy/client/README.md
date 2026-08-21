@@ -331,7 +331,7 @@ sequenceDiagram
     
     CLI->>Proxy: Poll /sso/cli/poll/login_id with poll_secret header
     Proxy->>CLI: Return {"status": "ready", "key": "jwt"}
-    CLI->>CLI: Save key to the OS keychain (metadata to ~/.litellm/token.json)
+    CLI->>CLI: Save the secret to the OS keychain (metadata to ~/.litellm/token.json)
 ```
 
 ### Authentication Commands
@@ -365,7 +365,7 @@ The CLI provides these authentication commands:
 
 ### Token Storage
 
-The key itself goes into the OS keychain (macOS Keychain, Windows Credential Manager, or the Linux Secret Service) under service `litellm-cli`, account `credential`. Only the non-secret session metadata is written to `~/.litellm/token.json`, in a `0700` directory with `0600` file permissions:
+The key itself, together with the refresh token that renews a `--pkce` credential, goes into the OS keychain (macOS Keychain, Windows Credential Manager, or the Linux Secret Service) under service `litellm-cli`, account `credential`. Only the non-secret session metadata is written to `~/.litellm/token.json`, in a `0700` directory with `0600` file permissions:
 
 ```json
 {
@@ -378,7 +378,7 @@ The key itself goes into the OS keychain (macOS Keychain, Windows Credential Man
 }
 ```
 
-Keychain storage needs the `keyring` package, which ships with `pip install 'litellm[cli]'`. Headless boxes and CI runners usually have no keychain either. In all of those cases the key stays in the same `0600` file alongside the metadata, exactly as it did before, and `lite login` names which one applies: the package is missing, the machine has no keychain, or you set `LITELLM_CLI_DISABLE_KEYRING=1` to force the file even where a keychain exists. A `token.json` written by an older `lite` keeps working and is moved into the keychain, and scrubbed from the file, the first time a keychain-capable `lite` reads it.
+Keychain storage needs the `keyring` package, which ships with `pip install 'litellm[cli]'`. Headless boxes and CI runners usually have no keychain either. In all of those cases the key and the refresh token stay in the same `0600` file alongside the metadata, exactly as they did before, and `lite login` names which one applies: the package is missing, the machine has no keychain, or you set `LITELLM_CLI_DISABLE_KEYRING=1` to force the file even where a keychain exists. A `token.json` written by an older `lite` keeps working and is moved into the keychain, and scrubbed from the file, the first time a keychain-capable `lite` reads it. That includes a refresh token left behind by the release that moved only the key.
 
 `lite logout` clears both stores. If the keychain is locked at that moment it says so, and re-running it once the keychain is unlocked finishes the job.
 

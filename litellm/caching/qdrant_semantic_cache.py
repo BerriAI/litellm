@@ -16,7 +16,11 @@ from typing import TYPE_CHECKING, Any, Final, cast
 
 import litellm
 from litellm._logging import print_verbose
-from litellm.constants import QDRANT_SCALAR_QUANTILE, QDRANT_VECTOR_SIZE
+from litellm.constants import (
+    QDRANT_SCALAR_QUANTILE,
+    QDRANT_VECTOR_SIZE,
+    SEMANTIC_CACHE_EMBEDDING_TIMEOUT_SECONDS,
+)
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_str_from_messages,
 )
@@ -26,6 +30,7 @@ from ._embedding_router import (
     build_router_embedding_metadata,
     resolve_embedding_max_input_tokens,
     resolve_embedding_router,
+    resolve_embedding_timeout,
     truncate_embedding_input,
 )
 from .base_cache import BaseCache
@@ -37,6 +42,7 @@ if TYPE_CHECKING:
 class QdrantSemanticCache(BaseCache):
     CACHE_KEY_FIELD_NAME = "litellm_cache_key"
     embedding_max_input_tokens: int | None = None
+    embedding_timeout: float = SEMANTIC_CACHE_EMBEDDING_TIMEOUT_SECONDS
 
     def __init__(
         self,
@@ -49,6 +55,7 @@ class QdrantSemanticCache(BaseCache):
         host_type=None,
         vector_size=None,
         embedding_max_input_tokens: int | None = None,
+        embedding_timeout: float | None = None,
     ):
         from litellm.llms.custom_httpx.http_handler import (
             _get_httpx_client,
@@ -68,6 +75,7 @@ class QdrantSemanticCache(BaseCache):
         self.similarity_threshold = similarity_threshold
         self.embedding_model = embedding_model
         self.embedding_max_input_tokens = embedding_max_input_tokens
+        self.embedding_timeout = resolve_embedding_timeout(embedding_timeout)
         self.vector_size = vector_size if vector_size is not None else QDRANT_VECTOR_SIZE
         headers = {}
 
@@ -222,11 +230,15 @@ class QdrantSemanticCache(BaseCache):
                 input=embedding_input,
                 cache={"no-store": True, "no-cache": True},
                 metadata=build_router_embedding_metadata(metadata),
+                timeout=self.embedding_timeout,
+                num_retries=0,
             )
         return litellm.embedding(
             model=self.embedding_model,
             input=embedding_input,
             cache={"no-store": True, "no-cache": True},
+            timeout=self.embedding_timeout,
+            num_retries=0,
         )
 
     async def _get_async_embedding(self, prompt: str, metadata: dict[str, Any] | None = None) -> EmbeddingResponse:
@@ -238,19 +250,25 @@ class QdrantSemanticCache(BaseCache):
 
         router: Final = resolve_embedding_router(self.embedding_model, llm_router, llm_model_list)
         embedding_input: Final = self._embedding_input(prompt, router)
-        if router is not None:
-            return await router.aembedding(
+        embedding_call: Final = (
+            router.aembedding(
                 model=self.embedding_model,
                 input=embedding_input,
                 cache={"no-store": True, "no-cache": True},
                 metadata=build_router_embedding_metadata(metadata),
+                timeout=self.embedding_timeout,
+                num_retries=0,
             )
-
-        return await litellm.aembedding(
-            model=self.embedding_model,
-            input=embedding_input,
-            cache={"no-store": True, "no-cache": True},
+            if router is not None
+            else litellm.aembedding(
+                model=self.embedding_model,
+                input=embedding_input,
+                cache={"no-store": True, "no-cache": True},
+                timeout=self.embedding_timeout,
+                num_retries=0,
+            )
         )
+        return await asyncio.wait_for(embedding_call, self.embedding_timeout)
 
     def set_cache(self, key, value, **kwargs):
         print_verbose(f"qdrant semantic-cache set_cache, kwargs: {kwargs}")

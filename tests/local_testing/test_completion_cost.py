@@ -625,16 +625,8 @@ def test_vertex_ai_completion_cost():
     print("calculated_input_cost: {}".format(calculated_input_cost))
 
 
-@pytest.mark.skip(reason="new test - WIP, working on fixing this")
 def test_vertex_ai_medlm_completion_cost():
     """Test for medlm completion cost ."""
-
-    with pytest.raises(Exception) as e:
-        model = "vertex_ai/medlm-medium"
-        messages = [{"role": "user", "content": "Test MedLM completion cost."}]
-        predictive_cost = completion_cost(
-            model=model, messages=messages, custom_llm_provider="vertex_ai"
-        )
 
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
@@ -1097,7 +1089,7 @@ def test_completion_cost_databricks(model):
     litellm._turn_on_debug()
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
-    model, messages = model, [{"role": "user", "content": "What is 2+2?"}]
+    messages = [{"role": "user", "content": "What is 2+2?"}]
 
     resp = litellm.completion(model=model, messages=messages)  # works fine
 
@@ -1479,7 +1471,6 @@ def test_completion_cost_azure_ai_rerank(model):
         },
     )
     print("response", response)
-    model = model
     cost = completion_cost(
         model=model, completion_response=response, call_type="arerank"
     )
@@ -2874,7 +2865,7 @@ def test_json_valid_model_cost_map():
         json_str = json.dumps(model_cost)
         json.loads(json_str)
     except json.JSONDecodeError as e:
-        assert False, f"Invalid JSON format: {str(e)}"
+        pytest.fail(f"Invalid JSON format: {str(e)}")
 
 
 def test_batch_cost_calculator():

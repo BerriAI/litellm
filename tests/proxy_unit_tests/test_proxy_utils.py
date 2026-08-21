@@ -29,6 +29,7 @@ from litellm.proxy.litellm_pre_call_utils import (
     _get_dynamic_logging_metadata,
     add_litellm_data_to_request,
 )
+from pydantic import ValidationError
 
 pytestmark = pytest.mark.xdist_group("proxy_heavy")
 
@@ -1695,13 +1696,13 @@ def test_update_key_request_validation():
     """
     from litellm.proxy._types import UpdateKeyRequest
 
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         UpdateKeyRequest(
             key="test_key",
             temp_budget_increase=100,
         )
 
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         UpdateKeyRequest(
             key="test_key",
             temp_budget_expiry="2024-01-20T00:00:00Z",
@@ -1848,7 +1849,7 @@ async def test_end_user_transactions_reset():
     mock_client.db.tx = AsyncMock(side_effect=Exception("DB Error"))
 
     # Call function - should raise error
-    with pytest.raises(Exception):
+    with pytest.raises(TypeError):
         await ProxyUpdateSpend.update_end_user_spend(
             n_retry_times=0,
             prisma_client=mock_client,
@@ -1878,7 +1879,7 @@ async def test_spend_logs_cleanup_after_error():
     original_logs = mock_client.spend_log_transactions.copy()
 
     # Call function - should raise error
-    with pytest.raises(Exception):
+    with pytest.raises(TypeError):
         await ProxyUpdateSpend.update_spend_logs(
             n_retry_times=0,
             prisma_client=mock_client,

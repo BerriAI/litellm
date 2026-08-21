@@ -4067,9 +4067,10 @@ class PrometheusLogger(CustomLogger):
             require_auth (bool, optional): Whether to require authentication for the metrics endpoint.
                                         Defaults to False.
         """
-        from prometheus_client import make_asgi_app
+        from prometheus_client import REGISTRY
 
         from litellm._logging import verbose_proxy_logger
+        from litellm.integrations.prometheus_metrics_endpoint import make_metrics_asgi_app
         from litellm.proxy.proxy_server import app
 
         # Create metrics ASGI app
@@ -4078,9 +4079,9 @@ class PrometheusLogger(CustomLogger):
 
             registry: Final = CollectorRegistry()
             multiprocess.MultiProcessCollector(registry)
-            metrics_app = make_asgi_app(registry)
+            metrics_app = make_metrics_asgi_app(registry)
         else:
-            metrics_app = make_asgi_app()
+            metrics_app = make_metrics_asgi_app(REGISTRY)
 
         # Mount the metrics app to the app
         app.mount("/metrics", metrics_app)

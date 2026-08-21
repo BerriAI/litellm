@@ -259,14 +259,6 @@ def _raw_cache(cache: _RawCacheRead) -> _RawCacheRead:
     return cache
 
 
-class _BudgetCacheRead(Protocol):
-    async def async_get_cache(self, *, key: str) -> "LiteLLM_BudgetTable | Mapping[str, object] | None": ...
-
-
-def _budget_cache(cache: _BudgetCacheRead) -> _BudgetCacheRead:
-    return cache
-
-
 def _typed_request_body(request_body: dict) -> Mapping[str, object]:
     return request_body
 
@@ -474,6 +466,103 @@ def _is_cost_explicitly_configured(model: str, llm_router: "Router") -> bool:
         if "input_cost_per_token" in raw_entry or "output_cost_per_token" in raw_entry:
             return True
     return False
+
+
+_EMPTY_COST_ENTRY: Final[Mapping[str, object]] = MappingProxyType({})
+
+
+def _is_positive_cost(value: object) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0
+
+
+def _entry_has_priced_metric(entry: Mapping[str, object]) -> bool:
+    if entry.get("tiered_pricing") is not None:
+        return True
+    for key, value in entry.items():
+        if "cost_per" not in key:
+            continue
+        if _is_positive_cost(value):
+            return True
+        if isinstance(value, dict) and any(_is_positive_cost(nested) for nested in value.values()):
+            return True
+    return False
+
+
+def _entry_declares_price(entry: Mapping[str, object]) -> bool:
+    return any("cost_per" in key or key == "tiered_pricing" for key in entry)
+
+
+def _model_group_has_pricing(model: str, llm_router: "Router") -> bool:
+    """
+    A model group counts as priced when a deployment overrides any *cost_per* field or
+    tiered_pricing in its litellm_params, even at zero, or when its resolved model info carries
+    tiered_pricing or a positive price on any billed metric (tokens, characters, seconds, pages,
+    images, queries, ...), so models billed by a non-token metric are not treated as unpriced.
+    """
+    for deployment in llm_router.get_model_list(model_name=model) or ():
+        litellm_params = deployment.get("litellm_params") or _EMPTY_COST_ENTRY
+        if _entry_declares_price(litellm_params):
+            return True
+
+        model_id = (deployment.get("model_info") or _EMPTY_COST_ENTRY).get("id")
+        if model_id is None:
+            continue
+
+        model_info = llm_router.get_deployment_model_info(
+            model_id=model_id, model_name=litellm_params.get("model") or ""
+        )
+        if model_info is not None and _entry_has_priced_metric(model_info):
+            return True
+
+    return False
+
+
+def _group_declares_explicit_cost(model: str, llm_router: "Router") -> bool:
+    """
+    Alias-aware counterpart to ``_is_cost_explicitly_configured``, which resolves the model group
+    the same way ``_model_group_has_pricing`` does. A deployment that prices itself through its
+    ``model_info`` block lands in the cost map under its deployment id rather than in its
+    litellm_params, and reaching that entry through the router's own resolution keeps an alias
+    pointing at such a group from being read as unpriced.
+    """
+    for deployment in llm_router.get_model_list(model_name=model) or ():
+        model_id = (deployment.get("model_info") or _EMPTY_COST_ENTRY).get("id")
+        if model_id is None:
+            continue
+        raw_entry = litellm.model_cost.get(model_id, _EMPTY_COST_ENTRY)
+        if "input_cost_per_token" in raw_entry or "output_cost_per_token" in raw_entry:
+            return True
+    return False
+
+
+def model_has_no_cost_mapping(model: str | None, llm_router: Router | None) -> bool:
+    if not model or llm_router is None:
+        return False
+
+    if llm_router.get_model_group_info(model_group=model) is None:
+        return False
+
+    if _model_group_has_pricing(model=model, llm_router=llm_router):
+        return False
+
+    return not _group_declares_explicit_cost(model=model, llm_router=llm_router)
+
+
+def _unpriced_models_in_request(model: str | list[str] | None, llm_router: Router | None) -> tuple[str, ...]:
+    candidates: Final = (model,) if isinstance(model, str) else tuple(model or ())
+    return tuple(
+        candidate for candidate in candidates if model_has_no_cost_mapping(model=candidate, llm_router=llm_router)
+    )
+
+
+def _unpriced_models_block_message(models: tuple[str, ...]) -> str:
+    names: Final = ", ".join(f"'{model}'" for model in models)
+    subject: Final = f"Model {names} has" if len(models) == 1 else f"Models {names} have"
+    return (
+        f"{subject} no pricing in the cost map, so litellm cannot price the request. "
+        "Requests for unpriced models are blocked because 'block_requests_for_models_without_pricing' "
+        "is enabled. Add pricing (input_cost_per_token/output_cost_per_token) to allow the request."
+    )
 
 
 async def _run_project_checks(
@@ -751,6 +840,19 @@ async def common_checks(
         route not in BUDGET_ENFORCED_SIDE_EFFECT_ROUTES
         and (route in MODEL_DISCOVERY_ROUTES or not RouteChecks.is_llm_api_route(route=route))
     )
+
+    unpriced_models: Final = (
+        _unpriced_models_in_request(model=_model, llm_router=llm_router)
+        if litellm.block_requests_for_models_without_pricing and RouteChecks.is_llm_api_route(route=route)
+        else ()
+    )
+    if unpriced_models:
+        raise ProxyException(
+            message=_unpriced_models_block_message(unpriced_models),
+            type=ProxyErrorTypes.model_cost_map_missing,
+            param="model",
+            code=status.HTTP_403_FORBIDDEN,
+        )
 
     # 1. If team is blocked
     if team_object is not None and team_object.blocked is True:
@@ -1207,32 +1309,34 @@ async def get_team_member_default_budget(
 
     cache_key: Final = f"team_member_default_budget:{budget_id}"
 
-    cached_budget: Final = await _budget_cache(user_api_key_cache).async_get_cache(key=cache_key)
-    if isinstance(cached_budget, LiteLLM_BudgetTable):
+    cached_budget: Final = await user_api_key_cache.async_get_cache(
+        key=cache_key,
+        model_type=LiteLLM_BudgetTable,
+    )
+    if cached_budget is not None:
         return cached_budget
-    if isinstance(cached_budget, dict):
-        return LiteLLM_BudgetTable.model_validate(cached_budget)
 
     try:
         budget_record: Final = await _dictable_table(BudgetRepository(prisma_client)).find_unique(
             where={"budget_id": budget_id}
         )
-
-        if budget_record is None:
-            verbose_proxy_logger.warning("Team-default member budget not found in database: %s", budget_id)
-            return None
-
-        await user_api_key_cache.async_set_cache(
-            key=cache_key,
-            value=budget_record.dict(),
-            ttl=get_management_object_ttl(user_api_key_cache),
-        )
-
-        return LiteLLM_BudgetTable.model_validate(budget_record.dict())
-
     except Exception:
         verbose_proxy_logger.exception("Error fetching team-default member budget %s", budget_id)
         return None
+
+    if budget_record is None:
+        verbose_proxy_logger.warning("Team-default member budget not found in database: %s", budget_id)
+        return None
+
+    budget: Final = LiteLLM_BudgetTable.model_validate(budget_record.dict())
+    await user_api_key_cache.async_set_cache(
+        key=cache_key,
+        value=budget,
+        model_type=LiteLLM_BudgetTable,
+        ttl=get_management_object_ttl(user_api_key_cache),
+    )
+
+    return budget
 
 
 async def _apply_default_budget_to_end_user(

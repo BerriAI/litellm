@@ -277,6 +277,14 @@ db:
     # written to db.readReplicaUrl ends up visible in the rendered pod spec
     # and the Helm release secret.
     readReplicaUrlKey: ""
+    # Optional: when set, a DATABASE_READER_HOST env var is sourced from this
+    # secret key, so db.readReplicaUrl can compose the reader URL from
+    # individual secret components, e.g.
+    # postgresql://$(DATABASE_USERNAME):$(DATABASE_PASSWORD)@$(DATABASE_READER_HOST):5432/$(DATABASE_NAME)
+    # Use this when your secret store holds the bare reader hostname rather
+    # than a full connection URL. Only takes effect when readReplicaUrl is
+    # set; ignored when readReplicaUrlKey is set.
+    readReplicaEndpointKey: ""
 
   # Optional read-replica routing. When set, the proxy sends read-only
   # queries (find_*, count, group_by, query_raw/_first) to this URL while

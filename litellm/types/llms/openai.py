@@ -279,6 +279,40 @@ OpenAIFilesPurpose = Literal[
 ]
 
 
+class BatchGuardrailRecord(BaseModel):
+    """One batch input record a guardrail acted on."""
+
+    line: int
+    """The 1-based line of the uploaded file the record started on."""
+
+    custom_id: str | None = None
+    """The record's own `custom_id`, when it carried one."""
+
+    action: Literal["redacted", "dropped"]
+    """`redacted` means the record was submitted with the guardrail's rewrite applied.
+
+    `dropped` means the guardrail blocked it and it was left out of the submitted file.
+    """
+
+    guardrail: str | None = None
+    """Which guardrail dropped the record, when it named itself.
+
+    Set for dropped records only. A guardrail refusing content and a guardrail that is
+    unreachable under a fail-closed setting raise the same way, so this names the guardrail
+    to check rather than claiming a reason it cannot distinguish.
+    """
+
+
+class BatchGuardrailReport(BaseModel):
+    """What guardrails did to a batch input file, per record."""
+
+    submitted_records: int
+    """How many records reached the provider."""
+
+    modified_records: tuple[BatchGuardrailRecord, ...]
+    """Every record that was redacted or dropped, in file order."""
+
+
 class OpenAIFileObject(BaseModel):
     id: str
     """The file identifier, which can be referenced in the API endpoints."""
@@ -317,6 +351,12 @@ class OpenAIFileObject(BaseModel):
 
     For details on why a fine-tuning training file failed validation, see the
     `error` field on `fine_tuning.job`.
+    """
+
+    litellm_batch_guardrail: BatchGuardrailReport | None = None
+    """Set by the proxy when guardrails acted on a `purpose=batch` upload.
+
+    Absent on every other upload, so OpenAI-shaped clients see an unchanged response.
     """
 
     _hidden_params: dict = {"response_cost": 0.0}  # no cost for writing a file

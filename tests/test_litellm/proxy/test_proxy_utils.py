@@ -1584,7 +1584,7 @@ async def test_prisma_health_check_failure_redacts_database_credentials(caplog):
     client._report_health_check_failure = AsyncMock()
 
     with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
-        with pytest.raises(Exception):
+        with pytest.raises(Exception, match="could not connect to"):
             await PrismaClient.health_check(client)
 
     emitted = [record.getMessage() for record in caplog.records if record.name == "LiteLLM Proxy"]
