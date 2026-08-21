@@ -160,7 +160,7 @@ def _get_budget_metrics_per_request_timeout() -> float:
 class _LabeledGauge(Protocol):
     """Structural type shared by ``prometheus_client.Gauge`` and the no-op / label-excluding wrappers above."""
 
-    def labels(self, **labels: str) -> _LabeledGauge: ...
+    def labels(self, *labelvalues: str) -> _LabeledGauge: ...
 
     def set(self, value: float) -> None: ...
 
@@ -2171,13 +2171,14 @@ class PrometheusLogger(CustomLogger):
             enum_values=enum_values,
             label_context=label_context,
         )
+        label_values: Final = tuple(labels.get(name, "") for name in labelnames)
         if value is not None:
             self._drop_superseded_team_series(gauge=gauge, labelnames=labelnames, labels=labels)
-            gauge.labels(**labels).set(value)
+            gauge.labels(*label_values).set(value)
             return
 
         try:
-            gauge.remove(*(labels.get(name, "") for name in labelnames))
+            gauge.remove(*label_values)
         except KeyError:
             # No child series for this labelset, which is the common case:
             # the team never had a limit for this model.

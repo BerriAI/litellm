@@ -128,10 +128,9 @@ def test_labels_carry_team_and_requested_model():
     _set_team_metrics(logger, _payload_with_headers(dict(ALL_TEAM_HEADERS)))
 
     for metric_name in TEAM_RATE_LIMIT_METRICS:
-        labels_kwargs = getattr(logger, metric_name).labels.call_args.kwargs
-        assert labels_kwargs["team"] == "team-abc"
-        assert labels_kwargs["team_alias"] == "research"
-        assert labels_kwargs["model"] == "gpt-4o-mini"
+        labelnames = PrometheusMetricLabels.get_labels(metric_name)
+        label_values = getattr(logger, metric_name).labels.call_args.args
+        assert dict(zip(labelnames, label_values, strict=True)) == TEAM_LABELS
 
 
 def test_emits_nothing_when_team_has_no_configured_limits():
@@ -353,10 +352,14 @@ def test_excluded_label_wrapper_cannot_remove_when_every_label_is_excluded():
 
 
 def test_noop_metric_remove_is_inert():
+    """A disabled metric answers every call without recording or raising."""
     metric = NoOpMetric()
 
-    metric.labels(**TEAM_LABELS).set(60)
-    metric.remove(*TEAM_LABELS.values())
+    child = metric.labels(*TEAM_LABELS.values())
+
+    assert child is metric
+    assert child.set(60) is None
+    assert metric.remove(*TEAM_LABELS.values()) is None
 
 
 def test_retires_the_old_series_when_a_team_is_renamed():
