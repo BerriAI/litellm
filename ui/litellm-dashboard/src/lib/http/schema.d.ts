@@ -3154,6 +3154,40 @@ export interface paths {
         patch: operations["cursor_proxy_route_cursor__endpoint__patch"];
         trace?: never;
     };
+    "/custom_role": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** custom_rbac_roles */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/customer/block": {
         parameters: {
             query?: never;
@@ -30273,7 +30307,7 @@ export interface components {
             /** User Id */
             user_id?: string | null;
             /** User Role */
-            user_role?: ("proxy_admin" | "proxy_admin_viewer" | "internal_user" | "internal_user_viewer") | null;
+            user_role?: components["schemas"]["LitellmUserRoles"] | string | null;
         };
         /** NewUserRequestTeam */
         NewUserRequestTeam: {
@@ -30455,7 +30489,7 @@ export interface components {
             /** User Id */
             user_id?: string | null;
             /** User Role */
-            user_role?: ("proxy_admin" | "proxy_admin_viewer" | "internal_user" | "internal_user_viewer") | null;
+            user_role?: components["schemas"]["LitellmUserRoles"] | string | null;
         };
         /**
          * OAuth2SecurityScheme
@@ -35558,7 +35592,7 @@ export interface components {
             /** User Id */
             user_id?: string | null;
             /** User Role */
-            user_role?: ("proxy_admin" | "proxy_admin_viewer" | "internal_user" | "internal_user_viewer") | null;
+            user_role?: components["schemas"]["LitellmUserRoles"] | string | null;
         };
         /** UpdateUserRequestNoUserIDorEmail */
         UpdateUserRequestNoUserIDorEmail: {
@@ -35662,7 +35696,7 @@ export interface components {
             /** User Id */
             user_id?: string | null;
             /** User Role */
-            user_role?: ("proxy_admin" | "proxy_admin_viewer" | "internal_user" | "internal_user_viewer") | null;
+            user_role?: components["schemas"]["LitellmUserRoles"] | string | null;
         };
         /** UsageAIChatRequest */
         UsageAIChatRequest: {
@@ -36086,7 +36120,8 @@ export interface components {
             user_id?: string | null;
             /** User Max Budget */
             user_max_budget?: number | null;
-            user_role?: components["schemas"]["LitellmUserRoles"] | null;
+            /** User Role */
+            user_role?: components["schemas"]["LitellmUserRoles"] | string | null;
             /** User Rpm Limit */
             user_rpm_limit?: number | null;
             /** User Spend */
