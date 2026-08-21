@@ -453,3 +453,27 @@ def test_openai_file_object_accepts_pending_status():
         status="pending",
     )
     assert file_obj.status == "pending"
+
+
+def test_file_object_omits_the_batch_guardrail_key_when_nothing_acted():
+    """Every non-batch upload, retrieve, and stored managed-file row serializes this model."""
+    import json
+
+    from litellm.types.llms.openai import BatchGuardrailRecord, BatchGuardrailReport, OpenAIFileObject
+
+    plain = OpenAIFileObject(
+        id="file-1", object="file", bytes=10, created_at=1, filename="notes.txt",
+        purpose="assistants", status="processed",
+    )
+    assert "litellm_batch_guardrail" not in plain.model_dump()
+    assert "litellm_batch_guardrail" not in json.loads(plain.model_dump_json())
+
+    acted = OpenAIFileObject(
+        id="file-2", object="file", bytes=10, created_at=1, filename="batch.jsonl",
+        purpose="batch", status="processed",
+        litellm_batch_guardrail=BatchGuardrailReport(
+            submitted_records=1,
+            modified_records=(BatchGuardrailRecord(line=1, custom_id="a", action="dropped", guardrail="g"),),
+        ),
+    )
+    assert acted.model_dump()["litellm_batch_guardrail"]["submitted_records"] == 1

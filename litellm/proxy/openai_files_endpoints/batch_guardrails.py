@@ -307,6 +307,30 @@ def _scannable_call_type(url: object, body: Mapping[str, object]) -> CallTypesLi
     return from_url if from_url is not None else _call_type_from_body(body)
 
 
+def _with_requested_guardrails(scan_metadata: Mapping[str, object], requested: object) -> Mapping[str, object]:
+    """
+    Fold a record's own `guardrails` into the chain its key and team already selected.
+
+    Online, `move_guardrails_to_metadata` extends the selected list with the one in the body, so a
+    caller can only ever add to what an admin chose. Reading the record's key verbatim would let it
+    replace that list instead, and dropping the key entirely would lose an opt-in the online path
+    honours, so this unions the two the way the online path does.
+    """
+    if not isinstance(requested, list) or not requested:
+        return scan_metadata
+    selected: Final = scan_metadata.get("guardrails")
+    already: Final = tuple(selected) if isinstance(selected, list) else ()
+    names: Final = [  # mutable-ok: guardrail selection tests this value with isinstance(list)
+        *already,
+        *(name for name in requested if name not in already),
+    ]
+    merged: Final = {  # mutable-ok: frozen by the MappingProxyType below
+        **scan_metadata,
+        "guardrails": names,
+    }
+    return MappingProxyType(merged)
+
+
 def _custom_id_of(payload: Mapping[str, object]) -> str | None:
     custom_id: Final = payload.get("custom_id")
     return custom_id if isinstance(custom_id, str) else None
@@ -367,8 +391,9 @@ async def _scan_record(
     # neither survives into the record that ships. Deep, and per bag per record, because `headers`
     # and `tags` are nested containers otherwise shared with the upload request and with every
     # other record in the window. The narrowing above already removed what cannot be copied.
+    record_scan_metadata: Final = _with_requested_guardrails(scan_metadata, body.get("guardrails"))
     for injected in _SCAN_METADATA_BAGS:
-        scan_input[injected] = copy.deepcopy(dict(scan_metadata))  # mutable-ok: guardrails write here
+        scan_input[injected] = copy.deepcopy(dict(record_scan_metadata))  # mutable-ok: guardrails write here
 
     try:
         # The chain hands back the body it produced, which may be a replacement for the dict it was

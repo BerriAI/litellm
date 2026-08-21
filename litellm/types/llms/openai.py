@@ -66,8 +66,10 @@ from pydantic import (
     ConfigDict,
     Discriminator,
     PrivateAttr,
+    SerializerFunctionWrapHandler,
     field_serializer,
     field_validator,
+    model_serializer,
 )
 from typing_extensions import (
     NotRequired,
@@ -358,6 +360,19 @@ class OpenAIFileObject(BaseModel):
 
     Absent on every other upload, so OpenAI-shaped clients see an unchanged response.
     """
+
+    @model_serializer(mode="wrap")
+    def _drop_unset_batch_guardrail(self, handler: SerializerFunctionWrapHandler) -> dict[str, object]:
+        """
+        Omit the key entirely rather than emitting a null.
+
+        Every other upload, every retrieve, and the stored managed-file row serialize this model,
+        and none of them should gain a field because the batch path exists.
+        """
+        serialized: Final = handler(self)
+        return {  # mutable-ok: this dict is the serialized payload pydantic asks us to return
+            key: value for key, value in serialized.items() if key != "litellm_batch_guardrail" or value is not None
+        }
 
     _hidden_params: dict = {"response_cost": 0.0}  # no cost for writing a file
 

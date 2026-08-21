@@ -845,6 +845,29 @@ async def test_a_record_body_cannot_opt_itself_out_of_the_guardrail_chain():
 
 
 @pytest.mark.asyncio
+async def test_a_record_can_add_a_guardrail_but_not_remove_one():
+    """Online the body list extends what the key selected; a record must be able to add too."""
+    seen = []
+
+    async def _run(body_guardrails):
+        seen.clear()
+        record = _record("a")
+        if body_guardrails is not None:
+            record["body"]["guardrails"] = body_guardrails
+        await _scan_full(
+            _jsonl(record),
+            FakeProxyLogging(lambda d: seen.append(list(d["litellm_metadata"].get("guardrails") or []))),
+            metadata={"guardrails": ["team-guard"]},
+        )
+        return seen[0]
+
+    assert await _run(None) == ["team-guard"]
+    assert await _run([]) == ["team-guard"], "an empty list must not clear the key's selection"
+    assert await _run(["extra-guard"]) == ["team-guard", "extra-guard"], "an opt-in must be honoured"
+    assert await _run(["team-guard"]) == ["team-guard"], "no duplicates"
+
+
+@pytest.mark.asyncio
 async def test_a_redacted_record_keeps_its_own_guardrails_key():
     """Stripping it for the scan must not rewrite what the caller asked the provider to run."""
     record = _record("m", content="my secret is here")
