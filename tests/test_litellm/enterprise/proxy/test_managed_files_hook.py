@@ -191,6 +191,39 @@ async def test_get_user_created_file_ids_remaps_stored_raw_provider_id_to_unifie
 
 
 @pytest.mark.asyncio
+async def test_afile_list_returns_owner_scoped_managed_files():
+    managed_files = _make_managed_files_instance()
+    managed_files.prisma_client.db.litellm_managedfiletable.find_many = AsyncMock(
+        return_value=[
+            MagicMock(
+                file_object=_make_file_object("file-provider-id").model_dump(),
+                unified_file_id="unified-file-id",
+            ),
+            MagicMock(
+                file_object=_make_file_object("file-other-purpose").model_copy(
+                    update={"purpose": "batch"}
+                ).model_dump(),
+                unified_file_id="unified-other-purpose",
+            ),
+        ]
+    )
+
+    response = await managed_files.afile_list(
+        purpose="batch_output",
+        litellm_parent_otel_span=None,
+        user_api_key_dict=_make_user_api_key_dict(),
+    )
+
+    managed_files.prisma_client.db.litellm_managedfiletable.find_many.assert_awaited_once_with(
+        where={"created_by": "test-user"}
+    )
+    assert [file.id for file in response["data"]] == ["unified-file-id"]
+    assert response["first_id"] == "unified-file-id"
+    assert response["last_id"] == "unified-file-id"
+    assert response["has_more"] is False
+
+
+@pytest.mark.asyncio
 async def test_parse_managed_file_object_warning_omits_rejected_values(caplog):
     from litellm_enterprise.proxy.hooks.managed_files import (
         _parse_managed_file_object,

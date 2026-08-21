@@ -1365,12 +1365,23 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
 
     async def afile_list(
         self,
-        purpose: Optional[OpenAIFilesPurpose],
+        purpose: str | None,
         litellm_parent_otel_span: Optional[Span],
+        user_api_key_dict: UserAPIKeyAuth,
         **data: Dict,
-    ) -> List[OpenAIFileObject]:
-        """Handled in files_endpoints.py"""
-        return []
+    ) -> Dict[str, object]:
+        owner_filter: Final = build_owner_filter(user_api_key_dict)
+        if owner_filter is None:
+            return build_list_page([])
+
+        rows: Final = await _managed_file_table(self.prisma_client).find_many(where=owner_filter)
+        files: Final = [
+            parsed_file_object.model_copy(update={"id": row.unified_file_id})
+            for row in rows
+            if (parsed_file_object := _parse_managed_file_object(row.file_object, row.unified_file_id)) is not None
+            and (purpose is None or parsed_file_object.purpose == purpose)
+        ]
+        return build_list_page(files)
 
     def _is_batch_polling_enabled(self) -> bool:
         """
