@@ -1575,7 +1575,6 @@ async def test_async_increment_tokens_with_ttl_preservation():
     3. Second call: Increment same keys
     4. Verify TTL decreased but wasn't reset to 60s
     """
-    import os
     import time
 
     from litellm.caching.redis_cache import RedisCache

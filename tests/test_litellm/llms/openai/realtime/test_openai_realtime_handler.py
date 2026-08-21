@@ -97,7 +97,6 @@ def test_openai_realtime_handler_model_parameter_inclusion():
 
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 

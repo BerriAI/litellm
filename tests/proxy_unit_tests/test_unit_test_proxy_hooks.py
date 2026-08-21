@@ -17,7 +17,6 @@ async def test_disable_spend_logs():
     Test that the spend logs are not written to the database when disable_spend_logs is True
     """
     # Mock the necessary components
-    import asyncio
 
     mock_prisma_client = Mock()
     mock_prisma_client.spend_log_transactions = []

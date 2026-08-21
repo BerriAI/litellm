@@ -2736,10 +2736,8 @@ def test_add_headers_to_llm_call_by_model_group_existing_headers_in_data():
         litellm.model_group_settings = original_model_group_settings
 
 
-import json
 import time
 from typing import Optional
-from unittest.mock import AsyncMock
 
 from fastapi.responses import Response
 

@@ -1363,7 +1363,7 @@ def test_get_provider_rerank_config():
     Test the get_provider_rerank_config function for various providers
     """
     from litellm import HostedVLLMRerankConfig
-    from litellm.utils import LlmProviders, ProviderConfigManager
+    from litellm.utils import LlmProviders
 
     # Test for hosted_vllm provider
     config = ProviderConfigManager.get_provider_rerank_config(
@@ -1486,7 +1486,7 @@ def test_get_model_info_shows_supports_computer_use():
 def test_pre_process_non_default_params(model, custom_llm_provider):
     from pydantic import BaseModel
 
-    from litellm.utils import ProviderConfigManager, pre_process_non_default_params
+    from litellm.utils import pre_process_non_default_params
 
     provider_config = ProviderConfigManager.get_provider_chat_config(
         model=model, provider=LlmProviders(custom_llm_provider)
@@ -2353,7 +2353,6 @@ def test_anthropic_claude_4_invoke_chat_provider_config():
     from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import (
         AmazonAnthropicClaudeConfig,
     )
-    from litellm.utils import ProviderConfigManager
 
     config = ProviderConfigManager.get_provider_chat_config(
         model="invoke/us.anthropic.claude-sonnet-4-20250514-v1:0",
@@ -3240,7 +3239,6 @@ class TestProxyLoggingBudgetAlerts:
 def test_azure_ai_claude_provider_config():
     """Test that Azure AI Claude models return AzureAnthropicConfig for proper tool transformation."""
     from litellm import AzureAIStudioConfig, AzureAnthropicConfig
-    from litellm.utils import ProviderConfigManager
 
     # Claude models should return AzureAnthropicConfig
     config = ProviderConfigManager.get_provider_chat_config(
@@ -4308,7 +4306,6 @@ class TestGetOptionalParamsTencent:
         from litellm.llms.tencent.messages.transformation import (
             TencentAnthropicMessagesConfig,
         )
-        from litellm.utils import ProviderConfigManager
 
         config = ProviderConfigManager.get_provider_anthropic_messages_config(
             model="deepseek-v4-pro",

@@ -6,7 +6,6 @@ import traceback
 from dotenv import load_dotenv
 
 load_dotenv()
-import os
 
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -478,7 +477,6 @@ async def test_virtual_key_max_budget_check(
     2. Raises BudgetExceededError when spend >= max_budget
     """
     from litellm.proxy.auth.auth_checks import _virtual_key_max_budget_check
-    from litellm.proxy.utils import ProxyLogging
 
     # Setup test data
     valid_token = UserAPIKeyAuth(
@@ -836,7 +834,6 @@ async def test_can_user_call_model_with_no_default_models():
 @pytest.mark.asyncio
 async def test_get_fuzzy_user_object():
     from litellm.proxy.auth.auth_checks import _get_fuzzy_user_object
-    from litellm.proxy.utils import PrismaClient
     from unittest.mock import AsyncMock, MagicMock
 
     # Setup mock Prisma client
