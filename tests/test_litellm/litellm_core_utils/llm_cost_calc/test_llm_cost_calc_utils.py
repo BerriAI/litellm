@@ -44,12 +44,12 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
 from litellm.types.utils import CacheCreationTokenDetails, Usage
 
 
-def test_reasoning_tokens_no_price_set():
+def test_reasoning_tokens_no_price_set(monkeypatch):
     # Use o1 - o1-mini was deprecated/renamed; o1 has same reasoning-token semantics
     # (no separate output_cost_per_reasoning_token, so all completion tokens use output_cost_per_token)
     model = "o1"
     custom_llm_provider = "openai"
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
     model_cost_map = litellm.model_cost[model]
     usage = Usage(
@@ -87,10 +87,10 @@ def test_reasoning_tokens_no_price_set():
     )
 
 
-def test_reasoning_tokens_gemini():
+def test_reasoning_tokens_gemini(monkeypatch):
     model = "gemini-2.5-flash"
     custom_llm_provider = "gemini"
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
     usage = Usage(
@@ -132,11 +132,11 @@ def test_reasoning_tokens_gemini():
     )
 
 
-def test_reasoning_tokens_gemini_3_1_flash_lite():
+def test_reasoning_tokens_gemini_3_1_flash_lite(monkeypatch):
     """Test cost calculation for gemini-3.1-flash-lite-preview with reasoning tokens"""
     model = "gemini-3.1-flash-lite-preview"
     custom_llm_provider = "gemini"
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
     usage = Usage(
@@ -270,10 +270,10 @@ def test_image_tokens_fallback_to_base_cost():
     assert round(completion_cost, 12) == round(expected_completion_cost, 12)
 
 
-def test_video_output_tokens_gemini_omni_flash_preview():
+def test_video_output_tokens_gemini_omni_flash_preview(monkeypatch):
     """Video output tokens are billed at output_cost_per_video_token, not the text rate and not zero."""
     model = "gemini-omni-flash-preview"
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
     text_tokens = 100
@@ -310,10 +310,10 @@ def test_video_output_tokens_gemini_omni_flash_preview():
     )
 
 
-def test_video_input_tokens_gemini_omni_flash_preview():
+def test_video_input_tokens_gemini_omni_flash_preview(monkeypatch):
     """Video input tokens are billed at the standard input rate instead of being dropped."""
     model = "gemini-omni-flash-preview"
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
     usage = Usage(
@@ -369,11 +369,11 @@ def test_video_tokens_fallback_to_base_cost():
     assert round(completion_cost, 12) == round((600 + 1120) * 2e-6, 12)
 
 
-def test_generic_cost_per_token_above_200k_tokens():
+def test_generic_cost_per_token_above_200k_tokens(monkeypatch):
     # gemini-2.5-pro-exp-03-25 was removed; gemini-2.5-pro has same above-200k pricing
     model = "gemini-2.5-pro"
     custom_llm_provider = "vertex_ai"
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
     model_cost_map = litellm.model_cost[model]
@@ -420,11 +420,11 @@ def test_get_token_base_cost_picks_highest_crossed_tier():
     assert prompt_base_cost == 9e-6
 
 
-def test_generic_cost_per_token_gpt54_above_272k_tokens():
+def test_generic_cost_per_token_gpt54_above_272k_tokens(monkeypatch):
     """GPT-5.4/5.4-pro: prompts >272K input tokens priced at 2x input, 1.5x output."""
     model = "gpt-5.4"
     custom_llm_provider = "openai"
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
     model_cost_map = litellm.model_cost[model]
@@ -450,11 +450,11 @@ def test_generic_cost_per_token_gpt54_above_272k_tokens():
     assert round(completion_cost, 10) == round(expected_completion, 10)
 
 
-def test_generic_cost_per_token_minimax_m3_above_512k_tokens():
+def test_generic_cost_per_token_minimax_m3_above_512k_tokens(monkeypatch):
     """MiniMax-M3: prompts >512K input tokens priced at 2x input, output, and cache read."""
     model = "minimax/MiniMax-M3"
     custom_llm_provider = "minimax"
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
     model_cost_map = litellm.model_cost[model]
@@ -493,9 +493,9 @@ def test_generic_cost_per_token_minimax_m3_above_512k_tokens():
         "bedrock_mantle/openai.gpt-5.6-luna",
     ],
 )
-def test_generic_cost_per_token_bedrock_mantle_gpt56_long_context(model):
+def test_generic_cost_per_token_bedrock_mantle_gpt56_long_context(model, monkeypatch):
     """Bedrock GPT-5.6 supports a 1M context window, billed at the long-context rates above 272K."""
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
     model_cost_map = litellm.model_cost[model]
@@ -827,11 +827,11 @@ def test_generic_cost_per_token_tiered_pricing_bills_reasoning_at_tier_rate():
         litellm.model_cost.pop(model, None)
 
 
-def test_generic_cost_per_token_gpt55():
+def test_generic_cost_per_token_gpt55(monkeypatch):
     """gpt-5.5: base pricing — $5/1M input, $30/1M output, $0.50/1M cached input."""
     model = "gpt-5.5"
     custom_llm_provider = "openai"
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
     model_cost_map = litellm.model_cost[model]
@@ -867,11 +867,11 @@ def test_generic_cost_per_token_gpt55():
     )
 
 
-def test_generic_cost_per_token_gpt55_pro():
+def test_generic_cost_per_token_gpt55_pro(monkeypatch):
     """gpt-5.5-pro: responses-only model — $30/1M input, $180/1M output, $3/1M cached input."""
     model = "gpt-5.5-pro"
     custom_llm_provider = "openai"
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
     model_cost_map = litellm.model_cost[model]
@@ -1654,10 +1654,10 @@ def test_cache_writing_cost_with_zero_creation_tokens_and_ephemeral_details():
     assert round(result, 6) == round(expected, 6)
 
 
-def test_service_tier_flex_pricing():
+def test_service_tier_flex_pricing(monkeypatch):
     """Test that flex service tier uses correct pricing (approximately 50% of standard)."""
     # Set up environment for local model cost map
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
     # Test with gpt-5-nano which has flex pricing
@@ -1711,10 +1711,10 @@ def test_service_tier_flex_pricing():
     ), f"Flex total cost mismatch: {flex_total} vs {expected_flex_total}"
 
 
-def test_service_tier_default_pricing():
+def test_service_tier_default_pricing(monkeypatch):
     """Test that when no service tier is provided, standard pricing is used."""
     # Set up environment for local model cost map
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
     # Test with gpt-5-nano
@@ -1762,10 +1762,10 @@ def test_service_tier_default_pricing():
     ), f"Standard completion cost mismatch: {default_cost[1]} vs {expected_standard_completion}"
 
 
-def test_service_tier_fallback_pricing():
+def test_service_tier_fallback_pricing(monkeypatch):
     """Test that when service tier is provided but model doesn't have those keys, it falls back to standard pricing."""
     # Set up environment for local model cost map
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
     # Test with gpt-4 which doesn't have flex pricing keys
@@ -1874,14 +1874,14 @@ def test_service_tier_ultrafast_pricing():
     assert completion_cost == pytest.approx(400 * 3e-04)
 
 
-def test_service_tier_ultrafast_fallback_pricing():
+def test_service_tier_ultrafast_fallback_pricing(monkeypatch):
     """Without *_ultrafast keys an ultrafast request bills the standard rate, not zero.
 
     Guards the suffix fallback in _get_cost_per_unit: "_fast" is a substring of
     "_ultrafast", so a shortest-first suffix match would strip the wrong suffix
     and price the request at 0.
     """
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
     usage = Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
@@ -1977,12 +1977,12 @@ def test_gemini_image_generation_cost_with_zero_text_tokens(model: str):
     ), f"Expected completion cost ${expected_completion_cost:.6f}, got ${completion_cost:.6f}"
 
 
-def test_vertex_image_generation_cost_prefers_token_usage_metadata():
+def test_vertex_image_generation_cost_prefers_token_usage_metadata(monkeypatch):
     """
     When usage metadata exists on image responses, Vertex image generation cost
     should be calculated from token pricing, not flat output_cost_per_image.
     """
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
     model = "gemini-3.1-flash-image-preview"
@@ -2022,12 +2022,12 @@ def test_vertex_image_generation_cost_prefers_token_usage_metadata():
     assert cost != len(image_response.data) * model_info["output_cost_per_image"]
 
 
-def test_vertex_image_generation_cost_falls_back_to_flat_image_pricing():
+def test_vertex_image_generation_cost_falls_back_to_flat_image_pricing(monkeypatch):
     """
     Without usage metadata, Vertex image generation cost should fall back to
     output_cost_per_image * number_of_images.
     """
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
     model = "gemini-3.1-flash-image-preview"
@@ -2046,12 +2046,12 @@ def test_vertex_image_generation_cost_falls_back_to_flat_image_pricing():
     assert round(cost, 10) == round(expected_cost, 10)
 
 
-def test_gemini_image_generation_cost_prefers_token_usage_metadata():
+def test_gemini_image_generation_cost_prefers_token_usage_metadata(monkeypatch):
     """
     When usage metadata exists on image responses, Gemini image generation cost
     should be calculated from token pricing, not flat output_cost_per_image.
     """
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
     model = "gemini/gemini-3-pro-image-preview"
@@ -2091,12 +2091,12 @@ def test_gemini_image_generation_cost_prefers_token_usage_metadata():
     assert cost != len(image_response.data) * model_info["output_cost_per_image"]
 
 
-def test_gemini_image_generation_cost_falls_back_to_flat_image_pricing():
+def test_gemini_image_generation_cost_falls_back_to_flat_image_pricing(monkeypatch):
     """
     Without usage metadata, Gemini image generation cost should fall back to
     output_cost_per_image * number_of_images.
     """
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
     model = "gemini/gemini-3-pro-image-preview"
@@ -2194,7 +2194,7 @@ def test_reasoning_tokens_without_text_tokens_gpt5_nano():
     ), "Bug detected: Cost calculation is using only reasoning_tokens instead of all completion_tokens!"
 
 
-def test_image_count_prevents_text_tokens_fallback():
+def test_image_count_prevents_text_tokens_fallback(monkeypatch):
     """
     Test that the text_tokens fallback in generic_cost_per_token does not
     override text_tokens=0 when image_count > 0.
@@ -2203,7 +2203,7 @@ def test_image_count_prevents_text_tokens_fallback():
     When image_count > 0, text_tokens=0 is intentional (image-only request),
     not "text_tokens not set by provider."
     """
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
     # Simulate Nova image-only embedding: prompt_tokens estimated from
@@ -2629,9 +2629,9 @@ def test_token_type_cost_breakdown_is_provider_agnostic(
     assert breakdown.cache_read_cost == pytest.approx(cached_tokens * cache_read_rate)
 
 
-def test_token_type_cost_breakdown_matches_real_gemini_numbers():
+def test_token_type_cost_breakdown_matches_real_gemini_numbers(monkeypatch):
     """Hard-coded against the exact gemini-2.5-flash response that exposed the gap."""
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
     usage = Usage(
@@ -2655,8 +2655,8 @@ def test_token_type_cost_breakdown_matches_real_gemini_numbers():
     assert breakdown.cache_creation_cost == 0.0
 
 
-def test_token_type_cost_breakdown_xai_at_exactly_200k_uses_higher_tier_rates():
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+def test_token_type_cost_breakdown_xai_at_exactly_200k_uses_higher_tier_rates(monkeypatch):
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
     usage = Usage(
@@ -2679,8 +2679,8 @@ def test_token_type_cost_breakdown_xai_at_exactly_200k_uses_higher_tier_rates():
     assert breakdown.cache_read_cost == pytest.approx(50_000 * 4e-07)
 
 
-def test_token_type_cost_breakdown_xai_just_below_200k_uses_base_tier_rates():
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+def test_token_type_cost_breakdown_xai_just_below_200k_uses_base_tier_rates(monkeypatch):
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
     usage = Usage(
@@ -2703,13 +2703,13 @@ def test_token_type_cost_breakdown_xai_just_below_200k_uses_base_tier_rates():
     assert breakdown.cache_read_cost == pytest.approx(50_000 * 2e-07)
 
 
-def test_token_type_cost_breakdown_includes_cache_creation_from_top_level_usage():
+def test_token_type_cost_breakdown_includes_cache_creation_from_top_level_usage(monkeypatch):
     """
     Bedrock/Anthropic report cache tokens as top-level usage fields; the Usage
     constructor maps them onto prompt_tokens_details, so the breakdown must still
     pick up both cache-read and cache-creation costs.
     """
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
     model = "anthropic.claude-3-5-haiku-20241022-v1:0"
@@ -2734,13 +2734,13 @@ def test_token_type_cost_breakdown_includes_cache_creation_from_top_level_usage(
     )
 
 
-def test_token_type_cost_breakdown_reads_cache_write_tokens():
+def test_token_type_cost_breakdown_reads_cache_write_tokens(monkeypatch):
     """
     Some OpenAI-compatible providers (e.g. kimi-k2) report cache-write tokens under
     `cache_write_tokens` rather than `cache_creation_tokens`. The breakdown must read
     it the same way the total-cost normalization does, so the two agree.
     """
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
     model = "anthropic.claude-3-5-haiku-20241022-v1:0"
@@ -2762,7 +2762,7 @@ def test_token_type_cost_breakdown_reads_cache_write_tokens():
     )
 
 
-def test_generic_cost_per_token_openai_cache_write_tokens_gpt_5_6():
+def test_generic_cost_per_token_openai_cache_write_tokens_gpt_5_6(monkeypatch):
     """
     Regression: OpenAI gpt-5.6 reports cache-write tokens under
     prompt_tokens_details.cache_write_tokens (not the Anthropic cache_creation_tokens
@@ -2770,7 +2770,7 @@ def test_generic_cost_per_token_openai_cache_write_tokens_gpt_5_6():
     input rate. Customer report: cache creation tokens were never counted for the
     GPT-5.6 series, so cost was undercounted on cache-write requests.
     """
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
     model = "gpt-5.6"
@@ -2793,13 +2793,13 @@ def test_generic_cost_per_token_openai_cache_write_tokens_gpt_5_6():
     assert prompt_cost > 1000 * info["input_cost_per_token"]
 
 
-def test_generic_cost_per_token_backs_out_cache_write_tokens_from_text_tokens():
+def test_generic_cost_per_token_backs_out_cache_write_tokens_from_text_tokens(monkeypatch):
     """
     Regression for #34801: when a provider reports text_tokens covering the whole
     prompt alongside cache-write tokens (and no cache reads), the cache-write tokens
     must be backed out of the text total instead of being billed twice.
     """
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
     model = "gpt-5.6"
@@ -2819,14 +2819,14 @@ def test_generic_cost_per_token_backs_out_cache_write_tokens_from_text_tokens():
     assert prompt_cost == pytest.approx(expected_prompt)
 
 
-def test_token_type_cost_breakdown_reconciles_with_generic_total():
+def test_token_type_cost_breakdown_reconciles_with_generic_total(monkeypatch):
     """
     Both-ways check: the reasoning subset must sum with the remaining (text) output
     cost to exactly the completion total, and the cache-read subset with the remaining
     input cost to exactly the prompt total, as computed by generic_cost_per_token.
     A mismatch here would mean the breakdown misrepresents what was actually billed.
     """
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
     model = "gemini-2.5-flash"
@@ -2860,8 +2860,8 @@ def test_token_type_cost_breakdown_reconciles_with_generic_total():
     assert text_input_cost + breakdown.cache_read_cost == pytest.approx(prompt_cost)
 
 
-def test_token_type_cost_breakdown_zero_without_special_tokens():
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+def test_token_type_cost_breakdown_zero_without_special_tokens(monkeypatch):
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
     usage = Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150)
@@ -2950,14 +2950,14 @@ def test_token_type_cost_breakdown_handles_unknown_model_gracefully():
     )
 
 
-def test_token_type_cost_breakdown_applies_regional_uplift():
+def test_token_type_cost_breakdown_applies_regional_uplift(monkeypatch):
     """
     Regional OpenAI hosts (eu./us.) apply a flat uplift to every token cost. The
     per-type breakdown must apply the same uplift via data_residency so it stays
     reconciled with the uplifted input_cost/output_cost totals, instead of being
     logged at the base rate.
     """
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
     model = "gpt-5.4"
@@ -3006,14 +3006,14 @@ def test_token_type_cost_breakdown_applies_regional_uplift():
     assert text_input_cost + eu.cache_read_cost == pytest.approx(prompt_cost)
 
 
-def test_token_type_cost_breakdown_applies_vertex_regional_uplift():
+def test_token_type_cost_breakdown_applies_vertex_regional_uplift(monkeypatch):
     """
     Non-global Vertex endpoints apply a flat 1.1x uplift to every token cost. The
     per-type breakdown must apply the same uplift via vertex_location so it stays
     reconciled with the uplifted input_cost/output_cost totals, instead of being
     logged at the global rate.
     """
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
     model = "claude-haiku-4-5@20251001"
@@ -3191,8 +3191,8 @@ GEMINI_DAY0_LAUNCH_PRICING = [
 
 
 @pytest.mark.parametrize("model,input_cost,output_cost,cache_read_cost", GEMINI_DAY0_LAUNCH_PRICING)
-def test_gemini_36_flash_and_35_flash_lite_launch_pricing(model, input_cost, output_cost, cache_read_cost):
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+def test_gemini_36_flash_and_35_flash_lite_launch_pricing(model, input_cost, output_cost, cache_read_cost, monkeypatch):
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
     model_cost_map = litellm.model_cost[model]
@@ -3206,8 +3206,8 @@ def test_gemini_36_flash_and_35_flash_lite_launch_pricing(model, input_cost, out
     assert model_cost_map["max_input_tokens"] == 1048576
 
 
-def test_generic_cost_per_token_gemini_36_flash():
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+def test_generic_cost_per_token_gemini_36_flash(monkeypatch):
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
     usage = Usage(
@@ -3274,8 +3274,8 @@ def test_gemini_36_flash_batch_introductory_pricing(model, _local_model_cost_map
     assert model_cost_map["output_cost_per_token_batches"] == 1.875e-06
 
 
-def test_generic_cost_per_token_gemini_35_flash_lite():
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+def test_generic_cost_per_token_gemini_35_flash_lite(monkeypatch):
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
     usage = Usage(

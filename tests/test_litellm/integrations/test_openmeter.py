@@ -236,9 +236,9 @@ class TestOpenMeterIntegration:
         assert result["data"]["completion_tokens"] == 8
         assert result["data"]["total_tokens"] == 23
 
-    def test_custom_event_type(self):
+    def test_custom_event_type(self, monkeypatch):
         """Test that custom event type is used when set"""
-        os.environ["OPENMETER_EVENT_TYPE"] = "custom_event_type"
+        monkeypatch.setenv("OPENMETER_EVENT_TYPE", "custom_event_type")
 
         logger = OpenMeterLogger()
 
@@ -374,10 +374,10 @@ class TestOpenMeterIntegration:
         assert isinstance(result["subject"], str)
         assert result["subject"] == "12345"
 
-    def test_common_logic_trust_request_user_false_ignores_request_user(self):
+    def test_common_logic_trust_request_user_false_ignores_request_user(self, monkeypatch):
         """OPENMETER_TRUST_REQUEST_USER=false makes the key-bound user_id win
         over a request-supplied `user` (forge-attribution mitigation)."""
-        os.environ["OPENMETER_TRUST_REQUEST_USER"] = "false"
+        monkeypatch.setenv("OPENMETER_TRUST_REQUEST_USER", "false")
         logger = OpenMeterLogger()
 
         kwargs = {
@@ -400,11 +400,11 @@ class TestOpenMeterIntegration:
         assert result["subject"] == "real-tenant-id"
         assert result["subject"] != "forged-by-client"
 
-    def test_common_logic_trust_request_user_false_still_raises_without_key_user(self):
+    def test_common_logic_trust_request_user_false_still_raises_without_key_user(self, monkeypatch):
         """OPENMETER_TRUST_REQUEST_USER=false still raises when no
         user_api_key_user_id is available — the request `user` is not a
         fallback in this mode."""
-        os.environ["OPENMETER_TRUST_REQUEST_USER"] = "false"
+        monkeypatch.setenv("OPENMETER_TRUST_REQUEST_USER", "false")
         logger = OpenMeterLogger()
 
         kwargs = {

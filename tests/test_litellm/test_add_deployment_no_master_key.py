@@ -62,7 +62,7 @@ async def test_add_deployment_without_master_key():
 
 
 @pytest.mark.asyncio
-async def test_add_deployment_without_salt_key_or_master_key():
+async def test_add_deployment_without_salt_key_or_master_key(monkeypatch):
     """
     Test that add_deployment() works when both master_key and LITELLM_SALT_KEY are None.
 
@@ -118,7 +118,7 @@ async def test_add_deployment_without_salt_key_or_master_key():
     finally:
         # Restore LITELLM_SALT_KEY if it was set
         if old_salt_key:
-            os.environ["LITELLM_SALT_KEY"] = old_salt_key
+            monkeypatch.setenv("LITELLM_SALT_KEY", old_salt_key)
 
 
 def test_add_deployment_sync_without_master_key():

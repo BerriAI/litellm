@@ -144,7 +144,7 @@ def test_acount_tokens_api_error_falls_back():
         assert result.total_tokens > 0
 
 
-def test_acount_tokens_no_api_key_falls_back():
+def test_acount_tokens_no_api_key_falls_back(monkeypatch):
     """Test that missing API key falls back to local counting."""
     env_backup = os.environ.pop("OPENAI_API_KEY", None)
     try:
@@ -160,4 +160,4 @@ def test_acount_tokens_no_api_key_falls_back():
         assert result.tokenizer_type == "local_tokenizer"
     finally:
         if env_backup:
-            os.environ["OPENAI_API_KEY"] = env_backup
+            monkeypatch.setenv("OPENAI_API_KEY", env_backup)

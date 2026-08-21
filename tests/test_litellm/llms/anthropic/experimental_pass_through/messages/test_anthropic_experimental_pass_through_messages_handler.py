@@ -525,7 +525,7 @@ class TestThinkingSummaryPreservation:
         finally:
             litellm.reasoning_auto_summary = original
 
-    def test_summary_added_when_env_var_set(self):
+    def test_summary_added_when_env_var_set(self, monkeypatch):
         """When LITELLM_REASONING_AUTO_SUMMARY env var is true, summary is added."""
         import litellm
         from litellm.llms.anthropic.experimental_pass_through.adapters.handler import (
@@ -535,7 +535,7 @@ class TestThinkingSummaryPreservation:
         original = litellm.reasoning_auto_summary
         try:
             litellm.reasoning_auto_summary = False
-            os.environ["LITELLM_REASONING_AUTO_SUMMARY"] = "true"
+            monkeypatch.setenv("LITELLM_REASONING_AUTO_SUMMARY", "true")
             completion_kwargs = {
                 "model": "responses/gpt-5.2",
                 "custom_llm_provider": "openai",

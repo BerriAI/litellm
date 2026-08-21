@@ -98,7 +98,7 @@ async def test_send_email_success(mock_env_vars, mock_async_client):
 
 
 @pytest.mark.asyncio
-async def test_send_email_missing_api_key():
+async def test_send_email_missing_api_key(monkeypatch):
     original_key = os.environ.pop("SENDGRID_API_KEY", None)
 
     try:
@@ -113,7 +113,7 @@ async def test_send_email_missing_api_key():
             )
     finally:
         if original_key is not None:
-            os.environ["SENDGRID_API_KEY"] = original_key
+            monkeypatch.setenv("SENDGRID_API_KEY", original_key)
 
 
 @pytest.mark.asyncio

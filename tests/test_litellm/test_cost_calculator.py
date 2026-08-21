@@ -93,13 +93,13 @@ def test_cost_per_token_non_string_model_does_not_hang():
     assert result.get("status") in ("returned", "raised")
 
 
-def test_completion_cost_uses_response_model_for_dynamic_routing():
+def test_completion_cost_uses_response_model_for_dynamic_routing(monkeypatch):
     """
     Test that completion_cost uses the model from the response object
     when the input model (e.g., azure-model-router) is not in model_cost.
     This supports Azure Model Router and similar dynamic routing scenarios.
     """
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
     # Simulate Azure Model Router: input is generic router, response has actual model
@@ -139,8 +139,8 @@ def test_cost_calculator_with_response_cost_in_additional_headers():
     assert result == 1000
 
 
-def test_baseten_model_api_pricing_entries():
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+def test_baseten_model_api_pricing_entries(monkeypatch):
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
     expected_pricing = {
@@ -165,8 +165,8 @@ def test_baseten_model_api_pricing_entries():
         assert model_info["output_cost_per_token"] == output_cost
 
 
-def test_wandb_model_api_pricing_entries():
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+def test_wandb_model_api_pricing_entries(monkeypatch):
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
     expected_pricing = {
@@ -182,8 +182,8 @@ def test_wandb_model_api_pricing_entries():
         assert model_info["output_cost_per_token"] == output_cost
 
 
-def test_openrouter_qwen36_plus_model_info():
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+def test_openrouter_qwen36_plus_model_info(monkeypatch):
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
     model_info = litellm.model_cost.get("openrouter/qwen/qwen3.6-plus")
@@ -208,8 +208,8 @@ def test_openrouter_qwen36_plus_model_info():
         "github_copilot/mai-code-1-flash-internal",
     ],
 )
-def test_github_copilot_mai_code_1_flash_pricing(model):
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+def test_github_copilot_mai_code_1_flash_pricing(model, monkeypatch):
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
     model_info = litellm.model_cost.get(model)
@@ -239,7 +239,7 @@ def test_github_copilot_mai_code_1_flash_pricing(model):
 
 
 def test_cost_calculator_with_usage(monkeypatch):
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
     usage = Usage(
@@ -320,10 +320,10 @@ def test_cost_calculator_with_usage(monkeypatch):
     assert result == expected_cost, f"Got {result}, Expected {expected_cost}"
 
 
-def test_transcription_cost_uses_token_pricing():
+def test_transcription_cost_uses_token_pricing(monkeypatch):
     from litellm import completion_cost
 
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
     usage = Usage(
@@ -348,10 +348,10 @@ def test_transcription_cost_uses_token_pricing():
     assert pytest.approx(cost, rel=1e-6) == expected_cost
 
 
-def test_transcription_cost_falls_back_to_duration():
+def test_transcription_cost_falls_back_to_duration(monkeypatch):
     from litellm import completion_cost
 
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
     response = TranscriptionResponse(text="demo text")
@@ -368,13 +368,13 @@ def test_transcription_cost_falls_back_to_duration():
     assert pytest.approx(cost, rel=1e-6) == expected_cost
 
 
-def test_vertex_chirp_3_transcription_cost_from_duration():
+def test_vertex_chirp_3_transcription_cost_from_duration(monkeypatch):
     """Regression: the chirp_3 cost map entry shipped with output_cost_per_second 0.0,
     and cost_per_second prefers output_cost_per_second whenever it is not None, so
     every transcription priced to $0.00 instead of using input_cost_per_second."""
     from litellm import completion_cost
 
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
     response = TranscriptionResponse(text="demo text")
@@ -1127,8 +1127,8 @@ def test_tiered_pricing_only_deployment_completion_cost_is_nonzero():
     assert cost > 0
 
 
-def test_azure_realtime_cost_calculator():
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+def test_azure_realtime_cost_calculator(monkeypatch):
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
     cost = handle_realtime_stream_cost_calculation(
@@ -1152,7 +1152,7 @@ def test_azure_realtime_cost_calculator():
     assert cost > 0
 
 
-def test_azure_audio_output_cost_calculation():
+def test_azure_audio_output_cost_calculation(monkeypatch):
     """
     Test that Azure audio models correctly calculate costs for audio output tokens.
 
@@ -1162,7 +1162,7 @@ def test_azure_audio_output_cost_calculation():
     """
     from litellm.types.utils import Choices, CompletionTokensDetailsWrapper, Message
 
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
     # Scenario from issue #19764:
@@ -1672,7 +1672,7 @@ def test_gemini_25_explicit_caching_cost_direct_usage():
     assert expected_actual_cost == total_cost
 
 
-def test_azure_ai_cache_cost_calculation():
+def test_azure_ai_cache_cost_calculation(monkeypatch):
     """
     Test that azure_ai provider correctly calculates cache costs using generic_cost_per_token.
 
@@ -1683,7 +1683,7 @@ def test_azure_ai_cache_cost_calculation():
     from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
     from litellm.types.utils import PromptTokensDetailsWrapper, Usage
 
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
     # Register a custom azure_ai model with cache pricing
@@ -2286,11 +2286,11 @@ def test_azure_image_generation_cost_calculator():
     assert cost > 0.079
 
 
-def test_completion_cost_extracts_service_tier_from_response():
+def test_completion_cost_extracts_service_tier_from_response(monkeypatch):
     """Test that completion_cost extracts service_tier from completion_response object."""
     from litellm import completion_cost
 
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
     # Test with gpt-5-nano which has flex pricing
@@ -2338,11 +2338,11 @@ def test_completion_cost_extracts_service_tier_from_response():
     ), f"Flex pricing should be ~50% of standard, got {flex_ratio:.2f}"
 
 
-def test_completion_cost_extracts_service_tier_from_usage():
+def test_completion_cost_extracts_service_tier_from_usage(monkeypatch):
     """Test that completion_cost extracts service_tier from usage object."""
     from litellm import completion_cost
 
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
     # Test with gpt-5-nano which has flex pricing
@@ -2397,11 +2397,11 @@ def test_completion_cost_extracts_service_tier_from_usage():
     ), f"Flex pricing should be ~50% of standard, got {flex_ratio:.2f}"
 
 
-def test_completion_cost_service_tier_priority():
+def test_completion_cost_service_tier_priority(monkeypatch):
     """Test that service_tier extraction follows priority: optional_params > completion_response > usage."""
     from litellm import completion_cost
 
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
     # Test with gpt-5-nano which has flex pricing
@@ -2457,11 +2457,11 @@ def test_completion_cost_service_tier_priority():
     ), "Costs from params and usage should be similar (both flex)"
 
 
-def test_completion_cost_service_tier_for_bedrock():
+def test_completion_cost_service_tier_for_bedrock(monkeypatch):
     """Test that Bedrock cost calculation applies service_tier-specific pricing."""
     from litellm import completion_cost
 
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
     model = "bedrock/us-east-1/test-bedrock-service-tier-cost-model"
@@ -2507,7 +2507,7 @@ def test_completion_cost_service_tier_for_bedrock():
     assert priority_cost > default_cost > flex_cost > 0
 
 
-def test_completion_cost_service_tier_for_anthropic():
+def test_completion_cost_service_tier_for_anthropic(monkeypatch):
     """
     Anthropic priority-tier requests must be priced at the priority rate.
 
@@ -2519,7 +2519,7 @@ def test_completion_cost_service_tier_for_anthropic():
     from litellm import completion_cost
     from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
     model = "claude-test-service-tier-cost-model"
@@ -2561,7 +2561,7 @@ def test_completion_cost_service_tier_for_anthropic():
     assert priority_cost == pytest.approx(2 * standard_cost)
 
 
-def test_completion_cost_anthropic_auto_tier_uses_served_priority_rate():
+def test_completion_cost_anthropic_auto_tier_uses_served_priority_rate(monkeypatch):
     """
     Proxy billing path regression for LIT-3771.
 
@@ -2574,7 +2574,7 @@ def test_completion_cost_anthropic_auto_tier_uses_served_priority_rate():
     from litellm import completion_cost
     from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
     model = "claude-test-auto-tier-cost-model"
@@ -2613,7 +2613,7 @@ def test_completion_cost_anthropic_auto_tier_uses_served_priority_rate():
     assert cost == pytest.approx(expected_priority)
 
 
-def test_completion_cost_non_string_service_tier_defers_to_served_tier():
+def test_completion_cost_non_string_service_tier_defers_to_served_tier(monkeypatch):
     """
     Regression: a non-string request-level ``service_tier`` (reachable via
     ``allowed_openai_params``/``drop_params``) must not crash cost tracking.
@@ -2627,7 +2627,7 @@ def test_completion_cost_non_string_service_tier_defers_to_served_tier():
     from litellm import completion_cost
     from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
     model = "claude-test-non-string-tier-cost-model"
@@ -2665,7 +2665,7 @@ def test_completion_cost_non_string_service_tier_defers_to_served_tier():
     assert cost == pytest.approx(expected_priority)
 
 
-def test_completion_cost_non_string_response_service_tier_defers_to_served_tier():
+def test_completion_cost_non_string_response_service_tier_defers_to_served_tier(monkeypatch):
     """
     Regression: a non-string ``service_tier`` on the response object must not
     crash cost tracking.
@@ -2679,7 +2679,7 @@ def test_completion_cost_non_string_response_service_tier_defers_to_served_tier(
     from litellm import completion_cost
     from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
     model = "claude-test-response-non-string-tier-cost-model"
@@ -2718,7 +2718,7 @@ def test_completion_cost_non_string_response_service_tier_defers_to_served_tier(
     assert cost == pytest.approx(expected_priority)
 
 
-def test_completion_cost_non_string_usage_service_tier_prices_standard():
+def test_completion_cost_non_string_usage_service_tier_prices_standard(monkeypatch):
     """
     Regression: a non-string ``service_tier`` on the usage object must not crash
     cost tracking.
@@ -2729,7 +2729,7 @@ def test_completion_cost_non_string_usage_service_tier_prices_standard():
     """
     from litellm import completion_cost
 
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
     model = "claude-test-usage-non-string-tier-cost-model"
@@ -2764,7 +2764,7 @@ def test_completion_cost_non_string_usage_service_tier_prices_standard():
     assert cost == pytest.approx(expected_standard)
 
 
-def test_anthropic_cost_per_token_prices_cache_at_served_tier_with_multiplier():
+def test_anthropic_cost_per_token_prices_cache_at_served_tier_with_multiplier(monkeypatch):
     """
     Regression for the cache/tier interaction in the Anthropic geo/speed path.
 
@@ -2780,7 +2780,7 @@ def test_anthropic_cost_per_token_prices_cache_at_served_tier_with_multiplier():
     )
     from litellm.types.utils import PromptTokensDetailsWrapper, Usage
 
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
     model = "claude-test-priority-cache-fast-model"
@@ -3100,7 +3100,7 @@ def test_gemini_implicit_caching_cost_calculation():
     )
 
 
-def test_additional_costs_only_for_azure_ai():
+def test_additional_costs_only_for_azure_ai(monkeypatch):
     """
     Test that _get_additional_costs is only called for azure_ai provider.
 
@@ -3111,7 +3111,7 @@ def test_additional_costs_only_for_azure_ai():
     """
     from litellm.cost_calculator import _get_additional_costs
 
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
     # Non-azure_ai providers should return None
@@ -3140,7 +3140,7 @@ def test_additional_costs_only_for_azure_ai():
     assert result is None, "Vertex AI should have no additional costs"
 
 
-def test_openrouter_gemini_3_1_flash_lite_preview_pricing():
+def test_openrouter_gemini_3_1_flash_lite_preview_pricing(monkeypatch):
     """
     Test that openrouter/google/gemini-3.1-flash-lite-preview has a pricing entry.
 
@@ -3150,7 +3150,7 @@ def test_openrouter_gemini_3_1_flash_lite_preview_pricing():
     model_prices_and_context_window.json when other Gemini 3.x variants were present.
     This caused ValueError: This model isn't mapped yet during router pre-call checks.
     """
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
     model_name = "openrouter/google/gemini-3.1-flash-lite-preview"
@@ -3164,8 +3164,8 @@ def test_openrouter_gemini_3_1_flash_lite_preview_pricing():
     assert model_info["max_output_tokens"] == 65536
 
 
-def test_gemini_3_1_flash_lite_pricing():
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+def test_gemini_3_1_flash_lite_pricing(monkeypatch):
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
     for model_name in (
@@ -3489,7 +3489,7 @@ def test_custom_pricing_without_cache_keys_preserves_legacy_behavior():
     assert cost == pytest.approx(expected)
 
 
-def test_openrouter_gemini_3_1_flash_lite_stable_pricing():
+def test_openrouter_gemini_3_1_flash_lite_stable_pricing(monkeypatch):
     """
     Test that openrouter/google/gemini-3.1-flash-lite (stable, no -preview suffix)
     has a pricing entry.
@@ -3505,7 +3505,7 @@ def test_openrouter_gemini_3_1_flash_lite_stable_pricing():
     Pricing matches the existing -preview entry one-for-one (input $0.25/M, output
     $1.50/M, cache-read $0.025/M) — Google did not change costs at the GA cutover.
     """
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
     model_name = "openrouter/google/gemini-3.1-flash-lite"
@@ -3520,7 +3520,7 @@ def test_openrouter_gemini_3_1_flash_lite_stable_pricing():
     assert model_info["max_output_tokens"] == 65536
 
 
-def test_completion_cost_logs_reasoning_and_cache_breakdown():
+def test_completion_cost_logs_reasoning_and_cache_breakdown(monkeypatch):
     """
     completion_cost must surface explicit reasoning and cache-read costs into the
     cost_breakdown stored on the logging object, so they end up in the spend logs
@@ -3531,7 +3531,7 @@ def test_completion_cost_logs_reasoning_and_cache_breakdown():
     from litellm.litellm_core_utils.litellm_logging import Logging
     from litellm.types.utils import Choices, CompletionTokensDetailsWrapper, Message
 
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
     logging_obj = Logging(
@@ -3750,12 +3750,12 @@ def test_combine_usage_objects_sums_mirrored_cache_write_fields_once():
     assert combined_pair.prompt_tokens_details.cache_creation_tokens == 100
 
 
-def test_completion_cost_prices_anthropic_shaped_cache_read_tokens():
+def test_completion_cost_prices_anthropic_shaped_cache_read_tokens(monkeypatch):
     """Regression: an Anthropic /v1/messages response reports cache reads as top-level
     cache_read_input_tokens with input_tokens excluding them. Reading that usage as
     Responses API usage dropped the cache tokens and billed the whole prompt at the
     uncached input rate, overstating spend on cache hits."""
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
     response = {

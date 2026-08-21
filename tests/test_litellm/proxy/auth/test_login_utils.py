@@ -109,7 +109,7 @@ async def test_authenticate_user_admin_login_with_ui_credentials():
 
 
 @pytest.mark.asyncio
-async def test_authenticate_user_admin_login_with_master_key_as_password():
+async def test_authenticate_user_admin_login_with_master_key_as_password(monkeypatch):
     """Test admin login when UI_PASSWORD is not set, should use master_key"""
     master_key = "sk-1234"
     ui_username = "admin"
@@ -163,7 +163,7 @@ async def test_authenticate_user_admin_login_with_master_key_as_password():
                         assert result.user_role == LitellmUserRoles.PROXY_ADMIN
         finally:
             if original_ui_password:
-                os.environ["UI_PASSWORD"] = original_ui_password
+                monkeypatch.setenv("UI_PASSWORD", original_ui_password)
 
 
 @pytest.mark.asyncio
@@ -319,7 +319,7 @@ async def test_authenticate_user_email_case_insensitive_login():
 
 
 @pytest.mark.asyncio
-async def test_authenticate_user_database_required_for_admin():
+async def test_authenticate_user_database_required_for_admin(monkeypatch):
     """Test that database is required for admin login"""
     master_key = "sk-1234"
     ui_username = "admin"
@@ -353,7 +353,7 @@ async def test_authenticate_user_database_required_for_admin():
                 assert "No Database connected" in exc_info.value.message
             finally:
                 if original_db_url:
-                    os.environ["DATABASE_URL"] = original_db_url
+                    monkeypatch.setenv("DATABASE_URL", original_db_url)
 
 
 @pytest.mark.asyncio

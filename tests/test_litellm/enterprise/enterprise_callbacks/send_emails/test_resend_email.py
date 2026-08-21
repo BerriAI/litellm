@@ -88,7 +88,7 @@ async def test_send_email_success(mock_env_vars):
 
 
 @pytest.mark.asyncio
-async def test_send_email_missing_api_key():
+async def test_send_email_missing_api_key(monkeypatch):
     # Remove the API key from environment before initializing logger
     original_key = os.environ.pop("RESEND_API_KEY", None)
 
@@ -130,7 +130,7 @@ async def test_send_email_missing_api_key():
     finally:
         # Restore the original key if it existed
         if original_key is not None:
-            os.environ["RESEND_API_KEY"] = original_key
+            monkeypatch.setenv("RESEND_API_KEY", original_key)
 
 
 @pytest.mark.asyncio
