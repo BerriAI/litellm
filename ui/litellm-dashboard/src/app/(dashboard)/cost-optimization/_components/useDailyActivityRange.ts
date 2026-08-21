@@ -46,7 +46,7 @@ export const useScopedDailyActivityRange = (
   const endTime = dateValue.to ?? null;
   const { userId, apiKey = null } = scope;
 
-  const { data, loading, isFetchingMore } = usePaginatedDailyActivity({
+  const activityQueryOptions = {
     fetchFn: userDailyActivityCall,
     aggregatedFetchFn: userDailyActivityAggregatedCall,
     // Positional, and read by two functions whose signatures diverge at index 3: the paginated
@@ -54,7 +54,8 @@ export const useScopedDailyActivityRange = (
     // appended here must therefore be appended to BOTH networking signatures, in this order.
     args: [accessToken, startTime, endTime, userId, true, apiKey],
     enabled: !!accessToken && !!startTime && !!endTime,
-  });
+  };
+  const { data, loading, isFetchingMore } = usePaginatedDailyActivity(activityQueryOptions);
 
   return {
     dateValue,
