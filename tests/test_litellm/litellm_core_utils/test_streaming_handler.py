@@ -982,7 +982,7 @@ async def test_bedrock_validation_error_raises_directly(logging_obj: Logging):
         make_call=_raise_400,
     )
 
-    with pytest.raises(Exception) as excinfo:
+    with pytest.raises(Exception, match='litellm\\.BadRequestError: BedrockException') as excinfo:
         await response.__anext__()
     assert not isinstance(excinfo.value, MidStreamFallbackError)
     assert getattr(excinfo.value, "status_code", None) == 400
@@ -2722,7 +2722,7 @@ def test_dispatch_text_completion_codestral_requires_string(
     is a programming error and must surface loudly."""
     initialized_custom_stream_wrapper.custom_llm_provider = "text-completion-codestral"
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="chunk is not a string: \\{'not': 'a string'\\}"):
         _run_dispatch(initialized_custom_stream_wrapper, {"not": "a string"})
 
 

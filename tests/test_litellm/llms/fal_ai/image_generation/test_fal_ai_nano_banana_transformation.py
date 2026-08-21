@@ -113,7 +113,7 @@ def test_response_format_is_ignored():
 
 
 def test_unsupported_param_raises_without_drop_params():
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="Supported parameters are \\['n', 'response_format', 'size'\\]\\."):
         FalAINanoBananaConfig().map_openai_params(
             non_default_params={"style": "vivid"},
             optional_params={},

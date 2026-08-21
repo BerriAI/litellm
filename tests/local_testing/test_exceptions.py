@@ -1433,7 +1433,7 @@ async def test_exception_bubbling_up(sync_mode, stream_mode, model):
                 sync_stream=sync_mode,
             )
 
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(Exception, match='litellm\\.BadRequestError: OpenAIException - Invalid value') as exc_info:
         await _call_with_bad_role()
 
     assert exc_info.value.code == "invalid_value"

@@ -38,7 +38,7 @@ class TestBytezChatConfig:
         config = BytezChatConfig()
         headers = {}
 
-        with pytest.raises(Exception) as excinfo:
+        with pytest.raises(Exception, match='Missing api_key, make sure you pass in your api key') as excinfo:
             config.validate_environment(
                 headers=headers,
                 model=TEST_MODEL,

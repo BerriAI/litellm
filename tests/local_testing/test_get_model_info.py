@@ -134,7 +134,6 @@ def test_get_model_info_bedrock_region():
         "ft:gpt-3.5-turbo:my-org:custom_suffix:id",
         "ft:gpt-4-0613:my-org:custom_suffix:id",
         "ft:davinci-002:my-org:custom_suffix:id",
-        "ft:gpt-4-0613:my-org:custom_suffix:id",
         "ft:babbage-002:my-org:custom_suffix:id",
         "gpt-35-turbo",
         "ada",

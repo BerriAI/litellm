@@ -61,7 +61,7 @@ async def test_dynamoai_blocks_content_with_block_action():
         guardrail.should_run_guardrail = MagicMock(return_value=True)
 
         # Test that the guardrail raises ValueError for blocked content
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(ValueError, match='violation\\(s\\) detected') as exc_info:
             await guardrail.async_pre_call_hook(
                 data=request_data,
                 user_api_key_dict=UserAPIKeyAuth(),

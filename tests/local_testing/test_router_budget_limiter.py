@@ -160,7 +160,7 @@ async def test_provider_budgets_e2e_test_expect_to_fail():
     await asyncio.sleep(2.5)
 
     for _ in range(3):
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(Exception, match="Exceeded budget for provider") as exc_info:
             await router.acompletion(
                 messages=[{"role": "user", "content": "Hello, how are you?"}],
                 model="anthropic/claude-sonnet-4-5-20250929",
@@ -594,7 +594,7 @@ async def test_deployment_budgets_e2e_test_expect_to_fail():
     await asyncio.sleep(2.5)
 
     for _ in range(3):
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(Exception, match="Exceeded budget for deployment") as exc_info:
             await router.acompletion(
                 messages=[{"role": "user", "content": "Hello, how are you?"}],
                 model="openai/gpt-4o-mini",
@@ -646,7 +646,7 @@ async def test_tag_budgets_e2e_test_expect_to_fail():
     await asyncio.sleep(2.5)
 
     for _ in range(3):
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(Exception, match=f"Exceeded budget for tag='{TAG_NAME}'") as exc_info:
             await router.acompletion(
                 messages=[{"role": "user", "content": "Hello, how are you?"}],
                 model="openai/gpt-4o-mini",

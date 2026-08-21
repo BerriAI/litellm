@@ -4370,7 +4370,7 @@ class TestVertexEmbeddingEncodingFormat:
         assert "encoding_format" not in optional_params
 
     def test_encoding_format_base64_still_rejected_without_drop_params(self):
-        with pytest.raises(Exception) as excinfo:
+        with pytest.raises(Exception, match='To drop these, set `litellm\\.drop_params=True` or for proxy') as excinfo:
             litellm.utils.get_optional_params_embeddings(
                 model="gemini-embedding-001",
                 encoding_format="base64",

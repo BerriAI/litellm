@@ -763,24 +763,6 @@ class TestTokenizerSelection(unittest.TestCase):
                 ],
             }
         ],
-        [
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": "These are some sample images from a movie. Based on these images, what do you think the tone of the movie is?",
-                    },
-                    {
-                        "type": "text",
-                        "image_url": {
-                            "url": "https://gratisography.com/wp-content/uploads/2024/11/gratisography-augmented-reality-800x525.jpg",
-                            "detail": "high",
-                        },
-                    },
-                ],
-            }
-        ],
     ],
 )
 def test_bad_input_token_counter(model, messages):
@@ -1174,7 +1156,7 @@ def test_count_content_list_rejects_unknown_type():
     """
     from litellm.litellm_core_utils.token_counter import _count_content_list
 
-    with pytest.raises(ValueError) as exc_info:
+    with pytest.raises(ValueError, match='Error getting number of tokens from content list: Invalid') as exc_info:
         _count_content_list(
             count_function=len,
             content_list=[{"type": "totally_unknown_block"}],

@@ -268,7 +268,7 @@ def test_get_experimental_ui_login_jwt_auth_token_invalid(
     invalid_sso_user_defined_values,
 ):
     """Test generating JWT token with missing user role"""
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(Exception, match='User role is required for experimental UI login') as exc_info:
         ExperimentalUIJWTToken.get_experimental_ui_login_jwt_auth_token(
             invalid_sso_user_defined_values
         )
@@ -883,7 +883,7 @@ async def test_get_user_object_wraps_db_outage_as_valueerror_preserving_context(
     mock_cache.async_set_cache = AsyncMock()
 
     with patch("litellm.proxy.auth.auth_checks._should_check_db", return_value=True):
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(ValueError, match="User doesn't exist in db\\.") as exc_info:
             await get_user_object(
                 user_id="outage-contract-probe-user",
                 prisma_client=mock_prisma_client,
