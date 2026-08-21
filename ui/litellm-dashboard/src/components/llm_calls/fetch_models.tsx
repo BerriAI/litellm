@@ -19,13 +19,21 @@ interface AvailableModel {
   supported_reasoning_efforts?: string[] | null;
 }
 
+/**
+ * /models carries no capability metadata, so the team-allowed names are joined against
+ * /model_group/info; a name without a group entry keeps every capability field absent (unknown).
+ */
 export const fetchAvailableModelsForTeam = async (accessToken: string, teamId: string): Promise<ModelGroup[]> => {
-  const response = await modelAvailableCall(accessToken, "", "", false, teamId);
+  const [response, groups] = await Promise.all([
+    modelAvailableCall(accessToken, "", "", false, teamId),
+    fetchAvailableModels(accessToken).catch(() => [] as ModelGroup[]),
+  ]);
+  const byGroup = new Map(groups.map((group) => [group.model_group, group]));
   const modelNames: string[] = (response?.data ?? []).map((model: { id: string }) => model.id);
 
   return excludeProxyWideSentinel(Array.from(new Set(modelNames)))
     .sort((a, b) => a.localeCompare(b))
-    .map((model) => ({ model_group: model }));
+    .map((model) => byGroup.get(model) ?? { model_group: model });
 };
 
 /**

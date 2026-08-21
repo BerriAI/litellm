@@ -12,6 +12,12 @@ export type TierModelParamsByTier = Record<string, Record<string, TierModelParam
  */
 export const REASONING_EFFORT_OPTIONS = ["none", "minimal", "low", "medium", "high", "xhigh"] as const;
 
+/**
+ * Open on purpose: the valid set is per model group at runtime (supported_reasoning_efforts), and
+ * hand-authored configs can carry any level, so the known literals only add autocompletion.
+ */
+export type ReasoningEffort = (typeof REASONING_EFFORT_OPTIONS)[number] | (string & {});
+
 const asRecord = (raw: unknown): Record<string, unknown> | undefined =>
   typeof raw === "object" && raw !== null && !Array.isArray(raw) ? (raw as Record<string, unknown>) : undefined;
 
@@ -94,7 +100,7 @@ export const setTierModelReasoningEffort = (
   current: TierModelParamsByTier | undefined,
   tier: string,
   model: string,
-  effort: string | undefined,
+  effort: ReasoningEffort | undefined,
 ): TierModelParamsByTier | undefined => {
   const { reasoning_effort: _dropped, ...rest } = current?.[tier]?.[model] ?? {};
   const params = effort === undefined ? rest : { ...rest, reasoning_effort: effort };

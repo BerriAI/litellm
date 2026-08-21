@@ -14,6 +14,7 @@ import AdaptiveRoutingConfig from "./AdaptiveRoutingConfig";
 import ClassificationMethodConfig from "./ClassificationMethodConfig";
 import {
   REASONING_EFFORT_OPTIONS,
+  ReasoningEffort,
   TierModelParamsByTier,
   pruneTierModelParams,
   resolveComplexityDefaultModel,
@@ -275,7 +276,11 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
     });
   };
 
-  const handleTierModelEffortChange = (tier: keyof ComplexityTiers, model: string, effort: string | undefined) => {
+  const handleTierModelEffortChange = (
+    tier: keyof ComplexityTiers,
+    model: string,
+    effort: ReasoningEffort | undefined,
+  ) => {
     onChange({
       ...value,
       tier_model_params: setTierModelReasoningEffort(value.tier_model_params, tier, model, effort),

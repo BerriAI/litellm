@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { modelAvailableCall } from "@/components/networking";
+import { modelAvailableCall, modelHubCall } from "@/components/networking";
 import { fetchAvailableModelsForTeam } from "./fetch_models";
 
 vi.mock("@/components/networking", () => ({
@@ -29,5 +29,40 @@ describe("fetchAvailableModelsForTeam", () => {
     modelAvailableCallMock.mockResolvedValue({ data: [] });
 
     expect(await fetchAvailableModelsForTeam("token", "team-123")).toEqual([]);
+  });
+});
+
+describe("fetchAvailableModelsForTeam capability join", () => {
+  it("carries model-group capabilities onto team-allowed names that have a group entry", async () => {
+    modelAvailableCallMock.mockResolvedValue({ data: [{ id: "gpt-5-mini" }, { id: "team-only-byok" }] });
+    vi.mocked(modelHubCall).mockResolvedValue({
+      data: [
+        {
+          model_group: "gpt-5-mini",
+          mode: "chat",
+          supports_reasoning: true,
+          supported_reasoning_efforts: ["minimal", "low", "medium", "high"],
+        },
+      ],
+    });
+
+    const models = await fetchAvailableModelsForTeam("token", "team-123");
+
+    expect(models).toEqual([
+      {
+        model_group: "gpt-5-mini",
+        mode: "chat",
+        supports_reasoning: true,
+        supported_reasoning_efforts: ["minimal", "low", "medium", "high"],
+      },
+      { model_group: "team-only-byok" },
+    ]);
+  });
+
+  it("keeps the team list usable when the group-info fetch fails", async () => {
+    modelAvailableCallMock.mockResolvedValue({ data: [{ id: "gpt-5-mini" }] });
+    vi.mocked(modelHubCall).mockRejectedValue(new Error("boom"));
+
+    expect(await fetchAvailableModelsForTeam("token", "team-123")).toEqual([{ model_group: "gpt-5-mini" }]);
   });
 });

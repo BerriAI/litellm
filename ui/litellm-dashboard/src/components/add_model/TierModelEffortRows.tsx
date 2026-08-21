@@ -2,11 +2,11 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { SimpleTooltip } from "@/components/ui/tooltip";
 import { Info } from "lucide-react";
 import React from "react";
-import { TierModelParams } from "./complexity_router_tiers";
+import { ReasoningEffort, TierModelParams } from "./complexity_router_tiers";
 
 const PROVIDER_DEFAULT = "__provider_default__";
 
-const storedEffort = (params: TierModelParams | undefined): string | undefined => {
+const storedEffort = (params: TierModelParams | undefined): ReasoningEffort | undefined => {
   const stored = params?.reasoning_effort;
   return typeof stored === "string" && stored ? stored : undefined;
 };
@@ -16,7 +16,7 @@ interface TierModelEffortRowsProps {
   models: string[];
   effortOptionsByModel: Record<string, string[]>;
   paramsByModel: Record<string, TierModelParams> | undefined;
-  onEffortChange: (model: string, effort: string | undefined) => void;
+  onEffortChange: (model: string, effort: ReasoningEffort | undefined) => void;
 }
 
 const TierModelEffortRows: React.FC<TierModelEffortRowsProps> = ({
