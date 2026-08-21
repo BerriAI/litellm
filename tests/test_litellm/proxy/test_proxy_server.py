@@ -1507,7 +1507,7 @@ def test_team_info_masking():
         "langfuse_public_key": "public-test-key",
     }
 
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(Exception, match="secr\\*\\*\\*\\*\\*\\*\\*-key', 'langfuse_public_key':") as exc_info:
         proxy_config._get_team_config(
             team_id="test_dev",
             all_teams_config=[team1_info],
@@ -11098,3 +11098,100 @@ async def test_moderations_reraises_proxy_exception_unwrapped():
     assert exc_info.value.code == "400"
     assert exc_info.value.param == "metadata"
     mock_logging.post_call_failure_hook.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_init_agents_in_db_rebuilds_registry_under_agent_reconcile_lock(monkeypatch):
+    from litellm.proxy.agent_endpoints.agent_registry import (
+        AGENT_RECONCILE_LOCK,
+        global_agent_registry,
+    )
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    lock_states: list[bool] = []
+
+    async def fake_get_all_agents_from_db(prisma_client) -> list:
+        lock_states.append(AGENT_RECONCILE_LOCK.locked())
+        return []
+
+    def fake_load_agents_from_db_and_config(db_agents) -> None:
+        lock_states.append(AGENT_RECONCILE_LOCK.locked())
+
+    monkeypatch.setattr(global_agent_registry, "get_all_agents_from_db", fake_get_all_agents_from_db)
+    monkeypatch.setattr(global_agent_registry, "load_agents_from_db_and_config", fake_load_agents_from_db_and_config)
+
+    await ProxyConfig()._init_agents_in_db(prisma_client=MagicMock())
+
+    assert lock_states == [True, True]
+    assert not AGENT_RECONCILE_LOCK.locked()
+
+
+@pytest.mark.asyncio
+async def test_init_guardrails_in_db_snapshots_and_reconciles_under_guardrail_reconcile_lock(monkeypatch):
+    from litellm.proxy.guardrails.guardrail_registry import (
+        GUARDRAIL_RECONCILE_LOCK,
+        IN_MEMORY_GUARDRAIL_HANDLER,
+        GuardrailRegistry,
+    )
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    lock_states: list[bool] = []
+
+    async def fake_get_all_guardrails_from_db(prisma_client) -> list:
+        lock_states.append(GUARDRAIL_RECONCILE_LOCK.locked())
+        return []
+
+    def fake_reconcile_db_guardrails(db_guardrail_ids) -> list:
+        lock_states.append(GUARDRAIL_RECONCILE_LOCK.locked())
+        return []
+
+    monkeypatch.setattr(GuardrailRegistry, "get_all_guardrails_from_db", fake_get_all_guardrails_from_db)
+    monkeypatch.setattr(IN_MEMORY_GUARDRAIL_HANDLER, "reconcile_db_guardrails", fake_reconcile_db_guardrails)
+
+    await ProxyConfig()._init_guardrails_in_db(prisma_client=MagicMock())
+
+    assert lock_states == [True, True]
+    assert not GUARDRAIL_RECONCILE_LOCK.locked()
+
+
+class TestEmbeddingsFailureHookRequestData:
+    @pytest.mark.asyncio
+    async def test_failure_hook_gets_post_setup_data_with_logging_obj(self):
+        """Request setup replaces the processor's data dict (adding the logging
+        object the failure hook needs to lift token usage from); the embeddings
+        exception handler must pass that replaced dict, not the raw request body
+        dict it was rebuilt from."""
+        from litellm.proxy._types import ProxyException
+
+        captured = {}
+        logging_obj_sentinel = MagicMock()
+
+        async def fake_process(self, **kwargs):
+            self.data = {**self.data, "litellm_logging_obj": logging_obj_sentinel}
+            captured["processor_data"] = self.data
+            raise RuntimeError("provider timeout")
+
+        with (
+            patch.object(
+                proxy_server_module,
+                "_read_request_body",
+                new=AsyncMock(return_value={"model": "my-embed", "input": "hello"}),
+            ),
+            patch.object(
+                proxy_server_module.ProxyBaseLLMRequestProcessing,
+                "base_process_llm_request",
+                new=fake_process,
+            ),
+            patch.object(proxy_server_module, "proxy_logging_obj") as mock_logging,
+        ):
+            mock_logging.post_call_failure_hook = AsyncMock(return_value=None)
+            with pytest.raises(ProxyException):
+                await proxy_server_module.embeddings(
+                    request=MagicMock(),
+                    fastapi_response=MagicMock(),
+                    user_api_key_dict=UserAPIKeyAuth(),
+                )
+
+        hook_request_data = mock_logging.post_call_failure_hook.await_args.kwargs["request_data"]
+        assert hook_request_data is captured["processor_data"]
+        assert hook_request_data["litellm_logging_obj"] is logging_obj_sentinel

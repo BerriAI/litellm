@@ -1,5 +1,6 @@
 import { KeywordTierRule } from "./KeywordTierRules";
 import { emptyKeywordTierRuleIndexes, serializeKeywordTierRules } from "./complexity_router_keywords";
+import { TierModelParams, TierModelParamsByTier, serializeTierModelConfigs } from "./complexity_router_tiers";
 import {
   AdaptiveEligible,
   AdaptiveRouterWeights,
@@ -46,6 +47,7 @@ interface ScorerKnobInputs {
   tierBoundaries: TierBoundaries | undefined;
   tokenThresholds: TokenThresholds | undefined;
   dimensionWeights: DimensionWeights | undefined;
+  reasoningOverrideMinScore: number | undefined;
 }
 
 /**
@@ -59,6 +61,7 @@ const scorerKnobPayload = ({
   tierBoundaries,
   tokenThresholds,
   dimensionWeights,
+  reasoningOverrideMinScore,
 }: ScorerKnobInputs) =>
   heuristicScoringRoleFor(classifierType, classifierFallback) === "never"
     ? {}
@@ -66,11 +69,13 @@ const scorerKnobPayload = ({
         ...(tierBoundaries && { tier_boundaries: tierBoundaries }),
         ...(tokenThresholds && { token_thresholds: tokenThresholds }),
         ...(dimensionWeights && { dimension_weights: dimensionWeights }),
+        ...(reasoningOverrideMinScore !== undefined && { reasoning_override_min_score: reasoningOverrideMinScore }),
       };
 
 export interface BuildComplexityRouterConfigParams {
   tiers: ComplexityTiers;
   defaultModel: string | undefined;
+  planModeMinTier: string | undefined;
   tierLabels: ComplexityTierLabels | undefined;
   classifierType: ClassifierType;
   classifierLlmConfig: ClassifierLLMConfig | undefined;
@@ -94,11 +99,14 @@ export interface BuildComplexityRouterConfigParams {
   tierBoundaries?: TierBoundaries;
   tokenThresholds?: TokenThresholds;
   dimensionWeights?: DimensionWeights;
+  reasoningOverrideMinScore?: number;
+  tierModelParams?: TierModelParamsByTier;
 }
 
 export interface ComplexityRouterConfigPayload {
   tiers: ComplexityTiers;
   default_model?: string;
+  plan_mode_min_tier?: string;
   tier_labels?: ComplexityTierLabels;
   classifier_type: ClassifierType;
   classifier_llm_config?: ClassifierLLMConfig;
@@ -122,6 +130,8 @@ export interface ComplexityRouterConfigPayload {
   tier_boundaries?: TierBoundaries;
   token_thresholds?: TokenThresholds;
   dimension_weights?: DimensionWeights;
+  reasoning_override_min_score?: number;
+  tier_model_configs?: Record<string, { model_name: string; litellm_params: TierModelParams }[]>;
 }
 
 const TIER_KEYS: Array<keyof ComplexityTiers> = ["SIMPLE", "MEDIUM", "COMPLEX", "REASONING"];
@@ -172,6 +182,16 @@ export const getMissingTiersError = (tiers: ComplexityTiers): string | null => {
   return `Select a model for the following tier(s): ${missing.join(", ")}`;
 };
 
+// The backend rejects a plan-mode floor naming a tier with no models. The create form's
+// getMissingTiersError makes this unreachable there; the edit modal allows partially filled
+// tiers, so both gates call this to keep the two forms symmetric.
+export const getPlanModeTierError = (planModeMinTier: string | undefined, tiers: ComplexityTiers): string | null => {
+  if (!planModeMinTier) return null;
+  const models = tiers[planModeMinTier as keyof ComplexityTiers] ?? [];
+  if (models.length > 0) return null;
+  return `The plan-mode minimum tier (${planModeMinTier}) has no models. Add one or turn the override off.`;
+};
+
 export const getKeywordTierRulesError = (keywordTierRules: KeywordTierRule[]): string | null => {
   const emptyRows = emptyKeywordTierRuleIndexes(keywordTierRules);
   if (emptyRows.length === 0) return null;
@@ -194,6 +214,7 @@ export const getSemanticConfigError = ({
 export const buildComplexityRouterConfig = ({
   tiers,
   defaultModel,
+  planModeMinTier,
   tierLabels,
   classifierType,
   classifierLlmConfig,
@@ -217,16 +238,28 @@ export const buildComplexityRouterConfig = ({
   tierBoundaries,
   tokenThresholds,
   dimensionWeights,
+  reasoningOverrideMinScore,
+  tierModelParams,
 }: BuildComplexityRouterConfigParams): ComplexityRouterConfigPayload => {
+  const serializedTierModelConfigs = serializeTierModelConfigs(tiers, tierModelParams);
   const cleanedEscalationKeywords = escalationKeywords.map((keyword) => keyword.trim()).filter(Boolean);
   const cleanedKeywordTierRules = serializeKeywordTierRules(keywordTierRules);
   const cleanedTierLabels = serializeTierLabels(tierLabels);
-  const scorerInputs = { classifierType, classifierFallback, tierBoundaries, tokenThresholds, dimensionWeights };
+  const scorerInputs = {
+    classifierType,
+    classifierFallback,
+    tierBoundaries,
+    tokenThresholds,
+    dimensionWeights,
+    reasoningOverrideMinScore,
+  };
   const scorerKnobs = scorerKnobPayload(scorerInputs);
 
   return {
     tiers,
+    ...(serializedTierModelConfigs && { tier_model_configs: serializedTierModelConfigs }),
     ...(defaultModel?.trim() && { default_model: defaultModel }),
+    ...(planModeMinTier?.trim() && { plan_mode_min_tier: planModeMinTier }),
     ...(cleanedTierLabels && { tier_labels: cleanedTierLabels }),
     classifier_type: classifierType,
     ...(classifierType === "llm" &&

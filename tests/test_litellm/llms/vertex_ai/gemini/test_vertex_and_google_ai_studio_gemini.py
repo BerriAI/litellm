@@ -5246,10 +5246,13 @@ def test_mid_stream_429_error_raises_during_iteration():
 
     # Iterate the stream: first chunks should succeed, then 429 error should be raised
     results = []
-    with pytest.raises(VertexAIError) as exc_info:
+    def _drain():
         for chunk in streaming_obj:
             if chunk is not None:
                 results.append(chunk)
+
+    with pytest.raises(VertexAIError) as exc_info:
+        _drain()
 
     # Verify: received normal chunks before the error
     assert (

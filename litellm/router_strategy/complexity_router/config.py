@@ -5,12 +5,14 @@ Contains default keyword lists, weights, tier boundaries, and configuration clas
 All values are configurable via proxy config.yaml.
 """
 
+from collections.abc import Mapping
 from enum import Enum
-from typing import Final, Literal
+from types import MappingProxyType
+from typing import Annotated, Final, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, SkipValidation, field_serializer, field_validator, model_validator
 
-from litellm.types.router import AdaptiveRouterWeights, RoutingPlugin
+from litellm.types.router import AdaptiveRouterWeights, ClassifierPlugin, RoutingPlugin
 
 
 class ComplexityTier(str, Enum):
@@ -23,11 +25,12 @@ class ComplexityTier(str, Enum):
 
 
 class ClassificationRubric(str, Enum):
-    """Which calibration examples the built-in classifier rubric carries."""
+    """Which calibration examples, and for BUSINESS which tier criteria, the built-in classifier rubric carries."""
 
     LEGACY = "legacy"
     AGENTIC = "agentic"
     CHAT = "chat"
+    BUSINESS = "business"
 
 
 # Unset means LEGACY, so upgrading never moves an existing router's tier decisions or its bill. A
@@ -159,6 +162,44 @@ class ReminderMarkerPair(BaseModel):
         return self
 
 
+class ComplexityTierModel(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    model_name: str
+    litellm_params: Annotated[Mapping[str, object], SkipValidation()] = Field(
+        default_factory=lambda: MappingProxyType({})
+    )
+
+    @field_validator("litellm_params", mode="before")
+    @classmethod
+    def _freeze_litellm_params(cls, value: Mapping[str, object]) -> Mapping[str, object]:
+        return MappingProxyType(dict(value))
+
+    @field_serializer("litellm_params")
+    def _serialize_litellm_params(self, value: Mapping[str, object]) -> Mapping[str, object]:
+        return dict(value)  # mutable-ok: Pydantic JSON serialization requires a concrete mapping
+
+
+def _normalize_tier_entries(
+    raw_value: object,
+    tier: str,
+) -> tuple[str | list[str], tuple[ComplexityTierModel, ...]]:
+    raw_entries: Final = raw_value if isinstance(raw_value, (list, tuple)) else (raw_value,)
+    entries: Final = tuple(
+        ComplexityTierModel(model_name=entry) if isinstance(entry, str) else ComplexityTierModel.model_validate(entry)
+        for entry in raw_entries
+    )
+    model_names: Final = tuple(entry.model_name for entry in entries)
+    if len(model_names) != len(frozenset(model_names)):
+        raise ValueError(f"tier {tier} contains duplicate model_name values; each pool entry needs distinct parameters")
+    normalized: Final = (
+        entries[0].model_name
+        if not isinstance(raw_value, (list, tuple))
+        else list(model_names)  # mutable-ok: config.tiers must preserve its existing list contract
+    )
+    return normalized, entries
+
+
 # ─── Default Keyword Lists ───
 # Note: Keywords should be full words/phrases to avoid substring false positives.
 # The matching logic uses word boundary detection for single-word keywords.
@@ -267,6 +308,16 @@ DEFAULT_TECHNICAL_KEYWORDS: Final[list[str]] = [
 
 DEFAULT_ESCALATION_KEYWORDS: Final[list[str]] = ["LITELLM ESCALATE"]
 
+# Verified against Claude Code 2.1.233 wire captures and vscode-copilot-chat source
+# (agentPrompt.tsx / planAgentProvider.ts). These are client-owned strings that drift with
+# client releases; operators extend coverage via plan_mode_patterns rather than editing these.
+PLAN_MODE_TAIL_SENTINELS: Final[tuple[str, ...]] = (
+    "Plan mode is active",
+    "Plan mode still active",
+)
+PLAN_MODE_SYSTEM_SENTINELS: Final[tuple[str, ...]] = ('You are currently running in "Plan" mode.',)
+PLAN_MODE_TOOL_NAME: Final[str] = "exit_plan_mode"
+
 
 DEFAULT_SIMPLE_KEYWORDS: Final[list[str]] = [
     "what is",
@@ -356,8 +407,11 @@ class ClassifierLLMConfig(BaseModel):
             "multi-file edits, and standard debugging at MEDIUM, so ordinary engineering does not route to the "
             "most expensive tier; it suits agent, terminal, and coding-assistant traffic as well as mixed "
             "traffic. 'chat' omits those engineering anchors, for a deployment serving only conversational "
-            "traffic. Every preset shares the same tier criteria, so this moves where the boundary sits without "
-            "changing the taxonomy. Leave unset for 'legacy', the rubric as it shipped before calibration examples "
+            "traffic. 'business' carries business/sales anchors and business-flavored tier criteria that keep "
+            "routine drafting and summarizing off the expensive tiers and reserve the top tier for committing to "
+            "decisions under tradeoffs; it suits sales, support, and go-to-market traffic. Every preset keeps the "
+            "same four tiers, so this moves where the boundary sits without changing the taxonomy. Leave unset "
+            "for 'legacy', the rubric as it shipped before calibration examples "
             "existed, so an existing router's tier decisions and spend do not move on upgrade. Mutually exclusive "
             "with system_prompt, which replaces the rubric this would select. Only applies when classifier_type "
             "is 'llm'."
@@ -415,6 +469,9 @@ class ComplexityRouterConfig(BaseModel):
             "A list is randomly picked from when adaptive=False, and used as a soft-floor home pool when adaptive=True"
         ),
     )
+    tier_model_configs: Mapping[str, tuple[ComplexityTierModel, ...]] = Field(
+        default_factory=dict,
+    )
 
     tier_definitions: tuple[TierDefinition, ...] | None = Field(
         default=None,
@@ -424,7 +481,7 @@ class ComplexityRouterConfig(BaseModel):
             "becomes that tier's rubric bullet; entries named after a built-in tier may omit the "
             "description and inherit the built-in criteria. List order is ascending severity and "
             "decides which tier wins when several keyword_tier_rules match. Requires classifier_type "
-            "'llm', a fallback_tier, and `tiers` keys matching the defined names exactly. Escalation, "
+            "'llm' or 'custom', a fallback_tier, and `tiers` keys matching the defined names exactly. Escalation, "
             "adaptive selection, session affinity, plugins, tier_labels, and the calibration-example "
             "rubric presets are unavailable with a custom tier set: the first four are built on the "
             "built-in tier ladder, and the last two rename or exemplify tiers the set replaces."
@@ -468,6 +525,15 @@ class ComplexityRouterConfig(BaseModel):
             "Score boundaries between tiers. These keys (simple_medium, medium_complex, complex_reasoning) "
             "name the gaps between the default tier names and are not renameable by tier_labels; they are "
             "scorer knobs persisted by name on every routing decision"
+        ),
+    )
+
+    reasoning_override_min_score: float | None = Field(
+        default=None,
+        description=(
+            "Minimum weighted score a request must reach before 2+ reasoning markers may promote it to the "
+            "reasoning tier. Unset tracks tier_boundaries.simple_medium, so the override never rescues a "
+            "request the scorer placed in the cheapest tier; 0 restores the unconditional override"
         ),
     )
 
@@ -525,13 +591,30 @@ class ComplexityRouterConfig(BaseModel):
     )
 
     # Classifier strategy
-    classifier_type: Literal["heuristic", "llm"] = Field(
+    classifier_type: Literal["heuristic", "llm", "custom"] = Field(
         default="heuristic",
-        description="Classification strategy: local regex/keyword scoring, or an LLM call",
+        description="Classification strategy: local regex/keyword scoring, an LLM call, or a custom classifier plugin",
     )
     classifier_llm_config: ClassifierLLMConfig | None = Field(
         default=None,
         description="Configuration for the LLM classifier; required when classifier_type is 'llm'",
+    )
+    classifier_plugin: ClassifierPlugin | None = Field(
+        default=None,
+        description=(
+            "Custom classifier deciding the tier; required when classifier_type is 'custom'. In the proxy "
+            "config, a dotted path to a ClassifierPlugin instance (resolved at startup, like plugins). Its "
+            "classify(context) receives the request messages and metadata (caller identity included) and "
+            "returns the name of the tier to route to, or None to decline and let classifier_fallback decide."
+        ),
+    )
+    classifier_plugin_timeout_ms: int = Field(
+        default=3000,
+        gt=0,
+        description=(
+            "Timeout budget for the classifier plugin call, in milliseconds. On expiry the fallback "
+            "path decides the tier. Only applies when classifier_type is 'custom'."
+        ),
     )
 
     classifier_fallback: Literal["heuristic", "default_model"] = Field(
@@ -543,7 +626,7 @@ class ComplexityRouterConfig(BaseModel):
             "which is what a classifier on some other taxonomy wants: a prompt that grades data "
             "sensitivity has no use for a complexity score, and scoring one produces a tier unrelated to "
             "what the operator configured. Requires default_model when set to 'default_model'. Only "
-            "applies when classifier_type is 'llm'."
+            "applies when classifier_type is 'llm' or 'custom'."
         ),
     )
 
@@ -621,6 +704,31 @@ class ComplexityRouterConfig(BaseModel):
     keyword_tier_rules: list[KeywordTierRule] | None = Field(
         default=None,
         description="Rules that force a specific tier when their keywords match the prompt",
+    )
+
+    plan_mode_min_tier: str | None = Field(
+        default=None,
+        description=(
+            "When set, requests carrying a coding-agent plan-mode sentinel (Claude Code plan "
+            "mode, VS Code Copilot Plan mode, Copilot CLI's exit_plan_mode tool) are routed to "
+            "at least this tier: the classified tier still wins when it is higher, and the "
+            "floor also overrides a session-affinity pin to a lower tier for exactly the turns "
+            "carrying the sentinel, without rewriting the pin -- the first turn after plan mode "
+            "exits routes as if plan mode had never happened. Names a built-in tier, or with "
+            "tier_definitions set, one of the defined tier names (list order is ascending "
+            "severity, same as keyword_tier_rules). Unset disables detection entirely. The "
+            "sentinels ride in client-injected prompt text, so a caller who pastes one can "
+            "spend up to this tier's models -- never down, and never outside the configured "
+            "pools."
+        ),
+    )
+    plan_mode_patterns: tuple[str, ...] | None = Field(
+        default=None,
+        description=(
+            "Additional case-sensitive literal sentinels that mark a request as plan mode, on "
+            "top of the built-in Claude Code and Copilot ones. For clients whose plan-mode "
+            "wording the built-ins don't cover, or after a client release changes its strings."
+        ),
     )
 
     # Semantic (embedding) matching for keyword_tier_rules instead of literal text matching
@@ -716,6 +824,55 @@ class ComplexityRouterConfig(BaseModel):
                 coerced[key] = item
         return coerced
 
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_tier_model_configs(cls, value: object) -> object:
+        if not isinstance(value, dict):
+            return value
+        raw_tiers: Final = value.get("tiers")
+        if not isinstance(raw_tiers, dict):
+            return value
+        existing_configs: Final = value.get("tier_model_configs")
+        normalized_entries: Final = MappingProxyType(
+            {tier: _normalize_tier_entries(raw_value, tier) for tier, raw_value in raw_tiers.items()}
+        )
+        normalized_tiers: Final = MappingProxyType(
+            {tier: normalized for tier, (normalized, _) in normalized_entries.items()}
+        )
+        incoming_params: Final = (
+            MappingProxyType(
+                {
+                    (tier, entry.model_name): entry.litellm_params
+                    for tier, entries in existing_configs.items()
+                    for entry in (ComplexityTierModel.model_validate(item) for item in entries)
+                }
+            )
+            if isinstance(existing_configs, dict)
+            else MappingProxyType({})
+        )
+        tier_model_configs: Final = MappingProxyType(
+            {
+                tier: tuple(
+                    entry.model_copy(
+                        update=MappingProxyType(
+                            {
+                                "litellm_params": incoming_params.get((tier, entry.model_name), entry.litellm_params),
+                            }
+                        )
+                    )
+                    for entry in entries
+                )
+                for tier, (_, entries) in normalized_entries.items()
+                if any(entry.litellm_params for entry in entries)
+                or (isinstance(existing_configs, dict) and tier in existing_configs)
+            }
+        )
+        return {  # mutable-ok: Pydantic before-validator requires a concrete mapping
+            **value,
+            "tiers": normalized_tiers,
+            "tier_model_configs": tier_model_configs,
+        }
+
     @field_validator("escalation_keywords")
     @classmethod
     def _normalize_escalation_keywords(cls, value: list[str] | None) -> list[str] | None:
@@ -723,10 +880,53 @@ class ComplexityRouterConfig(BaseModel):
             return None
         return [stripped for keyword in value if (stripped := keyword.strip())]
 
+    @field_validator("plan_mode_min_tier", mode="before")
+    @classmethod
+    def _coerce_plan_mode_min_tier(cls, value: object) -> object:
+        if isinstance(value, ComplexityTier):
+            return value.value
+        if isinstance(value, str):
+            return value.strip()
+        return value
+
+    @field_validator("plan_mode_patterns")
+    @classmethod
+    def _normalize_plan_mode_patterns(cls, value: tuple[str, ...] | None) -> tuple[str, ...] | None:
+        """Blank patterns are dropped rather than kept: an empty string substring-matches every
+        request, which would silently floor all traffic (same failure mode keyword_tier_rules
+        rejects)."""
+        if value is None:
+            return None
+        return tuple(stripped for pattern in value if (stripped := pattern.strip()))
+
     @model_validator(mode="after")
-    def _validate_llm_classifier_config(self) -> "ComplexityRouterConfig":
+    def _validate_plan_mode_min_tier(self) -> "ComplexityRouterConfig":
+        if self.plan_mode_min_tier is None:
+            return self
+        if self.plan_mode_min_tier not in self.tier_names():
+            raise ValueError(
+                f"plan_mode_min_tier {self.plan_mode_min_tier!r} is not an active tier: it must name "
+                f"one of {', '.join(self.tier_names())}"
+            )
+        if self.plan_mode_min_tier not in self.tiers:
+            raise ValueError(
+                f"plan_mode_min_tier {self.plan_mode_min_tier} has no model configured in tiers; "
+                "a floor pointing at an unconfigured tier would route every plan-mode request to the "
+                "default fallback instead of the premium pool the operator intended"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_classifier_config(self) -> "ComplexityRouterConfig":
         if self.classifier_type == "llm" and self.classifier_llm_config is None:
             raise ValueError("classifier_llm_config is required when classifier_type is 'llm'")
+        if self.classifier_type == "custom" and self.classifier_plugin is None:
+            raise ValueError("classifier_plugin is required when classifier_type is 'custom'")
+        if self.classifier_plugin is not None and self.classifier_type != "custom":
+            raise ValueError(
+                f"classifier_plugin is set but classifier_type is {self.classifier_type!r}; "
+                "the plugin would never run. Set classifier_type 'custom' or remove classifier_plugin"
+            )
         return self
 
     @field_validator("fallback_tier", "classification_prompt")
@@ -845,9 +1045,10 @@ class ComplexityRouterConfig(BaseModel):
         )
         if duplicated:
             raise ValueError(f"tier_definitions names must be unique (case-insensitive): {', '.join(duplicated)}")
-        if self.classifier_type != "llm":
+        if self.classifier_type == "heuristic":
             raise ValueError(
-                "tier_definitions requires classifier_type 'llm': the heuristic scorer only produces the built-in tiers"
+                "tier_definitions requires classifier_type 'llm' or 'custom': the heuristic scorer only "
+                "produces the built-in tiers"
             )
         conflicts: Final = self._tier_definition_conflicts()
         if conflicts:

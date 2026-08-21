@@ -1416,7 +1416,7 @@ async def test_router_fallbacks_default_and_model_specific_fallbacks(sync_mode):
         default_fallbacks=["bad-model"],
     )
 
-    with pytest.raises(Exception) as exc_info:
+    async def _call_bad_model():
         if sync_mode:
             resp = router.completion(
                 model="bad-model",
@@ -1429,6 +1429,9 @@ async def test_router_fallbacks_default_and_model_specific_fallbacks(sync_mode):
                 model="bad-model",
                 messages=[{"role": "user", "content": "Hey, how's it going?"}],
             )
+
+    with pytest.raises(Exception, match='litellm\\.AuthenticationError: AuthenticationError') as exc_info:
+        await _call_bad_model()
     assert isinstance(
         exc_info.value, litellm.AuthenticationError
     ), f"Expected AuthenticationError, but got {type(exc_info.value).__name__}"

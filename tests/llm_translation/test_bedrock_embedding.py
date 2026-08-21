@@ -447,9 +447,7 @@ def test_bedrock_embedding_region_bug_reproduction():
                 print(
                     "❌ BUG REPRODUCED: Using wrong region from env var instead of explicit parameter"
                 )
-                assert (
-                    False
-                ), f"Bug reproduced: URL contains ap-northeast-1 instead of us-east-1. URL: {url}"
+                pytest.fail(f"Bug reproduced: URL contains ap-northeast-1 instead of us-east-1. URL: {url}")
             else:
                 print(
                     "✓ Bug NOT reproduced: Using correct region from explicit parameter"
