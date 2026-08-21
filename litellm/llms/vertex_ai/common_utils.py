@@ -1,4 +1,5 @@
 import re
+from collections.abc import Mapping
 from copy import deepcopy
 from enum import Enum
 from typing import Any, Final, Literal, Protocol, get_type_hints
@@ -1096,7 +1097,12 @@ class VertexAIModelInfo(BaseLLMModelInfo):
 
 
 class GeminiCountTokensClient(Protocol):
-    async def acount_tokens(self, contents: object, model: str, **kwargs: object) -> dict[str, Any]: ...
+    async def acount_tokens(
+        self,
+        contents: object,
+        model: str,
+        **kwargs: object,  # kwargs-ok: mirrors the handler signature, litellm_params are splatted into the call
+    ) -> Mapping[str, Any]: ...
 
 
 class VertexAITokenCounter(BaseTokenCounter):
