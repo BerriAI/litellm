@@ -836,8 +836,8 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             handle_raw_dict_callback=self._handle_raw_dict_response_item,
         )
 
-        response_is_incomplete: Final = (
-            raw_response.status == "incomplete" or raw_response.incomplete_details is not None
+        response_is_incomplete: Final = raw_response.status == "incomplete" or (
+            raw_response.incomplete_details is not None and raw_response.incomplete_details.reason is not None
         )
 
         if len(choices) == 0 and not response_is_incomplete:
