@@ -56,6 +56,13 @@ _THRESHOLD_RATE_KEY: Final[re.Pattern[str]] = re.compile(
     r"cache_read_input_token_cost"
     r")_above_\d+k?_tokens$"
 )
+
+
+def is_threshold_rate_key(field: str) -> bool:
+    """Whether ``field`` is a custom above-threshold rate key the cost calculator reads."""
+    return _THRESHOLD_RATE_KEY.fullmatch(field) is not None
+
+
 PTU_ZEROED_PRICING: Final[Mapping[str, float | tuple[()] | Mapping[str, float]]] = MappingProxyType(
     {
         **dict.fromkeys(PTU_ZEROED_PRICING_FIELDS, 0.0),
@@ -189,9 +196,7 @@ def zeroed_ptu_pricing(
         return None
     if not is_ptu_cost_attribution_enabled():
         return None
-    declared_threshold_rates: Final = frozenset(
-        key for key in declared if _THRESHOLD_RATE_KEY.fullmatch(key) is not None
-    )
+    declared_threshold_rates: Final = frozenset(key for key in declared if is_threshold_rate_key(key))
     return MappingProxyType(
         {
             **PTU_ZEROED_PRICING,

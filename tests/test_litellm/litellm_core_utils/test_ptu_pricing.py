@@ -7,6 +7,7 @@ from unittest.mock import patch
 import pytest
 
 from litellm.litellm_core_utils.ptu_pricing import (
+    is_threshold_rate_key,
     ptu_config_error,
     CUSTOM_PRICING_FIELDS,
     PTU_EMPTIED_PRICING_FIELDS,
@@ -196,6 +197,36 @@ def test_threshold_like_non_pricing_params_are_left_alone(param_field):
 
     assert override is not None
     assert param_field not in override
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "input_cost_per_token_above_32k_tokens",
+        "output_cost_per_token_above_64k_tokens",
+        "cache_read_input_token_cost_above_128k_tokens",
+        "cache_creation_input_token_cost_above_200k_tokens",
+        "cache_creation_input_token_cost_above_1hr_above_200k_tokens",
+    ],
+)
+def test_is_threshold_rate_key_accepts_supported_threshold_rates(field):
+    assert is_threshold_rate_key(field)
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "api_key_above_32k_tokens",
+        "secret_above_32k_tokens",
+        "credential_above_32k_tokens",
+        "custom_provider_param_above_32k_tokens",
+        "input_cost_per_token_above_32k_tokens_priority",
+        "input_cost_per_token",
+        "tiered_pricing",
+    ],
+)
+def test_is_threshold_rate_key_rejects_non_pricing_fields(field):
+    assert not is_threshold_rate_key(field)
 
 
 def test_a_setting_that_is_not_a_charge_is_left_alone():
