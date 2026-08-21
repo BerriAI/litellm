@@ -10254,6 +10254,65 @@ async def test_team_info_returns_model_aliases():
 
 
 @pytest.mark.asyncio
+async def test_team_info_hydrates_member_emails_from_the_user_table():
+    """/team/info must fill in emails missing from the members_with_roles snapshot.
+
+    members_with_roles is written at add-time, so a member added by user_id alone
+    carries user_email=None forever. Without this join the Admin UI's member table
+    shows "-" for a user that has an email on their user row. A stored email is left
+    exactly as-is.
+    """
+    from fastapi import Request
+
+    from litellm.proxy.management_endpoints import team_endpoints
+
+    team_row = LiteLLM_TeamTable(
+        team_id="team-1",
+        members_with_roles=[
+            Member(user_id="no-email-on-roster", role="admin"),
+            Member(user_id="already-stored", user_email="stored@example.com", role="user"),
+        ],
+    )
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=team_row)
+    mock_prisma.get_data = AsyncMock(return_value=[])
+
+    find_many = AsyncMock(
+        return_value=[
+            LiteLLM_UserTable(
+                user_id="no-email-on-roster",
+                user_email="real@example.com",
+                max_budget=None,
+                spend=0.0,
+                models=[],
+            )
+        ]
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+        patch.object(team_endpoints, "get_all_team_memberships", AsyncMock(return_value=[])),
+        patch.object(team_endpoints, "UserRepository") as repo,
+    ):
+        repo.return_value.table.find_many = find_many
+
+        response = await team_endpoints.team_info(
+            http_request=MagicMock(spec=Request),
+            team_id="team-1",
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+    members = response["team_info"].members_with_roles
+    assert [(m.user_id, m.user_email) for m in members] == [
+        ("no-email-on-roster", "real@example.com"),
+        ("already-stored", "stored@example.com"),
+    ]
+    # only the member actually missing an email is looked up
+    assert find_many.await_args.kwargs["where"] == {"user_id": {"in": ["no-email-on-roster"]}}
+
+
+@pytest.mark.asyncio
 async def test_update_model_table_clears_aliases_with_empty_map():
     """``model_aliases={}`` on /team/update must persist an empty map (json.dumps({}))
     so existing aliases are cleared, while ``model_aliases=None`` must be a no-op that
@@ -11367,6 +11426,141 @@ async def test_resolve_existing_member_user_ids_skips_the_query_when_no_user_ids
 
     assert resolved == frozenset()
     repo.return_value.table.find_many.assert_not_awaited()
+
+
+def _user_row(user_id: str, user_email: str | None) -> LiteLLM_UserTable:
+    return LiteLLM_UserTable(
+        user_id=user_id, user_email=user_email, max_budget=None, spend=0.0, models=[]
+    )
+
+
+@pytest.mark.asyncio
+async def test_hydrate_member_emails_fills_in_emails_the_roster_snapshot_never_captured():
+    """A member added by user_id alone has user_email=None on the stored roster entry.
+
+    /team/info has to fill it in from the user row, or the UI renders "-" for a user
+    that plainly has an email.
+    """
+    from litellm.proxy.management_endpoints.team_endpoints import _hydrate_member_emails
+
+    find_many = AsyncMock(return_value=[_user_row("by-id", "found@example.com")])
+
+    with patch("litellm.proxy.management_endpoints.team_endpoints.UserRepository") as repo:
+        repo.return_value.table.find_many = find_many
+
+        hydrated = await _hydrate_member_emails(
+            prisma_client=MagicMock(),
+            members=[Member(user_id="by-id", role="admin")],
+        )
+
+    assert [(m.user_id, m.user_email, m.role) for m in hydrated] == [("by-id", "found@example.com", "admin")]
+    find_many.assert_awaited_once()
+    assert find_many.await_args.kwargs["where"] == {"user_id": {"in": ["by-id"]}}
+
+
+@pytest.mark.asyncio
+async def test_hydrate_member_emails_never_overwrites_a_stored_email():
+    """The snapshot wins wherever it has a value - hydration only fills blanks.
+
+    Overwriting would be a real behavior change to /team/info; filling a null is not.
+    """
+    from litellm.proxy.management_endpoints.team_endpoints import _hydrate_member_emails
+
+    find_many = AsyncMock(return_value=[_user_row("has-email", "current@example.com")])
+
+    with patch("litellm.proxy.management_endpoints.team_endpoints.UserRepository") as repo:
+        repo.return_value.table.find_many = find_many
+
+        hydrated = await _hydrate_member_emails(
+            prisma_client=MagicMock(),
+            members=[Member(user_id="has-email", user_email="stored@example.com", role="user")],
+        )
+
+    assert hydrated[0].user_email == "stored@example.com"
+    # nothing was missing, so no round-trip either
+    find_many.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_hydrate_member_emails_leaves_members_alone_when_the_user_row_has_no_email():
+    """A user row with no email leaves the member as-is rather than inventing one."""
+    from litellm.proxy.management_endpoints.team_endpoints import _hydrate_member_emails
+
+    with patch("litellm.proxy.management_endpoints.team_endpoints.UserRepository") as repo:
+        repo.return_value.table.find_many = AsyncMock(return_value=[_user_row("no-email", None)])
+
+        hydrated = await _hydrate_member_emails(
+            prisma_client=MagicMock(),
+            members=[Member(user_id="no-email", role="user"), Member(user_email="e@example.com", role="user")],
+        )
+
+    assert [m.user_email for m in hydrated] == [None, "e@example.com"]
+
+
+@pytest.mark.asyncio
+async def test_hydrate_member_emails_skips_the_query_when_every_member_has_one():
+    """No blanks means /team/info pays for no extra query."""
+    from litellm.proxy.management_endpoints.team_endpoints import _hydrate_member_emails
+
+    with patch("litellm.proxy.management_endpoints.team_endpoints.UserRepository") as repo:
+        repo.return_value.table.find_many = AsyncMock()
+
+        hydrated = await _hydrate_member_emails(
+            prisma_client=MagicMock(),
+            members=[Member(user_id="a", user_email="a@example.com", role="user")],
+        )
+
+    assert hydrated[0].user_email == "a@example.com"
+    repo.return_value.table.find_many.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_update_team_members_list_stamps_email_for_a_member_added_by_user_id():
+    """Identity resolution runs both ways, so new roster entries stop being born blank.
+
+    Previously only user_id was backfilled (from email); a member added by user_id
+    was written with user_email=None forever.
+    """
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        _update_team_members_list,
+    )
+
+    mock_team = MagicMock(spec=LiteLLM_TeamTable)
+    mock_team.members_with_roles = []
+
+    await _update_team_members_list(
+        data=TeamMemberAddRequest(team_id="test-team-123", member=Member(user_id="new-user-123", role="user")),
+        complete_team_data=mock_team,
+        updated_users=[_user_row("new-user-123", "new@example.com")],
+    )
+
+    assert len(mock_team.members_with_roles) == 1
+    assert mock_team.members_with_roles[0].user_email == "new@example.com"
+
+
+@pytest.mark.asyncio
+async def test_update_team_members_list_stamps_email_for_each_member_in_a_bulk_add():
+    """Same both-ways resolution for the list branch."""
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        _update_team_members_list,
+    )
+
+    mock_team = MagicMock(spec=LiteLLM_TeamTable)
+    mock_team.members_with_roles = []
+
+    await _update_team_members_list(
+        data=TeamMemberAddRequest(
+            team_id="test-team-123",
+            member=[Member(user_id="u1", role="user"), Member(user_email="u2@example.com", role="admin")],
+        ),
+        complete_team_data=mock_team,
+        updated_users=[_user_row("u1", "u1@example.com"), _user_row("u2", "u2@example.com")],
+    )
+
+    assert [(m.user_id, m.user_email) for m in mock_team.members_with_roles] == [
+        ("u1", "u1@example.com"),
+        ("u2", "u2@example.com"),
+    ]
 
 
 def test_pre_existing_user_ids_counts_ids_filled_in_by_member_resolution():

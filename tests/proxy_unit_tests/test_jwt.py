@@ -1583,7 +1583,7 @@ async def test_auth_jwt_mismatched_key_fails(monkeypatch):
 
     h = JWTHandler()
     with patch.object(h, "get_public_key", new=AsyncMock(return_value=rsa_jwk)):
-        with pytest.raises(Exception) as exc:
+        with pytest.raises(Exception, match='Validation fails: Expecting a PEM-formatted key\\.') as exc:
             await h.auth_jwt(token)
         assert "Validation fails" in str(exc.value)
 
@@ -1826,7 +1826,7 @@ async def test_multi_issuer_jwt_unknown_issuer_without_global_jwks_rejected(
         kid="issuer-key",
     )
 
-    with pytest.raises(Exception) as exc:
+    with pytest.raises(Exception, match='Missing JWT Public Key URL from environment\\.') as exc:
         await jwt_handler.auth_jwt(token=token)
 
     assert "Missing JWT Public Key URL" in str(exc.value)
@@ -1857,7 +1857,7 @@ async def test_multi_issuer_jwt_rejects_wrong_audience(monkeypatch):
         kid="issuer-key",
     )
 
-    with pytest.raises(Exception) as exc:
+    with pytest.raises(Exception, match="Validation fails: Audience doesn't match") as exc:
         await jwt_handler.auth_jwt(token=token)
 
     assert "Validation fails" in str(exc.value)
@@ -1900,7 +1900,7 @@ async def test_multi_issuer_jwt_same_kid_does_not_cross_issuer_keys(monkeypatch)
         kid=shared_kid,
     )
 
-    with pytest.raises(Exception) as exc:
+    with pytest.raises(Exception, match='Validation fails: Signature verification failed') as exc:
         await jwt_handler.auth_jwt(token=token)
 
     assert "Validation fails" in str(exc.value)
@@ -1953,7 +1953,7 @@ def test_multi_issuer_jwt_requires_audience_unless_explicitly_disabled(
     issuer = "https://issuer.example.com"
     jwks_url = f"{issuer}/keys"
 
-    with pytest.raises(Exception) as exc:
+    with pytest.raises(Exception, match='must configure audience or set') as exc:
         LiteLLM_JWTAuth(
             issuers=[
                 {

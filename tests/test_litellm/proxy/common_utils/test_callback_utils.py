@@ -586,7 +586,7 @@ def test_initialize_callbacks_on_proxy_rejects_class_valued_entry(probe_config_p
     silently never run the hook. Config load must fail instead."""
     entry = f"{_PROBE_MODULE_NAME}.FloorMaxTokens"
 
-    with pytest.raises(ValueError) as exc_info:
+    with pytest.raises(ValueError, match='litellm_settings\\.callbacks entry') as exc_info:
         _load_callbacks([entry], probe_config_path)
 
     message = str(exc_info.value)
@@ -609,7 +609,7 @@ def test_initialize_callbacks_on_proxy_rejects_non_dispatchable_values(
 ):
     entry = f"{_PROBE_MODULE_NAME}.{attribute}"
 
-    with pytest.raises(ValueError) as exc_info:
+    with pytest.raises(ValueError, match='litellm_settings\\.callbacks entry') as exc_info:
         _load_callbacks([entry], probe_config_path)
 
     message = str(exc_info.value)
@@ -621,7 +621,7 @@ def test_initialize_callbacks_on_proxy_rejects_non_dispatchable_values(
 def test_initialize_callbacks_on_proxy_rejects_class_valued_non_list_value(probe_config_path):
     entry = f"{_PROBE_MODULE_NAME}.FloorMaxTokens"
 
-    with pytest.raises(ValueError) as exc_info:
+    with pytest.raises(ValueError, match='litellm_settings\\.callbacks entry') as exc_info:
         _load_callbacks(entry, probe_config_path)
 
     assert entry in str(exc_info.value)

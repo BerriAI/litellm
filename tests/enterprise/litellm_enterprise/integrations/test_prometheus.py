@@ -400,7 +400,7 @@ def test_invalid_metric_name_validation():
     litellm.prometheus_metrics_config = test_config
 
     # Creating PrometheusLogger should raise ValueError due to invalid metric
-    with pytest.raises(ValueError) as exc_info:
+    with pytest.raises(ValueError, match='Configuration validation failed') as exc_info:
         PrometheusLogger()
 
     # Verify error message contains information about invalid metric
@@ -429,7 +429,7 @@ def test_invalid_labels_validation():
     litellm.prometheus_metrics_config = test_config
 
     # Creating PrometheusLogger should raise ValueError due to invalid labels
-    with pytest.raises(ValueError) as exc_info:
+    with pytest.raises(ValueError, match='Configuration validation failed') as exc_info:
         PrometheusLogger()
 
     # Verify error message contains information about invalid labels
@@ -598,7 +598,7 @@ def test_invalid_exclude_metric_name_raises(reset_prometheus_exclude_settings):
     litellm.prometheus_exclude_labels = None
     litellm.prometheus_exclude_metrics = ["not_a_real_metric"]
 
-    with pytest.raises(ValueError) as exc_info:
+    with pytest.raises(ValueError, match='Prometheus exclude configuration validation failed') as exc_info:
         PrometheusLogger()
 
     assert "not_a_real_metric" in str(exc_info.value)
@@ -612,7 +612,7 @@ def test_invalid_exclude_label_name_raises(reset_prometheus_exclude_settings):
     litellm.prometheus_exclude_metrics = None
     litellm.prometheus_exclude_labels = ["not_a_real_label"]
 
-    with pytest.raises(ValueError) as exc_info:
+    with pytest.raises(ValueError, match='Prometheus exclude configuration validation failed') as exc_info:
         PrometheusLogger()
 
     assert "not_a_real_label" in str(exc_info.value)

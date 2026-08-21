@@ -3263,7 +3263,7 @@ async def test_provider_budget_over(disable_budget_sync):
         model_list=MODEL_LIST,
     )
 
-    with pytest.raises(Exception) as e:
+    with pytest.raises(Exception, match='No deployments available - crossed budget: Exceeded budget') as e:
         await router.acompletion(
             model="azure-gpt-4o",
             messages=[{"role": "user", "content": "Hello, world!"}],
@@ -5096,7 +5096,7 @@ def test_resolve_spend_report_scope_missing_caller_value_400():
 
 @pytest.mark.parametrize("bad_column", ["metadata", "end_user", "evil; DROP TABLE", ""])
 def test_scoped_spend_report_sql_rejects_unknown_column(bad_column):
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match='Unsupported spend report scope column'):
         spend_management_endpoints._scoped_spend_report_sql(scope_column=bad_column)
 
 

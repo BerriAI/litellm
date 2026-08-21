@@ -110,7 +110,7 @@ def test_top_level_kwargs_overrides_metadata_slots():
 def test_env_reference_at_top_level_raises_with_guidance():
     kwargs = {"langfuse_public_key": "os.environ/LANGFUSE_PUBLIC_KEY"}
 
-    with pytest.raises(ValueError) as exc_info:
+    with pytest.raises(ValueError, match="Callback param 'langfuse_public_key' \\(from request body\\)") as exc_info:
         initialize_standard_callback_dynamic_params(kwargs)
 
     message = str(exc_info.value)
@@ -127,7 +127,7 @@ def test_env_reference_in_metadata_raises_with_guidance():
         }
     }
 
-    with pytest.raises(ValueError) as exc_info:
+    with pytest.raises(ValueError, match="Callback param 'langsmith_api_key' \\(from metadata\\) contains") as exc_info:
         initialize_standard_callback_dynamic_params(kwargs)
 
     message = str(exc_info.value)

@@ -781,7 +781,7 @@ async def test_the_rewrite_closes_its_own_output_when_it_cannot_finish():
     original_read = bg._read_spooled
     bg._read_spooled = _boom
     try:
-        with pytest.raises(OSError):
+        with pytest.raises(OSError, match='no space left on device'):
             rewrite_batch_input_file(source, result)
     finally:
         bg.tempfile.SpooledTemporaryFile = real
