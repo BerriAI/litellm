@@ -1773,6 +1773,11 @@ S3_OBJECT_KEY_CASES = (
     ("hash", "LOGS/Team#Hash/2026-08-04/log.json", "/LOGS/Team%23Hash/2026-08-04/log.json"),
     ("unicode", "LOGS/Equipe Café/2026-08-04/log.json", "/LOGS/Equipe%20Caf%C3%A9/2026-08-04/log.json"),
     ("percent", "LOGS/100%Team/2026-08-04/log.json", "/LOGS/100%25Team/2026-08-04/log.json"),
+    (
+        "base64_equals",
+        "2026-08-21/time-05-29-36_resp_bGl0ZWxsbTpvcGVuYWk=.json",
+        "/2026-08-21/time-05-29-36_resp_bGl0ZWxsbTpvcGVuYWk%3D.json",
+    ),
 )
 
 
