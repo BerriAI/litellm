@@ -12,6 +12,7 @@ from types import SimpleNamespace
 from typing import Final
 
 import pytest
+from pydantic import ValidationError
 
 import litellm
 from litellm.caching.dual_cache import DualCache
@@ -239,12 +240,12 @@ def test_extract_team_id_ignores_a_forged_value_in_the_non_authoritative_field()
 
 
 def test_tag_rate_limit_entry_rejects_zero_period_seconds():
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError, match="period_seconds must be a positive integer"):
         TagRateLimitEntry(name="n", limit=1, period_seconds=0)
 
 
 def test_tag_rate_limit_entry_rejects_negative_period_seconds():
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError, match="period_seconds must be a positive integer"):
         TagRateLimitEntry(name="n", limit=1, period_seconds=-1)
 
 
@@ -3409,7 +3410,7 @@ def test_ttl_for_concurrency_never_drops_below_the_safety_floor_even_with_a_lowe
 
 
 def test_tag_rate_limit_entry_rejects_non_positive_key_ttl_seconds():
-    with pytest.raises(ValueError):
+    with pytest.raises(ValidationError, match="key_ttl_seconds must be a positive integer"):
         TagRateLimitEntry(name="per_minute", limit=1, period_seconds=60, key_ttl_seconds=0)
 
 
@@ -3420,7 +3421,7 @@ def test_tag_rate_limit_entry_rejects_key_ttl_seconds_shorter_than_period_second
     resetting the counter to zero mid-window and letting tagged traffic
     exceed the configured limit.
     """
-    with pytest.raises(ValueError):
+    with pytest.raises(ValidationError, match="key_ttl_seconds must be at least period_seconds"):
         TagRateLimitEntry(name="per_minute", limit=1, period_seconds=60, key_ttl_seconds=59)
 
 
@@ -3430,7 +3431,7 @@ def test_tag_rate_limit_entry_rejects_key_ttl_seconds_shorter_than_period_second
 
 
 def test_tag_rate_limit_entry_rejects_non_positive_max_in_memory_cache_size():
-    with pytest.raises(ValueError):
+    with pytest.raises(ValidationError, match="max_in_memory_cache_size must be a positive integer"):
         TagRateLimitEntry(name="per_minute", limit=1, period_seconds=60, max_in_memory_cache_size=0)
 
 

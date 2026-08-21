@@ -1151,10 +1151,11 @@ class _PROXY_TagRateLimiter(  # pyright: ignore[reportUnusedClass]  # only refer
                 # bypassing that in-memory layer, is the only way this
                 # read-then-later-increment split stays coherent.
                 # not `Final`: rebound each loop iteration, which basedpyright's
-                # LIT010/Final-in-loop check forbids; explicitly typed since
+                # LIT010/Final-in-loop check forbids; explicitly typed (as the
+                # read-only supertype, since this is never mutated) since
                 # RedisCache.async_batch_get_cache's own signature returns a
                 # bare, unparameterized dict
-                redis_values: dict[str, object] = await redis_cache.async_batch_get_cache(
+                redis_values: Mapping[str, object] = await redis_cache.async_batch_get_cache(
                     key_list=keys, parent_otel_span=parent_otel_span
                 )
                 resolved = [redis_values.get(key) for key in keys]  # mutable-ok: needs a real list
