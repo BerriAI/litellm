@@ -33,7 +33,7 @@ Every test under `tests/e2e/mcp/` must exercise the proxy against the real Datad
 - Prefer calling real Datadog tools that prove the product path (e.g. `search_datadog_logs` for list/call and permission denials). Seed a unique marker (`e2e-datadog-mcp-*`) in a chat completion when you need a log the tool can find; dual-read with `dd_logs` from conftest when delivery matters
 - Delete the MCP server (and any keys) through `resources.defer` the same way every other suite tears down
 - If a new MCP behavior cannot be covered with Datadog's tool surface, say so in the PR and get agreement before inventing another upstream; the default is always Datadog
-- The one standing exception is `test_mcp_chat_completion_oauth_e2e.py`. Datadog authenticates with the static `DD-API-KEY` / `DD-APPLICATION-KEY` headers and exposes no authorize/token dance at all, so it cannot exercise gateway-managed OAuth or per-user token seeding in any form. That test drives a real Linear MCP server instead; it is still a real remote upstream, so the no-mock, no-fixture rule above holds unchanged
+- Gateway-managed OAuth (authorization_code / per-user token vault) is not exercisable against Datadog's static-header MCP. When adding chat/responses/messages bridge e2e for that path, use a real remote OAuth MCP server (one shared real OAuth MCP for the suite), still no mocks or local fixtures
 
 ## Lay the pattern down in a class
 
@@ -133,14 +133,36 @@ mgmt.<endpoint>.<assertion>
         mgmt.key.generate.happy_path      (surface=ui)
 ```
 
-MCPs - endpoint features with the protocol op as the variant
+MCPs - endpoint features with the protocol op as the variant. Feature map and full
+vocabulary: `coverage_registry/MCP_FEATURES.md`. `auth_family` is how the *client*
+authenticates to LiteLLM; upstream server auth is an assertion (e.g. `upstream_sigv4`)
 
 ```
 mcp.<operation>.<auth_family>.<assertion>
-  operation   : list_tools | call_tool | list_resources | read_resource | list_prompts | get_prompt
+  operation   : list_tools | call_tool | list_resources | read_resource | list_resource_templates
+                | list_prompts | get_prompt | tool_search | tool_call_virtual | test_connection
+                | sampling | elicitation | chat_completion | responses | messages
+                | auth | permission | oauth | toolset | health
   auth_family : none | api_key | bearer | oauth
-  assertion   : succeeds | denied_without_permission
+  assertion   : succeeds | denied_without_permission | access_group_scoped | allowed_tools_scoped
+                | disallowed_tools_blocked | params_filtered | toolset_scoped
+                | namespaced_multi_server | partial_on_upstream_fault | progress_forwarded
+                | cost_logged | concurrent_limit | forwards_extra_headers | resolves_user_env_vars
+                | auto_executes_tools | stream_auto_executes_tools | semantic_filter_narrows
+                | enforces_model_access
+                | upstream_static_auth | upstream_oauth2_client_credentials
+                | upstream_oauth2_authorization_code | delegate_auth_upstream | oauth_passthrough
+                | upstream_true_passthrough | upstream_token_exchange | upstream_id_jag
+                | upstream_oauth_delegate | upstream_sigv4
+                | transport_http | transport_sse | transport_stdio | openapi_tools
+                | returns_401_not_500 | returns_429_on_budget | empty_intersection_denies
+                | dangling_grant_errors | stable_id_survives_repoint | per_server_route
+                | sees_newly_added_server | trailing_slash_parity | resource_metadata_public_https
+                | prefix_separator_honored | byok_not_false_unhealthy
+                | unregistered_server_blocked | acting_user_oauth_token
   e.g.  mcp.call_tool.oauth.succeeds
+        mcp.messages.api_key.auto_executes_tools
+        mcp.chat_completion.api_key.auto_executes_tools
 ```
 
 Reliability & Performance - behavior features (no route; endpoint is exercised_on)

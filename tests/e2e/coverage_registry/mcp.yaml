@@ -1,12 +1,19 @@
-# MCP module. Grounded in litellm/proxy/_experimental/mcp_server/. See tests/e2e/CLAUDE.md for the grammar.
+# MCP module. Grounded in litellm/proxy/_experimental/mcp_server/.
+# Feature map: tests/e2e/coverage_registry/MCP_FEATURES.md
+# Grammar: mcp.<operation>.<auth_family>.<assertion>
+#   auth_family = how the *client* authenticates to LiteLLM (none|api_key|bearer|oauth)
+#   upstream server auth is encoded in the assertion / operation variant, not auth_family
+# See tests/e2e/CLAUDE.md for the full grammar.
+
+# --- Protocol: list_tools / call_tool by client auth family ---
 - id: mcp.list_tools.api_key.succeeds
   module: mcp
   tier: P0
   operation: list_tools
   auth_family: api_key
   assertions: [succeeds]
-  source: "server.py:637"
-  rationale: Core operation; most common auth path; high usage
+  source: "server.py:handle_list_tools"
+  rationale: "Core operation; most common auth path; high usage"
 - id: mcp.list_tools.api_key.access_group_scoped
   module: mcp
   tier: P1
@@ -14,55 +21,55 @@
   auth_family: api_key
   assertions: [access_group_scoped]
   source: "test_mcp_access_group_e2e.py"
-  rationale: "A key granted an MCP access group sees the tagged server's tools; a key with a different group does not. Access-group-scoped tool selection at key creation"
+  rationale: "A key granted an MCP access group sees the tagged server's tools; a key with a different group does not"
 - id: mcp.list_tools.api_key.denied_without_permission
   module: mcp
   tier: P0
   operation: list_tools
   auth_family: api_key
   assertions: [denied_without_permission]
-  source: "mcp_server_manager.py:1409"
-  rationale: Permission guard is high blast-radius; multi-tenant safety
+  source: "mcp_server_manager.py:get_allowed_mcp_servers"
+  rationale: "Permission guard is high blast-radius; multi-tenant safety"
 - id: mcp.call_tool.api_key.succeeds
   module: mcp
   tier: P0
   operation: call_tool
   auth_family: api_key
   assertions: [succeeds]
-  source: "server.py:849"
-  rationale: Primary operation; customer-critical; high usage
+  source: "server.py:mcp_server_tool_call"
+  rationale: "Primary operation; customer-critical; high usage"
 - id: mcp.call_tool.api_key.denied_without_permission
   module: mcp
   tier: P0
   operation: call_tool
   auth_family: api_key
   assertions: [denied_without_permission]
-  source: "rest_endpoints.py:305-386"
-  rationale: Tool-level permission guard; multi-tenant safety
+  source: "rest_endpoints.py:call_tool_rest_api"
+  rationale: "Tool-level permission guard; multi-tenant safety"
 - id: mcp.list_tools.bearer.succeeds
   module: mcp
   tier: P1
   operation: list_tools
   auth_family: bearer
   assertions: [succeeds]
-  source: "server.py:662"
-  rationale: OAuth/bearer token flow; upstream delegation
+  source: "server.py:handle_list_tools"
+  rationale: "OAuth/bearer token flow; upstream delegation"
 - id: mcp.call_tool.bearer.succeeds
   module: mcp
   tier: P1
   operation: call_tool
   auth_family: bearer
   assertions: [succeeds]
-  source: "server.py:886"
-  rationale: Bearer token forwarding for tool invocation
+  source: "server.py:mcp_server_tool_call"
+  rationale: "Bearer token forwarding for tool invocation"
 - id: mcp.list_tools.oauth.succeeds
   module: mcp
   tier: P1
   operation: list_tools
   auth_family: oauth
   assertions: [succeeds]
-  source: "rest_endpoints.py:138-188"
-  rationale: Interactive OAuth2 flow; live token management
+  source: "rest_endpoints.py; outbound_credentials/per_user_oauth_store"
+  rationale: "Interactive OAuth2 flow; live token management"
 - id: mcp.call_tool.oauth.succeeds
   module: mcp
   tier: P1
@@ -70,52 +77,511 @@
   auth_family: oauth
   assertions: [succeeds]
   source: "db.py user_oauth_credential lookup"
-  rationale: OAuth2 token passthrough; per-user credential storage
+  rationale: "OAuth2 token passthrough; per-user credential storage"
 - id: mcp.list_tools.none.succeeds
   module: mcp
   tier: P1
   operation: list_tools
   auth_family: none
   assertions: [succeeds]
-  source: "mcp_server_manager.py:1485-1492"
-  rationale: Public/anonymous servers; delegate_auth_to_upstream
+  source: "mcp_server_manager.py; delegate_auth_to_upstream"
+  rationale: "Public/anonymous servers; delegate_auth_to_upstream"
 - id: mcp.call_tool.none.succeeds
   module: mcp
   tier: P1
   operation: call_tool
   auth_family: none
   assertions: [succeeds]
-  source: "rest_endpoints.py:305-334"
-  rationale: No upstream auth required; demo servers
+  source: "rest_endpoints.py"
+  rationale: "No LiteLLM key required; demo or upstream-delegated servers"
+
+# --- Protocol: prompts / resources ---
 - id: mcp.get_prompt.api_key.succeeds
   module: mcp
   tier: P1
   operation: get_prompt
   auth_family: api_key
   assertions: [succeeds]
-  source: "server.py:1042"
-  rationale: Prompt op; same auth stack as tools
+  source: "server.py:get_prompt"
+  rationale: "Prompt op; same auth stack as tools"
 - id: mcp.read_resource.api_key.succeeds
   module: mcp
   tier: P1
   operation: read_resource
   auth_family: api_key
   assertions: [succeeds]
-  source: "server.py:1177"
-  rationale: Resource op; same permission model as tools
+  source: "server.py:read_resource"
+  rationale: "Resource op; same permission model as tools"
 - id: mcp.list_prompts.api_key.succeeds
   module: mcp
   tier: P2
   operation: list_prompts
   auth_family: api_key
   assertions: [succeeds]
-  source: "server.py:993"
-  rationale: Smoke-level; same auth stack as list_tools
+  source: "server.py:list_prompts"
+  rationale: "Smoke-level; same auth stack as list_tools"
 - id: mcp.list_resources.api_key.succeeds
   module: mcp
   tier: P2
   operation: list_resources
   auth_family: api_key
   assertions: [succeeds]
-  source: "server.py:1089"
-  rationale: Smoke; rarely used; same auth model as tools
+  source: "server.py:list_resources"
+  rationale: "Smoke; rarely used; same auth model as tools"
+- id: mcp.list_resource_templates.api_key.succeeds
+  module: mcp
+  tier: P2
+  operation: list_resource_templates
+  auth_family: api_key
+  assertions: [succeeds]
+  source: "server.py:list_resource_templates"
+  rationale: "Resource templates; same permission model as list_resources"
+
+# --- Multi-tenant tool selection (server + key policy) ---
+- id: mcp.call_tool.api_key.access_group_scoped
+  module: mcp
+  tier: P1
+  operation: call_tool
+  auth_family: api_key
+  assertions: [access_group_scoped]
+  source: "mcp_server_manager.py:get_allowed_mcp_servers"
+  rationale: "Call path must honor the same MCP access groups as list_tools"
+- id: mcp.list_tools.api_key.allowed_tools_scoped
+  module: mcp
+  tier: P0
+  operation: list_tools
+  auth_family: api_key
+  assertions: [allowed_tools_scoped]
+  source: "types/mcp_server/mcp_server_manager.py:MCPServer.allowed_tools"
+  rationale: "Server allowed_tools must hide disallowed tools from list_tools"
+- id: mcp.call_tool.api_key.allowed_tools_scoped
+  module: mcp
+  tier: P0
+  operation: call_tool
+  auth_family: api_key
+  assertions: [allowed_tools_scoped]
+  source: "mcp_server_manager.py"
+  rationale: "Calling a tool outside allowed_tools must be denied"
+- id: mcp.call_tool.api_key.disallowed_tools_blocked
+  module: mcp
+  tier: P0
+  operation: call_tool
+  auth_family: api_key
+  assertions: [disallowed_tools_blocked]
+  source: "types/mcp_server/mcp_server_manager.py:MCPServer.disallowed_tools"
+  rationale: "Explicit disallowed_tools block must win even if listed upstream"
+- id: mcp.call_tool.api_key.params_filtered
+  module: mcp
+  tier: P1
+  operation: call_tool
+  auth_family: api_key
+  assertions: [params_filtered]
+  source: "types/mcp_server/mcp_server_manager.py:MCPServer.allowed_params"
+  rationale: "allowed_params strips or rejects tool arguments outside the allow-list"
+- id: mcp.call_tool.api_key.toolset_scoped
+  module: mcp
+  tier: P1
+  operation: call_tool
+  auth_family: api_key
+  assertions: [toolset_scoped]
+  source: "toolset_db.py; resolve_toolset_tool_permissions"
+  rationale: "Key scoped to a toolset only sees/calls that toolset's tools"
+
+# --- Namespacing, virtual tools, partial failure ---
+- id: mcp.list_tools.api_key.namespaced_multi_server
+  module: mcp
+  tier: P1
+  operation: list_tools
+  auth_family: api_key
+  assertions: [namespaced_multi_server]
+  source: "mcp_server_manager.py:_assign_unique_short_prefix"
+  rationale: "Two servers' tools remain distinguishable (prefix/short_prefix) without collision"
+- id: mcp.tool_search.api_key.succeeds
+  module: mcp
+  tier: P1
+  operation: tool_search
+  auth_family: api_key
+  assertions: [succeeds]
+  source: "tool_search.py:handle_mcp_tool_search"
+  rationale: "Virtual mcp_tool_search tool returns ranked tools when mcp_tool_search_enabled"
+- id: mcp.tool_call_virtual.api_key.succeeds
+  module: mcp
+  tier: P1
+  operation: tool_call_virtual
+  auth_family: api_key
+  assertions: [succeeds]
+  source: "tool_search.py:handle_mcp_tool_call"
+  rationale: "Virtual mcp_tool_call invokes a real upstream tool by name after search"
+- id: mcp.list_tools.api_key.partial_on_upstream_fault
+  module: mcp
+  tier: P1
+  operation: list_tools
+  auth_family: api_key
+  assertions: [partial_on_upstream_fault]
+  source: "faults/list_outcomes.py"
+  rationale: "One bad upstream must not blank the entire multi-server tool list"
+- id: mcp.call_tool.api_key.progress_forwarded
+  module: mcp
+  tier: P2
+  operation: call_tool
+  auth_family: api_key
+  assertions: [progress_forwarded]
+  source: "server.py:forward_progress"
+  rationale: "Upstream progress notifications reach the MCP client during long tool calls"
+
+# --- Upstream auth variants (client still api_key unless noted) ---
+- id: mcp.call_tool.api_key.upstream_static_auth
+  module: mcp
+  tier: P1
+  operation: call_tool
+  auth_family: api_key
+  assertions: [upstream_static_auth]
+  source: "types/mcp.py:MCPAuth api_key|bearer_token|basic|authorization|token"
+  rationale: "Gateway injects static upstream credentials so call_tool succeeds"
+- id: mcp.call_tool.api_key.upstream_oauth2_client_credentials
+  module: mcp
+  tier: P1
+  operation: call_tool
+  auth_family: api_key
+  assertions: [upstream_oauth2_client_credentials]
+  source: "MCPServer.has_client_credentials; outbound_credentials/client_credentials.py"
+  rationale: "M2M oauth2_flow=client_credentials fetches and uses a client token"
+- id: mcp.call_tool.api_key.upstream_oauth2_authorization_code
+  module: mcp
+  tier: P0
+  operation: call_tool
+  auth_family: api_key
+  assertions: [upstream_oauth2_authorization_code]
+  source: "outbound_credentials/per_user_oauth_store.py"
+  rationale: "Per-user vaulted authorization_code token is used on call_tool after consent"
+- id: mcp.list_tools.none.delegate_auth_upstream
+  module: mcp
+  tier: P1
+  operation: list_tools
+  auth_family: none
+  assertions: [delegate_auth_upstream]
+  source: "MCPServer.delegate_auth_to_upstream"
+  rationale: "oauth2 + delegate_auth_to_upstream allows anonymous PKCE against upstream"
+- id: mcp.call_tool.none.oauth_passthrough
+  module: mcp
+  tier: P1
+  operation: call_tool
+  auth_family: none
+  assertions: [oauth_passthrough]
+  source: "MCPServer.oauth_passthrough"
+  rationale: "Non-oauth2 servers with oauth_passthrough proxy metadata and 401 challenges"
+- id: mcp.call_tool.api_key.upstream_true_passthrough
+  module: mcp
+  tier: P1
+  operation: call_tool
+  auth_family: api_key
+  assertions: [upstream_true_passthrough]
+  source: "types/mcp.py:MCPAuth.true_passthrough"
+  rationale: "Client Authorization is forwarded unchanged to upstream"
+- id: mcp.call_tool.api_key.upstream_token_exchange
+  module: mcp
+  tier: P1
+  operation: call_tool
+  auth_family: api_key
+  assertions: [upstream_token_exchange]
+  source: "types/mcp.py:MCPAuth.oauth2_token_exchange; outbound_credentials/token_exchanger.py"
+  rationale: "OBO / RFC 8693 (or entra_obo) exchange yields a usable upstream token"
+- id: mcp.call_tool.api_key.upstream_id_jag
+  module: mcp
+  tier: P2
+  operation: call_tool
+  auth_family: api_key
+  assertions: [upstream_id_jag]
+  source: "types/mcp.py:MCPAuth.oauth2_id_jag"
+  rationale: "ID-JAG two-leg exchange issues a resource token for call_tool"
+- id: mcp.call_tool.api_key.upstream_oauth_delegate
+  module: mcp
+  tier: P1
+  operation: call_tool
+  auth_family: api_key
+  assertions: [upstream_oauth_delegate]
+  source: "types/mcp.py:MCPAuth.oauth_delegate; bridge_token_flow.py"
+  rationale: "SSO / bridge assertion path obtains upstream credentials"
+- id: mcp.call_tool.api_key.upstream_sigv4
+  module: mcp
+  tier: P1
+  operation: call_tool
+  auth_family: api_key
+  assertions: [upstream_sigv4]
+  source: "types/mcp.py:MCPAuth.aws_sigv4"
+  rationale: "SigV4-signed upstream MCP calls (e.g. Bedrock AgentCore)"
+
+# --- Transports / OpenAPI tools ---
+- id: mcp.call_tool.api_key.transport_http
+  module: mcp
+  tier: P1
+  operation: call_tool
+  auth_family: api_key
+  assertions: [transport_http]
+  source: "types/mcp.py:MCPTransport.http"
+  rationale: "Streamable HTTP transport reaches a real upstream"
+- id: mcp.call_tool.api_key.transport_sse
+  module: mcp
+  tier: P1
+  operation: call_tool
+  auth_family: api_key
+  assertions: [transport_sse]
+  source: "sse_transport.py; types/mcp.py:MCPTransport.sse"
+  rationale: "SSE transport list+call works end-to-end"
+- id: mcp.call_tool.api_key.transport_stdio
+  module: mcp
+  tier: P2
+  operation: call_tool
+  auth_family: api_key
+  assertions: [transport_stdio]
+  source: "types/mcp.py:MCPTransport.stdio"
+  rationale: "Local stdio MCP server (command/args/env) is invocable through the gateway"
+- id: mcp.call_tool.api_key.openapi_tools
+  module: mcp
+  tier: P2
+  operation: call_tool
+  auth_family: api_key
+  assertions: [openapi_tools]
+  source: "openapi_to_mcp_generator.py"
+  rationale: "OpenAPI spec_path servers expose operations as tools and execute them"
+
+# --- Cost, concurrency, headers, env ---
+- id: mcp.call_tool.api_key.cost_logged
+  module: mcp
+  tier: P1
+  operation: call_tool
+  auth_family: api_key
+  assertions: [cost_logged]
+  source: "cost_calculator.py:MCPCostCalculator"
+  rationale: "Spend logs record non-zero (or configured) cost for an MCP tool call"
+- id: mcp.list_tools.api_key.cost_logged
+  module: mcp
+  tier: P2
+  operation: list_tools
+  auth_family: api_key
+  assertions: [cost_logged]
+  source: "server.py:_get_tools_from_mcp_servers log_list_tools_to_spendlogs"
+  rationale: "list_tools can write a spend row when logging is enabled"
+- id: mcp.call_tool.api_key.concurrent_limit
+  module: mcp
+  tier: P1
+  operation: call_tool
+  auth_family: api_key
+  assertions: [concurrent_limit]
+  source: "mcp_server_manager.py:_get_call_semaphore"
+  rationale: "max_concurrent_requests queues excess calls instead of unbounded fan-out"
+- id: mcp.call_tool.api_key.forwards_extra_headers
+  module: mcp
+  tier: P1
+  operation: call_tool
+  auth_family: api_key
+  assertions: [forwards_extra_headers]
+  source: "MCPServer.extra_headers"
+  rationale: "Client headers listed in extra_headers are forwarded upstream"
+- id: mcp.call_tool.api_key.resolves_user_env_vars
+  module: mcp
+  tier: P1
+  operation: call_tool
+  auth_family: api_key
+  assertions: [resolves_user_env_vars]
+  source: "MCPServer.env_vars; management store_mcp_user_env_vars"
+  rationale: "Per-user env vars interpolate into static_headers for the call"
+- id: mcp.test_connection.api_key.succeeds
+  module: mcp
+  tier: P2
+  operation: test_connection
+  auth_family: api_key
+  assertions: [succeeds]
+  source: "rest_endpoints.py:/test/connection"
+  rationale: "Pre-save connection test against a candidate server config succeeds"
+
+# --- Sampling / elicitation ---
+- id: mcp.sampling.api_key.succeeds
+  module: mcp
+  tier: P1
+  operation: sampling
+  auth_family: api_key
+  assertions: [succeeds]
+  source: "sampling_handler.py:handle_sampling_create_message"
+  rationale: "allow_sampling servers can createMessage through the proxy LLM path"
+- id: mcp.sampling.api_key.enforces_model_access
+  module: mcp
+  tier: P1
+  operation: sampling
+  auth_family: api_key
+  assertions: [enforces_model_access]
+  source: "sampling_handler.py:_check_model_access"
+  rationale: "Sampling refuses models the key cannot use"
+- id: mcp.elicitation.api_key.succeeds
+  module: mcp
+  tier: P2
+  operation: elicitation
+  auth_family: api_key
+  assertions: [succeeds]
+  source: "elicitation_handler.py:handle_elicitation_request"
+  rationale: "allow_elicitation relays elicitation requests to the downstream client"
+
+# --- LLM bridges (chat / responses / messages) ---
+# Shared expansion: responses/mcp/litellm_proxy_mcp_handler.py (litellm_proxy tool refs)
+- id: mcp.chat_completion.api_key.auto_executes_tools
+  module: mcp
+  tier: P0
+  operation: chat_completion
+  auth_family: api_key
+  assertions: [auto_executes_tools]
+  source: "responses/mcp/chat_completions_handler.py:acompletion_with_mcp"
+  rationale: "/chat/completions with MCP tools lists, calls, and returns a final answer"
+- id: mcp.chat_completion.oauth.auto_executes_tools
+  module: mcp
+  tier: P1
+  operation: chat_completion
+  auth_family: oauth
+  assertions: [auto_executes_tools]
+  source: "responses/mcp/chat_completions_handler.py:acompletion_with_mcp"
+  rationale: "Gateway-managed OAuth: chat completion lists and executes tools with vaulted user token (e2e TBD on a real OAuth MCP)"
+- id: mcp.chat_completion.api_key.semantic_filter_narrows
+  module: mcp
+  tier: P1
+  operation: chat_completion
+  auth_family: api_key
+  assertions: [semantic_filter_narrows]
+  source: "semantic_tool_filter.py; hooks/mcp_semantic_filter"
+  rationale: "Semantic filter reduces the tool set offered to the model without dropping needed tools"
+- id: mcp.responses.api_key.auto_executes_tools
+  module: mcp
+  tier: P1
+  operation: responses
+  auth_family: api_key
+  assertions: [auto_executes_tools]
+  source: "responses/main.py:aresponses_api_with_mcp; responses/mcp/mcp_streaming_iterator.py"
+  rationale: "Responses API streams list_tools and call events and auto-executes MCP tools"
+- id: mcp.messages.api_key.auto_executes_tools
+  module: mcp
+  tier: P0
+  operation: messages
+  auth_family: api_key
+  assertions: [auto_executes_tools]
+  source: "llms/anthropic/experimental_pass_through/messages/mcp_handler.py:anthropic_messages_with_mcp"
+  rationale: "/v1/messages expands litellm_proxy MCP tools, runs the tool_use loop, and returns a final Anthropic message (Claude Code path)"
+- id: mcp.messages.oauth.auto_executes_tools
+  module: mcp
+  tier: P0
+  operation: messages
+  auth_family: oauth
+  assertions: [auto_executes_tools]
+  source: "llms/anthropic/experimental_pass_through/messages/mcp_handler.py:anthropic_messages_with_mcp"
+  rationale: "Messages bridge uses vaulted per-user OAuth token for list+call under Claude Code / Desktop OAuth clients"
+- id: mcp.messages.api_key.stream_auto_executes_tools
+  module: mcp
+  tier: P1
+  operation: messages
+  auth_family: api_key
+  assertions: [stream_auto_executes_tools]
+  source: "llms/anthropic/experimental_pass_through/messages/mcp_handler.py"
+  rationale: "Streaming /v1/messages still expands MCP tools and completes the tool loop"
+
+# --- Gateway reliability / multi-tenant edge cases (customer open issues) ---
+- id: mcp.auth.api_key.returns_401_not_500
+  module: mcp
+  tier: P0
+  operation: auth
+  auth_family: api_key
+  assertions: [returns_401_not_500]
+  source: "server.py:extract_mcp_auth_context; PR #31011"
+  rationale: "Malformed/invalid/expired key on /mcp returns 401 with WWW-Authenticate, not a flattened 500"
+- id: mcp.auth.api_key.returns_429_on_budget
+  module: mcp
+  tier: P0
+  operation: auth
+  auth_family: api_key
+  assertions: [returns_429_on_budget]
+  source: "server.py:extract_mcp_auth_context"
+  rationale: "Over-budget key on /mcp returns 429, matching REST chat semantics"
+- id: mcp.list_tools.api_key.empty_intersection_denies
+  module: mcp
+  tier: P0
+  operation: list_tools
+  auth_family: api_key
+  assertions: [empty_intersection_denies]
+  source: "auth/user_api_key_auth_mcp.py permission hierarchy"
+  rationale: "Empty key∩team (or similar) MCP permission intersection is deny-all, never allow-all"
+- id: mcp.permission.api_key.dangling_grant_errors
+  module: mcp
+  tier: P0
+  operation: permission
+  auth_family: api_key
+  assertions: [dangling_grant_errors]
+  source: "mcp_server_manager.py:_generate_stable_server_id; object_permission.mcp_servers"
+  rationale: "Grants pointing at missing server_ids surface a loud error (or migrate), not silent empty tool lists"
+- id: mcp.permission.api_key.stable_id_survives_repoint
+  module: mcp
+  tier: P1
+  operation: permission
+  auth_family: api_key
+  assertions: [stable_id_survives_repoint]
+  source: "mcp_server_manager.py:_generate_stable_server_id"
+  rationale: "Config.yaml rename or URL repoint keeps grants valid (stable id or automatic migration)"
+- id: mcp.list_tools.api_key.per_server_route
+  module: mcp
+  tier: P1
+  operation: list_tools
+  auth_family: api_key
+  assertions: [per_server_route]
+  source: "server.py dynamic_mcp_route"
+  rationale: "Per-server MCP URL (e.g. /mcp/{alias}/) lists that server's tools, not only aggregate /mcp/"
+- id: mcp.list_tools.api_key.sees_newly_added_server
+  module: mcp
+  tier: P1
+  operation: list_tools
+  auth_family: api_key
+  assertions: [sees_newly_added_server]
+  source: "mcp_server_manager registry reload / config sync"
+  rationale: "After admin adds a server, aggregate list_tools includes its tools without process restart"
+- id: mcp.list_tools.api_key.trailing_slash_parity
+  module: mcp
+  tier: P1
+  operation: list_tools
+  auth_family: api_key
+  assertions: [trailing_slash_parity]
+  source: "server.py MCP route registration"
+  rationale: "/mcp and /mcp/ accept the same authenticated list_tools behavior"
+- id: mcp.oauth.api_key.resource_metadata_public_https
+  module: mcp
+  tier: P0
+  operation: oauth
+  auth_family: api_key
+  assertions: [resource_metadata_public_https]
+  source: "oauth_utils.py X-Forwarded-Proto / public base URL"
+  rationale: "Behind a TLS terminator, protected-resource metadata advertises https:// so Claude accepts OAuth"
+- id: mcp.toolset.api_key.prefix_separator_honored
+  module: mcp
+  tier: P1
+  operation: toolset
+  auth_family: api_key
+  assertions: [prefix_separator_honored]
+  source: "toolset_db.py; MCP_TOOL_PREFIX_SEPARATOR; PR #34559"
+  rationale: "Tools stored on a toolset use server{separator}tool with the configured separator and resolve on call"
+- id: mcp.health.api_key.byok_not_false_unhealthy
+  module: mcp
+  tier: P2
+  operation: health
+  auth_family: api_key
+  assertions: [byok_not_false_unhealthy]
+  source: "mcp_management_endpoints.py:health_check_servers; is_byok"
+  rationale: "BYOK/per-user auth servers are not reported as hard Unhealthy solely because health check has no user token"
+- id: mcp.call_tool.api_key.unregistered_server_blocked
+  module: mcp
+  tier: P1
+  operation: call_tool
+  auth_family: api_key
+  assertions: [unregistered_server_blocked]
+  source: "gateway allowlist intent; user_api_key_auth_mcp"
+  rationale: "Clients cannot invoke arbitrary upstream MCP URLs that are not registered on the gateway"
+- id: mcp.call_tool.api_key.acting_user_oauth_token
+  module: mcp
+  tier: P1
+  operation: call_tool
+  auth_family: api_key
+  assertions: [acting_user_oauth_token]
+  source: "management store_mcp_oauth_user_credential; per_user_oauth_store"
+  rationale: "Agent key call resolves a documented acting-user identity to that user's vaulted upstream OAuth token"

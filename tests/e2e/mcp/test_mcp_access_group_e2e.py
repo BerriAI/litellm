@@ -28,7 +28,7 @@ class TestMcpAccessGroupToolSelection:
         self, client: McpClient, resources: ResourceManager
     ) -> None:
         group = f"e2e-mcp-grp-{unique_marker()}"
-        server_id = register_datadog_mcp(client, resources, mcp_access_groups=[group])
+        server_id = register_datadog_mcp(client, resources, mcp_access_groups=[group]).server_id
         client.await_registered(server_id)
 
         granted = client.generate_key(

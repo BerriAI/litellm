@@ -19,8 +19,24 @@ from dataclasses import dataclass
 from pydantic import BaseModel, ConfigDict, Field, RootModel
 
 from e2e_config import settle_propagation
-from e2e_http import Headers, NoBody, Result, Success, UnknownApiError, unwrap
-from models import KeyGenerateBody, ObjectPermission
+from e2e_http import (
+    AnthropicHeaders,
+    Headers,
+    NoBody,
+    Result,
+    StreamingResponse,
+    Success,
+    UnknownApiError,
+    unwrap,
+)
+from models import (
+    AnthropicMessagesBody,
+    AnthropicMessagesResponse,
+    ChatBody,
+    ChatResponse,
+    KeyGenerateBody,
+    ObjectPermission,
+)
 from proxy_client import ProxyClient
 
 McpToolArg = str | int | float | bool | list[str] | dict[str, str]
@@ -145,6 +161,67 @@ class McpCallToolResponse(BaseModel):
         return "\n".join(part.text for part in self.content if part.text)
 
 
+class ResponsesMcpTool(BaseModel):
+    type: str = "mcp"
+    server_label: str
+    server_url: str
+    require_approval: str = "never"
+    allowed_tools: list[str] | None = None
+
+
+class ResponsesMcpInputMessage(BaseModel):
+    role: str = "user"
+    type: str = "message"
+    content: str
+
+
+class ResponsesMcpBody(BaseModel):
+    model: str
+    input: list[ResponsesMcpInputMessage]
+    instructions: str | None = None
+    stream: bool = False
+    tools: list[ResponsesMcpTool]
+
+
+class ResponsesMcpOutputContent(BaseModel):
+    type: str | None = None
+    text: str | None = None
+
+
+class ResponsesMcpOutputItem(BaseModel):
+    model_config = ConfigDict(extra="allow")
+    type: str | None = None
+    content: list[ResponsesMcpOutputContent] = []
+    name: str | None = None
+    arguments: str | None = None
+
+
+class ResponsesMcpResult(BaseModel):
+    model_config = ConfigDict(extra="allow")
+    id: str | None = None
+    status: str | None = None
+    model: str | None = None
+    output: list[ResponsesMcpOutputItem] = []
+
+    @property
+    def text(self) -> str:
+        return "".join(
+            content.text or "" for item in self.output for content in item.content
+        )
+
+    @property
+    def mcp_tools_fetched(self) -> ResponsesMcpOutputItem | None:
+        return next(
+            (item for item in self.output if item.type == "mcp_tools_fetched"), None
+        )
+
+    @property
+    def tool_execution_results(self) -> ResponsesMcpOutputItem | None:
+        return next(
+            (item for item in self.output if item.type == "tool_execution_results"), None
+        )
+
+
 @dataclass(frozen=True, slots=True)
 class McpClient:
     proxy: ProxyClient
@@ -198,17 +275,22 @@ class McpClient:
         ).root
 
     def await_registered(self, server_id: str) -> None:
-        """Poll /v1/mcp/server until `server_id` is listed. Fails at poll_timeout.
+        """Poll /v1/mcp/server until `server_id` is listed, then wait out the
+        propagation budget. Fails at poll_timeout.
 
         The DB row exists the moment registration returns, but a data-plane pod
         answers the listing from a registry it refreshes on a periodic DB sync, so a
         pod that joined the load balancer after the write reports the server as
-        absent until its first sync.
+        absent until its first sync. The poll only proves ONE replica has the row;
+        settle_propagation is what makes the server safe to call on whichever
+        replica the next request lands on (mirrors ProxyClient.create_model).
         """
-        deadline = time.monotonic() + self.proxy.poll_timeout
+        written_at = time.monotonic()
+        deadline = written_at + self.proxy.poll_timeout
         while True:
             registered = frozenset(row.server_id for row in self.registered_servers())
             if server_id in registered:
+                settle_propagation(written_at)
                 return
             if time.monotonic() >= deadline:
                 raise AssertionError(
@@ -372,6 +454,43 @@ class McpClient:
                 name=name, arguments=dict(arguments), server_id=server_id
             ),
             response_type=McpCallToolResponse,
+        )
+
+    def chat_with_mcp(self, key: str, body: ChatBody) -> Result[ChatResponse]:
+        return self.proxy.transport.post(
+            "/chat/completions",
+            headers=self.proxy.transport.bearer(key),
+            json=body,
+            response_type=ChatResponse,
+        )
+
+    def responses_with_mcp(
+        self, key: str, body: ResponsesMcpBody
+    ) -> Result[ResponsesMcpResult]:
+        return self.proxy.transport.post(
+            "/v1/responses",
+            headers=self.proxy.transport.bearer(key),
+            json=body,
+            response_type=ResponsesMcpResult,
+        )
+
+    def messages_with_mcp(
+        self, key: str, body: AnthropicMessagesBody
+    ) -> Result[AnthropicMessagesResponse]:
+        return self.proxy.transport.post(
+            "/v1/messages",
+            headers=AnthropicHeaders(authorization=self.proxy.transport.bearer(key).authorization),
+            json=body,
+            response_type=AnthropicMessagesResponse,
+        )
+
+    def messages_stream_with_mcp(
+        self, key: str, body: AnthropicMessagesBody
+    ) -> StreamingResponse:
+        return self.proxy.transport.stream(
+            "/v1/messages",
+            headers=AnthropicHeaders(authorization=self.proxy.transport.bearer(key).authorization),
+            json=body,
         )
 
 

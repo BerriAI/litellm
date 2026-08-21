@@ -385,7 +385,15 @@ class AnthropicCustomTool(BaseModel):
     input_schema: ToolInputSchema
 
 
-type AnthropicTool = AnthropicToolSearchTool | AnthropicWebSearchTool | AnthropicCustomTool
+class AnthropicMcpTool(BaseModel):
+    type: Literal["mcp"] = "mcp"
+    server_label: str
+    server_url: str
+    require_approval: str = "never"
+    allowed_tools: list[str] | None = None
+
+
+type AnthropicTool = AnthropicToolSearchTool | AnthropicWebSearchTool | AnthropicCustomTool | AnthropicMcpTool
 
 
 class AnthropicContentBlock(BaseModel):
