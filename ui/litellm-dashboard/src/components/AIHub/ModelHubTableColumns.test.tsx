@@ -50,6 +50,9 @@ describe("getModelHubTableColumns", () => {
     expect(screen.getByText("128.0K / 16.4K")).toBeInTheDocument();
     expect(screen.getByText("$2.50")).toBeInTheDocument();
     expect(screen.getByText("$10.00")).toBeInTheDocument();
+    expect(screen.getByText("128.0K / 16.4K").closest("td")).toHaveClass("text-right");
+    expect(screen.getByText("$2.50").closest("td")).toHaveClass("text-right");
+    expect(screen.getByText("gpt-4o").closest("td")).not.toHaveClass("text-right");
   });
 
   it("shows capability badges only for supported features", () => {

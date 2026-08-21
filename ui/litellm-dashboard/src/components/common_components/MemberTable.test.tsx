@@ -213,3 +213,20 @@ describe("MemberTable actions", () => {
     expect(screen.getByText("No members found")).toBeInTheDocument();
   });
 });
+
+describe("MemberTable numeric columns", () => {
+  it("right-aligns the header and cells of a numeric extra column only", () => {
+    renderTable({
+      members: [MEMBERS[0]],
+      extraColumns: [
+        { title: "Spend (USD)", key: "spend", numeric: true, render: () => <span>$1.50</span> },
+        { title: "Joined", key: "joined", render: () => <span>Aug 1</span> },
+      ],
+    });
+
+    expect(screen.getByText("Spend (USD)").closest("th")).toHaveClass("text-right", "tabular-nums");
+    expect(screen.getByText("$1.50").closest("td")).toHaveClass("text-right", "tabular-nums");
+    expect(screen.getByText("Joined").closest("th")).not.toHaveClass("text-right");
+    expect(screen.getByText("Aug 1").closest("td")).not.toHaveClass("text-right");
+  });
+});
