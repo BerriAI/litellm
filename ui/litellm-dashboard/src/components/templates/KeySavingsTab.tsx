@@ -11,13 +11,11 @@ import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { hasProxyWideSpendView, spendScopeUserId } from "@/utils/roles";
 import {
   autorouterOf,
-  cacheHitRatio,
   cachingOf,
   compressionOf,
   formatRangeLabel,
   localIsoDay,
   MAX_POINTS_WITH_DOTS,
-  pct,
   savedTokensOf,
   SAVINGS_COLORS,
   SAVINGS_SERIES,
@@ -57,19 +55,6 @@ const KeySavingsTab: React.FC<KeySavingsTabProps> = ({ accessToken, keyToken, us
   const autorouterTotal = useMemo(() => results.reduce((sum, d) => sum + autorouterOf(d.metrics), 0), [results]);
   const savedTokensTotal = useMemo(() => results.reduce((sum, d) => sum + savedTokensOf(d.metrics), 0), [results]);
   const totalSaved = compressionTotal + cachingTotal + autorouterTotal;
-
-  // The rows are already filtered to this key server-side, so the ratio comes straight off the
-  // day totals -- no breakdown walk, and the same formula the proxy-wide leakage table uses.
-  const hitRatio = useMemo(() => {
-    const totals = results.reduce(
-      (agg, d) => ({
-        cacheRead: agg.cacheRead + (d.metrics.cache_read_input_tokens ?? 0),
-        prompt: agg.prompt + (d.metrics.prompt_tokens ?? 0),
-      }),
-      { cacheRead: 0, prompt: 0 },
-    );
-    return { ratio: cacheHitRatio(totals.cacheRead, totals.prompt), promptTokens: totals.prompt };
-  }, [results]);
 
   const [accumulation, setAccumulation] = useState<SavingsAccumulation>("cumulative");
 
@@ -128,7 +113,7 @@ const KeySavingsTab: React.FC<KeySavingsTabProps> = ({ accessToken, keyToken, us
         </p>
       )}
 
-      <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-5">
+      <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-4">
         <SummaryCard
           label="Total saved"
           value={usd(totalSaved)}
@@ -151,16 +136,6 @@ const KeySavingsTab: React.FC<KeySavingsTabProps> = ({ accessToken, keyToken, us
           value={usd(autorouterTotal)}
           hint="vs. the priciest model it could pick"
           info="What this traffic would have cost had every request gone to the most expensive model the auto-router can route to, minus what it actually cost. Switching leaves the new model with a cold cache, so it pays to write the prompt again while the baseline is priced as already warm; a route that thrashes the cache can total below zero, and a genuine first turn, where neither side had anything cached, is undercounted."
-        />
-        <SummaryCard
-          label="Cache hit rate"
-          value={hitRatio.promptTokens > 0 ? pct(hitRatio.ratio) : "--"}
-          hint={
-            hitRatio.promptTokens > 0
-              ? `${formatNumberWithCommas(hitRatio.promptTokens)} prompt tokens`
-              : "No prompt tokens in range"
-          }
-          info="Share of this key's input tokens that were served from cache. Prompt tokens already include cached reads, so this is cache reads over prompt tokens."
         />
       </div>
 

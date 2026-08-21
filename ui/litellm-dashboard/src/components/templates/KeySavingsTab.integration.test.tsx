@@ -88,16 +88,6 @@ describe("KeySavingsTab", () => {
     expect(screen.getByTestId("summary-card-compression-savings")).toHaveTextContent("1,000 tokens compressed");
     expect(screen.getByTestId("summary-card-prompt-caching-savings")).toHaveTextContent("$1.00");
     expect(screen.getByTestId("summary-card-auto-router-savings")).toHaveTextContent("$3.00");
-    expect(screen.getByTestId("summary-card-cache-hit-rate")).toHaveTextContent("25.0%");
-    expect(screen.getByTestId("summary-card-cache-hit-rate")).toHaveTextContent("2,000 prompt tokens");
-  });
-
-  it("reads no cache hit rate off a range with no prompt tokens", () => {
-    scopedRange().mockReturnValue(mockActivity({ results: [day("2025-01-01", { compression_savings_spend: 1 })] }));
-
-    renderTab();
-
-    expect(screen.getByTestId("summary-card-cache-hit-rate")).toHaveTextContent("No prompt tokens in range");
   });
 
   it("separates a key with no traffic from one still loading", () => {
