@@ -1626,6 +1626,31 @@ def test_model_group_info_cost_none_when_db_model_info_has_no_cost():
         assert result.output_cost_per_token is None
 
 
+def test_model_group_info_description_from_model_info():
+    """
+    model_info.description set in the config should surface on ModelGroupInfo,
+    including when only a later deployment in the group carries it.
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4", "api_key": "fake"},
+                "model_info": {},
+            },
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4", "api_key": "fake2"},
+                "model_info": {"description": "State-of-the-art language model."},
+            },
+        ]
+    )
+
+    result = router.get_model_group_info("gpt-4")
+    assert result is not None
+    assert result.description == "State-of-the-art language model."
+
+
 @pytest.mark.parametrize(
     "value,expected",
     [

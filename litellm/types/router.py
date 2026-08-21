@@ -637,6 +637,7 @@ class ModelGroupInfo(BaseModel):
     supports_function_calling: bool = Field(default=False)
     supported_openai_params: list[str] | None = Field(default=[])
     configurable_clientside_auth_params: CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS = None
+    description: str | None = None
 
     def __init__(self, **data) -> None:
         for field_name, field_type in get_type_hints(self.__class__).items():
