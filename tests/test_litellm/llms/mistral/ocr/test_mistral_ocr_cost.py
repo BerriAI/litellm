@@ -51,16 +51,6 @@ def test_ocr4_cost_scales_with_pages(model: str, pages_processed: int) -> None:
     assert cost == pytest.approx(OCR4_COST_PER_PAGE * pages_processed)
 
 
-@pytest.fixture
-def local_model_cost_map(monkeypatch):
-    """Force get_model_info to resolve against the in-repo cost map instead of the
-    remote one fetched at import time, which does not yet carry OCR 3 pricing."""
-    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
-    litellm.get_model_info.cache_clear()
-    yield
-    litellm.get_model_info.cache_clear()
-
 
 @pytest.mark.parametrize("cost_map_path", [MAIN_COST_MAP, BACKUP_COST_MAP])
 def test_ocr3_pricing_entry(cost_map_path: Path) -> None:

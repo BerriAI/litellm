@@ -42,6 +42,8 @@ import {
   toSubmittedValues,
 } from "./keyEditFormValues";
 import { BudgetFallbacksEditor } from "../key_team_helpers/BudgetFallbacksEditor";
+import { ModelMaxBudgetField } from "../key_team_helpers/ModelMaxBudgetEditor";
+import { useModelMaxBudgetField } from "../key_team_helpers/useModelMaxBudgetField";
 import { BudgetWindowEntry, BudgetWindowsEditor } from "../key_team_helpers/BudgetWindowsEditor";
 import {
   TagRateLimitEditor,
@@ -117,6 +119,7 @@ export function KeyEditView({
   const [budgetFallbacks, setBudgetFallbacks] = useState<Record<string, string[]>>(
     keyData.budget_fallbacks && typeof keyData.budget_fallbacks === "object" ? keyData.budget_fallbacks : {},
   );
+  const modelBudget = useModelMaxBudgetField(keyData.token, keyData.model_max_budget);
   const routerSettingsRef = useRef<RouterSettingsAccordionRef>(null);
   const keyTypeFieldId = React.useId();
   const projectFieldId = React.useId();
@@ -284,6 +287,8 @@ export function KeyEditView({
         values.budget_fallbacks = {};
       }
 
+      modelBudget.applyTo(values);
+
       const routerSettings = routerSettingsUpdate(
         routerSettingsRef.current?.getValue()?.router_settings,
         keyData.router_settings,
@@ -443,6 +448,16 @@ export function KeyEditView({
             </FieldLabel>
             <BudgetWindowsEditor value={budgetLimits} onChange={setBudgetLimits} />
           </Field>
+
+          <ModelMaxBudgetField
+            key={keyData.token}
+            premiumUser={premiumUser}
+            value={modelBudget.value}
+            onChange={modelBudget.setValue}
+            availableModels={availableModels}
+            usage={keyData.model_max_budget_usage}
+            hint="Cap spend on individual models, each with its own reset window. Enforced across every request this key makes."
+          />
 
           <Field>
             <FieldLabel>

@@ -19,7 +19,6 @@ from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
 load_dotenv()
 import io
-import os
 
 sys.path.insert(
     0, os.path.abspath("../..")

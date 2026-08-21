@@ -108,7 +108,7 @@ class TestCloudZeroStreamer:
         """Test _parse_and_convert_timestamp method with invalid timestamp."""
         streamer = CloudZeroStreamer("test-key", "test-connection")
 
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="Could not parse timestamp 'invalid-timestamp': Invalid"):
             streamer._parse_and_convert_timestamp("invalid-timestamp")
 
     def test_prepare_batch_payload(self):

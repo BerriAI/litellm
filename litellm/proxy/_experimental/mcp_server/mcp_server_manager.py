@@ -46,7 +46,7 @@ from litellm.constants import (
     MCP_TOOL_LISTING_TIMEOUT,
 )
 from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
-from litellm.experimental_mcp_client.client import MCPClient, MCPSigV4Auth
+from litellm.experimental_mcp_client.client import MCPClient, MCPSigV4Auth, strip_auth_scheme
 from litellm.integrations.custom_guardrail import (
     _sync_guardrail_info_to_logging_obj,  # pyright: ignore[reportPrivateUsage] - the same bridge @log_guardrail_information uses; reimplementing it here would fork the metadata-key logic
 )
@@ -841,12 +841,17 @@ def _without_authorization(
 
 
 def _format_byok_openapi_auth_header(mcp_server: MCPServer, mcp_auth_header: str) -> str:
-    """Format a raw BYOK credential for OpenAPI tool ``Authorization`` injection."""
+    """Format a raw BYOK credential for OpenAPI tool ``Authorization`` injection.
+
+    A non-BYOK server short-circuits ``_resolve_byok_mcp_auth_header``, so the value here can also
+    be the deprecated global ``x-mcp-auth``, which is a complete header value and would otherwise
+    be given a second scheme.
+    """
     if mcp_server.auth_type == MCPAuth.api_key:
-        return f"ApiKey {mcp_auth_header}"
+        return f"ApiKey {strip_auth_scheme(mcp_auth_header, 'ApiKey')}"
     if mcp_server.auth_type == MCPAuth.basic:
-        return f"Basic {mcp_auth_header}"
-    return f"Bearer {mcp_auth_header}"
+        return f"Basic {strip_auth_scheme(mcp_auth_header, 'Basic')}"
+    return f"Bearer {strip_auth_scheme(mcp_auth_header, 'Bearer')}"
 
 
 def _openapi_forwarded_extra_headers(

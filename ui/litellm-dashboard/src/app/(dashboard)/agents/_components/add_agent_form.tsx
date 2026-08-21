@@ -72,7 +72,7 @@ const AgentTypeLabel: React.FC<{ agentType: string; info: AgentCreateInfo | unde
   if (agentType === CUSTOM_AGENT_TYPE) {
     return (
       <span className="flex items-center gap-2">
-        <LayoutGrid className="size-4 text-amber-600 dark:text-amber-400" />
+        <LayoutGrid className="size-4 text-warning" />
         <span>Custom / Other</span>
       </span>
     );
@@ -588,7 +588,7 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
         <h4 className="mb-3 text-sm font-medium text-foreground">Budgets &amp; Rate Limits</h4>
         <div className="space-y-4">
           {!requireTraceIdOutbound && (
-            <div className="rounded-lg border border-yellow-200 bg-yellow-50 p-3 text-sm text-yellow-800 dark:border-yellow-800 dark:bg-yellow-950 dark:text-yellow-300">
+            <div className="rounded-lg border border-warning/20 bg-warning/10 p-3 text-sm text-warning">
               Enable &quot;Require x-litellm-trace-id on calls BY this agent&quot; in Tracing to configure budgets and
               rate limits.
             </div>
@@ -758,20 +758,17 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
             <div className="mb-1 px-2 text-xs font-medium tracking-wide text-muted-foreground uppercase">
               Not listed?
             </div>
-            <SelectItem
-              value={CUSTOM_AGENT_TYPE}
-              className="focus:bg-amber-50 dark:focus:bg-amber-950 dark:focus:**:text-amber-400"
-            >
+            <SelectItem value={CUSTOM_AGENT_TYPE} className="focus:bg-warning/10">
               <span className="flex items-center gap-3">
-                <LayoutGrid className="size-4.5 shrink-0 text-amber-600 dark:text-amber-400" />
+                <LayoutGrid className="size-4.5 shrink-0 text-warning" />
                 <span className="block">
                   <span className="flex items-center gap-2">
-                    <span className="font-medium text-amber-700 dark:text-amber-400">Custom / Other</span>
+                    <span className="font-medium text-warning">Custom / Other</span>
                     <Badge variant="warning" className="h-4 px-1 text-[10px]">
                       GENERIC
                     </Badge>
                   </span>
-                  <span className="block text-xs whitespace-normal text-amber-600 dark:text-amber-400">
+                  <span className="block text-xs whitespace-normal text-warning">
                     For agents that don&apos;t follow a standard protocol, just needs a virtual key
                   </span>
                 </span>
@@ -909,7 +906,7 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
           <div
             className={`cursor-pointer rounded-lg border-2 p-4 transition-colors ${
               keyAssignOption === "create_new"
-                ? "border-indigo-600 bg-indigo-50 dark:border-indigo-400 dark:bg-indigo-950"
+                ? "border-info bg-info/10"
                 : "border-border bg-background hover:border-muted-foreground/40"
             }`}
             onClick={() => setKeyAssignOption("create_new")}
@@ -919,7 +916,7 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
                 <RadioGroupItem value="create_new" aria-label="Create a new key for this agent" />
                 <div className="flex-1">
                   <div className="flex items-center gap-2">
-                    <Key className="size-4 text-indigo-600 dark:text-indigo-400" />
+                    <Key className="size-4 text-info" />
                     <span className="font-medium text-foreground">Create a new key for this agent</span>
                   </div>
                   <p className="mt-1 text-sm text-muted-foreground">A dedicated key scoped to this agent.</p>
@@ -946,7 +943,7 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
           <div
             className={`cursor-pointer rounded-lg border-2 p-4 transition-colors ${
               keyAssignOption === "existing_key"
-                ? "border-indigo-600 bg-indigo-50 dark:border-indigo-400 dark:bg-indigo-950"
+                ? "border-info bg-info/10"
                 : "border-border bg-background hover:border-muted-foreground/40"
             }`}
             onClick={() => setKeyAssignOption("existing_key")}
@@ -993,7 +990,7 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
 
   const renderReadyStep = () => (
     <div className="py-6 text-center">
-      <CircleCheck className="mb-4 size-12 text-green-500" />
+      <CircleCheck className="mb-4 size-12 text-success" />
       <h3 className="mb-2 text-xl font-semibold text-foreground">Agent Created!</h3>
       <div className="mb-4 flex justify-center">
         <Badge className="h-auto gap-1.5 bg-purple-100 px-3 py-1 text-sm text-purple-700 dark:bg-purple-950 dark:text-purple-300">

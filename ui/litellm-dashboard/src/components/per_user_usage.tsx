@@ -145,7 +145,7 @@ const PerUserUsage: React.FC<PerUserUsageProps> = ({ accessToken, selectedTags, 
 
           {perUserData.results.length > 10 && (
             <div className="mt-4 flex justify-between items-center">
-              <p className="text-sm text-gray-500">Showing 10 of {perUserData.total_count} results</p>
+              <p className="text-sm text-muted-foreground">Showing 10 of {perUserData.total_count} results</p>
               <div className="flex gap-2">
                 <Button size="sm" variant="secondary" onClick={handlePrevPage} disabled={currentPage === 1}>
                   Previous

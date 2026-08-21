@@ -664,6 +664,9 @@
         "supports_pdf_input": {
           "type": "boolean"
         },
+        "supports_prompt_cache_breakpoint": {
+          "type": "boolean"
+        },
         "supports_prompt_caching": {
           "type": "boolean"
         },
@@ -701,6 +704,9 @@
           "type": "boolean"
         },
         "supports_xhigh_reasoning_effort": {
+          "type": "boolean"
+        },
+        "thinking_always_on": {
           "type": "boolean"
         },
         "tiered_pricing": {

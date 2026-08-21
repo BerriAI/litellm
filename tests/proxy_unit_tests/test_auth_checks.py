@@ -6,7 +6,6 @@ import traceback
 from dotenv import load_dotenv
 
 load_dotenv()
-import os
 
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -173,7 +172,7 @@ async def test_can_key_call_model(model, expect_to_work):
     if expect_to_work:
         await can_key_call_model(**args)
     else:
-        with pytest.raises(Exception) as e:
+        with pytest.raises(Exception, match='key not allowed to access model\\. This key can only access') as e:
             await can_key_call_model(**args)
 
         print(e)
@@ -242,8 +241,8 @@ async def test_can_team_call_model(model, expect_to_work):
 )
 @pytest.mark.asyncio
 async def test_can_key_call_model_wildcard_access(key_models, model, expect_to_work):
+    from litellm.proxy._types import ProxyException
     from litellm.proxy.auth.auth_checks import can_key_call_model
-    from fastapi import HTTPException
 
     llm_model_list = [
         {
@@ -294,15 +293,13 @@ async def test_can_key_call_model_wildcard_access(key_models, model, expect_to_w
             llm_router=router,
         )
     else:
-        with pytest.raises(Exception) as e:
+        with pytest.raises(ProxyException):
             await can_key_call_model(
                 model=model,
                 llm_model_list=llm_model_list,
                 valid_token=user_api_key_object,
                 llm_router=router,
             )
-
-            print(e)
 
 
 @pytest.mark.parametrize(
@@ -330,6 +327,7 @@ async def test_wildcard_access_after_cost_map_reload(key_models, model, expect_t
     Fix: each reload now calls litellm.add_known_models(model_cost_map=new_map)
     with the fetched map passed explicitly to avoid any reference ambiguity.
     """
+    from litellm.proxy._types import ProxyException
     from litellm.proxy.auth.auth_checks import can_key_call_model
 
     # Build a new cost map that includes the brand-new model — exactly what
@@ -378,7 +376,7 @@ async def test_wildcard_access_after_cost_map_reload(key_models, model, expect_t
                 llm_router=router,
             )
         else:
-            with pytest.raises(Exception):
+            with pytest.raises(ProxyException):
                 await can_key_call_model(
                     model=model,
                     llm_model_list=llm_model_list,
@@ -479,7 +477,6 @@ async def test_virtual_key_max_budget_check(
     2. Raises BudgetExceededError when spend >= max_budget
     """
     from litellm.proxy.auth.auth_checks import _virtual_key_max_budget_check
-    from litellm.proxy.utils import ProxyLogging
 
     # Setup test data
     valid_token = UserAPIKeyAuth(
@@ -837,7 +834,6 @@ async def test_can_user_call_model_with_no_default_models():
 @pytest.mark.asyncio
 async def test_get_fuzzy_user_object():
     from litellm.proxy.auth.auth_checks import _get_fuzzy_user_object
-    from litellm.proxy.utils import PrismaClient
     from unittest.mock import AsyncMock, MagicMock
 
     # Setup mock Prisma client
@@ -959,7 +955,7 @@ async def test_can_key_call_model_with_aliases(model, alias_map, expect_to_work)
             llm_router=router,
         )
     else:
-        with pytest.raises(Exception) as e:
+        with pytest.raises(Exception, match='key not allowed to access model\\. This key can only access') as e:
             await can_key_call_model(
                 model=model,
                 llm_model_list=llm_model_list,

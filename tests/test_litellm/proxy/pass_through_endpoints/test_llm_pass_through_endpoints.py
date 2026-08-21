@@ -2405,9 +2405,6 @@ class TestMilvusProxyRoute:
         """
         Test successful Milvus proxy route with valid managed vector store index
         """
-        from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
-            milvus_proxy_route,
-        )
 
         collection_name = "dall-e-6"
         vector_store_name = "milvus-store-1"
@@ -2518,9 +2515,6 @@ class TestMilvusProxyRoute:
         """
         from fastapi import HTTPException
 
-        from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
-            milvus_proxy_route,
-        )
 
         mock_request = MagicMock(spec=Request)
         mock_response = MagicMock(spec=Response)
@@ -2555,9 +2549,6 @@ class TestMilvusProxyRoute:
         """
         from fastapi import HTTPException
 
-        from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
-            milvus_proxy_route,
-        )
 
         mock_request = MagicMock(spec=Request)
         mock_response = MagicMock(spec=Response)
@@ -2587,9 +2578,6 @@ class TestMilvusProxyRoute:
         """
         from fastapi import HTTPException
 
-        from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
-            milvus_proxy_route,
-        )
 
         collection_name = "test-collection"
 
@@ -2629,9 +2617,6 @@ class TestMilvusProxyRoute:
         """
         from fastapi import HTTPException
 
-        from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
-            milvus_proxy_route,
-        )
 
         collection_name = "unmanaged-collection"
 
@@ -2672,9 +2657,6 @@ class TestMilvusProxyRoute:
         """
         Test that missing vector store raises Exception
         """
-        from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
-            milvus_proxy_route,
-        )
 
         collection_name = "test-collection"
         vector_store_name = "missing-store"
@@ -2714,7 +2696,7 @@ class TestMilvusProxyRoute:
                 None
             )
 
-            with pytest.raises(Exception) as exc_info:
+            with pytest.raises(Exception, match='Vector store not found for missing-store') as exc_info:
                 await milvus_proxy_route(
                     endpoint="vectors/search",
                     request=mock_request,
@@ -2731,9 +2713,6 @@ class TestMilvusProxyRoute:
         """
         Test that missing api_base raises Exception
         """
-        from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
-            milvus_proxy_route,
-        )
 
         collection_name = "test-collection"
         vector_store_name = "milvus-store-1"
@@ -2779,7 +2758,7 @@ class TestMilvusProxyRoute:
                 mock_vector_store
             )
 
-            with pytest.raises(Exception) as exc_info:
+            with pytest.raises(Exception, match='api_base not found in vector store configuration for') as exc_info:
                 await milvus_proxy_route(
                     endpoint="vectors/search",
                     request=mock_request,
@@ -2797,9 +2776,6 @@ class TestMilvusProxyRoute:
         """
         Test that endpoint without leading slash is handled correctly
         """
-        from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
-            milvus_proxy_route,
-        )
 
         collection_name = "test-collection"
         vector_store_name = "milvus-store-1"
@@ -2877,9 +2853,6 @@ class TestOpenAIPassthroughRoute:
         This verifies the fix for issue #18865 where /openai/v1/responses was being
         routed to LiteLLM's native implementation instead of passthrough
         """
-        from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
-            openai_proxy_route,
-        )
 
         # Mock request for Responses API
         mock_request = MagicMock(spec=Request)
@@ -2931,9 +2904,6 @@ class TestOpenAIPassthroughRoute:
         """
         Test that /openai_passthrough works for chat completions
         """
-        from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
-            openai_proxy_route,
-        )
 
         mock_request = MagicMock(spec=Request)
         mock_request.method = "POST"
@@ -2976,9 +2946,6 @@ class TestOpenAIPassthroughRoute:
         """
         Test that missing OPENAI_API_KEY raises an exception
         """
-        from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
-            openai_proxy_route,
-        )
 
         mock_request = MagicMock(spec=Request)
         mock_response = MagicMock(spec=Response)
@@ -2988,7 +2955,7 @@ class TestOpenAIPassthroughRoute:
             "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router.get_credentials",
             return_value=None,
         ):
-            with pytest.raises(Exception) as exc_info:
+            with pytest.raises(Exception, match="Required 'OPENAI_API_KEY' in environment to make") as exc_info:
                 await openai_proxy_route(
                     endpoint="v1/chat/completions",
                     request=mock_request,
@@ -3003,9 +2970,6 @@ class TestOpenAIPassthroughRoute:
         """
         Test that /openai_passthrough works for Assistants API endpoints
         """
-        from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
-            openai_proxy_route,
-        )
 
         mock_request = MagicMock(spec=Request)
         mock_request.method = "POST"
@@ -3177,7 +3141,7 @@ class TestCursorProxyRoute:
                 [],
             ),
         ):
-            with pytest.raises(Exception) as exc_info:
+            with pytest.raises(Exception, match='Cursor API key not found\\. Add Cursor credentials via') as exc_info:
                 await cursor_proxy_route(
                     endpoint="v0/agents",
                     request=mock_request,
@@ -3887,3 +3851,211 @@ class TestComprehendMedicalProxyRoute:
                 user_api_key_dict=Mock(),
             )
         assert exc_info.value.status_code == 400
+
+
+LIVE_RESOURCE_PATH = "projects/proj-db/locations/global/publishers/google/models/gemini-live-2.5-flash"
+
+
+class TestVertexAILiveWebsocketPassthrough:
+    def _websocket(self):
+        from starlette.websockets import WebSocketState
+
+        websocket = MagicMock()
+        websocket.accept = AsyncMock()
+        websocket.close = AsyncMock()
+        websocket.headers = {}
+        websocket.client_state = WebSocketState.CONNECTED
+        return websocket
+
+    def _clear_vertex_env(self, monkeypatch):
+        monkeypatch.delenv("DEFAULT_VERTEXAI_PROJECT", raising=False)
+        monkeypatch.delenv("DEFAULT_VERTEXAI_LOCATION", raising=False)
+        monkeypatch.delenv("DEFAULT_GOOGLE_APPLICATION_CREDENTIALS", raising=False)
+
+    @pytest.mark.asyncio
+    async def test_uses_db_deployment_credentials_without_query_params(self, monkeypatch):
+        from litellm.proxy.pass_through_endpoints import (
+            llm_passthrough_endpoints as passthrough_module,
+        )
+
+        llm_router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "gemini-live",
+                    "litellm_params": {
+                        "model": "vertex_ai/gemini-live-2.5-flash",
+                        "use_in_pass_through": True,
+                        "vertex_project": "proj-db",
+                        "vertex_location": "global",
+                        "vertex_credentials": '{"type": "service_account"}',
+                    },
+                }
+            ]
+        )
+        monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", llm_router)
+        monkeypatch.setattr(
+            passthrough_module.passthrough_endpoint_router, "default_vertex_config", None
+        )
+        self._clear_vertex_env(monkeypatch)
+        websocket = self._websocket()
+        ensure_token = AsyncMock(return_value=("token-abc", "proj-db"))
+        ws_passthrough = AsyncMock()
+
+        with (
+            patch.object(passthrough_module.vertex_llm_base, "_ensure_access_token_async", ensure_token),
+            patch.object(passthrough_module, "websocket_passthrough_request", ws_passthrough),
+        ):
+            await passthrough_module.vertex_ai_live_websocket_passthrough(
+                websocket=websocket,
+                user_api_key_dict=UserAPIKeyAuth(),
+            )
+
+        ensure_token.assert_awaited_once_with(
+            credentials='{"type": "service_account"}',
+            project_id="proj-db",
+            custom_llm_provider="vertex_ai_beta",
+        )
+        passthrough_kwargs = ws_passthrough.await_args.kwargs
+        assert passthrough_kwargs["target"] == (
+            "wss://aiplatform.googleapis.com/ws/google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent"
+        )
+        assert passthrough_kwargs["custom_headers"]["Authorization"] == "Bearer token-abc"
+        rewriter = passthrough_kwargs["setup_model_rewriter"]
+        assert rewriter("gemini-live") == (
+            "projects/proj-db/locations/global/publishers/google/models/gemini-live-2.5-flash"
+        )
+        websocket.close.assert_not_awaited()
+
+    @pytest.mark.parametrize(
+        "setup_model, expected",
+        [
+            ("gemini-live-2.5-flash", LIVE_RESOURCE_PATH),
+            ("models/gemini-live-2.5-flash", LIVE_RESOURCE_PATH),
+            ("vertex_ai/gemini-live-2.5-flash", LIVE_RESOURCE_PATH),
+            ("gemini-live", LIVE_RESOURCE_PATH),
+            ("models/gemini-live", LIVE_RESOURCE_PATH),
+            (
+                "publishers/meta/models/llama-3.3-70b-instruct-maas",
+                "projects/proj-db/locations/global/publishers/meta/models/llama-3.3-70b-instruct-maas",
+            ),
+            (
+                "projects/other/locations/us-central1/publishers/google/models/gemini-2.0-flash",
+                "projects/other/locations/us-central1/publishers/google/models/gemini-2.0-flash",
+            ),
+        ],
+    )
+    def test_setup_model_rewriter_normalises_the_forms_clients_send(self, setup_model, expected):
+        from litellm.proxy.pass_through_endpoints import (
+            llm_passthrough_endpoints as passthrough_module,
+        )
+
+        llm_router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "gemini-live",
+                    "litellm_params": {
+                        "model": "vertex_ai/gemini-live-2.5-flash",
+                        "use_in_pass_through": True,
+                        "vertex_project": "proj-db",
+                        "vertex_location": "global",
+                    },
+                }
+            ]
+        )
+
+        rewriter = passthrough_module._build_vertex_live_setup_model_rewriter(
+            vertex_project="proj-db",
+            vertex_location="global",
+            llm_router=llm_router,
+        )
+
+        assert rewriter is not None
+        assert rewriter(setup_model) == expected
+
+    @pytest.mark.asyncio
+    async def test_default_vertex_config_outranks_db_deployment(self, monkeypatch):
+        from litellm.proxy.pass_through_endpoints import (
+            llm_passthrough_endpoints as passthrough_module,
+        )
+        from litellm.types.passthrough_endpoints.vertex_ai import (
+            VertexPassThroughCredentials,
+        )
+
+        llm_router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "gemini-live",
+                    "litellm_params": {
+                        "model": "vertex_ai/gemini-live-2.5-flash",
+                        "use_in_pass_through": True,
+                        "vertex_project": "proj-db",
+                        "vertex_location": "global",
+                        "vertex_credentials": '{"type": "db_account"}',
+                    },
+                }
+            ]
+        )
+        monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", llm_router)
+        monkeypatch.setattr(
+            passthrough_module.passthrough_endpoint_router,
+            "default_vertex_config",
+            VertexPassThroughCredentials(
+                vertex_project="proj-env",
+                vertex_location="global",
+                vertex_credentials='{"type": "env_account"}',
+            ),
+        )
+        self._clear_vertex_env(monkeypatch)
+        websocket = self._websocket()
+        ensure_token = AsyncMock(return_value=("token-abc", "proj-env"))
+        ws_passthrough = AsyncMock()
+
+        with (
+            patch.object(passthrough_module.vertex_llm_base, "_ensure_access_token_async", ensure_token),
+            patch.object(passthrough_module, "websocket_passthrough_request", ws_passthrough),
+        ):
+            await passthrough_module.vertex_ai_live_websocket_passthrough(
+                websocket=websocket,
+                model="gemini-live",
+                user_api_key_dict=UserAPIKeyAuth(),
+            )
+
+        ensure_token.assert_awaited_once_with(
+            credentials='{"type": "env_account"}',
+            project_id="proj-env",
+            custom_llm_provider="vertex_ai_beta",
+        )
+        rewriter = ws_passthrough.await_args.kwargs["setup_model_rewriter"]
+        assert rewriter("gemini-live") == (
+            "projects/proj-env/locations/global/publishers/google/models/gemini-live-2.5-flash"
+        )
+
+    @pytest.mark.asyncio
+    async def test_credential_failure_close_names_configuration_options(self, monkeypatch):
+        from litellm.proxy.pass_through_endpoints import (
+            llm_passthrough_endpoints as passthrough_module,
+        )
+
+        monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None)
+        monkeypatch.setattr(
+            passthrough_module.passthrough_endpoint_router, "default_vertex_config", None
+        )
+        self._clear_vertex_env(monkeypatch)
+        websocket = self._websocket()
+        ensure_token = AsyncMock(side_effect=Exception("Unable to find your credentials"))
+
+        with (
+            patch.object(passthrough_module.vertex_llm_base, "_ensure_access_token_async", ensure_token),
+            patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging,
+        ):
+            mock_proxy_logging.post_call_failure_hook = AsyncMock()
+            await passthrough_module.vertex_ai_live_websocket_passthrough(
+                websocket=websocket,
+                user_api_key_dict=UserAPIKeyAuth(),
+            )
+
+        close_kwargs = websocket.close.await_args.kwargs
+        assert close_kwargs["code"] == 1011
+        assert "use_in_pass_through" in close_kwargs["reason"]
+        assert "default_vertex_config" in close_kwargs["reason"]
+        assert len(close_kwargs["reason"].encode("utf-8")) <= 123

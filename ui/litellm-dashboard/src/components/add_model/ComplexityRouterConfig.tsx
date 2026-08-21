@@ -12,7 +12,15 @@ import React from "react";
 import { ModelGroup } from "@/components/llm_calls/fetch_models";
 import AdaptiveRoutingConfig from "./AdaptiveRoutingConfig";
 import ClassificationMethodConfig from "./ClassificationMethodConfig";
-import { resolveComplexityDefaultModel, tierOptions } from "./complexity_router_tiers";
+import {
+  ReasoningEffort,
+  TierModelParamsByTier,
+  pruneTierModelParams,
+  resolveComplexityDefaultModel,
+  setTierModelReasoningEffort,
+  tierOptions,
+} from "./complexity_router_tiers";
+import TierModelEffortRows from "./TierModelEffortRows";
 import EscalationKeywords from "./EscalationKeywords";
 import KeywordTierRules, { KeywordTierRule } from "./KeywordTierRules";
 import SemanticKeywordMatching from "./SemanticKeywordMatching";
@@ -34,7 +42,7 @@ export interface ComplexityTiers {
   REASONING: string[];
 }
 
-export type ClassificationRubric = "legacy" | "agentic" | "chat";
+export type ClassificationRubric = "legacy" | "agentic" | "chat" | "business";
 
 /** What an unset preset means, matching the backend: the rubric as it shipped before calibration. */
 export const DEFAULT_CLASSIFICATION_RUBRIC: ClassificationRubric = "legacy";
@@ -67,6 +75,13 @@ export const CLASSIFICATION_RUBRIC_DESCRIPTIONS: Record<ClassificationRubric, { 
       description:
         "Drops the engineering examples, for a router serving only conversational traffic that never sees those " +
         "requests.",
+    },
+    business: {
+      label: "Business",
+      description:
+        "Business and sales examples plus business-oriented tier definitions: routine drafting and summarizing " +
+        "stay at Medium, data-determined analysis is Complex, and only decisions under conflicting tradeoffs " +
+        "reach Reasoning. Suits sales, support, and go-to-market traffic.",
     },
   };
 
@@ -146,6 +161,12 @@ export interface ComplexityRouterConfigValue {
    * floor tracks tier_boundaries.simple_medium; an explicit 0 is a real floor that promotes on the markers alone.
    */
   reasoning_override_min_score?: number;
+  /**
+   * Per-(tier, model) litellm_params, serialized to the sibling tier_model_configs key. The full
+   * params object is held, not just reasoning_effort, so keys authored in config.yaml survive an
+   * edit round-trip.
+   */
+  tier_model_params?: TierModelParamsByTier;
 }
 
 interface ComplexityRouterConfigProps {
@@ -230,6 +251,10 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
   const defaultModel = resolveComplexityDefaultModel(value.tiers, value.default_model);
 
   // Embedding models can't serve a chat-completion role, so they're excluded here.
+  const reasoningModels = new Set(
+    modelInfo.filter((model) => model.supports_reasoning).map((model) => model.model_group),
+  );
+
   const modelOptions = modelInfo
     .filter((model) => model.mode !== "embedding")
     .map((model) => ({
@@ -241,6 +266,18 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
     onChange({
       ...value,
       tiers: { ...value.tiers, [tier]: models },
+      tier_model_params: pruneTierModelParams(value.tier_model_params, tier, models),
+    });
+  };
+
+  const handleTierModelEffortChange = (
+    tier: keyof ComplexityTiers,
+    model: string,
+    effort: ReasoningEffort | undefined,
+  ) => {
+    onChange({
+      ...value,
+      tier_model_params: setTierModelReasoningEffort(value.tier_model_params, tier, model, effort),
     });
   };
 
@@ -262,7 +299,7 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
       <div className="inline-flex items-center gap-2 mb-4">
         <h4 className="m-0 text-xl font-semibold text-foreground">Complexity Tier Configuration</h4>
         <SimpleTooltip content="Map each complexity tier to one or more models. Simple queries use cheaper/faster models, complex queries use more capable models.">
-          <Info className="size-4 text-gray-400" />
+          <Info className="size-4 text-muted-foreground" />
         </SimpleTooltip>
       </div>
 
@@ -291,7 +328,7 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
                   <div className="flex items-center gap-2 mb-2">
                     <strong className="text-base font-semibold">{label} Tier</strong>
                     <SimpleTooltip content={tierInfo.description}>
-                      <Info className="size-4 text-gray-400" />
+                      <Info className="size-4 text-muted-foreground" />
                     </SimpleTooltip>
                     <span className="text-xs text-muted-foreground">
                       Tier {index + 1} of {TIER_KEYS.length} &middot; {tier}
@@ -325,6 +362,13 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
                     emptyText="No models found"
                     className={tierMissing ? "w-full border-destructive" : "w-full"}
                   />
+                  <TierModelEffortRows
+                    tierLabel={label}
+                    models={value.tiers[tier]}
+                    reasoningModels={reasoningModels}
+                    paramsByModel={value.tier_model_params?.[tier]}
+                    onEffortChange={(model, effort) => handleTierModelEffortChange(tier, model, effort)}
+                  />
                   {value.tiers[tier].length > 1 && (
                     <span className="text-xs text-muted-foreground">
                       Multiple models selected — the router randomly picks among them per request (or Thompson-samples
@@ -342,7 +386,7 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
             <div className="flex items-center gap-2 mb-2">
               <strong className="text-base font-semibold">Default Model</strong>
               <SimpleTooltip content="Leave empty to follow the tiers. A model chosen here is pinned: it stays the default however the tiers change.">
-                <Info className="size-4 text-gray-400" />
+                <Info className="size-4 text-muted-foreground" />
               </SimpleTooltip>
             </div>
             <SearchSelect
@@ -367,11 +411,11 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
 
       <Separator className="my-6" />
 
-      <div className="rounded-lg border border-gray-200 bg-gray-50">
+      <div className="rounded-lg border border-border bg-muted">
         {[
           {
             key: "classifier",
-            label: <strong className="text-gray-700 font-semibold">Advanced: Classification Method</strong>,
+            label: <strong className="text-foreground font-semibold">Advanced: Classification Method</strong>,
             children: (
               <ClassificationMethodConfig
                 value={value}
@@ -386,12 +430,12 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
           },
           {
             key: "adaptive",
-            label: <strong className="text-gray-700 font-semibold">Advanced: Adaptive Routing</strong>,
+            label: <strong className="text-foreground font-semibold">Advanced: Adaptive Routing</strong>,
             children: <AdaptiveRoutingConfig value={value} onChange={onChange} />,
           },
           {
             key: "affinity",
-            label: <strong className="text-gray-700 font-semibold">Advanced: Affinity</strong>,
+            label: <strong className="text-foreground font-semibold">Advanced: Affinity</strong>,
             children: (
               <>
                 <div className="flex items-center gap-2 mb-2">
@@ -425,7 +469,7 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
           },
           {
             key: "plan-mode",
-            label: <strong className="text-gray-700 font-semibold">Advanced: Plan-Mode Override</strong>,
+            label: <strong className="text-foreground font-semibold">Advanced: Plan-Mode Override</strong>,
             children: (
               <>
                 <div className="flex items-center gap-2 mb-2">
@@ -469,7 +513,7 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
           },
           {
             key: "response",
-            label: <strong className="text-gray-700 font-semibold">Advanced: Response Format</strong>,
+            label: <strong className="text-foreground font-semibold">Advanced: Response Format</strong>,
             children: (
               <>
                 <div className="flex items-center gap-2 mb-2">
@@ -492,7 +536,7 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
             ? [
                 {
                   key: "escalation",
-                  label: <strong className="text-gray-700 font-semibold">Advanced: Escalation Keywords</strong>,
+                  label: <strong className="text-foreground font-semibold">Advanced: Escalation Keywords</strong>,
                   children: <EscalationKeywords keywords={escalationKeywords} onChange={onEscalationKeywordsChange} />,
                 },
               ]
@@ -501,7 +545,7 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
             ? [
                 {
                   key: "keyword-semantic",
-                  label: <strong className="text-gray-700 font-semibold">Advanced: Keyword/Semantic Matching</strong>,
+                  label: <strong className="text-foreground font-semibold">Advanced: Keyword/Semantic Matching</strong>,
                   children: (
                     <>
                       {onKeywordTierRulesChange && (
@@ -530,7 +574,7 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
               ]
             : []),
         ].map(({ key, label, children }) => (
-          <Collapsible key={key} className="border-b border-gray-200 last:border-b-0">
+          <Collapsible key={key} className="border-b border-border last:border-b-0">
             <CollapsibleTrigger className="group flex w-full items-center gap-2 px-4 py-3 text-left">
               <ChevronRight className="size-4 shrink-0 text-muted-foreground transition-transform group-data-panel-open:rotate-90" />
               {label}

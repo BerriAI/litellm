@@ -197,6 +197,7 @@ async def test_bedrock_guardrails_block_responses_api():
 
 @pytest.mark.asyncio
 async def test_bedrock_guardrails_with_streaming():
+    from fastapi import HTTPException
     from litellm.proxy.utils import ProxyLogging
     from litellm.types.guardrails import GuardrailEventHooks
 
@@ -204,7 +205,7 @@ async def test_bedrock_guardrails_with_streaming():
     mock_user_api_key_cache = MagicMock(spec=DualCache)
     mock_user_api_key_dict = UserAPIKeyAuth()
 
-    with pytest.raises(Exception):  # Assert that this raises an exception
+    async def _stream_through_guardrail():
         proxy_logging_obj = ProxyLogging(
             user_api_key_cache=mock_user_api_key_cache,
             premium_user=True,
@@ -238,6 +239,9 @@ async def test_bedrock_guardrails_with_streaming():
 
         async for chunk in response:
             print(chunk)
+
+    with pytest.raises(HTTPException):
+        await _stream_through_guardrail()
 
 
 @pytest.mark.asyncio
@@ -1501,7 +1505,7 @@ async def test_bedrock_guardrail_disable_exception_on_block_streaming():
         mock_post.return_value = mock_bedrock_response
 
         # Should raise exception during streaming processing
-        with pytest.raises(HTTPException):
+        async def _drain():
             result_generator = (
                 guardrail_default.async_post_call_streaming_iterator_hook(
                     user_api_key_dict=mock_user_api_key_dict,
@@ -1510,9 +1514,11 @@ async def test_bedrock_guardrail_disable_exception_on_block_streaming():
                 )
             )
 
-            # Try to consume the generator - should raise exception
             async for chunk in result_generator:
                 pass
+
+        with pytest.raises(HTTPException):
+            await _drain()
 
     # Test 2: disable_exception_on_block=True. Streaming can't raise up to the
     # endpoint handler (SSE headers already flushed), so the block is delivered

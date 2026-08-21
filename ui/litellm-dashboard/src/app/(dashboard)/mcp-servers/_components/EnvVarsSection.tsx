@@ -39,7 +39,7 @@ const EnvVarsSection: React.FC = () => {
   useMountedName("env_vars");
 
   return (
-    <div className="rounded-lg border border-gray-200 bg-gray-50 p-4">
+    <div className="rounded-lg border border-border bg-muted p-4">
       <div className="flex items-center gap-2 mb-1">
         <strong className="text-sm font-semibold">Variables</strong>
         <SimpleTooltip
@@ -54,19 +54,19 @@ const EnvVarsSection: React.FC = () => {
             </>
           }
         >
-          <Info className="size-4 text-blue-400 hover:text-blue-600 cursor-help" />
+          <Info className="size-4 text-info hover:text-info/80 cursor-help" />
         </SimpleTooltip>
       </div>
-      <span className="mb-3 block text-xs text-gray-600">
+      <span className="mb-3 block text-xs text-muted-foreground">
         Reference these in Static Headers or Authentication as <code>{"${VAR_NAME}"}</code>. For example:{" "}
-        <code className="bg-white px-1 rounded-sm border border-gray-200">
+        <code className="bg-card px-1 rounded-sm border border-border">
           {"${DB_PROTOCOL}://${CORP_USERNAME}:${CORP_PASSWORD}@${DB_HOSTNAME}"}
         </code>
       </span>
 
       <div className="space-y-2">
         {fields.length > 0 && (
-          <div className="flex gap-3 px-1 text-xs font-medium text-gray-500 uppercase tracking-wide">
+          <div className="flex gap-3 px-1 text-xs font-medium text-muted-foreground uppercase tracking-wide">
             <div style={{ flex: 1 }}>Variable Name</div>
             <div style={{ flex: 1 }}>Value / Description</div>
             <div style={{ width: 160 }}>Scope</div>
@@ -114,7 +114,7 @@ const EnvVarsSection: React.FC = () => {
             <div style={{ width: 24, height: 32 }} className="flex items-center justify-center">
               <CircleMinus
                 onClick={() => remove(index)}
-                className="size-4 text-gray-500 hover:text-red-500 cursor-pointer"
+                className="size-4 text-muted-foreground hover:text-destructive cursor-pointer"
               />
             </div>
           </div>
@@ -140,13 +140,17 @@ const ScopedValueOrDescription: React.FC<{ index: number }> = ({ index }) => {
           <InputGroup>
             <InputGroupAddon>
               <SimpleTooltip content="Per-user variables have no shared value. This text is only a hint shown to each user when they fill in their own value.">
-                <span className="text-xs text-gray-500 cursor-help whitespace-nowrap">
+                <span className="text-xs text-muted-foreground cursor-help whitespace-nowrap">
                   <Info className="mr-1 inline size-3 align-text-bottom" />
                   Hint
                 </span>
               </SimpleTooltip>
             </InputGroupAddon>
-            <InputGroupInput {...textControl(control)} placeholder="e.g. Your DB username" className="text-gray-400" />
+            <InputGroupInput
+              {...textControl(control)}
+              placeholder="e.g. Your DB username"
+              className="text-muted-foreground"
+            />
           </InputGroup>
         )}
       </MountedFormField>

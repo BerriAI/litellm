@@ -13,7 +13,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 from datetime import datetime, timezone
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import litellm
 from litellm.types.vector_stores import LiteLLM_ManagedVectorStore

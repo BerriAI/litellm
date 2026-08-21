@@ -47,7 +47,7 @@ class TestNovitaConfig:
         """Test error handling when API key is missing"""
         config = NovitaConfig()
 
-        with pytest.raises(ValueError) as excinfo:
+        with pytest.raises(ValueError, match='Missing Novita AI API Key - A call is being made to novita') as excinfo:
             config.validate_environment(
                 headers={},
                 model="novita/meta-llama/llama-3.3-70b-instruct",

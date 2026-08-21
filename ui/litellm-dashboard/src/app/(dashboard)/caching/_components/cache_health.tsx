@@ -168,12 +168,12 @@ const HealthCheckDetails: React.FC<{ response: any }> = ({ response }) => {
           <div>
             <div className="mb-6 flex items-center">
               {response?.status === "healthy" ? (
-                <CheckCircle2 className="mr-2 size-5 text-green-600" />
+                <CheckCircle2 className="mr-2 size-5 text-success" />
               ) : (
                 <XCircle className="mr-2 size-5 text-destructive" />
               )}
               <p
-                className={`text-sm font-medium ${response?.status === "healthy" ? "text-green-600" : "text-destructive"}`}
+                className={`text-sm font-medium ${response?.status === "healthy" ? "text-success" : "text-destructive"}`}
               >
                 Cache Status: {response?.status || "unhealthy"}
               </p>

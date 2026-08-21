@@ -46,13 +46,13 @@ const columns: ColumnDef<ProviderSpendData>[] = [
   {
     header: "Successful",
     accessorKey: "successful_requests",
-    meta: { numeric: true, className: "text-green-600" },
+    meta: { numeric: true, className: "text-success" },
     cell: ({ row }) => row.original.successful_requests.toLocaleString(),
   },
   {
     header: "Failed",
     accessorKey: "failed_requests",
-    meta: { numeric: true, className: "text-red-600" },
+    meta: { numeric: true, className: "text-destructive" },
     cell: ({ row }) => row.original.failed_requests.toLocaleString(),
   },
   {
@@ -90,14 +90,14 @@ const SpendByProvider: React.FC<SpendByProviderProps> = ({ loading, isDateChangi
         <CardTitle>Spend by Provider</CardTitle>
         <CardAction className="flex items-center gap-4">
           <div className="flex items-center gap-2">
-            <label className="text-sm text-gray-700">Show Zero Spend</label>
+            <label className="text-sm text-foreground">Show Zero Spend</label>
             <Switch checked={includeZeroSpend} onCheckedChange={setIncludeZeroSpend} />
           </div>
           <div className="flex items-center gap-2">
             <div className="flex items-center gap-1">
-              <label className="text-sm text-gray-700">Show Unknown</label>
+              <label className="text-sm text-foreground">Show Unknown</label>
               <Tooltip>
-                <TooltipTrigger render={<Info className="size-4 text-gray-400 hover:text-gray-600" />} />
+                <TooltipTrigger render={<Info className="size-4 text-muted-foreground hover:text-foreground" />} />
                 <TooltipContent>Requests that failed to route to a provider</TooltipContent>
               </Tooltip>
             </div>

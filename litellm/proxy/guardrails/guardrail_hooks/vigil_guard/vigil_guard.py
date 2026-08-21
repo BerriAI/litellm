@@ -205,6 +205,7 @@ class VigilGuardGuardrail(CustomGuardrail):
                     guardrail_name=self.guardrail_name,
                     message=self._build_block_reason(analysis),
                     should_wrap_with_default_message=False,
+                    blocked_content=True,
                 )
 
             if decision == "SANITIZED":
@@ -245,6 +246,7 @@ class VigilGuardGuardrail(CustomGuardrail):
                     guardrail_name=self.guardrail_name,
                     message=self._build_block_reason(analysis),
                     should_wrap_with_default_message=False,
+                    blocked_content=True,
                 )
 
             if decision == "SANITIZED":
