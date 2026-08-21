@@ -17419,10 +17419,190 @@
     "fal_ai/openai/gpt-image-2": {
         "litellm_provider": "fal_ai",
         "metadata": {
-            "notes": "OpenAI gpt-image-2 served through fal.ai. fal bills by token, so the flat output_cost_per_image here is fal's published per-image rate for a default request (quality=high, image_size=landscape_4_3 at 1024x768). Other canonical sizes at high quality: 1024x1024 $0.211, 1024x1536 $0.165, 1920x1080 $0.158, 2560x1440 $0.222, 3840x2160 $0.401"
+            "notes": "OpenAI gpt-image-2 served through fal.ai. fal bills by token but publishes deterministic per-image prices per size and quality, mirrored here as keyed entries fal_ai/{quality}/{width}-x-{height}/openai/gpt-image-2 that litellm's fal_ai cost calculator picks from the request params. This flat entry is the fallback when no keyed entry matches and carries the default request rate (quality=high, image_size=landscape_4_3 at 1024x768). quality=auto is priced as high"
         },
         "mode": "image_generation",
         "output_cost_per_image": 0.145,
+        "source": "https://fal.ai/models/openai/gpt-image-2",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/low/1024-x-768/openai/gpt-image-2": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.005,
+        "source": "https://fal.ai/models/openai/gpt-image-2",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/low/1024-x-1024/openai/gpt-image-2": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.006,
+        "source": "https://fal.ai/models/openai/gpt-image-2",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/low/1024-x-1536/openai/gpt-image-2": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.005,
+        "source": "https://fal.ai/models/openai/gpt-image-2",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/low/1920-x-1080/openai/gpt-image-2": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.005,
+        "source": "https://fal.ai/models/openai/gpt-image-2",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/low/2560-x-1440/openai/gpt-image-2": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.007,
+        "source": "https://fal.ai/models/openai/gpt-image-2",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/low/3840-x-2160/openai/gpt-image-2": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.012,
+        "source": "https://fal.ai/models/openai/gpt-image-2",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/medium/1024-x-768/openai/gpt-image-2": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.037,
+        "source": "https://fal.ai/models/openai/gpt-image-2",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/medium/1024-x-1024/openai/gpt-image-2": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.053,
+        "source": "https://fal.ai/models/openai/gpt-image-2",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/medium/1024-x-1536/openai/gpt-image-2": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.042,
+        "source": "https://fal.ai/models/openai/gpt-image-2",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/medium/1920-x-1080/openai/gpt-image-2": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://fal.ai/models/openai/gpt-image-2",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/medium/2560-x-1440/openai/gpt-image-2": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.056,
+        "source": "https://fal.ai/models/openai/gpt-image-2",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/medium/3840-x-2160/openai/gpt-image-2": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.101,
+        "source": "https://fal.ai/models/openai/gpt-image-2",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/high/1024-x-768/openai/gpt-image-2": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.145,
+        "source": "https://fal.ai/models/openai/gpt-image-2",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/high/1024-x-1024/openai/gpt-image-2": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.211,
+        "source": "https://fal.ai/models/openai/gpt-image-2",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/high/1024-x-1536/openai/gpt-image-2": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.165,
+        "source": "https://fal.ai/models/openai/gpt-image-2",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/high/1920-x-1080/openai/gpt-image-2": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.158,
+        "source": "https://fal.ai/models/openai/gpt-image-2",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/high/2560-x-1440/openai/gpt-image-2": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.222,
+        "source": "https://fal.ai/models/openai/gpt-image-2",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/high/3840-x-2160/openai/gpt-image-2": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.401,
         "source": "https://fal.ai/models/openai/gpt-image-2",
         "supported_endpoints": [
             "/v1/images/generations"
@@ -17432,7 +17612,7 @@
     "fal_ai/gpt-image-2": {
         "litellm_provider": "fal_ai",
         "metadata": {
-            "notes": "Alias of fal_ai/openai/gpt-image-2, which litellm also accepts without the openai/ prefix. Same rate, see that entry for the size and quality caveat"
+            "notes": "Alias of fal_ai/openai/gpt-image-2, which litellm also accepts without the openai/ prefix. Same rates, including the keyed fal_ai/{quality}/{width}-x-{height}/gpt-image-2 entries; see that entry for details"
         },
         "mode": "image_generation",
         "output_cost_per_image": 0.145,
@@ -17442,13 +17622,373 @@
         ],
         "supports_vision": true
     },
+    "fal_ai/low/1024-x-768/gpt-image-2": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.005,
+        "source": "https://fal.ai/models/openai/gpt-image-2",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/low/1024-x-1024/gpt-image-2": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.006,
+        "source": "https://fal.ai/models/openai/gpt-image-2",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/low/1024-x-1536/gpt-image-2": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.005,
+        "source": "https://fal.ai/models/openai/gpt-image-2",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/low/1920-x-1080/gpt-image-2": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.005,
+        "source": "https://fal.ai/models/openai/gpt-image-2",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/low/2560-x-1440/gpt-image-2": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.007,
+        "source": "https://fal.ai/models/openai/gpt-image-2",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/low/3840-x-2160/gpt-image-2": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.012,
+        "source": "https://fal.ai/models/openai/gpt-image-2",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/medium/1024-x-768/gpt-image-2": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.037,
+        "source": "https://fal.ai/models/openai/gpt-image-2",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/medium/1024-x-1024/gpt-image-2": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.053,
+        "source": "https://fal.ai/models/openai/gpt-image-2",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/medium/1024-x-1536/gpt-image-2": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.042,
+        "source": "https://fal.ai/models/openai/gpt-image-2",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/medium/1920-x-1080/gpt-image-2": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://fal.ai/models/openai/gpt-image-2",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/medium/2560-x-1440/gpt-image-2": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.056,
+        "source": "https://fal.ai/models/openai/gpt-image-2",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/medium/3840-x-2160/gpt-image-2": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.101,
+        "source": "https://fal.ai/models/openai/gpt-image-2",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/high/1024-x-768/gpt-image-2": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.145,
+        "source": "https://fal.ai/models/openai/gpt-image-2",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/high/1024-x-1024/gpt-image-2": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.211,
+        "source": "https://fal.ai/models/openai/gpt-image-2",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/high/1024-x-1536/gpt-image-2": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.165,
+        "source": "https://fal.ai/models/openai/gpt-image-2",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/high/1920-x-1080/gpt-image-2": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.158,
+        "source": "https://fal.ai/models/openai/gpt-image-2",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/high/2560-x-1440/gpt-image-2": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.222,
+        "source": "https://fal.ai/models/openai/gpt-image-2",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/high/3840-x-2160/gpt-image-2": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.401,
+        "source": "https://fal.ai/models/openai/gpt-image-2",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
     "fal_ai/openai/gpt-image-2/edit": {
         "litellm_provider": "fal_ai",
         "metadata": {
-            "notes": "Editing endpoint of gpt-image-2 on fal.ai, reached through the image generation path with fal's image_urls param since /v1/images/edits is not wired for fal_ai. Same rate as fal_ai/openai/gpt-image-2, see that entry for the size and quality caveat"
+            "notes": "Editing endpoint of gpt-image-2 on fal.ai, reached through the image generation path with fal's image_urls param since /v1/images/edits is not wired for fal_ai. Prices include one input image and live in keyed entries fal_ai/{quality}/{width}-x-{height}/openai/gpt-image-2/edit. This flat entry is the fallback for the default edit request (quality=high, image_size=auto, inferred from the input image, priced as 1024x768 high)"
         },
         "mode": "image_generation",
-        "output_cost_per_image": 0.145,
+        "output_cost_per_image": 0.151,
+        "source": "https://fal.ai/models/openai/gpt-image-2/edit",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/low/1024-x-768/openai/gpt-image-2/edit": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.011,
+        "source": "https://fal.ai/models/openai/gpt-image-2/edit",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/low/1024-x-1024/openai/gpt-image-2/edit": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.015,
+        "source": "https://fal.ai/models/openai/gpt-image-2/edit",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/low/1024-x-1536/openai/gpt-image-2/edit": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.018,
+        "source": "https://fal.ai/models/openai/gpt-image-2/edit",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/low/1920-x-1080/openai/gpt-image-2/edit": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.017,
+        "source": "https://fal.ai/models/openai/gpt-image-2/edit",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/low/2560-x-1440/openai/gpt-image-2/edit": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.019,
+        "source": "https://fal.ai/models/openai/gpt-image-2/edit",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/low/3840-x-2160/openai/gpt-image-2/edit": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.024,
+        "source": "https://fal.ai/models/openai/gpt-image-2/edit",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/medium/1024-x-768/openai/gpt-image-2/edit": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.043,
+        "source": "https://fal.ai/models/openai/gpt-image-2/edit",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/medium/1024-x-1024/openai/gpt-image-2/edit": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.061,
+        "source": "https://fal.ai/models/openai/gpt-image-2/edit",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/medium/1024-x-1536/openai/gpt-image-2/edit": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.054,
+        "source": "https://fal.ai/models/openai/gpt-image-2/edit",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/medium/1920-x-1080/openai/gpt-image-2/edit": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.053,
+        "source": "https://fal.ai/models/openai/gpt-image-2/edit",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/medium/2560-x-1440/openai/gpt-image-2/edit": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.068,
+        "source": "https://fal.ai/models/openai/gpt-image-2/edit",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/medium/3840-x-2160/openai/gpt-image-2/edit": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.113,
+        "source": "https://fal.ai/models/openai/gpt-image-2/edit",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/high/1024-x-768/openai/gpt-image-2/edit": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.151,
+        "source": "https://fal.ai/models/openai/gpt-image-2/edit",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/high/1024-x-1024/openai/gpt-image-2/edit": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.219,
+        "source": "https://fal.ai/models/openai/gpt-image-2/edit",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/high/1024-x-1536/openai/gpt-image-2/edit": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.178,
+        "source": "https://fal.ai/models/openai/gpt-image-2/edit",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/high/1920-x-1080/openai/gpt-image-2/edit": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.158,
+        "source": "https://fal.ai/models/openai/gpt-image-2/edit",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/high/2560-x-1440/openai/gpt-image-2/edit": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.234,
+        "source": "https://fal.ai/models/openai/gpt-image-2/edit",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/high/3840-x-2160/openai/gpt-image-2/edit": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.413,
         "source": "https://fal.ai/models/openai/gpt-image-2/edit",
         "supported_endpoints": [
             "/v1/images/generations"
