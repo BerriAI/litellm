@@ -2958,6 +2958,55 @@ def test_validate_trusted_redirect_uri_logs_diagnostic_on_rejection(caplog, monk
 
 
 @pytest.mark.parametrize(
+    "direct_ip,expect_accepted",
+    [
+        ("10.0.0.7", True),
+        ("203.0.113.5", False),
+    ],
+)
+def test_validate_trusted_redirect_uri_follows_the_xff_trust_gate(direct_ip, expect_accepted, monkeypatch):
+    try:
+        from fastapi import HTTPException, Request
+
+        from litellm.proxy._experimental.mcp_server.oauth_utils import (
+            validate_trusted_redirect_uri,
+        )
+    except ImportError:
+        pytest.skip("MCP oauth_utils not available")
+
+    monkeypatch.delenv("PROXY_BASE_URL", raising=False)
+    monkeypatch.delenv("MCP_TRUSTED_REDIRECT_ORIGINS", raising=False)
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "http://localhost:4000/"
+    mock_request.client = MagicMock()
+    mock_request.client.host = direct_ip
+
+    headers = {
+        "X-Forwarded-Proto": "https",
+        "X-Forwarded-Host": "proxy.example.com",
+    }
+    mock_request.headers.get = lambda name, default=None: headers.get(name, default)
+    mock_request.headers.__contains__ = lambda self_, name: name in headers
+
+    redirect_uri = "https://proxy.example.com/callback"
+    general_settings = {
+        "use_x_forwarded_for": True,
+        "mcp_trusted_proxy_ranges": ["10.0.0.0/8"],
+    }
+
+    with patch("litellm.proxy.proxy_server.general_settings", general_settings, create=True):
+        if expect_accepted:
+            validate_trusted_redirect_uri(mock_request, redirect_uri)
+            return
+        with pytest.raises(HTTPException) as exc_info:
+            validate_trusted_redirect_uri(mock_request, redirect_uri)
+
+    assert exc_info.value.status_code == 400
+    assert "proxy.example.com" in str(exc_info.value.detail)
+
+
+@pytest.mark.parametrize(
     "bad_value",
     [
         "litellm.example.com",
