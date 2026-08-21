@@ -18,7 +18,10 @@ sys.path.insert(0, os.path.abspath("../../../../.."))
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
-from litellm.llms.perplexity.responses.transformation import PerplexityResponsesConfig
+from litellm.llms.perplexity.responses.transformation import (
+    PerplexityResponsesConfig,
+    perplexity_uses_agent_api,
+)
 from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams
 from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager
@@ -590,3 +593,55 @@ class TestPerplexityResponsesTransformation:
         assert result.type == "response.completed"
         assert result.response.usage.cost == 0.0003
         assert isinstance(result.response.usage.cost, float)
+
+
+class TestPerplexityAgentApiRouting:
+    """Routing an Agent API deployment to /v1/responses must not depend on the cost map.
+
+    ``completion()`` picks the responses bridge off ``mode`` in the cost map, so an Agent API
+    model litellm ships no pricing for was unroutable on /v1/chat/completions, and
+    ``perplexity/perplexity/sonar`` resolved to the older flat ``perplexity/sonar`` chat entry
+    several steps before the doubled-prefix key. Both went out on Perplexity's chat endpoint
+    and came back 400 naming a model id nobody wrote.
+    """
+
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "perplexity/sonar",
+            "perplexity/glm-5.2",
+            "perplexity/nemotron-3-ultra-550b-a55b",
+            "openai/gpt-5.2",
+            "anthropic/claude-opus-4-7",
+            "preset/pro-search",
+        ],
+    )
+    def test_agent_api_models_bridge_to_responses(self, model):
+        from litellm.main import responses_api_bridge_check
+
+        model_info, _ = responses_api_bridge_check(model=model, custom_llm_provider="perplexity")
+
+        assert model_info.get("mode") == "responses"
+
+    @pytest.mark.parametrize("model", ["sonar", "sonar-pro", "sonar-reasoning", "llama-3.1-70b-instruct"])
+    def test_chat_models_stay_on_chat_completions(self, model):
+        from litellm.main import responses_api_bridge_check
+
+        model_info, _ = responses_api_bridge_check(model=model, custom_llm_provider="perplexity")
+
+        assert model_info.get("mode") != "responses"
+
+    def test_other_providers_keep_a_slash_in_the_model_name_on_chat(self):
+        from litellm.main import responses_api_bridge_check
+
+        model_info, _ = responses_api_bridge_check(
+            model="meta-llama/Llama-3.3-70B-Instruct", custom_llm_provider="together_ai"
+        )
+
+        assert model_info.get("mode") != "responses"
+
+    def test_agent_api_ids_are_told_apart_by_their_vendor_namespace(self):
+        assert perplexity_uses_agent_api("perplexity/sonar") is True
+        assert perplexity_uses_agent_api("preset/pro-search") is True
+        assert perplexity_uses_agent_api("sonar") is False
+        assert perplexity_uses_agent_api("sonar-pro") is False
