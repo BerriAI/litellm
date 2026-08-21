@@ -1,6 +1,6 @@
 import re
 from collections.abc import Sequence
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 from fastapi import HTTPException, Request, status
 
@@ -15,6 +15,9 @@ from litellm.proxy._types import (
 )
 
 from .auth_checks_organization import _user_is_org_admin
+
+if TYPE_CHECKING:
+    from litellm.proxy.auth.custom_rbac import CustomRBACEngine
 
 # Management write routes denied to PROXY_ADMIN_VIEW_ONLY. Adding a new write
 # endpoint to a management router REQUIRES adding it here too — the surrounding
@@ -240,6 +243,28 @@ class RouteChecks:
         )
 
     @staticmethod
+    def custom_rbac_route_allowed(
+        user_obj: LiteLLM_UserTable | None,
+        route: str,
+        custom_rbac_engine: "CustomRBACEngine | None",
+    ) -> bool:
+        """Whether the caller's custom RBAC role grants ``route``.
+
+        False when the caller's role is not governed by a custom role, so the built-in role
+        checks still apply. Governed roles are default-deny: a route the role does not grant
+        raises 403 instead of falling through to the built-in permissions
+        """
+        raw_role: Final = user_obj.user_role if user_obj is not None else None
+        if custom_rbac_engine is None or not custom_rbac_engine.is_governed_role(raw_role) or raw_role is None:
+            return False
+        if custom_rbac_engine.is_route_allowed(role_name=raw_role, route=route):
+            return True
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"user_role={raw_role} is not allowed to access route={route}",
+        )
+
+    @staticmethod
     def non_proxy_admin_allowed_routes_check(
         user_obj: LiteLLM_UserTable | None,
         _user_role: LitellmUserRoles | None,
@@ -247,6 +272,7 @@ class RouteChecks:
         request: Request,
         valid_token: UserAPIKeyAuth,
         request_data: dict,
+        custom_rbac_engine: "CustomRBACEngine | None" = None,
     ):
         """
         Checks if Non Proxy Admin User is allowed to access the route
@@ -256,6 +282,13 @@ class RouteChecks:
         RouteChecks.custom_admin_only_route_check(
             route=route,
         )
+
+        if RouteChecks.custom_rbac_route_allowed(
+            user_obj=user_obj,
+            route=route,
+            custom_rbac_engine=custom_rbac_engine,
+        ):
+            return
 
         if RouteChecks.is_auth_enforced_pass_through_route(
             route=route,

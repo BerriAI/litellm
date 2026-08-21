@@ -206,6 +206,54 @@ class LitellmUserRoles(str, enum.Enum):
         ]
 
 
+ASSIGNABLE_BUILTIN_USER_ROLES: Final = frozenset(
+    (
+        LitellmUserRoles.PROXY_ADMIN,
+        LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+        LitellmUserRoles.INTERNAL_USER,
+        LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
+    )
+)
+
+
+def user_role_name(value: "LitellmUserRoles | str | None") -> str | None:
+    """The wire name of a built-in or custom RBAC role"""
+    return value.value if isinstance(value, LitellmUserRoles) else value
+
+
+def parse_stored_user_role(value: str) -> "LitellmUserRoles | str":
+    """A persisted user_role as its built-in enum member, or verbatim when it is a custom RBAC role"""
+    try:
+        return LitellmUserRoles(value)
+    except ValueError:
+        return value
+
+
+def coerce_assignable_user_role(
+    value: "LitellmUserRoles | str | None",
+) -> "LitellmUserRoles | str | None":
+    """Normalize a user_role from a management request.
+
+    Built-in roles are returned as enum members and are rejected unless they can be assigned
+    to a user directly. Any other string is kept verbatim as a custom RBAC role name; whether
+    such a role actually exists is checked against the configured roles by the endpoint
+    """
+    if value is None:
+        return None
+
+    try:
+        role: Final = LitellmUserRoles(value)
+    except ValueError:
+        return str(value)
+
+    if role not in ASSIGNABLE_BUILTIN_USER_ROLES:
+        raise ValueError(
+            f"user_role={role.value} cannot be assigned to a user. "
+            f"Allowed built-in roles: {sorted(_role.value for _role in ASSIGNABLE_BUILTIN_USER_ROLES)}"
+        )
+    return role
+
+
 class LitellmTableNames(str, enum.Enum):
     """
     Enum for Table Names used by LiteLLM
@@ -1674,34 +1722,23 @@ class NewUserRequest(GenerateRequestBase):
     max_budget: float | None = None
     user_email: str | None = None
     user_alias: str | None = None
-    user_role: (
-        Literal[
-            LitellmUserRoles.PROXY_ADMIN,
-            LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
-            LitellmUserRoles.INTERNAL_USER,
-            LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
-        ]
-        | None
-    ) = None
+    user_role: LitellmUserRoles | str | None = None
     teams: list[str] | list[NewUserRequestTeam] | None = None
     auto_create_key: bool = True  # flag used for returning a key as part of the /user/new response
     send_invite_email: bool | None = None
     sso_user_id: str | None = None
     organizations: list[str] | None = None
 
+    @field_validator("user_role")
+    @classmethod
+    def _check_user_role(cls, value: LitellmUserRoles | str | None) -> LitellmUserRoles | str | None:
+        return coerce_assignable_user_role(value)
+
 
 class NewUserResponse(GenerateKeyResponse):
     max_budget: float | None = None
     user_email: str | None = None
-    user_role: (
-        Literal[
-            LitellmUserRoles.PROXY_ADMIN,
-            LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
-            LitellmUserRoles.INTERNAL_USER,
-            LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
-        ]
-        | None
-    ) = None
+    user_role: LitellmUserRoles | str | None = None
     teams: list | None = None
     user_alias: str | None = None
     model_max_budget: dict | None = None
@@ -1714,16 +1751,13 @@ class UpdateUserRequestNoUserIDorEmail(GenerateRequestBase):  # shared with Bulk
     spend: float | None = None
     metadata: dict | None = None
     user_alias: str | None = None
-    user_role: (
-        Literal[
-            LitellmUserRoles.PROXY_ADMIN,
-            LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
-            LitellmUserRoles.INTERNAL_USER,
-            LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
-        ]
-        | None
-    ) = None
+    user_role: LitellmUserRoles | str | None = None
     max_budget: float | None = None
+
+    @field_validator("user_role")
+    @classmethod
+    def _check_user_role(cls, value: LitellmUserRoles | str | None) -> LitellmUserRoles | str | None:
+        return coerce_assignable_user_role(value)
 
 
 class UpdateUserRequest(UpdateUserRequestNoUserIDorEmail):
@@ -2795,7 +2829,7 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
     """
 
     api_key: str | None = None
-    user_role: LitellmUserRoles | None = None
+    user_role: LitellmUserRoles | str | None = None
     allowed_model_region: AllowedModelRegion | None = None
     parent_otel_span: Span | None = None
     rpm_limit_per_model: dict[str, int] | None = None

@@ -256,6 +256,11 @@ LAZY_FEATURES: Final[tuple[LazyFeature, ...]] = (
         module_path="litellm.proxy.management_endpoints.access_group_endpoints",
         path_prefixes=("/access_group", "/v1/access_group", "/v1/unified_access_group"),
     ),
+    LazyFeature(
+        name="custom_rbac_roles",
+        module_path="litellm.proxy.management_endpoints.custom_rbac_role_endpoints",
+        path_prefixes=("/custom_role",),
+    ),
 )
 
 
