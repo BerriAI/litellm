@@ -181,6 +181,25 @@ def test_arbitrary_threshold_rate_the_deployment_declares_is_zeroed_too(threshol
 
 
 @pytest.mark.parametrize(
+    "threshold_field",
+    [
+        "output_cost_per_token_above_32k_tokens_priority",
+        "cache_read_input_token_cost_above_32k_tokens_priority",
+    ],
+)
+def test_service_tier_qualified_threshold_rate_declared_is_zeroed_too(threshold_field):
+    """A tier-qualified threshold rate the deployment declares must be zeroed like every
+    other declared rate, or a PTU deployment bills per token past the threshold."""
+    assert threshold_field not in CUSTOM_PRICING_FIELDS
+    assert threshold_field not in PTU_ZEROED_PRICING_FIELDS
+
+    override = _with_flag(_VALID, declared={threshold_field: 9e-06})
+
+    assert override is not None
+    assert override.get(threshold_field, 9e-06) == 0.0
+
+
+@pytest.mark.parametrize(
     "param_field",
     [
         "api_key_above_32k_tokens",
@@ -216,11 +235,28 @@ def test_is_threshold_rate_key_accepts_supported_threshold_rates(field):
 @pytest.mark.parametrize(
     "field",
     [
+        "input_cost_per_token_above_32k_tokens_priority",
+        "output_cost_per_token_above_32k_tokens_flex",
+        "cache_read_input_token_cost_above_200k_tokens_priority",
+        "cache_creation_input_token_cost_above_32k_tokens_ultrafast",
+        "cache_creation_input_token_cost_above_1hr_above_200k_tokens_priority",
+    ],
+)
+def test_is_threshold_rate_key_accepts_service_tier_qualified_threshold_rates(field):
+    assert is_threshold_rate_key(field)
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
         "api_key_above_32k_tokens",
         "secret_above_32k_tokens",
         "credential_above_32k_tokens",
         "custom_provider_param_above_32k_tokens",
-        "input_cost_per_token_above_32k_tokens_priority",
+        "api_key_above_32k_tokens_priority",
+        "secret_above_32k_tokens_flex",
+        "credential_above_200k_tokens_ultrafast",
+        "custom_provider_param_above_32k_tokens_priority",
         "input_cost_per_token",
         "tiered_pricing",
     ],

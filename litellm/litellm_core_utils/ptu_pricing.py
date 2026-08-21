@@ -54,7 +54,7 @@ _THRESHOLD_RATE_KEY: Final[re.Pattern[str]] = re.compile(
     r"output_cost_per_token|"
     r"cache_creation_input_token_cost(?:_above_1hr)?|"
     r"cache_read_input_token_cost"
-    r")_above_\d+k?_tokens$"
+    r")_above_\d+k?_tokens(?:_(?:priority|flex|ultrafast))?$"
 )
 
 
