@@ -54,6 +54,7 @@ const CODE_KILLS_ROW: Readonly<Record<KeyBudgetNoteCode, boolean>> = {
   end_user_route_only: false,
   entity_unavailable: false,
   project_spend_not_tracked: true,
+  proxy_spend_restricted: false,
   request_tags_add_budgets: false,
   reservation_blocks_at_limit: false,
   rolling_window: false,
