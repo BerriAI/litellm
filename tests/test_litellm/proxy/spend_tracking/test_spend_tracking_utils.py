@@ -2653,8 +2653,22 @@ def test_redact_logged_api_key_long_opaque_token_is_hashed():
 
 def test_redact_logged_api_key_hashed_jwt_passes_through():
     jwt_hash = "hashed-jwt-" + "a" * 64
-    result = _redact_logged_api_key(jwt_hash)
+    result = _redact_logged_api_key(jwt_hash, already_hashed=True)
     assert result == jwt_hash
+
+
+def test_redact_logged_api_key_hashed_jwt_shape_without_provenance_is_hashed():
+    lookalike = "hashed-jwt-" + "a" * 64
+    result = _redact_logged_api_key(lookalike)
+    assert result == hash_token(lookalike)
+    assert result != lookalike
+
+
+def test_redact_logged_api_key_hashed_jwt_trailing_newline_is_hashed():
+    trailing = "hashed-jwt-" + "a" * 64 + "\n"
+    result = _redact_logged_api_key(trailing, already_hashed=True)
+    assert result == hash_token(trailing)
+    assert result != trailing
 
 
 def test_redact_logged_api_key_hashed_jwt_short_suffix_is_hashed():
@@ -2730,8 +2744,15 @@ def test_get_spend_logs_metadata_provenance_bypass_requires_hash_match():
 
 def test_get_spend_logs_metadata_hashed_jwt_unchanged():
     jwt_hash = "hashed-jwt-" + "b" * 64
-    meta = _get_spend_logs_metadata({"user_api_key": jwt_hash})
+    meta = _get_spend_logs_metadata({"user_api_key": jwt_hash, "user_api_key_hash": jwt_hash})
     assert meta["user_api_key"] == jwt_hash
+
+
+def test_get_spend_logs_metadata_hashed_jwt_shape_without_provenance_is_hashed():
+    lookalike = "hashed-jwt-" + "b" * 64
+    meta = _get_spend_logs_metadata({"user_api_key": lookalike})
+    assert meta["user_api_key"] == hash_token(lookalike)
+    assert meta["user_api_key"] != lookalike
 
 
 def test_get_spend_logs_metadata_none_key_is_none():
