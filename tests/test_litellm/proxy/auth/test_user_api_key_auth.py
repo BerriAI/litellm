@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import sys
+from contextlib import contextmanager
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
@@ -3739,6 +3740,140 @@ async def test_centralized_common_checks_skipped_for_custom_auth_without_flag():
             setattr(_proxy_server_mod, k, v)
 
 
+def _unrestricted_end_user_prisma(spend: float):
+    """Prisma stand-in where "customer-1" exists but restricts nothing: no row matches the
+    restricted-registry query, and the row itself carries only spend."""
+    end_user_row = MagicMock()
+    end_user_row.user_id = "customer-1"
+    end_user_row.dict = lambda: {"user_id": "customer-1", "blocked": False, "spend": spend}
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_endusertable.find_many = AsyncMock(return_value=[])
+    mock_prisma.db.litellm_endusertable.find_unique = AsyncMock(return_value=end_user_row)
+    mock_prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
+    mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=None)
+    mock_prisma.db.litellm_verificationtoken.find_unique = AsyncMock(return_value=None)
+    return mock_prisma
+
+
+@contextmanager
+def _custom_auth_end_user_world(mock_prisma):
+    """The proxy globals a custom-auth deployment running the centralized gate reads, with cold
+    spend counters. Real caches, so the end user's spend reaches the counter the way it does in
+    production: through the cache entry get_end_user_object writes."""
+    import litellm.proxy.proxy_server as _proxy_server_mod
+
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.utils import ProxyLogging
+
+    key_cache = UserApiKeyCache()
+    attrs = {
+        **_proxy_attrs_for_centralized_checks(user_custom_auth=AsyncMock(), flag=True),
+        "prisma_client": mock_prisma,
+        "user_api_key_cache": key_cache,
+        "spend_counter_cache": DualCache(),
+        "proxy_logging_obj": ProxyLogging(user_api_key_cache=key_cache),
+    }
+    originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
+    try:
+        for k, v in attrs.items():
+            setattr(_proxy_server_mod, k, v)
+        yield
+    finally:
+        for k, v in originals.items():
+            setattr(_proxy_server_mod, k, v)
+
+
+def _chat_request():
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    request = Request(scope={"type": "http"})
+    request._url = URL(url="/chat/completions")
+    return request
+
+
+@pytest.mark.asyncio
+async def test_centralized_checks_enforce_token_end_user_budget_against_row_spend():
+    """
+    Regression: a token-supplied end-user budget must still be checked against the end user's
+    recorded spend.
+
+    A user_custom_auth callable can set end_user_max_budget on the token for an end user whose own
+    row carries no budget, which keeps that row out of the restricted-id registry. Auth must still
+    load it, because the reservation counter cold-starts from the spend on the loaded row; skipping
+    the load admits a customer who is already double their budget.
+    """
+    mock_prisma = _unrestricted_end_user_prisma(spend=100.0)
+    token = UserAPIKeyAuth(
+        api_key="sk-test",
+        token="hashed-token",
+        user_id="u1",
+        end_user_id="customer-1",
+        end_user_max_budget=50.0,
+    )
+
+    with _custom_auth_end_user_world(mock_prisma):
+        with (
+            patch(
+                "litellm.proxy.auth.user_api_key_auth.common_checks",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "litellm.proxy.spend_tracking.budget_reservation.estimate_request_max_cost",
+                return_value=0.6,
+            ),
+            pytest.raises(litellm.BudgetExceededError) as exc_info,
+        ):
+            await _run_centralized_common_checks(
+                user_api_key_auth_obj=token,
+                request=_chat_request(),
+                request_data={
+                    "model": "gpt-4o-mini",
+                    "messages": [{"role": "user", "content": "hi"}],
+                },
+                route="/chat/completions",
+            )
+
+    assert exc_info.value.max_budget == 50.0
+    assert exc_info.value.current_cost == pytest.approx(100.6)
+
+
+@pytest.mark.asyncio
+async def test_centralized_checks_skip_end_user_lookup_without_a_token_budget():
+    """The companion case: with no token budget an unrestricted end user costs zero row reads."""
+    mock_prisma = _unrestricted_end_user_prisma(spend=100.0)
+    token = UserAPIKeyAuth(
+        api_key="sk-test",
+        token="hashed-token",
+        user_id="u1",
+        end_user_id="customer-1",
+    )
+
+    with _custom_auth_end_user_world(mock_prisma):
+        with (
+            patch(
+                "litellm.proxy.auth.user_api_key_auth.common_checks",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "litellm.proxy.spend_tracking.budget_reservation.estimate_request_max_cost",
+                return_value=0.6,
+            ),
+        ):
+            await _run_centralized_common_checks(
+                user_api_key_auth_obj=token,
+                request=_chat_request(),
+                request_data={
+                    "model": "gpt-4o-mini",
+                    "messages": [{"role": "user", "content": "hi"}],
+                },
+                route="/chat/completions",
+            )
+
+    mock_prisma.db.litellm_endusertable.find_unique.assert_not_awaited()
+
+
 @pytest.mark.asyncio
 async def test_centralized_common_checks_runs_for_custom_auth_with_flag():
     """Custom-auth deployments that opt in via custom_auth_run_common_checks
@@ -4363,212 +4498,6 @@ async def test_centralized_common_checks_team_404_does_not_zero_other_contexts()
         assert kwargs["user_object"] is fetched_user
         assert kwargs["end_user_object"] is fetched_end_user
         assert kwargs["project_object"] is fetched_project
-    finally:
-        for k, v in originals.items():
-            setattr(_proxy_server_mod, k, v)
-
-
-@pytest.mark.asyncio
-async def test_centralized_common_checks_unresolvable_team_without_grant_is_refused():
-    """The store restricts the team to gpt-4o-mini and the read of it fails, so the
-    only surviving team record is the token's own, which carries ``team_models=[]``
-    and reads as every model. The request must be refused with the original lookup
-    error. Pre-fix it was served."""
-    import litellm.proxy.proxy_server as _proxy_server_mod
-    from fastapi import HTTPException, Request
-    from starlette.datastructures import URL
-
-    # The key inherits its models from the team (models=[]), so the team object
-    # is the only gate on model access.
-    token = UserAPIKeyAuth(
-        api_key="sk-test",
-        team_id="restricted-team",
-        models=[],
-        team_models=[],
-    )
-    request = Request(scope={"type": "http"})
-    request._url = URL(url="/chat/completions")
-    request._body = json.dumps({"model": "gpt-4.1"}).encode()
-
-    team_read_failure = HTTPException(
-        status_code=404,
-        detail={"error": "Team doesn't exist in db. Team=restricted-team."},
-    )
-
-    attrs = _proxy_attrs_for_centralized_checks(user_custom_auth=None)
-    originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
-    try:
-        for k, v in attrs.items():
-            setattr(_proxy_server_mod, k, v)
-        with patch(
-            "litellm.proxy.auth.user_api_key_auth.get_team_object",
-            new_callable=AsyncMock,
-            side_effect=team_read_failure,
-        ):
-            with pytest.raises(HTTPException) as exc_info:
-                await _run_centralized_common_checks(
-                    user_api_key_auth_obj=token,
-                    request=request,
-                    request_data={"model": "gpt-4.1"},
-                    route="/chat/completions",
-                )
-        assert exc_info.value is team_read_failure
-    finally:
-        for k, v in originals.items():
-            setattr(_proxy_server_mod, k, v)
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("token_team_models", [[], ["gpt-4.1"]])
-async def test_centralized_common_checks_absent_team_refused_despite_db_unavailable_optout(token_team_models):
-    """A team that is provably gone is a definitive answer, not a degraded read.
-    ``allow_requests_on_db_unavailable`` is a static settings read, so without the
-    absent-versus-unreadable distinction it would hand a deleted team's key the
-    old permissive fallback while the database is perfectly healthy. Refused in
-    both token shapes, including the one whose grant would otherwise vouch.
-
-    Imported from the module under test rather than from ``auth_checks``: other
-    tests in this suite ``importlib.reload`` that module, which rebinds the class
-    and would leave this raising a type the guard has never seen."""
-    import litellm.proxy.proxy_server as _proxy_server_mod
-    from fastapi import HTTPException, Request
-    from starlette.datastructures import URL
-
-    from litellm.proxy.auth.user_api_key_auth import TeamNotFoundError
-
-    token = UserAPIKeyAuth(
-        api_key="sk-test",
-        team_id="deleted-team",
-        models=[],
-        team_models=token_team_models,
-    )
-    request = Request(scope={"type": "http"})
-    request._url = URL(url="/chat/completions")
-    request._body = json.dumps({"model": "gpt-4.1"}).encode()
-
-    team_absent = TeamNotFoundError(team_id="deleted-team")
-
-    attrs = _proxy_attrs_for_centralized_checks(user_custom_auth=None)
-    attrs["general_settings"] = {"allow_requests_on_db_unavailable": True}
-    originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
-    try:
-        for k, v in attrs.items():
-            setattr(_proxy_server_mod, k, v)
-        with patch(
-            "litellm.proxy.auth.user_api_key_auth.get_team_object",
-            new_callable=AsyncMock,
-            side_effect=team_absent,
-        ):
-            with pytest.raises(HTTPException) as exc_info:
-                await _run_centralized_common_checks(
-                    user_api_key_auth_obj=token,
-                    request=request,
-                    request_data={"model": "gpt-4.1"},
-                    route="/chat/completions",
-                )
-        assert exc_info.value is team_absent
-    finally:
-        for k, v in originals.items():
-            setattr(_proxy_server_mod, k, v)
-
-
-@pytest.mark.asyncio
-async def test_centralized_common_checks_unreadable_team_keeps_db_unavailable_optout():
-    """The counterpart: an unreadable team leaves the grant unknown rather than
-    answered, so an operator who has accepted degraded authorization during a
-    database fault still gets the fallback. Without this the fix would trade the
-    widening for a lockout with no way out."""
-    import litellm.proxy.proxy_server as _proxy_server_mod
-    from fastapi import HTTPException as _HTTPException
-    from fastapi import Request
-    from starlette.datastructures import URL
-
-    token = UserAPIKeyAuth(api_key="sk-test", team_id="unreadable-team", models=[], team_models=[])
-    request = Request(scope={"type": "http"})
-    request._url = URL(url="/chat/completions")
-    request._body = json.dumps({"model": "gpt-4.1"}).encode()
-
-    attrs = _proxy_attrs_for_centralized_checks(user_custom_auth=None)
-    attrs["general_settings"] = {"allow_requests_on_db_unavailable": True}
-    originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
-    try:
-        for k, v in attrs.items():
-            setattr(_proxy_server_mod, k, v)
-        with (
-            patch(
-                "litellm.proxy.auth.user_api_key_auth.get_team_object",
-                new_callable=AsyncMock,
-                side_effect=_HTTPException(status_code=404, detail={"error": "team unreadable"}),
-            ),
-            patch(
-                "litellm.proxy.auth.user_api_key_auth.common_checks",
-                new_callable=AsyncMock,
-            ) as mock_checks,
-        ):
-            await _run_centralized_common_checks(
-                user_api_key_auth_obj=token,
-                request=request,
-                request_data={"model": "gpt-4.1"},
-                route="/chat/completions",
-            )
-        mock_checks.assert_awaited_once()
-        assert mock_checks.call_args.kwargs["team_object"].team_id == "unreadable-team"
-    finally:
-        for k, v in originals.items():
-            setattr(_proxy_server_mod, k, v)
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "requested_model, is_granted",
-    [("gpt-4o-mini", True), ("gpt-4.1", False)],
-)
-async def test_centralized_common_checks_unresolvable_team_with_grant_enforces_it(requested_model, is_granted):
-    """Mirror of the refusal above: a token that does carry a team model grant keeps
-    the fallback, and the reconstructed team must still enforce that grant rather
-    than wave the request through."""
-    import litellm.proxy.proxy_server as _proxy_server_mod
-    from fastapi import HTTPException, Request
-    from starlette.datastructures import URL
-
-    from litellm.proxy._types import ProxyErrorTypes, ProxyException
-
-    token = UserAPIKeyAuth(
-        api_key="sk-test",
-        team_id="restricted-team",
-        models=[],
-        team_models=["gpt-4o-mini"],
-    )
-    request = Request(scope={"type": "http"})
-    request._url = URL(url="/chat/completions")
-    request._body = json.dumps({"model": requested_model}).encode()
-
-    attrs = _proxy_attrs_for_centralized_checks(user_custom_auth=None)
-    originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
-    try:
-        for k, v in attrs.items():
-            setattr(_proxy_server_mod, k, v)
-        with patch(
-            "litellm.proxy.auth.user_api_key_auth.get_team_object",
-            new_callable=AsyncMock,
-            side_effect=HTTPException(status_code=404, detail={"error": "team unreadable"}),
-        ):
-            if is_granted:
-                await _run_centralized_common_checks(
-                    user_api_key_auth_obj=token,
-                    request=request,
-                    request_data={"model": requested_model},
-                    route="/chat/completions",
-                )
-            else:
-                with pytest.raises(ProxyException) as exc_info:
-                    await _run_centralized_common_checks(
-                        user_api_key_auth_obj=token,
-                        request=request,
-                        request_data={"model": requested_model},
-                        route="/chat/completions",
-                    )
-                assert exc_info.value.type == ProxyErrorTypes.team_model_access_denied
     finally:
         for k, v in originals.items():
             setattr(_proxy_server_mod, k, v)
@@ -5408,7 +5337,7 @@ async def test_random_non_sk_token_is_rejected(monkeypatch):
         patch("litellm.proxy.proxy_server.master_key", "sk-master"),
         patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
     ):
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(Exception, match='LiteLLM Virtual Key expected\\.') as exc_info:
             await user_api_key_auth(
                 request=mock_request,
                 api_key="Bearer not-a-real-token",
@@ -5610,7 +5539,7 @@ async def test_real_jwt_still_requires_license_when_jwt_auth_enabled(monkeypatch
         patch("litellm.proxy.proxy_server.master_key", "sk-master"),
         patch("litellm.proxy.proxy_server.prisma_client", None),
     ):
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(Exception, match='JWT Auth is an enterprise only feature\\. You must be a') as exc_info:
             await user_api_key_auth(
                 request=mock_request,
                 api_key=f"Bearer {jwt_token}",

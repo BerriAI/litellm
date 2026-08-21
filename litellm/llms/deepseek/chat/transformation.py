@@ -131,9 +131,11 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
           - model supports reasoning (capability check)
           - user explicitly passed thinking={"type": "enabled"} (opt-in check)
         """
+        thinking: Final = optional_params.get("thinking")
         return (
             supports_reasoning(model=model, custom_llm_provider="deepseek")
-            and (optional_params.get("thinking") or {}).get("type") == "enabled"
+            and isinstance(thinking, dict)
+            and thinking.get("type") == "enabled"
         )
 
     @staticmethod

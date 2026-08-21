@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import MCPDiscovery from "./mcp_discovery";
@@ -70,7 +70,7 @@ describe("MCPDiscovery", () => {
     render(<MCPDiscovery {...defaultProps} />);
     await screen.findByText("GitHub");
 
-    await userEvent.type(screen.getByPlaceholderText("Search servers..."), "chat");
+    fireEvent.change(screen.getByPlaceholderText("Search servers..."), { target: { value: "chat" } });
 
     await waitFor(() => expect(screen.queryByText("GitHub")).not.toBeInTheDocument());
     expect(screen.getByText("Slack")).toBeInTheDocument();

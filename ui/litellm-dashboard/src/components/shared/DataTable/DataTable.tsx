@@ -303,7 +303,10 @@ function DataTableBodyRow<TData>({
 function MessageRow({ colSpan, children }: { colSpan: number; children: React.ReactNode }) {
   return (
     <TableRow className="hover:bg-transparent">
-      <TableCell colSpan={colSpan} className="h-24 text-center align-middle text-sm text-muted-foreground">
+      <TableCell
+        colSpan={colSpan}
+        className="h-24 text-center align-middle text-sm whitespace-normal text-muted-foreground"
+      >
         {children}
       </TableCell>
     </TableRow>
@@ -594,7 +597,7 @@ export function DataTable<TData extends RowData, TValue>(props: DataTableProps<T
           <TableRoot className={enableColumnResizing ? "table-fixed" : ""} style={tableStyle}>
             <TableHeader className={cn(stickyHeader ? "sticky top-0 z-20" : "", fill.header)}>
               {table.getHeaderGroups().map((headerGroup) => (
-                <TableRow key={headerGroup.id} className="bg-muted/50 hover:bg-muted/50">
+                <TableRow key={headerGroup.id} className="bg-muted/50">
                   {headerGroup.headers.map((header) => (
                     <DataTableHeadCell
                       key={header.id}
