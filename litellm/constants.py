@@ -1606,6 +1606,7 @@ LITELLM_SETTINGS_SAFE_DB_OVERRIDES: Final = [
     "public_model_groups_links",
     "cost_discount_config",
     "cost_margin_config",
+    "block_requests_for_models_without_pricing",
     "budget_exceeded_throttle_percentage",
     # Every field editable from the Admin UI (proxy_server._GENERAL_SETTINGS_UI_LITELLM_FIELDS)
     # must be listed here so a DB write from one worker overrides the live litellm attribute on
