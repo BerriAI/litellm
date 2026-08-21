@@ -341,9 +341,13 @@ filterwarnings = [
 paths_to_mutate = [
     "litellm/proxy/management_endpoints/",
 ]
+# Only the unit tier that maps to paths_to_mutate. mutmut times and
+# coverage-maps this whole set once before mutating, so a tier that needs a
+# seeded database (tests/proxy_behavior/) kills the run before it starts, and
+# a mutation score is only meaningful against the tests that claim to cover
+# the mutated code anyway.
 tests_dir = [
     "tests/test_litellm/proxy/management_endpoints/",
-    "tests/proxy_behavior/management/",
 ]
 also_copy = [
     "litellm/",

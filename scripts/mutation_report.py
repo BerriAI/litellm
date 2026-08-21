@@ -22,6 +22,7 @@ import tomllib
 from collections import defaultdict
 from difflib import SequenceMatcher
 from pathlib import Path
+from typing import NamedTuple
 from textwrap import dedent
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -33,16 +34,24 @@ def load_mutmut_config() -> dict:
         return tomllib.load(f)["tool"]["mutmut"]
 
 
-def get_survivors() -> list[str]:
+class MutmutResults(NamedTuple):
+    survivors: tuple[str, ...]
+    reported: int
+
+
+def get_survivors() -> MutmutResults:
     proc = subprocess.run(
         [*MUTMUT_INVOCATION, "results"], capture_output=True, text=True, check=False
     )
-    survivors = []
-    for line in proc.stdout.splitlines():
-        m = re.match(r"\s*(\S+):\s*survived\s*$", line)
-        if m:
-            survivors.append(m.group(1))
-    return survivors
+    verdicts = tuple(
+        m.groups()
+        for line in proc.stdout.splitlines()
+        if (m := re.match(r"\s*(\S+):\s*(\w+)\s*$", line))
+    )
+    return MutmutResults(
+        survivors=tuple(name for name, verdict in verdicts if verdict == "survived"),
+        reported=len(verdicts),
+    )
 
 
 def get_mutmut_show(mutant_name: str) -> str:
@@ -222,7 +231,8 @@ def render_meta_style_mutant(
     return "\n".join(out)
 
 
-def render(config: dict, survivors: list[str], stats: dict | None) -> str:
+def render(config: dict, results: MutmutResults, stats: dict | None) -> str:
+    survivors = list(results.survivors)
     by_function: dict[tuple[str, str], list[tuple[str, str]]] = defaultdict(list)
     for survivor in survivors:
         module_path, function_name, mutant_num = parse_mutant_name(survivor)
@@ -264,7 +274,12 @@ def render(config: dict, survivors: list[str], stats: dict | None) -> str:
     out.append("")
 
     if not survivors:
-        out.append("**No surviving mutants — the test suite caught every mutation.**")
+        out.append(
+            "**No surviving mutants — the test suite caught every mutation.**"
+            if results.reported
+            else "**mutmut reported no mutants at all. The run did not finish; this is "
+            "not a passing score.**"
+        )
         out.append("")
         return "\n".join(out)
 
@@ -407,15 +422,22 @@ def main() -> int:
         except json.JSONDecodeError as exc:
             print(f"warning: could not parse {stats_file}: {exc}", file=sys.stderr)
 
-    survivors = get_survivors()
-    report = render(config, survivors, stats)
+    results = get_survivors()
+    report = render(config, results, stats)
 
     out_path = ROOT / "mutation-report.md"
     out_path.write_text(report)
     print(
-        f"Wrote {out_path} ({len(survivors)} survivor"
-        f"{'s' if len(survivors) != 1 else ''}, {len(report)} chars)"
+        f"Wrote {out_path} ({len(results.survivors)} survivor"
+        f"{'s' if len(results.survivors) != 1 else ''}, {len(report)} chars)"
     )
+    if not results.reported and stats is None:
+        print(
+            "error: mutmut produced no results, so the report cannot say anything "
+            "about the suite",
+            file=sys.stderr,
+        )
+        return 1
     return 0
 
 
