@@ -1,24 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { renderWithProviders, screen, waitFor } from "../../../tests/test-utils";
+import { fireEvent, renderWithProviders, screen, waitFor } from "../../../tests/test-utils";
 import userEvent from "@testing-library/user-event";
 import RouterSettings from "./index";
 
-vi.mock("antd", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("antd")>();
-  return {
-    ...actual,
-    Select: Object.assign(
-      ({ value, onChange, children }: any) => (
-        <select data-testid="strategy-select" value={value ?? ""} onChange={(e) => onChange(e.target.value)}>
-          {children}
-        </select>
-      ),
-      {
-        Option: ({ value, children }: any) => <option value={value}>{children}</option>,
-      },
-    ),
-  };
-});
+// The strategy select only renders once getRouterSettingsCall resolves, so awaiting it is how a
+// test knows the loaded settings are on screen.
+const findStrategySelect = () => screen.findByRole("combobox");
 
 vi.mock("@/components/networking", () => ({
   getCallbacksCall: vi.fn(),
@@ -27,7 +14,7 @@ vi.mock("@/components/networking", () => ({
 }));
 
 import { getCallbacksCall, getRouterSettingsCall, setCallbacksCall } from "@/components/networking";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 
 const mockCallbacksResponse = {
   router_settings: {
@@ -101,26 +88,20 @@ describe("RouterSettings", () => {
   });
 
   it("should render routing strategies loaded from the API", async () => {
+    const user = userEvent.setup();
     renderWithProviders(<RouterSettings {...defaultProps} />);
 
-    await waitFor(() => {
-      expect(screen.getByTestId("strategy-select")).toBeInTheDocument();
-    });
+    await user.click(await findStrategySelect());
 
-    const select = screen.getByTestId("strategy-select") as HTMLSelectElement;
-    const optionValues = Array.from(select.options).map((o) => o.value);
-    expect(optionValues).toContain("simple-shuffle");
-    expect(optionValues).toContain("latency-based-routing");
+    expect(await screen.findByRole("option", { name: /simple-shuffle/ })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: /latency-based-routing/ })).toBeInTheDocument();
   });
 
   it("should call setCallbacksCall with updated settings on Save Changes", async () => {
     const user = userEvent.setup();
     renderWithProviders(<RouterSettings {...defaultProps} />);
 
-    // Wait for the strategy select to appear — it only renders after getRouterSettingsCall resolves
-    await waitFor(() => {
-      expect(screen.getByTestId("strategy-select")).toBeInTheDocument();
-    });
+    await findStrategySelect();
 
     await user.click(screen.getByRole("button", { name: /save changes/i }));
 
@@ -138,13 +119,11 @@ describe("RouterSettings", () => {
     const user = userEvent.setup();
     renderWithProviders(<RouterSettings {...defaultProps} />);
 
-    await waitFor(() => {
-      expect(screen.getByTestId("strategy-select")).toBeInTheDocument();
-    });
+    await findStrategySelect();
 
     const numRetries = await screen.findByRole("textbox", { name: /num_retries/i });
     await user.clear(numRetries);
-    await user.type(numRetries, "42");
+    fireEvent.change(numRetries, { target: { value: "42" } });
 
     await user.click(screen.getByRole("button", { name: /save changes/i }));
 
@@ -162,13 +141,10 @@ describe("RouterSettings", () => {
     const user = userEvent.setup();
     renderWithProviders(<RouterSettings {...defaultProps} />);
 
-    // Wait for data to load before interacting
-    await waitFor(() => {
-      expect(screen.getByTestId("strategy-select")).toBeInTheDocument();
-    });
+    await findStrategySelect();
     await user.click(screen.getByRole("button", { name: /save changes/i }));
 
-    expect(NotificationsManager.success).toHaveBeenCalledWith("router settings updated successfully");
+    expect(toast.success).toHaveBeenCalledWith("router settings updated successfully");
   });
 
   it("should not render or save routing_groups (owned by the Routing Groups tab)", async () => {
@@ -182,9 +158,7 @@ describe("RouterSettings", () => {
     });
     renderWithProviders(<RouterSettings {...defaultProps} />);
 
-    await waitFor(() => {
-      expect(screen.getByTestId("strategy-select")).toBeInTheDocument();
-    });
+    await findStrategySelect();
     expect(document.querySelector('input[name="routing_groups"]')).toBeNull();
 
     await user.click(screen.getByRole("button", { name: /save changes/i }));
@@ -201,14 +175,12 @@ describe("RouterSettings", () => {
     vi.mocked(setCallbacksCall).mockRejectedValue(new Error("422 Unprocessable Entity"));
     renderWithProviders(<RouterSettings {...defaultProps} />);
 
-    await waitFor(() => {
-      expect(screen.getByTestId("strategy-select")).toBeInTheDocument();
-    });
+    await findStrategySelect();
     await user.click(screen.getByRole("button", { name: /save changes/i }));
 
     await waitFor(() => {
-      expect(NotificationsManager.fromBackend).toHaveBeenCalled();
+      expect(toast.fromError).toHaveBeenCalled();
     });
-    expect(NotificationsManager.success).not.toHaveBeenCalled();
+    expect(toast.success).not.toHaveBeenCalled();
   });
 });

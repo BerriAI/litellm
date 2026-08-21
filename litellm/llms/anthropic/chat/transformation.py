@@ -5,6 +5,7 @@ from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, NoReturn, cast
 
 import httpx
+from pydantic import ValidationError
 
 import litellm
 from litellm.constants import (
@@ -39,6 +40,7 @@ from litellm.types.llms.anthropic import (
     AnthropicMessagesTool,
     AnthropicMessagesToolChoice,
     AnthropicOutputSchema,
+    AnthropicOutputTokensDetails,
     AnthropicSystemMessageContent,
     AnthropicThinkingParam,
     AnthropicWebSearchTool,
@@ -1267,13 +1269,14 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         import copy
 
         from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            DEFS_MAX_INLINED_BYTES,
             unpack_defs,
         )
 
         json_schema = copy.deepcopy(json_schema)
         defs: Final = json_schema.pop("$defs", json_schema.pop("definitions", {}))
         if defs:
-            unpack_defs(json_schema, defs)
+            unpack_defs(json_schema, defs, max_inlined_bytes=DEFS_MAX_INLINED_BYTES)
 
         # Filter out unsupported fields for Anthropic's output_format API
         filtered_schema: Final = self.filter_anthropic_output_schema(json_schema)
@@ -2104,6 +2107,68 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         )
 
     @staticmethod
+    def _thinking_tokens_from_usage(usage_object: Mapping[str, object]) -> int | None:
+        details: Final = usage_object.get("output_tokens_details")
+        if not isinstance(details, Mapping):
+            return None
+        try:
+            return AnthropicOutputTokensDetails.model_validate(details).thinking_tokens
+        except ValidationError:
+            return None
+
+    @staticmethod
+    def _response_has_thinking_block(completion_response: Mapping[str, object] | None) -> bool:
+        if completion_response is None:
+            return False
+        content: Final = completion_response.get("content")
+        if not isinstance(content, list):
+            return False
+        return any(
+            isinstance(block, Mapping) and block.get("type") in ("thinking", "redacted_thinking") for block in content
+        )
+
+    def _build_completion_token_details(
+        self,
+        usage_object: Mapping[str, object],
+        iterations: Sequence[object] | None,
+        completion_tokens: int,
+        reasoning_content: str | None,
+        completion_response: Mapping[str, object] | None,
+    ) -> CompletionTokensDetailsWrapper:
+        iteration_thinking_tokens: Final = self._sum_iteration_thinking_tokens(iterations) if iterations else None
+        reported_thinking_tokens: Final = (
+            iteration_thinking_tokens
+            if iteration_thinking_tokens is not None
+            else self._thinking_tokens_from_usage(usage_object)
+        )
+        if reported_thinking_tokens is not None:
+            capped_reported: Final = min(max(0, reported_thinking_tokens), completion_tokens)
+            return CompletionTokensDetailsWrapper(
+                reasoning_tokens=capped_reported,
+                text_tokens=completion_tokens - capped_reported,
+            )
+        if reasoning_content:
+            estimated: Final = min(
+                token_counter(text=reasoning_content, count_response_tokens=True),
+                completion_tokens,
+            )
+            return CompletionTokensDetailsWrapper(
+                reasoning_tokens=max(0, estimated),
+                text_tokens=completion_tokens - max(0, estimated),
+            )
+        if self._response_has_thinking_block(completion_response):
+            return CompletionTokensDetailsWrapper(reasoning_tokens=None, text_tokens=None)
+        return CompletionTokensDetailsWrapper(reasoning_tokens=0, text_tokens=completion_tokens)
+
+    def _sum_iteration_thinking_tokens(self, iterations: Sequence[object]) -> int | None:
+        per_iteration: Final = tuple(
+            self._thinking_tokens_from_usage(iteration) if isinstance(iteration, Mapping) else None
+            for iteration in iterations
+        )
+        reported: Final = tuple(tokens for tokens in per_iteration if tokens is not None)
+        return sum(reported) if len(reported) == len(per_iteration) else None
+
+    @staticmethod
     def is_anthropic_usage_object(usage_object: dict) -> bool:
         """Anthropic reports prompt cache tokens as top-level ``cache_read_input_tokens`` /
         ``cache_creation_input_tokens``; no other API surface uses those keys, and the
@@ -2151,7 +2216,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
     def calculate_usage(
         self,
-        usage_object: dict,
+        usage_object: Mapping[str, Any],
         reasoning_content: str | None,
         completion_response: dict | None = None,
         speed: str | None = None,
@@ -2221,14 +2286,12 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             cache_creation_token_details=cache_creation_token_details,
             text_tokens=raw_input_tokens,
         )
-        # Always populate completion_token_details, not just when there's reasoning_content
-        estimated_reasoning_tokens: Final = (
-            token_counter(text=reasoning_content, count_response_tokens=True) if reasoning_content else 0
-        )
-        reasoning_tokens: Final = min(estimated_reasoning_tokens, completion_tokens)
-        completion_token_details: Final = CompletionTokensDetailsWrapper(
-            reasoning_tokens=max(0, reasoning_tokens),
-            text_tokens=(completion_tokens - reasoning_tokens if reasoning_tokens > 0 else completion_tokens),
+        completion_token_details: Final = self._build_completion_token_details(
+            usage_object=_usage,
+            iterations=iterations,
+            completion_tokens=completion_tokens,
+            reasoning_content=reasoning_content,
+            completion_response=completion_response,
         )
         total_tokens: Final = prompt_tokens + completion_tokens
 

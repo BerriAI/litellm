@@ -15,7 +15,7 @@ import GuardrailTable from "./guardrail_table";
 import { isAdminRole } from "@/utils/roles";
 import GuardrailInfoView from "./guardrail_info";
 import GuardrailTestPlayground from "./GuardrailTestPlayground";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { Guardrail } from "@/components/guardrails/types";
 import DeleteResourceModal from "@/components/common_components/DeleteResourceModal";
 import { getGuardrailLogoAndName } from "./guardrail_info_helpers";
@@ -101,11 +101,11 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken, userRole
     setIsDeleting(true);
     try {
       await deleteGuardrailCall(accessToken, guardrailToDelete.guardrail_id);
-      NotificationsManager.success(`Guardrail "${guardrailToDelete.guardrail_name}" deleted successfully`);
+      toast.success(`Guardrail "${guardrailToDelete.guardrail_name}" deleted successfully`);
       await fetchGuardrails();
     } catch (error) {
       console.error("Error deleting guardrail:", error);
-      NotificationsManager.fromBackend("Failed to delete guardrail");
+      toast.fromError("Failed to delete guardrail");
     } finally {
       setIsDeleting(false);
       setIsDeleteModalOpen(false);
@@ -126,7 +126,7 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken, userRole
   return (
     <div className="w-full mx-auto flex-auto overflow-y-auto m-8 p-2">
       <Tabs defaultValue="guardrails">
-        <TabsList>
+        <TabsList variant="line">
           {isAdmin && (
             <>
               <TabsTrigger value="garden" className="flex-none">

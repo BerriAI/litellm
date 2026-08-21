@@ -569,5 +569,5 @@ class TestClaudeModelPatternMatching:
         )
 
         set_fallback_generalizations([])
-        with pytest.raises(Exception):
+        with pytest.raises(litellm.BadRequestError):
             litellm.get_llm_provider(model="claude-opus-4-9")

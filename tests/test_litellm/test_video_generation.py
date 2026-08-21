@@ -151,7 +151,7 @@ class TestVideoGeneration:
             "video_generation_handler",
             side_effect=Exception("API Error"),
         ):
-            with pytest.raises(Exception):
+            with pytest.raises(litellm.APIConnectionError):
                 video_generation(prompt="Test video", model="sora-2")
 
     def test_video_generation_provider_config(self):
@@ -739,7 +739,7 @@ class TestVideoGeneration:
             "video_status_handler",
             side_effect=Exception("API Error"),
         ):
-            with pytest.raises(Exception):
+            with pytest.raises(litellm.APIConnectionError):
                 video_status(video_id="test_video_id", model="sora-2")
 
     def test_video_status_request_transformation(self):

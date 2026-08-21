@@ -1288,7 +1288,8 @@ def test_just_system_message():
             model="anthropic.claude-3-sonnet-20240229-v1:0",
             llm_provider="bedrock",
         )
-        assert "bedrock requires at least one non-system message" in str(e.value)
+
+    assert "bedrock requires at least one non-system message" in str(e.value)
 
 
 def test_convert_generic_image_chunk_to_openai_image_obj():

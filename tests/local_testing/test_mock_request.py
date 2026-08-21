@@ -128,13 +128,12 @@ def test_router_mock_request_with_mock_timeout():
         ],
     )
     with pytest.raises(litellm.Timeout):
-        response = router.completion(
+        router.completion(
             model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": "Hey, I'm a mock request"}],
             timeout=3,
             mock_timeout=True,
         )
-        print(response)
     end_time = time.time()
     assert end_time - start_time >= 3, f"Time taken: {end_time - start_time}"
 

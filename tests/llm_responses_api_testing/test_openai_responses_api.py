@@ -1643,9 +1643,12 @@ async def test_openai_responses_api_token_limit_error():
         model="gpt-5-mini", input=oversized_text, stream=True
     )
 
-    with pytest.raises(litellm.APIError) as exc_info:
+    async def _drain():
         async for event in response:
             print(event)
+
+    with pytest.raises(litellm.APIError) as exc_info:
+        await _drain()
 
     assert exc_info.value.status_code == 400
     assert "exceeds the context window" in str(exc_info.value)

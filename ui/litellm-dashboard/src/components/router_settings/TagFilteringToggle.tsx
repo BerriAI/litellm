@@ -14,10 +14,10 @@ const TagFilteringToggle: React.FC<TagFilteringToggleProps> = ({ enabled, router
     <div className="space-y-3 max-w-3xl">
       <div className="flex items-start justify-between">
         <div className="flex-1">
-          <label htmlFor={toggleId} className="text-xs font-medium text-gray-700 uppercase tracking-wide">
+          <label htmlFor={toggleId} className="text-xs font-medium text-foreground uppercase tracking-wide">
             {routerFieldsMetadata["enable_tag_filtering"]?.ui_field_name || "Enable Tag Filtering"}
           </label>
-          <p className="text-xs text-gray-500 mt-0.5">
+          <p className="text-xs text-muted-foreground mt-0.5">
             {routerFieldsMetadata["enable_tag_filtering"]?.field_description || ""}
             {routerFieldsMetadata["enable_tag_filtering"]?.link && (
               <>
@@ -26,7 +26,7 @@ const TagFilteringToggle: React.FC<TagFilteringToggleProps> = ({ enabled, router
                   href={routerFieldsMetadata["enable_tag_filtering"].link}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="text-blue-600 hover:text-blue-800 underline"
+                  className="text-info hover:text-info/80 underline"
                 >
                   Learn more
                 </a>

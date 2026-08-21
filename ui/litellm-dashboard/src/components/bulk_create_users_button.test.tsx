@@ -14,13 +14,6 @@ vi.mock("./networking", () => ({
   }),
 }));
 
-vi.mock("./molecules/notifications_manager", () => ({
-  default: {
-    success: vi.fn(),
-    fromBackend: vi.fn(),
-  },
-}));
-
 const csvFile = () =>
   new File(["user_email,user_role\nnew.hire@example.com,internal_user\n"], "users.csv", { type: "text/csv" });
 

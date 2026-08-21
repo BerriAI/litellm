@@ -198,10 +198,11 @@ def test_volcengine_embedding_error_scenarios():
                 mock_embedding.side_effect = ValueError("Unsupported encoding_format")
 
             # Test that errors are properly raised
+            test_params = {
+                k: v for k, v in scenario.items() if k != "expected_error_pattern"
+            }
+
             with pytest.raises(Exception) as exc_info:
-                test_params = {
-                    k: v for k, v in scenario.items() if k != "expected_error_pattern"
-                }
                 litellm.embedding(input=["test"], **test_params)
 
             # Verify error message contains expected pattern

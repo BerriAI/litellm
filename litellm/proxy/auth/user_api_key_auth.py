@@ -2307,6 +2307,7 @@ async def _run_centralized_common_checks(
                     parent_otel_span=parent_otel_span,
                     proxy_logging_obj=proxy_logging_obj,
                     route=route,
+                    token_end_user_max_budget=user_api_key_auth_obj.end_user_max_budget,
                 ),
             )
         )
@@ -2841,6 +2842,7 @@ async def _lookup_end_user_and_apply_budget(
             parent_otel_span=parent_otel_span,
             proxy_logging_obj=proxy_logging_obj,
             route=route,
+            token_end_user_max_budget=valid_token.end_user_max_budget,
         )
         if end_user_object is not None:
             end_user_params = {

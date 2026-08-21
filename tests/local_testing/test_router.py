@@ -120,7 +120,7 @@ async def test_router_provider_wildcard_routing():
     print("response 2 = ", response2)
 
     response3 = await router.acompletion(
-        model="groq/llama-3.1-8b-instant",
+        model="groq/openai/gpt-oss-120b",
         messages=[{"role": "user", "content": "hello"}],
     )
 
@@ -1303,7 +1303,7 @@ def test_consistent_model_id():
     """
     - For a given model group + litellm params, assert the model id is always the same
 
-    Test on `_generate_model_id`
+    Test on `generate_model_id`
 
     Test on `set_model_list`
 
@@ -1317,11 +1317,11 @@ def test_consistent_model_id():
         "stream_timeout": 0.001,
     }
 
-    id1 = Router()._generate_model_id(
+    id1 = Router().generate_model_id(
         model_group=model_group, litellm_params=litellm_params
     )
 
-    id2 = Router()._generate_model_id(
+    id2 = Router().generate_model_id(
         model_group=model_group, litellm_params=litellm_params
     )
 

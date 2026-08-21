@@ -161,12 +161,10 @@ async def test_provider_budgets_e2e_test_expect_to_fail():
 
     for _ in range(3):
         with pytest.raises(Exception) as exc_info:
-            response = await router.acompletion(
+            await router.acompletion(
                 messages=[{"role": "user", "content": "Hello, how are you?"}],
                 model="anthropic/claude-sonnet-4-5-20250929",
             )
-            print(response)
-            print("response.hidden_params", response._hidden_params)
 
         await asyncio.sleep(0.5)
         # Verify the error is related to budget exceeded
@@ -597,12 +595,10 @@ async def test_deployment_budgets_e2e_test_expect_to_fail():
 
     for _ in range(3):
         with pytest.raises(Exception) as exc_info:
-            response = await router.acompletion(
+            await router.acompletion(
                 messages=[{"role": "user", "content": "Hello, how are you?"}],
                 model="openai/gpt-4o-mini",
             )
-            print(response)
-            print("response.hidden_params", response._hidden_params)
 
         await asyncio.sleep(0.5)
         # Verify the error is related to budget exceeded
@@ -651,13 +647,11 @@ async def test_tag_budgets_e2e_test_expect_to_fail():
 
     for _ in range(3):
         with pytest.raises(Exception) as exc_info:
-            response = await router.acompletion(
+            await router.acompletion(
                 messages=[{"role": "user", "content": "Hello, how are you?"}],
                 model="openai/gpt-4o-mini",
                 metadata={"tags": [TAG_NAME]},
             )
-            print(response)
-            print("response.hidden_params", response._hidden_params)
 
         await asyncio.sleep(0.5)
         # Verify the error is related to budget exceeded

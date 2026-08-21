@@ -47,8 +47,12 @@ from litellm.proxy._experimental.mcp_server.gateway_dcr_flow import (
     aggregate_token,
     complete_connect_flow,
     is_gateway_dcr_client_id,
+    is_proxy_api_resource,
+    native_client_auth_contract,
+    native_client_authorize,
     register_aggregate_client,
     relative_request_url,
+    revoke_refresh_token,
 )
 from litellm.proxy._experimental.mcp_server.oauth_utils import (
     TOKEN_NO_CACHE_HEADERS,
@@ -57,6 +61,10 @@ from litellm.proxy._experimental.mcp_server.oauth_utils import (
     resolve_upstream_resource,
     validate_trusted_redirect_uri,
     well_known_root_suffix,
+)
+from litellm.proxy._experimental.mcp_server.proxy_api_credentials import (
+    lookup_consent_teams,
+    mint_proxy_credential,
 )
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
@@ -1341,7 +1349,7 @@ async def _persist_dcr_client_registration(
     ``update_mcp_server`` merges credential blobs: a re-registered public client must not
     inherit the previous client's secret or auth method.
     """
-    if mcp_server.is_true_passthrough or mcp_server.is_oauth_delegate:
+    if mcp_server.is_client_forwarded_token:
         return "skipped"
 
     try:
@@ -1655,6 +1663,7 @@ async def authorize(
     code_challenge_method: str | None = None,
     response_type: str | None = None,
     scope: str | None = None,
+    resource: str | None = None,
 ):
     # Redirect to real OAuth provider with PKCE support
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
@@ -1662,6 +1671,18 @@ async def authorize(
     )
 
     if mcp_server_name is None and client_id and is_gateway_dcr_client_id(client_id):
+        if is_proxy_api_resource(request, resource):
+            return await native_client_authorize(
+                request=request,
+                client_id=client_id,
+                redirect_uri=redirect_uri,
+                state=state,
+                code_challenge=code_challenge,
+                code_challenge_method=code_challenge_method,
+                response_type=response_type,
+                session_user_id=_session_cookie_user_id(request),
+                lookup_consent_teams=lookup_consent_teams,
+            )
         return aggregate_authorize(
             request=request,
             client_id=client_id,
@@ -1671,15 +1692,23 @@ async def authorize(
             code_challenge_method=code_challenge_method,
             response_type=response_type,
             session_user_id=_session_cookie_user_id(request),
+            resource=resource,
         )
 
     lookup_name: Final[str | None] = mcp_server_name or client_id
     client_ip: Final = IPAddressUtils.get_mcp_client_ip(request)
     mcp_server = (
-        global_mcp_server_manager.get_mcp_server_by_name(lookup_name, client_ip=client_ip) if lookup_name else None
+        await global_mcp_server_manager.get_resolved_mcp_server_by_name(lookup_name, client_ip=client_ip)
+        if lookup_name
+        else None
     )
     if mcp_server is None and mcp_server_name is None:
-        mcp_server = _resolve_oauth2_server_for_root_endpoints(client_ip=client_ip)
+        unresolved_server: Final = _resolve_oauth2_server_for_root_endpoints(client_ip=client_ip)
+        mcp_server = (
+            await global_mcp_server_manager.ensure_oauth_metadata_discovered(unresolved_server)
+            if unresolved_server is not None
+            else None
+        )
     if mcp_server is None:
         raise HTTPException(status_code=404, detail="MCP server not found")
     _raise_if_not_oauth2(mcp_server)
@@ -1721,6 +1750,7 @@ async def token_endpoint(
     code_verifier: str = Form(None),
     refresh_token: str | None = Form(None),
     scope: str | None = Form(None),
+    resource: str | None = Form(None),
     mcp_server_name: str | None = None,
 ):
     """
@@ -1753,13 +1783,20 @@ async def token_endpoint(
             master_key=master_key,
             reload_user=_reload_active_user_by_id,
             cache=user_api_key_cache,
+            resource=resource,
+            mint_proxy_credential=mint_proxy_credential,
         )
 
     lookup_name: Final = mcp_server_name or client_id
     client_ip: Final = IPAddressUtils.get_mcp_client_ip(request)
-    mcp_server = global_mcp_server_manager.get_mcp_server_by_name(lookup_name, client_ip=client_ip)
+    mcp_server = await global_mcp_server_manager.get_resolved_mcp_server_by_name(lookup_name, client_ip=client_ip)
     if mcp_server is None and mcp_server_name is None:
-        mcp_server = _resolve_oauth2_server_for_root_endpoints(client_ip=client_ip)
+        unresolved_server: Final = _resolve_oauth2_server_for_root_endpoints(client_ip=client_ip)
+        mcp_server = (
+            await global_mcp_server_manager.ensure_oauth_metadata_discovered(unresolved_server)
+            if unresolved_server is not None
+            else None
+        )
     if mcp_server is None:
         raise HTTPException(status_code=404, detail="MCP server not found")
     return await exchange_token_with_server(
@@ -1777,12 +1814,19 @@ async def token_endpoint(
 
 
 @router.post("/authorize/complete")
-async def authorize_complete(request: Request, flow: str = Form(...), delivery: str | None = Form(None)):
+async def authorize_complete(
+    request: Request,
+    flow: str = Form(...),
+    delivery: str | None = Form(None),
+    team_id: str | None = Form(None),
+    decision: str | None = Form(None),
+) -> Response:
     """Finish an aggregate connect flow: mint the gateway authorization code for the
     signed-in user and hand it back to the DCR client, by 303 redirect (default) or, for
     a loopback client on a different machine, as a copyable callback URL
     (``delivery=manual``). POST plus the per-flow HttpOnly cookie set at /authorize; an
-    anonymous or bad-flow request just 400s."""
+    anonymous or bad-flow request just 400s. The native-client consent page adds
+    ``decision`` (approve or deny) and the ``team_id`` the credential is attributed to."""
     from litellm.proxy.proxy_server import user_api_key_cache  # noqa: PLC0415  # circular import at module load
 
     return await complete_connect_flow(
@@ -1791,7 +1835,29 @@ async def authorize_complete(request: Request, flow: str = Form(...), delivery: 
         session_user_id=_session_cookie_user_id(request),
         cache=user_api_key_cache,
         delivery=delivery,
+        team_id=team_id,
+        decision=decision,
     )
+
+
+@router.post("/revoke")
+async def revoke_endpoint(request: Request, token: str = Form(...), client_id: str = Form(...)) -> Response:
+    """RFC 7009 revocation for the gateway's refresh tokens (``lite logout``): 200 for a known
+    client whatever the token's state, 503 when the shared single-use record cannot be written;
+    access tokens expire on their own."""
+    from litellm.proxy.proxy_server import (  # noqa: PLC0415  # circular import at module load
+        master_key,
+        user_api_key_cache,
+    )
+
+    return await revoke_refresh_token(token=token, client_id=client_id, master_key=master_key, cache=user_api_key_cache)
+
+
+@router.get("/.well-known/litellm-cli-auth")
+async def native_client_auth_discovery(request: Request) -> JSONResponse:
+    """The versioned contract a native client (``lite login --pkce``, or a CLI in any other
+    language) reads to sign a user in through the browser and obtain a proxy credential."""
+    return JSONResponse(native_client_auth_contract(request), headers=TOKEN_NO_CACHE_HEADERS)
 
 
 # Per RFC 6749 §4.1.2.1, an IdP that rejects an OAuth authorization request
@@ -2171,7 +2237,7 @@ async def _build_oauth_protected_resource_response(
             )
 
         if upstream_metadata is not None:
-            if mcp_server.is_true_passthrough or mcp_server.is_oauth_delegate:
+            if mcp_server.is_client_forwarded_token:
                 return upstream_metadata
             return {**upstream_metadata, "resource": resource_url}
 
@@ -2393,6 +2459,7 @@ def _build_oauth_authorization_server_response(
 
     request_base_url: Final = get_request_base_url(request)
     client_ip: Final = IPAddressUtils.get_mcp_client_ip(request)
+    explicitly_named: Final = mcp_server_name is not None
 
     # When no server name provided, try to resolve the single OAuth2 server
     if mcp_server_name is None:
@@ -2411,8 +2478,10 @@ def _build_oauth_authorization_server_response(
 
     _raise_unless_oauth2_discovery_server(mcp_server, mcp_server_name, "not an OAuth authorization server")
 
+    issuer: Final = f"{request_base_url}/{mcp_server_name}" if explicitly_named else request_base_url
+
     return {
-        "issuer": request_base_url,  # point to your proxy
+        "issuer": issuer,
         "authorization_endpoint": authorization_endpoint,
         "token_endpoint": token_endpoint,
         "response_types_supported": ["code"],
@@ -2558,9 +2627,10 @@ async def register_client(request: Request, mcp_server_name: str | None = None):
             return await register_aggregate_client(request=request, request_body=data)
         resolved: Final = _resolve_oauth2_server_for_root_endpoints(client_ip=client_ip)
         if resolved:
+            resolved_server: Final = await global_mcp_server_manager.ensure_oauth_metadata_discovered(resolved)
             return await register_client_with_server(
                 request=request,
-                mcp_server=resolved,
+                mcp_server=resolved_server,
                 client_name=data.get("client_name", ""),
                 grant_types=data.get("grant_types", []),
                 response_types=data.get("response_types", []),
@@ -2570,7 +2640,10 @@ async def register_client(request: Request, mcp_server_name: str | None = None):
             )
         return dummy_return
 
-    mcp_server: Final = global_mcp_server_manager.get_mcp_server_by_name(mcp_server_name, client_ip=client_ip)
+    mcp_server: Final = await global_mcp_server_manager.get_resolved_mcp_server_by_name(
+        mcp_server_name,
+        client_ip=client_ip,
+    )
     if mcp_server is None:
         return dummy_return
     return await register_client_with_server(

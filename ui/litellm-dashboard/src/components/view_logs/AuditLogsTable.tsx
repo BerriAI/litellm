@@ -45,6 +45,16 @@ const TABLE_OPTIONS = [
   { label: "Models", value: "LiteLLM_ProxyModelTable" },
 ] as const;
 
+const ACTION_FILTER_ITEMS = [
+  { value: ALL_VALUE, label: "All Actions" },
+  ...ACTION_OPTIONS.map((option) => ({ value: option.value, label: option.label })),
+];
+
+const TABLE_FILTER_ITEMS = [
+  { value: ALL_VALUE, label: "All Tables" },
+  ...TABLE_OPTIONS.map((option) => ({ value: option.value, label: option.label })),
+];
+
 const FILTER_LABELS: Record<string, string> = {
   object_id: "Object ID",
   changed_by: "Changed By",
@@ -164,6 +174,7 @@ export function AuditLogsTable({
                 </DataTableFilterField>
                 <DataTableFilterField label="Action">
                   <Select
+                    items={ACTION_FILTER_ITEMS}
                     value={(get("action") as string) ?? ALL_VALUE}
                     onValueChange={(value) => set("action", value === ALL_VALUE ? undefined : value)}
                   >
@@ -182,6 +193,7 @@ export function AuditLogsTable({
                 </DataTableFilterField>
                 <DataTableFilterField label="Table">
                   <Select
+                    items={TABLE_FILTER_ITEMS}
                     value={(get("table_name") as string) ?? ALL_VALUE}
                     onValueChange={(value) => set("table_name", value === ALL_VALUE ? undefined : value)}
                   >

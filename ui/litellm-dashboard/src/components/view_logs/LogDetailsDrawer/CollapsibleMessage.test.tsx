@@ -7,12 +7,12 @@ import { CollapsibleMessage } from "./CollapsibleMessage";
 describe("CollapsibleMessage", () => {
   it("should return null when content is empty", () => {
     const { container } = render(<CollapsibleMessage label="SYSTEM" content="" />);
-    expect(container.innerHTML).toBe("");
+    expect(container).toBeEmptyDOMElement();
   });
 
   it("should return null when content is undefined", () => {
     const { container } = render(<CollapsibleMessage label="SYSTEM" />);
-    expect(container.innerHTML).toBe("");
+    expect(container).toBeEmptyDOMElement();
   });
 
   it("should render the label and char count", () => {

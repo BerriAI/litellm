@@ -87,12 +87,7 @@ const TeamMultiSelect: React.FC<TeamMultiSelectProps> = ({
             ))
           }
         </ComboboxValue>
-        <ComboboxChipsInput
-          className="border-0 bg-transparent"
-          placeholder={placeholder}
-          aria-label={placeholder}
-          disabled={disabled}
-        />
+        <ComboboxChipsInput placeholder={placeholder} aria-label={placeholder} disabled={disabled} />
         {value.length > 0 && <ComboboxClear aria-label="Clear all teams" disabled={disabled} />}
       </ComboboxChips>
       <ComboboxContent anchor={anchor}>

@@ -35,11 +35,10 @@ class TestBytezChatConfig:
         assert result["user-agent"] == f"litellm/{version}"
 
     def test_missing_api_key(self):
+        config = BytezChatConfig()
+        headers = {}
+
         with pytest.raises(Exception) as excinfo:
-            config = BytezChatConfig()
-
-            headers = {}
-
             config.validate_environment(
                 headers=headers,
                 model=TEST_MODEL,

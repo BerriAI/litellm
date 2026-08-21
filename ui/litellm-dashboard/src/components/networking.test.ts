@@ -9,15 +9,6 @@ vi.mock("@/utils/cookieUtils", () => ({
   storeLoginToken: vi.fn(),
 }));
 
-vi.mock("./molecules/notifications_manager", () => ({
-  default: {
-    info: vi.fn(),
-    success: vi.fn(),
-    error: vi.fn(),
-    fromBackend: vi.fn(),
-  },
-}));
-
 describe("networking - expired session handling", () => {
   const originalFetch = global.fetch;
 
@@ -31,10 +22,10 @@ describe("networking - expired session handling", () => {
 
   it("should call clearTokenCookies on expired session", async () => {
     const errorData = "Authentication Error - Expired Key";
-    const { default: NotificationsManager } = await import("./molecules/notifications_manager");
+    const { toast } = await import("@/lib/toast");
 
     if (errorData.includes("Authentication Error - Expired Key")) {
-      NotificationsManager.info("UI Session Expired. Logging out.");
+      toast.info("UI Session Expired. Logging out.");
       clearTokenCookies();
     }
 

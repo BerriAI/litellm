@@ -234,7 +234,7 @@ class TestRouterFallbackFailureTracebackRedaction:
                 raise ValueError(f"primary deployment failed api_key={secret}")
             except ValueError as original_exception:
                 with caplog.at_level(logging.DEBUG, logger="LiteLLM Router"):
-                    with pytest.raises(Exception):
+                    with pytest.raises(ValueError):
                         await router.async_function_with_fallbacks_common_utils(
                             e=original_exception,
                             disable_fallbacks=False,

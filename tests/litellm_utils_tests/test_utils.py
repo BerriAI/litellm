@@ -1334,7 +1334,7 @@ def test_validate_chat_completion_user_messages(messages, expected_bool):
         validate_chat_completion_user_messages(messages=messages)
     else:
         ## Invalid message
-        with pytest.raises(Exception):
+        with pytest.raises(Exception, match="Invalid user message at index 0"):
             validate_chat_completion_user_messages(messages=messages)
 
 
@@ -1354,7 +1354,7 @@ def test_validate_chat_completion_tool_choice(tool_choice, expected_bool):
     if expected_bool:
         validate_chat_completion_tool_choice(tool_choice=tool_choice)
     else:
-        with pytest.raises(Exception):
+        with pytest.raises(Exception, match="Invalid tool choice"):
             validate_chat_completion_tool_choice(tool_choice=tool_choice)
 
 

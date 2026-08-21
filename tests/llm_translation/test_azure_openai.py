@@ -650,7 +650,7 @@ def test_azure_openai_responses_bridge():
         mock_responses.assert_called_once()
         assert (
             mock_responses.call_args.kwargs["model"]
-            == "test-azure-computer-use-preview"
+            == "azure/test-azure-computer-use-preview"
         )
         assert mock_responses.call_args.kwargs["custom_llm_provider"] == "azure"
 

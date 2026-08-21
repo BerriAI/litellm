@@ -668,6 +668,8 @@ def test_validate_sort_params():
     """
     Test that validate_sort_params returns None if sort_by is None
     """
+    from fastapi import HTTPException
+
     from litellm.proxy.management_endpoints.internal_user_endpoints import (
         _validate_sort_params,
     )
@@ -676,7 +678,7 @@ def test_validate_sort_params():
     assert _validate_sort_params(None, "desc") is None
     assert _validate_sort_params("user_id", "asc") == {"user_id": "asc"}
     assert _validate_sort_params("user_id", "desc") == {"user_id": "desc"}
-    with pytest.raises(Exception):
+    with pytest.raises(HTTPException):
         _validate_sort_params("user_id", "invalid")
 
 
@@ -2253,7 +2255,8 @@ async def test_get_user_daily_activity_aggregated_rejects_service_account_caller
 
 
 @pytest.mark.asyncio
-async def test_get_user_daily_activity_aggregated_admin_global_view(monkeypatch):
+@pytest.mark.parametrize("include_current_utc_day", [False, True])
+async def test_get_user_daily_activity_aggregated_admin_global_view(monkeypatch, include_current_utc_day):
     """
     Test that admin users can call the aggregated endpoint without a user_id
     to get a global view. Also verifies that the correct arguments are forwarded
@@ -2291,6 +2294,7 @@ async def test_get_user_daily_activity_aggregated_admin_global_view(monkeypatch)
         api_key=None,
         user_id=None,
         timezone=480,
+        include_current_utc_day=include_current_utc_day,
         user_api_key_dict=admin_key_dict,
     )
 
@@ -2308,6 +2312,7 @@ async def test_get_user_daily_activity_aggregated_admin_global_view(monkeypatch)
         model="gpt-4",
         api_key=None,
         timezone_offset_minutes=480,
+        include_current_utc_day=include_current_utc_day,
     )
 
 

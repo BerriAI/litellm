@@ -170,11 +170,14 @@ async def test_a_failed_mirror_takes_the_new_team_row_with_it():
     async with _clean_db() as db:
         await _seed(db, {GROUPS[0]: [], GROUPS[1]: [OTHER_TEAM]})
 
-        with pytest.raises(RuntimeError):
+        async def _blow_up_after_reconcile():
             async with db.tx() as tx:
                 await tx.litellm_teamtable.create(data={"team_id": TEAM, "access_group_ids": [GROUPS[0]]})
                 await reconcile_team_access_group_membership(tx, TEAM)
                 raise RuntimeError("the cache handoff blew up")
+
+        with pytest.raises(RuntimeError):
+            await _blow_up_after_reconcile()
 
         assert await _read(db) == {GROUPS[0]: [], GROUPS[1]: [OTHER_TEAM]}
         assert await db.litellm_teamtable.find_unique(where={"team_id": TEAM}) is None

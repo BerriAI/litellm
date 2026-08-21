@@ -1295,6 +1295,49 @@ def test_streaming_surfaces_fireworks_response_fields():
     assert surfaced["fireworks_prompt_token_ids"] == [1, 2, 3]
 
 
+def test_transform_request_routes_router_slug():
+    config = FireworksAIConfig()
+
+    data = config.transform_request(
+        model="routers/glm-latest",
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert data["model"] == "accounts/fireworks/routers/glm-latest"
+
+
+def test_transform_request_bare_slug_stays_model():
+    config = FireworksAIConfig()
+
+    data = config.transform_request(
+        model="glm-4p6",
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert data["model"] == "accounts/fireworks/models/glm-4p6"
+
+
+def test_transform_request_direct_route_passthrough():
+    config = FireworksAIConfig()
+    model = "accounts/fireworks/models/qwen2p5-coder-7b#accounts/gitlab/deployments/2fb7764c"
+
+    data = config.transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert data["model"] == model
+
+
 def test_map_extra_body_params_translates_truncate_prompt_tokens():
     config = FireworksAIConfig()
     result = config.map_extra_body_params(

@@ -28,12 +28,10 @@ def test_validate_tool_choice_standard_dict():
 
 
 def test_validate_tool_choice_cursor_format():
-    """Test Cursor IDE format: {"type": "auto"} -> {"type": "auto"}."""
-    assert validate_chat_completion_tool_choice({"type": "auto"}) == {"type": "auto"}
-    assert validate_chat_completion_tool_choice({"type": "none"}) == {"type": "none"}
-    assert validate_chat_completion_tool_choice({"type": "required"}) == {
-        "type": "required"
-    }
+    """Cursor IDE format {"type": "auto"} is unwrapped to the bare string."""
+    assert validate_chat_completion_tool_choice({"type": "auto"}) == "auto"
+    assert validate_chat_completion_tool_choice({"type": "none"}) == "none"
+    assert validate_chat_completion_tool_choice({"type": "required"}) == "required"
 
 
 def test_validate_tool_choice_invalid_dict():

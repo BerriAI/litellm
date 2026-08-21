@@ -41,6 +41,7 @@ from litellm.proxy.auth.handle_jwt import JWTHandler, JWTAuthManager
 from litellm.proxy.management_endpoints.team_endpoints import new_team
 from litellm.proxy.proxy_server import chat_completion
 from typing import Literal, Optional
+from litellm.proxy._types import ProxyException
 
 public_key = {
     "kty": "RSA",
@@ -1045,11 +1046,8 @@ async def test_allow_access_by_email(
             assert result is not None  # Adjust this based on your actual response check
         else:
             # Expect the call to fail
-            with pytest.raises(
-                Exception
-            ):  # Replace with the actual exception raised on failure
-                resp = await user_api_key_auth(request=request, api_key=bearer_token)
-                print(resp)
+            with pytest.raises(ProxyException):
+                await user_api_key_auth(request=request, api_key=bearer_token)
 
 
 def test_get_public_key_from_jwk_url():

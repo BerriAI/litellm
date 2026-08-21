@@ -238,7 +238,11 @@ class DB:
     """
 
     SYSTEM_NAME: Final = "db.system.name"
+    # Superseded by SYSTEM_NAME, dual-emitted because Datadog's OTLP intake
+    # still infers a span's database type from this key.
+    SYSTEM_LEGACY: Final = "db.system"
     OPERATION_NAME: Final = "db.operation.name"
+    NAMESPACE: Final = "db.namespace"
 
 
 class HTTP:

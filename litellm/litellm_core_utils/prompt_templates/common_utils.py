@@ -10,7 +10,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from itertools import groupby
 from os import PathLike
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Final, Literal, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, TypeVar, cast
 
 from openai.types.chat.chat_completion_custom_tool_param import (
     CustomFormatGrammar,
@@ -1004,7 +1004,7 @@ def _has_legacy_defs(schema: object) -> bool:
     return "definitions" in schema or (isinstance(components, dict) and isinstance(components.get("schemas"), dict))
 
 
-# Schema-bomb budget for ``unpack_legacy_defs``: cap the cumulative JSON-byte
+# Schema-bomb budget for ``$ref`` inlining: cap the cumulative JSON-byte
 # size of every inlined target. A byte cap is the universal measure of
 # expansion -- it simultaneously bounds ref-count fan-out, node-count
 # amplification, and scalar-byte amplification (large ``description`` /
@@ -1012,14 +1012,14 @@ def _has_legacy_defs(schema: object) -> bool:
 # inline well under 1MB; 10MB sits two orders of magnitude above that, well
 # below memory-pressure territory, and rejects request-supplied bombs before
 # the proxy materialises them.
-_LEGACY_DEFS_MAX_INLINED_BYTES: Final = 10_000_000
+DEFS_MAX_INLINED_BYTES: Final = 10_000_000
 
 
 def unpack_legacy_defs(
     schema: dict,
     *,
     copy: bool = False,
-    max_inlined_bytes: int = _LEGACY_DEFS_MAX_INLINED_BYTES,
+    max_inlined_bytes: int = DEFS_MAX_INLINED_BYTES,
 ) -> dict:
     """Inline ``$ref``s backed by draft-04 ``definitions`` / OpenAPI
     ``components.schemas``. ``$defs`` is left untouched.
@@ -1323,6 +1323,16 @@ def check_is_function_call(logging_obj: "LoggingClass") -> bool:
             return True
 
     return False
+
+
+_MarkedT: Final = TypeVar("_MarkedT", bound=Mapping[str, object])
+
+
+def with_prompt_cache_breakpoint(target: _MarkedT, marker: object) -> _MarkedT:
+    if marker is None:
+        return target
+    marked: Final = {**target, "prompt_cache_breakpoint": marker}  # mutable-ok: API message payload
+    return cast(_MarkedT, marked)  # cast-ok: same block shape as the input plus the marker key
 
 
 def filter_value_from_dict(dictionary: dict, key: str, depth: int = 0) -> Any:
@@ -1816,16 +1826,19 @@ def split_concatenated_json_objects(raw: str) -> list[dict[str, Any]]:
     This helper uses ``json.JSONDecoder.raw_decode()`` to walk the string
     and extract each JSON object individually.
 
+    The walk degrades gracefully: if the string is malformed or truncated
+    (e.g. a stream that ended mid-tool-call), whatever complete objects were
+    parsed before the bad tail are returned and the remainder is discarded
+    with a warning, rather than raising.  The sole caller
+    (``_convert_to_bedrock_tool_call_invoke``) treats an empty result as
+    ``input={}`` so the conversation can continue instead of hard-failing.
+
     Returns
     -------
     list[dict]
         A list of parsed dicts – one per JSON object found.  If *raw* is
-        empty or whitespace-only, an empty list is returned.
-
-    Raises
-    ------
-    json.JSONDecodeError
-        If the string contains text that cannot be parsed as JSON at all.
+        empty, whitespace-only, or wholly unparseable, an empty list is
+        returned.
     """
     import json
 
@@ -1845,7 +1858,17 @@ def split_concatenated_json_objects(raw: str) -> list[dict[str, Any]]:
         if idx >= length:
             break
 
-        obj, end_idx = decoder.raw_decode(raw, idx)
+        try:
+            obj, end_idx = decoder.raw_decode(raw, idx)
+        except json.JSONDecodeError as e:
+            verbose_logger.warning(
+                "split_concatenated_json_objects: discarding unparseable tool-call "
+                "arguments tail after %d complete object(s); decode_start=%d error=%s",
+                len(results),
+                idx,
+                e,
+            )
+            break
         if isinstance(obj, dict):
             results.append(obj)
         else:

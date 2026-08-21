@@ -16,7 +16,7 @@ import traceback
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from types import MappingProxyType
-from typing import Annotated, Final, Protocol, TypedDict, TypeVar, cast
+from typing import Annotated, Final, NamedTuple, Protocol, TypedDict, TypeVar, cast
 
 import fastapi
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
@@ -85,11 +85,17 @@ from litellm.proxy.auth.auth_checks import (
     get_team_object,
     get_user_object,
 )
-from litellm.proxy.auth.auth_utils import enforce_output_token_estimates_are_admin_only
+from litellm.proxy.auth.auth_utils import (
+    enforce_batch_enqueued_token_limit_is_admin_only,
+    enforce_output_token_estimates_are_admin_only,
+)
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.callback_utils import encrypt_callback_vars
 from litellm.proxy.common_utils.json_merge_patch import apply_json_merge_patch
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.proxy.management_endpoints.common_daily_activity import (
+    get_daily_activity_aggregated,
+)
 from litellm.proxy.management_endpoints.common_utils import (
     _check_passthrough_routes_caller_permission,
     _is_user_org_admin_for_team,
@@ -1246,6 +1252,7 @@ async def new_team(
     try:
         from litellm.proxy.management_helpers.audit_logs import (
             get_audit_log_changed_by,
+            is_audit_logging_enabled,
         )
         from litellm.proxy.proxy_server import (
             _license_check,
@@ -1295,6 +1302,12 @@ async def new_team(
                     )
 
         enforce_output_token_estimates_are_admin_only(
+            data=data,
+            existing_metadata=None,
+            user_api_key_dict=user_api_key_dict,
+            entity="team",
+        )
+        enforce_batch_enqueued_token_limit_is_admin_only(
             data=data,
             existing_metadata=None,
             user_api_key_dict=user_api_key_dict,
@@ -1548,8 +1561,7 @@ async def new_team(
             litellm_proxy_admin_name=litellm_proxy_admin_name,
         )
 
-        # Enterprise Feature - Audit Logging. Enable with litellm.store_audit_logs = True
-        if litellm.store_audit_logs is True:
+        if is_audit_logging_enabled():
             _updated_values = complete_team_data.json(exclude_none=True)
 
             _updated_values = json.dumps(_updated_values, default=str)
@@ -1941,6 +1953,7 @@ async def update_team(
     ```
     """
     try:
+        from litellm.proxy.management_helpers.audit_logs import is_audit_logging_enabled
         from litellm.proxy.proxy_server import (
             litellm_proxy_admin_name,
             llm_router,
@@ -1999,6 +2012,12 @@ async def update_team(
 
         _existing_team_metadata: Final[object] = getattr(existing_team_row, "metadata", None)
         enforce_output_token_estimates_are_admin_only(
+            data=data,
+            existing_metadata=_existing_team_metadata if isinstance(_existing_team_metadata, dict) else None,
+            user_api_key_dict=user_api_key_dict,
+            entity="team",
+        )
+        enforce_batch_enqueued_token_limit_is_admin_only(
             data=data,
             existing_metadata=_existing_team_metadata if isinstance(_existing_team_metadata, dict) else None,
             user_api_key_dict=user_api_key_dict,
@@ -2243,8 +2262,7 @@ async def update_team(
             proxy_logging_obj=proxy_logging_obj,
         )
 
-        # Enterprise Feature - Audit Logging. Enable with litellm.store_audit_logs = True
-        if litellm.store_audit_logs is True:
+        if is_audit_logging_enabled():
             await _create_team_update_audit_log(
                 existing_team_row=existing_team_row,
                 updated_kv=updated_kv,
@@ -3709,6 +3727,7 @@ async def delete_team(
     """
     from litellm.proxy.management_helpers.audit_logs import (
         get_audit_log_changed_by,
+        is_audit_logging_enabled,
     )
     from litellm.proxy.proxy_server import (
         create_audit_log_for_update,
@@ -3753,9 +3772,8 @@ async def delete_team(
         litellm_changed_by=litellm_changed_by,
     )
 
-    # Enterprise Feature - Audit Logging. Enable with litellm.store_audit_logs = True
     # we do this after the first for loop, since first for loop is for validation. we only want this inserted after validation passes
-    if litellm.store_audit_logs is True:
+    if is_audit_logging_enabled():
         # make an audit log for each team deleted
         for team_id in data.team_ids:
             team_row: LiteLLM_TeamTable | None = await prisma_client.get_data(
@@ -5679,49 +5697,32 @@ async def _append_permissions_to_all_teams(prisma_client: PrismaClient, permissi
     return teams_updated
 
 
-@router.get(
-    "/team/daily/activity",
-    response_model=SpendAnalyticsPaginatedResponse,
-    tags=["team management"],
-)
-async def get_team_daily_activity(
-    team_ids: str | None = None,
-    start_date: str | None = None,
-    end_date: str | None = None,
-    model: str | None = None,
-    api_key: str | None = None,
-    page: int = 1,
-    page_size: int = 10,
-    exclude_team_ids: str | None = None,
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-):
-    """
-    Get daily activity for specific teams or all teams.
+def _daily_activity_error(*, status_code: int, message: str) -> HTTPException:
+    """Single construction site for the `{"error": ...}` detail shape the
+    /team/daily/activity endpoints have always returned."""
+    return HTTPException(status_code=status_code, detail={"error": message})  # mutable-ok: FastAPI JSON detail
 
-    Args:
-        team_ids (Optional[str]): Comma-separated list of team IDs to filter by. If not provided, returns data for all teams.
-        start_date (Optional[str]): Start date for the activity period (YYYY-MM-DD).
-        end_date (Optional[str]): End date for the activity period (YYYY-MM-DD).
-        model (Optional[str]): Filter by model name.
-        api_key (Optional[str]): Filter by API key.
-        page (int): Page number for pagination.
-        page_size (int): Number of items per page.
-        exclude_team_ids (Optional[str]): Comma-separated list of team IDs to exclude.
-    Returns:
-        SpendAnalyticsPaginatedResponse: Paginated response containing daily activity data.
-    """
-    from litellm.proxy.proxy_server import (
-        prisma_client,
-        proxy_logging_obj,
-        user_api_key_cache,
-    )
 
-    if prisma_client is None:
-        raise HTTPException(
-            status_code=500,
-            detail={"error": CommonProxyErrors.db_not_connected_error.value},
-        )
+class _TeamDailyActivityScope(NamedTuple):
+    team_ids: list[str] | None  # mutable-ok: downstream daily-activity signatures take str | list unions
+    exclude_team_ids: list[str] | None  # mutable-ok: downstream daily-activity signatures take str | list unions
+    team_alias_metadata: dict[str, dict[str, object]]  # mutable-ok: entity_metadata_field shape
+    api_key_filter: str | list[str] | None  # mutable-ok: downstream daily-activity signatures take str | list unions
 
+
+async def _resolve_team_daily_activity_scope(
+    *,
+    team_ids: str | None,
+    exclude_team_ids: str | None,
+    api_key: str | None,
+    user_api_key_dict: UserAPIKeyAuth,
+    prisma_client: PrismaClient,
+    user_api_key_cache: UserApiKeyCache,
+    proxy_logging_obj: ProxyLogging,
+) -> _TeamDailyActivityScope:
+    """Resolve which teams the caller may see and whether results must be
+    narrowed to their own API keys. Shared by the paginated and aggregated
+    /team/daily/activity endpoints so both enforce identical permissions."""
     # Convert comma-separated tags string to list if provided
     team_ids_list = team_ids.split(",") if team_ids else None
     exclude_team_ids_list: list[str] | None = None
@@ -5740,10 +5741,7 @@ async def get_team_daily_activity(
             check_db_only=True,
         )
         if user_info is None:
-            raise HTTPException(
-                status_code=404,
-                detail={"error": f"User= {user_api_key_dict.user_id} not found"},
-            )
+            raise _daily_activity_error(status_code=404, message=f"User= {user_api_key_dict.user_id} not found")
 
         if team_ids_list is None:
             team_ids_list = user_info.teams
@@ -5751,11 +5749,9 @@ async def get_team_daily_activity(
             # check if all team_ids are in user_info.teams
             for team_id in team_ids_list:
                 if team_id not in user_info.teams:
-                    raise HTTPException(
+                    raise _daily_activity_error(
                         status_code=404,
-                        detail={
-                            "error": f"User does not belong to Team= {team_id}. Call `/user/info` to see user's teams"
-                        },
+                        message=f"User does not belong to Team= {team_id}. Call `/user/info` to see user's teams",
                     )
 
     ## Fetch team aliases and check team admin status
@@ -5804,17 +5800,167 @@ async def get_team_daily_activity(
     if final_api_key_filter is None and user_api_keys is not None:
         final_api_key_filter = user_api_keys
 
+    return _TeamDailyActivityScope(
+        team_ids=team_ids_list,
+        exclude_team_ids=exclude_team_ids_list,
+        team_alias_metadata=team_alias_metadata,
+        api_key_filter=final_api_key_filter,
+    )
+
+
+@router.get(
+    "/team/daily/activity",
+    response_model=SpendAnalyticsPaginatedResponse,
+    tags=["team management"],
+)
+async def get_team_daily_activity(
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    team_ids: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    model: str | None = None,
+    api_key: str | None = None,
+    page: int = 1,
+    page_size: int = 10,
+    exclude_team_ids: str | None = None,
+):
+    """
+    Get daily activity for specific teams or all teams.
+
+    Args:
+        team_ids (Optional[str]): Comma-separated list of team IDs to filter by. If not provided, returns data for all teams.
+        start_date (Optional[str]): Start date for the activity period (YYYY-MM-DD).
+        end_date (Optional[str]): End date for the activity period (YYYY-MM-DD).
+        model (Optional[str]): Filter by model name.
+        api_key (Optional[str]): Filter by API key.
+        page (int): Page number for pagination.
+        page_size (int): Number of items per page.
+        exclude_team_ids (Optional[str]): Comma-separated list of team IDs to exclude.
+    Returns:
+        SpendAnalyticsPaginatedResponse: Paginated response containing daily activity data.
+    """
+    from litellm.proxy.proxy_server import (
+        prisma_client,
+        proxy_logging_obj,
+        user_api_key_cache,
+    )
+
+    if prisma_client is None:
+        raise _daily_activity_error(status_code=500, message=CommonProxyErrors.db_not_connected_error.value)
+
+    scope: Final = await _resolve_team_daily_activity_scope(
+        team_ids=team_ids,
+        exclude_team_ids=exclude_team_ids,
+        api_key=api_key,
+        user_api_key_dict=user_api_key_dict,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+
     return await get_daily_activity(
         prisma_client=prisma_client,
         table_name="litellm_dailyteamspend",
         entity_id_field="team_id",
-        entity_id=team_ids_list,
-        entity_metadata_field=team_alias_metadata,
-        exclude_entity_ids=exclude_team_ids_list,
+        entity_id=scope.team_ids,
+        entity_metadata_field=scope.team_alias_metadata,
+        exclude_entity_ids=scope.exclude_team_ids,
         start_date=start_date,
         end_date=end_date,
         model=model,
-        api_key=final_api_key_filter,
+        api_key=scope.api_key_filter,
         page=page,
         page_size=page_size,
+    )
+
+
+_MAX_AGGREGATED_RANGE_DAYS: Final = 400
+
+
+def _aggregated_date_range_error(start_date: str | None, end_date: str | None) -> str | None:
+    """The aggregated endpoint has no pagination to bound its work, so malformed
+    dates and ranges wider than the UI ever requests are rejected before querying."""
+    if start_date is None or end_date is None:
+        return "Please provide start_date and end_date"
+    try:
+        parsed_start: Final = datetime.strptime(start_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        parsed_end: Final = datetime.strptime(end_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return "start_date and end_date must be valid YYYY-MM-DD dates"
+    if parsed_end < parsed_start:
+        return "end_date must be on or after start_date"
+    if (parsed_end - parsed_start).days > _MAX_AGGREGATED_RANGE_DAYS:
+        return f"Date range must be at most {_MAX_AGGREGATED_RANGE_DAYS} days"
+    return None
+
+
+@router.get(
+    "/team/daily/activity/aggregated",
+    response_model=SpendAnalyticsPaginatedResponse,
+    tags=["team management"],
+)
+async def get_team_daily_activity_aggregated(
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    team_ids: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    model: str | None = None,
+    api_key: str | None = None,
+    exclude_team_ids: str | None = None,
+    timezone: int | None = None,
+):
+    """
+    Aggregated daily activity for teams without pagination, including per-team breakdown.
+
+    One SQL GROUPING SETS pass returns every day in the range regardless of row
+    volume, so callers never reassemble pages. Same response shape as the
+    paginated endpoint with page metadata pinned to a single page.
+
+    Args:
+        team_ids (Optional[str]): Comma-separated list of team IDs to filter by. If not provided, returns data for all teams.
+        start_date (Optional[str]): Start date for the activity period (YYYY-MM-DD).
+        end_date (Optional[str]): End date for the activity period (YYYY-MM-DD).
+        model (Optional[str]): Filter by model name.
+        api_key (Optional[str]): Filter by API key.
+        exclude_team_ids (Optional[str]): Comma-separated list of team IDs to exclude.
+        timezone (Optional[int]): Timezone offset in minutes from UTC, matching JavaScript's Date.getTimezoneOffset() convention.
+    Returns:
+        SpendAnalyticsPaginatedResponse: Response containing all daily activity data for the range.
+    """
+    from litellm.proxy.proxy_server import (
+        prisma_client,
+        proxy_logging_obj,
+        user_api_key_cache,
+    )
+
+    if prisma_client is None:
+        raise _daily_activity_error(status_code=500, message=CommonProxyErrors.db_not_connected_error.value)
+
+    range_error: Final = _aggregated_date_range_error(start_date, end_date)
+    if range_error is not None:
+        raise _daily_activity_error(status_code=400, message=range_error)
+
+    scope: Final = await _resolve_team_daily_activity_scope(
+        team_ids=team_ids,
+        exclude_team_ids=exclude_team_ids,
+        api_key=api_key,
+        user_api_key_dict=user_api_key_dict,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+
+    return await get_daily_activity_aggregated(
+        prisma_client=prisma_client,
+        table_name="litellm_dailyteamspend",
+        entity_id_field="team_id",
+        entity_id=scope.team_ids,
+        entity_metadata_field=scope.team_alias_metadata,
+        start_date=start_date,
+        end_date=end_date,
+        model=model,
+        api_key=scope.api_key_filter,
+        exclude_entity_ids=scope.exclude_team_ids,
+        timezone_offset_minutes=timezone,
+        include_entity_breakdown=True,
     )

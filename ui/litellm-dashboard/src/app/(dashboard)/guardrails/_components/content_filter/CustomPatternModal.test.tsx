@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import CustomPatternModal from "./CustomPatternModal";
 
@@ -42,7 +42,7 @@ describe("CustomPatternModal", () => {
 
     // Find and fill the pattern name input
     const nameInput = screen.getByPlaceholderText("e.g., internal_id, employee_code");
-    await user.type(nameInput, "employee_id");
+    fireEvent.change(nameInput, { target: { value: "employee_id" } });
 
     // Find and fill the regex pattern input - use paste instead of type to avoid special char issues
     const regexInput = screen.getByPlaceholderText("e.g., ID-[0-9]{6}");

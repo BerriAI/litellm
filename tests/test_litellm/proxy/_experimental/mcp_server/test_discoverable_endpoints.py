@@ -1,12 +1,21 @@
 """Tests for MCP OAuth discoverable endpoints"""
 
+import hashlib
 import json
+import time
+from base64 import urlsafe_b64encode
+from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
 
 from litellm.types.mcp import MCPAuth
+
+if TYPE_CHECKING:
+    import httpx
+
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
 
 # Fixture to mock IP address check for all MCP tests
@@ -39,6 +48,128 @@ def _mock_callback_request(base_url: str = "http://localhost:3000/"):
     req.headers = {}
     req.cookies = {}
     return req
+
+
+def _unresolved_oauth_server():
+    from litellm.proxy._types import MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    return MCPServer(
+        server_id="cold-oauth-server",
+        name="cold_oauth_server",
+        server_name="cold_oauth_server",
+        alias="cold_oauth_server",
+        url="https://mcp.example.com/mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        oauth2_flow="authorization_code",
+        client_id="client-id",
+    )
+
+
+def _resolved_oauth_metadata():
+    from litellm.types.mcp_server.mcp_server_manager import MCPOAuthMetadata
+
+    return MCPOAuthMetadata(
+        authorization_url="https://idp.example.com/authorize",
+        token_url="https://idp.example.com/token",
+        registration_url="https://idp.example.com/register",
+        scopes=["mcp.read"],
+    )
+
+
+@pytest.mark.asyncio
+async def test_authorize_resolves_cold_oauth_metadata():
+    from litellm.proxy._experimental.mcp_server import discoverable_endpoints
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+
+    server = _unresolved_oauth_server()
+    global_mcp_server_manager.registry[server.server_id] = server
+    global_mcp_server_manager._set_oauth_discovery_deferred(server.server_id, True)
+    request = _mock_callback_request("https://litellm.example.com/")
+    expected = MagicMock()
+
+    with (
+        patch.object(
+            global_mcp_server_manager,
+            "_discover_oauth_metadata_for_server",
+            new=AsyncMock(return_value=_resolved_oauth_metadata()),
+        ) as discovery,
+        patch.object(discoverable_endpoints, "authorize_with_server", new=AsyncMock(return_value=expected)) as relay,
+    ):
+        response = await discoverable_endpoints.authorize(
+            request=request,
+            client_id="client-id",
+            mcp_server_name=server.server_name,
+            redirect_uri="http://127.0.0.1:60108/callback",
+        )
+
+    discovery.assert_awaited_once_with(server)
+    assert relay.await_args.kwargs["mcp_server"].authorization_url == "https://idp.example.com/authorize"
+    assert response is expected
+
+
+@pytest.mark.asyncio
+async def test_token_resolves_cold_oauth_metadata():
+    from litellm.proxy._experimental.mcp_server import discoverable_endpoints
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+
+    server = _unresolved_oauth_server()
+    global_mcp_server_manager.registry[server.server_id] = server
+    global_mcp_server_manager._set_oauth_discovery_deferred(server.server_id, True)
+    request = _mock_callback_request("https://litellm.example.com/")
+    expected = MagicMock()
+
+    with (
+        patch.object(
+            global_mcp_server_manager,
+            "_discover_oauth_metadata_for_server",
+            new=AsyncMock(return_value=_resolved_oauth_metadata()),
+        ) as discovery,
+        patch.object(
+            discoverable_endpoints, "exchange_token_with_server", new=AsyncMock(return_value=expected)
+        ) as relay,
+    ):
+        response = await discoverable_endpoints.token_endpoint(
+            request=request,
+            grant_type="refresh_token",
+            client_id="client-id",
+            refresh_token="refresh-token",
+            mcp_server_name=server.server_name,
+        )
+
+    discovery.assert_awaited_once_with(server)
+    assert relay.await_args.kwargs["mcp_server"].token_url == "https://idp.example.com/token"
+    assert response is expected
+
+
+@pytest.mark.asyncio
+async def test_register_resolves_cold_oauth_metadata():
+    from litellm.proxy._experimental.mcp_server import discoverable_endpoints
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+
+    server = _unresolved_oauth_server()
+    global_mcp_server_manager.registry[server.server_id] = server
+    global_mcp_server_manager._set_oauth_discovery_deferred(server.server_id, True)
+    request = _mock_callback_request("https://litellm.example.com/")
+    expected = MagicMock()
+
+    with (
+        patch.object(
+            global_mcp_server_manager,
+            "_discover_oauth_metadata_for_server",
+            new=AsyncMock(return_value=_resolved_oauth_metadata()),
+        ) as discovery,
+        patch.object(discoverable_endpoints, "_read_request_body", new=AsyncMock(return_value={})),
+        patch.object(
+            discoverable_endpoints, "register_client_with_server", new=AsyncMock(return_value=expected)
+        ) as relay,
+    ):
+        response = await discoverable_endpoints.register_client(request=request, mcp_server_name=server.server_name)
+
+    discovery.assert_awaited_once_with(server)
+    assert relay.await_args.kwargs["mcp_server"].registration_url == "https://idp.example.com/register"
+    assert response is expected
 
 
 @pytest.fixture
@@ -3161,6 +3292,7 @@ def _create_oauth2_server(
     client_id="test_client_id",
     client_secret="test_client_secret",
     available_on_public_internet=True,
+    delegate_auth_to_upstream: bool = False,
 ):
     """Helper to create a mock OAuth2 MCPServer."""
     from litellm.proxy._types import MCPTransport
@@ -3180,6 +3312,7 @@ def _create_oauth2_server(
         token_url="https://provider.com/oauth/token",
         scopes=["read", "write"],
         available_on_public_internet=available_on_public_internet,
+        delegate_auth_to_upstream=delegate_auth_to_upstream,
     )
 
 
@@ -8169,6 +8302,69 @@ async def test_bare_origin_discovery_resolves_single_server_not_aggregate():
         global_mcp_server_manager.registry.clear()
 
 
+@pytest.mark.asyncio
+async def test_named_discovery_issuer_matches_protected_resource_authorization_servers():
+    """RFC 8414 requires the issuer to equal the authorization server identifier the client
+    resolved the metadata from, which is the protected-resource authorization_servers entry."""
+    from fastapi import Request
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        _build_oauth_authorization_server_response,
+        _build_oauth_protected_resource_response,
+    )
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+
+    global_mcp_server_manager.registry.clear()
+    server = _create_oauth2_server(delegate_auth_to_upstream=True)
+    global_mcp_server_manager.registry[server.server_id] = server
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "https://llm.example.com/"
+    mock_request.headers = {}
+
+    try:
+        resource_response = await _build_oauth_protected_resource_response(
+            request=mock_request, mcp_server_name="test_oauth", use_standard_pattern=True
+        )
+        authorization_response = _build_oauth_authorization_server_response(
+            request=mock_request, mcp_server_name="test_oauth"
+        )
+        assert resource_response["authorization_servers"] == ["https://llm.example.com/test_oauth"]
+        assert authorization_response["issuer"] == resource_response["authorization_servers"][0]
+    finally:
+        global_mcp_server_manager.registry.clear()
+
+
+@pytest.mark.asyncio
+async def test_openid_configuration_issuer_stays_bare_origin_for_single_oauth2_server():
+    """The OIDC discovery document is served from the bare origin, so its issuer must stay the
+    bare origin even when root discovery resolves the one configured OAuth2 server."""
+    from fastapi import Request
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        openid_configuration,
+    )
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+
+    global_mcp_server_manager.registry.clear()
+    server = _create_oauth2_server()
+    global_mcp_server_manager.registry[server.server_id] = server
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "https://llm.example.com/"
+    mock_request.headers = {}
+
+    try:
+        response = await openid_configuration(mock_request)
+        assert response["issuer"] == "https://llm.example.com"
+    finally:
+        global_mcp_server_manager.registry.clear()
+
+
 def test_gateway_dcr_flow_routing_engages_only_for_llm_dcrc_clients(monkeypatch):
     """The aggregate DCR arms engage for llm_dcrc_ client_ids (register always mints one,
     authorize/token route into the aggregate flow); a non-gateway client_id keeps the
@@ -8457,6 +8653,8 @@ async def test_authorize_wall_names_the_issuer_for_anchored_servers():
     assert "verify the Issuer" in detail_text
     assert "Servers with no url" not in detail_text
     assert "idp.example.com" not in detail_text
+
+
 def test_passthrough_authorization_code_round_trips_and_rejects_hostile_input():
     """The passthrough gateway code seals and recovers the ephemeral DCR client and upstream code,
     and is total over hostile input: a raw upstream code opens to None, and a tampered or
@@ -8865,7 +9063,9 @@ async def test_mint_ephemeral_dcr_client_unusable_registration_response_is_502(p
     )
     from litellm.types.mcp import MCPAuth
 
-    server = _bridge_server(auth_type=MCPAuth.true_passthrough, dcr_bridge=None, server_id=server_id, server_name=server_id)
+    server = _bridge_server(
+        auth_type=MCPAuth.true_passthrough, dcr_bridge=None, server_id=server_id, server_name=server_id
+    )
     mock_response = MagicMock()
     mock_response.text = json.dumps(payload)
     mock_response.raise_for_status = MagicMock()
@@ -8941,8 +9141,6 @@ async def test_token_exchange_authenticates_with_the_sealed_clients_own_auth_met
         assert "Authorization" not in sent_headers
         assert sent_body["client_id"] == "minted-77"
         assert sent_body["client_secret"] == "mint-secret"
-
-
 
 
 # ---------------------------------------------------------------------------
@@ -9197,7 +9395,9 @@ def test_upstream_resource_auto_keeps_the_path_because_it_identifies_the_server(
     sets ``upstream_resource`` explicitly instead of using ``auto``."""
     from litellm.proxy._experimental.mcp_server.oauth_utils import resolve_upstream_resource
 
-    first = resolve_upstream_resource(_resource_server(url="https://gw.example.com/team-a/mcp", upstream_resource="auto"))
+    first = resolve_upstream_resource(
+        _resource_server(url="https://gw.example.com/team-a/mcp", upstream_resource="auto")
+    )
     second = resolve_upstream_resource(
         _resource_server(url="https://gw.example.com/team-b/mcp", upstream_resource="auto")
     )
@@ -9241,3 +9441,229 @@ async def test_upstream_resource_sent_on_dcr_bridge_relay_authorize():
     query = await _authorize_query(server)
     assert query["resource"] == ["https://mcp.example.com/mcp"]
     assert query["client_id"] == ["caller-client"]
+
+
+def _s256(verifier: str) -> str:
+    return urlsafe_b64encode(hashlib.sha256(verifier.encode("ascii")).digest()).rstrip(b"=").decode("ascii")
+
+
+_NATIVE_CLIENT_MASTER_KEY = "sk-test-salt-for-LIT-5874"
+
+
+def _native_client_app(monkeypatch):
+    """The unauthenticated discoverable router served over TestClient with a signed UI session
+    cookie available, plus fakes for the two database-backed hooks the native-client flow calls."""
+    import jwt
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import router
+    from litellm.proxy._experimental.mcp_server.gateway_dcr_flow import ConsentTeam, MintedProxyCredential
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", _NATIVE_CLIENT_MASTER_KEY)
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", _NATIVE_CLIENT_MASTER_KEY, raising=False)
+    minted = []
+
+    async def fake_mint(user_id, team_id):
+        minted.append((user_id, team_id))
+        return MintedProxyCredential(key=f"sk-cli-{len(minted)}", expires_in=3600, user_id=user_id, team_id=team_id)
+
+    async def fake_lookup(user_id):
+        return (ConsentTeam(team_id="team-a", team_alias="Team A"), ConsentTeam(team_id="team-b"))
+
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.mint_proxy_credential", fake_mint
+    )
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.lookup_consent_teams", fake_lookup
+    )
+    global_mcp_server_manager.registry.clear()
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+    session_cookie = jwt.encode(
+        {"user_id": "u1", "login_method": "username_password", "exp": int(time.time()) + 600},
+        _NATIVE_CLIENT_MASTER_KEY,
+        algorithm="HS256",
+    )
+    return client, session_cookie, minted
+
+
+def _consent_flow_handle(page: str) -> str:
+    import re
+
+    match = re.search(r'name="flow" value="([^"]+)"', page)
+    assert match is not None, page
+    return match.group(1)
+
+
+def test_native_client_login_walks_discovery_consent_token_refresh_and_revoke(monkeypatch):
+    """The whole ``lite login --pkce`` server side over the real router: a Go CLI reads the versioned
+    discovery document, registers a loopback public client, the signed-in user consents to a team,
+    the code redeems for the ``lite login`` credential, the refresh token rotates, and revocation
+    kills it."""
+    from http.cookies import SimpleCookie
+    from urllib.parse import parse_qs, urlparse
+
+    client, session_cookie, minted = _native_client_app(monkeypatch)
+    redirect_uri = "http://127.0.0.1:51234/callback"
+
+    discovery = client.get("/.well-known/litellm-cli-auth")
+    assert discovery.status_code == 200
+    assert discovery.headers["cache-control"] == "no-store"
+    contract = discovery.json()
+    assert contract["contract_version"] == 1
+    assert contract["resource"] == "http://testserver"
+    assert contract["code_challenge_methods_supported"] == ["S256"]
+    assert contract["token_endpoint_auth_methods_supported"] == ["none"]
+    for endpoint in ("authorization_endpoint", "token_endpoint", "registration_endpoint", "revocation_endpoint"):
+        assert contract[endpoint].startswith("http://testserver/")
+
+    registered = client.post(
+        contract["registration_endpoint"],
+        json={
+            "client_name": "litellm-cli",
+            "redirect_uris": [redirect_uri],
+            "grant_types": ["authorization_code", "refresh_token"],
+            "response_types": ["code"],
+            "token_endpoint_auth_method": "none",
+        },
+    )
+    assert registered.status_code == 201
+    client_id = registered.json()["client_id"]
+    verifier = "v" * 43
+    authorize_params = {
+        "response_type": "code",
+        "client_id": client_id,
+        "redirect_uri": redirect_uri,
+        "state": "cli-state",
+        "code_challenge": _s256(verifier),
+        "code_challenge_method": "S256",
+        "resource": contract["resource"],
+    }
+
+    anonymous = client.get(contract["authorization_endpoint"], params=authorize_params, follow_redirects=False)
+    assert anonymous.status_code == 303
+    login_target = urlparse(anonymous.headers["location"])
+    assert login_target.path == "/sso/key/generate"
+    assert parse_qs(login_target.query)["return_to"][0].startswith("/authorize?")
+
+    client.cookies.set("token", session_cookie)
+    consent = client.get(contract["authorization_endpoint"], params=authorize_params, follow_redirects=False)
+    assert consent.status_code == 200
+    assert consent.headers["x-frame-options"] == "DENY"
+    assert consent.headers["cache-control"] == "no-store"
+    assert "http://127.0.0.1:51234" in consent.text
+    assert '<option value="team-b">team-b</option>' in consent.text
+    jar = SimpleCookie()
+    jar.load(consent.headers["set-cookie"])
+    assert all(morsel["httponly"] for morsel in jar.values())
+
+    denied = client.post(
+        "/authorize/complete",
+        data={"flow": _consent_flow_handle(consent.text), "decision": "deny", "team_id": "team-a"},
+        follow_redirects=False,
+    )
+    assert denied.status_code == 303
+    denied_query = parse_qs(urlparse(denied.headers["location"]).query)
+    assert denied.headers["location"].startswith(redirect_uri)
+    assert denied_query["error"] == ["access_denied"]
+    assert denied_query["state"] == ["cli-state"]
+    assert minted == []
+
+    consent_again = client.get(contract["authorization_endpoint"], params=authorize_params, follow_redirects=False)
+    approved = client.post(
+        "/authorize/complete",
+        data={"flow": _consent_flow_handle(consent_again.text), "decision": "approve", "team_id": "team-b"},
+        follow_redirects=False,
+    )
+    assert approved.status_code == 303
+    assert approved.headers["location"].startswith(redirect_uri)
+    approved_query = parse_qs(urlparse(approved.headers["location"]).query)
+    assert approved_query["state"] == ["cli-state"]
+    code = approved_query["code"][0]
+
+    token = client.post(
+        contract["token_endpoint"],
+        data={
+            "grant_type": "authorization_code",
+            "code": code,
+            "redirect_uri": redirect_uri,
+            "client_id": client_id,
+            "code_verifier": verifier,
+            "resource": contract["resource"],
+        },
+    )
+    assert token.status_code == 200, token.text
+    assert token.headers["cache-control"] == "no-store"
+    body = token.json()
+    assert body["access_token"] == "sk-cli-1"
+    assert body["token_type"] == "Bearer"
+    assert body["expires_in"] == 3600
+    assert body["user_id"] == "u1"
+    assert body["team_id"] == "team-b"
+    assert body["refresh_token"].startswith("llm_srefresh_")
+    assert minted == [("u1", "team-b")]
+
+    refreshed = client.post(
+        contract["token_endpoint"],
+        data={
+            "grant_type": "refresh_token",
+            "refresh_token": body["refresh_token"],
+            "client_id": client_id,
+            "resource": contract["resource"],
+        },
+    )
+    assert refreshed.status_code == 200, refreshed.text
+    assert refreshed.json()["access_token"] == "sk-cli-2"
+    assert refreshed.json()["team_id"] == "team-b"
+    assert refreshed.json()["refresh_token"] != body["refresh_token"]
+    assert minted == [("u1", "team-b"), ("u1", "team-b")]
+
+    revoked = client.post(
+        contract["revocation_endpoint"],
+        data={"token": refreshed.json()["refresh_token"], "token_type_hint": "refresh_token", "client_id": client_id},
+    )
+    assert revoked.status_code == 200
+    assert revoked.json() == {}
+
+    after_revoke = client.post(
+        contract["token_endpoint"],
+        data={
+            "grant_type": "refresh_token",
+            "refresh_token": refreshed.json()["refresh_token"],
+            "client_id": client_id,
+            "resource": contract["resource"],
+        },
+    )
+    assert after_revoke.status_code == 400
+    assert after_revoke.json()["error"] == "invalid_grant"
+
+    stranger = client.post(
+        contract["revocation_endpoint"], data={"token": "whatever", "client_id": "llm_dcrc_not_a_client"}
+    )
+    assert stranger.status_code == 401
+    assert stranger.json()["error"] == "invalid_client"
+
+
+def test_native_client_authorize_without_the_proxy_resource_keeps_the_mcp_flow(monkeypatch):
+    """A registered client asking for the MCP resource (or no resource) never sees the consent
+    page, so existing MCP clients are untouched by the native-client arm."""
+    client, session_cookie, minted = _native_client_app(monkeypatch)
+    registered = client.post("/register", json={"redirect_uris": ["http://127.0.0.1:51234/callback"]})
+    client.cookies.set("token", session_cookie)
+    for resource in (None, "http://testserver/mcp"):
+        params = {
+            "response_type": "code",
+            "client_id": registered.json()["client_id"],
+            "redirect_uri": "http://127.0.0.1:51234/callback",
+            "state": "s",
+            "code_challenge": _s256("v" * 43),
+            "code_challenge_method": "S256",
+            **({"resource": resource} if resource else {}),
+        }
+        response = client.get("/authorize", params=params, follow_redirects=False)
+        assert 'name="decision"' not in response.text
+        assert "team-b" not in response.text
+    assert minted == []
