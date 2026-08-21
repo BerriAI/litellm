@@ -3,15 +3,17 @@ Unit tests for per-deployment num_retries in litellm_params
 GitHub Issue: #18968 - Per-deployment max_retries/num_retries in litellm_params is not used in retry logic
 """
 
+from unittest.mock import patch
+
 import httpx
 import pytest
 import pytest_asyncio
-from unittest.mock import patch
 
 import litellm
 from litellm import Router
-from litellm.types.router import RetryPolicy
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.router_utils.get_retry_from_policy import get_num_retries_from_retry_policy
+from litellm.types.router import RetryPolicy
 
 
 class TestPerDeploymentNumRetries:
@@ -425,6 +427,18 @@ class TestNoProviderRetryAmplification:
             retry_policy=RetryPolicy(InternalServerErrorRetries=2),
         )
         assert await self._call_and_count(router) == 6
+
+    def test_retry_policy_helper_handles_internal_server_error(self):
+        retry_count = get_num_retries_from_retry_policy(
+            exception=litellm.InternalServerError(
+                message="test error",
+                llm_provider="openai",
+                model="gpt-4",
+            ),
+            retry_policy=RetryPolicy(InternalServerErrorRetries=2),
+        )
+
+        assert retry_count == 2
 
     @pytest.mark.asyncio
     async def test_global_num_retries_not_amplified(self):
