@@ -436,6 +436,9 @@ DEFAULT_REQUEST_TIMEOUT_SECONDS: Final[float] = 6000.0
 # deadline and connect handshake (see ``http_handler`` cached handler paths).
 COMPLETION_HTTP_FALLBACK_SECONDS: Final[float] = 600.0
 HTTP_HANDLER_CONNECT_TIMEOUT_SECONDS: Final[float] = 5.0
+SEMANTIC_CACHE_EMBEDDING_TIMEOUT_SECONDS: Final[float] = float(
+    os.getenv("SEMANTIC_CACHE_EMBEDDING_TIMEOUT_SECONDS", "5.0")
+)
 request_timeout: float = float(os.getenv("REQUEST_TIMEOUT", str(int(DEFAULT_REQUEST_TIMEOUT_SECONDS))))
 request_timeout_explicitly_set: bool = "REQUEST_TIMEOUT" in os.environ
 DEFAULT_A2A_AGENT_TIMEOUT: Final[float] = float(os.getenv("DEFAULT_A2A_AGENT_TIMEOUT", 6000))  # 10 minutes
@@ -779,6 +782,7 @@ openai_compatible_endpoints: Final[list] = [
     "https://api.libertai.io/v1",
     "https://pinstripes.io/v1",
     "https://api.meta.ai/v1",
+    "https://api.cognition.ai/v1",
 ]
 
 
@@ -846,6 +850,7 @@ openai_compatible_providers: Final[list] = [
     "pinstripes",  # Pinstripes - JSON-configured provider
     "darkbloom",
     "meta",  # Meta Model API (Muse Spark) - JSON-configured provider
+    "cognition",
 ]
 openai_text_completion_compatible_providers: Final[list] = [  # providers that support `/v1/completions`
     "together_ai",
@@ -1537,6 +1542,11 @@ DEFAULT_CRON_JOB_LOCK_TTL_SECONDS: Final = int(os.getenv("DEFAULT_CRON_JOB_LOCK_
 PROXY_BUDGET_RESCHEDULER_MIN_TIME: Final = int(os.getenv("PROXY_BUDGET_RESCHEDULER_MIN_TIME", 597))
 RESET_BUDGET_JOB_BATCH_SIZE: Final = max(1, int(os.getenv("RESET_BUDGET_JOB_BATCH_SIZE", "500")))
 RESET_BUDGET_JOB_MAX_CHUNKS_PER_RUN: Final = max(1, int(os.getenv("RESET_BUDGET_JOB_MAX_CHUNKS_PER_RUN", "100")))
+RESET_BUDGET_JOB_NAME: Final = "reset_budget_job"
+# Comfortably longer than one PROXY_BUDGET_RESCHEDULER_MIN_TIME tick, so a healthy
+# leader keeps the lease across its own run, and a crashed one strands the sweep for
+# at most a single tick.
+RESET_BUDGET_JOB_LOCK_TTL_SECONDS: Final[int] = 900
 PROXY_BATCH_POLLING_INTERVAL: Final = int(os.getenv("PROXY_BATCH_POLLING_INTERVAL", 3600))
 MAX_OBJECTS_PER_POLL_CYCLE: Final = max(1, int(os.getenv("MAX_OBJECTS_PER_POLL_CYCLE", 50)))
 MANAGED_OBJECT_STALENESS_CUTOFF_DAYS: Final = max(1, int(os.getenv("MANAGED_OBJECT_STALENESS_CUTOFF_DAYS", 7)))
@@ -1601,6 +1611,7 @@ LITELLM_SETTINGS_SAFE_DB_OVERRIDES: Final = [
     "public_model_groups_links",
     "cost_discount_config",
     "cost_margin_config",
+    "block_requests_for_models_without_pricing",
     "budget_exceeded_throttle_percentage",
     # Every field editable from the Admin UI (proxy_server._GENERAL_SETTINGS_UI_LITELLM_FIELDS)
     # must be listed here so a DB write from one worker overrides the live litellm attribute on

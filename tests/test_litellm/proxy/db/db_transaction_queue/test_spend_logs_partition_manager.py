@@ -308,9 +308,9 @@ async def test_partition_maintenance_issues_nothing_when_the_budget_is_already_s
 
 
 def test_unsupported_interval_raises():
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match='Unsupported partition interval: year'):
         period_start(date(2026, 6, 1), "year")
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match='Unsupported partition interval: year'):
         next_period_start(date(2026, 6, 1), "year")
 
 

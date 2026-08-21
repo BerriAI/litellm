@@ -3746,6 +3746,8 @@ class ProxyErrorTypes(str, enum.Enum):
     Project does not have access to the model
     """
 
+    model_cost_map_missing = "model_cost_map_missing"
+
     expired_key = "expired_key"
     """
     Key has expired

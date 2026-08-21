@@ -293,7 +293,7 @@ def test_cleanup_timestamps():
     assert all(isinstance(x, float) for x in result)
 
     # Test invalid input
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="start_time is required, got=invalid of type <class 'str'>"):
         StandardLoggingPayloadSetup.cleanup_timestamps(
             "invalid", end_float, completion_float
         )

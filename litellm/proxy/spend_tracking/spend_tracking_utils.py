@@ -10,6 +10,7 @@ from pydantic import BaseModel
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
+    LITELLM_PROXY_MASTER_KEY_ALIAS,
     LITELLM_TRUNCATED_PAYLOAD_FIELD,
     LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE,
     REDACTED_BY_LITELM_STRING,
@@ -22,6 +23,7 @@ from litellm.litellm_core_utils.core_helpers import (
     reconstruct_model_name,
 )
 from litellm.litellm_core_utils.internal_call_metadata import is_unbilled_non_inference_call
+from litellm.litellm_core_utils.litellm_logging import is_valid_sha256_hash
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps, strip_null_bytes
 from litellm.proxy._types import SpendLogsMetadata, SpendLogsPayload
 from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
@@ -54,13 +56,6 @@ def _get_max_string_length_prompt_in_db() -> int:
         return DEFAULT_MAX_STRING_LENGTH_PROMPT_IN_DB
 
 
-def _hash_api_key_for_spend_log(api_key: str) -> str:
-    stripped: Final = api_key[7:] if api_key[:7].lower() == "bearer " else api_key
-    if stripped.startswith("sk-"):
-        return hash_token(stripped)
-    return stripped
-
-
 def _is_master_key(api_key: str | None, _master_key: str | None) -> bool:
     """
     Raw-only constant-time master-key comparison. The hashed form is never
@@ -69,6 +64,28 @@ def _is_master_key(api_key: str | None, _master_key: str | None) -> bool:
     if _master_key is None or api_key is None:
         return False
     return secrets.compare_digest(api_key, _master_key)
+
+
+_HASHED_JWT_RE = re.compile(r"hashed-jwt-[a-fA-F0-9]{64}")
+
+
+def _is_non_secret_key_value(value: str) -> bool:
+    return (
+        value == LITELLM_PROXY_MASTER_KEY_ALIAS
+        or is_valid_sha256_hash(value)
+        or _HASHED_JWT_RE.fullmatch(value) is not None
+    )
+
+
+def _redact_logged_api_key(value: str | None, *, already_redacted: bool = False) -> str | None:
+    if not isinstance(value, str) or not value:
+        return None
+    stripped: Final = re.sub(r"(?i)^bearer ", "", value)
+    if not stripped:
+        return None
+    if already_redacted and _is_non_secret_key_value(stripped):
+        return stripped
+    return hash_token(stripped)
 
 
 def _get_spend_logs_metadata(
@@ -124,9 +141,12 @@ def _get_spend_logs_metadata(
 
     # Filter the metadata dictionary to include only the specified keys
     clean_metadata: Final = SpendLogsMetadata(**{key: metadata.get(key) for key in SpendLogsMetadata.__annotations__})
-    raw_user_api_key: Final = clean_metadata.get("user_api_key")
-    if raw_user_api_key is not None and isinstance(raw_user_api_key, str):
-        clean_metadata["user_api_key"] = _hash_api_key_for_spend_log(raw_user_api_key)
+    _raw_key: Final = clean_metadata.get("user_api_key")
+    _trusted_hash: Final = metadata.get("user_api_key_hash")
+    _already_redacted: Final = (
+        isinstance(_trusted_hash, str) and _is_non_secret_key_value(_trusted_hash) and _trusted_hash == _raw_key
+    )
+    clean_metadata["user_api_key"] = _redact_logged_api_key(_raw_key, already_redacted=_already_redacted)
     clean_metadata["applied_guardrails"] = applied_guardrails
     clean_metadata["batch_models"] = batch_models
     clean_metadata["mcp_tool_call_metadata"] = mcp_tool_call_metadata
@@ -282,16 +302,23 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogs
         standard_logging_prompt_tokens = standard_logging_payload.get("prompt_tokens", 0)
         standard_logging_completion_tokens = standard_logging_payload.get("completion_tokens", 0)
         standard_logging_total_tokens = standard_logging_payload.get("total_tokens", 0)
-    if api_key is not None and isinstance(api_key, str):
-        api_key = _hash_api_key_for_spend_log(api_key)
+    _trusted_hash = metadata.get("user_api_key_hash")
+    _key_already_redacted = (
+        isinstance(_trusted_hash, str) and _is_non_secret_key_value(_trusted_hash) and _trusted_hash == api_key
+    )
+    api_key = _redact_logged_api_key(api_key, already_redacted=_key_already_redacted) or ""
 
     if (
         standard_logging_payload is not None
     ):  # [TODO] migrate completely to sl payload. currently missing pass-through endpoint data
-        api_key = api_key or standard_logging_payload["metadata"].get("user_api_key_hash") or ""
+        api_key = (
+            api_key
+            or _redact_logged_api_key(
+                standard_logging_payload["metadata"].get("user_api_key_hash"), already_redacted=True
+            )
+            or ""
+        )
         end_user_id = end_user_id or standard_logging_payload["metadata"].get("user_api_key_end_user_id")
-    # BUG FIX: Don't overwrite api_key when standard_logging_payload is None
-    # The api_key was already extracted from metadata (line 243) and hashed (lines 256-259)
     request_tags = safe_dumps(metadata.get("tags", [])) if isinstance(metadata.get("tags", []), list) else "[]"
     if (
         standard_logging_payload is not None and standard_logging_payload.get("request_tags") is not None

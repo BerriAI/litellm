@@ -1507,7 +1507,7 @@ def test_team_info_masking():
         "langfuse_public_key": "public-test-key",
     }
 
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(Exception, match="secr\\*\\*\\*\\*\\*\\*\\*-key', 'langfuse_public_key':") as exc_info:
         proxy_config._get_team_config(
             team_id="test_dev",
             all_teams_config=[team1_info],

@@ -2412,9 +2412,12 @@ async def test_streaming_cancel_before_any_chunk_reconciles_to_input_cost(
 
     generator, streaming_logging_obj = _drive_streaming_cancel(valid_token, cancel_before_chunk)
     received = []
-    with pytest.raises(asyncio.CancelledError):
+    async def _drain():
         async for chunk in generator:
             received.append(chunk)
+
+    with pytest.raises(asyncio.CancelledError):
+        await _drain()
 
     assert received == []
     # no chunk delivered, but the provider already received the input, so the
@@ -2444,9 +2447,12 @@ async def test_streaming_cancel_after_chunk_keeps_reservation(
 
     generator, streaming_logging_obj = _drive_streaming_cancel(valid_token, cancel_after_chunk)
     received = []
-    with pytest.raises(asyncio.CancelledError):
+    async def _drain():
         async for chunk in generator:
             received.append(chunk)
+
+    with pytest.raises(asyncio.CancelledError):
+        await _drain()
 
     assert received == ["data: chunk\n\n"]
     # a consumed stream must NOT be refunded
@@ -2508,9 +2514,12 @@ async def test_streaming_cancel_in_slow_path_before_yield_refunds(spend_counter_
     received = []
     # include_cost_in_streaming_usage forces fast_path off, so the hook above runs
     with patch.object(litellm, "include_cost_in_streaming_usage", True, create=True):
-        with pytest.raises(asyncio.CancelledError):
+        async def _drain():
             async for chunk in generator:
                 received.append(chunk)
+
+        with pytest.raises(asyncio.CancelledError):
+            await _drain()
 
     assert received == []
     # cancellation happened before any chunk reached the client, but the

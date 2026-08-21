@@ -979,7 +979,7 @@ async def test_create__exception_calls_failure_hook(harness, openai_env_creds):
     )
     harness.litellm_acreate.side_effect = ValueError("provider boom")
 
-    with pytest.raises(Exception):
+    with pytest.raises(ProxyException):
         await call_create(harness)
 
     harness.logging.post_call_failure_hook.assert_called_once()
@@ -1437,7 +1437,7 @@ async def test_retrieve__uses_aretrieve_batch_route_type(retrieve_harness, opena
 async def test_retrieve__exception_calls_failure_hook(retrieve_harness, openai_env_creds):
     retrieve_harness.litellm_aretrieve.side_effect = ValueError("provider boom")
 
-    with pytest.raises(Exception):
+    with pytest.raises(ProxyException):
         await call_retrieve(retrieve_harness, "batch-raw-xyz")
 
     retrieve_harness.logging.post_call_failure_hook.assert_called_once()
@@ -1844,7 +1844,7 @@ async def test_list__uses_alist_batches_route_type(list_harness):
 async def test_list__exception_calls_failure_hook(list_harness):
     list_harness.litellm_alist.side_effect = ValueError("provider boom")
 
-    with pytest.raises(Exception):
+    with pytest.raises(ProxyException):
         await call_list(list_harness)
 
     list_harness.logging.post_call_failure_hook.assert_called_once()
@@ -2233,7 +2233,7 @@ async def test_cancel__uses_acancel_batch_route_type(cancel_harness, openai_env_
 async def test_cancel__exception_calls_failure_hook(cancel_harness, openai_env_creds):
     cancel_harness.litellm_acancel.side_effect = ValueError("provider boom")
 
-    with pytest.raises(Exception):
+    with pytest.raises(ProxyException):
         await call_cancel(cancel_harness, "batch-raw-xyz")
 
     cancel_harness.logging.post_call_failure_hook.assert_called_once()

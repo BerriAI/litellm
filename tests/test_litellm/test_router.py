@@ -367,7 +367,7 @@ async def test_arouter_with_tags_and_fallbacks():
         enable_tag_filtering=True,
     )
 
-    with pytest.raises(Exception):
+    with pytest.raises(litellm.InternalServerError):
         response = await router.acompletion(
             model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": "Hello, world!"}],
@@ -953,7 +953,7 @@ async def test_arouter_filter_team_based_models():
     assert result is not None
 
     # FAILS
-    with pytest.raises(Exception) as e:
+    with pytest.raises(Exception, match='No deployments available for selected model, Try again in') as e:
         result = await router.acompletion(
             model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": "Hello, world!"}],
@@ -1225,7 +1225,7 @@ def test_add_invalid_provider_to_router():
         ],
     )
 
-    with pytest.raises(Exception) as e:
+    with pytest.raises(Exception, match='Unsupported provider - vertex_ai_eu') as e:
         router.add_deployment(
             Deployment(
                 model_name="vertex_ai/*",
@@ -1320,7 +1320,7 @@ async def test_router_ageneric_api_call_with_fallbacks_helper():
     with patch.object(router, "async_get_available_deployment") as mock_get_deployment:
         mock_get_deployment.side_effect = Exception("No deployment available")
 
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(Exception, match='No deployment available') as exc_info:
             await router._ageneric_api_call_with_fallbacks_helper(
                 model="gpt-3.5-turbo",
                 original_generic_function=mock_generic_function,
@@ -1394,7 +1394,7 @@ async def test_router_ageneric_api_call_with_fallbacks_helper():
                 with patch.object(
                     router, "async_routing_strategy_pre_call_checks"
                 ) as mock_pre_call_checks:
-                    with pytest.raises(Exception) as exc_info:
+                    with pytest.raises(Exception, match='Mock failure') as exc_info:
                         await router._ageneric_api_call_with_fallbacks_helper(
                             model="gpt-3.5-turbo",
                             original_generic_function=mock_failing_function,
@@ -1999,9 +1999,12 @@ async def test_acompletion_streaming_iterator():
 
     # Collect streamed chunks — the first chunk succeeds, then the error re-raises
     collected_chunks = []
-    with pytest.raises(MidStreamFallbackError):
+    async def _drain():
         async for chunk in result:
             collected_chunks.append(chunk)
+
+    with pytest.raises(MidStreamFallbackError):
+        await _drain()
 
     assert len(collected_chunks) == 1, "one chunk yielded before the error"
     print("✓ MidStreamFallbackError re-raised correctly when content was already generated")
@@ -3734,7 +3737,7 @@ def test_count_pre_call_check_tokens_across_api_surfaces():
     assert string_input_tokens > 0
     assert list_input_tokens > 0
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match='Either messages or input must be provided to count tokens'):
         router._count_pre_call_check_tokens(messages=None, input=None)
 
 
@@ -5557,9 +5560,12 @@ async def test_acompletion_streaming_iterator_does_not_log_success_on_terminal_f
             initial_kwargs=dict(initial_kwargs),
         )
         collected = []
-        with pytest.raises(MidStreamFallbackError):
+        async def _drain():
             async for chunk in result:
                 collected.append(chunk)
+
+        with pytest.raises(MidStreamFallbackError):
+            await _drain()
 
     assert len(collected) == 1
     logging_obj.dispatch_success_handlers.assert_not_called()
@@ -5580,9 +5586,12 @@ async def test_acompletion_streaming_iterator_does_not_log_success_on_terminal_f
             initial_kwargs=dict(initial_kwargs),
         )
         collected = []
-        with pytest.raises(MidStreamFallbackError):
+        async def _drain():
             async for chunk in result:
                 collected.append(chunk)
+
+        with pytest.raises(MidStreamFallbackError):
+            await _drain()
 
     assert len(collected) == 1, "only the partial chunk before the error"
     mock_fallback.assert_not_called()
@@ -5707,7 +5716,7 @@ async def test_team_scoped_model_fallback_cross_team_blocked():
         fallbacks=[{"primary-model": ["fallback-model"]}],
     )
 
-    with pytest.raises(Exception):
+    with pytest.raises(litellm.InternalServerError):
         await router.acompletion(
             model="primary-model",
             messages=[{"role": "user", "content": "Hello"}],

@@ -33,7 +33,7 @@ def test_validate_vertex_location_accepts_valid(location):
     ["attacker.example/", "evil.com#", "us.attacker.example", "us/../..", "US", "us_central1", "-us", "", None],
 )
 def test_validate_vertex_location_rejects_invalid(location):
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="vertex_location is required|Invalid vertex_location format"):
         validate_vertex_location(location)
 
 

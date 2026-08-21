@@ -635,6 +635,7 @@ class BaseLLMHTTPHandler:
                 model=model,
                 custom_llm_provider=custom_llm_provider,
                 logging_obj=logging_obj,
+                _response_headers=headers,
             )
 
         if client is None or not isinstance(client, HTTPHandler):
@@ -798,6 +799,7 @@ class BaseLLMHTTPHandler:
             model=model,
             custom_llm_provider=custom_llm_provider,
             logging_obj=logging_obj,
+            _response_headers=_response_headers,
         )
         return streamwrapper
 

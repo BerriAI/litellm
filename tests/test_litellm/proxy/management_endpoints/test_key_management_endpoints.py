@@ -10179,7 +10179,7 @@ async def test_update_key_creator_reassigned_key_blocked(monkeypatch):
     mock_request = MagicMock()
     mock_request.query_params = {}
 
-    with pytest.raises(Exception) as exc:
+    with pytest.raises(Exception, match='User can only create keys for themselves\\. Got') as exc:
         await update_key_fn(
             request=mock_request,
             data=UpdateKeyRequest(key=test_hashed_token, key_alias="hijacked"),
@@ -11037,8 +11037,7 @@ class TestKeyAliasSkipValidationOnUnchanged:
 
         assert new_alias != existing_alias
         with pytest.raises(ProxyException):
-            if new_alias != existing_alias:
-                _validate_key_alias_format(new_alias)
+            _validate_key_alias_format(new_alias)
 
     @pytest.mark.asyncio
     async def test_update_key_changed_to_valid_alias_passes(
