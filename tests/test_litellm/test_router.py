@@ -8641,20 +8641,13 @@ class TestAutoRoutedRequestMarker:
         assert AUTO_ROUTED_REQUEST_METADATA_KEY not in request_kwargs["metadata"]
 
 
+@pytest.mark.usefixtures("local_model_cost_map")
 class TestAzureBaseModelFallbackLogging:
     """When an azure deployment has no base_model but its model name is a known
     azure key in the cost map, get_router_model_info resolves it via the
-    fallback — so it must not log the per-request 'Could not identify azure
+    fallback, so it must not log the per-request 'Could not identify azure
     model' ERROR. The ERROR must remain for genuinely unmappable deployment
     names. Issue #33172."""
-
-    @pytest.fixture(autouse=True)
-    def _use_local_model_cost_map(self, monkeypatch):
-        monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-        original_model_cost = litellm.model_cost
-        litellm.model_cost = litellm.get_model_cost_map(url="")
-        yield
-        litellm.model_cost = original_model_cost
 
     def _router_with_azure_deployment(self, deployment_model: str):
         return litellm.Router(

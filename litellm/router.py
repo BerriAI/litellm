@@ -9154,14 +9154,9 @@ class Router:
 
         ## SET MODEL TO 'model=' - if base_model is None + not azure
         if custom_llm_provider == "azure" and base_model is None:
-            # the `if model is None` fallback below resolves the deployment's
-            # model name against the model cost map — when the name is a known
-            # azure key (e.g. deployment model "azure/gpt-4o"), that resolution
-            # gives correct max tokens / costs and there is nothing for the
-            # operator to fix, so don't spam an ERROR on every request.
-            # membership alone isn't enough: Router init auto-registers every
-            # deployment name into litellm.model_cost as a zeroed stub, so
-            # require the entry to carry usable limits/costs.
+            # Router init auto-registers every deployment name into
+            # litellm.model_cost as a zeroed stub, so membership alone can't
+            # tell a resolvable name apart; require usable limits/costs.
             _azure_fallback_key = _model if _model.startswith("azure/") else f"azure/{_model}"
             _fallback_entry = litellm.model_cost.get(_azure_fallback_key)
             _fallback_resolves = _fallback_entry is not None and (
