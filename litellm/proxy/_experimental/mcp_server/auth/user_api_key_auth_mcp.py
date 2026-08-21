@@ -160,7 +160,7 @@ def _is_mcp_admitted_user_subject(user_api_key_auth: UserAPIKeyAuth | None) -> b
     """True when this auth is a keyless subject admitted by the gateway session / bridge user
     path, as opposed to a JWT or other keyless auth that merely lacks a ``team_id``.
 
-    Reads the server-only ``mcp_admitted_user_subject`` field, set only by ``_reload_admitted_user``. It
+    Reads the server-only ``mcp_admitted_user_subject`` field, set only by ``reload_admitted_user``. It
     is deliberately NOT a ``metadata`` key, which is caller-controlled at key creation and so forgeable
     on a personal key to gain the team grant union or dodge the egress scrub; this field cannot be."""
     return user_api_key_auth is not None and user_api_key_auth.mcp_admitted_user_subject is True
@@ -812,7 +812,7 @@ class MCPRequestHandler:
 
         Identity-only sibling of :meth:`_admit_dcr_bridge_delegate`: the session token seals no
         upstream credential (those are vaulted per user, resolved at egress), so authorization is
-        resolved fresh via :meth:`_reload_admitted_user` + the centralized policy gate rather than a
+        resolved fresh via :meth:`reload_admitted_user` + the centralized policy gate rather than a
         mint-time snapshot. Pre-DB gates (size, IP, route allowlist) run first, mirroring the standard
         pipeline. Fails closed with the requested scope's ``invalid_token`` challenge on an expired,
         tampered, foreign, or refresh token, or a missing/deactivated/policy-rejected user."""
@@ -835,7 +835,7 @@ class MCPRequestHandler:
         match result:
             case SessionBearerAdmitted():
                 try:
-                    admitted: Final = await MCPRequestHandler._reload_admitted_user(result.principal.user_id)
+                    admitted: Final = await MCPRequestHandler.reload_admitted_user(result.principal.user_id)
                     admitted.mcp_session_resource_server_id = result.principal.resource_server_id
                     await MCPRequestHandler._enforce_admitted_live_policy(
                         admitted=admitted, request=request, route=route
@@ -893,12 +893,12 @@ class MCPRequestHandler:
             case "key_hash":
                 return await MCPRequestHandler._reload_admitted_key(identity.subject)
             case "user_id":
-                return await MCPRequestHandler._reload_admitted_user(identity.subject)
+                return await MCPRequestHandler.reload_admitted_user(identity.subject)
             case _:
                 assert_never(identity.subject_type)
 
     @staticmethod
-    async def _reload_admitted_user(user_id: str) -> UserAPIKeyAuth:
+    async def reload_admitted_user(user_id: str) -> UserAPIKeyAuth:
         """Reload the live user an interactively-minted envelope references and admit them as themselves.
 
         The user's own object permission and ``org_id`` ride on the returned ``UserAPIKeyAuth``, and the

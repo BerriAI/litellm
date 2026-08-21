@@ -5232,7 +5232,7 @@ class TestMCPDcrBridgeDelegateAdmission:
     @contextlib.contextmanager
     def _patch_user_reload(*, return_value=None, side_effect=None):
         """Patch the user-subject reload path an interactively-minted envelope takes: the
-        ``get_user_object`` lookup ``_reload_admitted_user`` runs (which also drives the SCIM gate),
+        ``get_user_object`` lookup ``reload_admitted_user`` runs (which also drives the SCIM gate),
         plus the ``prisma_client`` / ``user_api_key_cache`` globals. The centralized gate's own
         fetches fail-safe to None under the MagicMock prisma, so an unblocked user admits. Yields the
         ``get_user_object`` mock so a caller can assert the sealed user_id was the reload key."""
