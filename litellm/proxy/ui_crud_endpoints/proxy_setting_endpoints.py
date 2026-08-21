@@ -110,6 +110,7 @@ def _config_param_db(repo: _HasConfigParamTable) -> _PrismaTableActions[_ConfigP
 # reflect a deployment branded purely through process env.
 _UI_THEME_FIELD_ENV_VARS: Final[dict[str, str]] = {
     "logo_url": "UI_LOGO_PATH",
+    "logo_url_dark": "UI_LOGO_PATH_DARK",
     "favicon_url": "LITELLM_FAVICON_URL",
 }
 
@@ -154,6 +155,14 @@ class UIThemeConfig(BaseModel):
     logo_url: str | None = Field(
         default=None,
         description="URL or path to custom logo image. Can be a local file path or HTTP/HTTPS URL",
+    )
+
+    logo_url_dark: str | None = Field(
+        default=None,
+        description=(
+            "URL or path to a custom logo image for dark mode. Can be a local file path or HTTP/HTTPS URL. "
+            "Leave unset to reuse logo_url in dark mode"
+        ),
     )
 
     # Favicon configuration
@@ -666,7 +675,7 @@ async def get_internal_user_settings():
 )
 async def get_default_team_settings():
     """
-    Get all SSO settings from the litellm_settings configuration.
+    Get the default team parameters (litellm_settings.default_team_params).
     Returns a structured object with values and descriptions for UI display.
     """
     from litellm.proxy.proxy_server import proxy_config
@@ -894,8 +903,9 @@ async def update_default_team_settings(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
-    Update the default team parameters for SSO users.
-    These settings will be applied to new teams created from SSO.
+    Update the default team parameters (litellm_settings.default_team_params).
+    Applied to every new team for fields not explicitly provided in the create request;
+    `models` only applies to teams automatically created via SSO Groups.
     """
     if settings.organization_id is not None:
         await _validate_default_organization_exists(settings.organization_id)
@@ -1183,6 +1193,7 @@ async def update_ui_theme_settings(
     )
 
     _validate_public_image_url(theme_config.logo_url, "logo_url")
+    _validate_public_image_url(theme_config.logo_url_dark, "logo_url_dark")
     _validate_public_image_url(theme_config.favicon_url, "favicon_url")
 
     if store_model_in_db is not True:
@@ -1203,16 +1214,18 @@ async def update_ui_theme_settings(
         config["litellm_settings"] = {}
     config["litellm_settings"]["ui_theme_config"] = theme_data
 
-    # UI_LOGO_PATH and LITELLM_FAVICON_URL are the only environment variables
-    # this endpoint owns. A non-empty value sets the var; an empty or missing
-    # one clears it back to the default. Apply to the live process immediately,
-    # then persist only these two keys so an unrelated env var (a YAML/OS value
-    # merged in by get_config) is never snapshotted into the DB.
+    # The vars below are the only environment variables this endpoint owns, and
+    # they must stay in step with _UI_THEME_FIELD_ENV_VARS. A non-empty value
+    # sets the var; an empty or missing one clears it back to the default. Apply
+    # to the live process immediately, then persist only those keys so an
+    # unrelated env var (a YAML/OS value merged in by get_config) is never
+    # snapshotted into the DB.
     def _clean(url: str | None) -> str | None:
         return url if url is not None and url.strip() else None
 
     env_updates: Final[dict[str, str | None]] = {
         "UI_LOGO_PATH": _clean(theme_config.logo_url),
+        "UI_LOGO_PATH_DARK": _clean(theme_config.logo_url_dark),
         "LITELLM_FAVICON_URL": _clean(theme_config.favicon_url),
     }
     for env_key, env_value in env_updates.items():

@@ -12,6 +12,8 @@ import uuid
 from collections.abc import AsyncIterator, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, TypedDict, cast
 
+from typing_extensions import ReadOnly
+
 import litellm
 from litellm._logging import verbose_logger
 from litellm.anthropic_interface import messages as anthropic_messages
@@ -83,6 +85,25 @@ class _AgenticLoopParamsView(TypedDict):
 
 class _WebSearchSettingsView(TypedDict):
     websearch_interception_params: WebSearchInterceptionConfig
+
+
+class _SearchToolConfig(TypedDict, total=False):
+    search_tool_name: str
+    litellm_params: Mapping[str, object] | None
+
+
+class _DeploymentKwargsView(TypedDict):
+    """Typed reads of the untyped request kwargs seen by the deployment hook."""
+
+    custom_llm_provider: ReadOnly[str]
+    litellm_params: ReadOnly[Mapping[str, object]]
+    model: ReadOnly[str]
+
+
+class _UserAuthView(TypedDict):
+    """Typed read of the optional team attached to the caller's auth object."""
+
+    team_id: ReadOnly[str | None]
 
 
 class WebSearchInterceptionLogger(CustomLogger):
@@ -260,7 +281,9 @@ class WebSearchInterceptionLogger(CustomLogger):
         )
         return response
 
-    async def async_pre_call_deployment_hook(self, kwargs: dict[str, Any], call_type: CallTypes | None) -> dict | None:
+    async def async_pre_call_deployment_hook(
+        self, kwargs: dict[str, Any], call_type: CallTypes | None
+    ) -> dict[str, object] | None:
         """
         Pre-call hook to convert native Anthropic web_search tools to regular tools.
 
@@ -270,12 +293,17 @@ class WebSearchInterceptionLogger(CustomLogger):
         """
         # Check if this is for an enabled provider
         # Try top-level kwargs first, then nested litellm_params, then derive from model name
-        custom_llm_provider = kwargs.get("custom_llm_provider", "") or kwargs.get("litellm_params", {}).get(
+        kwargs_view: Final[_DeploymentKwargsView] = {
+            "custom_llm_provider": kwargs.get("custom_llm_provider", ""),
+            "litellm_params": kwargs.get("litellm_params", {}),
+            "model": kwargs.get("model", ""),
+        }
+        custom_llm_provider = kwargs_view["custom_llm_provider"] or kwargs_view["litellm_params"].get(
             "custom_llm_provider", ""
         )
         if not custom_llm_provider:
             try:
-                _, custom_llm_provider, _, _ = litellm.get_llm_provider(model=kwargs.get("model", ""))
+                _, custom_llm_provider, _, _ = litellm.get_llm_provider(model=kwargs_view["model"])
             except Exception:
                 custom_llm_provider = ""
         if custom_llm_provider not in self.enabled_providers:
@@ -1417,7 +1445,8 @@ class WebSearchInterceptionLogger(CustomLogger):
             valid_token=user_api_key_auth,
         )
 
-        team_id: Final = getattr(user_api_key_auth, "team_id", None)
+        auth_view: Final[_UserAuthView] = {"team_id": getattr(user_api_key_auth, "team_id", None)}
+        team_id: Final = auth_view["team_id"]
         if team_id:
             from litellm.proxy.proxy_server import (
                 prisma_client,
@@ -1487,7 +1516,7 @@ class WebSearchInterceptionLogger(CustomLogger):
 
         return None
 
-    def _select_search_tool_from_router(self, llm_router: object) -> dict[str, Any] | None:
+    def _select_search_tool_from_router(self, llm_router: object) -> "_SearchToolConfig | None":
         if llm_router is None or not hasattr(llm_router, "search_tools"):
             return None
         search_tools: Final = list(getattr(llm_router, "search_tools") or [])
@@ -1495,9 +1524,9 @@ class WebSearchInterceptionLogger(CustomLogger):
 
     def _select_search_tool_from_list(
         self,
-        search_tools: list[dict[str, Any]],
+        search_tools: list[_SearchToolConfig],
         source: str,
-    ) -> dict[str, Any] | None:
+    ) -> "_SearchToolConfig | None":
         if self.search_tool_name:
             matching_tools = [tool for tool in search_tools if tool.get("search_tool_name") == self.search_tool_name]
             if matching_tools:
@@ -1692,7 +1721,7 @@ class WebSearchInterceptionLogger(CustomLogger):
 
     @staticmethod
     def initialize_from_proxy_config(
-        litellm_settings: dict[str, Any],
+        litellm_settings: Mapping[str, WebSearchInterceptionConfig],
         callback_specific_params: Mapping[str, object],
     ) -> "WebSearchInterceptionLogger":
         """

@@ -7,7 +7,6 @@ from dotenv import load_dotenv
 
 load_dotenv()
 import io
-import os
 
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -67,7 +66,7 @@ def test_completion_custom_provider_model_name():
     try:
         litellm.cache = None
         response = completion(
-            model="together_ai/Qwen/Qwen2.5-7B-Instruct-Turbo",
+            model="together_ai/openai/gpt-oss-20b",
             messages=messages,
             logger_fn=logger_fn,
         )
@@ -271,7 +270,7 @@ def test_completion_claude_3():
 
 @pytest.mark.parametrize(
     "model",
-    ["anthropic/claude-sonnet-4-5-20250929", "anthropic.claude-3-sonnet-20240229-v1:0"],
+    ["anthropic/claude-sonnet-4-5-20250929", "us.anthropic.claude-sonnet-4-5-20250929-v1:0"],
 )
 def test_completion_claude_3_function_call(model):
     litellm.set_verbose = True
@@ -357,7 +356,7 @@ def test_completion_claude_3_function_call(model):
     [
         ("gpt-3.5-turbo", None, None),
         ("claude-sonnet-4-5-20250929", None, None),
-        ("anthropic.claude-3-sonnet-20240229-v1:0", None, None),
+        ("us.anthropic.claude-sonnet-4-5-20250929-v1:0", None, None),
         # (
         #     "azure_ai/command-r-plus",
         #     os.getenv("AZURE_COHERE_API_KEY"),
@@ -513,7 +512,8 @@ async def test_anthropic_no_content_error():
     except litellm.InternalServerError:
         pass
     except litellm.APIError as e:
-        assert e.status_code == 500
+        if e.status_code != 500:
+            raise
     except Exception as e:
         pytest.fail(f"An unexpected error occurred - {str(e)}")
 
@@ -842,6 +842,8 @@ def test_completion_mistral_api_modified_input():
 
 @pytest.mark.skip(reason="this test is flaky")
 def test_completion_gpt4_vision():
+    import openai
+
     try:
         litellm.set_verbose = True
         response = completion(
@@ -1378,7 +1380,6 @@ def test_ollama_image():
     """
 
     import base64
-    import io
 
     from PIL import Image
 
@@ -1550,7 +1551,7 @@ def test_completion_openai():
     [
         # ("gpt-4o-2024-08-06", None),
         # ("azure/gpt-4.1-mini", None),
-        ("bedrock/anthropic.claude-3-sonnet-20240229-v1:0", None),
+        ("bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0", None),
         # ("azure/gpt-4o-new-test", "2024-08-01-preview"),
     ],
 )
@@ -1820,6 +1821,8 @@ def test_completion_openai_litellm_key():
 
 @pytest.mark.skip(reason="Unresponsive endpoint.[TODO] Rehost this somewhere else")
 def test_completion_ollama_hosted():
+    import openai
+
     try:
         litellm.request_timeout = 20  # give ollama 20 seconds to response
         litellm.set_verbose = True
@@ -2057,17 +2060,12 @@ def test_completion_openrouter_reasoning_effort():
 
 
 def test_completion_hf_model_no_provider():
-    try:
-        response = completion(
+    with pytest.raises(litellm.BadRequestError, match="LLM Provider NOT provided"):
+        completion(
             model="WizardLM/WizardLM-70B-V1.0",
             messages=messages,
             max_tokens=5,
         )
-        # Add any assertions here to check the response
-        print(response)
-        pytest.fail(f"Error occurred: {e}")
-    except Exception as e:
-        pass
 
 
 # test_completion_hf_model_no_provider()
@@ -2546,7 +2544,7 @@ def test_completion_replicate_vicuna():
         response_str = response["choices"][0]["message"]["content"]
         print("RESPONSE STRING\n", response_str)
         if type(response_str) != str:
-            pytest.fail(f"Error occurred: {e}")
+            pytest.fail(f"Expected a string response, got {type(response_str)}: {response_str}")
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
@@ -2818,7 +2816,7 @@ def test_customprompt_together_ai():
         print(litellm.success_callback)
         print(litellm._async_success_callback)
         response = completion(
-            model="together_ai/Qwen/Qwen2.5-7B-Instruct-Turbo",
+            model="together_ai/openai/gpt-oss-20b",
             messages=messages,
             roles={
                 "system": {
@@ -2887,7 +2885,7 @@ def response_format_tests(response: litellm.ModelResponse):
     [
         "bedrock/mistral.mistral-large-2407-v1:0",
         "bedrock/cohere.command-r-plus-v1:0",
-        "anthropic.claude-3-sonnet-20240229-v1:0",
+        "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
         "mistral.mistral-7b-instruct-v0:2",
         "meta.llama3-8b-instruct-v1:0",
     ],
@@ -3098,29 +3096,6 @@ def test_completion_anyscale_api():
         response = completion(
             model="anyscale/meta-llama/Llama-2-7b-chat-hf",
             messages=messages,
-        )
-        print(response)
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
-@pytest.mark.skip(reason="anyscale stopped serving public api endpoints")
-def test_completion_anyscale_2():
-    try:
-        # litellm.set_verbose = True
-        messages = [
-            {"role": "system", "content": "You're a good bot"},
-            {
-                "role": "user",
-                "content": "Hey",
-            },
-            {
-                "role": "user",
-                "content": "Hey",
-            },
-        ]
-        response = completion(
-            model="anyscale/meta-llama/Llama-2-7b-chat-hf", messages=messages
         )
         print(response)
     except Exception as e:
@@ -3681,7 +3656,7 @@ def test_completion_together_ai_stream():
     messages = [{"content": user_message, "role": "user"}]
     try:
         response = completion(
-            model="together_ai/Qwen/Qwen2.5-7B-Instruct-Turbo",
+            model="together_ai/openai/gpt-oss-20b",
             messages=messages,
             stream=True,
             max_tokens=5,
@@ -4075,7 +4050,7 @@ def test_completion_novita_ai_dynamic_params(api_key):
             "create",
             side_effect=Exception("Invalid API key"),
         ) as mock_call:
-            try:
+            with pytest.raises(Exception, match="Invalid API key") as exc_info:
                 completion(
                     model="novita/meta-llama/llama-3.3-70b-instruct",
                     messages=messages,
@@ -4083,10 +4058,8 @@ def test_completion_novita_ai_dynamic_params(api_key):
                     client=openai_client,
                     api_base="https://api.novita.ai/v3/openai",
                 )
-                pytest.fail(f"This call should have failed!")
-            except Exception as e:
-                # This should fail with the mocked exception
-                assert "Invalid API key" in str(e)
+            e = exc_info.value
+            assert "Invalid API key" in str(e)
 
             mock_call.assert_called_once()
     except Exception as e:

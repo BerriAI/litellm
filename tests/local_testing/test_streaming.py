@@ -951,7 +951,6 @@ def test_vertex_ai_stream(provider):
 
     load_vertex_ai_credentials()
     litellm.set_verbose = True
-    import random
 
     test_models = ["gemini-2.5-flash-lite"]
     for model in test_models:
@@ -1174,7 +1173,7 @@ async def test_completion_replicate_llama3_streaming(sync_mode):
     [
         # ["bedrock/ai21.jamba-instruct-v1:0", "us-east-1"],
         # ["bedrock/cohere.command-r-plus-v1:0", None],
-        ["anthropic.claude-3-sonnet-20240229-v1:0", None],
+        ["us.anthropic.claude-sonnet-4-5-20250929-v1:0", None],
         # ["mistral.mistral-7b-instruct-v0:2", None],
         # ["meta.llama3-8b-instruct-v1:0", None],
     ],
@@ -1246,7 +1245,7 @@ def test_bedrock_claude_3_streaming():
     try:
         litellm.set_verbose = True
         response: ModelResponse = completion(  # type: ignore
-            model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
+            model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
             messages=messages,
             max_tokens=10,  # type: ignore
             stream=True,
@@ -2352,7 +2351,6 @@ def test_success_callback_streaming():
 from typing import List, Optional
 
 #### STREAMING + FUNCTION CALLING ###
-from pydantic import BaseModel
 
 
 class Function(BaseModel):
@@ -2569,7 +2567,6 @@ def test_azure_streaming_and_function_calling():
 
 @pytest.mark.asyncio
 async def test_azure_astreaming_and_function_calling():
-    from litellm._uuid import uuid
 
     tools = [
         {
@@ -2926,11 +2923,14 @@ def test_unit_test_custom_stream_wrapper_repeating_chunk(
     print(f"expected_chunk_fail: {expected_chunk_fail}")
 
     if (loop_amount > litellm.REPEATED_STREAMING_CHUNK_LIMIT) and expected_chunk_fail:
+        def _drain():
+            for chunk in response:
+                continue
+
         with pytest.raises(
             (litellm.InternalServerError, litellm.exceptions.MidStreamFallbackError)
         ):
-            for chunk in response:
-                continue
+            _drain()
     else:
         for chunk in response:
             continue
@@ -3500,7 +3500,7 @@ def test_unit_test_perplexity_citations_chunk():
     [
         "gpt-3.5-turbo",
         "claude-sonnet-4-5-20250929",
-        "anthropic.claude-3-sonnet-20240229-v1:0",
+        "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
         # "vertex_ai/claude-3-5-sonnet@20240620",
     ],
 )

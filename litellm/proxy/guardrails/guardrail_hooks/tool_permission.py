@@ -1,6 +1,6 @@
 import json
 import re
-from collections.abc import AsyncGenerator, Sequence
+from collections.abc import AsyncGenerator, AsyncIterable, Mapping, Sequence
 from typing import Any, Final, Literal
 
 from fastapi import HTTPException
@@ -16,6 +16,11 @@ from litellm.integrations.custom_guardrail import (
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.callback_utils import (
     add_guardrail_to_applied_guardrails_header,
+)
+from litellm.proxy.guardrails.anthropic_sse import (
+    anthropic_sse_chunks_from_response,
+    assemble_anthropic_sse_stream,
+    is_raw_sse_stream,
 )
 from litellm.types.guardrails import GuardrailEventHooks, LitellmParams
 from litellm.types.proxy.guardrails.guardrail_hooks.tool_permission import (
@@ -34,6 +39,16 @@ from litellm.types.utils import (
 )
 
 GUARDRAIL_NAME: Final = "tool_permission"
+
+
+def _object_mapping(value: object) -> Mapping[str, object] | None:
+    """Return ``value`` as an opaque mapping when it is a dict."""
+    return value if isinstance(value, dict) else None
+
+
+def _object_list(value: object) -> Sequence[object] | None:
+    """Return ``value`` as an opaque sequence when it is a list."""
+    return value if isinstance(value, list) else None
 
 
 class ToolPermissionGuardrail(CustomGuardrail):
@@ -269,12 +284,12 @@ class ToolPermissionGuardrail(CustomGuardrail):
 
     def _parse_tool_call_arguments(
         self, tool_call: ChatCompletionMessageToolCall
-    ) -> tuple[dict[str, Any] | None, str | None]:
+    ) -> tuple[Mapping[str, object] | None, str | None]:
         arguments: Final = getattr(tool_call.function, "arguments", None)
         if not arguments:
             return None, "missing arguments"
 
-        parsed_arguments: Any = {}
+        parsed_arguments: object = {}
         try:
             if isinstance(arguments, str):
                 parsed_arguments = json.loads(arguments)
@@ -301,9 +316,9 @@ class ToolPermissionGuardrail(CustomGuardrail):
 
     def _collect_argument_paths(
         self,
-        value: Any,
+        value: object,
         current_path: str,
-        collected: dict[str, list[Any]],
+        collected: dict[str, list[object]],
         depth: int = 0,
     ) -> None:
         from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
@@ -311,13 +326,15 @@ class ToolPermissionGuardrail(CustomGuardrail):
         if depth > DEFAULT_MAX_RECURSE_DEPTH:
             return
 
-        if isinstance(value, dict):
-            for key, sub_value in value.items():
+        mapping_value: Final = _object_mapping(value)
+        list_value: Final = _object_list(value)
+        if mapping_value is not None:
+            for key, sub_value in mapping_value.items():
                 next_path = f"{current_path}.{key}" if current_path else key
                 self._collect_argument_paths(sub_value, next_path, collected, depth + 1)
-        elif isinstance(value, list):
+        elif list_value is not None:
             list_path: Final = f"{current_path}[]" if current_path else "[]"
-            for item in value:
+            for item in list_value:
                 self._collect_argument_paths(item, list_path, collected, depth + 1)
         else:
             if not current_path:
@@ -327,7 +344,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
     def _patterns_match_for_rule(
         self,
         *,
-        arguments: dict[str, Any],
+        arguments: Mapping[str, object],
         rule: ToolPermissionRule,
         tool_name: str | None,
     ) -> tuple[bool, str | None]:
@@ -335,7 +352,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
         if not compiled_patterns:
             return True, None
 
-        path_value_map: Final[dict[str, list[Any]]] = {}
+        path_value_map: Final[dict[str, list[object]]] = {}
         self._collect_argument_paths(arguments, "", path_value_map)
 
         for path, compiled_pattern in compiled_patterns.items():
@@ -488,14 +505,14 @@ class ToolPermissionGuardrail(CustomGuardrail):
         )
 
     @staticmethod
-    def _get_anthropic_content_blocks(response: object) -> tuple[Any, ...] | None:
+    def _get_anthropic_content_blocks(response: object) -> tuple[object, ...] | None:
         if not isinstance(response, dict):
             return None
         content: Final[object] = response.get("content")
         return tuple(content) if isinstance(content, list) else None
 
     def _extract_tool_calls_from_anthropic_content(
-        self, content: tuple[Any, ...]
+        self, content: tuple[object, ...]
     ) -> tuple[ChatCompletionMessageToolCall, ...]:
         return tuple(
             tool_call for block in content if (tool_call := self._anthropic_tool_use_to_tool_call(block)) is not None
@@ -510,7 +527,9 @@ class ToolPermissionGuardrail(CustomGuardrail):
             if not is_allowed and message is not None:
                 verbose_proxy_logger.warning("Tool Permission Guardrail: %s", message)
                 if self.on_disallowed_action == "block":
-                    raise GuardrailRaisedException(guardrail_name=self.guardrail_name, message=message)
+                    raise GuardrailRaisedException(
+                        guardrail_name=self.guardrail_name, message=message, blocked_content=True
+                    )
 
         return tuple(
             (
@@ -847,7 +866,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
     async def async_post_call_streaming_iterator_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
-        response: Any,
+        response: AsyncIterable[ModelResponseStream],
         request_data: dict,
     ) -> AsyncGenerator[ModelResponseStream, None]:
         """
@@ -870,7 +889,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
             all_chunks.append(chunk)
 
         assembled_model_response: Final[ModelResponse | TextCompletionResponse | None] = (
-            stream_chunk_builder(chunks=all_chunks) if not self._is_raw_sse_stream(all_chunks) else None
+            stream_chunk_builder(chunks=all_chunks) if not is_raw_sse_stream(all_chunks) else None
         )
         if isinstance(assembled_model_response, ModelResponse):
             denied_tools = self._check_assembled_stream(assembled_model_response)
@@ -883,9 +902,9 @@ class ToolPermissionGuardrail(CustomGuardrail):
                 yield chunk
             return
 
-        anthropic_response: Final = self._assemble_anthropic_stream(all_chunks)
+        anthropic_response: Final = assemble_anthropic_sse_stream(all_chunks)
         if anthropic_response is None:
-            if self._is_raw_sse_stream(all_chunks):
+            if is_raw_sse_stream(all_chunks):
                 raise GuardrailRaisedException(
                     guardrail_name=self.guardrail_name,
                     message=(
@@ -904,12 +923,8 @@ class ToolPermissionGuardrail(CustomGuardrail):
             return
 
         self._modify_response_with_permission_errors(anthropic_response, anthropic_denials)
-        for sse_chunk in self._rewritten_anthropic_sse_chunks(anthropic_response):
+        for sse_chunk in anthropic_sse_chunks_from_response(anthropic_response):
             yield sse_chunk
-
-    @staticmethod
-    def _is_raw_sse_stream(all_chunks: Sequence[Any]) -> bool:
-        return any(isinstance(chunk, (str, bytes)) for chunk in all_chunks)
 
     def _check_assembled_stream(
         self, assembled: ModelResponse
@@ -924,60 +939,3 @@ class ToolPermissionGuardrail(CustomGuardrail):
         if not denied_tools:
             verbose_proxy_logger.debug("Tool Permission Guardrail Post-Call Hook: All tools allowed")
         return denied_tools
-
-    @staticmethod
-    def _joined_sse_stream(all_chunks: Sequence[Any]) -> str | None:
-        raw: Final = b"".join(
-            chunk if isinstance(chunk, bytes) else chunk.encode("utf-8")
-            for chunk in all_chunks
-            if isinstance(chunk, (str, bytes))
-        )
-        try:
-            return raw.decode("utf-8")
-        except UnicodeDecodeError:
-            return None
-
-    @staticmethod
-    def _has_anthropic_message_start(sse_stream: str) -> bool:
-        from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
-            AnthropicPassthroughLoggingHandler,
-        )
-
-        return any(
-            (event_data := AnthropicPassthroughLoggingHandler._extract_sse_data(event)) is not None  # pyright: ignore[reportPrivateUsage]  # same parser the assembler uses; a private import beats forking SSE parsing
-            and event_data.get("type") == "message_start"
-            for event in AnthropicPassthroughLoggingHandler._split_sse_chunk_into_events(sse_stream)  # pyright: ignore[reportPrivateUsage]  # same parser the assembler uses
-        )
-
-    @staticmethod
-    def _assemble_anthropic_stream(all_chunks: Sequence[Any]) -> ModelResponse | None:
-        from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
-            AnthropicPassthroughLoggingHandler,
-        )
-
-        sse_stream: Final = ToolPermissionGuardrail._joined_sse_stream(all_chunks)
-        if sse_stream is None or not ToolPermissionGuardrail._has_anthropic_message_start(sse_stream):
-            return None
-        try:
-            assembled = AnthropicPassthroughLoggingHandler._build_complete_streaming_response(  # pyright: ignore[reportPrivateUsage]  # the only SSE-to-ModelResponse assembler; reimplementing it here would fork the parser
-                all_chunks=(sse_stream,),
-                litellm_logging_obj=None,  # pyright: ignore[reportArgumentType]  # only forwarded to stream_chunk_builder, which accepts None
-                model="",
-            )
-        except (AttributeError, TypeError, ValueError, json.JSONDecodeError):
-            return None
-        return assembled if isinstance(assembled, ModelResponse) else None
-
-    @staticmethod
-    def _rewritten_anthropic_sse_chunks(assembled: ModelResponse) -> tuple[bytes, ...]:
-        from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import (
-            LiteLLMAnthropicMessagesAdapter,
-        )
-        from litellm.llms.anthropic.experimental_pass_through.messages.fake_stream_iterator import (
-            FakeAnthropicMessagesStreamIterator,
-        )
-
-        anthropic_response: Final = LiteLLMAnthropicMessagesAdapter().translate_openai_response_to_anthropic(
-            response=assembled
-        )
-        return tuple(FakeAnthropicMessagesStreamIterator(response=anthropic_response).chunks)

@@ -471,7 +471,7 @@ async def test_afile_content_error_reports_unified_id_not_provider_uri():
     mock_router.get_deployment_credentials_with_provider = MagicMock(return_value=None)
     mock_router.afile_content = AsyncMock(side_effect=Exception("deployment failed"))
 
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(Exception, match='LiteLLM Managed File object with') as exc_info:
         await managed_files.afile_content(
             file_id=unified_file_id,
             litellm_parent_otel_span=None,
@@ -604,8 +604,8 @@ async def test_create_still_upserts_and_claims_attribution():
 
 @pytest.mark.asyncio
 async def test_default_callers_still_create_their_rows():
-    """create_if_missing defaults to True, so the fine-tune, Responses and Anthropic
-    callers, none of which pass it, keep upserting exactly as before."""
+    """create_if_missing defaults to True, so the fine-tune, Responses and managed
+    /v1/batches callers, none of which passes it, keep upserting exactly as before."""
     managed_files, mock_prisma = _make_object_store_instance()
 
     await managed_files.store_unified_object_id(
@@ -828,3 +828,49 @@ async def test_cost_job_and_retrieve_paths_mint_identical_unified_output_file_id
         model_id="model-deploy-xyz",
         model_name=cost_job_model_name,
     )
+
+
+@pytest.mark.asyncio
+async def test_batch_create_hook_persists_creating_key_and_tags():
+    """Regression: the /v1/batches create hook must persist the creating key and the
+    request's tags on the managed object row. CheckBatchCost, which owns the batch's
+    accounting once the retrieve path defers to it, bills whatever the row carries, and
+    without these columns the cost lands on the user alone and the key's spend and
+    budget never see it."""
+    managed_files = _make_managed_files_instance()
+    creator = UserAPIKeyAuth(api_key="sk-the-creator", user_id="alice", parent_otel_span=None)
+    create_response = _make_batch_response(status="validating", output_file_id=None)
+
+    await managed_files.async_post_call_success_hook(
+        data={"litellm_metadata": {"tags": ["env:prod", "team:ml"], "user_api_key": creator.api_key}},
+        user_api_key_dict=creator,
+        response=create_response,
+    )
+
+    managed_files.store_unified_object_id.assert_awaited_once()
+    stored = managed_files.store_unified_object_id.await_args.kwargs
+    assert stored["persist_attribution"] is True
+    assert stored["request_tags"] == ("env:prod", "team:ml")
+    assert stored["user_api_key_dict"] is creator
+
+
+@pytest.mark.asyncio
+async def test_batch_retrieve_hook_does_not_claim_attribution():
+    """A retrieve carries unified_batch_id but no unified_file_id, so it must not rewrite
+    the row's paying key to whoever happens to poll the batch."""
+    managed_files = _make_managed_files_instance()
+    retrieve_response = _make_batch_response(status="in_progress", output_file_id=None)
+    retrieve_response._hidden_params = {
+        "unified_batch_id": "some-unified-batch-id",
+        "model_id": "model-deploy-xyz",
+        "model_name": "azure/gpt-4",
+    }
+
+    await managed_files.async_post_call_success_hook(
+        data={"litellm_metadata": {"tags": ["poller:tag"]}},
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-the-poller", user_id="bob", parent_otel_span=None),
+        response=retrieve_response,
+    )
+
+    managed_files.store_unified_object_id.assert_awaited_once()
+    assert managed_files.store_unified_object_id.await_args.kwargs["persist_attribution"] is False

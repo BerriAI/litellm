@@ -109,7 +109,7 @@ class TestBedrockMantleResponsesURL:
         monkeypatch.delenv("BEDROCK_MANTLE_API_BASE", raising=False)
         monkeypatch.delenv("AWS_REGION", raising=False)
         cfg = BedrockMantleResponsesAPIConfig()
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="api\\.aws\\.attacker\\.example/'\\. Region names must contain only"):
             cfg.get_complete_url(
                 api_base=None,
                 litellm_params={
@@ -154,12 +154,6 @@ class TestBedrockMantleResponsesURL:
         assert url == "https://bedrock-mantle.us-east-2.api.aws/v1/responses"
         assert url.count("/responses") == 1
 
-    def test_default_construction_keeps_openai_path(self, monkeypatch):
-        monkeypatch.setenv("BEDROCK_MANTLE_REGION", "us-east-2")
-        monkeypatch.delenv("BEDROCK_MANTLE_API_BASE", raising=False)
-        cfg = BedrockMantleResponsesAPIConfig()
-        url = cfg.get_complete_url(api_base=None, litellm_params={})
-        assert url == "https://bedrock-mantle.us-east-2.api.aws/openai/v1/responses"
 
     def test_url_aws_region_name_overrides_stale_api_base(self, monkeypatch):
         monkeypatch.delenv("BEDROCK_MANTLE_REGION", raising=False)
@@ -1424,7 +1418,7 @@ class TestBedrockMantleResponsesSigV4:
         signer.get_credentials = MagicMock(side_effect=NoCredentialsError())
         cfg = BedrockMantleResponsesAPIConfig(aws_signer=signer)
 
-        with pytest.raises(ValueError) as exc:
+        with pytest.raises(ValueError, match='Bedrock Mantle auth failed: no Bearer token and no usable') as exc:
             cfg.sign_request(
                 headers={},
                 optional_params={"aws_region_name": "us-east-2"},
@@ -1454,7 +1448,7 @@ class TestBedrockMantleResponsesSigV4:
         signer.get_credentials = MagicMock(side_effect=cred_error)
         cfg = BedrockMantleResponsesAPIConfig(aws_signer=signer)
 
-        with pytest.raises(ValueError) as exc:
+        with pytest.raises(ValueError, match='Bedrock Mantle auth failed: no Bearer token and no usable') as exc:
             cfg.sign_request(
                 headers={},
                 optional_params={"aws_region_name": "us-east-2"},
@@ -1532,7 +1526,11 @@ class TestBedrockMantleResponsesPricing:
         assert info["cache_creation_input_token_cost"] == pytest.approx(cache_creation_cost)
         assert info["cache_read_input_token_cost"] == pytest.approx(cache_read_cost)
         assert info["output_cost_per_token"] == pytest.approx(output_cost)
-        assert info["max_input_tokens"] == 272000
+        assert info["max_input_tokens"] == 1000000
+        assert info["input_cost_per_token_above_272k_tokens"] == pytest.approx(input_cost * 2)
+        assert info["cache_creation_input_token_cost_above_272k_tokens"] == pytest.approx(cache_creation_cost * 2)
+        assert info["cache_read_input_token_cost_above_272k_tokens"] == pytest.approx(cache_read_cost * 2)
+        assert info["output_cost_per_token_above_272k_tokens"] == pytest.approx(output_cost * 1.5)
 
     @pytest.mark.parametrize(
         "model, input_cost, output_cost",

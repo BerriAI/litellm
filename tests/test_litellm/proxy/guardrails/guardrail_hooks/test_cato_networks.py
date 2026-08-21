@@ -93,26 +93,26 @@ async def test_block_callback(mode: str):
         ],
     }
 
-    with pytest.raises(HTTPException, match="Jailbreak detected"):
-        with patch(
-            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
-            return_value=Response(
-                json={
-                    "analysis_result": {
-                        "analysis_time_ms": 212,
-                        "policy_drill_down": {},
-                        "session_entities": [],
-                    },
-                    "required_action": {
-                        "action_type": "block_action",
-                        "detection_message": "Jailbreak detected",
-                        "policy_name": "blocking policy",
-                    },
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        return_value=Response(
+            json={
+                "analysis_result": {
+                    "analysis_time_ms": 212,
+                    "policy_drill_down": {},
+                    "session_entities": [],
                 },
-                status_code=200,
-                request=Request(method="POST", url="http://cato"),
-            ),
-        ):
+                "required_action": {
+                    "action_type": "block_action",
+                    "detection_message": "Jailbreak detected",
+                    "policy_name": "blocking policy",
+                },
+            },
+            status_code=200,
+            request=Request(method="POST", url="http://cato"),
+        ),
+    ):
+        async def _call_guardrail():
             if mode == "pre_call":
                 await cato_guardrail.async_pre_call_hook(
                     data=data,
@@ -126,6 +126,9 @@ async def test_block_callback(mode: str):
                     user_api_key_dict=UserAPIKeyAuth(),
                     call_type="completion",
                 )
+
+        with pytest.raises(HTTPException, match="Jailbreak detected"):
+            await _call_guardrail()
 
 
 @pytest.mark.asyncio

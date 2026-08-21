@@ -336,6 +336,17 @@ class TestVertexAIBatchPassthroughHandler:
         mock_managed_files_hook.store_unified_object_id.assert_called_once()
         return mock_managed_files_hook.store_unified_object_id.call_args[1]
 
+    def test_persisted_tags_are_db_safe(self, mock_logging_obj, mock_managed_files_hook):
+        """Regression for PostgreSQL 22P05, asserted for Vertex too so moving the
+        sanitation somewhere that only covers Anthropic fails loudly."""
+        call_kwargs = self._store_with_metadata(
+            mock_logging_obj,
+            mock_managed_files_hook,
+            {"user_api_key": "hashed-key-a", "tags": ["clean", "bad\x00tag"]},
+        )
+
+        assert call_kwargs["request_tags"] == ("clean", "badtag")
+
     def test_create_persists_key_hash_and_tags(
         self, mock_logging_obj, mock_managed_files_hook
     ):

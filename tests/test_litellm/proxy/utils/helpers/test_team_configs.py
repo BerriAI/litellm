@@ -66,7 +66,7 @@ def test_is_valid_team_configs_short_circuits_when_team_id_none():
 def test_is_valid_team_configs_raises_on_model_not_in_team_models():
     team_config = {"models": ["gpt-4o"]}
     request_data = {"model": "claude-haiku"}
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(Exception, match='claude-haiku\\.  Valid models for team are') as exc_info:
         _is_valid_team_configs(
             team_id="team-1",
             team_config=team_config,

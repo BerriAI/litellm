@@ -104,7 +104,7 @@ async def test_send_email_missing_api_key():
     try:
         logger = SendGridEmailLogger()
 
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match='SENDGRID_API_KEY is not set'):
             await logger.send_email(
                 from_email="test@example.com",
                 to_email=["recipient@example.com"],
