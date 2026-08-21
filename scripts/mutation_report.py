@@ -22,7 +22,7 @@ import tomllib
 from collections import defaultdict
 from difflib import SequenceMatcher
 from pathlib import Path
-from typing import NamedTuple
+from typing import Final, NamedTuple
 from textwrap import dedent
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -231,11 +231,21 @@ def render_meta_style_mutant(
     return "\n".join(out)
 
 
+UNRESOLVED_STATUSES: Final = ("no_tests", "skipped", "suspicious", "timeout", "segfault")
+
+
+def unresolved_counts(stats: dict) -> dict[str, int]:
+    """Statuses that mean a mutant was never actually put in front of the tests."""
+    return {k: stats.get(k, 0) for k in UNRESOLVED_STATUSES if stats.get(k, 0)}
+
+
 def clean_sweep_is_provable(stats: dict | None) -> bool:
     """`mutmut results` omits killed mutants, so its silence is equally consistent with a
     perfect run and with a run that never started. Only the stats file can tell them apart,
-    and only when it agrees that nothing survived."""
-    return bool(stats) and stats.get("killed", 0) > 0 and stats.get("survived", 0) == 0
+    and only when it agrees that nothing survived and every mutant reached the tests."""
+    if not stats or stats.get("killed", 0) <= 0 or stats.get("survived", 0) != 0:
+        return False
+    return not unresolved_counts(stats)
 
 
 def no_survivors_verdict(results: MutmutResults, stats: dict | None) -> str:
@@ -246,6 +256,12 @@ def no_survivors_verdict(results: MutmutResults, stats: dict | None) -> str:
             f"**mutmut-cicd-stats.json counts {stats['survived']} surviving mutant(s) that "
             "`mutmut results` did not list, so the two disagree and neither can be trusted. "
             "This is not a passing score.**"
+        )
+    if stats and unresolved_counts(stats):
+        unresolved = ", ".join(f"{v} {k.replace('_', ' ')}" for k, v in unresolved_counts(stats).items())
+        return (
+            f"**No survivors, but {unresolved}, so those mutants never reached the tests "
+            "and the suite was not shown to catch them. This is not a passing score.**"
         )
     if stats:
         return "**Not one mutant was killed. This is not a passing score.**"
@@ -276,11 +292,7 @@ def render(config: dict, results: MutmutResults, stats: dict | None) -> str:
             for k in (
                 "killed",
                 "survived",
-                "no_tests",
-                "skipped",
-                "suspicious",
-                "timeout",
-                "segfault",
+                *UNRESOLVED_STATUSES,
             )
         )
         killed = stats.get("killed", 0)
@@ -290,10 +302,8 @@ def render(config: dict, results: MutmutResults, stats: dict | None) -> str:
         out.append(f"- Killed: **{killed}**")
         out.append(f"- Survived: **{survived}**")
         out.append(f"- Mutation score: **{score:.1f}%**")
-        for k in ("no_tests", "skipped", "suspicious", "timeout", "segfault"):
-            v = stats.get(k, 0)
-            if v:
-                out.append(f"- {k.replace('_', ' ').title()}: {v}")
+        for k, v in unresolved_counts(stats).items():
+            out.append(f"- {k.replace('_', ' ').title()}: {v}")
     else:
         out.append(f"- Survivors found: **{len(survivors)}**")
         out.append("- (mutmut-cicd-stats.json not available — full counts unavailable)")

@@ -46,6 +46,19 @@ def test_stats_counting_survivors_results_never_listed_is_not_a_clean_sweep():
     assert "3 surviving mutant(s)" in rendered
 
 
+def test_mutants_that_never_reached_the_tests_are_not_a_clean_sweep():
+    rendered = report.render(
+        _CONFIG,
+        report.MutmutResults(survivors=(), reported=0),
+        {"killed": 48, "survived": 0, "no_tests": 4, "timeout": 1},
+    )
+
+    assert "not a passing score" in rendered
+    assert "caught every mutation" not in rendered
+    assert "4 no tests" in rendered
+    assert "1 timeout" in rendered
+
+
 def test_no_survivors_without_a_kill_is_not_a_clean_sweep():
     rendered = report.render(
         _CONFIG, report.MutmutResults(survivors=(), reported=48), {"killed": 0, "survived": 0}
