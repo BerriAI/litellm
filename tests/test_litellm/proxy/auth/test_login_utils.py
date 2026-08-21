@@ -131,39 +131,35 @@ async def test_authenticate_user_admin_login_with_master_key_as_password(monkeyp
 
     with patch.dict(os.environ, env_vars, clear=False):
         # Explicitly remove UI_PASSWORD if it exists
-        original_ui_password = os.environ.pop("UI_PASSWORD", None)
-        try:
+        monkeypatch.delenv("UI_PASSWORD", raising=False)
+        with patch(
+            "litellm.proxy.auth.login_utils.generate_key_helper_fn",
+            new_callable=AsyncMock,
+        ) as mock_generate_key:
+            mock_generate_key.return_value = {
+                "token": "test-token-123",
+                "user_id": LITELLM_PROXY_ADMIN_NAME,
+            }
+
             with patch(
-                "litellm.proxy.auth.login_utils.generate_key_helper_fn",
+                "litellm.proxy.auth.login_utils.user_update",
                 new_callable=AsyncMock,
-            ) as mock_generate_key:
-                mock_generate_key.return_value = {
-                    "token": "test-token-123",
-                    "user_id": LITELLM_PROXY_ADMIN_NAME,
-                }
-
+                return_value=None,
+            ) as mock_user_update:
                 with patch(
-                    "litellm.proxy.auth.login_utils.user_update",
-                    new_callable=AsyncMock,
-                    return_value=None,
-                ) as mock_user_update:
-                    with patch(
-                        "litellm.proxy.auth.login_utils.get_secret_bool",
-                        return_value=False,
-                    ):
-                        result = await authenticate_user(
-                            username=ui_username,
-                            password=master_key,
-                            master_key=master_key,
-                            prisma_client=mock_prisma_client,
-                        )
+                    "litellm.proxy.auth.login_utils.get_secret_bool",
+                    return_value=False,
+                ):
+                    result = await authenticate_user(
+                        username=ui_username,
+                        password=master_key,
+                        master_key=master_key,
+                        prisma_client=mock_prisma_client,
+                    )
 
-                        assert isinstance(result, LoginResult)
-                        assert result.user_id == LITELLM_PROXY_ADMIN_NAME
-                        assert result.user_role == LitellmUserRoles.PROXY_ADMIN
-        finally:
-            if original_ui_password:
-                monkeypatch.setenv("UI_PASSWORD", original_ui_password)
+                    assert isinstance(result, LoginResult)
+                    assert result.user_id == LITELLM_PROXY_ADMIN_NAME
+                    assert result.user_role == LitellmUserRoles.PROXY_ADMIN
 
 
 @pytest.mark.asyncio
