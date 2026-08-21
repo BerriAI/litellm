@@ -599,6 +599,17 @@ model LiteLLM_TagTable {
   updated_at DateTime @default(now()) @updatedAt @map("updated_at")
 }
 
+model LiteLLM_CustomRBACRoleTable {
+  role_name String @id
+  description String?
+  allowed_routes String[]
+  inherits String[]
+  created_at DateTime @default(now()) @map("created_at")
+  created_by String?
+  updated_at DateTime @default(now()) @updatedAt @map("updated_at")
+  updated_by String?
+}
+
 // store proxy config.yaml
 model LiteLLM_Config {
   param_name String @id

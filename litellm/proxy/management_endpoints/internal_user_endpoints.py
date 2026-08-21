@@ -27,6 +27,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.proxy._types import *
 from litellm.proxy.auth.auth_checks import get_team_object, get_user_object
+from litellm.proxy.auth.custom_rbac import validate_assigned_user_role
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.user_api_key_cache import (
     object_permission_cache_key,
@@ -511,6 +512,8 @@ async def new_user(
 
         if prisma_client is None:
             raise HTTPException(status_code=400, detail=CommonProxyErrors.db_not_connected_error.value)
+
+        await validate_assigned_user_role(data.user_role)
 
         if prisma_client is None:
             raise HTTPException(
@@ -1577,6 +1580,8 @@ async def user_update(
     """
     try:
         verbose_proxy_logger.debug("/user/update: Received data = %s", data)
+
+        await validate_assigned_user_role(data.user_role)
 
         response: Final = await _update_single_user_helper(
             user_request=data,

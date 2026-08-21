@@ -18,7 +18,7 @@ from typing import Final, Literal, Protocol
 from fastapi import HTTPException, status
 from pydantic import BaseModel, JsonValue, TypeAdapter
 
-from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
+from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth, user_role_name
 from litellm.types.proxy.management_endpoints.team_endpoints import (
     TeamMetadataFieldSchema,
 )
@@ -181,7 +181,7 @@ async def validate_team_metadata_if_configured(
         requester=TeamMetadataRequester(
             user_id=user_api_key_dict.user_id,
             user_email=user_api_key_dict.user_email,
-            user_role=user_api_key_dict.user_role.value if user_api_key_dict.user_role is not None else None,
+            user_role=user_role_name(user_api_key_dict.user_role),
         ),
     )
     await run_team_metadata_validation(

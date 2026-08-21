@@ -32,6 +32,7 @@ from litellm.integrations.otel.runtime import phase_span, seed_request_identity
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.dot_notation_indexing import get_nested_value
 from litellm.proxy._types import *
+from litellm.proxy._types import parse_stored_user_role
 from litellm.proxy.auth.auth_checks import (
     ExperimentalUIJWTToken,
     _cache_key_object,
@@ -1379,7 +1380,7 @@ async def _user_api_key_auth_builder(
                         team_rpm_limit=(team_object.rpm_limit if team_object is not None else None),
                         team_models=(team_object.models if team_object is not None else []),
                         user_role=(
-                            LitellmUserRoles(user_object.user_role)
+                            parse_stored_user_role(user_object.user_role)
                             if user_object is not None and user_object.user_role is not None
                             else LitellmUserRoles.INTERNAL_USER
                         ),

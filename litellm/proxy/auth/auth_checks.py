@@ -63,10 +63,15 @@ from litellm.proxy._types import (
     RoleBasedPermissions,
     SpecialModelNames,
     UserAPIKeyAuth,
+    parse_stored_user_role,
 )
 from litellm.proxy.auth.budget_throttle import (
     budget_throttle_percentage,
     should_throttle_budget_exceeded,
+)
+from litellm.proxy.auth.custom_rbac import (
+    CustomRBACEngine,
+    get_active_custom_rbac_engine,
 )
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import publish_auth_cache_invalidation
@@ -1046,6 +1051,7 @@ async def common_checks(
         request_data=request_body_for_route_check,
         valid_token=valid_token,
         user_obj=user_object,
+        custom_rbac_engine=await get_active_custom_rbac_engine(),
     )
 
     # 11. [OPTIONAL] Vector store checks - is the object allowed to access the vector store
@@ -1091,6 +1097,7 @@ def _is_api_route_allowed(
     request_data: dict,
     valid_token: UserAPIKeyAuth | None,
     user_obj: LiteLLM_UserTable | None = None,
+    custom_rbac_engine: CustomRBACEngine | None = None,
 ) -> bool:
     """
     - Route b/w api token check and normal token check
@@ -1108,6 +1115,7 @@ def _is_api_route_allowed(
             request=request,
             request_data=request_data,
             valid_token=valid_token,
+            custom_rbac_engine=custom_rbac_engine,
         )
     return True
 
@@ -3007,7 +3015,7 @@ class ExperimentalUIJWTToken:
             team_id="litellm-dashboard",
             models=user_info.models,
             max_parallel_requests=None,
-            user_role=LitellmUserRoles(user_info.user_role),
+            user_role=parse_stored_user_role(user_info.user_role),
         )
 
         return encrypt_value_helper(valid_token.model_dump_json(exclude_none=True))
@@ -3075,7 +3083,7 @@ class ExperimentalUIJWTToken:
             team_model_aliases=dict(team_model_aliases) if team_model_aliases is not None else None,
             models=[] if _team_id is not None else user_info.models,
             max_parallel_requests=None,
-            user_role=LitellmUserRoles(user_info.user_role),
+            user_role=parse_stored_user_role(user_info.user_role),
             is_session_token=True,
         )
 

@@ -174,6 +174,10 @@ class SkillsRepository(PrismaTableRepository):
     table_name = "litellm_skillstable"
 
 
+class CustomRBACRoleRepository(PrismaTableRepository):
+    table_name = "litellm_customrbacroletable"
+
+
 class CacheConfigRepository(PrismaTableRepository):
     table_name = "litellm_cacheconfig"
 
