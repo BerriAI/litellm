@@ -1311,15 +1311,27 @@ def test_responses_gpt54_allow_temperature_effort_none(
     assert params["temperature"] == 0.7
 
 
-@pytest.mark.parametrize("effort", ["max", "ultra"])
-def test_gpt5_6_allows_opt_in_reasoning_efforts(config: OpenAIConfig, effort: str):
+def test_gpt5_6_allows_reasoning_effort_max(config: OpenAIConfig):
     params = config.map_openai_params(
-        non_default_params={"reasoning_effort": effort},
+        non_default_params={"reasoning_effort": "max"},
         optional_params={},
         model="gpt-5.6",
         drop_params=False,
     )
-    assert params["reasoning_effort"] == effort
+    assert params["reasoning_effort"] == "max"
+
+
+def test_gpt5_6_rejects_reasoning_effort_ultra_until_the_map_opts_in(config: OpenAIConfig):
+    # ultra is plumbed as an opt-in level but no map entry asserts it: OpenAI's model guidance
+    # documents effort values only up to max, and the builder guide frames ultra as multi-agent
+    # orchestration. A verified supports_ultra_reasoning_effort flag lights this up with no code.
+    with pytest.raises(litellm.utils.UnsupportedParamsError):
+        config.map_openai_params(
+            non_default_params={"reasoning_effort": "ultra"},
+            optional_params={},
+            model="gpt-5.6",
+            drop_params=False,
+        )
 
 
 @pytest.mark.parametrize("effort", ["max", "ultra"])

@@ -1593,6 +1593,7 @@ def test_map_reasoning_effort_adds_summary_detailed(monkeypatch):
             result_passthrough = handler._map_reasoning_effort(effort)
             assert result_passthrough == Reasoning(effort=effort)
         assert handler._map_reasoning_effort("") is None
+        assert handler._map_reasoning_effort("default") is None
         print("✓ Unenumerated reasoning_effort levels pass through to the provider")
 
         print(
