@@ -10,6 +10,7 @@ denied, so the built-in role permissions never widen a custom role.
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from functools import reduce
 from types import MappingProxyType
 from typing import Final, Protocol
 
@@ -64,21 +65,27 @@ def _permission_grants_route(permission: str, route: str) -> bool:
     return RouteChecks.check_route_access(route=route, allowed_routes=(permission,))
 
 
-def _resolve_routes(
-    role_name: str,
-    roles_by_name: Mapping[str, CustomRBACRole],
-    visited: frozenset[str],
-) -> frozenset[str]:
-    role: Final = roles_by_name.get(role_name)
-    if role is None or role_name in visited:
-        return frozenset()
-    return frozenset(role.allowed_routes).union(
-        *(
-            _resolve_routes(role_name=parent, roles_by_name=roles_by_name, visited=visited | frozenset((role_name,)))
-            for parent in role.inherits
-        ),
-        frozenset(),
+def _inherited_roles(role_names: frozenset[str], roles_by_name: Mapping[str, CustomRBACRole]) -> frozenset[str]:
+    return role_names | frozenset(
+        parent for role_name in role_names for parent in roles_by_name[role_name].inherits if parent in roles_by_name
     )
+
+
+def _resolve_routes(role_name: str, roles_by_name: Mapping[str, CustomRBACRole]) -> frozenset[str]:
+    """The routes a role grants, including everything it inherits.
+
+    The inheritance closure is reached by expanding the parent set once per defined role, which
+    bounds the work and makes an inheritance cycle harmless
+    """
+    if role_name not in roles_by_name:
+        return frozenset()
+
+    closure: Final = reduce(
+        lambda names, _: _inherited_roles(role_names=names, roles_by_name=roles_by_name),
+        range(len(roles_by_name)),
+        frozenset((role_name,)),
+    )
+    return frozenset(route for name in closure for route in roles_by_name[name].allowed_routes)
 
 
 def build_custom_rbac_engine(roles: Sequence[CustomRBACRole]) -> CustomRBACEngine:
@@ -86,7 +93,7 @@ def build_custom_rbac_engine(roles: Sequence[CustomRBACRole]) -> CustomRBACEngin
     return CustomRBACEngine(
         effective_routes=MappingProxyType(
             {
-                role_name: _resolve_routes(role_name=role_name, roles_by_name=roles_by_name, visited=frozenset())
+                role_name: _resolve_routes(role_name=role_name, roles_by_name=roles_by_name)
                 for role_name in roles_by_name
             }
         )
