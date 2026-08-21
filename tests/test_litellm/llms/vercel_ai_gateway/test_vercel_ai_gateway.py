@@ -297,3 +297,26 @@ def test_vercel_ai_gateway_glm46_cost_math():
     assert math.isclose(
         completion_cost, 500 * info["output_cost_per_token"], rel_tol=1e-12
     )
+
+
+def test_vercel_ai_gateway_streaming_prompt_tokens_details_preserved():
+    """Regression test for #37485: verify streaming chunks with prompt_tokens_details are correctly preserved in calculate_total_usage."""
+    from litellm.types.utils import ModelResponseStream, Usage, PromptTokensDetailsWrapper
+    from litellm.litellm_core_utils.streaming_handler import calculate_total_usage
+
+    chunk1 = ModelResponseStream(id="chatcmpl-1")
+    chunk2 = ModelResponseStream(id="chatcmpl-1")
+    chunk2.usage = Usage(
+        prompt_tokens=33121,
+        completion_tokens=42,
+        total_tokens=33163,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=32000),
+    )
+
+    usage = calculate_total_usage([chunk1, chunk2])
+    assert usage.prompt_tokens == 33121
+    assert usage.completion_tokens == 42
+    assert usage.total_tokens == 33163
+    assert usage.prompt_tokens_details is not None
+    assert usage.prompt_tokens_details.cached_tokens == 32000
+
