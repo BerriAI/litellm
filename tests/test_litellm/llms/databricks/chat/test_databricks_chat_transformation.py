@@ -496,6 +496,8 @@ def test_chunk_parser_without_usage_still_parses_content():
     assert result.id == "chatcmpl-test"
     assert result.model == "databricks-claude-sonnet-5"
     assert result.choices[0]["delta"]["content"] == "hi"
+
+
 def _thinking_message(thinking_blocks, content="391"):
     return {"role": "assistant", "content": content, "thinking_blocks": thinking_blocks}
 

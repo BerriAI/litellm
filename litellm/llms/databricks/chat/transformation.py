@@ -502,7 +502,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         holds_reasoning: Final = any(isinstance(b, dict) and b.get("type") == "reasoning" for b in existing)
         replace: Final = signed is not None and not holds_reasoning and bool(existing)
         text: Final = (signed.get("thinking") or "") if signed is not None else ""
-        signature: Final = signed["signature"] if signed is not None else ""
+        signature: Final = (signed.get("signature") or "") if signed is not None else ""
         entry: Final = {"type": "summary_text", "text": text, "signature": signature}  # mutable-ok: provider JSON
         block: Final = {"type": "reasoning", "summary": [entry]}  # mutable-ok: outbound provider JSON
         rebuilt: Final = {**stripped, "content": [block, *existing]}  # mutable-ok: outbound provider JSON
