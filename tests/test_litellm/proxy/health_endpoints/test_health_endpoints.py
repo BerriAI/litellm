@@ -3680,6 +3680,50 @@ class TestConfigBaseForHealthCheck:
         assert "litellm_credential_name" not in base
         assert "api_key" not in base
 
+    @pytest.mark.parametrize(
+        "pricing_field,value",
+        [
+            ("input_cost_per_token", 1e-9),
+            ("output_cost_per_token", 2e-9),
+            ("cache_read_input_token_cost", 5e-10),
+        ],
+    )
+    def test_pricing_field_is_not_a_connection_override(self, pricing_field, value):
+        """Pricing fields are banned from a request body because they poison the
+        shared model-cost registry, not because they describe a connection. A
+        connection test that carries one still gets the configured credentials —
+        otherwise a healthy deployment reports "Missing credentials"."""
+        base = self._base(self.CONFIG, {"model": "openai/gpt-4o", pricing_field: value})
+        assert base["api_key"] == "sk-configured"
+        assert base["api_base"] == "https://configured.example/v1"
+
+    def test_pricing_field_alongside_a_real_override_still_drops_credentials(self):
+        """The pricing field is neutral, so the api_base beside it still decides."""
+        base = self._base(
+            self.CONFIG,
+            {"api_base": "https://caller.example/v1", "input_cost_per_token": 1e-9},
+        )
+        assert "api_key" not in base
+        assert "sk-configured" not in str(base)
+
+    def test_every_custom_pricing_field_is_excluded_from_the_connection_list(self):
+        from litellm.proxy.auth.auth_utils import _CONNECTION_OVERRIDE_REQUEST_PARAMS
+        from litellm.types.utils import CustomPricingLiteLLMParams
+
+        connection_params = set(_CONNECTION_OVERRIDE_REQUEST_PARAMS)
+        for field in CustomPricingLiteLLMParams.model_fields:
+            assert field not in connection_params, (
+                f"CustomPricingLiteLLMParams.{field} is treated as a connection override, "
+                "so a connection test that sets it loses the configured credentials."
+            )
+
+    def test_connection_list_keeps_the_real_credential_and_endpoint_fields(self):
+        from litellm.proxy.auth.auth_utils import _CONNECTION_OVERRIDE_REQUEST_PARAMS
+
+        connection_params = set(_CONNECTION_OVERRIDE_REQUEST_PARAMS)
+        for field in ("api_base", "base_url", "azure_ad_token", "vertex_credentials", "user_config"):
+            assert field in connection_params
+
     def test_stored_credential_reference_kept_when_request_sets_no_connection(self):
         """The Admin UI tests a configured model by naming it plus its stored
         credential and nothing else; that keeps working."""

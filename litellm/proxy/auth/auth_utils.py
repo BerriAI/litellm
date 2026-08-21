@@ -371,6 +371,17 @@ _BANNED_REQUEST_BODY_PARAMS: Final[tuple[str, ...]] = (
 )
 
 
+# The banned params that actually describe a CONNECTION — the tuple above minus
+# the custom-pricing fields. Pricing fields are banned from a request body
+# because they poison the shared model-cost registry, not because they retarget
+# or re-authenticate the outbound call. A caller that needs to reason about
+# "did this request bring its own connection?" must use this list; the full
+# tuple would treat `input_cost_per_token` as a credential.
+_CONNECTION_OVERRIDE_REQUEST_PARAMS: Final[tuple[str, ...]] = tuple(
+    param for param in _BANNED_REQUEST_BODY_PARAMS if param not in CustomPricingLiteLLMParams.model_fields
+)
+
+
 def _check_banned_params(
     body: dict,
     general_settings: dict,
