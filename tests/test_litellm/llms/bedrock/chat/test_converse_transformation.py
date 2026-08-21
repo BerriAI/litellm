@@ -3003,7 +3003,7 @@ def test_request_metadata_validation():
     # Test too many items (max 16)
     too_many_items = {f"key_{i}": f"value_{i}" for i in range(17)}
 
-    try:
+    with pytest.raises(Exception, match="maximum of 16 items") as exc_info:
         config.transform_request(
             model="anthropic.claude-haiku-4-5-20251001-v1:0",
             messages=messages,
@@ -3011,9 +3011,8 @@ def test_request_metadata_validation():
             litellm_params={},
             headers={},
         )
-        pytest.fail("Should have raised validation error for too many items")
-    except Exception as e:
-        assert "maximum of 16 items" in str(e).lower()
+    e = exc_info.value
+    assert "maximum of 16 items" in str(e).lower()
 
 
 def test_request_metadata_key_constraints():
@@ -3026,7 +3025,7 @@ def test_request_metadata_key_constraints():
     long_key = "a" * 257
     invalid_metadata = {long_key: "value"}
 
-    try:
+    with pytest.raises(Exception, match="(?i)key length|256 characters"):
         config.transform_request(
             model="anthropic.claude-haiku-4-5-20251001-v1:0",
             messages=messages,
@@ -3034,14 +3033,11 @@ def test_request_metadata_key_constraints():
             litellm_params={},
             headers={},
         )
-        pytest.fail("Should have raised validation error for key too long")
-    except Exception as e:
-        assert "key length" in str(e).lower() or "256 characters" in str(e).lower()
 
     # Test empty key
     invalid_metadata = {"": "value"}
 
-    try:
+    with pytest.raises(Exception, match="(?i)key length|empty"):
         config.transform_request(
             model="anthropic.claude-haiku-4-5-20251001-v1:0",
             messages=messages,
@@ -3049,9 +3045,6 @@ def test_request_metadata_key_constraints():
             litellm_params={},
             headers={},
         )
-        pytest.fail("Should have raised validation error for empty key")
-    except Exception as e:
-        assert "key length" in str(e).lower() or "empty" in str(e).lower()
 
 
 def test_request_metadata_value_constraints():
@@ -3064,7 +3057,7 @@ def test_request_metadata_value_constraints():
     long_value = "a" * 257
     invalid_metadata = {"key": long_value}
 
-    try:
+    with pytest.raises(Exception, match="(?i)value length|256 characters"):
         config.transform_request(
             model="anthropic.claude-haiku-4-5-20251001-v1:0",
             messages=messages,
@@ -3072,9 +3065,6 @@ def test_request_metadata_value_constraints():
             litellm_params={},
             headers={},
         )
-        pytest.fail("Should have raised validation error for value too long")
-    except Exception as e:
-        assert "value length" in str(e).lower() or "256 characters" in str(e).lower()
 
     # Test empty value (should be allowed)
     valid_metadata = {"key": ""}

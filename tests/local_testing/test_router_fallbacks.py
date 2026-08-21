@@ -1197,22 +1197,22 @@ async def test_using_default_fallback(sync_mode):
             },
         ],
     )
-    try:
-        if sync_mode:
-            response = router.completion(
-                model="openai/foo",
-                messages=[{"role": "user", "content": "Hey, how's it going?"}],
-            )
-        else:
-            response = await router.acompletion(
-                model="openai/foo",
-                messages=[{"role": "user", "content": "Hey, how's it going?"}],
-            )
+    if sync_mode:
+        response = router.completion(
+            model="openai/foo",
+            messages=[{"role": "user", "content": "Hey, how's it going?"}],
+        )
+    else:
+        response = await router.acompletion(
+            model="openai/foo",
+            messages=[{"role": "user", "content": "Hey, how's it going?"}],
+        )
+
+    with pytest.raises(Exception, match="BadRequestError") as exc_info:
         print("got response=", response)
-        pytest.fail(f"Expected call to fail we passed model=openai/foo")
-    except Exception as e:
-        print("got exception = ", e)
-        assert "BadRequestError" in str(e)
+    e = exc_info.value
+    print("got exception = ", e)
+    assert "BadRequestError" in str(e)
 
 
 @pytest.mark.parametrize("sync_mode", [False])

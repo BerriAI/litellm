@@ -309,9 +309,8 @@ def test_deepinfra_rerank_models():
         except Exception as e:
             # We expect this to potentially fail due to missing api_base/key
             # but the model format should be recognized
-            assert "api_base" in str(e) or "API key" in str(
-                e
-            ), f"Unexpected error for model {model}: {e}"
+            if "api_base" not in str(e) and "API key" not in str(e):
+                raise
 
 
 @patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post")

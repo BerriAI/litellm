@@ -295,13 +295,11 @@ async def test_user_api_key_auth_fails_with_prohibited_params(prohibited_param):
         return bytes(json.dumps(body), "utf-8")
 
     request.body = return_body
-    try:
-        response = await user_api_key_auth(request=request, api_key="Bearer " + user_key)
-    except Exception as e:
-        print("error str=", str(e))
-        error_message = str(e.message)
-        print("error message=", error_message)
-        assert "is not allowed in request body" in error_message
+    with pytest.raises(Exception, match="is not allowed in request body") as exc_info:
+        await user_api_key_auth(request=request, api_key="Bearer " + user_key)
+    error_message = str(exc_info.value.message)
+    print("error message=", error_message)
+    assert "is not allowed in request body" in error_message
 
 
 @pytest.mark.asyncio()
@@ -1120,12 +1118,9 @@ async def test_jwt_non_admin_team_route_access(monkeypatch):
             return_value=mock_jwt_response,
         ),
     ):
-        try:
+        with pytest.raises(ProxyException) as exc_info:
             await user_api_key_auth(request=request, api_key="Bearer fake.jwt.token")
-            pytest.fail("Expected this call to fail. Non-admin user should not access team routes.")
-        except ProxyException as e:
-            print("e", e)
-            assert "Only proxy admin can be used to generate" in str(e.message)
+        assert "Only proxy admin can be used to generate" in str(exc_info.value.message)
 
 
 @pytest.mark.asyncio
