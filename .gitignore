@@ -17,6 +17,7 @@ __pycache__/
 litellm/rust_bridge/_native*.so
 litellm/rust_bridge/_native*.pyd
 litellm-rust/target/
+.cargo-target/
 
 # Python package build output
 dist/
