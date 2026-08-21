@@ -124,6 +124,26 @@ class TestOpentelemetryRedaction:
         finally:
             litellm.redact_user_api_key_info = original_flag
 
+    def test_team_attributes_are_not_added_to_auxiliary_spans_when_redacted(self):
+        """Auxiliary spans must respect the same user_api_key redaction flag."""
+        from litellm.integrations.opentelemetry import OpenTelemetry
+
+        original_flag = litellm.redact_user_api_key_info
+        litellm.redact_user_api_key_info = True
+        try:
+            otel_logger = OpenTelemetry()
+            otel_logger.safe_set_attribute = MagicMock()
+
+            otel_logger._set_team_attributes_on_span(
+                span=MagicMock(),
+                team_id="team-456",
+                team_alias="team-alias",
+            )
+
+            otel_logger.safe_set_attribute.assert_not_called()
+        finally:
+            litellm.redact_user_api_key_info = original_flag
+
 
 class TestOpentelemetryUnitTests(BaseLoggingCallbackTest):
     def test_parallel_tool_calls(self, mock_response_obj: ModelResponse):
