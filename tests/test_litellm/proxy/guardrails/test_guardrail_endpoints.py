@@ -1527,7 +1527,19 @@ async def test_apply_guardrail_invokes_logging_pipeline(mocker):
     }
 
 
-def _patch_apply_guardrail_env(mocker, guardrail_result):
+# What add_litellm_data_to_request leaves in data["metadata"]: the caller's own
+# metadata with every identity field overwritten from the authenticated key.
+PROCESSED_METADATA = {
+    "user_api_key": "real-hash",
+    "user_api_key_hash": "real-hash",
+    "user_api_key_alias": "real-caller",
+    "user_api_key_team_id": "real-team",
+    "agent_id": "real-agent",
+    "user_api_key_auth": "sentinel-auth-object",
+}
+
+
+def _patch_apply_guardrail_env(mocker, guardrail_result, processed_metadata=None):
     mock_guardrail = mocker.Mock()
     mock_guardrail.apply_guardrail = AsyncMock(return_value=guardrail_result)
 
@@ -1541,8 +1553,11 @@ def _patch_apply_guardrail_env(mocker, guardrail_result):
     mock_logging_obj.async_success_handler = AsyncMock()
     mock_logging_obj.model_call_details = {}
     mock_processor = mocker.Mock()
+    processed = {"guardrail_name": "test-guardrail"}
+    if processed_metadata is not None:
+        processed["metadata"] = processed_metadata
     mock_processor.common_processing_pre_call_logic = AsyncMock(
-        return_value=({"guardrail_name": "test-guardrail"}, mock_logging_obj)
+        return_value=(processed, mock_logging_obj)
     )
     mocker.patch(
         "litellm.proxy.common_request_processing.ProxyBaseLLMRequestProcessing",
@@ -1564,7 +1579,9 @@ def _patch_apply_guardrail_env(mocker, guardrail_result):
 async def test_apply_guardrail_forwards_metadata_to_guardrail(mocker):
     """Client-supplied metadata must reach apply_guardrail via request_data so
     parameterized custom guardrails can read per-request configuration."""
-    mock_guardrail = _patch_apply_guardrail_env(mocker, {"texts": ["ok"]})
+    mock_guardrail = _patch_apply_guardrail_env(
+        mocker, {"texts": ["ok"]}, processed_metadata={"route": "/apply_guardrail"}
+    )
 
     request = ApplyGuardrailRequest(
         guardrail_name="test-guardrail",
@@ -1577,18 +1594,19 @@ async def test_apply_guardrail_forwards_metadata_to_guardrail(mocker):
         user_api_key_dict=UserAPIKeyAuth(),
     )
 
-    mock_guardrail.apply_guardrail.assert_awaited_once_with(
-        inputs={"texts": ["What are tax loopholes?"]},
-        request_data={"metadata": {"forbidden_topics": ["tax"]}},
-        input_type="request",
-    )
+    call = mock_guardrail.apply_guardrail.await_args.kwargs
+    assert call["inputs"] == {"texts": ["What are tax loopholes?"]}
+    assert call["input_type"] == "request"
+    assert call["request_data"]["metadata"]["forbidden_topics"] == ["tax"]
 
 
 @pytest.mark.asyncio
 async def test_apply_guardrail_forwards_metadata_and_messages_together(mocker):
     """metadata and messages must coexist in request_data; the dict merge must
     not clobber messages when both fields are sent."""
-    mock_guardrail = _patch_apply_guardrail_env(mocker, {"texts": ["ok"]})
+    mock_guardrail = _patch_apply_guardrail_env(
+        mocker, {"texts": ["ok"]}, processed_metadata={"route": "/apply_guardrail"}
+    )
 
     messages = [{"role": "user", "content": "What are tax loopholes?"}]
     request = ApplyGuardrailRequest(
@@ -1603,19 +1621,19 @@ async def test_apply_guardrail_forwards_metadata_and_messages_together(mocker):
         user_api_key_dict=UserAPIKeyAuth(),
     )
 
-    mock_guardrail.apply_guardrail.assert_awaited_once_with(
-        inputs={"texts": ["What are tax loopholes?"]},
-        request_data={
-            "messages": messages,
-            "metadata": {"forbidden_topics": ["tax"]},
-        },
-        input_type="request",
-    )
+    call = mock_guardrail.apply_guardrail.await_args.kwargs
+    assert call["request_data"]["messages"] == messages
+    assert call["request_data"]["metadata"]["forbidden_topics"] == ["tax"]
 
 
 @pytest.mark.asyncio
 async def test_apply_guardrail_omits_metadata_when_not_sent(mocker):
-    """Without metadata, request_data stays empty (backward-compatible)."""
+    """Without metadata, request_data stays empty (backward-compatible).
+
+    Guardrails read that emptiness as a signal: singulr treats it as a playground
+    call and only then puts the text on the wire, so manufacturing metadata here
+    would silently stop it scanning.
+    """
     mock_guardrail = _patch_apply_guardrail_env(mocker, {"texts": ["ok"]})
 
     request = ApplyGuardrailRequest(guardrail_name="test-guardrail", text="hello")
@@ -1636,7 +1654,9 @@ async def test_apply_guardrail_omits_metadata_when_not_sent(mocker):
 async def test_apply_guardrail_forwards_explicit_empty_messages_and_metadata(mocker):
     """Explicitly-sent empty messages/metadata must be forwarded, not dropped;
     only omitted fields stay out of request_data."""
-    mock_guardrail = _patch_apply_guardrail_env(mocker, {"texts": ["ok"]})
+    mock_guardrail = _patch_apply_guardrail_env(
+        mocker, {"texts": ["ok"]}, processed_metadata={}
+    )
 
     request = ApplyGuardrailRequest(
         guardrail_name="test-guardrail",
@@ -1650,11 +1670,9 @@ async def test_apply_guardrail_forwards_explicit_empty_messages_and_metadata(moc
         user_api_key_dict=UserAPIKeyAuth(),
     )
 
-    mock_guardrail.apply_guardrail.assert_awaited_once_with(
-        inputs={"texts": ["hello"]},
-        request_data={"messages": [], "metadata": {}},
-        input_type="request",
-    )
+    call = mock_guardrail.apply_guardrail.await_args.kwargs
+    assert call["request_data"]["messages"] == []
+    assert "metadata" in call["request_data"]
 
 
 @pytest.mark.asyncio
@@ -2624,3 +2642,50 @@ def test_field_type_inference_handles_pep604_unions():
     assert _get_field_type_from_annotation(list[str] | None) == "array"
     assert _get_field_type_from_annotation(bool | None) == "boolean"
     assert _unwrap_optional_type(str | None) is str
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_caller_cannot_choose_identity_or_policy(mocker):
+    """The assembled metadata wins over the body, and policy keys are dropped.
+
+    The pre-call logic fills the identity fields from auth, so layering its dict on
+    top of the caller's stops a body claiming another key, team or agent. profile_id
+    and profile_name are dropped outright: panw_prisma_airs reads both to pick which
+    profile evaluates the content, so a caller choosing either would choose the
+    policy it is judged by.
+    """
+    mock_guardrail = _patch_apply_guardrail_env(
+        mocker, {"texts": ["ok"]}, processed_metadata=dict(PROCESSED_METADATA)
+    )
+
+    request = ApplyGuardrailRequest(
+        guardrail_name="test-guardrail",
+        text="hello",
+        metadata={
+            "user_api_key": "forged-bare-hash",
+            "user_api_key_token": "forged-hash",
+            "user_api_key_alias": "forged-alias",
+            "user_api_key_team_id": "forged-team",
+            "agent_id": "forged-agent",
+            "profile_id": "permissive-profile",
+            "profile_name": "permissive-by-name",
+            "forbidden_topics": ["tax"],
+        },
+    )
+    await apply_guardrail(
+        fastapi_request=mocker.Mock(),
+        request=request,
+        user_api_key_dict=UserAPIKeyAuth(api_key="real-hash", key_alias="real-caller"),
+    )
+
+    metadata = mock_guardrail.apply_guardrail.await_args.kwargs["request_data"]["metadata"]
+    assert "forged" not in str(metadata)
+    assert "permissive" not in str(metadata)
+    assert "profile_id" not in metadata
+    assert "profile_name" not in metadata
+    assert metadata["user_api_key"] == "real-hash"
+    assert metadata["agent_id"] == "real-agent"
+    # user_api_key_auth survives; per-key guardrail overrides read it.
+    assert metadata["user_api_key_auth"] == "sentinel-auth-object"
+    # Parameterization the caller is allowed to send still arrives.
+    assert metadata["forbidden_topics"] == ["tax"]

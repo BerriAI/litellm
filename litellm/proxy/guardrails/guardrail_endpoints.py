@@ -2278,6 +2278,50 @@ async def _emit_guardrail_success_logs(
     return response
 
 
+# Body metadata keys a caller must not be able to choose. The user_api_key prefix
+# covers identity: several of those keys are aliases for the key hash, and the proxy
+# fills them from auth. profile_id and profile_name both select which PANW profile
+# evaluates the content (panw_prisma_airs.py, per-request id then per-request name),
+# so a caller supplying either would pick the policy it is judged by. Everything else
+# is forwarded, which is the point of client metadata: presidio's guardrail_config,
+# for instance, only narrows language and entity list within its own configured scope.
+_CALLER_METADATA_PREFIX_DENYLIST: Final = ("user_api_key",)
+_CALLER_METADATA_DENYLIST: Final = frozenset({"profile_id", "profile_name"})
+
+
+def _guardrail_request_data(
+    request: ApplyGuardrailRequest,
+    processed_metadata: dict | None,  # mutable-ok: the proxy builds request metadata as a dict
+) -> dict:  # mutable-ok: guardrails receive request_data as a plain dict
+    """The request data a guardrail is given on the apply routes.
+
+    The caller's metadata is forwarded so parameterized guardrails keep working, but
+    the metadata the pre-call logic assembled is layered on top and wins: it carries
+    the identity fields filled from auth, plus user_api_key_auth, which per-key
+    guardrail overrides read. Keys a caller must not choose are dropped outright.
+
+    A request that sent neither messages nor metadata still gets an empty dict.
+    Guardrails treat that emptiness as a signal (singulr reads it as a playground
+    call and only then puts the text on the wire), so manufacturing metadata for a
+    bare request would silently change what they do.
+    """
+    if request.messages is None and request.metadata is None:
+        return {}  # mutable-ok: the guardrail contract passes a plain dict
+    caller_metadata: Final = {  # mutable-ok: merged into the request_data dict
+        key: value
+        for key, value in (request.metadata or {}).items()
+        if key not in _CALLER_METADATA_DENYLIST and not key.startswith(_CALLER_METADATA_PREFIX_DENYLIST)
+    }
+    return {  # mutable-ok: same reason
+        **({"messages": request.messages} if request.messages is not None else {}),
+        **(
+            {"metadata": {**caller_metadata, **(processed_metadata or {})}}  # mutable-ok: same reason
+            if request.metadata is not None or processed_metadata is not None
+            else {}
+        ),
+    }
+
+
 @router.post("/guardrails/apply_guardrail", response_model=ApplyGuardrailResponse)
 @router.post("/apply_guardrail", response_model=ApplyGuardrailResponse)
 async def apply_guardrail(
@@ -2344,10 +2388,7 @@ async def apply_guardrail(
         if litellm_logging_obj is not None:
             _patch_logging_obj_for_guardrail(litellm_logging_obj, request)
 
-        request_data: Final[dict] = {
-            **({"messages": request.messages} if request.messages is not None else {}),
-            **({"metadata": request.metadata} if request.metadata is not None else {}),
-        }
+        request_data: Final[dict] = _guardrail_request_data(request, data.get("metadata"))
         _input_type: Final = _resolve_guardrail_input_type(active_guardrail, request.input_type)
         guardrailed_inputs: Final = await active_guardrail.apply_guardrail(
             inputs={"texts": [request.text]},
