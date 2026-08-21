@@ -9,7 +9,9 @@ every text fragment.
 """
 
 from collections.abc import Callable, Iterator, Mapping
-from typing import Any, Final
+from typing import Any, Final, TypeAlias
+
+from pydantic import JsonValue
 
 # Call types whose body carries free-form chat / prompt text that
 # text-content guardrails (banned keywords, content moderation, secret
@@ -36,6 +38,8 @@ def is_text_content_call_type(call_type: str) -> bool:
 TEXT_PART_TYPES: Final[frozenset[str]] = frozenset(
     {"text", "input_text", "output_text", "summary_text", "reasoning_text"}
 )
+
+TextTransform: TypeAlias = Callable[[str], str]
 
 # Responses-API item types whose ``output`` field carries user/tool text
 # that guardrails should inspect.  ``function_call_output`` is the
@@ -130,6 +134,33 @@ def iter_message_text(data: dict[str, Any]) -> Iterator[str]:
         yield from _iter_text_parts_in_content(message.get("content"))
 
 
+def map_content_text(content: JsonValue, transform: TextTransform) -> JsonValue:
+    """Return ``content`` with every text fragment replaced by ``transform(fragment)``.
+
+    Pure counterpart of ``walk_user_text``: string content, bare strings in a
+    content list, and any part carrying non-empty ``text`` are transformed (see
+    ``_part_text``); every other part is passed through by reference, so the
+    content structure cannot change shape.
+    """
+    if isinstance(content, str):
+        return transform(content) if content else content
+    if not isinstance(content, list):
+        return content
+    return [_mapped_text_part(part, transform) for part in content]  # mutable-ok: JSON content is a list
+
+
+def _mapped_text_part(part: JsonValue, transform: TextTransform) -> JsonValue:
+    if isinstance(part, str):
+        # A bare string in a content list is itself a text fragment.
+        return transform(part) if part else part
+    if not isinstance(part, dict):
+        return part
+    text: Final = _part_text(part)
+    if text is None:
+        return part
+    return {**part, "text": transform(text)}  # mutable-ok: JSON parts are dicts
+
+
 def walk_user_text(data: dict[str, Any], visit: Callable[[str], str]) -> int:
     """Rewrite every text fragment in place via ``visit``.
 
@@ -139,26 +170,13 @@ def walk_user_text(data: dict[str, Any], visit: Callable[[str], str]) -> int:
     """
     visited = 0
 
-    def _rewrite_content(content: Any) -> Any:
+    def _counting_visit(text: str) -> str:
         nonlocal visited
-        if isinstance(content, str):
-            if content:
-                visited += 1
-                return visit(content)
-            return content
-        if isinstance(content, list):
-            new_parts: Final[list[Any]] = []
-            for part in content:
-                if isinstance(part, str) and part:
-                    visited += 1
-                    new_parts.append(visit(part))
-                elif isinstance(part, dict) and _part_text(part) is not None:
-                    visited += 1
-                    new_parts.append({**part, "text": visit(part["text"])})
-                else:
-                    new_parts.append(part)
-            return new_parts
-        return content
+        visited += 1
+        return visit(text)
+
+    def _rewrite_content(content: JsonValue) -> JsonValue:
+        return map_content_text(content, _counting_visit)
 
     messages: Final = data.get("messages")
     if isinstance(messages, list):
