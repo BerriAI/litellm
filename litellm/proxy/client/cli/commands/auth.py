@@ -153,10 +153,7 @@ def storage_notice(outcome: SecretSave) -> str:
                 f"(owner-only) instead. For OS keychain storage, run: {KEYRING_ENABLE_HINT}"
             )
         case SecretTooLarge():
-            return (
-                f"Your credential is too large for the OS keychain, so it was stored in {path} "
-                "(owner-only) instead."
-            )
+            return f"Your credential is too large for the OS keychain, so it was stored in {path} (owner-only) instead."
         case CredentialNotSaved(detail=detail):
             return (
                 f"Signed in, but the credential could not be saved to {path}: {detail}. "

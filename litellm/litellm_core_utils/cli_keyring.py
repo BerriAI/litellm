@@ -292,9 +292,10 @@ class KeyringVault:
         match result:
             case _KeyringCallAnswered():
                 return SecretErased()
-            case _KeyringCallFailed() | _KeyringCallTimedOut():
-                if isinstance(result, _KeyringCallTimedOut):
-                    self.stopped_answering.set()
+            case _KeyringCallFailed():
+                return SecretStranded()
+            case _KeyringCallTimedOut():
+                self.stopped_answering.set()
                 return SecretStranded()
 
 
