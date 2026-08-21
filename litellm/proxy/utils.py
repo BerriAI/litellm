@@ -11,7 +11,7 @@ import sys
 import threading
 import time
 import traceback
-from collections.abc import AsyncGenerator, Awaitable, Callable, Coroutine, Mapping, Sequence
+from collections.abc import AsyncGenerator, Awaitable, Callable, Collection, Coroutine, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from email.mime.multipart import MIMEMultipart
@@ -186,6 +186,7 @@ if TYPE_CHECKING:
     from litellm.models.team import LiteLLM_TeamTableCachedObj
     from litellm.proxy.db.autorouter_session_rollup import AutoRouterTurnTransaction
     from litellm.proxy.db.spend_log_tool_index import ToolUsageTransaction
+    from litellm.types.proxy.policy_engine.pipeline_types import GuardrailPipeline
 
     Span = _Span | object
 else:
@@ -406,6 +407,46 @@ def _exception_changes_request_flow(exc: BaseException) -> bool:
     generic pipeline block instead of being re-raised verbatim.
     """
     return isinstance(exc, (SensitiveDataRouteException, ModifyResponseException))
+
+
+def _policy_state_metadata(data: Mapping[str, object]) -> Mapping[str, object]:
+    """
+    Return the metadata bucket the policy engine wrote its pipeline state into.
+
+    The route decides the bucket (``litellm_metadata`` for ``/v1/messages``,
+    responses, batches, files and bedrock, ``metadata`` everywhere else), and both
+    buckets can be present at once because callers send their own provider-facing
+    ``metadata`` (Claude Code sends ``metadata.user_id``) or their own
+    ``litellm_metadata``. Pipeline slots are stripped from caller input before the
+    policy engine runs, so whichever bucket carries them is the proxy's own write.
+    """
+    return next(
+        (
+            bucket
+            for bucket in (data.get("metadata"), data.get("litellm_metadata"))
+            if isinstance(bucket, dict)
+            and ("_guardrail_pipelines" in bucket or "_pipeline_managed_guardrails" in bucket)
+        ),
+        {},
+    )
+
+
+def _policy_pipelines(data: Mapping[str, object]) -> tuple[tuple[str, "GuardrailPipeline"], ...]:
+    pipelines: Final = _policy_state_metadata(data).get("_guardrail_pipelines")
+    return (
+        tuple(cast("Sequence[tuple[str, GuardrailPipeline]]", pipelines))  # cast-ok: the policy engine wrote the slot
+        if pipelines
+        else ()
+    )
+
+
+def _pipeline_managed_guardrail_names(data: Mapping[str, object]) -> frozenset[str]:
+    managed: Final = _policy_state_metadata(data).get("_pipeline_managed_guardrails")
+    return (
+        frozenset(cast("Collection[str]", managed))  # cast-ok: the policy engine wrote these guardrail names
+        if managed
+        else frozenset()
+    )
 
 
 def _prompt_block_text(block: object) -> str:
@@ -1446,8 +1487,7 @@ class ProxyLogging:
 
         Returns the (possibly modified) data dict.
         """
-        metadata: Final = data.get("metadata", data.get("litellm_metadata", {})) or {}
-        pipelines: Final = metadata.get("_guardrail_pipelines")
+        pipelines: Final = _policy_pipelines(data)
         if not pipelines:
             return data
 
@@ -1631,8 +1671,7 @@ class ProxyLogging:
             )
 
             # Get pipeline-managed guardrails to skip in normal loop
-            metadata: Final = data.get("metadata", data.get("litellm_metadata", {})) or {}
-            pipeline_managed: Final[set] = metadata.get("_pipeline_managed_guardrails", set())
+            pipeline_managed: Final = _pipeline_managed_guardrail_names(data)
 
             caps: Final = ProxyLogging._callback_capabilities()
             # Skip the per-request callback walk entirely when nothing in
