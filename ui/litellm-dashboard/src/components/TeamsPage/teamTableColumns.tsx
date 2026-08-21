@@ -26,7 +26,11 @@ interface ResourceTone {
 }
 
 const RESOURCE_TONES: Record<"members" | "models" | "keys", ResourceTone> = {
-  members: { icon: Users, className: "bg-violet-50 text-violet-700 ring-violet-600/20" },
+  members: {
+    icon: Users,
+    className:
+      "bg-violet-50 text-violet-700 ring-violet-600/20 dark:bg-violet-950 dark:text-violet-300 dark:ring-violet-400/30",
+  },
   models: { icon: Layers, className: "bg-info/10 text-info ring-sky-600/20" },
   keys: { icon: KeyRound, className: "bg-success/10 text-success ring-emerald-600/20" },
 };

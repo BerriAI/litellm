@@ -14,6 +14,9 @@ vi.mock("@/components/networking", () => ({
   userDailyActivityCall: vi
     .fn()
     .mockResolvedValue({ results: [], metadata: { total_pages: 1, has_more: false, page: 1 } }),
+  userDailyActivityAggregatedCall: vi
+    .fn()
+    .mockResolvedValue({ results: [], metadata: { total_pages: 1, has_more: false, page: 1 } }),
 }));
 
 vi.mock("./UsageTab", () => ({ __esModule: true, default: () => <div data-testid="usage-tab" /> }));

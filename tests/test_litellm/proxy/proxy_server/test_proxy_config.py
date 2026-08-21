@@ -2617,6 +2617,33 @@ async def test_ProxyConfig__reschedule_spend_log_cleanup_job_invalid_cron(monkey
     assert fake_scheduler.add_job.call_count == 0
 
 
+@pytest.mark.asyncio
+async def test_ProxyConfig__reschedule_spend_log_cleanup_job_health_check_retention(monkeypatch):
+    fake_scheduler = MagicMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.scheduler", fake_scheduler)
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.general_settings",
+        {"maximum_health_check_retention_period": "30d"},
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    pc = ProxyConfig()
+    await pc._reschedule_spend_log_cleanup_job()
+    assert fake_scheduler.add_job.call_count == 1
+    assert fake_scheduler.add_job.call_args.kwargs["id"] == "spend_log_cleanup_job"
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig__update_general_settings_updates_health_check_retention(monkeypatch):
+    settings = {}
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", settings)
+    pc = ProxyConfig()
+    reschedule = AsyncMock()
+    monkeypatch.setattr(pc, "_reschedule_spend_log_cleanup_job", reschedule)
+    await pc._update_general_settings({"maximum_health_check_retention_period": "30d"})
+    assert settings["maximum_health_check_retention_period"] == "30d"
+    reschedule.assert_awaited_once()
+
+
 # ---------------------------------------------------------------------------
 # ProxyConfig._update_general_settings
 # ---------------------------------------------------------------------------

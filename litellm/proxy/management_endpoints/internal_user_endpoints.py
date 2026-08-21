@@ -2790,6 +2790,13 @@ async def get_user_daily_activity_aggregated(
         description="Timezone offset in minutes from UTC (e.g., 480 for PST). "
         "Matches JavaScript's Date.getTimezoneOffset() convention.",
     ),
+    include_current_utc_day: bool = fastapi.Query(
+        default=False,
+        description="When the range ends on the caller's current local day, extend it to "
+        "today's UTC bucket so spend written after the caller's local midnight (in UTC "
+        "terms) is included. Requires the timezone parameter. Historical ranges are "
+        "never extended.",
+    ),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ) -> SpendAnalyticsPaginatedResponse:
     """
@@ -2837,6 +2844,7 @@ async def get_user_daily_activity_aggregated(
             model=model,
             api_key=api_key,
             timezone_offset_minutes=timezone,
+            include_current_utc_day=include_current_utc_day,
         )
 
     except HTTPException:

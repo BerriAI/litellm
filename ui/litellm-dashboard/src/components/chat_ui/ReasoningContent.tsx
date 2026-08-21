@@ -2,6 +2,8 @@ import React, { useState } from "react";
 import ReactMarkdown from "react-markdown";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { coy } from "react-syntax-highlighter/dist/esm/styles/prism";
+
+import { useSyntaxTheme } from "@/hooks/useSyntaxTheme";
 import { ChevronDown, ChevronRight, Lightbulb } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
@@ -11,6 +13,7 @@ interface ReasoningContentProps {
 }
 
 const ReasoningContent: React.FC<ReasoningContentProps> = ({ reasoningContent }) => {
+  const syntaxTheme = useSyntaxTheme(coy);
   const [isExpanded, setIsExpanded] = useState(true);
 
   if (!reasoningContent) return null;
@@ -59,7 +62,7 @@ const ReasoningContent: React.FC<ReasoningContentProps> = ({ reasoningContent })
                       wrapLines={true}
                       wrapLongLines={true}
                       {...props}
-                      style={coy as { [key: string]: React.CSSProperties }}
+                      style={syntaxTheme}
                     >
                       {String(children).replace(/\n$/, "")}
                     </SyntaxHighlighter>

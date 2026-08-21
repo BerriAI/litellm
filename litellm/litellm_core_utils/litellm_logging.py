@@ -832,8 +832,8 @@ class Logging(LiteLLMLoggingBaseClass):
 
         eg. AnthropicCacheControlHook and BedrockKnowledgeBaseHook both don't require a `prompt_id` to be passed in, they are triggered by dynamic params
         """
-        for param in non_default_params:
-            if param in DynamicPromptManagementParamLiteral.list_all_params():
+        for param in DynamicPromptManagementParamLiteral.list_all_params():
+            if non_default_params.get(param):
                 return True
 
         #############################################################################
@@ -966,6 +966,23 @@ class Logging(LiteLLMLoggingBaseClass):
 
         return None
 
+    @staticmethod
+    def _prompt_manager_runs_without_prompt_id(
+        logger: CustomLogger,
+        prompt_spec: PromptSpec | None,
+        dynamic_callback_params: StandardCallbackDynamicParams | None,
+    ) -> bool:
+        if not isinstance(logger, CustomPromptManagement):
+            return False
+        try:
+            return logger.should_run_prompt_management(
+                prompt_id=None,
+                prompt_spec=prompt_spec,
+                dynamic_callback_params=dynamic_callback_params or StandardCallbackDynamicParams(),
+            )
+        except Exception:
+            return False
+
     def get_custom_logger_for_prompt_management(
         self,
         model: str,
@@ -1016,8 +1033,13 @@ class Logging(LiteLLMLoggingBaseClass):
             callback_type=CustomPromptManagement
         )
 
-        if prompt_management_loggers:
-            logger: Final = prompt_management_loggers[0]
+        for logger in prompt_management_loggers:
+            if prompt_id is None and not self._prompt_manager_runs_without_prompt_id(
+                logger=logger,
+                prompt_spec=prompt_spec,
+                dynamic_callback_params=dynamic_callback_params,
+            ):
+                continue
             self.model_call_details["prompt_integration"] = logger.__class__.__name__
             return logger
 

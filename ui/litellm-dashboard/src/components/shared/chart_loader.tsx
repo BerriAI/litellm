@@ -13,7 +13,7 @@ export const ChartLoader: React.FC<ChartLoaderProps> = ({ isDateChanging = false
         <span className="text-muted-foreground text-sm font-medium">
           {isDateChanging ? "Processing date selection..." : "Loading chart data..."}
         </span>
-        <span className="text-muted-foreground/70 text-xs mt-1">
+        <span className="text-muted-foreground text-xs mt-1">
           {isDateChanging ? "This will only take a moment" : "Fetching your data"}
         </span>
       </div>

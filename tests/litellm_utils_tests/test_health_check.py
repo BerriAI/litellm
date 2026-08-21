@@ -132,7 +132,7 @@ async def test_azure_img_gen_health_check():
         retry_delay *= 2  # Exponential backoff
 
     # Should not reach here, but just in case
-    assert False, "Health check failed after all retries"
+    pytest.fail("Health check failed after all retries")
 
 
 @pytest.mark.skip(reason="AWS Suspended Account")

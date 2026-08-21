@@ -247,7 +247,7 @@ const UserDropdown: React.FC<UserDropdownProps> = ({ onLogout, variant = "navbar
           <span className="hidden min-w-0 truncate text-left text-sm font-medium leading-none text-foreground md:inline">
             {displayName}
           </span>
-          <ChevronDown className="hidden size-2.5 shrink-0 text-muted-foreground/70 md:inline" aria-hidden />
+          <ChevronDown className="hidden size-2.5 shrink-0 text-muted-foreground md:inline" aria-hidden />
         </PopoverTrigger>
       )}
       <PopoverContent

@@ -105,20 +105,6 @@ def load_vertex_ai_credentials():
     os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = os.path.abspath(temp_file.name)
 
 
-class TestVertexImageGeneration(BaseImageGenTest):
-    def get_base_image_generation_call_args(self) -> dict:
-        # comment this when running locally
-        load_vertex_ai_credentials()
-
-        litellm.in_memory_llm_clients_cache = InMemoryCache()
-        return {
-            "model": "vertex_ai/imagen-3.0-fast-generate-001",
-            "vertex_ai_project": "litellm-ci-cd",
-            "vertex_ai_location": "us-central1",
-            "n": 1,
-        }
-
-
 class TestVertexAIGeminiImageGeneration(BaseImageGenTest):
     """Test Gemini image generation models (Nano Banana)"""
 

@@ -9,6 +9,8 @@ reasoning.encrypted_content for multi-turn stateless workflows.
 Related issue: https://github.com/BerriAI/litellm/issues/22189
 """
 
+import pytest
+
 import litellm
 from litellm.llms.openrouter.responses.transformation import (
     OpenRouterResponsesAPIConfig,
@@ -76,7 +78,7 @@ class TestOpenRouterResponsesAPIConfig:
                 model="openai/o4-mini",
                 litellm_params=GenericLiteLLMParams(),
             )
-            assert False, "Should have raised ValueError"
+            pytest.fail("Should have raised ValueError")
         except ValueError as e:
             assert "OpenRouter API key is required" in str(e)
 

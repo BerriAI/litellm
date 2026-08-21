@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { DailyData } from "@/components/UsagePage/types";
+import {
+  BreakdownMetrics,
+  DailyData,
+  KeyMetricWithMetadata,
+  MetricWithMetadata,
+  SpendMetrics,
+} from "@/components/UsagePage/types";
 
 export interface PaginationProgress {
   currentPage: number;
@@ -87,6 +93,87 @@ export function sumMetadata(a: Record<string, any>, b: Record<string, any>): Rec
     result[key] = (a[key] || 0) + (b[key] || 0);
   }
   return result;
+}
+
+/**
+ * Sum the union of numeric metric keys so a metric column added to the backend
+ * later is summed automatically instead of silently frozen at one page's value
+ * (the drift hazard SUMMABLE_METADATA_KEYS documents above).
+ */
+const addMetrics = (a: SpendMetrics, b: SpendMetrics): SpendMetrics =>
+  Object.fromEntries(
+    Array.from(new Set([...Object.keys(a), ...Object.keys(b)])).map((key) => {
+      const left = a[key as keyof SpendMetrics];
+      const right = b[key as keyof SpendMetrics];
+      if (typeof left !== "number" && typeof right !== "number") return [key, left ?? right];
+      return [key, (typeof left === "number" ? left : 0) + (typeof right === "number" ? right : 0)];
+    }),
+  ) as unknown as SpendMetrics;
+
+const mergeBucketMaps = <T>(
+  a: Record<string, T> | undefined,
+  b: Record<string, T> | undefined,
+  mergeEntry: (left: T, right: T) => T,
+): Record<string, T> => {
+  const left = a ?? {};
+  const right = b ?? {};
+  return Object.fromEntries(
+    Array.from(new Set([...Object.keys(left), ...Object.keys(right)])).map((key) => {
+      const leftEntry = left[key];
+      const rightEntry = right[key];
+      if (leftEntry === undefined) return [key, rightEntry];
+      if (rightEntry === undefined) return [key, leftEntry];
+      return [key, mergeEntry(leftEntry, rightEntry)];
+    }),
+  );
+};
+
+const mergeKeyMetric = (a: KeyMetricWithMetadata, b: KeyMetricWithMetadata): KeyMetricWithMetadata => ({
+  ...a,
+  metrics: addMetrics(a.metrics, b.metrics),
+});
+
+const mergeMetricWithMetadata = (a: MetricWithMetadata, b: MetricWithMetadata): MetricWithMetadata => ({
+  ...a,
+  metrics: addMetrics(a.metrics, b.metrics),
+  api_key_breakdown: mergeBucketMaps(a.api_key_breakdown, b.api_key_breakdown, mergeKeyMetric),
+});
+
+const mergeBreakdown = (a: BreakdownMetrics, b: BreakdownMetrics): BreakdownMetrics => ({
+  models: mergeBucketMaps(a.models, b.models, mergeMetricWithMetadata),
+  model_groups: mergeBucketMaps(a.model_groups, b.model_groups, mergeMetricWithMetadata),
+  mcp_servers: mergeBucketMaps(a.mcp_servers, b.mcp_servers, mergeMetricWithMetadata),
+  providers: mergeBucketMaps(a.providers, b.providers, mergeMetricWithMetadata),
+  api_keys: mergeBucketMaps(a.api_keys, b.api_keys, mergeKeyMetric),
+  entities: mergeBucketMaps(a.entities, b.entities, mergeMetricWithMetadata),
+  ...(a.endpoints || b.endpoints
+    ? { endpoints: mergeBucketMaps(a.endpoints, b.endpoints, mergeMetricWithMetadata) }
+    : {}),
+});
+
+/**
+ * The backend paginates over raw rows and re-groups per page, so a date whose
+ * rows span pages arrives as one partial DailyData per page. Merge by date so
+ * consumers never see the same date twice (LIT-5818: each day rendered as N
+ * partial bars). Exported so the contract can be tested directly.
+ */
+export function mergeDailyResults(existing: readonly DailyData[], incoming: readonly DailyData[]): DailyData[] {
+  return incoming.reduce<DailyData[]>(
+    (acc, day) => {
+      const index = acc.findIndex((existingDay) => existingDay.date === day.date);
+      if (index === -1) return [...acc, day];
+      return acc.map((existingDay, i) =>
+        i === index
+          ? {
+              ...existingDay,
+              metrics: addMetrics(existingDay.metrics, day.metrics),
+              breakdown: mergeBreakdown(existingDay.breakdown, day.breakdown),
+            }
+          : existingDay,
+      );
+    },
+    [...existing],
+  );
 }
 
 /**
@@ -203,7 +290,7 @@ export function usePaginatedDailyActivity({
         setLoading(false);
         setIsFetchingMore(true);
 
-        let accumulatedResults = [...firstPage.results];
+        let accumulatedResults = mergeDailyResults([], firstPage.results);
         let accumulatedMetadata = { ...firstPage.metadata };
 
         for (let page = 2; page <= totalPages; page++) {
@@ -219,7 +306,7 @@ export function usePaginatedDailyActivity({
 
           if (isStale()) return;
 
-          accumulatedResults = [...accumulatedResults, ...pageData.results];
+          accumulatedResults = mergeDailyResults(accumulatedResults, pageData.results);
           accumulatedMetadata = sumMetadata(accumulatedMetadata, pageData.metadata);
           accumulatedMetadata.total_pages = totalPages;
           accumulatedMetadata.has_more = page < totalPages;

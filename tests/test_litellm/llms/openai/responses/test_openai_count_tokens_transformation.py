@@ -1,6 +1,8 @@
 import os
 import sys
 
+import pytest
+
 sys.path.insert(
     0, os.path.abspath("../../../../..")
 )  # Adds the parent directory to the system path
@@ -177,7 +179,7 @@ def test_validate_request_missing_model():
     config = OpenAICountTokensConfig()
     try:
         config.validate_request(model="", input="Hello")
-        assert False, "Should have raised ValueError"
+        pytest.fail("Should have raised ValueError")
     except ValueError as e:
         assert "model" in str(e)
 
@@ -187,7 +189,7 @@ def test_validate_request_missing_input():
     config = OpenAICountTokensConfig()
     try:
         config.validate_request(model="gpt-4o", input="")
-        assert False, "Should have raised ValueError"
+        pytest.fail("Should have raised ValueError")
     except ValueError as e:
         assert "input" in str(e)
 

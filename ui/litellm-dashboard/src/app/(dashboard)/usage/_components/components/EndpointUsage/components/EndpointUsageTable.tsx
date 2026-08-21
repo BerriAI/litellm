@@ -64,7 +64,7 @@ const EndpointUsageTable: React.FC<EndpointUsageTableProps> = ({ endpointData })
             </div>
             <div className="flex items-center space-x-2 text-sm min-w-[100px]">
               <span className="text-success font-medium">{record.successful_requests.toLocaleString()}</span>
-              <span className="text-muted-foreground/70">/</span>
+              <span className="text-muted-foreground">/</span>
               <span className="text-destructive font-medium">{record.failed_requests.toLocaleString()}</span>
             </div>
           </div>

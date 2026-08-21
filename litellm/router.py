@@ -52,7 +52,7 @@ from litellm.constants import (
     SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
 )
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.litellm_core_utils.asyncify import run_async_function
+from litellm.litellm_core_utils.asyncify import asyncify, run_async_function
 from litellm.litellm_core_utils.core_helpers import (
     _get_parent_otel_span_from_kwargs,
     coerce_token_limit,
@@ -64,7 +64,11 @@ from litellm.litellm_core_utils.coroutine_checker import coroutine_checker
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
-from litellm.litellm_core_utils.ptu_pricing import zeroed_ptu_pricing
+from litellm.litellm_core_utils.ptu_pricing import (
+    is_ptu_cost_attribution_enabled,
+    ptu_config_error,
+    zeroed_ptu_pricing,
+)
 from litellm.litellm_core_utils.request_timeout_resolver import (
     get_configured_request_timeout,
 )
@@ -323,6 +327,7 @@ def model_info_is_active_for_environment(model_info: Mapping[str, object] | None
 _PreRoutingStrategyT = TypeVar("_PreRoutingStrategyT")
 
 _ALIAS_PARAMS_NEVER_FORWARDED: Final = frozenset({"model", "api_base", "api_key", "api_version"})
+_ALIAS_MARKER_FORWARDED_PARAMS_KWARG: Final = "_alias_marker_forwarded_params"
 
 
 def _stream_chunks_have_generated_content(chunks: Sequence[ModelResponseStream]) -> bool:
@@ -3239,6 +3244,10 @@ class Router:
         - Adds default litellm params to kwargs, if set.
         - Merges tools from deployment with request (proxy-configured tools + request tools).
         """
+        for key in self._forwarded_alias_marker_keys_the_deployment_sets(
+            deployment=deployment, forwarded_keys=kwargs.pop(_ALIAS_MARKER_FORWARDED_PARAMS_KWARG, ())
+        ):
+            kwargs.pop(key, None)
         self._merge_tools_from_deployment(deployment=deployment, kwargs=kwargs)
 
         model_info = deployment.get("model_info", {}).copy()
@@ -7696,9 +7705,11 @@ class Router:
         - None: If the deployment is not active for the current environment (if 'supported_environments' is set in litellm_params)
         """
         try:
-            zeroed_pricing: Final = (
-                zeroed_ptu_pricing(_model_info, _litellm_params) if _model_info.get("db_model") is not True else None
-            )
+            config_sourced: Final = _model_info.get("db_model") is not True
+            ptu_error: Final = ptu_config_error(_model_info, model_name=_model_name) if config_sourced else None
+            if ptu_error is not None and is_ptu_cost_attribution_enabled():
+                raise ValueError(ptu_error)
+            zeroed_pricing: Final = zeroed_ptu_pricing(_model_info, _litellm_params) if config_sourced else None
             litellm_params: Final[LiteLLM_Params] = LiteLLM_Params(
                 **(
                     _litellm_params
@@ -9187,7 +9198,7 @@ class Router:
 
         # get_model_info() hands back an lru_cache'd dict, so merge into a copy; unset
         # values are skipped or Deployment's None pricing defaults would erase the map's
-        merged_model_info: Final = copy.copy(model_info)
+        merged_model_info: Final = copy.deepcopy(model_info)
         if user_model_info:
             for key, value in user_model_info.items():
                 if value is not None:
@@ -9238,7 +9249,7 @@ class Router:
         litellm_model_name_model_info: ModelInfo | None = None
 
         try:
-            custom_model_info = litellm.model_cost.get(model_id)
+            custom_model_info = copy.deepcopy(litellm.model_cost.get(model_id))
         except Exception:
             pass
 
@@ -9253,9 +9264,8 @@ class Router:
                 base_model: Final = custom_model_info.get("base_model", None)
                 if base_model is not None:
                     ## update litellm model info with base model info
-                    base_model_info: Final = litellm.get_model_info(model=base_model)
+                    base_model_info: Final = copy.deepcopy(litellm.get_model_info(model=base_model))
                     if base_model_info is not None:
-                        custom_model_info = custom_model_info or {}
                         # Base model provides defaults, custom model info overrides
                         custom_model_info = _update_dictionary(
                             cast(dict, base_model_info),
@@ -9271,13 +9281,13 @@ class Router:
             model_info = cast(
                 ModelInfo,
                 _update_dictionary(
-                    cast(dict, litellm_model_name_model_info).copy(),
+                    copy.deepcopy(cast(dict, litellm_model_name_model_info)),
                     custom_model_info,
                 ),
             )
         elif litellm_model_name_model_info is not None:
             # (2) Built-in only — no custom pricing to merge
-            model_info = litellm_model_name_model_info
+            model_info = copy.deepcopy(litellm_model_name_model_info)
         elif custom_model_info is not None:
             # (3) Custom only — model not in built-in cost map yet
             # custom_model_info already includes base_model defaults at this point, if applicable
@@ -10565,6 +10575,64 @@ class Router:
             return litellm.token_counter(messages=cast(list, input_messages))  # cast-ok: transformed chat messages
         raise ValueError("Either messages or input must be provided to count tokens")
 
+    def _deployment_max_input_tokens(self, model: str, deployment: Mapping[str, object]) -> int | None:
+        """The deployment's declared context window, or None when it declares none or cannot be resolved."""
+        try:
+            model_info: Final = self.get_router_model_info(
+                deployment=cast(dict, deployment),  # cast-ok: router deployments are plain dicts
+                received_model_name=model,
+            )
+        except Exception as e:  # noqa: BLE001  # best-effort: an unmappable deployment must not hide the others
+            verbose_router_logger.debug(
+                "litellm.router.py::_deployment_max_input_tokens: skipping deployment. Got - %s", e
+            )
+            return None
+        max_input_tokens: Final = model_info.get("max_input_tokens")
+        return max_input_tokens if isinstance(max_input_tokens, int) else None
+
+    def _pre_call_checks_need_token_count(
+        self, model: str, healthy_deployments: Sequence[Mapping[str, object]]
+    ) -> bool:
+        """Whether any healthy deployment declares a context window that a token count could exceed.
+
+        Resolves each deployment the way ``_pre_call_checks`` does, so one unmappable deployment
+        cannot hide a later one that does declare a limit.
+        """
+        return any(
+            self._deployment_max_input_tokens(model, deployment) is not None for deployment in healthy_deployments
+        )
+
+    async def _acount_pre_call_check_tokens(
+        self,
+        model: str,
+        healthy_deployments: Sequence[Mapping[str, object]],
+        messages: Sequence[Mapping[str, str]] | None,
+        input: str | Sequence[object] | None,
+        request_kwargs: Mapping[str, object] | None,
+    ) -> int | None:
+        """Count input tokens off the event loop, so a multi-MB prompt cannot stall the proxy.
+
+        Returns None when no deployment limits its context window, and when counting fails. The
+        caller pairs this with ``skip_inline_token_count`` so neither case puts the count back on
+        the loop: a failed count leaves the deployments unfiltered, exactly as before.
+        """
+        if messages is None and input is None:
+            return None
+        raw_instructions: Final = request_kwargs.get("instructions") if request_kwargs else None
+        try:
+            if not self._pre_call_checks_need_token_count(model, healthy_deployments):
+                return None
+            return await asyncify(self._count_pre_call_check_tokens)(
+                messages=cast(list[dict[str, str]] | None, messages),  # cast-ok: forwarded to the sync counter
+                input=cast(str | list | None, input),  # cast-ok: forwarded to the sync counter
+                instructions=raw_instructions if isinstance(raw_instructions, str) else None,
+            )
+        except Exception as e:  # noqa: BLE001  # best-effort: an uncountable prompt must not fail the request
+            verbose_router_logger.error(
+                "litellm.router.py::_acount_pre_call_check_tokens: failed to count tokens. Got - %s", e
+            )
+            return None
+
     def _pre_call_checks(
         self,
         model: str,
@@ -10572,6 +10640,8 @@ class Router:
         messages: list[dict[str, str]] | None = None,
         input: str | list | None = None,
         request_kwargs: dict | None = None,
+        input_token_count: int | None = None,
+        skip_inline_token_count: bool = False,
     ):
         """
         Filter out model in model group, if:
@@ -10593,7 +10663,9 @@ class Router:
         # Token counting (tiktoken) is the dominant on-loop cost for large prompts.
         # Only count when a deployment actually declares max_input_tokens, and count
         # at most once; for model groups with no context-window limit it is skipped.
-        input_tokens: int | None = None
+        # Async callers pass the count in, already computed off the event loop, and set
+        # skip_inline_token_count so a failed off-loop count is not retried back on the loop.
+        input_tokens: int | None = input_token_count
 
         _context_window_error = False
         _potential_error_str = ""
@@ -10628,6 +10700,8 @@ class Router:
                 max_input_tokens = model_info.get("max_input_tokens") if isinstance(model_info, dict) else None
                 if isinstance(max_input_tokens, int) and has_countable_input:
                     if input_tokens is None:
+                        if skip_inline_token_count:
+                            return _returned_deployments
                         try:
                             input_tokens = self._count_pre_call_check_tokens(
                                 messages=messages, input=input, instructions=instructions
@@ -11110,12 +11184,21 @@ class Router:
         )
 
         if self.enable_pre_call_checks and (messages is not None or input is not None):
+            deployments_to_check: Final = cast(list[dict], healthy_deployments)
             healthy_deployments = self._pre_call_checks(
                 model=model,
-                healthy_deployments=cast(list[dict], healthy_deployments),
+                healthy_deployments=deployments_to_check,
                 messages=messages,
                 input=input,
                 request_kwargs=request_kwargs,
+                input_token_count=await self._acount_pre_call_check_tokens(
+                    model=model,
+                    healthy_deployments=deployments_to_check,
+                    messages=messages,
+                    input=input,
+                    request_kwargs=request_kwargs,
+                ),
+                skip_inline_token_count=True,
             )
         # check if user wants to do tag based routing
         healthy_deployments = await get_deployments_for_tag(
@@ -11605,9 +11688,27 @@ class Router:
         # excluded here: they price the alias, not the deployment the hook
         # selected, and forwarding them re-registers the routed deployment at
         # the alias's price (an explicit 0 makes every alias request bill $0).
-        if pre_routing_hook_response is not None:
-            for key, value in self._forwardable_alias_marker_params(model=model, strategy_tags=selected_strategy.tags):
-                request_kwargs.setdefault(key, value)
+        # Forwarded params only fill gaps: the keys inserted here ride along on the
+        # request (top level, so sibling requests sharing a `metadata` dict never see
+        # them) until `_update_kwargs_with_deployment` drops any the selected
+        # deployment sets itself (its own `aws_region_name` beats the marker's).
+        # Per-tier `litellm_params` on the hook response are deliberate overrides
+        # the caller applies on top, so those keys are never forwarded here.
+        marker_params: Final = (
+            self._forwardable_alias_marker_params(model=model, strategy_tags=selected_strategy.tags)
+            if pre_routing_hook_response is not None
+            else ()
+        )
+        tier_param_keys: Final = (
+            tuple(pre_routing_hook_response.litellm_params or ()) if pre_routing_hook_response is not None else ()
+        )
+        newly_forwarded: Final = tuple(
+            (key, value) for key, value in marker_params if key not in request_kwargs and key not in tier_param_keys
+        )
+        request_kwargs.pop(_ALIAS_MARKER_FORWARDED_PARAMS_KWARG, None)
+        request_kwargs.update(newly_forwarded)
+        if newly_forwarded:
+            request_kwargs.update(((_ALIAS_MARKER_FORWARDED_PARAMS_KWARG, tuple(key for key, _ in newly_forwarded)),))
 
         return pre_routing_hook_response
 
@@ -11633,6 +11734,27 @@ class Router:
             and key not in CustomPricingLiteLLMParams.model_fields
             and value is not None
         )
+
+    @staticmethod
+    def _forwarded_alias_marker_keys_the_deployment_sets(
+        deployment: Mapping[str, object], forwarded_keys: object
+    ) -> tuple[str, ...]:
+        deployment_litellm_params: Final = deployment.get("litellm_params")
+        if not isinstance(deployment_litellm_params, Mapping) or not isinstance(forwarded_keys, tuple):
+            return ()
+        return tuple(
+            key
+            for key in forwarded_keys
+            if isinstance(key, str) and Router._deployment_sets_litellm_param(deployment_litellm_params, key)
+        )
+
+    @staticmethod
+    def _deployment_sets_litellm_param(deployment_litellm_params: Mapping[str, object], key: str) -> bool:
+        value: Final = deployment_litellm_params.get(key)
+        if value is None:
+            return False
+        field: Final = LiteLLM_Params.model_fields.get(key)
+        return field is None or value != field.default
 
     def _consumed_request_tags_stamp(
         self,

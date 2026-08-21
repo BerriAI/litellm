@@ -138,7 +138,7 @@ const ProviderMarginTable: React.FC<ProviderMarginTableProps> = ({
                         autoFocus
                       />
                       <span className="text-muted-foreground">%</span>
-                      <span className="text-muted-foreground/70">+</span>
+                      <span className="text-muted-foreground">+</span>
                       <span className="text-muted-foreground">$</span>
                       <Input
                         value={editFixedAmount}

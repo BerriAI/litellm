@@ -2,6 +2,7 @@
 ## This test asserts the type of data passed into each method of the custom callback handler
 import asyncio
 import inspect
+import json
 import os
 import sys
 import time

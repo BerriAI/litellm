@@ -222,8 +222,10 @@ _SAFE_CLIENT_CALLBACK_PARAMS: Final[frozenset[str]] = frozenset(
 _EXTRA_BANNED_OBSERVABILITY_PARAMS: Final[frozenset[str]] = frozenset(
     {
         "posthog_api_url",
-        "phoenix_project_name",
-        "phoenix_project_name_override",
+        # ``phoenix_project_name`` / ``phoenix_project_name_override`` are NOT
+        # banned: on the proxy the Phoenix integrations only read them from
+        # ``user_api_key_auth_metadata`` (key/team config), so the bare request
+        # fields are inert and rejecting them just breaks SDK-style callers.
         # Server-reserved: written exclusively by add_user_api_key_auth_to_request_metadata
         # from the authenticated key's database record.  A caller-supplied value
         # would survive the server merge and let an authenticated user redirect
@@ -309,6 +311,12 @@ _BANNED_REQUEST_BODY_PARAMS: Final[tuple[str, ...]] = (
     # the request away from the admin's pinned configuration.
     "nvcf_function_id",
     "use_ssl",
+    # Per-deployment opt-in that hands the whole call to the Rust core. It is a
+    # deployment decision, not a request one: the Rust path uses its own client
+    # rather than the one the deployment configured, and reports no post_call,
+    # so a caller-supplied value picks a transport and a callback surface the
+    # admin did not choose.
+    "rust",
     # SDK-only field; also rejected outright in is_request_body_safe.
     "model_list",
     "vertex_ai_credentials",

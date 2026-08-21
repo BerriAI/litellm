@@ -19,6 +19,7 @@ from litellm.constants import (
     MAX_SHORT_SIDE_FOR_IMAGE_HIGH_RES,
     MAX_TILE_HEIGHT,
     MAX_TILE_WIDTH,
+    TIKTOKEN_ENCODE_CHUNK_SIZE_CHARS,
 )
 from litellm.litellm_core_utils.default_encoding import encoding as default_encoding
 from litellm.litellm_core_utils.url_utils import safe_get
@@ -305,6 +306,16 @@ Type for a function that counts tokens in a string.
 """
 
 
+def _get_tiktoken_count_function(
+    encode_length: Callable[[str], int],
+    chunk_size: int = TIKTOKEN_ENCODE_CHUNK_SIZE_CHARS,
+) -> TokenCounterFunction:
+    def count_tokens(text: str) -> int:
+        return sum(encode_length(text[start : start + chunk_size]) for start in range(0, len(text), chunk_size))
+
+    return count_tokens
+
+
 class _MessageCountParams:
     """
     A class to hold the parameters for counting tokens in messages.
@@ -531,6 +542,7 @@ def _get_count_function(
                 enc: Final = tokenizer_json["tokenizer"].encode(text)
                 return len(enc.ids)
 
+            return count_tokens
         elif tokenizer_json["type"] == "openai_tokenizer":
             model_to_use: Final = _fix_model_name(model)
             try:
@@ -542,17 +554,18 @@ def _get_count_function(
                 print_verbose("Warning: model not found. Using cl100k_base encoding.")
                 encoding = tiktoken.get_encoding("cl100k_base")
 
-            def count_tokens(text: str) -> int:
+            def encode_length(text: str) -> int:
                 return len(encoding.encode(text, disallowed_special=()))
 
+            return _get_tiktoken_count_function(encode_length)
         else:
             raise ValueError("Unsupported tokenizer type")
     else:
 
-        def count_tokens(text: str) -> int:
+        def encode_length(text: str) -> int:
             return len(default_encoding.encode(text, disallowed_special=()))
 
-    return count_tokens
+        return _get_tiktoken_count_function(encode_length)
 
 
 def _fix_model_name(model: str) -> str:
