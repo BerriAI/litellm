@@ -742,8 +742,8 @@ export default function KeyInfoView({
             </div>
           </TabsContent>
 
-          {/* Savings Panel. No keepMounted: this tab sweeps the daily rollup, and mounting it
-              eagerly would fire that on every key page open for people who never look at it. */}
+          {/* Savings Panel. No keepMounted: this tab sweeps the daily rollup, and staying mounted
+              would fire that request on every key page open for people who never look at it. */}
           <TabsContent value="savings">
             <KeySavingsTab
               accessToken={accessToken}
