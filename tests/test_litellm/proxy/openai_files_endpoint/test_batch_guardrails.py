@@ -364,6 +364,48 @@ async def test_an_absolute_url_resolves_by_path_not_by_body_shape(url, expected_
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "prefix, label",
+    [(b"\xef\xbb\xbf", "utf-8 BOM"), (b"", "plain")],
+    ids=["utf8_bom", "plain"],
+)
+async def test_a_file_the_upload_validation_accepts_is_a_file_the_scan_can_read(prefix, label):
+    """The validator parses each line as bytes, which tolerates a BOM; the scan must match it."""
+    from litellm.proxy.openai_files_endpoints.batch_file_validation import check_batch_file_upload
+
+    payload = prefix + (json.dumps(_record("a")) + "\n").encode()
+    assert check_batch_file_upload("in.jsonl", io.BytesIO(payload), None) is None, f"{label} rejected upfront"
+
+    logging_obj = FakeProxyLogging()
+    assert await _scan(io.BytesIO(payload), logging_obj) is None
+    assert logging_obj.seen, f"{label} was never scanned"
+
+
+@pytest.mark.asyncio
+async def test_a_bom_file_is_rewritten_without_losing_the_untouched_records():
+    source = io.BytesIO(b"\xef\xbb\xbf" + ("\n".join(
+        json.dumps(r) for r in (_record("keep"), _record("dirty", content="my secret is here"))
+    ) + "\n").encode())
+
+    result = await _scan_full(source, FakeProxyLogging(_redact_containing("secret")))
+    rewritten = rewrite_batch_input_file(source, result).read().decode("utf-8-sig")
+
+    rows = [json.loads(line) for line in rewritten.splitlines()]
+    assert [row["custom_id"] for row in rows] == ["keep", "dirty"]
+    assert rows[1]["body"]["messages"][0]["content"] == "my *** is here"
+
+
+@pytest.mark.asyncio
+async def test_a_numeric_custom_id_is_still_reported():
+    """The spec asks for a string, but callers send numbers, and null would break reconciliation."""
+    record = {**_record("x", content="tripwire"), "custom_id": 12345}
+
+    result = await _scan_full(_jsonl(record), FakeProxyLogging(_blocking("tripwire")))
+
+    assert result.changes == (RecordDropped(line_number=1, custom_id="12345", guardrail="block-guard"),)
+
+
+@pytest.mark.asyncio
 async def test_query_string_on_a_known_url_does_not_change_the_call_type():
     """The body carries `messages`, so only stripping the query string can yield aembedding."""
     logging_obj = FakeProxyLogging()
