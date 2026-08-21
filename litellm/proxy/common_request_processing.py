@@ -281,9 +281,11 @@ def _assembled_model_came_from_a_later_chunk(chunks: list, assembled_model: obje
     """Report whether stream_chunk_builder picked a model the first chunk did not carry.
 
     Azure Model Router puts the routed model on the chunks after the first one, and the
-    proxy deliberately leaves those chunks unrestamped so the builder can recover it. The
-    assembled model is then more specific than the wrapper's, so the caller has to leave
-    it alone rather than stamping the wrapper's model over it.
+    proxy deliberately leaves those chunks unrestamped so the builder can recover it.
+
+    A stored chunk that carries usage is a pre-restamp copy of the one the proxy saw, so
+    an alias-restamped stream reaches the builder with the same shape: a first chunk that
+    disagrees with the rest. Those two are only told apart by what the client asked for.
     """
     first_chunk: Final = chunks[0]
     first_chunk_model: Final = (
@@ -294,6 +296,18 @@ def _assembled_model_came_from_a_later_chunk(chunks: list, assembled_model: obje
         and isinstance(assembled_model, str)
         and bool(assembled_model)
         and assembled_model != first_chunk_model
+    )
+
+
+def _assembled_model_is_the_name_the_client_asked_for(request_data: dict, assembled_model: object) -> bool:
+    """Report whether the assembled model is the public name the proxy stamps onto chunks.
+
+    That stamp is what leaves an unpriced alias on the partial response, so the deployment's
+    own model has to go back on before the row is costed.
+    """
+    return assembled_model in (
+        request_data.get("_litellm_client_requested_model"),
+        request_data.get("model"),
     )
 
 
@@ -348,11 +362,10 @@ async def _bill_partial_streamed_spend_on_disconnect(request_data: dict, respons
     if partial_response is None:
         return False
     wrapper_model: Final = getattr(response, "model", None)
-    if (
-        isinstance(wrapper_model, str)
-        and wrapper_model
-        and not _assembled_model_came_from_a_later_chunk(chunks, partial_response.model)
-    ):
+    builder_recovered_the_routed_model: Final = _assembled_model_came_from_a_later_chunk(
+        chunks, partial_response.model
+    ) and not _assembled_model_is_the_name_the_client_asked_for(request_data, partial_response.model)
+    if isinstance(wrapper_model, str) and wrapper_model and not builder_recovered_the_routed_model:
         partial_response.model = wrapper_model
     partial_usage: Final = getattr(partial_response, "usage", None)
     if isinstance(partial_usage, Usage):
