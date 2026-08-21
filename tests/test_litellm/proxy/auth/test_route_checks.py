@@ -2809,7 +2809,7 @@ def test_team_update_gate_rejects_without_org_context():
     request.method = "POST"
     request.query_params = {}
 
-    with pytest.raises(Exception):
+    with pytest.raises(Exception, match="Only proxy admin can be used to generate"):
         RouteChecks.non_proxy_admin_allowed_routes_check(
             user_obj=user_obj,
             _user_role=LitellmUserRoles.INTERNAL_USER.value,
@@ -2829,7 +2829,7 @@ def test_team_update_gate_rejects_cross_org_admin_with_resolved_org():
     request.method = "POST"
     request.query_params = {}
 
-    with pytest.raises(Exception):
+    with pytest.raises(Exception, match="Only proxy admin can be used to generate"):
         RouteChecks.non_proxy_admin_allowed_routes_check(
             user_obj=user_obj,
             _user_role=LitellmUserRoles.INTERNAL_USER.value,
@@ -2951,7 +2951,7 @@ def test_patch_team_gate_rejects_regular_internal_user():
     )
     valid_token = UserAPIKeyAuth(user_id="regular-user", user_role=LitellmUserRoles.INTERNAL_USER.value)
 
-    with pytest.raises(Exception):
+    with pytest.raises(Exception, match="Only proxy admin can be used to generate"):
         RouteChecks.non_proxy_admin_allowed_routes_check(
             user_obj=user_obj,
             _user_role=LitellmUserRoles.INTERNAL_USER.value,
@@ -2967,7 +2967,7 @@ def test_patch_team_gate_rejects_cross_org_admin():
     user_obj = _make_org_admin_user("org-1")
     valid_token = UserAPIKeyAuth(user_id="org-admin-user", user_role=LitellmUserRoles.INTERNAL_USER.value)
 
-    with pytest.raises(Exception):
+    with pytest.raises(Exception, match="Only proxy admin can be used to generate"):
         RouteChecks.non_proxy_admin_allowed_routes_check(
             user_obj=user_obj,
             _user_role=LitellmUserRoles.INTERNAL_USER.value,
@@ -2987,7 +2987,7 @@ def test_patch_team_gate_rejects_view_only_admin():
     )
     valid_token = UserAPIKeyAuth(user_id="viewer", user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value)
 
-    with pytest.raises(Exception):
+    with pytest.raises(HTTPException):
         RouteChecks.non_proxy_admin_allowed_routes_check(
             user_obj=user_obj,
             _user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,

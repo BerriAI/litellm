@@ -53,6 +53,7 @@ from litellm.types.proxy.management_endpoints.scim_v2 import (
     SCIMUserGroup,
     SCIMUserName,
 )
+from litellm.proxy._types import ProxyException
 
 
 @pytest.mark.asyncio
@@ -3216,7 +3217,7 @@ async def test_delete_user_surfaces_prune_failure_and_keeps_user(mocker):
         AsyncMock(side_effect=Exception("database connection lost")),
     )
 
-    with pytest.raises(Exception):
+    with pytest.raises(ProxyException):
         await delete_user(user_id=user_id)
 
     mock_prisma_client.db.litellm_usertable.delete.assert_not_awaited()

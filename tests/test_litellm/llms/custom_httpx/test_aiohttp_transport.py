@@ -1077,7 +1077,7 @@ async def test_session_closed_retry_does_not_close_concurrent_replacement():
         raise StopAsyncIteration("stop after retry dispatch")
 
     with patch.object(transport, "_make_aiohttp_request", side_effect=fake_make_request):
-        with pytest.raises(Exception):
+        with pytest.raises(StopAsyncIteration):
             await transport.handle_async_request(httpx.Request("GET", "http://example.com"))
 
     try:

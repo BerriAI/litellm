@@ -668,6 +668,8 @@ def test_validate_sort_params():
     """
     Test that validate_sort_params returns None if sort_by is None
     """
+    from fastapi import HTTPException
+
     from litellm.proxy.management_endpoints.internal_user_endpoints import (
         _validate_sort_params,
     )
@@ -676,7 +678,7 @@ def test_validate_sort_params():
     assert _validate_sort_params(None, "desc") is None
     assert _validate_sort_params("user_id", "asc") == {"user_id": "asc"}
     assert _validate_sort_params("user_id", "desc") == {"user_id": "desc"}
-    with pytest.raises(Exception):
+    with pytest.raises(HTTPException):
         _validate_sort_params("user_id", "invalid")
 
 

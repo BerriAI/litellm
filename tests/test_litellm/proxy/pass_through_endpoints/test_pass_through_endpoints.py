@@ -350,7 +350,7 @@ async def test_pass_through_request_failure_handler():
                 mock_user_api_key_dict = MagicMock()
 
                 # Call the function with a target that will trigger an HTTPError
-                with pytest.raises(Exception):
+                with pytest.raises(ProxyException):
                     await pass_through_request(
                         request=mock_request,
                         target="http://test.com",
@@ -1154,7 +1154,7 @@ async def test_pass_through_request_uses_resolved_timeout():
 
             mock_user_api_key_dict = MagicMock()
 
-            with pytest.raises(Exception):
+            with pytest.raises(TypeError):
                 await pass_through_request(
                     request=mock_request,
                     target="http://test.com",

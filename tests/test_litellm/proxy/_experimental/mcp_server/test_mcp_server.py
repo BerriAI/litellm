@@ -4440,7 +4440,7 @@ async def test_call_mcp_tool_logs_failure_via_post_call_failure_hook():
             proxy_logging_mock,
         ),
     ):
-        with pytest.raises(Exception):
+        with pytest.raises(Exception, match="boom"):
             await call_mcp_tool(
                 name="test_server-any_tool",
                 arguments={"x": 1},
