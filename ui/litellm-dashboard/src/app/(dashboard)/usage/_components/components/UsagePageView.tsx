@@ -6,12 +6,13 @@
  * Works at 1m+ spend logs, by querying an aggregate table instead.
  */
 
-import { ChevronDown, ChevronRight, Download, ExternalLink, Info, Loader2, Sparkles, X } from "lucide-react";
+import { ChevronDown, ChevronRight, Download, Info, Sparkles, X } from "lucide-react";
 import type { DateRangePickerValue } from "@/components/shared/date_picker_types";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { BarChart } from "@/components/shared/charts";
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/shared/Alert";
+import PaginationStatusAlerts from "@/components/shared/PaginationStatusAlerts";
 import { Button } from "@/components/ui/button";
 import { Card as ShadcnCard, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -473,33 +474,12 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
             />
             <AdvancedDatePicker value={dateValue} onValueChange={handleDateChange} />
           </div>
-          {paginatedResult.isFetchingMore && (
-            <Alert variant="warning" className="mb-2">
-              <AlertDescription className="flex items-center justify-between text-inherit">
-                <span>
-                  <Loader2 className="mr-2 inline size-4 animate-spin align-text-bottom" />
-                  Currently fetching spend data: fetched {paginatedResult.progress.currentPage} /{" "}
-                  {paginatedResult.progress.totalPages} pages. Charts will update periodically as data loads. Moving off
-                  of this page will stop and reset this. To continue using the UI in the meantime,{" "}
-                  <a href={window.location.href} target="_blank" rel="noopener noreferrer">
-                    open a new tab <ExternalLink className="inline size-3.5 align-text-bottom" />
-                  </a>
-                  .
-                </span>
-                <Button variant="destructive" onClick={paginatedResult.cancel}>
-                  Stop
-                </Button>
-              </AlertDescription>
-            </Alert>
-          )}
-          {paginatedResult.cancelled && (
-            <Alert variant="info" className="mb-2">
-              <AlertDescription className="text-inherit">
-                Showing partial data ({paginatedResult.progress.currentPage}/{paginatedResult.progress.totalPages} pages
-                loaded)
-              </AlertDescription>
-            </Alert>
-          )}
+          <PaginationStatusAlerts
+            isFetchingMore={paginatedResult.isFetchingMore}
+            cancelled={paginatedResult.cancelled}
+            progress={paginatedResult.progress}
+            cancel={paginatedResult.cancel}
+          />
           {/* Your Usage / Global Usage Panel */}
           {(usageView === "global" || usageView === "my-usage") && (
             <>

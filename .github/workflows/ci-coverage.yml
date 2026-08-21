@@ -46,3 +46,6 @@ jobs:
       # nowhere while counting as covered, which is how the caching suite went unrun.
       - name: Assert no -k expression deselects a file from every job that globs it
         run: python .github/scripts/assert_ci_coverage.py --slices
+
+      - name: Assert .github/workflows/ holds only workflows, correctly named
+        run: python .github/scripts/assert_workflow_dir_hygiene.py

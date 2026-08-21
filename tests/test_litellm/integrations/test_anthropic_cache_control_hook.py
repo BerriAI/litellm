@@ -1738,6 +1738,23 @@ class TestEnableAnthropicPromptCaching:
         assert result_msgs[-1]["content"][-1]["cache_control"] == {"type": "ephemeral"}
         assert "cache_control" not in result_msgs[0]["content"][-1]
 
+    def test_messages_with_default_injections_leaves_the_caller_list_untouched(self, monkeypatch):
+        """
+        Routing calls this on the live request's own message list to derive the affinity key, before
+        the request is sent. Marking in place would leak litellm's breakpoints into the caller's
+        messages, where the real injection pass later reads them back as client-supplied ones.
+        """
+        monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
+        messages = copy.deepcopy(self.MESSAGES)
+        before = copy.deepcopy(messages)
+
+        injected = AnthropicCacheControlHook.messages_with_default_injections(
+            messages=messages, models=("claude-sonnet-4-5",)
+        )
+
+        assert injected != messages
+        assert messages == before
+
 
 class TestPerKeyEnablePromptCaching:
     """Per-request enable_prompt_caching override (stamped from key metadata) with the global flag off."""

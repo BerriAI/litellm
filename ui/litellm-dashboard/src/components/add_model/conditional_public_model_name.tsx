@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo } from "react";
 import type { ColumnDef } from "@tanstack/react-table";
 import { useFormContext, useWatch } from "react-hook-form";
 import { DataTable } from "@/components/shared/DataTable";
@@ -12,6 +12,13 @@ interface ModelMapping {
   public_name: string;
   litellm_model: string;
 }
+
+const sameMappings = (left: readonly ModelMapping[], right: readonly ModelMapping[]): boolean =>
+  left.length === right.length &&
+  left.every(
+    (mapping, index) =>
+      mapping.public_name === right[index].public_name && mapping.litellm_model === right[index].litellm_model,
+  );
 
 const modelMappingsRule = {
   validator: async (_: unknown, value: unknown) => {
@@ -29,15 +36,14 @@ const modelMappingsRule = {
 
 const ConditionalPublicModelName: React.FC = () => {
   const form = useFormContext<MountedFormValues>();
-  const [tableKey, setTableKey] = useState(0); // Add a key to force table re-render
 
-  // Watch the 'model' field for changes and ensure it's always an array
   const modelValue = useWatch({ control: form.control, name: "model" }) || [];
-  const selectedModels = Array.isArray(modelValue) ? modelValue : [modelValue];
+  const selectionKey = JSON.stringify(Array.isArray(modelValue) ? modelValue : [modelValue]);
+  const selectedModels = useMemo(() => JSON.parse(selectionKey) as string[], [selectionKey]);
   const customModelName = useWatch({ control: form.control, name: "custom_model_name" }) as string | undefined;
   const showPublicModelName = !selectedModels.includes("all-wildcard");
   const selectedProvider = useWatch({ control: form.control, name: "custom_llm_provider" });
-  // Force table to re-render when custom model name changes
+
   useEffect(() => {
     if (customModelName && selectedModels.includes("custom")) {
       const currentMappings = (form.getValues("model_mappings") as ModelMapping[]) || [];
@@ -56,8 +62,9 @@ const ConditionalPublicModelName: React.FC = () => {
         }
         return mapping;
       });
-      form.setValue("model_mappings", updatedMappings);
-      setTableKey((prev) => prev + 1); // Force table re-render
+      if (!sameMappings(currentMappings, updatedMappings)) {
+        form.setValue("model_mappings", updatedMappings);
+      }
     }
   }, [customModelName, selectedModels, selectedProvider, form]);
 
@@ -109,7 +116,6 @@ const ConditionalPublicModelName: React.FC = () => {
         });
 
         form.setValue("model_mappings", mappings);
-        setTableKey((prev) => prev + 1); // Force table re-render
       }
     }
   }, [selectedModels, customModelName, selectedProvider, form]);
@@ -210,7 +216,6 @@ const ConditionalPublicModelName: React.FC = () => {
     >
       {(control) => (
         <DataTable
-          key={tableKey} // Add key to force re-render
           data={(control.value as ModelMapping[] | undefined) ?? []}
           columns={columns}
           getRowId={(row) => row.litellm_model}
