@@ -219,17 +219,14 @@ def test_stream_transformation_error_handling():
     # Create a wrapper
     mock_wrapper = GoogleGenAIStreamWrapper(completion_stream=iter([]))
 
-    # Try to transform - this should handle errors gracefully
+    # Try to transform - this should either succeed or raise a ValueError, never crash
     try:
-        streaming_chunk = adapter.translate_streaming_completion_to_generate_content(
+        adapter.translate_streaming_completion_to_generate_content(
             mock_response, mock_wrapper
         )
-        # If no exception is raised, that's fine - we just want to ensure no crash
-        assert True
-    except Exception as e:
-        # If an exception is raised, it should be a ValueError with appropriate message
-        assert isinstance(e, ValueError)
+    except ValueError:
         # We won't check the exact message as it might vary
+        pass
 
 
 def test_non_stream_response_when_stream_requested():

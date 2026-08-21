@@ -197,15 +197,15 @@ async def test_regenerate_api_key(prisma_client):
         return return_string.encode()
 
     request.body = return_body_3
-    try:
-        result = await user_api_key_auth(
-            request=request, api_key=f"Bearer {generated_key}"
-        )
+    result = await user_api_key_auth(
+        request=request, api_key=f"Bearer {generated_key}"
+    )
+
+    with pytest.raises(Exception, match="Invalid proxy server token passed") as exc_info:
         print(result)
-        pytest.fail(f"This should have failed!. the key has been regenerated")
-    except Exception as e:
-        print("got expected exception", e)
-        assert "Invalid proxy server token passed" in e.message
+    e = exc_info.value
+    print("got expected exception", e)
+    assert "Invalid proxy server token passed" in e.message
 
     # Check that the regenerated key has the same spend, max_budget, models and key_alias
     assert new_key.spend == spend, f"Expected spend {spend} but got {new_key.spend}"
