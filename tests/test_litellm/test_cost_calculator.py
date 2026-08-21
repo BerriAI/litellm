@@ -3775,3 +3775,36 @@ def test_completion_cost_prices_anthropic_shaped_cache_read_tokens():
     )
 
     assert cost == pytest.approx(3 * 5e-6 + 4014 * 5e-7 + 5 * 3e-5, rel=1e-9)
+
+
+@pytest.mark.parametrize("model", ["azure/us/gpt-4o-2024-11-20", "azure/eu/gpt-4o-2024-11-20"])
+def test_azure_data_zone_gpt4o_nov_cache_read_cost(model: str) -> None:
+    """Regression: azure/us/ and azure/eu/ gpt-4o-2024-11-20 were missing
+    cache_read_input_token_cost, so cache-read tokens were billed at $0.
+    Every other azure data-zone gpt-4o entry applies the standard 1.1x uplift
+    over the OpenAI rate (1.25e-06 -> 1.375e-06); these two must too."""
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    model_info = litellm.model_cost.get(model)
+    assert model_info is not None, f"Missing price map entry: {model}"
+    assert model_info.get("cache_read_input_token_cost") == 1.375e-06, (
+        f"{model} cache_read_input_token_cost should be 1.375e-06 (1.1x the OpenAI rate), "
+        f"got {model_info.get('cache_read_input_token_cost')}"
+    )
+
+    prompt_cost, _ = cost_per_token(
+        model=model,
+        prompt_tokens=1000,
+        completion_tokens=0,
+        custom_llm_provider="azure",
+        usage_object=Usage(
+            prompt_tokens=1000,
+            completion_tokens=0,
+            prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=1000),
+        ),
+    )
+    assert prompt_cost == pytest.approx(1000 * 1.375e-06), (
+        f"Cache-read cost for 1000 tokens on {model} should be "
+        f"{1000 * 1.375e-06}, got {prompt_cost}"
+    )
