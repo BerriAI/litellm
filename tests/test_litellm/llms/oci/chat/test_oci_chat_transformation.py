@@ -98,7 +98,7 @@ class TestOCIChatConfig:
             config = OCIChatConfig()
             headers = {}
 
-            with pytest.raises(Exception) as excinfo:
+            with pytest.raises(Exception, match='Missing required parameters: oci_user, oci_fingerprint') as excinfo:
                 config.validate_environment(
                     headers=headers,
                     model=TEST_MODEL,
@@ -272,7 +272,7 @@ class TestOCIChatConfig:
             "oci_serving_mode": "INVALID_MODE",
         }
 
-        with pytest.raises(Exception) as excinfo:
+        with pytest.raises(Exception, match="kwarg `oci_serving_mode` must be either 'ON_DEMAND' or") as excinfo:
             config.transform_request(
                 model=TEST_MODEL_NAME,
                 messages=TEST_MESSAGES,  # type: ignore
@@ -892,7 +892,7 @@ class TestOCISignerSupport:
 
         optional_params = {"oci_signer": MockSigner(), "method": "INVALID"}
 
-        with pytest.raises(ValueError) as excinfo:
+        with pytest.raises(ValueError, match='Unsupported HTTP method: INVALID') as excinfo:
             config.sign_request(
                 headers={},
                 optional_params=optional_params,
@@ -1604,7 +1604,7 @@ class TestOCIKeyNormalization:
 
         # We can't fully test signing without a real key, but we can verify
         # the error message indicates the key was processed (not a type error)
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(Exception, match='why-can-t-i-import-my-pem-file for more details\\.') as exc_info:
             sign_with_manual_credentials(
                 headers={},
                 optional_params=optional_params,
@@ -1630,7 +1630,7 @@ class TestOCIKeyNormalization:
             "oci_key": crlf_pem,
         }
 
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(Exception, match='why-can-t-i-import-my-pem-file for more details\\.') as exc_info:
             sign_with_manual_credentials(
                 headers={},
                 optional_params=optional_params,
@@ -1692,7 +1692,7 @@ class TestOCIValidateEnvironment:
 
     def test_missing_required_credentials_raises_error(self, config):
         """Test that missing required credentials raise an error."""
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(Exception, match='Missing required parameters: oci_user, oci_fingerprint') as exc_info:
             config.validate_environment(
                 headers={},
                 model="oci/xai.grok-3",
@@ -1875,7 +1875,7 @@ class TestOCIImageUrlTransformation:
             }
         ]
 
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(Exception, match='Prop `image_url` must be a string or an object with a `url`') as exc_info:
             adapt_messages_to_generic_oci_standard(messages)
 
         assert "image_url" in str(exc_info.value)
@@ -1899,7 +1899,7 @@ class TestOCIImageUrlTransformation:
             }
         ]
 
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(Exception, match='Prop `image_url` must be a string or an object with a `url`') as exc_info:
             adapt_messages_to_generic_oci_standard(messages)
 
         assert "image_url" in str(exc_info.value)

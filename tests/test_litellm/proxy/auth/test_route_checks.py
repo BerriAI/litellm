@@ -42,7 +42,7 @@ def test_non_admin_config_update_route_rejected():
     request.query_params = {}
 
     # Test that calling /config/update route raises HTTPException with 403 status
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(Exception, match='Only proxy admin can be used to generate, delete, update') as exc_info:
         RouteChecks.non_proxy_admin_allowed_routes_check(
             user_obj=user_obj,
             _user_role=LitellmUserRoles.INTERNAL_USER.value,
@@ -134,7 +134,7 @@ def test_user_banner_update_rejected_for_non_admin():
     request = MagicMock(spec=Request)
     request.query_params = {}
 
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(Exception, match='Only proxy admin can be used to generate, delete, update') as exc_info:
         RouteChecks.non_proxy_admin_allowed_routes_check(
             user_obj=user_obj,
             _user_role=LitellmUserRoles.INTERNAL_USER.value,
@@ -1814,7 +1814,7 @@ def test_internal_user_blocked_from_global_spend_routes(route):
     request = MagicMock(spec=Request)
     request.query_params = {}
 
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(Exception, match='Only proxy admin can be used to generate, delete, update') as exc_info:
         RouteChecks.non_proxy_admin_allowed_routes_check(
             user_obj=user_obj,
             _user_role=LitellmUserRoles.INTERNAL_USER.value,
@@ -1843,7 +1843,7 @@ def test_internal_user_view_only_blocked_from_global_spend_routes(route):
     request = MagicMock(spec=Request)
     request.query_params = {}
 
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(Exception, match='Only proxy admin can be used to generate, delete, update') as exc_info:
         RouteChecks.non_proxy_admin_allowed_routes_check(
             user_obj=user_obj,
             _user_role=LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value,
@@ -2046,7 +2046,7 @@ def test_internal_user_blocked_from_admin_viewer_logs_routes(route):
     if route not in INTERNAL_USER_BLOCKED_SUBSET:
         return
 
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(Exception, match='Only proxy admin can be used to generate, delete, update') as exc_info:
         RouteChecks.non_proxy_admin_allowed_routes_check(
             user_obj=user_obj,
             _user_role=LitellmUserRoles.INTERNAL_USER.value,
@@ -2530,7 +2530,7 @@ def test_non_admin_non_team_admin_cannot_access_config_update_but_can_attempt_re
     )
 
     # /config/update is still blocked
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(Exception, match='Only proxy admin can be used to generate, delete, update') as exc_info:
         RouteChecks.non_proxy_admin_allowed_routes_check(
             user_obj=user_obj,
             _user_role=LitellmUserRoles.INTERNAL_USER.value,
@@ -3188,7 +3188,7 @@ def test_internal_user_blocked_from_search_tool_writes(route):
     request = MagicMock(spec=Request)
     request.query_params = {}
 
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(Exception, match='Only proxy admin can be used to generate, delete, update') as exc_info:
         RouteChecks.non_proxy_admin_allowed_routes_check(
             user_obj=user_obj,
             _user_role=LitellmUserRoles.INTERNAL_USER.value,
