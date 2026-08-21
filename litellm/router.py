@@ -9184,10 +9184,27 @@ class Router:
 
         ## SET MODEL TO 'model=' - if base_model is None + not azure
         if custom_llm_provider == "azure" and base_model is None:
-            verbose_router_logger.error(
-                "Could not identify azure model '%s'. Set azure 'base_model' for accurate max tokens, cost tracking, etc.- https://docs.litellm.ai/docs/proxy/cost_tracking#spend-tracking-for-azure-openai-models",
-                _model,
+            # Router init auto-registers every deployment name into
+            # litellm.model_cost as a zeroed stub, so membership alone can't
+            # tell a resolvable name apart; require usable limits/costs.
+            _azure_fallback_key = _model if _model.startswith("azure/") else f"azure/{_model}"
+            _fallback_entry = litellm.model_cost.get(_azure_fallback_key)
+            _fallback_resolves = _fallback_entry is not None and (
+                (_fallback_entry.get("max_input_tokens") or 0) > 0
+                or (_fallback_entry.get("max_tokens") or 0) > 0
+                or (_fallback_entry.get("input_cost_per_token") or 0) > 0
             )
+            if _fallback_resolves:
+                verbose_router_logger.debug(
+                    "Azure deployment '%s' has no base_model set; using '%s' from the model cost map for max tokens, cost tracking, etc.",
+                    _model,
+                    _azure_fallback_key,
+                )
+            else:
+                verbose_router_logger.error(
+                    "Could not identify azure model '%s'. Set azure 'base_model' for accurate max tokens, cost tracking, etc.- https://docs.litellm.ai/docs/proxy/cost_tracking#spend-tracking-for-azure-openai-models",
+                    _model,
+                )
         elif custom_llm_provider != "azure":
             model = _model
 
