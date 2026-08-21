@@ -1466,17 +1466,19 @@ async def test_create_team_member_add_team_admin(
                 MagicMock(return_value=tx_cm),
             ),
         ):
+            error = None
             try:
                 await team_member_add(
                     data=team_member_add_request,
                     user_api_key_dict=valid_token,
                 )
             except HTTPException as e:
-                if (
-                    user_role == "user" or new_member_method == "user_id"
-                ) and e.status_code == 403:
-                    return
-                raise
+                error = e
+
+            if error is not None:
+                assert user_role == "user" or new_member_method == "user_id"
+                assert error.status_code == 403
+                return
 
             mock_client.assert_called()
 

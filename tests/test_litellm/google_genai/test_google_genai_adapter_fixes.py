@@ -219,14 +219,13 @@ def test_stream_transformation_error_handling():
     # Create a wrapper
     mock_wrapper = GoogleGenAIStreamWrapper(completion_stream=iter([]))
 
-    # Try to transform - this should either succeed or raise a ValueError, never crash
-    try:
+    # An empty `choices` leaves nothing to emit, so the adapter drops the chunk
+    assert (
         adapter.translate_streaming_completion_to_generate_content(
             mock_response, mock_wrapper
         )
-    except ValueError:
-        # We won't check the exact message as it might vary
-        pass
+        is None
+    )
 
 
 def test_non_stream_response_when_stream_requested():
