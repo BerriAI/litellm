@@ -3,7 +3,7 @@ import json
 import os
 import sys
 import unittest
-from typing import TYPE_CHECKING, List, Optional, Tuple
+from typing import TYPE_CHECKING, List, Literal, Optional, Tuple
 from unittest.mock import ANY, MagicMock, Mock, patch
 
 import httpx
@@ -3497,6 +3497,8 @@ async def test_acompletion_bridge_normalizes_tool_choice_on_the_wire(
 def _make_incomplete_responses_api_response(
     incomplete_reason: Optional[str],
     output: "List[ResponseOutputItem]",
+    status: Literal["completed", "incomplete"] = "incomplete",
+    empty_incomplete_details: bool = False,
 ) -> "ResponsesAPIResponse":
     from litellm.types.llms.openai import (
         InputTokensDetails,
@@ -3509,7 +3511,11 @@ def _make_incomplete_responses_api_response(
         id="resp_incomplete",
         created_at=1760144904,
         error=None,
-        incomplete_details={"reason": incomplete_reason} if incomplete_reason else None,
+        incomplete_details=(
+            {"reason": incomplete_reason}
+            if incomplete_reason is not None or empty_incomplete_details
+            else None
+        ),
         instructions=None,
         metadata={},
         model="gpt-5.6-sol",
@@ -3523,7 +3529,7 @@ def _make_incomplete_responses_api_response(
         max_output_tokens=16,
         previous_response_id=None,
         reasoning={"effort": "high", "summary": None},
-        status="incomplete",
+        status=status,
         text={"format": {"type": "text"}, "verbosity": "medium"},
         truncation="disabled",
         usage=ResponseAPIUsage(
@@ -3622,6 +3628,32 @@ def test_transform_response_zero_choices_not_incomplete_still_raises():
 
     with pytest.raises(ValueError, match="Unknown items"):
         _call_transform_response(handler, raw_response)
+
+
+def test_transform_response_completed_with_reasonless_incomplete_details_keeps_stop():
+    from openai.types.responses import ResponseOutputMessage, ResponseOutputText
+
+    handler = LiteLLMResponsesTransformationHandler()
+    output_message = ResponseOutputMessage(
+        id="msg_complete",
+        content=[
+            ResponseOutputText(
+                annotations=[], text="full answer", type="output_text", logprobs=[]
+            )
+        ],
+        role="assistant",
+        status="completed",
+        type="message",
+    )
+    raw_response = _make_incomplete_responses_api_response(
+        None, [output_message], status="completed", empty_incomplete_details=True
+    )
+
+    result = _call_transform_response(handler, raw_response)
+
+    assert len(result.choices) == 1
+    assert result.choices[0].finish_reason == "stop"
+    assert result.choices[0].message.content == "full answer"
 
 
 def test_transform_response_incomplete_partial_text_overrides_finish_reason_to_length():
