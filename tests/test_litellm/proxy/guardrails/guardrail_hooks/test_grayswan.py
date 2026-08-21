@@ -1,3 +1,4 @@
+import json
 from typing import Optional
 
 import pytest
@@ -596,6 +597,11 @@ def test_ensure_litellm_metadata_noop_when_already_present() -> None:
     assert data["litellm_metadata"] == {"existing": "value"}
 
 
+def _wire(payload: dict) -> dict:
+    """The JSON wire form of a monitor payload, as the Cygnal API receives it."""
+    return json.loads(json.dumps(payload))
+
+
 @pytest.mark.asyncio
 async def test_apply_guardrail_sends_structured_conversation_with_tools(
     monkeypatch, grayswan_guardrail: GraySwanGuardrail
@@ -632,8 +638,9 @@ async def test_apply_guardrail_sends_structured_conversation_with_tools(
         input_type="request",
     )
 
-    assert captured["payload"]["messages"] == structured_messages
-    assert captured["payload"]["tools"] == tools
+    wire = _wire(captured["payload"])
+    assert wire["messages"] == structured_messages
+    assert wire["tools"] == tools
 
 
 @pytest.mark.asyncio
@@ -654,7 +661,7 @@ async def test_apply_guardrail_scans_texts_not_raw_messages(monkeypatch, grayswa
         input_type="request",
     )
 
-    assert captured["payload"]["messages"] == [{"role": "user", "content": "scan exactly this"}]
+    assert _wire(captured["payload"])["messages"] == [{"role": "user", "content": "scan exactly this"}]
     assert "tools" not in captured["payload"]
 
 
@@ -691,8 +698,9 @@ async def test_apply_guardrail_response_appends_assistant_turn_with_tool_calls(
         input_type="response",
     )
 
-    assert captured["payload"]["messages"][:-1] == structured_messages
-    assert captured["payload"]["messages"][-1] == {
+    wire = _wire(captured["payload"])
+    assert wire["messages"][:-1] == structured_messages
+    assert wire["messages"][-1] == {
         "role": "assistant",
         "content": "sure, writing it now",
         "tool_calls": response_tool_calls,
@@ -725,9 +733,10 @@ async def test_apply_guardrail_scans_tool_call_only_response(
         input_type="response",
     )
 
-    assert captured["payload"]["messages"][0] == {"role": "user", "content": "go"}
-    assert captured["payload"]["messages"][-1]["tool_calls"] == response_tool_calls
-    assert captured["payload"]["messages"][-1]["content"] == ""
+    wire = _wire(captured["payload"])
+    assert wire["messages"][0] == {"role": "user", "content": "go"}
+    assert wire["messages"][-1]["tool_calls"] == response_tool_calls
+    assert wire["messages"][-1]["content"] == ""
 
 
 @pytest.mark.asyncio
@@ -748,7 +757,7 @@ async def test_apply_guardrail_wraps_texts_when_no_conversation_available(
         input_type="request",
     )
 
-    assert captured["payload"]["messages"] == [{"role": "user", "content": "a prompt for an image"}]
+    assert _wire(captured["payload"])["messages"] == [{"role": "user", "content": "a prompt for an image"}]
     assert "tools" not in captured["payload"]
 
 
@@ -770,7 +779,7 @@ async def test_apply_guardrail_response_without_request_scan_wraps_texts(
         input_type="response",
     )
 
-    assert captured["payload"]["messages"] == [{"role": "assistant", "content": "a model reply"}]
+    assert _wire(captured["payload"])["messages"] == [{"role": "assistant", "content": "a model reply"}]
     assert "tools" not in captured["payload"]
 
 
@@ -827,7 +836,7 @@ async def test_apply_guardrail_multiple_response_texts_get_separate_turns(
         input_type="response",
     )
 
-    assert captured["payload"]["messages"][-2:] == [
+    assert _wire(captured["payload"])["messages"][-2:] == [
         {"role": "assistant", "content": "candidate one"},
         {"role": "assistant", "content": "candidate two"},
     ]
@@ -872,6 +881,6 @@ async def test_apply_guardrail_build_error_fails_open(monkeypatch, grayswan_guar
 
 
 def test_sanitize_json_list_drops_non_dict_items(grayswan_guardrail: GraySwanGuardrail) -> None:
-    assert grayswan_guardrail._sanitize_json_list([{"role": "user", "content": "hi"}, "junk", 3]) == [
-        {"role": "user", "content": "hi"}
-    ]
+    assert grayswan_guardrail._sanitize_json_list([{"role": "user", "content": "hi"}, "junk", 3]) == (
+        {"role": "user", "content": "hi"},
+    )
