@@ -14,6 +14,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _MODULE_PATH = _REPO_ROOT / "scripts" / "check_type_discipline.py"
 _spec = importlib.util.spec_from_file_location("check_type_discipline", _MODULE_PATH)
@@ -699,7 +701,11 @@ def test_budget_covers_exactly_the_checker_rules():
         assert spec["limit"] >= 0
 
 
-def _corpus(tmp_path, count):
+_FANS_OUT = checker._worker_count(checker.PARALLEL_MIN_PATHS) > 1
+_SERIAL_ONLY = "one usable core, so scan_paths stays serial and there is no fan-out to compare"
+
+
+def _corpus(tmp_path: Path, count: int) -> tuple[Path, ...]:
     for index in range(count):
         (tmp_path / f"mod_{index}.py").write_text(
             f"def build_{index}(items: list[int]) -> None:\n    return None\n",
@@ -708,7 +714,7 @@ def _corpus(tmp_path, count):
     return tuple(sorted(tmp_path.rglob("*.py")))
 
 
-def _run_checker(target):
+def _run_checker(target: Path) -> list[str]:
     completed = subprocess.run(
         [sys.executable, str(_MODULE_PATH), str(target)],
         capture_output=True, text=True, timeout=300,
@@ -737,14 +743,15 @@ def test_scan_paths_below_the_threshold_returns_every_violation(tmp_path):
     assert found and len({v.path for v in found}) == 3
 
 
+@pytest.mark.skipif(not _FANS_OUT, reason=_SERIAL_ONLY)
 def test_a_fanned_out_run_reports_exactly_what_a_serial_run_reports(tmp_path):
     paths = _corpus(tmp_path, checker.PARALLEL_MIN_PATHS + 5)
-    assert checker._worker_count(len(paths)) > 1, "corpus must cross the fan-out threshold"
     serial = [v.render() for v in sorted(v for path in paths for v in checker.check_file(path))]
     assert serial, "corpus must produce violations or the comparison proves nothing"
     assert _run_checker(tmp_path) == serial
 
 
+@pytest.mark.skipif(not _FANS_OUT, reason=_SERIAL_ONLY)
 def test_a_fanned_out_run_reports_each_generated_file_exactly_once(tmp_path):
     paths = _corpus(tmp_path, checker.PARALLEL_MIN_PATHS + 5)
     reported = _run_checker(tmp_path)
