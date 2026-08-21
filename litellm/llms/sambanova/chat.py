@@ -8,10 +8,31 @@ from collections.abc import Coroutine
 from typing import Any, Final, Literal, overload
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
-    handle_messages_with_content_list_to_str_conversion,
+    convert_content_list_to_str,
 )
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.types.llms.openai import AllMessageValues
+
+
+def _flatten_text_only_messages(
+    messages: list[AllMessageValues],
+) -> list[AllMessageValues]:
+    """
+    Flatten a message's content list to a plain string only when it contains
+    text alone. A content list that carries any non-text part (e.g. image_url)
+    is left as a list so that part still reaches the SambaNova API, which
+    accepts content lists for vision-capable models. Flattening those would
+    drop the image and silently return a text-only answer.
+    """
+    for message in messages:
+        content = message.get("content")
+        if isinstance(content, list) and all(
+            isinstance(part, dict) and part.get("type") == "text" for part in content
+        ):
+            texts = convert_content_list_to_str(message=message)
+            if texts:
+                message["content"] = texts
+    return messages
 
 
 class SambanovaConfig(OpenAIGPTConfig):
@@ -117,14 +138,15 @@ class SambanovaConfig(OpenAIGPTConfig):
         """
         Transform messages to handle content list conversion.
 
-        SambaNova API doesn't support content as a list - only string content.
-        This converts content lists like [{"type": "text", "text": "..."}] to strings.
+        Text-only content lists like [{"type": "text", "text": "..."}] are
+        flattened to a plain string. Content lists that carry non-text parts
+        (e.g. image_url) are left intact so those parts still reach the
+        SambaNova API, which accepts content lists for vision-capable models.
         """
 
         async def _async_transform():
-            return handle_messages_with_content_list_to_str_conversion(messages)
+            return _flatten_text_only_messages(messages)
 
         if is_async:
             return _async_transform()
-        messages = handle_messages_with_content_list_to_str_conversion(messages)
-        return messages
+        return _flatten_text_only_messages(messages)

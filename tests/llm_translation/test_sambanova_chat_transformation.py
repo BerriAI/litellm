@@ -102,3 +102,34 @@ class TestSambanovaContentListHandling:
         assert transformed_messages[1]["content"] == "What is the weather?"
         assert transformed_messages[2]["content"] == "I need your location."
         assert transformed_messages[3]["content"] == "I'm in San Francisco"
+
+    def test_content_list_with_image_url_is_preserved(self):
+        """
+        A content list carrying a non-text part (image_url) must stay a list so
+        the image reaches the SambaNova API, instead of being flattened to a
+        text-only string that silently drops the image.
+        """
+        config = SambanovaConfig()
+
+        image_part = {
+            "type": "image_url",
+            "image_url": {"url": "data:image/png;base64,aGVsbG8="},
+        }
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "What colors are in this image?"},
+                    image_part,
+                ],
+            }
+        ]
+
+        transformed_messages = config._transform_messages(
+            messages=messages, model="sambanova/gpt-oss-120b", is_async=False
+        )
+
+        content = transformed_messages[0]["content"]
+        assert isinstance(content, list)
+        assert image_part in content
+        assert any(part.get("type") == "image_url" for part in content)
