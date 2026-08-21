@@ -61,6 +61,65 @@ def test_uncached_call_bills_every_prompt_token_at_the_input_rate(local_model_co
     assert cost == pytest.approx(1000 * INPUT_RATE + 100 * OUTPUT_RATE)
 
 
+@pytest.mark.parametrize(
+    "model",
+    [
+        "meta-llama/Llama-3.3-70B-Instruct-Turbo",
+        "together_ai/meta-llama/Llama-3.3-70B-Instruct-Turbo",
+    ],
+    ids=["bare", "prefixed"],
+)
+def test_published_rate_beats_the_size_bucket(local_model_cost_map, model):
+    """Together's per-token rates are size buckets only for ids the map does not price.
+
+    Applied unconditionally the buckets shadow every entry whose name carries a parameter
+    count, so this model billed at the 41.1b-80b bucket's $0.90/1M instead of its own
+    published $1.04/1M, and a cached-input rate on such an entry could never apply.
+    """
+    usage = Usage(prompt_tokens=1000, completion_tokens=100, total_tokens=1100)
+
+    cost = local_model_cost_map.completion_cost(
+        completion_response=response_with_usage(usage, model=model),
+        model=model,
+        custom_llm_provider="together_ai",
+    )
+
+    assert cost == pytest.approx(1000 * 1.04e-06 + 100 * 1.04e-06)
+
+
+def test_cached_rate_applies_to_a_model_the_bucket_would_have_shadowed(local_model_cost_map):
+    usage = Usage(prompt_tokens=1000, completion_tokens=100, total_tokens=1100, cached_tokens=800)
+
+    cost = local_model_cost_map.completion_cost(
+        completion_response=response_with_usage(usage, model="meta-models/Muse-Glimmer-30B"),
+        model="meta-models/Muse-Glimmer-30B",
+        custom_llm_provider="together_ai",
+    )
+
+    assert cost == pytest.approx(200 * 3.5e-07 + 800 * 4e-08 + 100 * 1.5e-06)
+
+
+@pytest.mark.parametrize(
+    "model, bucket_rate",
+    [
+        # mapped, but the entry carries no rate, so the bucket is all there is
+        ("Qwen/Qwen2.5-72B-Instruct-Turbo", 9e-07),
+        # never mapped at all
+        ("some-org/Mystery-13B-Instruct", 3e-07),
+    ],
+)
+def test_unpriced_models_still_fall_back_to_the_size_bucket(local_model_cost_map, model, bucket_rate):
+    usage = Usage(prompt_tokens=1000, completion_tokens=100, total_tokens=1100)
+
+    cost = local_model_cost_map.completion_cost(
+        completion_response=response_with_usage(usage, model=model),
+        model=model,
+        custom_llm_provider="together_ai",
+    )
+
+    assert cost == pytest.approx(1100 * bucket_rate)
+
+
 def test_qwen3_235b_instruct_output_rate(local_model_cost_map):
     """Regression: this entry billed output at $6.00/1M, 10x the published rate."""
     entry = local_model_cost_map.model_cost["together_ai/Qwen/Qwen3-235B-A22B-Instruct-2507-tput"]

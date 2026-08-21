@@ -5,6 +5,7 @@ Handles calculating cost for together ai models
 import re
 from typing import Final
 
+import litellm
 from litellm.constants import (
     TOGETHER_AI_4_B,
     TOGETHER_AI_8_B,
@@ -18,6 +19,26 @@ from litellm.constants import (
 from litellm.types.utils import CallTypes
 
 
+def has_published_rate(model_name: str) -> bool:
+    """Whether the cost map prices this model directly.
+
+    The size buckets below are a fallback for ids the map has never priced. Applied
+    unconditionally they shadow every entry whose name carries a parameter count, so a
+    model with a published per-token rate (and a published cached-input rate) would bill
+    at its bucket instead.
+    """
+    from litellm.utils import _get_model_cost_key
+
+    bare: Final = model_name.removeprefix("together_ai/")
+    for candidate in (f"together_ai/{bare}", model_name):
+        resolved = _get_model_cost_key(candidate)
+        if resolved is None:
+            continue
+        if litellm.model_cost[resolved].get("input_cost_per_token") is not None:
+            return True
+    return False
+
+
 # Extract the number of billion parameters from the model name
 # only used for together_computer LLMs
 def get_model_params_and_category(model_name, call_type: CallTypes) -> str:
@@ -27,6 +48,8 @@ def get_model_params_and_category(model_name, call_type: CallTypes) -> str:
     Returns
     - str - model pricing category if mapped else received model name
     """
+    if has_published_rate(model_name):
+        return model_name
     if call_type == CallTypes.embedding or call_type == CallTypes.aembedding:
         return get_model_params_and_category_embeddings(model_name=model_name)
     model_name = model_name.lower()
