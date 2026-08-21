@@ -139,6 +139,16 @@ def _reasoning_items_from_output_items(output_items: Sequence[object]) -> tuple[
     )
 
 
+def _as_chat_reasoning_items(
+    reasoning_items: Sequence[_BuiltReasoningItem],
+) -> list[ChatCompletionReasoningItem] | None:
+    if not reasoning_items:
+        return None
+    # cast-ok: _BuiltReasoningItem is the structural shape ChatCompletionReasoningItem
+    # describes, and TypedDict invariance is what stops the two from unifying here.
+    return cast(list[ChatCompletionReasoningItem], list(reasoning_items))
+
+
 def _map_incomplete_reason_to_finish_reason(incomplete_reason: str | None) -> Literal["length", "content_filter"]:
     if incomplete_reason == "content_filter":
         return "content_filter"
@@ -716,10 +726,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         message: Final = Message(
             content="",
             reasoning_content=reasoning_content if reasoning_content else None,
-            reasoning_items=cast(
-                list[ChatCompletionReasoningItem] | None,
-                reasoning_items or None,
-            ),
+            reasoning_items=_as_chat_reasoning_items(reasoning_items),
         )
         return Choices(message=message, finish_reason=finish_reason, index=0)
 
@@ -1485,10 +1492,8 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                 else ("tool_calls" if has_function_calls else "stop")
             )
 
-            terminal_reasoning_items: Final = _reasoning_items_from_output_items(output_items)
-            terminal_reasoning_items_typed: Final = cast(
-                list[ChatCompletionReasoningItem] | None,
-                list(terminal_reasoning_items) if terminal_reasoning_items else None,
+            terminal_reasoning_items_typed: Final = _as_chat_reasoning_items(
+                _reasoning_items_from_output_items(output_items)
             )
 
             usage = None
