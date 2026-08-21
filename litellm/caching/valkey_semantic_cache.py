@@ -30,6 +30,7 @@ from litellm._logging import print_verbose
 from litellm._uuid import uuid
 from litellm.llms.valkey.common_utils import build_valkey_url, pack_vector
 
+from ._embedding_router import resolve_embedding_timeout
 from .redis_semantic_cache import RedisSemanticCache
 
 
@@ -62,6 +63,7 @@ class ValkeySemanticCache(RedisSemanticCache):
         sync_client: Redis | None = None,
         async_client: AsyncRedis | None = None,
         embedding_max_input_tokens: int | None = None,
+        embedding_timeout: float | None = None,
         **kwargs: Any,
     ):
         if similarity_threshold is None:
@@ -80,6 +82,7 @@ class ValkeySemanticCache(RedisSemanticCache):
         self.similarity_threshold = similarity_threshold
         self.embedding_model = embedding_model
         self.embedding_max_input_tokens = embedding_max_input_tokens
+        self.embedding_timeout = resolve_embedding_timeout(embedding_timeout)
         self.index_name = index_name or self.DEFAULT_VALKEY_INDEX_NAME
         self.key_prefix = f"{self.index_name}:"
         self._index_dim: int | None = None
