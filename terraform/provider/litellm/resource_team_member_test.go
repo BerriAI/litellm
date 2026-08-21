@@ -21,7 +21,7 @@ func TestTeamMemberUpdateSendsRole(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := NewClient(srv.URL, "test-key", true)
+	client := NewClient(ProviderConfig{APIBase: srv.URL, APIKey: "test-key", InsecureSkipVerify: true})
 	d := schema.TestResourceDataRaw(t, resourceLiteLLMTeamMember().Schema, map[string]interface{}{
 		"team_id":    "team-1",
 		"user_id":    "user-1",

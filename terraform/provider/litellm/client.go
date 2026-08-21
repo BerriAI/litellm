@@ -17,19 +17,35 @@ type Client struct {
 	APIKey             string
 	httpClient         *http.Client
 	InsecureSkipVerify bool
+	CustomHeaders      map[string]string
 }
 
-func NewClient(apiBase, apiKey string, insecureSkipVerify bool) *Client {
-	tr := &http.Transport{
-		TLSClientConfig: &tls.Config{InsecureSkipVerify: insecureSkipVerify},
+func NewClient(cfg ProviderConfig) *Client {
+	headers := make(map[string]string, len(cfg.CustomHeaders))
+	for k, v := range cfg.CustomHeaders {
+		headers[k] = v
 	}
 
 	return &Client{
-		APIBase:            apiBase,
-		APIKey:             apiKey,
-		httpClient:         &http.Client{Transport: tr},
-		InsecureSkipVerify: insecureSkipVerify,
+		APIBase:            cfg.APIBase,
+		APIKey:             cfg.APIKey,
+		InsecureSkipVerify: cfg.InsecureSkipVerify,
+		CustomHeaders:      headers,
+		httpClient: &http.Client{
+			Transport: &http.Transport{
+				TLSClientConfig: &tls.Config{InsecureSkipVerify: cfg.InsecureSkipVerify},
+			},
+		},
 	}
+}
+
+func (c *Client) applyRequestHeaders(req *http.Request) {
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("accept", "application/json")
+	for k, v := range c.CustomHeaders {
+		req.Header.Set(k, v)
+	}
+	req.Header.Set("x-api-key", c.APIKey)
 }
 
 // Organization member methods
@@ -279,9 +295,7 @@ func (c *Client) sendRequest(method, path string, body interface{}) (map[string]
 		return nil, fmt.Errorf("error creating request: %v", err)
 	}
 
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("x-api-key", c.APIKey)
-	req.Header.Set("accept", "application/json")
+	c.applyRequestHeaders(req)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {

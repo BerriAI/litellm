@@ -46,6 +46,13 @@ func Provider() *schema.Provider {
 				DefaultFunc: schema.EnvDefaultFunc("LITELLM_INSECURE_SKIP_VERIFY", false),
 				Description: "Skip TLS certificate verification. Only use for development or when using self-signed certificates",
 			},
+			"custom_headers": {
+				Type:        schema.TypeMap,
+				Optional:    true,
+				Sensitive:   true,
+				Elem:        &schema.Schema{Type: schema.TypeString},
+				Description: "Optional HTTP headers to include on every request to the LiteLLM API (e.g. proxy or gateway headers)",
+			},
 		},
 		ConfigureFunc: providerConfigure,
 	}
@@ -53,11 +60,23 @@ func Provider() *schema.Provider {
 
 // providerConfigure configures the provider with the given schema data.
 func providerConfigure(d *schema.ResourceData) (interface{}, error) {
-	config := ProviderConfig{
+	return NewClient(ProviderConfig{
 		APIBase:            d.Get("api_base").(string),
 		APIKey:             d.Get("api_key").(string),
 		InsecureSkipVerify: d.Get("insecure_skip_verify").(bool),
-	}
+		CustomHeaders:      customHeadersFromSchema(d),
+	}), nil
+}
 
-	return NewClient(config.APIBase, config.APIKey, config.InsecureSkipVerify), nil
+func customHeadersFromSchema(d *schema.ResourceData) map[string]string {
+	v, ok := d.GetOk("custom_headers")
+	if !ok {
+		return map[string]string{}
+	}
+	raw := v.(map[string]interface{})
+	headers := make(map[string]string, len(raw))
+	for k, val := range raw {
+		headers[k] = val.(string)
+	}
+	return headers
 }

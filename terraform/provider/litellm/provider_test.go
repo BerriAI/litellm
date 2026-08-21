@@ -48,7 +48,7 @@ func createTestUsers(t *testing.T) {
 		return
 	}
 
-	client := NewClient(apiBase, apiKey, false)
+	client := NewClient(ProviderConfig{APIBase: apiBase, APIKey: apiKey, InsecureSkipVerify: false})
 
 	// Create test users
 	users := []map[string]interface{}{

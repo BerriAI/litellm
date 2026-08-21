@@ -79,8 +79,7 @@ func MakeRequest(client *Client, method, endpoint string, body interface{}) (*ht
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("x-api-key", client.APIKey)
+	client.applyRequestHeaders(req)
 
 	return client.httpClient.Do(req)
 }

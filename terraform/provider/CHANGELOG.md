@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **provider**: Optional `custom_headers` map to send extra HTTP headers on every LiteLLM API request (e.g. proxy or gateway headers). Applied by both request helpers. `x-api-key` from `api_key` always takes precedence
+
 ## [0.4.0] - 2026-08-06
 
 ### Fixed

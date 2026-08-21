@@ -28,7 +28,7 @@ func TestVectorStoreReadDoesNotPersistServerLitellmParams(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := NewClient(srv.URL, "test-key", true)
+	client := NewClient(ProviderConfig{APIBase: srv.URL, APIKey: "test-key", InsecureSkipVerify: true})
 	d := schema.TestResourceDataRaw(t, resourceLiteLLMVectorStore().Schema, map[string]interface{}{
 		"vector_store_name":   "kb",
 		"custom_llm_provider": "openai",
