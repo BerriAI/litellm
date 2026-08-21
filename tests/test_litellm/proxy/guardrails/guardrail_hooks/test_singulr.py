@@ -187,7 +187,9 @@ class TestSingulrRequestPayload:
                 request_data={},
                 input_type="request",
             )
-        mock_post.assert_called_once()
+        sent_payload = mock_post.call_args.kwargs["json"]
+        for key, value in extra_inputs.items():
+            assert sent_payload[key] == value
 
     @pytest.mark.asyncio
     async def test_tools_are_forwarded(self, singulr_guardrail):
@@ -557,8 +559,13 @@ class TestSingulrLoggingHook:
     @pytest.mark.asyncio
     async def test_no_messages_and_no_result_skips_both_api_calls(self, singulr_guardrail):
         with patch.object(singulr_guardrail.async_handler, "post") as mock_post:
-            await singulr_guardrail.async_logging_hook(kwargs={}, result=None, call_type="acompletion")
+            returned_kwargs, returned_result = await singulr_guardrail.async_logging_hook(
+                kwargs={}, result=None, call_type="acompletion"
+            )
         mock_post.assert_not_called()
+        assert returned_result is None
+        guardrail_information = returned_kwargs["standard_logging_object"]["guardrail_information"]
+        assert guardrail_information[0]["guardrail_status"] == "success"
 
     @pytest.mark.asyncio
     async def test_records_standard_logging_guardrail_information(self, singulr_guardrail):
@@ -629,8 +636,9 @@ class TestSingulrRequestWiring:
                 request_data={},
                 input_type="request",
             )
-        assert mock_post.call_args.kwargs["timeout"] == 5.0
-        assert mock_post.call_args.kwargs["url"] == "https://api.test.singulr.ai/api/v1/ai-gateway/litellm"
+        call_kwargs = mock_post.call_args.kwargs
+        assert call_kwargs["timeout"] == 5.0
+        assert call_kwargs["url"] == "https://api.test.singulr.ai/api/v1/ai-gateway/litellm"
 
 
 class TestSingulrBuildHeaders:
