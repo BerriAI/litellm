@@ -1113,22 +1113,13 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             litellm.reasoning_auto_summary or os.getenv("LITELLM_REASONING_AUTO_SUMMARY", "false").lower() == "true"
         )
 
-        # If string is passed, map with optional summary based on flag/env var
-        if reasoning_effort == "none":
-            return Reasoning(effort="none", summary="detailed") if auto_summary_enabled else Reasoning(effort="none")
-        elif reasoning_effort == "high":
-            return Reasoning(effort="high", summary="detailed") if auto_summary_enabled else Reasoning(effort="high")
-        elif reasoning_effort == "xhigh":
-            return Reasoning(effort="xhigh", summary="detailed") if auto_summary_enabled else Reasoning(effort="xhigh")
-        elif reasoning_effort == "medium":
+        # Level-agnostic: providers own effort validation, so an unknown level (max, ultra, future
+        # ones) passes through instead of being silently dropped here.
+        if reasoning_effort:
             return (
-                Reasoning(effort="medium", summary="detailed") if auto_summary_enabled else Reasoning(effort="medium")
-            )
-        elif reasoning_effort == "low":
-            return Reasoning(effort="low", summary="detailed") if auto_summary_enabled else Reasoning(effort="low")
-        elif reasoning_effort == "minimal":
-            return (
-                Reasoning(effort="minimal", summary="detailed") if auto_summary_enabled else Reasoning(effort="minimal")
+                Reasoning(effort=reasoning_effort, summary="detailed")
+                if auto_summary_enabled
+                else Reasoning(effort=reasoning_effort)
             )
         return None
 

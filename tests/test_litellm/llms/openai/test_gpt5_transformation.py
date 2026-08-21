@@ -1309,3 +1309,36 @@ def test_responses_gpt54_allow_temperature_effort_none(
         drop_params=False,
     )
     assert params["temperature"] == 0.7
+
+
+@pytest.mark.parametrize("effort", ["max", "ultra"])
+def test_gpt5_6_allows_opt_in_reasoning_efforts(config: OpenAIConfig, effort: str):
+    params = config.map_openai_params(
+        non_default_params={"reasoning_effort": effort},
+        optional_params={},
+        model="gpt-5.6",
+        drop_params=False,
+    )
+    assert params["reasoning_effort"] == effort
+
+
+@pytest.mark.parametrize("effort", ["max", "ultra"])
+def test_gpt5_rejects_opt_in_reasoning_efforts_for_other_models(config: OpenAIConfig, effort: str):
+    with pytest.raises(litellm.utils.UnsupportedParamsError):
+        config.map_openai_params(
+            non_default_params={"reasoning_effort": effort},
+            optional_params={},
+            model="gpt-5.1",
+            drop_params=False,
+        )
+
+
+@pytest.mark.parametrize("effort", ["max", "ultra"])
+def test_gpt5_drops_opt_in_reasoning_efforts_when_requested(config: OpenAIConfig, effort: str):
+    params = config.map_openai_params(
+        non_default_params={"reasoning_effort": effort},
+        optional_params={},
+        model="gpt-5.1",
+        drop_params=True,
+    )
+    assert "reasoning_effort" not in params

@@ -1585,10 +1585,15 @@ def test_map_reasoning_effort_adds_summary_detailed(monkeypatch):
         assert result_dict["summary"] == "custom_summary"
         print("✓ Dict input is passed through without modification")
 
-        # Test 5: None/unknown values return None
-        result_unknown = handler._map_reasoning_effort("unknown_value")
-        assert result_unknown is None
-        print("✓ Unknown reasoning_effort values return None")
+        # Test 5: levels this bridge does not enumerate (max, ultra, future ones) pass through so the
+        # provider can judge them, instead of being silently dropped before the request is built
+        from litellm.types.llms.openai import Reasoning
+
+        for effort in ("max", "ultra", "unknown_value"):
+            result_passthrough = handler._map_reasoning_effort(effort)
+            assert result_passthrough == Reasoning(effort=effort)
+        assert handler._map_reasoning_effort("") is None
+        print("✓ Unenumerated reasoning_effort levels pass through to the provider")
 
         print(
             "✓ All reasoning_effort behaviors work correctly with flag/env var control"

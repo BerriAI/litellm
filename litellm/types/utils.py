@@ -164,6 +164,7 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_low_reasoning_effort: bool | None
     supports_xhigh_reasoning_effort: bool | None
     supports_max_reasoning_effort: bool | None
+    supports_ultra_reasoning_effort: bool | None  # writable-ok: Pydantic warns on ReadOnly TypedDict fields
     supports_output_config: bool | None
     supports_image_size: bool | None
     bedrock_output_config_effort_ceiling: Literal["low", "medium", "high", "max", "xhigh"] | None
