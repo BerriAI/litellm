@@ -7092,15 +7092,53 @@ class TestUserSubjectTeamUnion:
         assert key_admin_view == admitted_view, "session and key admin views must be identical"
 
     async def test_admitted_admin_explicit_scope_still_wins(self):
-        """An explicit object_permission.mcp_servers scope binds even an admin, on a session exactly
-        as on a key: the registry seed must not fire."""
-        from litellm.proxy._types import LitellmUserRoles
+        """An admin whose own user row names servers is entitlement-bound whatever their role: the
+        row binds through the ceiling for an admitted subject (a user row's mcp_servers is the
+        human's grant list, not a credential scope), so the registry seed must not fire. A KEY
+        carrying an explicit scope disqualifies directly, empty list included."""
+        from litellm.proxy._types import LiteLLM_ObjectPermissionTable, LitellmUserRoles
 
         manager = self._manager_with(["srv-granted", "srv-secret"])
         admitted = _make_admitted_subject("admin-user", own_servers=["srv-granted"])
         admitted.user_role = LitellmUserRoles.PROXY_ADMIN
-        with patch.object(MCPRequestHandler, "get_allowed_mcp_servers", AsyncMock(return_value=["srv-granted"])):
+        with (
+            patch.object(
+                MCPRequestHandler, "_get_allowed_mcp_servers_for_user", AsyncMock(return_value=["srv-granted"])
+            ),
+            patch.object(MCPRequestHandler, "get_allowed_mcp_servers", AsyncMock(return_value=["srv-granted"])),
+        ):
             assert set(await manager.get_allowed_mcp_servers(admitted)) == {"srv-granted"}
+
+        scoped_key = UserAPIKeyAuth(
+            user_id="admin-user",
+            api_key="sk-hash",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            object_permission=LiteLLM_ObjectPermissionTable(object_permission_id="op-k", mcp_servers=[]),
+        )
+        with patch.object(MCPRequestHandler, "get_allowed_mcp_servers", AsyncMock(return_value=[])):
+            assert await manager.get_allowed_mcp_servers(scoped_key) == []
+
+    async def test_admitted_admin_db_default_empty_scope_still_gets_registry(self):
+        """The admitted subject's object_permission is the user's own row, whose mcp_servers column
+        is [] by DB default whenever the row exists for any other field: default noise, never an
+        explicit scope. The registry seed must fire through it, or every admin with a shared
+        permission row keeps resolving zero servers while their dashboard shows all of them."""
+        from litellm.proxy._types import LiteLLM_ObjectPermissionTable, LitellmUserRoles
+
+        manager = self._manager_with(["srv-granted", "srv-secret"])
+        admitted = _make_admitted_subject("admin-user")
+        admitted.user_role = LitellmUserRoles.PROXY_ADMIN
+        admitted.object_permission = LiteLLM_ObjectPermissionTable(object_permission_id="op-u", mcp_servers=[])
+        with patch.object(MCPRequestHandler, "get_allowed_mcp_servers", AsyncMock(return_value=[])):
+            assert set(await manager.get_allowed_mcp_servers(admitted)) == {"srv-granted", "srv-secret"}
+
+    async def test_non_admin_admitted_subject_never_gets_registry(self):
+        """The negative control for the registry seed: a plain admitted subject with no admin-view
+        role resolves only their grant union, however many servers the registry holds."""
+        manager = self._manager_with(["srv-granted", "srv-secret"])
+        plain = _make_admitted_subject("plain-user")
+        with patch.object(MCPRequestHandler, "get_allowed_mcp_servers", AsyncMock(return_value=["srv-granted"])):
+            assert set(await manager.get_allowed_mcp_servers(plain)) == {"srv-granted"}
 
     async def test_admitted_admin_entitlement_ceiling_disables_registry(self):
         """An entitlement ceiling, including an UNRESOLVED one, binds the human whatever their role:

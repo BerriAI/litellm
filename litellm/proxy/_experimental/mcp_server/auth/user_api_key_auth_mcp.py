@@ -2732,14 +2732,24 @@ class MCPRequestHandler:
         """Whether this principal's admin-view role grants the unscoped MCP resolution, whatever
         credential carries it (admin key, dashboard session, or OAuth-admitted session subject).
 
-        An explicit ``object_permission.mcp_servers`` scope wins even for admins, and an entitlement
-        ceiling (including an unresolved one) binds the human whatever their role, so both disqualify.
-        The one owner of this predicate: the server-axis registry shortcut and the tools-axis admin
-        channel both call it, so the two axes cannot disagree."""
+        Two bounds disqualify, one per ownership of the row. A CREDENTIAL's explicit
+        ``object_permission.mcp_servers`` scope wins even for admins, including the empty list. An
+        admitted subject's object_permission is the user's own row, whose ``mcp_servers`` column is
+        [] by DB default, so for that shape the row binds through the entitlement ceiling instead
+        (any non-empty entitlement, or an unresolved one, disqualifies), exactly as
+        ``operator_open_server_ids`` reads the same row. The one owner of this predicate: the
+        server-axis registry resolution in ``get_allowed_mcp_servers`` and the tools-axis open
+        channel in ``_resolve_admitted_subject_tools`` both consult it, so the two axes cannot
+        disagree."""
         if user_api_key_auth is None or not user_api_key_has_admin_view(user_api_key_auth):
             return False
         object_permission: Final = user_api_key_auth.object_permission
-        if object_permission is not None and object_permission.mcp_servers is not None:
+        credential_scoped: Final = (
+            not _is_mcp_admitted_user_subject(user_api_key_auth)
+            and object_permission is not None
+            and object_permission.mcp_servers is not None
+        )
+        if credential_scoped:
             return False
         return not await MCPRequestHandler._user_places_mcp_ceiling(user_api_key_auth)
 
