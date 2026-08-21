@@ -1986,10 +1986,11 @@ def test_effort_validation():
         )
         assert result["output_config"]["effort"] == effort
 
+    optional_params = {"output_config": {"effort": "invalid"}}
+
     with pytest.raises(
         litellm.exceptions.BadRequestError, match="Invalid effort value"
     ):
-        optional_params = {"output_config": {"effort": "invalid"}}
         config.transform_request(
             model="claude-opus-4-5-20251101",
             messages=messages,
@@ -2043,11 +2044,12 @@ def test_max_effort_rejected_for_opus_45():
 
     messages = [{"role": "user", "content": "Test"}]
 
+    optional_params = {"output_config": {"effort": "max"}}
+
     with pytest.raises(
         litellm.exceptions.BadRequestError,
         match="effort='max' is not supported by this model",
     ):
-        optional_params = {"output_config": {"effort": "max"}}
         config.transform_request(
             model="claude-opus-4-5-20251101",
             messages=messages,

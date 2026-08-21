@@ -1047,8 +1047,7 @@ async def test_allow_access_by_email(
         else:
             # Expect the call to fail
             with pytest.raises(ProxyException):
-                resp = await user_api_key_auth(request=request, api_key=bearer_token)
-                print(resp)
+                await user_api_key_auth(request=request, api_key=bearer_token)
 
 
 def test_get_public_key_from_jwk_url():

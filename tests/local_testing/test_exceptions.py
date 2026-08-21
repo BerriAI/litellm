@@ -1417,7 +1417,7 @@ async def test_exception_bubbling_up(sync_mode, stream_mode, model):
     import litellm
 
     litellm.set_verbose = True
-    with pytest.raises(Exception) as exc_info:
+    async def _call_with_bad_role():
         if sync_mode:
             litellm.completion(
                 model=model,
@@ -1432,6 +1432,9 @@ async def test_exception_bubbling_up(sync_mode, stream_mode, model):
                 stream=stream_mode,
                 sync_stream=sync_mode,
             )
+
+    with pytest.raises(Exception) as exc_info:
+        await _call_with_bad_role()
 
     assert exc_info.value.code == "invalid_value"
     assert exc_info.value.param is not None

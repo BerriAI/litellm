@@ -573,11 +573,14 @@ async def test_http_validator_service_outage_fails_closed(monkeypatch, kind, exi
     monkeypatch.setenv("TEAM_METADATA_VALIDATION_SERVICE_URL", _closed_port_url())
 
     with _configured(impls.validate_via_http):
-        with pytest.raises(ProxyException) as exc_info:
+        async def _drive():
             if kind == "create":
                 await _drive_create(metadata=request_payload)
             else:
                 await _drive_update(kind, existing_metadata, request_payload)
+
+        with pytest.raises(ProxyException) as exc_info:
+            await _drive()
 
     assert str(exc_info.value.code) == "503"
     assert DEFAULT_TEAM_METADATA_VALIDATION_UNAVAILABLE_MESSAGE in str(exc_info.value.message)
