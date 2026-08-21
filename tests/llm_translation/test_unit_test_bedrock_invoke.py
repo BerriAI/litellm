@@ -59,7 +59,7 @@ def test_transform_request_invalid_provider(bedrock_transformer):
     """Test request transformation with invalid provider"""
     messages = [{"role": "user", "content": "Hello"}]
 
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(Exception, match='Bedrock Invoke HTTPX: Unknown provider=None') as exc_info:
         bedrock_transformer.transform_request(
             model="invalid.model",
             messages=messages,

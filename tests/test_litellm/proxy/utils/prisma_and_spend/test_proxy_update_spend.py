@@ -561,7 +561,7 @@ async def test_update_spend_logs_does_not_requeue_non_transport_failures(
     proxy_logging.failure_handler = AsyncMock()
     mock_prisma_client.spend_log_transactions = []
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="bad payload"):
         await ProxyUpdateSpend.update_spend_logs(
             n_retry_times=1,
             prisma_client=mock_prisma_client,

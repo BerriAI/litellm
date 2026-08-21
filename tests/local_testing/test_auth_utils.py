@@ -264,10 +264,6 @@ def test_get_end_user_id_from_request_body_backwards_compatibility():
             ["gpt-3.5-turbo", "gpt-4o-mini-general-deployment"],
         ),
         ({"model": "gpt-3.5-turbo"}, "gpt-3.5-turbo"),
-        (
-            {"model": "gpt-3.5-turbo, gpt-4o-mini-general-deployment"},
-            ["gpt-3.5-turbo", "gpt-4o-mini-general-deployment"],
-        ),
     ],
 )
 def test_get_model_from_request(request_data, expected_model):

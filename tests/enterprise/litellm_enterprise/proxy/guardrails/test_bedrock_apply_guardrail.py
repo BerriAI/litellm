@@ -141,7 +141,7 @@ async def test_bedrock_apply_guardrail_api_failure():
         mock_api_request.side_effect = Exception("API connection failed")
 
         # Test the apply_guardrail method should raise an exception
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(Exception, match='Bedrock guardrail failed: API connection failed') as exc_info:
             await guardrail.apply_guardrail(
                 inputs={"texts": ["This is a test message"]},
                 request_data={},

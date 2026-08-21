@@ -83,7 +83,7 @@ class TestEUAIActFrench3Scenarios:
         print(f"{'='*70}\n")
 
         # Should raise an exception (blocked)
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(Exception, match="prohibited_practices_fr conditional match 'concevoir \\+") as exc_info:
             await content_filter_guardrail.apply_guardrail(
                 inputs={"texts": [sentence]},
                 request_data=request_data,
@@ -123,7 +123,7 @@ class TestEUAIActFrench3Scenarios:
         print(f"{'='*70}\n")
 
         # Should raise an exception (blocked)
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(Exception, match="prohibited_practices_fr conditional match 'créer \\+") as exc_info:
             await content_filter_guardrail.apply_guardrail(
                 inputs={"texts": [sentence]},
                 request_data=request_data,
@@ -194,7 +194,7 @@ class TestEUAIActFrench3Scenarios:
         print(f"{'='*70}\n")
 
         # Should raise an exception (blocked by conditional matching)
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(Exception, match="prohibited_practices_fr conditional match 'développer \\+") as exc_info:
             await content_filter_guardrail.apply_guardrail(
                 inputs={"texts": [sentence]},
                 request_data=request_data,
@@ -278,7 +278,7 @@ class TestFrenchEdgeCases:
         request_data = {"messages": [{"role": "user", "content": sentence}]}
 
         # Should still block (no exception bypass)
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(Exception, match="prohibited_practices_fr conditional match 'créer \\+ crédit") as exc_info:
             await content_filter_guardrail.apply_guardrail(
                 inputs={"texts": [sentence]},
                 request_data=request_data,

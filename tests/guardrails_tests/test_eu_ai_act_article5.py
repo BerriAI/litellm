@@ -211,7 +211,7 @@ class TestEUAIActArticle5ConditionalMatching:
         # Apply guardrail
         if expected == "BLOCK":
             # Should raise an exception or return modified response indicating block
-            with pytest.raises(Exception) as exc_info:
+            with pytest.raises(Exception, match='Content blocked: eu_ai_act_article') as exc_info:
                 await content_filter_guardrail.apply_guardrail(
                     inputs={"texts": [sentence]},
                     request_data=request_data,

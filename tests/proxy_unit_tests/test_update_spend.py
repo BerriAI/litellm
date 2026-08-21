@@ -166,7 +166,7 @@ async def test_update_spend_logs_non_connection_error():
     prisma_client.db.litellm_spendlogs.create_many = create_many_mock
 
     # Execute and verify it raises immediately without retrying
-    with pytest.raises(ValueError) as exc_info:
+    with pytest.raises(ValueError, match='Unexpected database error') as exc_info:
         await update_spend(prisma_client, None, proxy_logging_obj)
 
     # Verify error message
