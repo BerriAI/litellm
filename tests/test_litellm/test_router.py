@@ -367,7 +367,7 @@ async def test_arouter_with_tags_and_fallbacks():
         enable_tag_filtering=True,
     )
 
-    with pytest.raises(Exception):
+    with pytest.raises(litellm.InternalServerError):
         response = await router.acompletion(
             model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": "Hello, world!"}],
@@ -5707,7 +5707,7 @@ async def test_team_scoped_model_fallback_cross_team_blocked():
         fallbacks=[{"primary-model": ["fallback-model"]}],
     )
 
-    with pytest.raises(Exception):
+    with pytest.raises(litellm.InternalServerError):
         await router.acompletion(
             model="primary-model",
             messages=[{"role": "user", "content": "Hello"}],

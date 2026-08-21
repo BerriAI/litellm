@@ -26,6 +26,7 @@ from litellm.proxy import proxy_server
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.types.utils import LlmProviders
+import openai
 
 proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
 
@@ -254,7 +255,7 @@ async def test_delete_skill_sdk(prisma_client):
     assert result.type == "skill_deleted"
 
     # Verify skill no longer exists
-    with pytest.raises(Exception):
+    with pytest.raises(openai.APIError):
         await aget_skill(
             skill_id=created_skill.id,
             custom_llm_provider=LlmProviders.LITELLM_PROXY.value,

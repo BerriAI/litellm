@@ -1458,7 +1458,7 @@ def test_responses_gpt54_with_xhigh_reasoning():
         # Stop execution right after request generation to avoid external API calls.
         mock_responses.side_effect = RuntimeError("stop_after_request_build")
 
-        with pytest.raises(Exception):
+        with pytest.raises(litellm.APIConnectionError):
             litellm.completion(
                 model="openai/responses/gpt-5.4",
                 messages=[{"role": "user", "content": "What is 2+2?"}],

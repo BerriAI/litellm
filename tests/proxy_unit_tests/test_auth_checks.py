@@ -330,6 +330,7 @@ async def test_wildcard_access_after_cost_map_reload(key_models, model, expect_t
     Fix: each reload now calls litellm.add_known_models(model_cost_map=new_map)
     with the fetched map passed explicitly to avoid any reference ambiguity.
     """
+    from litellm.proxy._types import ProxyException
     from litellm.proxy.auth.auth_checks import can_key_call_model
 
     # Build a new cost map that includes the brand-new model — exactly what
@@ -378,7 +379,7 @@ async def test_wildcard_access_after_cost_map_reload(key_models, model, expect_t
                 llm_router=router,
             )
         else:
-            with pytest.raises(Exception):
+            with pytest.raises(ProxyException):
                 await can_key_call_model(
                     model=model,
                     llm_model_list=llm_model_list,
