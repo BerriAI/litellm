@@ -704,13 +704,10 @@ def _get_openai_compatible_provider_info(
             dynamic_api_key,
         ) = litellm.ZAIChatConfig()._get_openai_compatible_provider_info(api_base, api_key)
     elif custom_llm_provider == "together_ai":
-        api_base = api_base or get_secret_str("TOGETHER_AI_API_BASE") or "https://api.together.xyz/v1"
-        dynamic_api_key = api_key or (
-            get_secret_str("TOGETHER_API_KEY")
-            or get_secret_str("TOGETHER_AI_API_KEY")
-            or get_secret_str("TOGETHERAI_API_KEY")
-            or get_secret_str("TOGETHER_AI_TOKEN")
-        )
+        (
+            api_base,
+            dynamic_api_key,
+        ) = litellm.TogetherAIConfig()._get_openai_compatible_provider_info(api_base=api_base, api_key=api_key)
     elif custom_llm_provider == "friendliai":
         api_base = api_base or get_secret("FRIENDLI_API_BASE") or "https://api.friendli.ai/serverless/v1"
         dynamic_api_key = api_key or get_secret_str("FRIENDLIAI_API_KEY") or get_secret_str("FRIENDLI_TOKEN")

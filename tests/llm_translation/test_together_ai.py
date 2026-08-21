@@ -30,7 +30,11 @@ class TestTogetherAI(BaseLLMChatTest):
         "model, expected_bool",
         [
             ("meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo", True),
-            ("nvidia/Llama-3.1-Nemotron-70B-Instruct-HF", False),
+            # An id the cost map has never seen still gets Together's real feature set,
+            # from the provider-level baseline in TogetherAIConfig.get_provider_info.
+            ("nvidia/Llama-3.1-Nemotron-70B-Instruct-HF", True),
+            # The one mapped entry that opts out of tool calling.
+            ("Qwen/Qwen3-235B-A22B-fp8-tput", False),
         ],
     )
     def test_get_supported_response_format_together_ai(
