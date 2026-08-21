@@ -4688,7 +4688,7 @@ async def _attributed_teams_max_budget_check(
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging,
     general_settings: dict,
-):
+) -> None:
     """Enforce the max budget of every OTHER team the caller belongs to.
 
     Only active when ``track_spend_across_all_user_teams`` is on -- otherwise
@@ -4785,7 +4785,7 @@ async def _attributed_orgs_max_budget_check(
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging,
     general_settings: dict,
-):
+) -> None:
     """Enforce the max budget of every OTHER organization the caller belongs to.
 
     Skips ``valid_token.org_id`` -- ``_organization_max_budget_check`` owns that

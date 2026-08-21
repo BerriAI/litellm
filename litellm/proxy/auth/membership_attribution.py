@@ -33,13 +33,16 @@ those teams (and the caller's own user row) belong to, never a recursive walk.
 """
 
 import asyncio
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Final
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import LiteLLM_UserTable, UserAPIKeyAuth
 
 if TYPE_CHECKING:
+    from opentelemetry.trace import Span
+
     from litellm.caching.caching import DualCache
+    from litellm.proxy._types import LiteLLM_TeamTableCachedObj
     from litellm.proxy.utils import PrismaClient, ProxyLogging
 
 SPEND_ATTRIBUTION_SETTING: Final = "track_spend_across_all_user_teams"
@@ -192,7 +195,7 @@ def _apply_org_only_attribution(
     *,
     user_api_key_auth_obj: UserAPIKeyAuth,
     user_object: LiteLLM_UserTable | None,
-    team_objects: list[tuple[str, Any]],
+    team_objects: list[tuple[str, "LiteLLM_TeamTableCachedObj | None"]],
 ) -> None:
     """Derive the attributed organizations from what is already loaded.
 
@@ -223,9 +226,9 @@ async def _load_team_objects(
     team_ids: list[str],
     prisma_client: "PrismaClient",
     user_api_key_cache: "DualCache",
-    parent_otel_span: Any,
+    parent_otel_span: "Span | None",
     proxy_logging_obj: "ProxyLogging | None",
-) -> list[tuple[str, Any]]:
+) -> list[tuple[str, "LiteLLM_TeamTableCachedObj | None"]]:
     """Resolve every candidate team, preserving input order.
 
     Lookups run concurrently: ``get_team_object`` is cache-first, so the steady
@@ -234,7 +237,7 @@ async def _load_team_objects(
     """
     from litellm.proxy.auth.auth_checks import get_team_object
 
-    async def _safe_get(team_id: str) -> tuple[str, Any]:
+    async def _safe_get(team_id: str) -> tuple[str, "LiteLLM_TeamTableCachedObj | None"]:
         try:
             team_object = await get_team_object(
                 team_id=team_id,
@@ -243,7 +246,6 @@ async def _load_team_objects(
                 parent_otel_span=parent_otel_span,
                 proxy_logging_obj=proxy_logging_obj,
             )
-            return team_id, team_object
         except Exception as e:  # noqa: BLE001  # attribution must never fail an authorized request
             verbose_proxy_logger.debug(
                 "membership attribution: skipping team_id=%s, could not resolve: %s",
@@ -251,5 +253,7 @@ async def _load_team_objects(
                 e,
             )
             return team_id, None
+        else:
+            return team_id, team_object
 
     return list(await asyncio.gather(*(_safe_get(team_id) for team_id in team_ids)))
