@@ -914,7 +914,7 @@ def test_generic_cost_per_token_gpt55_pro():
     "model,input_cost,output_cost,cache_read_cost,cache_write_cost",
     [
         ("gpt-5.6", 5e-6, 3e-5, 5e-7, 6.25e-6),
-        ("gpt-5.6-sol", 5e-6, 3e-5, 5e-7, 6.25e-6),
+        ("gpt-5.6-sol", 4e-6, 2e-5, 4e-7, 5e-6),
         ("gpt-5.6-terra", 2e-6, 1.2e-5, 2e-7, 2.5e-6),
         ("gpt-5.6-luna", 2e-7, 1.2e-6, 2e-8, 2.5e-7),
     ],
@@ -969,7 +969,7 @@ def test_generic_cost_per_token_gpt56(
     "model,flex_long_input_cost,flex_long_output_cost",
     [
         ("gpt-5.6", 5e-6, 2.25e-5),
-        ("gpt-5.6-sol", 5e-6, 2.25e-5),
+        ("gpt-5.6-sol", 4e-6, 1.5e-5),
         ("gpt-5.6-terra", 2e-6, 9e-6),
         ("gpt-5.6-luna", 2e-7, 9e-7),
     ],
@@ -3300,8 +3300,8 @@ def test_generic_cost_per_token_gemini_35_flash_lite():
 @pytest.mark.parametrize(
     "service_tier,input_rate,cache_read_rate,cache_write_rate,output_rate",
     [
-        ("flex", 2.5e-6, 2.5e-7, 3.125e-6, 1.5e-5),
-        ("priority", 1e-5, 1e-6, 1.25e-5, 6e-5),
+        ("flex", 2e-6, 2e-7, 2.5e-6, 1e-5),
+        ("priority", 8e-6, 8e-7, 1e-5, 4e-5),
     ],
 )
 def test_service_tier_cache_creation_rates_for_gpt_5_6(
@@ -3314,7 +3314,7 @@ def test_service_tier_cache_creation_rates_for_gpt_5_6(
 ):
     """Regression: gpt-5.6 publishes cache_creation_input_token_cost_flex/_priority, so a
     flex or priority request must bill cache writes at that tier's rate instead of falling
-    back to the standard 6.25e-6 rate."""
+    back to the standard cache-write rate."""
     usage = Usage(
         prompt_tokens=10_000,
         completion_tokens=500,
@@ -3361,8 +3361,8 @@ def test_fast_service_tier_bills_at_the_priority_rate(_local_model_cost_map):
         model="gpt-5.6-sol", usage=usage, custom_llm_provider="openai", service_tier="fast"
     )
 
-    expected_prompt = 800 * 1e-05 + 200 * 1e-06
-    expected_completion = 500 * 6e-05
+    expected_prompt = 800 * 8e-06 + 200 * 8e-07
+    expected_completion = 500 * 4e-05
 
     assert fast == priority
     assert fast[0] == pytest.approx(expected_prompt, rel=1e-9)
@@ -3397,8 +3397,8 @@ def test_fast_service_tier_matches_priority_above_the_context_threshold(_local_m
     )
 
     assert fast == priority
-    assert fast[0] == pytest.approx(300_000 * 1e-05, rel=1e-9)
-    assert fast[1] == pytest.approx(1_000 * 4.5e-05, rel=1e-9)
+    assert fast[0] == pytest.approx(300_000 * 8e-06, rel=1e-9)
+    assert fast[1] == pytest.approx(1_000 * 3e-05, rel=1e-9)
 
 
 def test_priority_reasoning_tokens_bill_at_the_priority_output_rate(_local_model_cost_map):
