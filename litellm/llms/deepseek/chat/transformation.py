@@ -123,7 +123,7 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         as-is. All other messages keep the historical behavior of collapsing
         content lists to a plain string.
         """
-        text_only_messages: Final[list[AllMessageValues]] = []
+        text_only_messages: Final[list[AllMessageValues]] = []  # mutable-ok: collapse helper requires a mutable list
         for message in messages:
             content = message.get("content")
             if isinstance(content, list) and any(
