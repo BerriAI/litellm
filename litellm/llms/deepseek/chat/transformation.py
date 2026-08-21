@@ -127,8 +127,7 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         for message in messages:
             content = message.get("content")
             if isinstance(content, list) and any(
-                not isinstance(block, dict)
-                or block.get("type") not in (None, "text", "input_text", "output_text")
+                not isinstance(block, dict) or block.get("type") not in (None, "text", "input_text", "output_text")
                 for block in content
             ):
                 continue
