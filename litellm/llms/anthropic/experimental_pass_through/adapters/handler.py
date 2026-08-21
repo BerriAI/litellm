@@ -349,6 +349,12 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         if not isinstance(thinking, dict) or thinking.get("type") != "enabled":
             return
 
+        if completion_kwargs.get("stop"):
+            # The Responses API has no `stop` equivalent; staying on chat/completions
+            # (already routed to by _should_route_to_responses_api) so `stop` is honored,
+            # even at the cost of losing the reasoning-summary content block.
+            return
+
         model: Final = completion_kwargs.get("model")
         try:
             model_info: Final = get_model_info(model=cast(str, model), custom_llm_provider=custom_llm_provider)
