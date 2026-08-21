@@ -200,6 +200,14 @@ jobs:
             timeout-minutes: 20
             job-timeout-minutes: 55
 
+          - shard: enterprise-package
+            artifact-name: enterprise-package
+            test-path: "tests/enterprise"
+            workers: 4
+            reruns: 2
+            timeout-minutes: 20
+            job-timeout-minutes: 55
+
           - shard: responses-caching-types
             artifact-name: responses-caching-types
             test-path: >-
