@@ -544,6 +544,17 @@ def _map_anthropic_exception(
             model=model,
             llm_provider="anthropic",
         )
+    # Anthropic returns usage/spend-limit exhaustion typed as invalid_request_error (400),
+    # but per the exception-mapping docs it should surface as a RateLimitError (429). Check
+    # before the generic 400 branches below, which would otherwise map it to BadRequestError.
+    if ExceptionCheckers.is_error_str_rate_limit(
+        error_str, getattr(original_exception, "status_code", None)
+    ):
+        raise RateLimitError(
+            message=f"AnthropicError - {error_str}",
+            model=model,
+            llm_provider="anthropic",
+        )
     if "Client error '400 Bad Request'" in error_str:
         raise BadRequestError(
             message=f"AnthropicError - {error_str}",

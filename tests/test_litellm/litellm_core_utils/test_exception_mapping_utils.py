@@ -179,6 +179,31 @@ class TestExceptionCheckers:
         )
         assert ExceptionCheckers.is_error_str_rate_limit(error_str, status_code=400) is True
 
+    def test_anthropic_usage_limit_maps_to_rate_limit_error_end_to_end(self):
+        """Production path: an Anthropic usage-limit error is typed invalid_request_error
+        (HTTP 400). Driving it through exception_type must surface a RateLimitError (429),
+        not a BadRequestError (#37599) — the helper alone is not on the Anthropic mapper.
+        """
+        message = (
+            "AnthropicException - "
+            '{"type":"error","error":{"type":"invalid_request_error",'
+            '"message":"You have reached your specified API usage limits. '
+            'You will regain access on 2026-09-01 at 00:00 UTC."},'
+            '"request_id":"req_011CeDfeyYs7N6neZrLwFxPJ"}'
+        )
+        original_exception = httpx.HTTPStatusError(
+            message=message,
+            request=httpx.Request("POST", "https://api.anthropic.com/v1/messages"),
+            response=httpx.Response(400),
+        )
+
+        with pytest.raises(litellm.RateLimitError):
+            exception_type(
+                model="claude-haiku-4-5-20251001",
+                original_exception=original_exception,
+                custom_llm_provider="anthropic",
+            )
+
     def test_is_azure_content_policy_violation_error_with_policy_violation_text(self):
         """Test detection of Azure content policy violation with explicit policy violation text"""
 
