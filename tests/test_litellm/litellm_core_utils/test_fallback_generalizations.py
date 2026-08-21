@@ -366,6 +366,17 @@ def test_shipped_rules_stack_adaptive_and_mid_conversation_flags(shipped_cost_ma
     assert info["supports_function_calling"] is True
 
 
+def test_shipped_rules_flag_unmapped_fable_as_always_on_thinking(shipped_cost_map):
+    """An unmapped Fable/Mythos id picks up ``thinking_always_on`` from the
+    claude-always-on-thinking rule, while other unmapped Claudes stay unflagged."""
+    model = "claude-fable-5-1"
+    assert model not in litellm.model_cost
+    info = litellm.get_model_info(model, custom_llm_provider="anthropic")
+    assert info["thinking_always_on"] is True
+    other = litellm.get_model_info("claude-opus-4-9", custom_llm_provider="anthropic")
+    assert other.get("thinking_always_on") is None
+
+
 @pytest.mark.parametrize(
     "model,provider",
     [

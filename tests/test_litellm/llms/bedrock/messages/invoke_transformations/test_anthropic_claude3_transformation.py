@@ -31,23 +31,6 @@ from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_tran
 )
 
 
-@pytest.fixture
-def local_model_cost_map(monkeypatch):
-    """Force the bundled backup cost map so adaptive-thinking detection reads this
-    branch's ``supports_adaptive_thinking`` flags, which the network-fetched
-    ``main`` copy lacks until merge."""
-    import litellm
-
-    original = litellm.model_cost
-    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    litellm.model_cost = litellm.get_model_cost_map(url="")
-    litellm.get_model_info.cache_clear()
-    try:
-        yield
-    finally:
-        litellm.model_cost = original
-        litellm.get_model_info.cache_clear()
-
 
 @pytest.mark.asyncio
 async def test_bedrock_sse_wrapper_encodes_dict_chunks():

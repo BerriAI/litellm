@@ -15,13 +15,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 
-@pytest.fixture
-def local_model_cost_map(monkeypatch):
-    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
 
-
-# Test basic web search cost calculations
 def test_web_search_cost_low():
     web_search_options = WebSearchOptions(search_context_size="low")
     model_info = litellm.get_model_info("gpt-4o-search-preview")
