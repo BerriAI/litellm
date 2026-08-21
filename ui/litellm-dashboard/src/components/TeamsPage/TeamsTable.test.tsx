@@ -149,6 +149,12 @@ describe("sort contract – only backend-sortable columns are sortable", () => {
     });
   });
 
+  it("right-aligns Spend / Budget but not Team", () => {
+    renderTable();
+    expect(screen.getByText("Spend / Budget").closest("th")).toHaveClass("text-right");
+    expect(screen.getByText("Team").closest("th")).not.toHaveClass("text-right");
+  });
+
   it("does not make Spend / Budget sortable (the backend rejects sort_by=spend)", () => {
     renderTable();
     expect(screen.queryByText("Spend / Budget").closest("button")).toBeNull();

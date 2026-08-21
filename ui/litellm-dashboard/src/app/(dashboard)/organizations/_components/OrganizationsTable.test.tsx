@@ -52,6 +52,16 @@ describe("OrganizationsTable", () => {
     }
   });
 
+  it("right-aligns the money and count columns only", () => {
+    render(<OrganizationsTable {...baseProps} organizations={[]} />);
+    for (const header of ["Spend (USD)", "Budget (USD)", "Members"]) {
+      expect(screen.getByText(header).closest("th")).toHaveClass("text-right");
+    }
+    for (const header of ["Organization Name", "TPM / RPM Limits"]) {
+      expect(screen.getByText(header).closest("th")).not.toHaveClass("text-right");
+    }
+  });
+
   it("opens the detail view when the organization ID cell is clicked", async () => {
     const user = userEvent.setup();
     const onOrganizationClick = vi.fn();

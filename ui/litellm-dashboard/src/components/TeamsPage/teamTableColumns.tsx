@@ -209,7 +209,7 @@ export const getTeamTableColumns = ({
     {
       id: "spend",
       accessorKey: "spend",
-      meta: { title: "Spend / Budget", skeleton: "meter" },
+      meta: { title: "Spend / Budget", skeleton: "meter", numeric: true },
       header: "Spend / Budget",
       size: 200,
       enableSorting: false,
@@ -233,7 +233,7 @@ export const getTeamTableColumns = ({
     },
     {
       id: "members",
-      meta: { title: "Members" },
+      meta: { title: "Members", numeric: true },
       header: "Members",
       size: 110,
       enableSorting: false,
@@ -241,7 +241,7 @@ export const getTeamTableColumns = ({
     },
     {
       id: "models",
-      meta: { title: "Models" },
+      meta: { title: "Models", numeric: true },
       header: "Models",
       size: 100,
       enableSorting: false,

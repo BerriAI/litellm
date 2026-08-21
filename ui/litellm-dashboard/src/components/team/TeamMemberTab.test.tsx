@@ -249,6 +249,9 @@ describe("TeamMembersComponent", () => {
 
     expect(screen.getByText("$100.50")).toBeInTheDocument();
     expect(screen.getByText("$1,538.26")).toBeInTheDocument();
+    expect(screen.getByText("$100.50").closest("td")).toHaveClass("text-right");
+    expect(screen.getByText("Team Member Budget (USD)").closest("th")).toHaveClass("text-right");
+    expect(screen.getByText("User Email").closest("th")).not.toHaveClass("text-right");
     expect(screen.getByText(/100 RPM/)).toBeInTheDocument();
     expect(screen.getByText(/10000 TPM/)).toBeInTheDocument();
   });

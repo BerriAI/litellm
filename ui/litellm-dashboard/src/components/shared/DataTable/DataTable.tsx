@@ -30,6 +30,7 @@ import { Fragment, useState } from "react";
 
 import { Skeleton } from "@/components/ui/skeleton";
 import {
+  NUMERIC_CELL_CLASS,
   Table as TableRoot,
   TableBody,
   TableCell,
@@ -179,7 +180,7 @@ function DataTableHeadCell<TData>({ header, size, stickyHeader, enableColumnResi
       className={cn(
         "relative text-muted-foreground",
         size === "compact" ? "h-8 px-2 py-1 text-xs" : "",
-        meta?.numeric ? "text-right" : "",
+        meta?.numeric ? NUMERIC_CELL_CLASS : "",
         meta?.className,
         meta?.headerClassName,
         sticky.className,
@@ -225,7 +226,7 @@ function DataTableBodyCell<TData>({ cell, size, stickyHeader, enableColumnResizi
       className={cn(
         "overflow-hidden text-ellipsis",
         size === "compact" ? "px-2 py-1 text-xs" : "",
-        meta?.numeric ? "text-right tabular-nums" : "",
+        meta?.numeric ? NUMERIC_CELL_CLASS : "",
         meta?.className,
         sticky.className,
       )}

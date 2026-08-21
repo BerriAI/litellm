@@ -19,7 +19,15 @@ import {
 } from "@/components/ui/combobox";
 import { Meter, MeterIndicator, MeterTrack } from "@/components/ui/meter";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import {
+  NUMERIC_CELL_CLASS,
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { AreaChart, BarChart, DonutChart } from "@/components/shared/charts";
 
@@ -651,14 +659,14 @@ const UsagePage: React.FC<UsagePageProps> = ({ accessToken, token, userRole, use
                             <TableHeader>
                               <TableRow>
                                 <TableHead>Provider</TableHead>
-                                <TableHead>Spend</TableHead>
+                                <TableHead className={NUMERIC_CELL_CLASS}>Spend</TableHead>
                               </TableRow>
                             </TableHeader>
                             <TableBody>
                               {spendByProvider.map((provider) => (
                                 <TableRow key={provider.provider}>
                                   <TableCell>{provider.provider}</TableCell>
-                                  <TableCell>
+                                  <TableCell className={NUMERIC_CELL_CLASS}>
                                     <MoneyCell value={provider.spend} decimals={2} />
                                   </TableCell>
                                 </TableRow>
@@ -840,8 +848,8 @@ const UsagePage: React.FC<UsagePageProps> = ({ accessToken, token, userRole, use
                   <TableHeader>
                     <TableRow>
                       <TableHead>Customer</TableHead>
-                      <TableHead>Spend</TableHead>
-                      <TableHead>Total Events</TableHead>
+                      <TableHead className={NUMERIC_CELL_CLASS}>Spend</TableHead>
+                      <TableHead className={NUMERIC_CELL_CLASS}>Total Events</TableHead>
                     </TableRow>
                   </TableHeader>
 
@@ -849,10 +857,10 @@ const UsagePage: React.FC<UsagePageProps> = ({ accessToken, token, userRole, use
                     {topUsers?.map((user: any, index: number) => (
                       <TableRow key={index}>
                         <TableCell>{user.end_user}</TableCell>
-                        <TableCell>
+                        <TableCell className={NUMERIC_CELL_CLASS}>
                           <MoneyCell value={user.total_spend} decimals={2} />
                         </TableCell>
-                        <TableCell>{user.total_count}</TableCell>
+                        <TableCell className={NUMERIC_CELL_CLASS}>{user.total_count}</TableCell>
                       </TableRow>
                     ))}
                   </TableBody>

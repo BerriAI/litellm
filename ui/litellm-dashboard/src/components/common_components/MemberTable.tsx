@@ -2,7 +2,15 @@ import { SimpleTooltip } from "@/components/ui/tooltip";
 import { Member } from "@/components/networking";
 import { StatusBadge } from "@/components/shared/table_cells";
 import { Button } from "@/components/ui/button";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import {
+  NUMERIC_CELL_CLASS,
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import { Crown, Info, User, UserPlus } from "lucide-react";
 import React from "react";
 import TableIconActionButton from "./IconActionButton/TableIconActionButtons/TableIconActionButton";
@@ -12,6 +20,7 @@ export interface MemberTableColumn {
   key: React.Key;
   dataIndex?: keyof Member;
   render?: (value: Member[keyof Member], member: Member, index: number) => React.ReactNode;
+  numeric?: boolean;
 }
 
 export interface MemberTableProps {
@@ -33,6 +42,9 @@ const extraColumnCell = (column: MemberTableColumn, member: Member, index: numbe
 };
 
 const STICKY_ACTIONS_CLASS = "sticky right-0 w-[120px] bg-background";
+
+const extraColumnClass = (column: MemberTableColumn): string | undefined =>
+  column.numeric ? NUMERIC_CELL_CLASS : undefined;
 
 export default function MemberTable({
   members,
@@ -69,7 +81,9 @@ export default function MemberTable({
               )}
             </TableHead>
             {extraColumns.map((column) => (
-              <TableHead key={column.key}>{column.title}</TableHead>
+              <TableHead key={column.key} className={extraColumnClass(column)}>
+                {column.title}
+              </TableHead>
             ))}
             <TableHead className={STICKY_ACTIONS_CLASS}>Actions</TableHead>
           </TableRow>
@@ -103,7 +117,9 @@ export default function MemberTable({
                   </span>
                 </TableCell>
                 {extraColumns.map((column) => (
-                  <TableCell key={column.key}>{extraColumnCell(column, member, memberIndex)}</TableCell>
+                  <TableCell key={column.key} className={extraColumnClass(column)}>
+                    {extraColumnCell(column, member, memberIndex)}
+                  </TableCell>
                 ))}
                 <TableCell className={STICKY_ACTIONS_CLASS}>
                   {canEdit ? (
