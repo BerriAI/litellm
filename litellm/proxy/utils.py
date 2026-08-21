@@ -11,7 +11,7 @@ import sys
 import threading
 import time
 import traceback
-from collections.abc import AsyncGenerator, Awaitable, Callable, Coroutine, Mapping, Sequence
+from collections.abc import AsyncGenerator, Awaitable, Callable, Collection, Coroutine, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from email.mime.multipart import MIMEMultipart
@@ -185,6 +185,7 @@ if TYPE_CHECKING:
     from litellm.models.team import LiteLLM_TeamTableCachedObj
     from litellm.proxy.db.autorouter_session_rollup import AutoRouterTurnTransaction
     from litellm.proxy.db.spend_log_tool_index import ToolUsageTransaction
+    from litellm.types.proxy.policy_engine.pipeline_types import GuardrailPipeline
 
     Span = _Span | object
 else:
@@ -427,6 +428,16 @@ def _policy_state_metadata(data: Mapping[str, object]) -> Mapping[str, object]:
         ),
         {},
     )
+
+
+def _policy_pipelines(data: Mapping[str, object]) -> tuple[tuple[str, "GuardrailPipeline"], ...]:
+    pipelines: Final = _policy_state_metadata(data).get("_guardrail_pipelines")
+    return tuple(cast("Sequence[tuple[str, GuardrailPipeline]]", pipelines)) if pipelines else ()
+
+
+def _pipeline_managed_guardrail_names(data: Mapping[str, object]) -> frozenset[str]:
+    managed: Final = _policy_state_metadata(data).get("_pipeline_managed_guardrails")
+    return frozenset(cast("Collection[str]", managed)) if managed else frozenset()
 
 
 def _prompt_block_text(block: object) -> str:
@@ -1466,8 +1477,7 @@ class ProxyLogging:
 
         Returns the (possibly modified) data dict.
         """
-        metadata: Final = _policy_state_metadata(data)
-        pipelines: Final = metadata.get("_guardrail_pipelines")
+        pipelines: Final = _policy_pipelines(data)
         if not pipelines:
             return data
 
@@ -1644,8 +1654,7 @@ class ProxyLogging:
             )
 
             # Get pipeline-managed guardrails to skip in normal loop
-            metadata: Final = _policy_state_metadata(data)
-            pipeline_managed: Final[set] = metadata.get("_pipeline_managed_guardrails", set())
+            pipeline_managed: Final = _pipeline_managed_guardrail_names(data)
 
             caps: Final = ProxyLogging._callback_capabilities()
             # Skip the per-request callback walk entirely when nothing in
