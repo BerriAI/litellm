@@ -71,6 +71,7 @@ const { mockFetchAvailableModels, mockFetchAllModelDeployments } = vi.hoisted(()
 vi.mock("../networking", () => ({
   modelAvailableCall: vi.fn().mockResolvedValue({ data: [] }),
   testAutoRouterRouting: vi.fn(),
+  validateAutoRouterConfig: vi.fn().mockResolvedValue({ valid: true, error: null }),
 }));
 
 vi.mock("@/components/llm_calls/fetch_models", () => ({
@@ -862,5 +863,41 @@ describe("AddAutoRouterTab", () => {
         },
       });
     });
+  });
+});
+
+describe("AddAutoRouterTab submit guard", () => {
+  it("keeps the submission locked until the create itself resolves, so a double click cannot duplicate", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getMissingTiersError).mockReturnValue(null);
+    let releaseCreate: () => void = () => {};
+    vi.mocked(handleAddAutoRouterSubmit).mockClear();
+    vi.mocked(handleAddAutoRouterSubmit).mockImplementation(
+      () => new Promise<void>((resolve) => (releaseCreate = resolve)),
+    );
+
+    renderWithProviders(<AddAutoRouterTab handleOk={vi.fn()} accessToken="token" userRole="Admin" />);
+    await user.type(screen.getByPlaceholderText(/smart_router/i), "once-only-router");
+
+    const submit = screen.getByRole("button", { name: /add auto router/i });
+    await user.click(submit);
+    await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalledTimes(1));
+    await user.click(submit);
+    expect(handleAddAutoRouterSubmit).toHaveBeenCalledTimes(1);
+    releaseCreate();
+  });
+});
+
+describe("AddAutoRouterTab tier editor mode", () => {
+  it("a preset prefill closes the tier editor, so the fresh built-in set opens collapsed", async () => {
+    renderWithProviders(<Harness />);
+    expandDetailedConfiguration();
+    fireEvent.click(screen.getByRole("button", { name: "Edit tiers" }));
+    expect(screen.getByRole("button", { name: "Done" })).toBeInTheDocument();
+
+    openTemplateDropdown();
+    fireEvent.click(optionByLabel("Anthropic Family")!);
+    expect(screen.queryByRole("button", { name: "Done" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Edit tiers" })).toBeInTheDocument();
   });
 });

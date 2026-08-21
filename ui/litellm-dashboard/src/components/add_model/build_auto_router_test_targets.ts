@@ -10,6 +10,8 @@ export interface AutoRouterTestTarget {
 
 export interface BuildAutoRouterTestTargetsParams {
   tiers: ComplexityTiers;
+  /** An edited tier set's rows. When present they replace the built-in record as the tier source. */
+  customTiers?: { name: string; models: string[] }[];
   semanticMatchingEnabled: boolean;
   embeddingModel: string | undefined;
   /** The resolved default model - see resolveComplexityDefaultModel. A live fallback destination,
@@ -28,12 +30,16 @@ const TIER_ORDER = Object.keys({
 
 export const buildAutoRouterTestTargets = ({
   tiers,
+  customTiers,
   semanticMatchingEnabled,
   embeddingModel,
   defaultModel,
 }: BuildAutoRouterTestTargetsParams): AutoRouterTestTarget[] => {
-  const tieredByModel = TIER_ORDER.reduce<Record<string, string[]>>((acc, tier) => {
-    return (tiers[tier] ?? []).reduce((tierAcc, rawModel) => {
+  const tierPools: [string, string[]][] = customTiers
+    ? customTiers.map((row) => [row.name, row.models])
+    : TIER_ORDER.map((tier) => [tier, tiers[tier] ?? []]);
+  const tieredByModel = tierPools.reduce<Record<string, string[]>>((acc, [tier, models]) => {
+    return models.reduce((tierAcc, rawModel) => {
       const modelGroup = rawModel?.trim();
       if (!modelGroup) return tierAcc;
       return { ...tierAcc, [modelGroup]: [...(tierAcc[modelGroup] ?? []), tier] };

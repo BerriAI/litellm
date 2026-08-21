@@ -20,6 +20,7 @@ vi.mock("../networking", () => ({
   modelPatchUpdateCall,
   modelAvailableCall,
   getAutoRouterClassifierDefaultPromptCall,
+  validateAutoRouterConfig: vi.fn().mockResolvedValue({ valid: true, error: null }),
 }));
 
 vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({ default: () => ({ accessToken: "sk-test" }) }));
@@ -797,5 +798,87 @@ describe("EditAutoRouterModal plan-mode minimum tier", () => {
 
     await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
     expect(savedConfig()).not.toHaveProperty("plan_mode_min_tier");
+  });
+});
+
+describe("EditAutoRouterModal custom tier sets", () => {
+  const CUSTOM_STORED = {
+    tiers: { CASUAL: ["gpt-4o-mini"], SECURITY_REVIEW: ["claude-sonnet-5"] },
+    tier_definitions: [
+      { name: "CASUAL", description: "casual chat" },
+      { name: "SECURITY_REVIEW", description: "security audits" },
+    ],
+    fallback_tier: "SECURITY_REVIEW",
+    classifier_type: "llm",
+    classifier_llm_config: { model: "haiku-classifier", timeout_ms: 400 },
+    session_affinity: false,
+    escalation_keywords: [],
+  };
+  const renderCustomModal = (config: Record<string, unknown> = CUSTOM_STORED) =>
+    renderWithProviders(
+      <EditAutoRouterModal
+        isVisible
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        modelData={{
+          model_name: "custom-router",
+          litellm_params: { model: "auto_router/complexity_router", complexity_router_config: config },
+          model_info: { id: "auto-2", access_groups: [] },
+        }}
+        accessToken="token"
+        userRole="Admin"
+      />,
+    );
+
+  beforeEach(() => {
+    modelPatchUpdateCall.mockClear();
+  });
+
+  it("saves a stored custom-tier router whose built-in tier keys are empty, round-tripping the set", async () => {
+    const user = userEvent.setup();
+    renderCustomModal();
+
+    await screen.findByText(/Escalation Keywords/i);
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
+    const config = savedConfig();
+    expect(config.tier_definitions).toEqual(CUSTOM_STORED.tier_definitions);
+    expect(config.fallback_tier).toBe("SECURITY_REVIEW");
+    expect(config.tiers).toEqual(CUSTOM_STORED.tiers);
+  });
+
+  it("still requires a classifier model even when only the forced effective type is llm", async () => {
+    const user = userEvent.setup();
+    renderCustomModal({ ...CUSTOM_STORED, classifier_type: "heuristic", classifier_llm_config: undefined });
+
+    await screen.findByText(/Escalation Keywords/i);
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(toast.fromError).toHaveBeenCalledWith(expect.stringContaining("classifier model")));
+    expect(modelPatchUpdateCall).not.toHaveBeenCalled();
+  });
+});
+
+describe("EditAutoRouterModal tier editor mode", () => {
+  it("resets the tier editor when the modal re-initializes for another router", async () => {
+    const user = userEvent.setup();
+    const { rerender } = renderModal();
+    await screen.findByText(/Escalation Keywords/i);
+    await user.click(screen.getByRole("button", { name: "Edit tiers" }));
+    expect(screen.getByRole("button", { name: "Done" })).toBeInTheDocument();
+
+    rerender(
+      <EditAutoRouterModal
+        isVisible
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        modelData={{ ...MODEL_DATA, model_info: { id: "auto-3", access_groups: [] } }}
+        accessToken="token"
+        userRole="Admin"
+      />,
+    );
+    expect(await screen.findByRole("button", { name: "Edit tiers" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Done" })).not.toBeInTheDocument();
   });
 });

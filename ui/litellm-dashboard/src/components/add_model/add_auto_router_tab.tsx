@@ -13,7 +13,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { useZodForm } from "@/lib/forms/useZodForm";
 import AccessGroupTagsCombobox from "./AccessGroupTagsCombobox";
-import { modelAvailableCall } from "../networking";
+import { modelAvailableCall, validateAutoRouterConfig } from "../networking";
 import { all_admin_roles } from "@/utils/roles";
 import { type ModelWriteScope } from "@/utils/modelPermissions";
 import TeamDropdown from "../common_components/team_dropdown";
@@ -27,6 +27,8 @@ import ComplexityRouterConfig, {
   DEFAULT_SESSION_AFFINITY,
   DEFAULT_DEPLOYMENT_AFFINITY,
   DEFAULT_TIER_DISTANCE_PENALTY,
+  CustomTierSet,
+  effectiveClassifierType,
 } from "./ComplexityRouterConfig";
 import { KeywordTierRule } from "./KeywordTierRules";
 import { DEFAULT_ESCALATION_KEYWORDS } from "./EscalationKeywords";
@@ -39,8 +41,10 @@ import {
   getPlanModeTierError,
   getSemanticConfigError,
   getTierLabelsError,
+  getCustomTierRowsError,
+  getKeywordRuleTierError,
 } from "./build_complexity_router_config";
-import { resolveComplexityDefaultModel } from "./complexity_router_tiers";
+import { customTierDefaultModel, resolveComplexityDefaultModel } from "./complexity_router_tiers";
 import { buildAutoRouterTestTargets, AutoRouterTestTarget } from "./build_auto_router_test_targets";
 import AutoRouterConnectionTest from "./auto_router_connection_test";
 import AutoRouterRoutingTest from "./AutoRouterRoutingTest";
@@ -104,15 +108,16 @@ const presets = getAllPresets();
 
 // A one-line summary of what's configured, shown when the detailed section is collapsed so a
 // caller can see the shape of the config without opening it.
-const tierConfigSummary = (tiers: ComplexityTiers): string => {
-  const parts = (
-    [
-      ["Simple", tiers.SIMPLE],
-      ["Medium", tiers.MEDIUM],
-      ["Complex", tiers.COMPLEX],
-      ["Reasoning", tiers.REASONING],
-    ] as const
-  )
+const tierConfigSummary = (tiers: ComplexityTiers, customTierSet?: CustomTierSet): string => {
+  const rows: [string, string[]][] = customTierSet
+    ? customTierSet.tiers.map((row): [string, string[]] => [row.name.trim() || "New tier", row.models])
+    : [
+        ["Simple", tiers.SIMPLE],
+        ["Medium", tiers.MEDIUM],
+        ["Complex", tiers.COMPLEX],
+        ["Reasoning", tiers.REASONING],
+      ];
+  const parts = rows
     .filter(([, models]) => models.length > 0)
     .map(([label, models]) => `${label}: ${models.join(", ")}`);
   return parts.length > 0 ? parts.join(" · ") : "No tiers configured yet";
@@ -128,10 +133,13 @@ const getSubmitBlockedReason = (
   referencedModelsParams: Parameters<typeof getReferencedModelsError>[0],
   availability: ModelAvailability,
 ): string | null =>
-  getMissingTiersError(config.tiers) ??
-  getTierLabelsError(config.tier_labels) ??
-  getPlanModeTierError(config.plan_mode_min_tier, config.tiers) ??
+  (config.custom_tier_set
+    ? getCustomTierRowsError(config.custom_tier_set)
+    : getMissingTiersError(config.tiers) ??
+      getTierLabelsError(config.tier_labels) ??
+      getPlanModeTierError(config.plan_mode_min_tier, config.tiers)) ??
   getKeywordTierRulesError(keywordTierRules) ??
+  getKeywordRuleTierError(keywordTierRules, config.custom_tier_set) ??
   getReferencedModelsError(referencedModelsParams, availability);
 
 const autoRouterSchema = (requiresTeamScope: boolean) =>
@@ -200,6 +208,8 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
   const [matchThreshold, setMatchThreshold] = useState<number>(DEFAULT_MATCH_THRESHOLD);
   const [escalationKeywords, setEscalationKeywords] = useState<string[]>(DEFAULT_ESCALATION_KEYWORDS);
   const [showValidationErrors, setShowValidationErrors] = useState<boolean>(false);
+  const [editingTiers, setEditingTiers] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const [selectedPreset, setSelectedPreset] = useState<string | undefined>(undefined);
   // Closed by default: a caller opens it deliberately, either by clicking it or by choosing Custom
@@ -299,6 +309,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
   );
 
   const applyPrefill = (prefill: PresetPrefill) => {
+    setEditingTiers(false);
     setComplexityRouterConfig(prefill.complexityRouterConfig);
     setCustomTechnicalKeywords(prefill.customTechnicalKeywords);
     setKeywordTierRules(prefill.keywordTierRules);
@@ -328,9 +339,12 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     setDetailsExpanded(presetState.viaDeployments);
   };
 
+  const customTierSet = complexityRouterConfig.custom_tier_set;
   const referencedModelsParams = {
-    tiers: complexityRouterConfig.tiers,
-    classifierType: complexityRouterConfig.classifier_type,
+    tiers: customTierSet
+      ? Object.fromEntries(customTierSet.tiers.map((row) => [row.name.trim() || row.id, row.models] as const))
+      : complexityRouterConfig.tiers,
+    classifierType: effectiveClassifierType(complexityRouterConfig),
     classifierLlmConfig: complexityRouterConfig.classifier_llm_config,
     semanticMatchingEnabled,
     embeddingModel,
@@ -346,6 +360,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
 
   const complexityRouterConfigParams: BuildComplexityRouterConfigParams = {
     tiers: complexityRouterConfig.tiers,
+    customTierSet,
     defaultModel: complexityRouterConfig.default_model,
     planModeMinTier: complexityRouterConfig.plan_mode_min_tier,
     tierLabels: complexityRouterConfig.tier_labels,
@@ -375,20 +390,27 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     reasoningOverrideMinScore: complexityRouterConfig.reasoning_override_min_score,
   };
 
+  // One in-flight submission: a second click would race the first into a duplicate /model/new.
   const submitRecommendedRouter = async (name: string) => {
-    const { tiers, tierLabels, classifierType, classifierLlmConfig } = complexityRouterConfigParams;
-
-    const missingTiersError = getMissingTiersError(tiers);
-    if (missingTiersError) {
-      setShowValidationErrors(true);
-      toast.fromError(missingTiersError);
-      return;
+    if (isSubmitting) return;
+    setIsSubmitting(true);
+    try {
+      await submitRecommendedRouterInner(name);
+    } finally {
+      setIsSubmitting(false);
     }
+  };
 
-    const tierLabelsError = getTierLabelsError(tierLabels);
-    if (tierLabelsError) {
+  const submitRecommendedRouterInner = async (name: string) => {
+    const { tiers, tierLabels, classifierLlmConfig } = complexityRouterConfigParams;
+    const classifierType = effectiveClassifierType(complexityRouterConfig);
+
+    const tierSetError = customTierSet
+      ? getCustomTierRowsError(customTierSet)
+      : getMissingTiersError(tiers) ?? getTierLabelsError(tierLabels);
+    if (tierSetError) {
       setShowValidationErrors(true);
-      toast.fromError(tierLabelsError);
+      toast.fromError(tierSetError);
       return;
     }
 
@@ -398,7 +420,8 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
       return;
     }
 
-    const keywordRulesError = getKeywordTierRulesError(keywordTierRules);
+    const keywordRulesError =
+      getKeywordTierRulesError(keywordTierRules) ?? getKeywordRuleTierError(keywordTierRules, customTierSet);
     if (keywordRulesError) {
       setShowValidationErrors(true);
       toast.fromError(keywordRulesError);
@@ -423,13 +446,28 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
       return;
     }
 
-    const defaultModel = resolveComplexityDefaultModel(tiers, complexityRouterConfig.default_model);
+    const defaultModel = customTierSet
+      ? customTierDefaultModel(customTierSet, complexityRouterConfig.default_model)
+      : resolveComplexityDefaultModel(tiers, complexityRouterConfig.default_model);
     const validatedFields = requiresTeamScope
       ? (["auto_router_name", "team_id"] as const)
       : (["auto_router_name"] as const);
 
     if (!(await form.trigger(validatedFields))) {
       toast.fromError("Please fill in all required fields");
+      return;
+    }
+
+    // Dry-run the write gate against the exact config the save will send.
+    const builtConfig = buildComplexityRouterConfig(complexityRouterConfigParams);
+    const serverVerdict = await validateAutoRouterConfig(
+      accessToken,
+      builtConfig,
+      requiresTeamScope ? form.getValues("team_id") : undefined,
+    );
+    if (!serverVerdict.valid && serverVerdict.error) {
+      setShowValidationErrors(true);
+      toast.fromError(serverVerdict.error);
       return;
     }
 
@@ -442,11 +480,11 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
       ...teamScopePayload(requiresTeamScope, form.getValues("team_id")),
       auto_router_default_model: defaultModel,
       model_type: "complexity_router",
-      complexity_router_config: buildComplexityRouterConfig(complexityRouterConfigParams),
+      complexity_router_config: builtConfig,
       model_access_group: form.getValues("model_access_group"),
     };
 
-    handleAddAutoRouterSubmit(submitValues, accessToken, () => form.reset(EMPTY_FORM_VALUES), handleOk);
+    await handleAddAutoRouterSubmit(submitValues, accessToken, () => form.reset(EMPTY_FORM_VALUES), handleOk);
   };
 
   const handleAutoRouterSubmit = async () => {
@@ -464,9 +502,12 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
   const handleTestConnection = () => {
     const testTargetParams = {
       tiers: complexityRouterConfig.tiers,
+      customTiers: customTierSet?.tiers.map((row) => ({ name: row.name.trim() || row.id, models: row.models })),
       semanticMatchingEnabled,
       embeddingModel,
-      defaultModel: resolveComplexityDefaultModel(complexityRouterConfig.tiers, complexityRouterConfig.default_model),
+      defaultModel: customTierSet
+        ? customTierDefaultModel(customTierSet, complexityRouterConfig.default_model)
+        : resolveComplexityDefaultModel(complexityRouterConfig.tiers, complexityRouterConfig.default_model),
     };
     const targets = buildAutoRouterTestTargets(testTargetParams);
 
@@ -581,13 +622,15 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
                   </span>
                   {!detailsExpanded && (
                     <span className="text-xs text-muted-foreground line-clamp-2">
-                      {tierConfigSummary(complexityRouterConfig.tiers)}
+                      {tierConfigSummary(complexityRouterConfig.tiers, customTierSet)}
                     </span>
                   )}
                 </button>
                 {detailsExpanded && (
                   <div className="px-4 pb-4">
                     <ComplexityRouterConfig
+                      editingTiers={editingTiers}
+                      onEditingTiersChange={setEditingTiers}
                       modelInfo={modelInfo}
                       value={complexityRouterConfig}
                       onChange={setComplexityRouterConfig}
@@ -670,7 +713,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
                   <BlockedReasonTooltip reason={submitBlockedReason}>
                     <Button
                       type="button"
-                      disabled={submitBlockedReason !== null}
+                      disabled={submitBlockedReason !== null || isSubmitting}
                       onClick={() => {
                         void handleAutoRouterSubmit();
                       }}
@@ -694,10 +737,11 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
             <AutoRouterRoutingTest
               accessToken={accessToken}
               config={buildComplexityRouterConfig(complexityRouterConfigParams)}
-              defaultModel={resolveComplexityDefaultModel(
-                complexityRouterConfig.tiers,
-                complexityRouterConfig.default_model,
-              )}
+              defaultModel={
+                customTierSet
+                  ? customTierDefaultModel(customTierSet, complexityRouterConfig.default_model)
+                  : resolveComplexityDefaultModel(complexityRouterConfig.tiers, complexityRouterConfig.default_model)
+              }
               routerName={watchedName}
               teamId={requiresTeamScope ? watchedTeamId : undefined}
             />

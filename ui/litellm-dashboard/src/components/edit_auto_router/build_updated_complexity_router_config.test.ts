@@ -429,3 +429,70 @@ describe("buildUpdatedComplexityRouterConfig tier model params", () => {
     expect(result).not.toHaveProperty("tier_model_configs");
   });
 });
+
+describe("buildUpdatedComplexityRouterConfig custom tier sets", () => {
+  const customValue = {
+    tiers: { SIMPLE: ["gpt-4o-mini"], MEDIUM: [], COMPLEX: [], REASONING: [] },
+    custom_tier_set: {
+      tiers: [
+        { id: "SIMPLE", name: "SIMPLE", definition: "", models: ["gpt-4o-mini"] },
+        { id: "sec", name: "AUDIT", definition: "security audits", models: ["claude-sonnet-5"] },
+      ],
+      fallback_tier_id: "sec",
+    },
+    classifier_type: "heuristic" as const,
+    classifier_llm_config: { model: "haiku-classifier", timeout_ms: 400, system_prompt: "grade it" },
+    session_affinity: true,
+    adaptive: true,
+    tier_labels: { SIMPLE: "Cheap" },
+    plan_mode_min_tier: "sec",
+  };
+  const storedWithRejected = {
+    ...STORED,
+    session_affinity: true,
+    adaptive: true,
+    tier_labels: { SIMPLE: "Cheap" },
+    plan_mode_min_tier: "AUDIT",
+  };
+
+  it("emits the edited set through the shared wire owner and drops stored keys the backend rejects", () => {
+    const result = buildUpdatedComplexityRouterConfig(storedWithRejected, customValue, undefined, hydratedState);
+    expect(result).toEqual({
+      some_future_backend_key: { nested: true },
+      deployment_affinity: true,
+      keyword_tier_rules: [{ keywords: ["invoice", "refund"], tier: "MEDIUM" }],
+      semantic_keyword_matching: true,
+      embedding_model: "voyage-4-large",
+      match_threshold: 0.72,
+      tiers: { SIMPLE: ["gpt-4o-mini"], AUDIT: ["claude-sonnet-5"] },
+      tier_definitions: [{ name: "SIMPLE" }, { name: "AUDIT", description: "security audits" }],
+      fallback_tier: "AUDIT",
+      classifier_type: "llm",
+      classifier_llm_config: { model: "haiku-classifier", timeout_ms: 400 },
+      session_affinity: false,
+      escalation_keywords: [],
+      plan_mode_min_tier: "AUDIT",
+    });
+  });
+
+  it("follows a rename of the plan-mode floor's tier, because the floor points at the row id", () => {
+    const renamed = {
+      ...customValue,
+      custom_tier_set: {
+        ...customValue.custom_tier_set,
+        tiers: customValue.custom_tier_set.tiers.map((row) =>
+          row.id === "sec" ? { ...row, name: "SECURITY_REVIEW" } : row,
+        ),
+      },
+    };
+    const result = buildUpdatedComplexityRouterConfig(storedWithRejected, renamed, undefined, hydratedState);
+    expect(result.plan_mode_min_tier).toBe("SECURITY_REVIEW");
+    expect(result.fallback_tier).toBe("SECURITY_REVIEW");
+  });
+
+  it("keeps a built-in save identical when no custom set exists", () => {
+    const result = buildUpdatedComplexityRouterConfig(STORED, FORM_VALUE, undefined, hydratedState);
+    expect(result).not.toHaveProperty("tier_definitions");
+    expect(result.tiers).toEqual(FORM_VALUE.tiers);
+  });
+});
