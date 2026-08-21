@@ -422,7 +422,7 @@ def test_openai_web_search():
     """Makes a simple web search request and validates the response contains web search annotations and all expected fields are present"""
     litellm._turn_on_debug()
     response = litellm.completion(
-        model="openai/gpt-4o-search-preview",
+        model="openai/gpt-5-search-api",
         messages=[
             {
                 "role": "user",
@@ -442,7 +442,7 @@ def test_openai_web_search_streaming():
     # litellm._turn_on_debug()
     test_openai_web_search: Optional[ChatCompletionAnnotation] = None
     response = litellm.completion(
-        model="openai/gpt-4o-search-preview",
+        model="openai/gpt-5-search-api",
         messages=[
             {
                 "role": "user",
