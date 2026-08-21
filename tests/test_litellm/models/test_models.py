@@ -130,6 +130,26 @@ class TestModel:
         assert model.litellm_params == {"model": "gpt-4"}
         assert model.model_info == {"team_id": "t1"}
 
+    def test_accepts_existing_model_instance_during_revalidation(self):
+        # 1. Validate from dictionary input (dict branch in validator)
+        raw_dict = {
+            "model_id": "m1",
+            "model_name": "gpt-4",
+            "litellm_params": {"model": "gpt-4"},
+            "model_info": {"id": "m1"},
+            "blocked": True,
+        }
+        model_from_dict = LiteLLM_ProxyModelTable.model_validate(raw_dict)
+        assert model_from_dict.model_id == "m1"
+        assert model_from_dict.blocked is True
+
+        # 2. Revalidate from existing model instance (non-dict branch in validator)
+        reparsed = LiteLLM_ProxyModelTable.model_validate(model_from_dict)
+        assert reparsed.model_id == "m1"
+        assert reparsed.model_info == {"id": "m1"}
+        assert reparsed.blocked is True
+
+
     def test_team_helpers_none_when_no_model_info(self):
         model = LiteLLM_ProxyModelTable(
             model_id="m1", model_name="gpt-4", litellm_params={}, model_info=None
