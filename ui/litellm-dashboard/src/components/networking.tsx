@@ -2523,9 +2523,9 @@ export const userDailyActivityAggregatedCall = async (
         start_date: formatDate(startTime),
         end_date: formatDate(endTime),
         timezone: new Date().getTimezoneOffset().toString(),
-        user_id: userId || undefined,
+        user_id: userId ?? undefined,
         include_current_utc_day: includeCurrentUtcDay ? "true" : undefined,
-        api_key: apiKey || undefined,
+        api_key: apiKey ?? undefined,
       },
     });
   } catch (error) {
