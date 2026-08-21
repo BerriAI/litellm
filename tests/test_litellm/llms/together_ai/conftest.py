@@ -17,16 +17,18 @@ def local_model_cost_map():
     import litellm
     from litellm.utils import _invalidate_model_cost_lowercase_map
 
-    original_model_cost = litellm.model_cost
-    litellm.model_cost = json.loads(
-        files("litellm").joinpath("model_prices_and_context_window_backup.json").read_text(encoding="utf-8")
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        json.loads(
+            files("litellm").joinpath("model_prices_and_context_window_backup.json").read_text(encoding="utf-8")
+        ),
     )
     litellm.get_model_info.cache_clear()
     _invalidate_model_cost_lowercase_map()
     try:
         yield litellm
     finally:
-        litellm.model_cost = original_model_cost
+        monkeypatch.undo()
         litellm.get_model_info.cache_clear()
         _invalidate_model_cost_lowercase_map()
-        monkeypatch.undo()

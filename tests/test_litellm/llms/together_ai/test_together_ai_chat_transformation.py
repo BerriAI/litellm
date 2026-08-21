@@ -1,5 +1,6 @@
 """Tests for litellm/llms/together_ai/chat.py"""
 
+import json
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -228,61 +229,86 @@ def test_text_response_format_is_stripped(local_model_cost_map):
     }
 
 
-def test_request_body_reaching_the_openai_sdk(local_model_cost_map, no_together_env):
+def request_body_for(completion_kwargs, cost_map_module):
+    """Run one completion against a stubbed transport and return the JSON body that went out.
+
+    Faking at the HTTP boundary rather than at the SDK call means the assertions read the
+    bytes Together would receive, including whether extra_body was spread into the body.
+    """
+    import httpx
+    import openai
+
+    captured = []
+
+    def handler(request):
+        captured.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-test",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "test",
+                "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "ok"}}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+        )
+
+    client = openai.OpenAI(
+        api_key="test-key",
+        base_url="https://api.together.ai/v1",
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+    cost_map_module.completion(client=client, **completion_kwargs)
+    return captured[0]
+
+
+def test_request_body_reaching_together(local_model_cost_map, no_together_env):
     """End to end: what a caller passes has to arrive in the shape Together documents."""
-    import openai
+    body = request_body_for(
+        {
+            "model": "together_ai/openai/gpt-oss-120b",
+            "messages": [{"role": "user", "content": "hi"}],
+            "reasoning_effort": "low",
+            "max_completion_tokens": 100,
+            "logprobs": True,
+            "top_logprobs": 3,
+            "top_k": 40,
+            "repetition_penalty": 1.1,
+            "safety_model": "meta-llama/Llama-Guard-4-12B",
+        },
+        local_model_cost_map,
+    )
 
-    client = openai.OpenAI(api_key="test-key", base_url="https://api.together.ai/v1")
-    with patch.object(client.chat.completions.with_raw_response, "create", new=MagicMock()) as mocked_create:
-        local_model_cost_map.completion(
-            model="together_ai/openai/gpt-oss-120b",
-            messages=[{"role": "user", "content": "hi"}],
-            client=client,
-            reasoning_effort="low",
-            max_completion_tokens=100,
-            logprobs=True,
-            top_logprobs=3,
-            top_k=40,
-            repetition_penalty=1.1,
-            safety_model="meta-llama/Llama-Guard-4-12B",
-        )
-
-    sent = mocked_create.call_args.kwargs
-    assert sent["model"] == "openai/gpt-oss-120b"
-    # every key here has to be one the SDK's create() accepts, or the call raises TypeError
-    # before it is ever sent; Together-native fields belong in extra_body
-    assert "reasoning" not in sent
-    assert sent["max_tokens"] == 100
-    assert sent["logprobs"] == 3
-    assert sent["reasoning_effort"] == "low"
-    assert "max_completion_tokens" not in sent
-    assert "top_logprobs" not in sent
-    # Together-native params ride in extra_body, which the OpenAI SDK spreads into the body.
-    assert sent["extra_body"] == {
-        "top_k": 40,
-        "repetition_penalty": 1.1,
-        "safety_model": "meta-llama/Llama-Guard-4-12B",
-    }
+    assert body["model"] == "openai/gpt-oss-120b"
+    assert body["max_tokens"] == 100
+    assert body["logprobs"] == 3
+    assert body["reasoning_effort"] == "low"
+    assert "max_completion_tokens" not in body
+    assert "top_logprobs" not in body
+    # Together-native params ride in extra_body, which the SDK spreads into the body itself
+    assert body["top_k"] == 40
+    assert body["repetition_penalty"] == 1.1
+    assert body["safety_model"] == "meta-llama/Llama-Guard-4-12B"
+    assert "extra_body" not in body
 
 
-def test_reasoning_toggle_reaches_the_sdk_in_extra_body(local_model_cost_map, no_together_env):
-    """Regression: `reasoning` handed to the SDK as a keyword raised
-    `AsyncCompletions.create() got an unexpected keyword argument 'reasoning'`."""
-    import openai
+def test_reasoning_toggle_reaches_together(local_model_cost_map, no_together_env):
+    """Regression: the toggle was sent as a top-level SDK keyword, which raised
+    `AsyncCompletions.create() got an unexpected keyword argument 'reasoning'` before the
+    request left the process. It belongs in extra_body, and lands top-level on the wire."""
+    body = request_body_for(
+        {
+            "model": "together_ai/moonshotai/Kimi-K3",
+            "messages": [{"role": "user", "content": "hi"}],
+            "reasoning_effort": "none",
+        },
+        local_model_cost_map,
+    )
 
-    client = openai.OpenAI(api_key="test-key", base_url="https://api.together.ai/v1")
-    with patch.object(client.chat.completions.with_raw_response, "create", new=MagicMock()) as mocked_create:
-        local_model_cost_map.completion(
-            model="together_ai/moonshotai/Kimi-K3",
-            messages=[{"role": "user", "content": "hi"}],
-            client=client,
-            reasoning_effort="none",
-        )
-
-    sent = mocked_create.call_args.kwargs
-    assert sent["extra_body"]["reasoning"] == {"enabled": False}
-    assert "reasoning" not in sent
-    assert "reasoning_effort" not in sent
+    assert body["reasoning"] == {"enabled": False}
+    assert "reasoning_effort" not in body
+    assert "extra_body" not in body
 
 
 def test_api_key_resolution_order(no_together_env):
@@ -347,11 +373,12 @@ def test_get_models_prefixes_ids_for_both_payload_shapes(no_together_env, payloa
 def test_get_models_honors_a_custom_api_base(no_together_env):
     response = MagicMock()
     response.status_code = 200
-    response.json.return_value = {"data": []}
+    response.json.return_value = {"data": [{"id": "zai-org/GLM-5.2"}]}
 
     with patch("litellm.module_level_client.get", return_value=response) as mocked_get:
-        TogetherAIConfig().get_models(api_key="test-key", api_base="https://gateway.internal/v1/")
+        models = TogetherAIConfig().get_models(api_key="test-key", api_base="https://gateway.internal/v1/")
 
+    assert models == ["together_ai/zai-org/GLM-5.2"]
     assert mocked_get.call_args.kwargs["url"] == "https://gateway.internal/v1/models"
 
 
