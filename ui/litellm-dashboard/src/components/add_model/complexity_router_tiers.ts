@@ -1,5 +1,6 @@
-import type { ComplexityTiers } from "./ComplexityRouterConfig";
+import type { ComplexityTiers, CustomTierSet } from "./ComplexityRouterConfig";
 import type { ComplexityTier } from "./KeywordTierRules";
+import { findTierByName } from "./custom_tier_set";
 
 export type TierModelParams = Record<string, unknown>;
 
@@ -133,7 +134,23 @@ export const DEFAULT_TIER_LABELS: Record<ComplexityTier, string> = {
 
 export const TIER_ORDER: ComplexityTier[] = ["SIMPLE", "MEDIUM", "COMPLEX", "REASONING"];
 
+const isBuiltInOption = (tier: string): tier is ComplexityTier => (TIER_ORDER as string[]).includes(tier);
+
 export const tierOptions = (
   tierLabels: Partial<Record<ComplexityTier, string>> | undefined,
-): { value: ComplexityTier; label: string }[] =>
-  TIER_ORDER.map((tier) => ({ value: tier, label: tierLabels?.[tier]?.trim() || DEFAULT_TIER_LABELS[tier] }));
+  tierNames?: string[],
+): { value: string; label: string }[] =>
+  (tierNames ?? TIER_ORDER).map((tier) => ({
+    value: tier,
+    label: (isBuiltInOption(tier) && (tierLabels?.[tier]?.trim() || DEFAULT_TIER_LABELS[tier])) || tier,
+  }));
+
+/** Backend derivation for an edited set: pin, then the fallback tier's pool, then MEDIUM/SIMPLE. */
+export const customTierDefaultModel = (customTierSet: CustomTierSet, pinned?: string): string | undefined => {
+  const rowNamed = (name: string) => findTierByName(customTierSet.tiers, name);
+  const fallbackRow = customTierSet.tiers.find((row) => row.id === customTierSet.fallback_tier_id);
+  return pinned?.trim() || fallbackRow?.models[0] || rowNamed("MEDIUM")?.models[0] || rowNamed("SIMPLE")?.models[0];
+};
+
+export const defaultRuleTier = (tierNames?: string[]): string =>
+  !tierNames || tierNames.includes("COMPLEX") ? "COMPLEX" : tierNames[0] ?? "COMPLEX";

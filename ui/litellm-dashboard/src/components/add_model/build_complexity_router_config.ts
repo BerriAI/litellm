@@ -1,6 +1,12 @@
 import { KeywordTierRule } from "./KeywordTierRules";
+import { findTierByName, tierNamesMatch } from "./custom_tier_set";
 import { emptyKeywordTierRuleIndexes, serializeKeywordTierRules } from "./complexity_router_keywords";
-import { TierModelParams, TierModelParamsByTier, serializeTierModelConfigs } from "./complexity_router_tiers";
+import {
+  TierModelParams,
+  TierModelParamsByTier,
+  normalizeTierModels,
+  serializeTierModelConfigs,
+} from "./complexity_router_tiers";
 import {
   AdaptiveEligible,
   AdaptiveRouterWeights,
@@ -9,8 +15,10 @@ import {
   ClassifierType,
   ComplexityTierLabels,
   ComplexityTiers,
+  CustomTierSet,
   DimensionWeights,
   TIER_DESCRIPTIONS,
+  TIER_KEYS,
   TierBoundaries,
   TokenThresholds,
   effectiveTierLabel,
@@ -74,6 +82,7 @@ const scorerKnobPayload = ({
 
 export interface BuildComplexityRouterConfigParams {
   tiers: ComplexityTiers;
+  customTierSet?: CustomTierSet;
   defaultModel: string | undefined;
   planModeMinTier: string | undefined;
   tierLabels: ComplexityTierLabels | undefined;
@@ -103,8 +112,15 @@ export interface BuildComplexityRouterConfigParams {
   tierModelParams?: TierModelParamsByTier;
 }
 
+export interface TierDefinitionPayload {
+  name: string;
+  description?: string;
+}
+
 export interface ComplexityRouterConfigPayload {
-  tiers: ComplexityTiers;
+  tiers: ComplexityTiers | Record<string, string[]>;
+  tier_definitions?: TierDefinitionPayload[];
+  fallback_tier?: string;
   default_model?: string;
   plan_mode_min_tier?: string;
   tier_labels?: ComplexityTierLabels;
@@ -133,8 +149,6 @@ export interface ComplexityRouterConfigPayload {
   reasoning_override_min_score?: number;
   tier_model_configs?: Record<string, { model_name: string; litellm_params: TierModelParams }[]>;
 }
-
-const TIER_KEYS: Array<keyof ComplexityTiers> = ["SIMPLE", "MEDIUM", "COMPLEX", "REASONING"];
 
 export const serializeTierLabels = (tierLabels: ComplexityTierLabels | undefined): ComplexityTierLabels | undefined => {
   const renamed = TIER_KEYS.map((tier) => [tier, tierLabels?.[tier]?.trim() ?? ""] as const).filter(
@@ -192,10 +206,20 @@ export const getPlanModeTierError = (planModeMinTier: string | undefined, tiers:
   return `The plan-mode minimum tier (${planModeMinTier}) has no models. Add one or turn the override off.`;
 };
 
-export const getKeywordTierRulesError = (keywordTierRules: KeywordTierRule[]): string | null => {
+// Rules point at a tier by NAME, so a tier edit can orphan one and the backend rejects the config.
+export const getKeywordTierRulesError = (
+  keywordTierRules: KeywordTierRule[],
+  activeTierNames?: readonly string[],
+): string | null => {
   const emptyRows = emptyKeywordTierRuleIndexes(keywordTierRules);
-  if (emptyRows.length === 0) return null;
-  return `Add at least one keyword to keyword rule(s): ${emptyRows.map((index) => index + 1).join(", ")}`;
+  if (emptyRows.length > 0)
+    return `Add at least one keyword to keyword rule(s): ${emptyRows.map((index) => index + 1).join(", ")}`;
+  if (!activeTierNames) return null;
+  const orphaned = keywordTierRules.flatMap((rule, index) =>
+    activeTierNames.some((name) => tierNamesMatch(name, rule.tier)) ? [] : [index + 1],
+  );
+  if (orphaned.length === 0) return null;
+  return `Keyword rule(s) ${orphaned.join(", ")} route to a tier this router no longer has`;
 };
 
 export const getSemanticConfigError = ({
@@ -211,8 +235,100 @@ export const getSemanticConfigError = ({
   return null;
 };
 
+// Mirrors validate_complexity_router_config_write (litellm/router_utils/auto_router_model_naming.py).
+export const KEYS_REJECTED_WITH_CUSTOM_TIERS: readonly string[] = [
+  "plugins",
+  "tier_labels",
+  "classifier_fallback",
+  "adaptive",
+  "adaptive_weights",
+  "tier_distance_penalty",
+  "adaptive_eligible",
+  "tier_boundaries",
+  "token_thresholds",
+  "dimension_weights",
+  "reasoning_override_min_score",
+  "escalation_keywords",
+  "session_affinity",
+];
+
+export const serializeCustomTierSet = (
+  customTierSet: CustomTierSet,
+): Pick<ComplexityRouterConfigPayload, "tiers" | "tier_definitions" | "fallback_tier"> => {
+  const fallbackName = customTierSet.tiers.find((row) => row.id === customTierSet.fallback_tier_id)?.name.trim();
+  return {
+    tiers: Object.fromEntries(customTierSet.tiers.map((row) => [row.name.trim(), row.models] as const)),
+    tier_definitions: customTierSet.tiers.map((row) => ({
+      name: row.name.trim(),
+      ...(row.definition.trim() && { description: row.definition.trim() }),
+    })),
+    ...(fallbackName && { fallback_tier: fallbackName }),
+  };
+};
+
+// A built-in name keeps its canonical key as the row id so Restore recognizes it.
+export const hydrateCustomTierSet = (parsedConfig: {
+  tier_definitions?: unknown;
+  fallback_tier?: unknown;
+  tiers?: unknown;
+}): CustomTierSet | undefined => {
+  if (!Array.isArray(parsedConfig.tier_definitions) || parsedConfig.tier_definitions.length === 0) return undefined;
+  const storedTiers =
+    typeof parsedConfig.tiers === "object" && parsedConfig.tiers !== null && !Array.isArray(parsedConfig.tiers)
+      ? (parsedConfig.tiers as Record<string, unknown>)
+      : {};
+  const rows = parsedConfig.tier_definitions.flatMap((entry, index): CustomTierSet["tiers"] => {
+    if (typeof entry !== "object" || entry === null) return [];
+    const { name, description } = entry as { name?: unknown; description?: unknown };
+    if (typeof name !== "string" || !name.trim()) return [];
+    return [
+      {
+        id: TIER_KEYS.find((tier) => tierNamesMatch(tier, name)) ?? `stored-${index}`,
+        name: name.trim(),
+        definition: typeof description === "string" ? description.trim() : "",
+        models: normalizeTierModels(Object.entries(storedTiers).find(([tier]) => tierNamesMatch(tier, name))?.[1]),
+      },
+    ];
+  });
+  if (rows.length === 0) return undefined;
+  const storedFallback = typeof parsedConfig.fallback_tier === "string" ? parsedConfig.fallback_tier.trim() : "";
+  return { tiers: rows, fallback_tier_id: findTierByName(rows, storedFallback)?.id ?? "" };
+};
+
+// The floor is a ROW ID on the value; one rule at every layer: unresolvable means OFF.
+export const hydratePlanModeMinTier = (
+  stored: unknown,
+  customTierSet: CustomTierSet | undefined,
+): string | undefined => {
+  if (typeof stored !== "string" || stored.trim() === "") return undefined;
+  if (!customTierSet) return stored;
+  return findTierByName(customTierSet.tiers, stored)?.id;
+};
+
+// Everything an edited tier set forces onto the wire; shared by both builders.
+export const customTierSetWireFields = (
+  customTierSet: CustomTierSet,
+  classifierLlmConfig: ClassifierLLMConfig | undefined,
+  planModeMinTierId: string | undefined,
+) => {
+  const planModeName = customTierSet.tiers.find((row) => row.id === planModeMinTierId)?.name.trim();
+  return {
+    ...serializeCustomTierSet(customTierSet),
+    classifier_type: "llm" as const,
+    ...(classifierLlmConfig && {
+      classifier_llm_config: { model: classifierLlmConfig.model, timeout_ms: classifierLlmConfig.timeout_ms },
+    }),
+    session_affinity: false,
+    escalation_keywords: [] as string[],
+    ...(planModeName && { plan_mode_min_tier: planModeName }),
+  };
+};
+
+export { getCustomTierRowsError } from "./custom_tier_set";
+
 export const buildComplexityRouterConfig = ({
   tiers,
+  customTierSet,
   defaultModel,
   planModeMinTier,
   tierLabels,
@@ -241,7 +357,7 @@ export const buildComplexityRouterConfig = ({
   reasoningOverrideMinScore,
   tierModelParams,
 }: BuildComplexityRouterConfigParams): ComplexityRouterConfigPayload => {
-  const serializedTierModelConfigs = serializeTierModelConfigs(tiers, tierModelParams);
+  const serializedTierModelConfigs = customTierSet ? undefined : serializeTierModelConfigs(tiers, tierModelParams);
   const cleanedEscalationKeywords = escalationKeywords.map((keyword) => keyword.trim()).filter(Boolean);
   const cleanedKeywordTierRules = serializeKeywordTierRules(keywordTierRules);
   const cleanedTierLabels = serializeTierLabels(tierLabels);
@@ -255,25 +371,27 @@ export const buildComplexityRouterConfig = ({
   };
   const scorerKnobs = scorerKnobPayload(scorerInputs);
 
-  return {
+  // A custom set forces the LLM classifier, so llm-only inputs must survive a stale heuristic field.
+  const effectiveType: ClassifierType = customTierSet ? "llm" : classifierType;
+  const payload: ComplexityRouterConfigPayload = {
     tiers,
     ...(serializedTierModelConfigs && { tier_model_configs: serializedTierModelConfigs }),
     ...(defaultModel?.trim() && { default_model: defaultModel }),
     ...(planModeMinTier?.trim() && { plan_mode_min_tier: planModeMinTier }),
     ...(cleanedTierLabels && { tier_labels: cleanedTierLabels }),
     classifier_type: classifierType,
-    ...(classifierType === "llm" &&
+    ...(effectiveType === "llm" &&
       classifierLlmConfig && { classifier_llm_config: normalizeClassifierLlmConfig(classifierLlmConfig) }),
     ...(classifierType === "llm" && classifierFallback !== undefined && { classifier_fallback: classifierFallback }),
-    ...(classifierType === "llm" &&
+    ...(effectiveType === "llm" &&
       classifierContextWindowSize !== undefined && {
         classifier_context_window_size: classifierContextWindowSize,
       }),
-    ...(classifierType === "llm" &&
+    ...(effectiveType === "llm" &&
       classifierContextPerTurnChars !== undefined && {
         classifier_context_per_turn_chars: classifierContextPerTurnChars,
       }),
-    ...(classifierType === "llm" &&
+    ...(effectiveType === "llm" &&
       classifierContextIncludeAssistantTurns !== undefined && {
         classifier_context_include_assistant_turns: classifierContextIncludeAssistantTurns,
       }),
@@ -296,4 +414,11 @@ export const buildComplexityRouterConfig = ({
     ...(returnRawModelName && { return_raw_model_name: true }),
     ...scorerKnobs,
   };
+  if (!customTierSet) return payload;
+  // Drop what the backend rejects beside tier_definitions; stale control state would fail the save.
+  const { plan_mode_min_tier: planModeMinTierId, ...withFloorRemoved } = payload;
+  const rest = Object.fromEntries(
+    Object.entries(withFloorRemoved).filter(([key]) => !KEYS_REJECTED_WITH_CUSTOM_TIERS.includes(key)),
+  ) as typeof withFloorRemoved;
+  return { ...rest, ...customTierSetWireFields(customTierSet, classifierLlmConfig, planModeMinTierId) };
 };

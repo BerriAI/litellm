@@ -22,11 +22,11 @@ import { fetchAvailableModels } from "@/components/llm_calls/fetch_models";
 import { autoRouterListKey, fetchAllModelDeployments } from "@/app/(dashboard)/hooks/models/useModels";
 import ComplexityRouterConfig, {
   ComplexityRouterConfigValue,
-  ComplexityTiers,
   DEFAULT_ADAPTIVE_WEIGHTS,
   DEFAULT_SESSION_AFFINITY,
   DEFAULT_DEPLOYMENT_AFFINITY,
   DEFAULT_TIER_DISTANCE_PENALTY,
+  effectiveClassifierType,
 } from "./ComplexityRouterConfig";
 import { KeywordTierRule } from "./KeywordTierRules";
 import { DEFAULT_ESCALATION_KEYWORDS } from "./EscalationKeywords";
@@ -39,8 +39,14 @@ import {
   getPlanModeTierError,
   getSemanticConfigError,
   getTierLabelsError,
+  getCustomTierRowsError,
 } from "./build_complexity_router_config";
-import { resolveComplexityDefaultModel } from "./complexity_router_tiers";
+import {
+  customTierDefaultModel,
+  DEFAULT_TIER_LABELS,
+  TIER_ORDER,
+  resolveComplexityDefaultModel,
+} from "./complexity_router_tiers";
 import { buildAutoRouterTestTargets, AutoRouterTestTarget } from "./build_auto_router_test_targets";
 import AutoRouterConnectionTest from "./auto_router_connection_test";
 import AutoRouterRoutingTest from "./AutoRouterRoutingTest";
@@ -102,19 +108,12 @@ const isPresetHintAlarming = (availability: PresetAvailability): boolean => avai
 // this is resolved once at import time rather than re-called from inside the component every render.
 const presets = getAllPresets();
 
-// A one-line summary of what's configured, shown when the detailed section is collapsed so a
-// caller can see the shape of the config without opening it.
-const tierConfigSummary = (tiers: ComplexityTiers): string => {
-  const parts = (
-    [
-      ["Simple", tiers.SIMPLE],
-      ["Medium", tiers.MEDIUM],
-      ["Complex", tiers.COMPLEX],
-      ["Reasoning", tiers.REASONING],
-    ] as const
-  )
+const TIER_SUMMARY_LABELS: Record<string, string> = DEFAULT_TIER_LABELS;
+
+const tierConfigSummary = (rows: [string, string[]][]): string => {
+  const parts = rows
     .filter(([, models]) => models.length > 0)
-    .map(([label, models]) => `${label}: ${models.join(", ")}`);
+    .map(([tier, models]) => `${TIER_SUMMARY_LABELS[tier] ?? tier}: ${models.join(", ")}`);
   return parts.length > 0 ? parts.join(" · ") : "No tiers configured yet";
 };
 
@@ -128,10 +127,12 @@ const getSubmitBlockedReason = (
   referencedModelsParams: Parameters<typeof getReferencedModelsError>[0],
   availability: ModelAvailability,
 ): string | null =>
-  getMissingTiersError(config.tiers) ??
-  getTierLabelsError(config.tier_labels) ??
-  getPlanModeTierError(config.plan_mode_min_tier, config.tiers) ??
-  getKeywordTierRulesError(keywordTierRules) ??
+  (config.custom_tier_set
+    ? getCustomTierRowsError(config.custom_tier_set)
+    : getMissingTiersError(config.tiers) ??
+      getTierLabelsError(config.tier_labels) ??
+      getPlanModeTierError(config.plan_mode_min_tier, config.tiers)) ??
+  getKeywordTierRulesError(keywordTierRules, config.custom_tier_set?.tiers.map((r) => r.name) ?? TIER_ORDER) ??
   getReferencedModelsError(referencedModelsParams, availability);
 
 const autoRouterSchema = (requiresTeamScope: boolean) =>
@@ -200,6 +201,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
   const [matchThreshold, setMatchThreshold] = useState<number>(DEFAULT_MATCH_THRESHOLD);
   const [escalationKeywords, setEscalationKeywords] = useState<string[]>(DEFAULT_ESCALATION_KEYWORDS);
   const [showValidationErrors, setShowValidationErrors] = useState<boolean>(false);
+  const [editingTiers, setEditingTiers] = useState(false);
 
   const [selectedPreset, setSelectedPreset] = useState<string | undefined>(undefined);
   // Closed by default: a caller opens it deliberately, either by clicking it or by choosing Custom
@@ -299,6 +301,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
   );
 
   const applyPrefill = (prefill: PresetPrefill) => {
+    setEditingTiers(false);
     setComplexityRouterConfig(prefill.complexityRouterConfig);
     setCustomTechnicalKeywords(prefill.customTechnicalKeywords);
     setKeywordTierRules(prefill.keywordTierRules);
@@ -328,9 +331,17 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     setDetailsExpanded(presetState.viaDeployments);
   };
 
+  const customTierSet = complexityRouterConfig.custom_tier_set;
+  // `tiers` is a stale built-in shadow while a set is edited, so read the rows the payload will carry.
+  const tierEntries: [string, string[]][] = customTierSet
+    ? customTierSet.tiers.map((row) => [row.name.trim() || "New tier", row.models])
+    : TIER_ORDER.map((tier) => [tier, complexityRouterConfig.tiers[tier]]);
+  const activeDefaultModel = customTierSet
+    ? customTierDefaultModel(customTierSet, complexityRouterConfig.default_model)
+    : resolveComplexityDefaultModel(complexityRouterConfig.tiers, complexityRouterConfig.default_model);
   const referencedModelsParams = {
-    tiers: complexityRouterConfig.tiers,
-    classifierType: complexityRouterConfig.classifier_type,
+    tiers: Object.fromEntries(tierEntries),
+    classifierType: effectiveClassifierType(complexityRouterConfig),
     classifierLlmConfig: complexityRouterConfig.classifier_llm_config,
     semanticMatchingEnabled,
     embeddingModel,
@@ -346,6 +357,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
 
   const complexityRouterConfigParams: BuildComplexityRouterConfigParams = {
     tiers: complexityRouterConfig.tiers,
+    customTierSet,
     defaultModel: complexityRouterConfig.default_model,
     planModeMinTier: complexityRouterConfig.plan_mode_min_tier,
     tierLabels: complexityRouterConfig.tier_labels,
@@ -376,29 +388,32 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
   };
 
   const submitRecommendedRouter = async (name: string) => {
-    const { tiers, tierLabels, classifierType, classifierLlmConfig } = complexityRouterConfigParams;
+    const { tiers, tierLabels, classifierLlmConfig } = complexityRouterConfigParams;
+    const classifierType = effectiveClassifierType(complexityRouterConfig);
 
-    const missingTiersError = getMissingTiersError(tiers);
-    if (missingTiersError) {
+    const tierSetError = customTierSet
+      ? getCustomTierRowsError(customTierSet)
+      : getMissingTiersError(tiers) ?? getTierLabelsError(tierLabels);
+    if (tierSetError) {
       setShowValidationErrors(true);
-      toast.fromError(missingTiersError);
-      return;
-    }
-
-    const tierLabelsError = getTierLabelsError(tierLabels);
-    if (tierLabelsError) {
-      setShowValidationErrors(true);
-      toast.fromError(tierLabelsError);
+      toast.fromError(tierSetError);
       return;
     }
 
     if (classifierType === "llm" && !classifierLlmConfig?.model) {
       setShowValidationErrors(true);
-      toast.fromError("Please select a classifier model, or switch back to Heuristic");
+      toast.fromError(
+        customTierSet
+          ? "Select a classifier model: an edited tier set routes with the LLM classifier"
+          : "Please select a classifier model, or switch back to Heuristic",
+      );
       return;
     }
 
-    const keywordRulesError = getKeywordTierRulesError(keywordTierRules);
+    const keywordRulesError = getKeywordTierRulesError(
+      keywordTierRules,
+      tierEntries.map(([name]) => name),
+    );
     if (keywordRulesError) {
       setShowValidationErrors(true);
       toast.fromError(keywordRulesError);
@@ -423,7 +438,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
       return;
     }
 
-    const defaultModel = resolveComplexityDefaultModel(tiers, complexityRouterConfig.default_model);
+    const defaultModel = activeDefaultModel;
     const validatedFields = requiresTeamScope
       ? (["auto_router_name", "team_id"] as const)
       : (["auto_router_name"] as const);
@@ -432,6 +447,8 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
       toast.fromError("Please fill in all required fields");
       return;
     }
+
+    const builtConfig = buildComplexityRouterConfig(complexityRouterConfigParams);
 
     // auto_router_default_model (-> litellm_params, read by the backend at init) and
     // complexity_router_config.default_model (-> the pin marker read back on edit, see
@@ -442,11 +459,11 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
       ...teamScopePayload(requiresTeamScope, form.getValues("team_id")),
       auto_router_default_model: defaultModel,
       model_type: "complexity_router",
-      complexity_router_config: buildComplexityRouterConfig(complexityRouterConfigParams),
+      complexity_router_config: builtConfig,
       model_access_group: form.getValues("model_access_group"),
     };
 
-    handleAddAutoRouterSubmit(submitValues, accessToken, () => form.reset(EMPTY_FORM_VALUES), handleOk);
+    await handleAddAutoRouterSubmit(submitValues, accessToken, () => form.reset(EMPTY_FORM_VALUES), handleOk);
   };
 
   const handleAutoRouterSubmit = async () => {
@@ -463,10 +480,10 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
 
   const handleTestConnection = () => {
     const testTargetParams = {
-      tiers: complexityRouterConfig.tiers,
+      tiers: tierEntries,
       semanticMatchingEnabled,
       embeddingModel,
-      defaultModel: resolveComplexityDefaultModel(complexityRouterConfig.tiers, complexityRouterConfig.default_model),
+      defaultModel: activeDefaultModel,
     };
     const targets = buildAutoRouterTestTargets(testTargetParams);
 
@@ -580,14 +597,14 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
                     Detailed Configuration
                   </span>
                   {!detailsExpanded && (
-                    <span className="text-xs text-muted-foreground line-clamp-2">
-                      {tierConfigSummary(complexityRouterConfig.tiers)}
-                    </span>
+                    <span className="text-xs text-muted-foreground line-clamp-2">{tierConfigSummary(tierEntries)}</span>
                   )}
                 </button>
                 {detailsExpanded && (
                   <div className="px-4 pb-4">
                     <ComplexityRouterConfig
+                      editingTiers={editingTiers}
+                      onEditingTiersChange={setEditingTiers}
                       modelInfo={modelInfo}
                       value={complexityRouterConfig}
                       onChange={setComplexityRouterConfig}
@@ -694,10 +711,11 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
             <AutoRouterRoutingTest
               accessToken={accessToken}
               config={buildComplexityRouterConfig(complexityRouterConfigParams)}
-              defaultModel={resolveComplexityDefaultModel(
-                complexityRouterConfig.tiers,
-                complexityRouterConfig.default_model,
-              )}
+              defaultModel={
+                customTierSet
+                  ? customTierDefaultModel(customTierSet, complexityRouterConfig.default_model)
+                  : resolveComplexityDefaultModel(complexityRouterConfig.tiers, complexityRouterConfig.default_model)
+              }
               routerName={watchedName}
               teamId={requiresTeamScope ? watchedTeamId : undefined}
             />
@@ -707,7 +725,6 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
             <Button variant="outline" onClick={() => setIsRoutingTestVisible(false)}>
               Close
             </Button>
-            , ]
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -744,7 +761,6 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
             >
               Close
             </Button>
-            , ]
           </DialogFooter>
         </DialogContent>
       </Dialog>

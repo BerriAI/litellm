@@ -137,12 +137,20 @@ export interface KeywordMatchingState {
   matchThreshold: number;
 }
 
+// This form hydrates only the four built-in tiers, so rebuilding from it would drop custom pools
+// while the preserved tier_definitions still name them: a save would corrupt or be rejected.
+export const hasStoredCustomTierSet = (storedConfig: unknown): boolean => {
+  const definitions = toRecord(storedConfig).tier_definitions;
+  return Array.isArray(definitions) && definitions.length > 0;
+};
+
 export const buildUpdatedComplexityRouterConfig = (
   storedConfig: unknown,
   value: ComplexityRouterConfigValue,
   customTechnicalKeywords?: string[],
   keywordMatching?: KeywordMatchingState,
 ): Record<string, unknown> => {
+  if (hasStoredCustomTierSet(storedConfig)) return toRecord(storedConfig);
   const isManaged = (key: string): boolean => {
     if (MANAGED_COMPLEXITY_ROUTER_KEYS.has(key)) return true;
     if (keywordMatching !== undefined && KEYWORD_MATCHING_KEYS.has(key)) return true;
@@ -281,6 +289,7 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
     classifier_type: "heuristic",
   });
   const isComplexityRouterModel = isComplexityRouter(modelData?.litellm_params);
+  const storedCustomTierSet = hasStoredCustomTierSet(modelData?.litellm_params?.complexity_router_config);
 
   const schema = useMemo(
     () => (isComplexityRouterModel ? complexityRouterSchema : semanticRouterSchema),
@@ -291,14 +300,15 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
   // Mirrors the create form: the button says why it is unavailable and disables on the same
   // answer. Tiers use this modal's own rule, which allows a partly filled router, so an edit that
   // is legal today stays legal.
-  const submitBlockedReason = !isComplexityRouterModel
-    ? null
-    : (Object.values(complexityRouterConfig.tiers).every((models) => models.length === 0)
-        ? "Please select at least one model for a complexity tier"
-        : null) ??
-      getTierLabelsError(complexityRouterConfig.tier_labels) ??
-      getPlanModeTierError(complexityRouterConfig.plan_mode_min_tier, complexityRouterConfig.tiers) ??
-      getKeywordTierRulesError(keywordTierRules);
+  const submitBlockedReason =
+    !isComplexityRouterModel || storedCustomTierSet
+      ? null
+      : (Object.values(complexityRouterConfig.tiers).every((models) => models.length === 0)
+          ? "Please select at least one model for a complexity tier"
+          : null) ??
+        getTierLabelsError(complexityRouterConfig.tier_labels) ??
+        getPlanModeTierError(complexityRouterConfig.plan_mode_min_tier, complexityRouterConfig.tiers) ??
+        getKeywordTierRulesError(keywordTierRules);
 
   useEffect(() => {
     if (isVisible && modelData) {
@@ -451,6 +461,22 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
   };
 
   const saveValues = async (values: EditAutoRouterFormValues) => {
+    if (isComplexityRouterModel && storedCustomTierSet) {
+      const updatedModelInfo = {
+        ...modelData.model_info,
+        access_groups: values.model_access_group || [],
+      };
+      const renamed = {
+        model_name: values.auto_router_name,
+        litellm_params: modelData.litellm_params,
+        model_info: updatedModelInfo,
+      };
+      await modelPatchUpdateCall(accessToken, renamed, modelData.model_info.id);
+      toast.success("Auto router configuration updated successfully");
+      onSuccess({ ...modelData, ...renamed });
+      onCancel();
+      return;
+    }
     if (isComplexityRouterModel) {
       const { tiers, classifier_type, classifier_llm_config } = complexityRouterConfig;
       if (Object.values(tiers).every((models) => models.length === 0)) {
@@ -606,8 +632,13 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
                 {({ ref, ...field }) => <Input {...field} ref={ref} placeholder="e.g., auto_router_1, smart_routing" />}
               </FormField>
 
-              {isComplexityRouterModel ? (
-                /* Complexity Router Configuration */
+              {isComplexityRouterModel && storedCustomTierSet && (
+                <span className="block text-sm text-muted-foreground">
+                  This router uses a custom tier set, which this form cannot edit yet. Its complexity configuration is
+                  preserved exactly as stored; the name and access settings above still save.
+                </span>
+              )}
+              {isComplexityRouterModel && !storedCustomTierSet && (
                 <div className="w-full">
                   <ComplexityRouterConfig
                     showValidationErrors={showValidationErrors}
@@ -630,7 +661,8 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
                     onEscalationKeywordsChange={setEscalationKeywords}
                   />
                 </div>
-              ) : (
+              )}
+              {!isComplexityRouterModel && (
                 <>
                   {/* Router Configuration Builder */}
                   <div className="w-full">

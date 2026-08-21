@@ -26,6 +26,7 @@ import {
   CLASSIFICATION_RUBRIC_KEYS,
   ClassificationRubric,
   effectiveTierLabel,
+  effectiveClassifierType,
 } from "./ComplexityRouterConfig";
 
 const DEFAULT_SCORING_EXPLANATION =
@@ -146,8 +147,10 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
   defaultModel,
 }) => {
   const hasDefaultModel = Boolean(defaultModel);
+  const hasCustomTierSet = Boolean(value.custom_tier_set);
+  const classifierType = effectiveClassifierType(value);
   const classifierModelMissing =
-    showValidationErrors && value.classifier_type === "llm" && !value.classifier_llm_config?.model;
+    showValidationErrors && classifierType === "llm" && !value.classifier_llm_config?.model;
   const usesCustomPrompt = Boolean(value.classifier_llm_config?.system_prompt?.trim());
   const classificationRubric = value.classifier_llm_config?.classification_rubric ?? DEFAULT_CLASSIFICATION_RUBRIC;
 
@@ -252,20 +255,28 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
   return (
     <>
       <RadioGroup
-        value={value.classifier_type}
+        value={classifierType}
         onValueChange={(classifierType: unknown) => handleClassifierTypeChange(classifierType as ClassifierType)}
         className="w-full"
       >
         <div className="flex w-full flex-col items-start gap-2">
-          <Label className="items-start font-normal leading-normal">
-            <RadioGroupItem value="heuristic" className="mt-0.5" />
-            <span>
-              <strong className="font-semibold">Heuristic</strong>{" "}
-              <span className="text-muted-foreground">
-                (default) — rule-based scoring, no API calls, &lt;1ms latency
+          <SimpleTooltip
+            content={
+              hasCustomTierSet
+                ? "An edited tier set requires the LLM classifier: the heuristic scorer only produces the built-in tiers"
+                : undefined
+            }
+          >
+            <Label className="items-start font-normal leading-normal has-data-disabled:cursor-not-allowed has-data-disabled:opacity-50">
+              <RadioGroupItem value="heuristic" className="mt-0.5" disabled={hasCustomTierSet} />
+              <span>
+                <strong className="font-semibold">Heuristic</strong>{" "}
+                <span className="text-muted-foreground">
+                  (default) — rule-based scoring, no API calls, &lt;1ms latency
+                </span>
               </span>
-            </span>
-          </Label>
+            </Label>
+          </SimpleTooltip>
           <Label className="items-start font-normal leading-normal">
             <RadioGroupItem value="llm" className="mt-0.5" />
             <span>
@@ -276,7 +287,7 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
         </div>
       </RadioGroup>
 
-      {value.classifier_type === "llm" && (
+      {classifierType === "llm" && (
         <div className="mt-4 space-y-3">
           <div>
             <strong className="block mb-1 font-semibold">Classifier Model</strong>
@@ -348,13 +359,20 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
           </div>
           <div>
             <strong className="block mb-1 font-semibold">Classifier Prompt</strong>
-            <ClassifierPromptEditor
-              systemPrompt={value.classifier_llm_config?.system_prompt}
-              onChange={handleClassifierSystemPromptChange}
-              contextWindowSize={value.classifier_context_window_size ?? DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE}
-              tierLabels={value.tier_labels}
-              classificationRubric={classificationRubric}
-            />
+            {hasCustomTierSet ? (
+              <span className="block text-xs text-muted-foreground">
+                Unavailable with an edited tier set: a replacement prompt would drop the tier definitions the classifier
+                routes on, along with the injection guard. Your tier definitions are the rubric.
+              </span>
+            ) : (
+              <ClassifierPromptEditor
+                systemPrompt={value.classifier_llm_config?.system_prompt}
+                onChange={handleClassifierSystemPromptChange}
+                contextWindowSize={value.classifier_context_window_size ?? DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE}
+                tierLabels={value.tier_labels}
+                classificationRubric={classificationRubric}
+              />
+            )}
           </div>
           <div>
             <strong className="block mb-1 font-semibold">If the classifier fails</strong>

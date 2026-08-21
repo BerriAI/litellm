@@ -47,13 +47,13 @@ const MODEL_DATA = {
   model_info: { id: "auto-1", access_groups: [] },
 };
 
-const renderModal = () =>
+const renderModal = (modelData: typeof MODEL_DATA = MODEL_DATA) =>
   renderWithProviders(
     <EditAutoRouterModal
       isVisible
       onCancel={vi.fn()}
       onSuccess={vi.fn()}
-      modelData={MODEL_DATA}
+      modelData={modelData}
       accessToken="token"
       userRole="Admin"
     />,
@@ -797,5 +797,31 @@ describe("EditAutoRouterModal plan-mode minimum tier", () => {
 
     await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
     expect(savedConfig()).not.toHaveProperty("plan_mode_min_tier");
+  });
+});
+
+describe("EditAutoRouterModal stored custom tier set", () => {
+  // Before the pass-through this rebuilt the built-in four over a custom pool set, and the
+  // surviving tier_definitions then disagreed with `tiers`, failing the router at load.
+  const CONFIG = {
+    tiers: { CASUAL: ["gpt-4o-mini"], SECURITY_REVIEW: ["gpt-4o-mini"] },
+    tier_definitions: [
+      { name: "CASUAL", description: "chat" },
+      { name: "SECURITY_REVIEW", description: "audits" },
+    ],
+    fallback_tier: "CASUAL",
+    classifier_type: "llm",
+  };
+
+  it("says the editor is unavailable and saves the stored config byte-identical", async () => {
+    modelPatchUpdateCall.mockClear();
+    renderModal({ ...MODEL_DATA, litellm_params: { ...MODEL_DATA.litellm_params, complexity_router_config: CONFIG } });
+
+    await screen.findByText(/custom tier set, which this form cannot edit yet/i);
+    expect(screen.queryByText("Complexity Tier Configuration")).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
+    expect(savedConfig()).toEqual(CONFIG);
   });
 });

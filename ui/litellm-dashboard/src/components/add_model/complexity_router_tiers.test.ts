@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  customTierDefaultModel,
   hydrateTierModelParams,
   normalizeTierModels,
   pruneTierModelParams,
@@ -232,5 +233,18 @@ describe("pruneTierModelParams", () => {
   it("returns the input unchanged when the tier holds no params", () => {
     const current = { COMPLEX: { opus: { reasoning_effort: "high" } } };
     expect(pruneTierModelParams(current, "MEDIUM", [])).toBe(current);
+  });
+});
+
+describe("custom tier derivations", () => {
+  const set = (names: string[], fallbackId: string) => ({
+    tiers: names.map((name, index) => ({ id: `r${index}`, name, definition: "d", models: [`${name}-model`] })),
+    fallback_tier_id: fallbackId,
+  });
+
+  // The backend resolves with casefold, so a set spelling its tier "medium" derives the same default.
+  it("resolves the MEDIUM and SIMPLE derivation case-insensitively", () => {
+    expect(customTierDefaultModel(set(["medium", "simple"], "gone"))).toBe("medium-model");
+    expect(customTierDefaultModel(set(["simple"], "gone"))).toBe("simple-model");
   });
 });
