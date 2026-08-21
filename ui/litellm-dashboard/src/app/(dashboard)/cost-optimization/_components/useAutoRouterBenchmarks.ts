@@ -1,11 +1,16 @@
+import { formatDate } from "@/components/networking";
 import { $api } from "@/lib/http/api";
 
-import { windowFor, type BenchmarkWindow } from "./autoRouterBenchmarks";
+import type { DateRange } from "./useDailyActivityRange";
 
-export const useAutoRouterBenchmarks = (accessToken: string | null, range: BenchmarkWindow) =>
+export const useAutoRouterBenchmarks = (accessToken: string | null, range: DateRange) =>
   $api.useQuery(
     "get",
     "/auto_router/benchmarks",
-    { params: { query: windowFor(range, new Date()) } },
-    { enabled: Boolean(accessToken), retry: false },
+    {
+      params: {
+        query: range.from && range.to ? { start_date: formatDate(range.from), end_date: formatDate(range.to) } : {},
+      },
+    },
+    { enabled: Boolean(accessToken && range.from && range.to), retry: false },
   );
