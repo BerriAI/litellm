@@ -1959,6 +1959,36 @@ def test_sync_retrieve_file_content_raises_on_http_error():
     assert exc_info.value.status_code == 404
 
 
+class _FakeAsyncHTTPHandler(AsyncHTTPHandler):
+    def __init__(self, response: httpx.Response):
+        self.response = response
+
+    async def get(
+        self,
+        url: str,
+        *,
+        params: dict[str, object] | None = None,
+        headers: dict[str, str] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+    ) -> httpx.Response:
+        return self.response
+
+
+class _FakeHTTPHandler(HTTPHandler):
+    def __init__(self, response: httpx.Response):
+        self.response = response
+
+    def get(
+        self,
+        url: str,
+        *,
+        params: dict[str, object] | None = None,
+        headers: dict[str, str] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+    ) -> httpx.Response:
+        return self.response
+
+
 _UPSTREAM_NOT_FOUND_BODY = {
     "error": {
         "message": "Response with id 'resp_abc' not found.",
@@ -1967,6 +1997,81 @@ _UPSTREAM_NOT_FOUND_BODY = {
         "code": None,
     }
 }
+
+
+_VECTOR_STORE_FILE_NOT_FOUND_BODY = {
+    "error": {
+        "message": "No valid vector store found with id 'vs_does_not_exist'.",
+        "type": "invalid_request_error",
+        "param": "vector_store_id",
+        "code": None,
+    }
+}
+
+
+def _vector_store_file_not_found_response() -> httpx.Response:
+    return httpx.Response(
+        status_code=404,
+        json=_VECTOR_STORE_FILE_NOT_FOUND_BODY,
+        request=httpx.Request("GET", "https://api.openai.com/v1/vector_stores/vs_does_not_exist/files"),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ("list", "retrieve", "content"))
+async def test_async_vector_store_file_reads_surface_upstream_error_status(operation: str):
+    from litellm.llms.openai.vector_store_files.transformation import OpenAIVectorStoreFilesConfig
+
+    handler = BaseLLMHTTPHandler()
+    config = OpenAIVectorStoreFilesConfig()
+    client = _FakeAsyncHTTPHandler(_vector_store_file_not_found_response())
+    common_kwargs = {
+        "vector_store_id": "vs_does_not_exist",
+        "vector_store_files_provider_config": config,
+        "custom_llm_provider": "openai",
+        "litellm_params": GenericLiteLLMParams(api_key="sk-test"),
+        "logging_obj": Mock(),
+        "client": client,
+    }
+
+    with pytest.raises(BaseLLMException) as exc_info:
+        if operation == "list":
+            await handler.async_vector_store_file_list_handler(query_params={}, **common_kwargs)
+        elif operation == "retrieve":
+            await handler.async_vector_store_file_retrieve_handler(file_id="file-does-not-exist", **common_kwargs)
+        else:
+            await handler.async_vector_store_file_content_handler(file_id="file-does-not-exist", **common_kwargs)
+
+    assert exc_info.value.status_code == 404
+    assert "No valid vector store found" in exc_info.value.message
+
+
+@pytest.mark.parametrize("operation", ("list", "retrieve", "content"))
+def test_sync_vector_store_file_reads_surface_upstream_error_status(operation: str):
+    from litellm.llms.openai.vector_store_files.transformation import OpenAIVectorStoreFilesConfig
+
+    handler = BaseLLMHTTPHandler()
+    config = OpenAIVectorStoreFilesConfig()
+    client = _FakeHTTPHandler(_vector_store_file_not_found_response())
+    common_kwargs = {
+        "vector_store_id": "vs_does_not_exist",
+        "vector_store_files_provider_config": config,
+        "custom_llm_provider": "openai",
+        "litellm_params": GenericLiteLLMParams(api_key="sk-test"),
+        "logging_obj": Mock(),
+        "client": client,
+    }
+
+    with pytest.raises(BaseLLMException) as exc_info:
+        if operation == "list":
+            handler.vector_store_file_list_handler(query_params={}, **common_kwargs)
+        elif operation == "retrieve":
+            handler.vector_store_file_retrieve_handler(file_id="file-does-not-exist", **common_kwargs)
+        else:
+            handler.vector_store_file_content_handler(file_id="file-does-not-exist", **common_kwargs)
+
+    assert exc_info.value.status_code == 404
+    assert "No valid vector store found" in exc_info.value.message
 
 
 def _async_handler_returning(status_code: int, body: dict) -> AsyncHTTPHandler:

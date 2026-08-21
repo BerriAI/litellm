@@ -10569,6 +10569,7 @@ class BaseLLMHTTPHandler:
 
         try:
             response: Final = await async_httpx_client.get(url=url, headers=headers, params=request_params)
+            response.raise_for_status()
         except Exception as e:
             raise self._handle_error(e=e, provider_config=vector_store_files_provider_config)
 
@@ -10645,6 +10646,7 @@ class BaseLLMHTTPHandler:
 
         try:
             response: Final = sync_httpx_client.get(url=url, headers=headers, params=request_params)
+            response.raise_for_status()
         except Exception as e:
             raise self._handle_error(e=e, provider_config=vector_store_files_provider_config)
 
@@ -10704,6 +10706,7 @@ class BaseLLMHTTPHandler:
 
         try:
             response: Final = await async_httpx_client.get(url=url, headers=headers, params=request_params)
+            response.raise_for_status()
         except Exception as e:
             raise self._handle_error(e=e, provider_config=vector_store_files_provider_config)
 
@@ -10774,6 +10777,7 @@ class BaseLLMHTTPHandler:
 
         try:
             response: Final = sync_httpx_client.get(url=url, headers=headers, params=request_params)
+            response.raise_for_status()
         except Exception as e:
             raise self._handle_error(e=e, provider_config=vector_store_files_provider_config)
 
@@ -10833,6 +10837,7 @@ class BaseLLMHTTPHandler:
 
         try:
             response: Final = await async_httpx_client.get(url=url, headers=headers, params=request_params)
+            response.raise_for_status()
         except Exception as e:
             raise self._handle_error(e=e, provider_config=vector_store_files_provider_config)
 
@@ -10905,6 +10910,7 @@ class BaseLLMHTTPHandler:
 
         try:
             response: Final = sync_httpx_client.get(url=url, headers=headers, params=request_params)
+            response.raise_for_status()
         except Exception as e:
             raise self._handle_error(e=e, provider_config=vector_store_files_provider_config)
 
