@@ -1,3 +1,9 @@
+import { getProviderLogoAndName, Providers, providerLogoMap } from "@/components/provider_info_helpers";
+import milvusLogo from "../../public/assets/logos/milvus.svg";
+import postgresqlLogo from "../../public/assets/logos/postgresql.svg";
+import s3VectorLogo from "../../public/assets/logos/s3_vector.png";
+import valkeyLogo from "../../public/assets/logos/valkey.svg";
+
 export enum VectorStoreProviders {
   Bedrock = "Amazon Bedrock",
   S3Vectors = "Amazon S3 Vectors",
@@ -7,6 +13,7 @@ export enum VectorStoreProviders {
   OpenAI = "OpenAI",
   Azure = "Azure OpenAI",
   Milvus = "Milvus",
+  Valkey = "Valkey",
 }
 
 export const vectorStoreProviderMap: Record<string, string> = {
@@ -18,19 +25,19 @@ export const vectorStoreProviderMap: Record<string, string> = {
   Azure: "azure",
   Milvus: "milvus",
   S3Vectors: "s3_vectors",
+  Valkey: "valkey",
 };
 
-const asset_logos_folder = "../ui/assets/logos/";
-
 export const vectorStoreProviderLogoMap: Record<string, string> = {
-  [VectorStoreProviders.Bedrock]: `${asset_logos_folder}bedrock.svg`,
-  [VectorStoreProviders.PgVector]: `${asset_logos_folder}postgresql.svg`, // Fallback to a generic database icon if needed
-  [VectorStoreProviders.VertexRagEngine]: `${asset_logos_folder}google.svg`,
-  [VectorStoreProviders.VertexAiSearch]: `${asset_logos_folder}google.svg`,
-  [VectorStoreProviders.OpenAI]: `${asset_logos_folder}openai_small.svg`,
-  [VectorStoreProviders.Azure]: `${asset_logos_folder}microsoft_azure.svg`,
-  [VectorStoreProviders.Milvus]: `${asset_logos_folder}milvus.svg`,
-  [VectorStoreProviders.S3Vectors]: `${asset_logos_folder}s3_vector.png`,
+  [VectorStoreProviders.Bedrock]: providerLogoMap[Providers.Bedrock] ?? "",
+  [VectorStoreProviders.PgVector]: postgresqlLogo.src,
+  [VectorStoreProviders.VertexRagEngine]: providerLogoMap[Providers.Vertex_AI] ?? "",
+  [VectorStoreProviders.VertexAiSearch]: providerLogoMap[Providers.Vertex_AI] ?? "",
+  [VectorStoreProviders.OpenAI]: providerLogoMap[Providers.OpenAI] ?? "",
+  [VectorStoreProviders.Azure]: providerLogoMap[Providers.Azure] ?? "",
+  [VectorStoreProviders.Milvus]: milvusLogo.src,
+  [VectorStoreProviders.S3Vectors]: s3VectorLogo.src,
+  [VectorStoreProviders.Valkey]: valkeyLogo.src,
 };
 
 // Define field types for provider-specific configurations
@@ -162,6 +169,74 @@ export const vectorStoreProviderFields: Record<string, VectorStoreFieldConfig[]>
       type: "select",
     },
   ],
+  valkey: [
+    {
+      name: "valkey_host",
+      label: "Valkey Host",
+      tooltip: "Hostname or IP of your Valkey server, without redis:// or a port (e.g. my-valkey.example.com)",
+      placeholder: "my-valkey.example.com",
+      required: true,
+      type: "text",
+    },
+    {
+      name: "valkey_port",
+      label: "Valkey Port",
+      tooltip: "Port your Valkey server listens on. Leave as 6379 unless you changed it",
+      placeholder: "6379",
+      required: false,
+      type: "text",
+      initialValue: "6379",
+    },
+    {
+      name: "valkey_password",
+      label: "Valkey Password",
+      tooltip: "Password used to log in to your Valkey server. Leave blank if it has no password",
+      required: false,
+      type: "password",
+    },
+    {
+      name: "valkey_ssl",
+      label: "Use TLS",
+      tooltip:
+        "Set to true if your Valkey server requires an encrypted (TLS) connection, for example AWS ElastiCache with in-transit encryption turned on",
+      required: false,
+      type: "select",
+      options: [
+        { value: "false", label: "false" },
+        { value: "true", label: "true" },
+      ],
+      initialValue: "false",
+    },
+    {
+      name: "embedding_model",
+      label: "Embedding Model",
+      tooltip:
+        "The embedding model on this proxy that was used to create the embeddings already stored in your Valkey index. LiteLLM uses it to embed each search query, so it must be the same model or results will be wrong. Add it under Models first if it is not listed",
+      placeholder: "text-embedding-3-small",
+      required: true,
+      type: "select",
+    },
+    {
+      name: "valkey_text_field",
+      label: "Text Field",
+      tooltip:
+        "The field in each stored document that holds its readable text. LiteLLM returns this text in search results. Must match how your documents were stored (default: text)",
+      placeholder: "text",
+      required: false,
+      type: "text",
+      initialValue: "text",
+    },
+    {
+      name: "valkey_embedding_field",
+      label: "Vector Field Name",
+      tooltip:
+        "The field in each stored document that holds its embedding. LiteLLM searches against this field, so it must match the field your index was created on (default: embedding)",
+      placeholder: "embedding",
+      required: false,
+      type: "text",
+      initialValue: "embedding",
+    },
+  ],
   s3_vectors: [
     {
       name: "vector_bucket_name",
@@ -199,24 +274,14 @@ export const vectorStoreProviderFields: Record<string, VectorStoreFieldConfig[]>
 };
 
 export const getVectorStoreProviderLogoAndName = (providerValue: string): { logo: string; displayName: string } => {
-  if (!providerValue) {
-    return { logo: "", displayName: "-" };
-  }
-
-  // Find the enum key by matching vectorStoreProviderMap values
   const enumKey = Object.keys(vectorStoreProviderMap).find(
     (key) => vectorStoreProviderMap[key].toLowerCase() === providerValue.toLowerCase(),
   );
-
   if (!enumKey) {
-    return { logo: "", displayName: providerValue };
+    return getProviderLogoAndName(providerValue);
   }
-
-  // Get the display name from VectorStoreProviders enum and logo from map
   const displayName = VectorStoreProviders[enumKey as keyof typeof VectorStoreProviders];
-  const logo = vectorStoreProviderLogoMap[displayName as keyof typeof vectorStoreProviderLogoMap];
-
-  return { logo, displayName };
+  return { logo: vectorStoreProviderLogoMap[displayName], displayName };
 };
 
 export const getProviderSpecificFields = (providerValue: string): VectorStoreFieldConfig[] => {

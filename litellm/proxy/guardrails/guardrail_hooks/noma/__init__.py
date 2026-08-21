@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 from litellm.types.guardrails import SupportedGuardrailIntegrations
 
@@ -14,13 +14,11 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
     if isinstance(use_v2, str):
         use_v2 = use_v2.lower() == "true"
     if use_v2:
-        return initialize_guardrail_v2(
-            litellm_params=litellm_params, guardrail=guardrail
-        )
+        return initialize_guardrail_v2(litellm_params=litellm_params, guardrail=guardrail)
 
     import litellm
 
-    _noma_callback = NomaGuardrail(
+    _noma_callback: Final = NomaGuardrail(
         guardrail_name=guardrail.get("guardrail_name", ""),
         api_key=litellm_params.api_key,
         api_base=litellm_params.api_base,
@@ -39,7 +37,7 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
 def initialize_guardrail_v2(litellm_params: "LitellmParams", guardrail: "Guardrail"):
     import litellm
 
-    _noma_v2_callback = NomaV2Guardrail(
+    _noma_v2_callback: Final = NomaV2Guardrail(
         guardrail_name=guardrail.get("guardrail_name", ""),
         api_key=litellm_params.api_key,
         api_base=litellm_params.api_base,
@@ -54,13 +52,13 @@ def initialize_guardrail_v2(litellm_params: "LitellmParams", guardrail: "Guardra
     return _noma_v2_callback
 
 
-guardrail_initializer_registry = {
+guardrail_initializer_registry: Final = {
     SupportedGuardrailIntegrations.NOMA.value: initialize_guardrail,
     SupportedGuardrailIntegrations.NOMA_V2.value: initialize_guardrail_v2,
 }
 
 
-guardrail_class_registry = {
+guardrail_class_registry: Final = {
     SupportedGuardrailIntegrations.NOMA.value: NomaGuardrail,
     SupportedGuardrailIntegrations.NOMA_V2.value: NomaV2Guardrail,
 }

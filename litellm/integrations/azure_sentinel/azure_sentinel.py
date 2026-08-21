@@ -16,7 +16,10 @@ import asyncio
 import os
 import time
 import traceback
-from typing import List, Optional, Union
+from collections.abc import Mapping
+from types import MappingProxyType
+from typing import Final
+from urllib.parse import urlparse
 
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
@@ -27,6 +30,16 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.types.utils import StandardAuditLogPayload, StandardLoggingPayload
 
+DEFAULT_AZURE_AUTHORITY_HOST: Final = "https://login.microsoftonline.com"
+DEFAULT_AZURE_MONITOR_SCOPE: Final = "https://monitor.azure.com/.default"
+
+MONITOR_SCOPE_BY_AUTHORITY_HOST: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        "login.microsoftonline.com": DEFAULT_AZURE_MONITOR_SCOPE,
+        "login.microsoftonline.us": "https://monitor.azure.us/.default",
+    }
+)
+
 
 class AzureSentinelLogger(CustomBatchLogger):
     """
@@ -35,13 +48,14 @@ class AzureSentinelLogger(CustomBatchLogger):
 
     def __init__(
         self,
-        dcr_immutable_id: Optional[str] = None,
-        stream_name: Optional[str] = None,
-        endpoint: Optional[str] = None,
-        tenant_id: Optional[str] = None,
-        client_id: Optional[str] = None,
-        client_secret: Optional[str] = None,
-        audit_stream_name: Optional[str] = None,
+        dcr_immutable_id: str | None = None,
+        stream_name: str | None = None,
+        endpoint: str | None = None,
+        tenant_id: str | None = None,
+        client_id: str | None = None,
+        client_secret: str | None = None,
+        audit_stream_name: str | None = None,
+        authority_host: str | None = None,
         **kwargs,
     ):
         """
@@ -61,34 +75,30 @@ class AzureSentinelLogger(CustomBatchLogger):
             client_secret (str, optional): Azure Client Secret for OAuth2 authentication.
                 If not provided, will use AZURE_SENTINEL_CLIENT_SECRET or AZURE_CLIENT_SECRET env var.
             audit_stream_name (str, optional): Stream name from DCR for audit logs.
-                If not provided, audit logs use the standard stream name.
+                If not provided, will use AZURE_SENTINEL_AUDIT_STREAM_NAME env var or the standard stream name.
+            authority_host (str, optional): Microsoft Entra authority host that issues the OAuth2 token,
+                e.g. "https://login.microsoftonline.us" for Azure Government. If not provided, will use
+                AZURE_SENTINEL_AUTHORITY_HOST or AZURE_AUTHORITY_HOST env vars, or default to the Azure
+                Public Cloud authority. The Azure Monitor audience is derived from it.
         """
-        self.async_httpx_client = get_async_httpx_client(
-            llm_provider=httpxSpecialProvider.LoggingCallback
-        )
+        self.async_httpx_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.LoggingCallback)
 
-        resolved_dcr_immutable_id = dcr_immutable_id or os.getenv(
-            "AZURE_SENTINEL_DCR_IMMUTABLE_ID"
+        resolved_dcr_immutable_id: Final = dcr_immutable_id or os.getenv("AZURE_SENTINEL_DCR_IMMUTABLE_ID")
+        resolved_stream_name: Final = stream_name or os.getenv("AZURE_SENTINEL_STREAM_NAME") or "Custom-LiteLLM"
+        resolved_audit_stream_name: Final = (
+            audit_stream_name or os.getenv("AZURE_SENTINEL_AUDIT_STREAM_NAME") or resolved_stream_name
         )
-        resolved_stream_name = (
-            stream_name or os.getenv("AZURE_SENTINEL_STREAM_NAME") or "Custom-LiteLLM"
+        resolved_endpoint: Final = endpoint or os.getenv("AZURE_SENTINEL_ENDPOINT")
+        resolved_tenant_id: Final = tenant_id or os.getenv("AZURE_SENTINEL_TENANT_ID") or os.getenv("AZURE_TENANT_ID")
+        resolved_client_id: Final = client_id or os.getenv("AZURE_SENTINEL_CLIENT_ID") or os.getenv("AZURE_CLIENT_ID")
+        resolved_client_secret: Final = (
+            client_secret or os.getenv("AZURE_SENTINEL_CLIENT_SECRET") or os.getenv("AZURE_CLIENT_SECRET")
         )
-        resolved_audit_stream_name = audit_stream_name or resolved_stream_name
-        resolved_endpoint = endpoint or os.getenv("AZURE_SENTINEL_ENDPOINT")
-        resolved_tenant_id = (
-            tenant_id
-            or os.getenv("AZURE_SENTINEL_TENANT_ID")
-            or os.getenv("AZURE_TENANT_ID")
-        )
-        resolved_client_id = (
-            client_id
-            or os.getenv("AZURE_SENTINEL_CLIENT_ID")
-            or os.getenv("AZURE_CLIENT_ID")
-        )
-        resolved_client_secret = (
-            client_secret
-            or os.getenv("AZURE_SENTINEL_CLIENT_SECRET")
-            or os.getenv("AZURE_CLIENT_SECRET")
+        resolved_authority_host: Final = self._normalize_authority_host(
+            authority_host
+            or os.getenv("AZURE_SENTINEL_AUTHORITY_HOST")
+            or os.getenv("AZURE_AUTHORITY_HOST")
+            or DEFAULT_AZURE_AUTHORITY_HOST
         )
 
         if not resolved_dcr_immutable_id:
@@ -133,20 +143,39 @@ class AzureSentinelLogger(CustomBatchLogger):
         )
 
         # OAuth2 scope for Azure Monitor
-        self.oauth_scope = "https://monitor.azure.com/.default"
-        self.oauth_token: Optional[str] = None
-        self.oauth_token_expires_at: Optional[float] = None
+        self.authority_host = resolved_authority_host
+        self.oauth_scope = self._resolve_oauth_scope(authority_host=resolved_authority_host)
+        self.oauth_token: str | None = None
+        self.oauth_token_expires_at: float | None = None
 
         self.flush_lock = asyncio.Lock()
         super().__init__(**kwargs, flush_lock=self.flush_lock)
         asyncio.create_task(self.periodic_flush())
-        self.log_queue: List[StandardLoggingPayload] = []
-        self.audit_log_queue: List[StandardAuditLogPayload] = []
+        self.log_queue: list[StandardLoggingPayload] = []
+        self.audit_log_queue: list[StandardAuditLogPayload] = []
 
     @staticmethod
-    def _build_api_endpoint(
-        endpoint: str, dcr_immutable_id: str, stream_name: str
-    ) -> str:
+    def _normalize_authority_host(authority_host: str) -> str:
+        """
+        Normalize an authority host into an absolute URL with no trailing slash.
+
+        Accepts the scheme-qualified form litellm documents ("https://login.microsoftonline.us")
+        and the bare-host form the azure-identity AzureAuthorityHosts constants use.
+        """
+        stripped: Final = authority_host.strip().rstrip("/")
+        return stripped if "://" in stripped else f"https://{stripped}"
+
+    @staticmethod
+    def _resolve_oauth_scope(authority_host: str) -> str:
+        """
+        Map an authority host to the Azure Monitor Logs Ingestion audience for the same cloud,
+        falling back to the Azure Public Cloud audience for an unrecognized host.
+        """
+        host: Final = urlparse(authority_host).hostname or ""
+        return MONITOR_SCOPE_BY_AUTHORITY_HOST.get(host, DEFAULT_AZURE_MONITOR_SCOPE)
+
+    @staticmethod
+    def _build_api_endpoint(endpoint: str, dcr_immutable_id: str, stream_name: str) -> str:
         return f"{endpoint.rstrip('/')}/dataCollectionRules/{dcr_immutable_id}/streams/{stream_name}?api-version=2023-01-01"
 
     async def _get_oauth_token(self) -> str:
@@ -157,9 +186,7 @@ class AzureSentinelLogger(CustomBatchLogger):
             Bearer token string
         """
         if (
-            self.oauth_token
-            and self.oauth_token_expires_at
-            and time.time() < self.oauth_token_expires_at - 60
+            self.oauth_token and self.oauth_token_expires_at and time.time() < self.oauth_token_expires_at - 60
         ):  # Refresh 60 seconds before expiry
             return self.oauth_token
 
@@ -168,31 +195,27 @@ class AzureSentinelLogger(CustomBatchLogger):
         assert self.client_id is not None, "client_id is required"
         assert self.client_secret is not None, "client_secret is required"
 
-        token_url = (
-            f"https://login.microsoftonline.com/{self.tenant_id}/oauth2/v2.0/token"
-        )
+        token_url: Final = f"{self.authority_host}/{self.tenant_id}/oauth2/v2.0/token"
 
-        token_data = {
+        token_data: Final = {
             "client_id": self.client_id,
             "client_secret": self.client_secret,
             "scope": self.oauth_scope,
             "grant_type": "client_credentials",
         }
 
-        response = await self.async_httpx_client.post(
+        response: Final = await self.async_httpx_client.post(
             url=token_url,
             data=token_data,
             headers={"Content-Type": "application/x-www-form-urlencoded"},
         )
 
         if response.status_code != 200:
-            raise Exception(
-                f"Failed to get OAuth2 token: {response.status_code} - {response.text}"
-            )
+            raise Exception(f"Failed to get OAuth2 token: {response.status_code} - {response.text}")
 
-        token_response = response.json()
+        token_response: Final = response.json()
         self.oauth_token = token_response.get("access_token")
-        expires_in = token_response.get("expires_in", 3600)
+        expires_in: Final = token_response.get("expires_in", 3600)
 
         if not self.oauth_token:
             raise Exception("OAuth2 token response did not contain access_token")
@@ -213,15 +236,11 @@ class AzureSentinelLogger(CustomBatchLogger):
             Raises a NON Blocking verbose_logger.exception if an error occurs
         """
         try:
-            verbose_logger.debug(
-                "Azure Sentinel: Logging - Enters logging function for model %s", kwargs
-            )
-            standard_logging_payload = kwargs.get("standard_logging_object", None)
+            verbose_logger.debug("Azure Sentinel: Logging - Enters logging function for model %s", kwargs)
+            standard_logging_payload: Final = kwargs.get("standard_logging_object", None)
 
             if standard_logging_payload is None:
-                verbose_logger.warning(
-                    "Azure Sentinel: standard_logging_object not found in kwargs"
-                )
+                verbose_logger.warning("Azure Sentinel: standard_logging_object not found in kwargs")
                 return
 
             self.log_queue.append(standard_logging_payload)
@@ -230,10 +249,7 @@ class AzureSentinelLogger(CustomBatchLogger):
                 await self.async_send_batch()
 
         except Exception as e:
-            verbose_logger.exception(
-                f"Azure Sentinel Layer Error - {str(e)}\n{traceback.format_exc()}"
-            )
-            pass
+            verbose_logger.exception("Azure Sentinel Layer Error - %s\n%s", e, traceback.format_exc())
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         """
@@ -251,12 +267,10 @@ class AzureSentinelLogger(CustomBatchLogger):
                 "Azure Sentinel: Logging - Enters failure logging function for model %s",
                 kwargs,
             )
-            standard_logging_payload = kwargs.get("standard_logging_object", None)
+            standard_logging_payload: Final = kwargs.get("standard_logging_object", None)
 
             if standard_logging_payload is None:
-                verbose_logger.warning(
-                    "Azure Sentinel: standard_logging_object not found in kwargs"
-                )
+                verbose_logger.warning("Azure Sentinel: standard_logging_object not found in kwargs")
                 return
 
             self.log_queue.append(standard_logging_payload)
@@ -265,14 +279,9 @@ class AzureSentinelLogger(CustomBatchLogger):
                 await self.async_send_batch()
 
         except Exception as e:
-            verbose_logger.exception(
-                f"Azure Sentinel Layer Error - {str(e)}\n{traceback.format_exc()}"
-            )
-            pass
+            verbose_logger.exception("Azure Sentinel Layer Error - %s\n%s", e, traceback.format_exc())
 
-    async def async_log_audit_log_event(
-        self, audit_log: StandardAuditLogPayload
-    ) -> None:
+    async def async_log_audit_log_event(self, audit_log: StandardAuditLogPayload) -> None:
         """
         Async log LiteLLM audit log events to Azure Sentinel.
 
@@ -293,10 +302,7 @@ class AzureSentinelLogger(CustomBatchLogger):
                 await self.async_send_audit_batch()
 
         except Exception as e:
-            verbose_logger.exception(
-                f"Azure Sentinel Audit Log Layer Error - {str(e)}\n{traceback.format_exc()}"
-            )
-            pass
+            verbose_logger.exception("Azure Sentinel Audit Log Layer Error - %s\n%s", e, traceback.format_exc())
 
     async def async_send_batch(self):
         """
@@ -323,7 +329,7 @@ class AzureSentinelLogger(CustomBatchLogger):
 
     async def _async_send_batch_to_api(
         self,
-        log_queue: List[Union[StandardLoggingPayload, StandardAuditLogPayload]],
+        log_queue: list[StandardLoggingPayload | StandardAuditLogPayload],
         api_endpoint: str,
         log_type: str,
     ) -> None:
@@ -331,27 +337,23 @@ class AzureSentinelLogger(CustomBatchLogger):
             if not log_queue:
                 return
 
-            verbose_logger.debug(
-                "Azure Sentinel - about to flush %s %s", len(log_queue), log_type
-            )
+            verbose_logger.debug("Azure Sentinel - about to flush %s %s", len(log_queue), log_type)
 
             # Get OAuth2 token
-            bearer_token = await self._get_oauth_token()
+            bearer_token: Final = await self._get_oauth_token()
 
             # Convert log queue to JSON array format expected by Logs Ingestion API
             # Each log entry should be a JSON object in the array
-            body = safe_dumps(log_queue)
+            body: Final = safe_dumps(log_queue)
 
             # Set headers for Logs Ingestion API
-            headers = {
+            headers: Final = {
                 "Authorization": f"Bearer {bearer_token}",
                 "Content-Type": "application/json",
             }
 
             # Send the request
-            response = await self.async_httpx_client.post(
-                url=api_endpoint, data=body.encode("utf-8"), headers=headers
-            )
+            response = await self.async_httpx_client.post(url=api_endpoint, data=body.encode("utf-8"), headers=headers)
 
             if response.status_code not in [200, 204]:
                 verbose_logger.error(
@@ -359,9 +361,7 @@ class AzureSentinelLogger(CustomBatchLogger):
                     response.status_code,
                     response.text,
                 )
-                raise Exception(
-                    f"Failed to send logs to Azure Sentinel: {response.status_code} - {response.text}"
-                )
+                raise Exception(f"Failed to send logs to Azure Sentinel: {response.status_code} - {response.text}")
 
             verbose_logger.debug(
                 "Azure Sentinel: Response from API status_code: %s",
@@ -369,9 +369,7 @@ class AzureSentinelLogger(CustomBatchLogger):
             )
 
         except Exception as e:
-            verbose_logger.exception(
-                f"Azure Sentinel Error sending batch API - {str(e)}\n{traceback.format_exc()}"
-            )
+            verbose_logger.exception("Azure Sentinel Error sending batch API - %s\n%s", e, traceback.format_exc())
         finally:
             log_queue.clear()
 

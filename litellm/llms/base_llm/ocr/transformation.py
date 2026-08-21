@@ -2,7 +2,8 @@
 Base OCR transformation configuration.
 """
 
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Any, Final, Literal
 
 import httpx
 from pydantic import PrivateAttr
@@ -19,22 +20,42 @@ else:
 # DocumentType for OCR - providers always receive a dict with
 # type="document_url" or type="image_url" (str values only).
 # File-type inputs are preprocessed to this format in litellm/ocr/main.py.
-DocumentType = Dict[str, str]
+DocumentType = dict[str, str]
+
+OCRRequestFormat = Literal["litellm", "native"]
+
+OCR_REQUEST_FORMATS: Final[tuple[OCRRequestFormat, ...]] = ("litellm", "native")
+
+OCR_REQUEST_FORMAT_PARAM: Final = "req_format"
+
+OCR_REQUEST_FORMAT_HEADER: Final = "x-req-format"
+
+PROVIDER_NATIVE_RESPONSE_KEY: Final = "provider_native_response"
+
+
+def parse_ocr_request_format(value: object) -> OCRRequestFormat:
+    if value == "litellm":
+        return "litellm"
+    if value == "native":
+        return "native"
+    raise ValueError(
+        f"Invalid `{OCR_REQUEST_FORMAT_PARAM}`: {value!r}. Expected one of {', '.join(OCR_REQUEST_FORMATS)}."
+    )
 
 
 class OCRPageDimensions(LiteLLMPydanticObjectBase):
     """Page dimensions from OCR response."""
 
-    dpi: Optional[int] = None
-    height: Optional[int] = None
-    width: Optional[int] = None
+    dpi: int | None = None
+    height: int | None = None
+    width: int | None = None
 
 
 class OCRPageImage(LiteLLMPydanticObjectBase):
     """Image extracted from OCR page."""
 
-    image_base64: Optional[str] = None
-    bbox: Optional[Dict[str, Any]] = None
+    image_base64: str | None = None
+    bbox: dict[str, Any] | None = None
 
     model_config = {"extra": "allow"}
 
@@ -44,8 +65,8 @@ class OCRPage(LiteLLMPydanticObjectBase):
 
     index: int
     markdown: str
-    images: Optional[List[OCRPageImage]] = None
-    dimensions: Optional[OCRPageDimensions] = None
+    images: list[OCRPageImage] | None = None
+    dimensions: OCRPageDimensions | None = None
 
     model_config = {"extra": "allow"}
 
@@ -53,9 +74,9 @@ class OCRPage(LiteLLMPydanticObjectBase):
 class OCRUsageInfo(LiteLLMPydanticObjectBase):
     """Usage information from OCR response."""
 
-    pages_processed: Optional[int] = None
-    credits: Optional[float] = None
-    doc_size_bytes: Optional[int] = None
+    pages_processed: int | None = None
+    credits: float | None = None
+    doc_size_bytes: int | None = None
 
     model_config = {"extra": "allow"}
 
@@ -66,10 +87,13 @@ class OCRResponse(LiteLLMPydanticObjectBase):
     Standardized to Mistral OCR format - other providers should transform to this format.
     """
 
-    pages: List[OCRPage]
+    pages: list[OCRPage]
     model: str
-    document_annotation: Optional[Any] = None
-    usage_info: Optional[OCRUsageInfo] = None
+    document_annotation: Any | None = None
+    usage_info: OCRUsageInfo | None = None
+    content: str | None = None
+    tables: list[dict[str, object]] | None = None
+    keyValuePairs: list[dict[str, object]] | None = None
     object: str = "ocr"
 
     model_config = {"extra": "allow"}
@@ -77,12 +101,21 @@ class OCRResponse(LiteLLMPydanticObjectBase):
     # Define private attributes using PrivateAttr
     _hidden_params: dict = PrivateAttr(default_factory=dict)
 
+    def set_provider_native_response(self, native_response: Mapping[str, object]) -> None:
+        """Keep the provider's own response payload alongside the normalized one."""
+        self._hidden_params[PROVIDER_NATIVE_RESPONSE_KEY] = native_response
+
+    def get_provider_native_response(self) -> Mapping[str, object] | None:
+        """The provider's own response payload, when `req_format=native` was requested."""
+        native_response: Final = self._hidden_params.get(PROVIDER_NATIVE_RESPONSE_KEY)
+        return native_response if isinstance(native_response, dict) else None
+
 
 class OCRRequestData(LiteLLMPydanticObjectBase):
     """OCR request data structure."""
 
-    data: Optional[Union[Dict, bytes]] = None
-    files: Optional[Dict[str, Any]] = None
+    data: dict | bytes | None = None
+    files: dict[str, Any] | None = None
 
 
 class BaseOCRConfig:
@@ -101,6 +134,12 @@ class BaseOCRConfig:
         """
         return []
 
+    def get_api_key_env_var(self) -> str | None:
+        """
+        Return the provider-specific API key environment variable name, if any.
+        """
+        return None
+
     def map_ocr_params(
         self,
         non_default_params: dict,
@@ -112,13 +151,13 @@ class BaseOCRConfig:
 
     def validate_environment(
         self,
-        headers: Dict,
+        headers: dict,
         model: str,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
-        litellm_params: Optional[dict] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
+        litellm_params: dict | None = None,
         **kwargs,
-    ) -> Dict:
+    ) -> dict:
         """
         Validate environment and return headers.
         Override in provider-specific implementations.
@@ -127,10 +166,10 @@ class BaseOCRConfig:
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
+        api_base: str | None,
         model: str,
         optional_params: dict,
-        litellm_params: Optional[dict] = None,
+        litellm_params: dict | None = None,
         **kwargs,
     ) -> str:
         """
@@ -164,9 +203,7 @@ class BaseOCRConfig:
         Returns:
             OCRRequestData with data and files fields
         """
-        raise NotImplementedError(
-            "transform_ocr_request must be implemented by provider"
-        )
+        raise NotImplementedError("transform_ocr_request must be implemented by provider")
 
     async def async_transform_ocr_request(
         self,
@@ -212,9 +249,7 @@ class BaseOCRConfig:
         Transform provider-specific OCR response to standard format.
         Override in provider-specific implementations.
         """
-        raise NotImplementedError(
-            "transform_ocr_response must be implemented by provider"
-        )
+        raise NotImplementedError("transform_ocr_response must be implemented by provider")
 
     async def async_transform_ocr_response(
         self,

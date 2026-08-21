@@ -2,12 +2,14 @@
 Base Search transformation configuration.
 """
 
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union
+from typing import TYPE_CHECKING, Any, Final, Literal
+from urllib.parse import urlsplit
 
 import httpx
 from pydantic import PrivateAttr
 
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.base import LiteLLMPydanticObjectBase
 
 if TYPE_CHECKING:
@@ -16,14 +18,47 @@ else:
     LiteLLMLoggingObj = Any
 
 
+_PERPLEXITY_UNIFIED_PARAMS: Final[frozenset[str]] = frozenset(
+    (
+        "max_results",
+        "search_domain_filter",
+        "country",
+        "max_tokens_per_page",
+    )
+)
+
+
+def _search_host(url: str) -> str:
+    return urlsplit(url).netloc.lower()
+
+
+def _is_trusted_search_api_base(
+    caller_api_base: str,
+    default_api_base: str | None,
+    base_env_var: str | None,
+) -> bool:
+    candidate: Final = _search_host(caller_api_base)
+    if not candidate:
+        return False
+    trusted: Final = {
+        _search_host(base)
+        for base in (
+            default_api_base,
+            get_secret_str(base_env_var) if base_env_var else None,
+        )
+        if base
+    }
+    return candidate in trusted
+
+
 class SearchResult(LiteLLMPydanticObjectBase):
     """Single search result."""
 
     title: str
     url: str
     snippet: str
-    date: Optional[str] = None
-    last_updated: Optional[str] = None
+    date: str | None = None
+    last_updated: str | None = None
 
     model_config = {"extra": "allow"}
 
@@ -34,7 +69,7 @@ class SearchResponse(LiteLLMPydanticObjectBase):
     Standardized to Perplexity Search format - other providers should transform to this format.
     """
 
-    results: List[SearchResult]
+    results: list[SearchResult]
     object: str = "search"
 
     model_config = {"extra": "allow"}
@@ -71,7 +106,7 @@ class BaseSearchConfig:
         return "POST"
 
     @staticmethod
-    def get_supported_perplexity_optional_params() -> set:
+    def get_supported_perplexity_optional_params() -> frozenset[str]:
         """
         Get the set of Perplexity unified search parameters.
         These are the standard parameters that providers should transform from.
@@ -79,31 +114,103 @@ class BaseSearchConfig:
         Returns:
             Set of parameter names that are part of the unified spec
         """
-        return {
-            "max_results",
-            "search_domain_filter",
-            "country",
-            "max_tokens_per_page",
-        }
+        return _PERPLEXITY_UNIFIED_PARAMS
+
+    def _assert_trusted_api_base_for_server_credential(
+        self,
+        caller_api_base: str | None,
+        default_api_base: str | None,
+        base_env_var: str | None,
+        credential_name: str,
+    ) -> None:
+        """
+        Block sending a server-managed credential to a caller-chosen host.
+
+        A caller-supplied api_base is honored when constructing the request URL, so
+        falling back to a server-configured secret while the caller controls the host
+        leaks that secret. The provider default and the operator's own api_base
+        override are the only trusted destinations for a server-managed credential.
+        """
+        if not caller_api_base:
+            return
+        if _is_trusted_search_api_base(caller_api_base, default_api_base, base_env_var):
+            return
+        raise ValueError(
+            f"Refusing to send the server-configured {credential_name} to the "
+            f"caller-supplied api_base '{caller_api_base}'. Pass an explicit api_key "
+            f"when overriding api_base for this search provider."
+        )
+
+    def resolve_server_api_key(
+        self,
+        *,
+        caller_api_key: str | None,
+        caller_api_base: str | None,
+        key_env_vars: tuple[str, ...],
+        base_env_var: str | None,
+        default_api_base: str | None,
+    ) -> str | None:
+        """
+        Resolve a single-secret search API key, falling back to a server-managed
+        secret only when the request targets a trusted host.
+
+        Returns the caller's key when provided, otherwise the first set
+        server-managed secret (or None when none is set, for keyless providers).
+        """
+        if caller_api_key:
+            return caller_api_key
+        server_key: Final = next(
+            (key for key in (get_secret_str(var) for var in key_env_vars) if key),
+            None,
+        )
+        if server_key is None:
+            return None
+        self._assert_trusted_api_base_for_server_credential(
+            caller_api_base, default_api_base, base_env_var, key_env_vars[0]
+        )
+        return server_key
 
     def validate_environment(
         self,
-        headers: Dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        headers: dict,
+        api_key: str | None = None,
+        api_base: str | None = None,
         **kwargs,
-    ) -> Dict:
+    ) -> dict:
         """
         Validate environment and return headers.
         Override in provider-specific implementations.
         """
         return headers
 
+    def sign_request(
+        self,
+        headers: dict[str, str],  # mutable-ok: matches the request header dict every other hook on this base takes
+        optional_params: dict[str, object],  # mutable-ok: matches every other hook on this base
+        request_data: dict[str, object] | list[dict[str, object]],  # mutable-ok: transform_search_request's body
+        api_base: str,
+        api_key: str | None = None,
+    ) -> tuple[dict[str, str], bytes | None]:  # mutable-ok: the handler passes these headers straight to httpx
+        """
+        OPTIONAL
+
+        Sign the request. Providers like Bedrock AgentCore need to SigV4-sign
+        the request before sending it to the API.
+
+        For all other providers, this is a no-op and we just return the headers.
+
+        Returns:
+            Tuple of (headers, signed_json_body). When signed_json_body is not
+            None, the handler MUST send it verbatim as the request body —
+            re-serializing the payload would invalidate the signature.
+        """
+        return headers, None
+
     def get_complete_url(
         self,
-        api_base: Optional[str],
+        api_base: str | None,
         optional_params: dict,
-        data: Optional[Union[Dict, List[Dict]]] = None,
+        data: dict | list[dict] | None = None,
         **kwargs,
     ) -> str:
         """
@@ -128,10 +235,10 @@ class BaseSearchConfig:
 
     def transform_search_request(
         self,
-        query: Union[str, List[str]],
+        query: str | list[str],
         optional_params: dict,
         **kwargs,
-    ) -> Union[Dict, List[Dict]]:
+    ) -> dict | list[dict]:
         """
         Transform Search request to provider-specific format.
         Override in provider-specific implementations.
@@ -143,9 +250,7 @@ class BaseSearchConfig:
         Returns:
             Dict with request data
         """
-        raise NotImplementedError(
-            "transform_search_request must be implemented by provider"
-        )
+        raise NotImplementedError("transform_search_request must be implemented by provider")
 
     def transform_search_response(
         self,
@@ -157,9 +262,7 @@ class BaseSearchConfig:
         Transform provider-specific Search response to standard format.
         Override in provider-specific implementations.
         """
-        raise NotImplementedError(
-            "transform_search_response must be implemented by provider"
-        )
+        raise NotImplementedError("transform_search_response must be implemented by provider")
 
     def get_error_class(
         self,

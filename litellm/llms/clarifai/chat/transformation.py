@@ -1,14 +1,14 @@
-from typing import TYPE_CHECKING, Any, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.llms.openai.common_utils import OpenAIError
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.utils import ModelResponse
 from litellm.types.llms.openai import (
     AllMessageValues,
 )
-from litellm.llms.openai.common_utils import OpenAIError
-from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.types.utils import ModelResponse
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 
@@ -45,15 +45,15 @@ class ClarifaiConfig(OpenAIGPTConfig):
         ]
 
     @staticmethod
-    def get_api_key(api_key: Optional[str] = None) -> Optional[str]:
+    def get_api_key(api_key: str | None = None) -> str | None:
         return api_key or get_secret_str("CLARIFAI_API_KEY")
 
     @staticmethod
-    def get_api_base(api_base: Optional[str] = None) -> Optional[str]:
+    def get_api_base(api_base: str | None = None) -> str | None:
         return api_base or "https://api.clarifai.com/v2/ext/openai/v1"
 
     @staticmethod
-    def get_base_model(model: Optional[str] = None) -> Optional[str]:
+    def get_base_model(model: str | None = None) -> str | None:
         if model:
             user_id, app_id, model_id = model.split(".")
             return f"https://clarifai.com/{user_id}/{app_id}/models/{model_id}"
@@ -61,23 +61,19 @@ class ClarifaiConfig(OpenAIGPTConfig):
 
     def _get_openai_compatible_provider_info(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
-    ) -> Tuple[Optional[str], Optional[str]]:
+        api_base: str | None,
+        api_key: str | None,
+    ) -> tuple[str | None, str | None]:
         """
         Get API base and key for Clarifai provider.
         """
         api_base = api_base or "https://api.clarifai.com/v2/ext/openai/v1"
-        dynamic_api_key = api_key or get_secret_str("CLARIFAI_API_KEY") or ""
+        dynamic_api_key: Final = api_key or get_secret_str("CLARIFAI_API_KEY") or ""
         return api_base, dynamic_api_key
 
-    def transform_request(
-        self, model, messages, optional_params, litellm_params, headers
-    ):
+    def transform_request(self, model, messages, optional_params, litellm_params, headers):
         model = self.get_base_model(model) or model
-        return super().transform_request(
-            model, messages, optional_params, litellm_params, headers
-        )
+        return super().transform_request(model, messages, optional_params, litellm_params, headers)
 
     def transform_response(
         self,
@@ -86,12 +82,12 @@ class ClarifaiConfig(OpenAIGPTConfig):
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
         request_data: dict,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         encoding: Any,
-        api_key: Optional[str] = None,
-        json_mode: Optional[bool] = None,
+        api_key: str | None = None,
+        json_mode: bool | None = None,
     ) -> ModelResponse:
         """
         Transform the Clarifai response to a standard ModelResponse.
@@ -106,24 +102,22 @@ class ClarifaiConfig(OpenAIGPTConfig):
         )
         ## Reponse
         try:
-            completion_response = raw_response.json()
+            completion_response: Final = raw_response.json()
         except Exception as e:
             raise OpenAIError(
                 status_code=raw_response.status_code,
-                message=f"Failed to parse Clarifai response: {str(e)}",
+                message=f"Failed to parse Clarifai response: {e}",
                 headers=raw_response.headers,
             ) from e
 
-        response = ModelResponse(**completion_response)
+        response: Final = ModelResponse(**completion_response)
 
         if response.model is not None:
             response.model = "clarifai/" + model
 
         return response
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
-    ) -> BaseLLMException:
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
         """
         Get the appropriate error class for Clarifai errors.
         Since Clarifai is OpenAI-compatible, we use OpenAI error handling.

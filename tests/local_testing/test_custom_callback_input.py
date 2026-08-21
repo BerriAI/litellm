@@ -4,7 +4,6 @@ import asyncio
 import inspect
 import os
 import sys
-import time
 import traceback
 from litellm._uuid import uuid
 from datetime import datetime
@@ -20,6 +19,7 @@ import litellm
 from litellm import Cache, completion, embedding
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.types.utils import LiteLLMCommonStrings
+from tests._wait_helpers import await_until, wait_until
 
 # Test Scenarios (test across completion, streaming, embedding)
 ## 1: Pre-API-Call
@@ -389,7 +389,10 @@ def test_chat_openai_stream():
                 continue
         except Exception:
             pass
-        time.sleep(1)
+        wait_until(
+            lambda: "sync_failure" in customHandler.states,
+            message=f"no sync_failure callback, states={customHandler.states}",
+        )
         print(f"customHandler.errors: {customHandler.errors}")
         assert len(customHandler.errors) == 0
         litellm.callbacks = []
@@ -430,10 +433,12 @@ async def test_async_chat_openai_stream():
             )
             async for chunk in response:
                 continue
-            await asyncio.sleep(1)
         except Exception:
             pass
-        time.sleep(1)
+        await await_until(
+            lambda: "async_failure" in customHandler.states,
+            message=f"no async_failure callback, states={customHandler.states}",
+        )
         print(f"customHandler.errors: {customHandler.errors}")
         assert len(customHandler.errors) == 0
         litellm.callbacks = []
@@ -473,7 +478,10 @@ def test_chat_azure_stream():
                 continue
         except Exception:
             pass
-        time.sleep(1)
+        wait_until(
+            lambda: "sync_failure" in customHandler.states,
+            message=f"no sync_failure callback, states={customHandler.states}",
+        )
         print(f"customHandler.errors: {customHandler.errors}")
         assert len(customHandler.errors) == 0
         litellm.callbacks = []
@@ -590,7 +598,10 @@ async def test_async_chat_sagemaker_stream():
                 continue
         except Exception:
             pass
-        time.sleep(1)
+        await await_until(
+            lambda: "async_failure" in customHandler.states,
+            message=f"no async_failure callback, states={customHandler.states}",
+        )
         print(f"customHandler.errors: {customHandler.errors}")
         assert len(customHandler.errors) == 0
         litellm.callbacks = []
@@ -711,10 +722,12 @@ async def test_async_text_completion_bedrock():
             async for chunk in response:
                 continue
 
-            await asyncio.sleep(1)
         except Exception:
             pass
-        time.sleep(1)
+        await await_until(
+            lambda: "async_failure" in customHandler.states,
+            message=f"no async_failure callback, states={customHandler.states}",
+        )
         print(f"customHandler.errors: {customHandler.errors}")
         assert len(customHandler.errors) == 0
         litellm.callbacks = []
@@ -754,10 +767,12 @@ async def test_async_text_completion_openai_stream():
             async for chunk in response:
                 continue
 
-            await asyncio.sleep(1)
         except Exception:
             pass
-        time.sleep(1)
+        await await_until(
+            lambda: "async_failure" in customHandler.states,
+            message=f"no async_failure callback, states={customHandler.states}",
+        )
         print(f"customHandler.errors: {customHandler.errors}")
         assert len(customHandler.errors) == 0
         litellm.callbacks = []
@@ -816,7 +831,10 @@ def test_amazing_sync_embedding():
         )
         print(f"customHandler_success.errors: {customHandler_success.errors}")
         print(f"customHandler_success.states: {customHandler_success.states}")
-        time.sleep(2)
+        wait_until(
+            lambda: len(customHandler_success.states) == 3,
+            message=f"success states never reached pre/post/success, got {customHandler_success.states}",
+        )
         assert len(customHandler_success.errors) == 0
         assert len(customHandler_success.states) == 3  # pre, post, success
         # test failure callback
@@ -832,7 +850,10 @@ def test_amazing_sync_embedding():
             pass
         print(f"customHandler_failure.errors: {customHandler_failure.errors}")
         print(f"customHandler_failure.states: {customHandler_failure.states}")
-        time.sleep(2)
+        wait_until(
+            lambda: len(customHandler_failure.states) == 3,
+            message=f"failure states never reached pre/post/failure, got {customHandler_failure.states}",
+        )
         assert len(customHandler_failure.errors) == 1
         assert len(customHandler_failure.states) == 3  # pre, post, failure
     except Exception as e:
@@ -939,7 +960,10 @@ def test_image_generation_openai():
 
         print(f"customHandler_success.errors: {customHandler_success.errors}")
         print(f"customHandler_success.states: {customHandler_success.states}")
-        time.sleep(2)
+        wait_until(
+            lambda: len(customHandler_success.states) == 3,
+            message=f"success states never reached pre/post/success, got {customHandler_success.states}",
+        )
         assert len(customHandler_success.errors) == 0
         assert len(customHandler_success.states) == 3  # pre, post, success
         # test failure callback
@@ -991,7 +1015,10 @@ def test_turn_off_message_logging():
         mock_response="Going well!",
     )
 
-    time.sleep(2)
+    wait_until(
+        lambda: "sync_success" in customHandler.states,
+        message=f"no sync_success callback, states={customHandler.states}",
+    )
     assert len(customHandler.errors) == 0
 
 
@@ -1033,7 +1060,7 @@ def test_standard_logging_payload(model, turn_off_message_logging):
             mock_response="Going well!",
         )
 
-        time.sleep(2)
+        wait_until(lambda: mock_client.called, message="log_success_event never fired")
         mock_client.assert_called_once()
 
         print(
@@ -1147,7 +1174,7 @@ def test_standard_logging_payload_audio(turn_off_message_logging, stream):
             for chunk in response:
                 continue
 
-        time.sleep(2)
+        wait_until(lambda: mock_client.called, message="log_success_event never fired")
         mock_client.assert_called()
 
         print(
@@ -1247,7 +1274,7 @@ def test_aaastandard_logging_payload_cache_hit():
             caching=True,
         )
 
-        time.sleep(2)
+        wait_until(lambda: mock_client.called, message="log_success_event never fired")
         mock_client.assert_called_once()
 
         assert "standard_logging_object" in mock_client.call_args.kwargs["kwargs"]
@@ -1276,6 +1303,9 @@ def test_logging_async_cache_hit_sync_call(turn_off_message_logging):
 
     litellm.cache = Cache()
 
+    primingHandler = CompletionCustomHandler()
+    litellm.callbacks = [primingHandler]
+
     response = litellm.completion(
         model="gpt-3.5-turbo",
         messages=[{"role": "user", "content": "Hey, how's it going?"}],
@@ -1285,7 +1315,10 @@ def test_logging_async_cache_hit_sync_call(turn_off_message_logging):
     for chunk in response:
         print(chunk)
 
-    time.sleep(3)
+    wait_until(
+        lambda: "sync_success" in primingHandler.states,
+        message=f"priming call never finished logging, states={primingHandler.states}",
+    )
     customHandler = CompletionCustomHandler()
     litellm.callbacks = [customHandler]
     litellm.success_callback = []
@@ -1303,7 +1336,7 @@ def test_logging_async_cache_hit_sync_call(turn_off_message_logging):
         for chunk in resp:
             print(chunk)
 
-        time.sleep(2)
+        wait_until(lambda: mock_client.called, message="log_success_event never fired")
         mock_client.assert_called_once()
 
         assert "standard_logging_object" in mock_client.call_args.kwargs["kwargs"]
@@ -1387,7 +1420,7 @@ def test_logging_standard_payload_llm_headers(stream):
             for chunk in resp:
                 continue
 
-        time.sleep(2)
+        wait_until(lambda: mock_client.called, message="log_success_event never fired")
         mock_client.assert_called()
 
         standard_logging_object: StandardLoggingPayload = mock_client.call_args.kwargs[
@@ -1458,7 +1491,7 @@ async def test_standard_logging_payload_stream_usage(sync_mode):
                 chunks = []
                 for chunk in resp:
                     chunks.append(chunk)
-                time.sleep(2)
+                wait_until(lambda: mock_client.called, message="log_success_event never fired")
             else:
                 resp = await litellm.acompletion(
                     model="anthropic/claude-sonnet-4-5-20250929",
@@ -1469,7 +1502,9 @@ async def test_standard_logging_payload_stream_usage(sync_mode):
                 chunks = []
                 async for chunk in resp:
                     chunks.append(chunk)
-                await asyncio.sleep(2)
+                await await_until(
+                    lambda: mock_client.called, message="async_log_success_event never fired"
+                )
 
             mock_client.assert_called_once()
 

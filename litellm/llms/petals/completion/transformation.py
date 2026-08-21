@@ -1,4 +1,4 @@
-from typing import Any, List, Optional, Union
+from typing import Any, Final
 
 from httpx import Headers, Response
 
@@ -36,29 +36,25 @@ class PetalsConfig(BaseConfig):
     - `repetition_penalty` (float, optional): This helps apply the repetition penalty during text generation, as discussed in this paper.
     """
 
-    max_length: Optional[int] = None
-    max_new_tokens: Optional[int] = (
-        litellm.max_tokens
-    )  # petals requires max tokens to be set
-    do_sample: Optional[bool] = None
-    temperature: Optional[float] = None
-    top_k: Optional[int] = None
-    top_p: Optional[float] = None
-    repetition_penalty: Optional[float] = None
+    max_length: int | None = None
+    max_new_tokens: int | None = litellm.max_tokens  # petals requires max tokens to be set
+    do_sample: bool | None = None
+    temperature: float | None = None
+    top_k: int | None = None
+    top_p: float | None = None
+    repetition_penalty: float | None = None
 
     def __init__(
         self,
-        max_length: Optional[int] = None,
-        max_new_tokens: Optional[
-            int
-        ] = litellm.max_tokens,  # petals requires max tokens to be set
-        do_sample: Optional[bool] = None,
-        temperature: Optional[float] = None,
-        top_k: Optional[int] = None,
-        top_p: Optional[float] = None,
-        repetition_penalty: Optional[float] = None,
+        max_length: int | None = None,
+        max_new_tokens: int | None = litellm.max_tokens,  # petals requires max tokens to be set
+        do_sample: bool | None = None,
+        temperature: float | None = None,
+        top_k: int | None = None,
+        top_p: float | None = None,
+        repetition_penalty: float | None = None,
     ) -> None:
-        locals_ = locals().copy()
+        locals_: Final = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -67,14 +63,10 @@ class PetalsConfig(BaseConfig):
     def get_config(cls):
         return super().get_config()
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, Headers]
-    ) -> BaseLLMException:
-        return PetalsError(
-            status_code=status_code, message=error_message, headers=headers
-        )
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | Headers) -> BaseLLMException:
+        return PetalsError(status_code=status_code, message=error_message, headers=headers)
 
-    def get_supported_openai_params(self, model: str) -> List:
+    def get_supported_openai_params(self, model: str) -> list:
         return ["max_tokens", "temperature", "top_p", "stream"]
 
     def map_openai_params(
@@ -98,7 +90,7 @@ class PetalsConfig(BaseConfig):
     def transform_request(
         self,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
@@ -114,12 +106,12 @@ class PetalsConfig(BaseConfig):
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
         request_data: dict,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         encoding: Any,
-        api_key: Optional[str] = None,
-        json_mode: Optional[bool] = None,
+        api_key: str | None = None,
+        json_mode: bool | None = None,
     ) -> ModelResponse:
         raise NotImplementedError(
             "Petals transformation currently done in handler.py. [TODO] Move to the transformation.py"
@@ -129,10 +121,10 @@ class PetalsConfig(BaseConfig):
         self,
         headers: dict,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
         return {}

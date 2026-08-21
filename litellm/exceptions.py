@@ -10,7 +10,7 @@
 ## LiteLLM versions of the OpenAI Exception Types
 
 import enum
-from typing import Any, Dict, Optional, Union
+from typing import Any, Final
 
 import httpx
 import openai
@@ -81,11 +81,11 @@ class RateLimitType(str, enum.Enum):
     """Per-session max-iterations cap reached (agent-style flows)."""
 
 
-_RATE_LIMIT_CATEGORY_VALUES = frozenset(c.value for c in RateLimitErrorCategory)
-_RATE_LIMIT_TYPE_VALUES = frozenset(t.value for t in RateLimitType)
+_RATE_LIMIT_CATEGORY_VALUES: Final = frozenset(c.value for c in RateLimitErrorCategory)
+_RATE_LIMIT_TYPE_VALUES: Final = frozenset(t.value for t in RateLimitType)
 
 
-def validate_rate_limit_category(value: Any) -> Optional[str]:
+def validate_rate_limit_category(value: Any) -> str | None:
     """Return ``value`` only if it matches a known :class:`RateLimitErrorCategory`.
 
     Used at duck-typed read sites (StandardLoggingPayload extraction, Prometheus
@@ -100,7 +100,7 @@ def validate_rate_limit_category(value: Any) -> Optional[str]:
     return None
 
 
-def validate_rate_limit_type(value: Any) -> Optional[str]:
+def validate_rate_limit_type(value: Any) -> str | None:
     """Return ``value`` only if it matches a known :class:`RateLimitType`.
 
     See :func:`validate_rate_limit_category` for the rationale.
@@ -112,7 +112,7 @@ def validate_rate_limit_type(value: Any) -> Optional[str]:
     return None
 
 
-_MINIMAL_ERROR_RESPONSE: Optional[httpx.Response] = None
+_MINIMAL_ERROR_RESPONSE: httpx.Response | None = None
 
 
 def _get_minimal_error_response() -> httpx.Response:
@@ -126,19 +126,19 @@ def _get_minimal_error_response() -> httpx.Response:
     return _MINIMAL_ERROR_RESPONSE
 
 
-class AuthenticationError(openai.AuthenticationError):  # type: ignore
+class AuthenticationError(openai.AuthenticationError):
     def __init__(
         self,
         message,
         llm_provider,
         model,
-        response: Optional[httpx.Response] = None,
-        litellm_debug_info: Optional[str] = None,
-        max_retries: Optional[int] = None,
-        num_retries: Optional[int] = None,
+        response: httpx.Response | None = None,
+        litellm_debug_info: str | None = None,
+        max_retries: int | None = None,
+        num_retries: int | None = None,
     ):
         self.status_code = 401
-        self.message = "litellm.AuthenticationError: {}".format(message)
+        self.message = f"litellm.AuthenticationError: {message}"
         self.llm_provider = llm_provider
         self.model = model
         self.litellm_debug_info = litellm_debug_info
@@ -146,9 +146,7 @@ class AuthenticationError(openai.AuthenticationError):  # type: ignore
         self.num_retries = num_retries
         self.response = response or httpx.Response(
             status_code=self.status_code,
-            request=httpx.Request(
-                method="GET", url="https://litellm.ai"
-            ),  # mock request object
+            request=httpx.Request(method="GET", url="https://litellm.ai"),  # mock request object
         )
         super().__init__(
             self.message, response=self.response, body=None
@@ -172,19 +170,19 @@ class AuthenticationError(openai.AuthenticationError):  # type: ignore
 
 
 # raise when invalid models passed, example gpt-8
-class NotFoundError(openai.NotFoundError):  # type: ignore
+class NotFoundError(openai.NotFoundError):
     def __init__(
         self,
         message,
         model,
         llm_provider,
-        response: Optional[httpx.Response] = None,
-        litellm_debug_info: Optional[str] = None,
-        max_retries: Optional[int] = None,
-        num_retries: Optional[int] = None,
+        response: httpx.Response | None = None,
+        litellm_debug_info: str | None = None,
+        max_retries: int | None = None,
+        num_retries: int | None = None,
     ):
         self.status_code = 404
-        self.message = "litellm.NotFoundError: {}".format(message)
+        self.message = f"litellm.NotFoundError: {message}"
         self.model = model
         self.llm_provider = llm_provider
         self.litellm_debug_info = litellm_debug_info
@@ -192,9 +190,7 @@ class NotFoundError(openai.NotFoundError):  # type: ignore
         self.num_retries = num_retries
         self.response = response or httpx.Response(
             status_code=self.status_code,
-            request=httpx.Request(
-                method="GET", url="https://litellm.ai"
-            ),  # mock request object
+            request=httpx.Request(method="GET", url="https://litellm.ai"),  # mock request object
         )
         super().__init__(
             self.message, response=self.response, body=None
@@ -217,20 +213,20 @@ class NotFoundError(openai.NotFoundError):  # type: ignore
         return _message
 
 
-class BadRequestError(openai.BadRequestError):  # type: ignore
+class BadRequestError(openai.BadRequestError):
     def __init__(
         self,
         message,
         model,
         llm_provider,
-        response: Optional[httpx.Response] = None,
-        litellm_debug_info: Optional[str] = None,
-        max_retries: Optional[int] = None,
-        num_retries: Optional[int] = None,
-        body: Optional[dict] = None,
+        response: httpx.Response | None = None,
+        litellm_debug_info: str | None = None,
+        max_retries: int | None = None,
+        num_retries: int | None = None,
+        body: dict | None = None,
     ):
         self.status_code = 400
-        self.message = "litellm.BadRequestError: {}".format(message)
+        self.message = f"litellm.BadRequestError: {message}"
         self.model = model
         self.llm_provider = llm_provider
         self.litellm_debug_info = litellm_debug_info
@@ -274,11 +270,11 @@ class ImageFetchError(BadRequestError):
         message,
         model=None,
         llm_provider=None,
-        response: Optional[httpx.Response] = None,
-        litellm_debug_info: Optional[str] = None,
-        max_retries: Optional[int] = None,
-        num_retries: Optional[int] = None,
-        body: Optional[dict] = None,
+        response: httpx.Response | None = None,
+        litellm_debug_info: str | None = None,
+        max_retries: int | None = None,
+        num_retries: int | None = None,
+        body: dict | None = None,
     ):
         super().__init__(
             message=message,
@@ -292,19 +288,19 @@ class ImageFetchError(BadRequestError):
         )
 
 
-class UnprocessableEntityError(openai.UnprocessableEntityError):  # type: ignore
+class UnprocessableEntityError(openai.UnprocessableEntityError):
     def __init__(
         self,
         message,
         model,
         llm_provider,
         response: httpx.Response,
-        litellm_debug_info: Optional[str] = None,
-        max_retries: Optional[int] = None,
-        num_retries: Optional[int] = None,
+        litellm_debug_info: str | None = None,
+        max_retries: int | None = None,
+        num_retries: int | None = None,
     ):
         self.status_code = 422
-        self.message = "litellm.UnprocessableEntityError: {}".format(message)
+        self.message = f"litellm.UnprocessableEntityError: {message}"
         self.model = model
         self.llm_provider = llm_provider
         self.litellm_debug_info = litellm_debug_info
@@ -331,27 +327,25 @@ class UnprocessableEntityError(openai.UnprocessableEntityError):  # type: ignore
         return _message
 
 
-class Timeout(openai.APITimeoutError):  # type: ignore
+class Timeout(openai.APITimeoutError):
     def __init__(
         self,
         message,
         model,
         llm_provider,
-        litellm_debug_info: Optional[str] = None,
-        max_retries: Optional[int] = None,
-        num_retries: Optional[int] = None,
-        headers: Optional[dict] = None,
-        exception_status_code: Optional[int] = None,
+        litellm_debug_info: str | None = None,
+        max_retries: int | None = None,
+        num_retries: int | None = None,
+        headers: dict | None = None,
+        exception_status_code: int | None = None,
     ):
-        request = httpx.Request(
+        request: Final = httpx.Request(
             method="POST",
             url="https://api.openai.com/v1",
         )
-        super().__init__(
-            request=request
-        )  # Call the base class constructor with the parameters it needs
+        super().__init__(request=request)  # Call the base class constructor with the parameters it needs
         self.status_code = exception_status_code or 408
-        self.message = "litellm.Timeout: {}".format(message)
+        self.message = f"litellm.Timeout: {message}"
         self.model = model
         self.llm_provider = llm_provider
         self.litellm_debug_info = litellm_debug_info
@@ -377,19 +371,19 @@ class Timeout(openai.APITimeoutError):  # type: ignore
         return _message
 
 
-class PermissionDeniedError(openai.PermissionDeniedError):  # type: ignore
+class PermissionDeniedError(openai.PermissionDeniedError):
     def __init__(
         self,
         message,
         llm_provider,
         model,
         response: httpx.Response,
-        litellm_debug_info: Optional[str] = None,
-        max_retries: Optional[int] = None,
-        num_retries: Optional[int] = None,
+        litellm_debug_info: str | None = None,
+        max_retries: int | None = None,
+        num_retries: int | None = None,
     ):
         self.status_code = 403
-        self.message = "litellm.PermissionDeniedError: {}".format(message)
+        self.message = f"litellm.PermissionDeniedError: {message}"
         self.llm_provider = llm_provider
         self.model = model
         self.litellm_debug_info = litellm_debug_info
@@ -416,7 +410,7 @@ class PermissionDeniedError(openai.PermissionDeniedError):  # type: ignore
         return _message
 
 
-class RateLimitError(openai.RateLimitError):  # type: ignore
+class RateLimitError(openai.RateLimitError):
     """
     Unified rate-limit error.
 
@@ -434,34 +428,28 @@ class RateLimitError(openai.RateLimitError):  # type: ignore
         message,
         llm_provider,
         model,
-        response: Optional[httpx.Response] = None,
-        litellm_debug_info: Optional[str] = None,
-        max_retries: Optional[int] = None,
-        num_retries: Optional[int] = None,
-        category: Union[str, RateLimitErrorCategory] = (
-            RateLimitErrorCategory.VENDOR_RATE_LIMIT
-        ),
-        rate_limit_type: Optional[Union[str, RateLimitType]] = None,
-        headers: Optional[Dict[str, str]] = None,
+        response: httpx.Response | None = None,
+        litellm_debug_info: str | None = None,
+        max_retries: int | None = None,
+        num_retries: int | None = None,
+        category: str | RateLimitErrorCategory = (RateLimitErrorCategory.VENDOR_RATE_LIMIT),
+        rate_limit_type: str | RateLimitType | None = None,
+        headers: dict[str, str] | None = None,
         detail: Any = None,
     ):
         self.status_code = 429
-        self.message = "litellm.RateLimitError: {}".format(message)
+        self.message = f"litellm.RateLimitError: {message}"
         self.llm_provider = llm_provider
         self.model = model
         self.litellm_debug_info = litellm_debug_info
         self.max_retries = max_retries
         self.num_retries = num_retries
-        self.category = (
-            category.value if isinstance(category, RateLimitErrorCategory) else category
-        )
+        self.category = category.value if isinstance(category, RateLimitErrorCategory) else category
         # Which dimension was exceeded — request count, token count, parallel
         # requests, budget, max iterations. None when the source didn't
         # classify the failure (e.g. legacy vendor 429 with no header hints).
-        self.rate_limit_type: Optional[str] = (
-            rate_limit_type.value
-            if isinstance(rate_limit_type, RateLimitType)
-            else rate_limit_type
+        self.rate_limit_type: str | None = (
+            rate_limit_type.value if isinstance(rate_limit_type, RateLimitType) else rate_limit_type
         )
         # Headers explicitly attached to the error (e.g. retry-after,
         # rate_limit_type, reset_at). Preserved across the proxy boundary so
@@ -476,12 +464,8 @@ class RateLimitError(openai.RateLimitError):  # type: ignore
         # headers stay reachable on `e.response.headers` for callers that
         # explicitly want them; only the proxy-supplied `headers=` kwarg
         # makes it onto `self.headers`.
-        _response_headers = (
-            getattr(response, "headers", None) if response is not None else None
-        )
-        self.headers: Optional[Dict[str, str]] = (
-            {k: str(v) for k, v in headers.items()} if headers else None
-        )
+        _response_headers: Final = getattr(response, "headers", None) if response is not None else None
+        self.headers: dict[str, str] | None = {k: str(v) for k, v in headers.items()} if headers else None
         # Mirrors FastAPI HTTPException.detail so the same instance can be
         # serialized through both the ProxyException and HTTPException paths.
         self.detail = detail if detail is not None else self.message
@@ -517,14 +501,14 @@ class RateLimitError(openai.RateLimitError):  # type: ignore
 
 
 # sub class of rate limit error - meant to give more granularity for error handling context window exceeded errors
-class ContextWindowExceededError(BadRequestError):  # type: ignore
+class ContextWindowExceededError(BadRequestError):
     def __init__(
         self,
         message,
         model,
         llm_provider,
-        response: Optional[httpx.Response] = None,
-        litellm_debug_info: Optional[str] = None,
+        response: httpx.Response | None = None,
+        litellm_debug_info: str | None = None,
     ):
         self.status_code = 400
         self.model = model
@@ -532,14 +516,14 @@ class ContextWindowExceededError(BadRequestError):  # type: ignore
         self.litellm_debug_info = litellm_debug_info
         super().__init__(
             message=message,
-            model=self.model,  # type: ignore
-            llm_provider=self.llm_provider,  # type: ignore
+            model=self.model,
+            llm_provider=self.llm_provider,
             response=response,
             litellm_debug_info=self.litellm_debug_info,
         )  # Call the base class constructor with the parameters it needs
 
         # set after, to make it clear the raised error is a context window exceeded error
-        self.message = "litellm.ContextWindowExceededError: {}".format(self.message)
+        self.message = f"litellm.ContextWindowExceededError: {self.message}"
 
     def __str__(self):
         _message = self.message
@@ -559,27 +543,27 @@ class ContextWindowExceededError(BadRequestError):  # type: ignore
 
 
 # sub class of bad request error - meant to help us catch guardrails-related errors on proxy.
-class RejectedRequestError(BadRequestError):  # type: ignore
+class RejectedRequestError(BadRequestError):
     def __init__(
         self,
         message,
         model,
         llm_provider,
         request_data: dict,
-        litellm_debug_info: Optional[str] = None,
+        litellm_debug_info: str | None = None,
     ):
         self.status_code = 400
-        self.message = "litellm.RejectedRequestError: {}".format(message)
+        self.message = f"litellm.RejectedRequestError: {message}"
         self.model = model
         self.llm_provider = llm_provider
         self.litellm_debug_info = litellm_debug_info
         self.request_data = request_data
-        request = httpx.Request(method="POST", url="https://api.openai.com/v1")
-        response = httpx.Response(status_code=400, request=request)
+        request: Final = httpx.Request(method="POST", url="https://api.openai.com/v1")
+        response: Final = httpx.Response(status_code=400, request=request)
         super().__init__(
             message=self.message,
-            model=self.model,  # type: ignore
-            llm_provider=self.llm_provider,  # type: ignore
+            model=self.model,
+            llm_provider=self.llm_provider,
             response=response,
             litellm_debug_info=self.litellm_debug_info,
         )  # Call the base class constructor with the parameters it needs
@@ -601,28 +585,28 @@ class RejectedRequestError(BadRequestError):  # type: ignore
         return _message
 
 
-class ContentPolicyViolationError(BadRequestError):  # type: ignore
+class ContentPolicyViolationError(BadRequestError):
     #  Error code: 400 - {'error': {'code': 'content_policy_violation', 'message': 'Your request was rejected as a result of our safety system. Image descriptions generated from your prompt may contain text that is not allowed by our safety system. If you believe this was done in error, your request may succeed if retried, or by adjusting your prompt.', 'param': None, 'type': 'invalid_request_error'}}
     def __init__(
         self,
         message,
         model,
         llm_provider,
-        response: Optional[httpx.Response] = None,
-        litellm_debug_info: Optional[str] = None,
-        provider_specific_fields: Optional[dict] = None,
-        body: Optional[dict] = None,
+        response: httpx.Response | None = None,
+        litellm_debug_info: str | None = None,
+        provider_specific_fields: dict | None = None,
+        body: dict | None = None,
     ):
         self.status_code = 400
-        self.message = "litellm.ContentPolicyViolationError: {}".format(message)
+        self.message = f"litellm.ContentPolicyViolationError: {message}"
         self.model = model
         self.llm_provider = llm_provider
         self.litellm_debug_info = litellm_debug_info
         self.provider_specific_fields = provider_specific_fields
         super().__init__(
             message=self.message,
-            model=self.model,  # type: ignore
-            llm_provider=self.llm_provider,  # type: ignore
+            model=self.model,
+            llm_provider=self.llm_provider,
             response=response,
             litellm_debug_info=self.litellm_debug_info,
             body=body,
@@ -646,27 +630,25 @@ class ContentPolicyViolationError(BadRequestError):  # type: ignore
         return _message
 
 
-class ServiceUnavailableError(openai.APIStatusError):  # type: ignore
+class ServiceUnavailableError(openai.APIStatusError):
     def __init__(
         self,
         message,
         llm_provider,
         model,
-        response: Optional[httpx.Response] = None,
-        litellm_debug_info: Optional[str] = None,
-        max_retries: Optional[int] = None,
-        num_retries: Optional[int] = None,
+        response: httpx.Response | None = None,
+        litellm_debug_info: str | None = None,
+        max_retries: int | None = None,
+        num_retries: int | None = None,
     ):
         self.status_code = 503
-        self.message = "litellm.ServiceUnavailableError: {}".format(message)
+        self.message = f"litellm.ServiceUnavailableError: {message}"
         self.llm_provider = llm_provider
         self.model = model
         self.litellm_debug_info = litellm_debug_info
         self.max_retries = max_retries
         self.num_retries = num_retries
-        _response_headers = (
-            getattr(response, "headers", None) if response is not None else None
-        )
+        _response_headers: Final = getattr(response, "headers", None) if response is not None else None
         self.response = httpx.Response(
             status_code=self.status_code,
             headers=_response_headers,
@@ -696,27 +678,25 @@ class ServiceUnavailableError(openai.APIStatusError):  # type: ignore
         return _message
 
 
-class BadGatewayError(openai.APIStatusError):  # type: ignore
+class BadGatewayError(openai.APIStatusError):
     def __init__(
         self,
         message,
         llm_provider,
         model,
-        response: Optional[httpx.Response] = None,
-        litellm_debug_info: Optional[str] = None,
-        max_retries: Optional[int] = None,
-        num_retries: Optional[int] = None,
+        response: httpx.Response | None = None,
+        litellm_debug_info: str | None = None,
+        max_retries: int | None = None,
+        num_retries: int | None = None,
     ):
         self.status_code = 502
-        self.message = "litellm.BadGatewayError: {}".format(message)
+        self.message = f"litellm.BadGatewayError: {message}"
         self.llm_provider = llm_provider
         self.model = model
         self.litellm_debug_info = litellm_debug_info
         self.max_retries = max_retries
         self.num_retries = num_retries
-        _response_headers = (
-            getattr(response, "headers", None) if response is not None else None
-        )
+        _response_headers: Final = getattr(response, "headers", None) if response is not None else None
         self.response = httpx.Response(
             status_code=self.status_code,
             headers=_response_headers,
@@ -746,27 +726,25 @@ class BadGatewayError(openai.APIStatusError):  # type: ignore
         return _message
 
 
-class InternalServerError(openai.InternalServerError):  # type: ignore
+class InternalServerError(openai.InternalServerError):
     def __init__(
         self,
         message,
         llm_provider,
         model,
-        response: Optional[httpx.Response] = None,
-        litellm_debug_info: Optional[str] = None,
-        max_retries: Optional[int] = None,
-        num_retries: Optional[int] = None,
+        response: httpx.Response | None = None,
+        litellm_debug_info: str | None = None,
+        max_retries: int | None = None,
+        num_retries: int | None = None,
     ):
         self.status_code = 500
-        self.message = "litellm.InternalServerError: {}".format(message)
+        self.message = f"litellm.InternalServerError: {message}"
         self.llm_provider = llm_provider
         self.model = model
         self.litellm_debug_info = litellm_debug_info
         self.max_retries = max_retries
         self.num_retries = num_retries
-        _response_headers = (
-            getattr(response, "headers", None) if response is not None else None
-        )
+        _response_headers: Final = getattr(response, "headers", None) if response is not None else None
         self.response = httpx.Response(
             status_code=self.status_code,
             headers=_response_headers,
@@ -797,20 +775,20 @@ class InternalServerError(openai.InternalServerError):  # type: ignore
 
 
 # raise this when the API returns an invalid response object - https://github.com/openai/openai-python/blob/1be14ee34a0f8e42d3f9aa5451aa4cb161f1781f/openai/api_requestor.py#L401
-class APIError(openai.APIError):  # type: ignore
+class APIError(openai.APIError):
     def __init__(
         self,
         status_code: int,
         message,
         llm_provider,
         model,
-        request: Optional[httpx.Request] = None,
-        litellm_debug_info: Optional[str] = None,
-        max_retries: Optional[int] = None,
-        num_retries: Optional[int] = None,
+        request: httpx.Request | None = None,
+        litellm_debug_info: str | None = None,
+        max_retries: int | None = None,
+        num_retries: int | None = None,
     ):
         self.status_code = status_code
-        self.message = "litellm.APIError: {}".format(message)
+        self.message = f"litellm.APIError: {message}"
         self.llm_provider = llm_provider
         self.model = model
         self.litellm_debug_info = litellm_debug_info
@@ -818,7 +796,7 @@ class APIError(openai.APIError):  # type: ignore
         self.num_retries = num_retries
         if request is None:
             request = httpx.Request(method="POST", url="https://api.openai.com/v1")
-        super().__init__(self.message, request=request, body=None)  # type: ignore
+        super().__init__(self.message, request=request, body=None)
 
     def __str__(self):
         _message = self.message
@@ -838,18 +816,18 @@ class APIError(openai.APIError):  # type: ignore
 
 
 # raised if an invalid request (not get, delete, put, post) is made
-class APIConnectionError(openai.APIConnectionError):  # type: ignore
+class APIConnectionError(openai.APIConnectionError):
     def __init__(
         self,
         message,
         llm_provider,
         model,
-        request: Optional[httpx.Request] = None,
-        litellm_debug_info: Optional[str] = None,
-        max_retries: Optional[int] = None,
-        num_retries: Optional[int] = None,
+        request: httpx.Request | None = None,
+        litellm_debug_info: str | None = None,
+        max_retries: int | None = None,
+        num_retries: int | None = None,
     ):
-        self.message = "litellm.APIConnectionError: {}".format(message)
+        self.message = f"litellm.APIConnectionError: {message}"
         self.llm_provider = llm_provider
         self.model = model
         self.status_code = 500
@@ -877,21 +855,21 @@ class APIConnectionError(openai.APIConnectionError):  # type: ignore
 
 
 # raised if an invalid request (not get, delete, put, post) is made
-class APIResponseValidationError(openai.APIResponseValidationError):  # type: ignore
+class APIResponseValidationError(openai.APIResponseValidationError):
     def __init__(
         self,
         message,
         llm_provider,
         model,
-        litellm_debug_info: Optional[str] = None,
-        max_retries: Optional[int] = None,
-        num_retries: Optional[int] = None,
+        litellm_debug_info: str | None = None,
+        max_retries: int | None = None,
+        num_retries: int | None = None,
     ):
-        self.message = "litellm.APIResponseValidationError: {}".format(message)
+        self.message = f"litellm.APIResponseValidationError: {message}"
         self.llm_provider = llm_provider
         self.model = model
-        request = httpx.Request(method="POST", url="https://api.openai.com/v1")
-        response = httpx.Response(status_code=500, request=request)
+        request: Final = httpx.Request(method="POST", url="https://api.openai.com/v1")
+        response: Final = httpx.Response(status_code=500, request=request)
         self.litellm_debug_info = litellm_debug_info
         self.max_retries = max_retries
         self.num_retries = num_retries
@@ -915,20 +893,16 @@ class APIResponseValidationError(openai.APIResponseValidationError):  # type: ig
 
 
 class JSONSchemaValidationError(APIResponseValidationError):
-    def __init__(
-        self, model: str, llm_provider: str, raw_response: str, schema: str
-    ) -> None:
+    def __init__(self, model: str, llm_provider: str, raw_response: str, schema: str) -> None:
         self.raw_response = raw_response
         self.schema = schema
         self.model = model
-        message = "litellm.JSONSchemaValidationError: model={}, returned an invalid response={}, for schema={}.\nAccess raw response with `e.raw_response`".format(
-            model, raw_response, schema
-        )
+        message = f"litellm.JSONSchemaValidationError: model={model}, returned an invalid response={raw_response}, for schema={schema}.\nAccess raw response with `e.raw_response`"
         self.message = message
         super().__init__(model=model, message=message, llm_provider=llm_provider)
 
 
-class OpenAIError(openai.OpenAIError):  # type: ignore
+class OpenAIError(openai.OpenAIError):
     def __init__(self, original_exception=None):
         super().__init__()
         self.llm_provider = "openai"
@@ -938,30 +912,28 @@ class UnsupportedParamsError(BadRequestError):
     def __init__(
         self,
         message,
-        llm_provider: Optional[str] = None,
-        model: Optional[str] = None,
+        llm_provider: str | None = None,
+        model: str | None = None,
         status_code: int = 400,
-        response: Optional[httpx.Response] = None,
-        litellm_debug_info: Optional[str] = None,
-        max_retries: Optional[int] = None,
-        num_retries: Optional[int] = None,
+        response: httpx.Response | None = None,
+        litellm_debug_info: str | None = None,
+        max_retries: int | None = None,
+        num_retries: int | None = None,
     ):
         self.status_code = 400
-        self.message = "litellm.UnsupportedParamsError: {}".format(message)
+        self.message = f"litellm.UnsupportedParamsError: {message}"
         self.model = model
         self.llm_provider = llm_provider
         self.litellm_debug_info = litellm_debug_info
         response = response or httpx.Response(
             status_code=self.status_code,
-            request=httpx.Request(
-                method="GET", url="https://litellm.ai"
-            ),  # mock request object
+            request=httpx.Request(method="GET", url="https://litellm.ai"),  # mock request object
         )
         self.max_retries = max_retries
         self.num_retries = num_retries
 
 
-LITELLM_EXCEPTION_TYPES = [
+LITELLM_EXCEPTION_TYPES: Final = [
     AuthenticationError,
     NotFoundError,
     BadRequestError,
@@ -990,13 +962,17 @@ class BudgetExceededError(Exception):
         self,
         current_cost: float,
         max_budget: float,
-        message: Optional[str] = None,
-        llm_provider: Optional[str] = None,
+        message: str | None = None,
+        llm_provider: str | None = None,
+        entity_type: str | None = None,
+        entity_id: str | None = None,
     ):
         self.current_cost = current_cost
         self.max_budget = max_budget
         self.status_code = 429
         self.llm_provider = llm_provider or ""
+        self.entity_type = entity_type
+        self.entity_id = entity_id
         # Surface unified rate-limit fields without joining the RateLimitError
         # hierarchy so existing `except BudgetExceededError:` handlers keep
         # working; custom callbacks reading StandardLoggingPayload pick these
@@ -1005,16 +981,13 @@ class BudgetExceededError(Exception):
         # to match the normalization RateLimitError.__init__ performs.
         self.category: str = RateLimitErrorCategory.LITELLM_RATE_LIMIT.value
         self.rate_limit_type: str = RateLimitType.BUDGET.value
-        message = (
-            message
-            or f"Budget has been exceeded! Current cost: {current_cost}, Max budget: {max_budget}"
-        )
+        message = message or f"Budget has been exceeded! Current cost: {current_cost}, Max budget: {max_budget}"
         self.message = message
         super().__init__(message)
 
 
 ## DEPRECATED ##
-class InvalidRequestError(openai.BadRequestError):  # type: ignore
+class InvalidRequestError(openai.BadRequestError):
     def __init__(self, message, model, llm_provider):
         self.status_code = 400
         self.message = message
@@ -1022,9 +995,7 @@ class InvalidRequestError(openai.BadRequestError):  # type: ignore
         self.llm_provider = llm_provider
         self.response = httpx.Response(
             status_code=400,
-            request=httpx.Request(
-                method="GET", url="https://litellm.ai"
-            ),  # mock request object
+            request=httpx.Request(method="GET", url="https://litellm.ai"),  # mock request object
         )
         super().__init__(
             message=self.message, response=self.response, body=None
@@ -1039,13 +1010,13 @@ class MockException(openai.APIError):
         message,
         llm_provider,
         model,
-        request: Optional[httpx.Request] = None,
-        litellm_debug_info: Optional[str] = None,
-        max_retries: Optional[int] = None,
-        num_retries: Optional[int] = None,
+        request: httpx.Request | None = None,
+        litellm_debug_info: str | None = None,
+        max_retries: int | None = None,
+        num_retries: int | None = None,
     ):
         self.status_code = status_code
-        self.message = "litellm.MockException: {}".format(message)
+        self.message = f"litellm.MockException: {message}"
         self.llm_provider = llm_provider
         self.model = model
         self.litellm_debug_info = litellm_debug_info
@@ -1053,33 +1024,44 @@ class MockException(openai.APIError):
         self.num_retries = num_retries
         if request is None:
             request = httpx.Request(method="POST", url="https://api.openai.com/v1")
-        super().__init__(self.message, request=request, body=None)  # type: ignore
+        super().__init__(self.message, request=request, body=None)
 
 
 class LiteLLMUnknownProvider(BadRequestError):
-    def __init__(self, model: str, custom_llm_provider: Optional[str] = None):
+    def __init__(self, model: str, custom_llm_provider: str | None = None):
         self.message = LiteLLMCommonStrings.llm_provider_not_provided.value.format(
             model=model, custom_llm_provider=custom_llm_provider
         )
-        super().__init__(
-            self.message, model=model, llm_provider=custom_llm_provider, response=None
-        )
+        super().__init__(self.message, model=model, llm_provider=custom_llm_provider, response=None)
 
     def __str__(self):
         return self.message
 
 
 class GuardrailRaisedException(Exception):
+    """
+    Raised both when a guardrail judged content and when it could not judge it at all, since a
+    guardrail that fails closed refuses the request the same way a policy violation does.
+
+    ``blocked_content`` separates the two. Set it only where the guardrail actually reached a
+    verdict on the payload; leave it alone for an unreachable backend, a timeout, or a response
+    the integration could not parse. Callers that treat a block as something other than a plain
+    failure, such as the batch path dropping one record and submitting the rest, must gate on it,
+    because dropping a record no guardrail ever inspected is a silent loss of enforcement.
+    """
+
     def __init__(
         self,
-        guardrail_name: Optional[str] = None,
+        guardrail_name: str | None = None,
         message: str = "",
         should_wrap_with_default_message: bool = True,
         status_code: int = 400,
+        blocked_content: bool = False,
     ):
-        default_message = f"Guardrail raised an exception, Guardrail: {guardrail_name}, Message: {message}"
+        default_message: Final = f"Guardrail raised an exception, Guardrail: {guardrail_name}, Message: {message}"
         self.guardrail_name = guardrail_name
         self.status_code = status_code
+        self.blocked_content = blocked_content
         self.message = default_message if should_wrap_with_default_message else message
         super().__init__(self.message)
 
@@ -1088,7 +1070,7 @@ class BlockedPiiEntityError(Exception):
     def __init__(
         self,
         entity_type: str,
-        guardrail_name: Optional[str] = None,
+        guardrail_name: str | None = None,
         status_code: int = 400,
     ):
         """
@@ -1101,21 +1083,21 @@ class BlockedPiiEntityError(Exception):
         super().__init__(self.message)
 
 
-class MidStreamFallbackError(ServiceUnavailableError):  # type: ignore
+class MidStreamFallbackError(ServiceUnavailableError):
     def __init__(
         self,
         message: str,
         model: str,
         llm_provider: str,
-        original_exception: Optional[Exception] = None,
-        response: Optional[httpx.Response] = None,
-        litellm_debug_info: Optional[str] = None,
-        max_retries: Optional[int] = None,
-        num_retries: Optional[int] = None,
+        original_exception: Exception | None = None,
+        response: httpx.Response | None = None,
+        litellm_debug_info: str | None = None,
+        max_retries: int | None = None,
+        num_retries: int | None = None,
         generated_content: str = "",
         is_pre_first_chunk: bool = False,
     ):
-        original_status = getattr(original_exception, "status_code", None)
+        original_status: Final = getattr(original_exception, "status_code", None)
         self.status_code = int(original_status) if original_status is not None else 503
         self.message = f"litellm.MidStreamFallbackError: {message}"
         self.model = model
@@ -1140,11 +1122,11 @@ class MidStreamFallbackError(ServiceUnavailableError):  # type: ignore
             self.response = response
 
         # Save the original attributes before they are overridden by ServiceUnavailableError
-        _saved_response = self.response
-        _saved_request = getattr(self.response, "request", None) or httpx.Request(
+        _saved_response: Final = self.response
+        _saved_request: Final = getattr(self.response, "request", None) or httpx.Request(
             method="POST", url=f"https://{llm_provider}.com/v1/"
         )
-        _saved_message = self.message
+        _saved_message: Final = self.message
 
         # Call the parent constructor (which hardcodes status_code=503 and modifies the response object)
         super().__init__(
@@ -1171,7 +1153,7 @@ class MidStreamFallbackError(ServiceUnavailableError):  # type: ignore
         if self.max_retries:
             _message += f", LiteLLM Max Retries: {self.max_retries}"
         if self.original_exception:
-            _message += f" Original exception: {type(self.original_exception).__name__}: {str(self.original_exception)}"
+            _message += f" Original exception: {type(self.original_exception).__name__}: {self.original_exception}"
         return _message
 
     def __repr__(self):
@@ -1195,30 +1177,22 @@ class ModifyResponseException(Exception):
         self,
         message: str,
         model: str,
-        request_data: Dict[str, Any],
-        guardrail_name: Optional[str] = None,
-        detection_info: Optional[Dict[str, Any]] = None,
+        request_data: dict[str, Any],
+        guardrail_name: str | None = None,
+        detection_info: dict[str, Any] | None = None,
+        original_response: Any | None = None,
     ):
         self.message = message
         self.model = model
         self.request_data = request_data
         self.guardrail_name = guardrail_name
         self.detection_info = detection_info or {}
+        # The LLM response that was blocked (post-call). Carries the real token
+        # usage the upstream call consumed, so the synthetic block response can
+        # report it instead of discarding it. None for pre-call blocks (the LLM
+        # was never invoked).
+        self.original_response = original_response
         super().__init__(message)
-
-
-class GuardrailInterventionNormalStringError(
-    Exception
-):  # custom exception to raise when a guardrail intervenes, but we want to return a normal string to the user
-    def __init__(self, message: str):
-        self.message = message
-        super().__init__(self.message)
-
-    def __str__(self):
-        return self.message
-
-    def __repr__(self):
-        return self.__str__()
 
 
 class SensitiveDataRouteException(Exception):
@@ -1238,9 +1212,9 @@ class SensitiveDataRouteException(Exception):
         self,
         route_to_model: str,
         session_id: str,
-        guardrail_name: Optional[str] = None,
-        detection_info: Optional[Dict[str, Any]] = None,
-        message: Optional[str] = None,
+        guardrail_name: str | None = None,
+        detection_info: dict[str, Any] | None = None,
+        message: str | None = None,
         sticky_session_routing: bool = True,
     ):
         self.route_to_model = route_to_model
@@ -1248,8 +1222,5 @@ class SensitiveDataRouteException(Exception):
         self.guardrail_name = guardrail_name
         self.detection_info = detection_info or {}
         self.sticky_session_routing = sticky_session_routing
-        self.message = (
-            message
-            or f"Sensitive data detected by {guardrail_name}. Routing to model: {route_to_model}"
-        )
+        self.message = message or f"Sensitive data detected by {guardrail_name}. Routing to model: {route_to_model}"
         super().__init__(self.message)

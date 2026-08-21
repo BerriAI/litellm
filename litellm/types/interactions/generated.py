@@ -5,39 +5,33 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, Final, Literal
 
 from pydantic import AwareDatetime, Base64Str, BaseModel, Field, RootModel
 
 
 class Annotation(BaseModel):
-    start_index: Optional[int] = Field(
+    start_index: int | None = Field(
         None,
         description="Start of segment of the response that is attributed to this source.\n\nIndex indicates the start of the segment, measured in bytes.",
     )
-    end_index: Optional[int] = Field(
-        None, description="End of the attributed segment, exclusive."
-    )
-    source: Optional[str] = Field(
+    end_index: int | None = Field(None, description="End of the attributed segment, exclusive.")
+    source: str | None = Field(
         None,
         description="Source attributed for a portion of the text. Could be a URL, title, or\nother identifier.",
     )
 
 
 class DocumentContent(BaseModel):
-    data: Optional[Base64Str] = None
-    uri: Optional[str] = None
-    mime_type: Optional[str] = None
-    type: Literal["document"] = Field(
-        ..., description="Used as the OpenAPI type discriminator for the content oneof."
-    )
+    data: Base64Str | None = None
+    uri: str | None = None
+    mime_type: str | None = None
+    type: Literal["document"] = Field(..., description="Used as the OpenAPI type discriminator for the content oneof.")
 
 
 class FunctionCallContent(BaseModel):
     name: str = Field(..., description="The name of the tool to call.")
-    arguments: Dict[str, Any] = Field(
-        ..., description="The arguments to pass to the function."
-    )
+    arguments: dict[str, Any] = Field(..., description="The arguments to pass to the function.")
     type: Literal["function_call"] = Field(
         ..., description="Used as the OpenAPI type discriminator for the content oneof."
     )
@@ -49,22 +43,18 @@ class Language(Enum):
 
 
 class CodeExecutionCallArguments(BaseModel):
-    language: Optional[Language] = Field(
-        None, description="Programming language of the `code`."
-    )
-    code: Optional[str] = Field(None, description="The code to be executed.")
+    language: Language | None = Field(None, description="Programming language of the `code`.")
+    code: str | None = Field(None, description="The code to be executed.")
 
 
 class UrlContextCallArguments(BaseModel):
-    urls: Optional[List[str]] = Field(None, description="The URLs to fetch.")
+    urls: list[str] | None = Field(None, description="The URLs to fetch.")
 
 
 class McpServerToolCallContent(BaseModel):
     name: str = Field(..., description="The name of the tool which was called.")
     server_name: str = Field(..., description="The name of the used MCP server.")
-    arguments: Dict[str, Any] = Field(
-        ..., description="The JSON object of arguments for the function."
-    )
+    arguments: dict[str, Any] = Field(..., description="The JSON object of arguments for the function.")
     type: Literal["mcp_server_tool_call"] = Field(
         ..., description="Used as the OpenAPI type discriminator for the content oneof."
     )
@@ -72,25 +62,17 @@ class McpServerToolCallContent(BaseModel):
 
 
 class GoogleSearchCallArguments(BaseModel):
-    queries: Optional[List[str]] = Field(
-        None, description="Web search queries for the following-up web search."
-    )
+    queries: list[str] | None = Field(None, description="Web search queries for the following-up web search.")
 
 
 class CodeExecutionResultContent(BaseModel):
-    result: Optional[str] = Field(None, description="The output of the code execution.")
-    is_error: Optional[bool] = Field(
-        None, description="Whether the code execution resulted in an error."
-    )
-    signature: Optional[str] = Field(
-        None, description="A signature hash for backend validation."
-    )
+    result: str | None = Field(None, description="The output of the code execution.")
+    is_error: bool | None = Field(None, description="Whether the code execution resulted in an error.")
+    signature: str | None = Field(None, description="A signature hash for backend validation.")
     type: Literal["code_execution_result"] = Field(
         ..., description="Used as the OpenAPI type discriminator for the content oneof."
     )
-    call_id: Optional[str] = Field(
-        None, description="ID to match the ID from the code execution call block."
-    )
+    call_id: str | None = Field(None, description="ID to match the ID from the code execution call block.")
 
 
 class Status(Enum):
@@ -101,33 +83,29 @@ class Status(Enum):
 
 
 class UrlContextResult(BaseModel):
-    url: Optional[str] = Field(None, description="The URL that was fetched.")
-    status: Optional[Status] = Field(
-        None, description="The status of the URL retrieval."
-    )
+    url: str | None = Field(None, description="The URL that was fetched.")
+    status: Status | None = Field(None, description="The status of the URL retrieval.")
 
 
 class GoogleSearchResult(BaseModel):
-    url: Optional[str] = Field(None, description="URI reference of the search result.")
-    title: Optional[str] = Field(None, description="Title of the search result.")
-    rendered_content: Optional[str] = Field(
+    url: str | None = Field(None, description="URI reference of the search result.")
+    title: str | None = Field(None, description="Title of the search result.")
+    rendered_content: str | None = Field(
         None,
         description="Web content snippet that can be embedded in a web page or an app webview.",
     )
 
 
 class FileSearchResult(BaseModel):
-    title: Optional[str] = Field(None, description="The title of the search result.")
-    text: Optional[str] = Field(None, description="The text of the search result.")
-    file_search_store: Optional[str] = Field(
-        None, description="The name of the file search store."
-    )
+    title: str | None = Field(None, description="The title of the search result.")
+    text: str | None = Field(None, description="The text of the search result.")
+    file_search_store: str | None = Field(None, description="The name of the file search store.")
 
 
 class SpeechConfig(BaseModel):
-    voice: Optional[str] = Field(None, description="The voice of the speaker.")
-    language: Optional[str] = Field(None, description="The language of the speech.")
-    speaker: Optional[str] = Field(
+    voice: str | None = Field(None, description="The voice of the speaker.")
+    language: str | None = Field(None, description="The language of the speech.")
+    speaker: str | None = Field(
         None,
         description="The speaker's name, it should match the speaker name given in the prompt.",
     )
@@ -141,13 +119,9 @@ class DynamicAgentConfig(BaseModel):
 
 
 class Function(BaseModel):
-    name: Optional[str] = Field(None, description="The name of the function.")
-    description: Optional[str] = Field(
-        None, description="A description of the function."
-    )
-    parameters: Optional[Any] = Field(
-        None, description="The JSON Schema for the function's parameters."
-    )
+    name: str | None = Field(None, description="The name of the function.")
+    description: str | None = Field(None, description="A description of the function.")
+    parameters: Any | None = Field(None, description="The JSON Schema for the function's parameters.")
     type: Literal["function"]
 
 
@@ -165,10 +139,8 @@ class Environment(Enum):
 
 class ComputerUse(BaseModel):
     type: Literal["computer_use"]
-    environment: Optional[Environment] = Field(
-        None, description="The environment being operated."
-    )
-    excludedPredefinedFunctions: Optional[List[str]] = Field(
+    environment: Environment | None = Field(None, description="The environment being operated.")
+    excludedPredefinedFunctions: list[str] | None = Field(
         None,
         description="The list of predefined functions that are excluded from the model call.",
     )
@@ -179,13 +151,9 @@ class GoogleSearch(BaseModel):
 
 
 class FileSearch(BaseModel):
-    file_search_store_names: Optional[List[str]] = Field(
-        None, description="The file search store names to search."
-    )
-    top_k: Optional[int] = Field(
-        None, description="The number of semantic retrieval chunks to retrieve."
-    )
-    metadata_filter: Optional[str] = Field(
+    file_search_store_names: list[str] | None = Field(None, description="The file search store names to search.")
+    top_k: int | None = Field(None, description="The number of semantic retrieval chunks to retrieve.")
+    metadata_filter: str | None = Field(
         None,
         description="Metadata filter to apply to the semantic retrieval documents and chunks.",
     )
@@ -205,39 +173,34 @@ class Status1(Enum):
     cancelled = "cancelled"
     incomplete = "incomplete"
     budget_exceeded = "budget_exceeded"
+    queued = "queued"
 
 
 class InteractionStatusUpdate(BaseModel):
-    interaction_id: Optional[str] = None
-    status: Optional[Status1] = None
+    interaction_id: str | None = None
+    status: Status1 | None = None
     event_type: Literal["interaction.status_update"] = "interaction.status_update"
-    event_id: Optional[str] = Field(
+    event_id: str | None = Field(
         None,
         description="The event_id token to be used to resume the interaction stream, from\nthis event.",
     )
 
 
 class TextDelta(BaseModel):
-    text: Optional[str] = None
-    type: Literal["text"] = Field(
-        ..., description="Used as the OpenAPI type discriminator for the content oneof."
-    )
-    annotations: Optional[List[Annotation]] = Field(
-        None, description="Citation information for model-generated content."
-    )
+    text: str | None = None
+    type: Literal["text"] = Field(..., description="Used as the OpenAPI type discriminator for the content oneof.")
+    annotations: list[Annotation] | None = Field(None, description="Citation information for model-generated content.")
 
 
 class DocumentDelta(BaseModel):
-    data: Optional[Base64Str] = None
-    uri: Optional[str] = None
-    mime_type: Optional[str] = None
-    type: Literal["document"] = Field(
-        ..., description="Used as the OpenAPI type discriminator for the content oneof."
-    )
+    data: Base64Str | None = None
+    uri: str | None = None
+    mime_type: str | None = None
+    type: Literal["document"] = Field(..., description="Used as the OpenAPI type discriminator for the content oneof.")
 
 
 class ThoughtSignatureDelta(BaseModel):
-    signature: Optional[Base64Str] = Field(
+    signature: Base64Str | None = Field(
         None,
         description="Signature to match the backend source to be part of the generation.",
     )
@@ -247,115 +210,97 @@ class ThoughtSignatureDelta(BaseModel):
 
 
 class FunctionCallDelta(BaseModel):
-    name: Optional[str] = None
-    arguments: Optional[Dict[str, Any]] = None
+    name: str | None = None
+    arguments: dict[str, Any] | None = None
     type: Literal["function_call"] = Field(
         ..., description="Used as the OpenAPI type discriminator for the content oneof."
     )
-    id: Optional[str] = Field(
-        None, description="A unique ID for this specific tool call."
-    )
+    id: str | None = Field(None, description="A unique ID for this specific tool call.")
 
 
 class CodeExecutionCallDelta(BaseModel):
-    arguments: Optional[CodeExecutionCallArguments] = None
+    arguments: CodeExecutionCallArguments | None = None
     type: Literal["code_execution_call"] = Field(
         ..., description="Used as the OpenAPI type discriminator for the content oneof."
     )
-    id: Optional[str] = Field(
-        None, description="A unique ID for this specific tool call."
-    )
+    id: str | None = Field(None, description="A unique ID for this specific tool call.")
 
 
 class UrlContextCallDelta(BaseModel):
-    arguments: Optional[UrlContextCallArguments] = None
+    arguments: UrlContextCallArguments | None = None
     type: Literal["url_context_call"] = Field(
         ..., description="Used as the OpenAPI type discriminator for the content oneof."
     )
-    id: Optional[str] = Field(
-        None, description="A unique ID for this specific tool call."
-    )
+    id: str | None = Field(None, description="A unique ID for this specific tool call.")
 
 
 class GoogleSearchCallDelta(BaseModel):
-    arguments: Optional[GoogleSearchCallArguments] = None
+    arguments: GoogleSearchCallArguments | None = None
     type: Literal["google_search_call"] = Field(
         ..., description="Used as the OpenAPI type discriminator for the content oneof."
     )
-    id: Optional[str] = Field(
-        None, description="A unique ID for this specific tool call."
-    )
+    id: str | None = Field(None, description="A unique ID for this specific tool call.")
 
 
 class McpServerToolCallDelta(BaseModel):
-    name: Optional[str] = None
-    server_name: Optional[str] = None
-    arguments: Optional[Dict[str, Any]] = None
+    name: str | None = None
+    server_name: str | None = None
+    arguments: dict[str, Any] | None = None
     type: Literal["mcp_server_tool_call"] = Field(
         ..., description="Used as the OpenAPI type discriminator for the content oneof."
     )
-    id: Optional[str] = Field(
-        None, description="A unique ID for this specific tool call."
-    )
+    id: str | None = Field(None, description="A unique ID for this specific tool call.")
 
 
 class CodeExecutionResultDelta(BaseModel):
-    result: Optional[str] = None
-    is_error: Optional[bool] = None
-    signature: Optional[str] = None
+    result: str | None = None
+    is_error: bool | None = None
+    signature: str | None = None
     type: Literal["code_execution_result"] = Field(
         ..., description="Used as the OpenAPI type discriminator for the content oneof."
     )
-    call_id: Optional[str] = Field(
-        None, description="ID to match the ID from the function call block."
-    )
+    call_id: str | None = Field(None, description="ID to match the ID from the function call block.")
 
 
 class UrlContextResultDelta(BaseModel):
-    signature: Optional[str] = None
-    result: Optional[List[UrlContextResult]] = None
-    is_error: Optional[bool] = None
+    signature: str | None = None
+    result: list[UrlContextResult] | None = None
+    is_error: bool | None = None
     type: Literal["url_context_result"] = Field(
         ..., description="Used as the OpenAPI type discriminator for the content oneof."
     )
-    call_id: Optional[str] = Field(
-        None, description="ID to match the ID from the function call block."
-    )
+    call_id: str | None = Field(None, description="ID to match the ID from the function call block.")
 
 
 class GoogleSearchResultDelta(BaseModel):
-    signature: Optional[str] = None
-    result: Optional[List[GoogleSearchResult]] = None
-    is_error: Optional[bool] = None
+    signature: str | None = None
+    result: list[GoogleSearchResult] | None = None
+    is_error: bool | None = None
     type: Literal["google_search_result"] = Field(
         ..., description="Used as the OpenAPI type discriminator for the content oneof."
     )
-    call_id: Optional[str] = Field(
-        None, description="ID to match the ID from the function call block."
-    )
+    call_id: str | None = Field(None, description="ID to match the ID from the function call block.")
 
 
 class FileSearchResultDelta(BaseModel):
-    result: Optional[List[FileSearchResult]] = None
+    result: list[FileSearchResult] | None = None
     type: Literal["file_search_result"] = Field(
         ..., description="Used as the OpenAPI type discriminator for the content oneof."
     )
 
 
 class ContentStop(BaseModel):
-    index: Optional[int] = None
+    index: int | None = None
     event_type: Literal["content.stop"] = "content.stop"
-    event_id: Optional[str] = Field(
+    event_id: str | None = Field(
         None,
         description="The event_id token to be used to resume the interaction stream, from\nthis event.",
     )
 
 
 class Error(BaseModel):
-    code: Optional[str] = Field(
-        None, description="A URI that identifies the error type."
-    )
-    message: Optional[str] = Field(None, description="A human-readable error message.")
+    code: str | None = Field(None, description="A URI that identifies the error type.")
+    message: str | None = Field(None, description="A human-readable error message.")
 
 
 class MediaResolution(Enum):
@@ -395,6 +340,7 @@ class Status3(Enum):
     CANCELLED = "cancelled"
     INCOMPLETE = "incomplete"
     BUDGET_EXCEEDED = "budget_exceeded"
+    QUEUED = "queued"
 
 
 class ModelOption(RootModel[str]):
@@ -410,203 +356,137 @@ class AgentOption(RootModel[str]):
 
 
 class ImageMimeTypeOption(RootModel[str]):
-    root: str = Field(
-        ..., description="The mime type of the image.", title="ImageMimeType"
-    )
+    root: str = Field(..., description="The mime type of the image.", title="ImageMimeType")
 
 
 class AudioMimeTypeOption(RootModel[str]):
-    root: str = Field(
-        ..., description="The mime type of the audio.", title="AudioMimeType"
-    )
+    root: str = Field(..., description="The mime type of the audio.", title="AudioMimeType")
 
 
 class VideoMimeTypeOption(RootModel[str]):
-    root: str = Field(
-        ..., description="The mime type of the video.", title="VideoMimeType"
-    )
+    root: str = Field(..., description="The mime type of the video.", title="VideoMimeType")
 
 
 class TextContent(BaseModel):
-    text: Optional[str] = Field(None, description="The text content.")
-    type: Literal["text"] = Field(
-        ..., description="Used as the OpenAPI type discriminator for the content oneof."
-    )
-    annotations: Optional[List[Annotation]] = Field(
-        None, description="Citation information for model-generated content."
-    )
+    text: str | None = Field(None, description="The text content.")
+    type: Literal["text"] = Field(..., description="Used as the OpenAPI type discriminator for the content oneof.")
+    annotations: list[Annotation] | None = Field(None, description="Citation information for model-generated content.")
 
 
 class ImageContent(BaseModel):
-    data: Optional[Base64Str] = None
-    uri: Optional[str] = None
-    mime_type: Optional[ImageMimeTypeOption] = None
-    type: Literal["image"] = Field(
-        ..., description="Used as the OpenAPI type discriminator for the content oneof."
-    )
-    resolution: Optional[MediaResolution] = Field(
-        None, description="The resolution of the media."
-    )
+    data: Base64Str | None = None
+    uri: str | None = None
+    mime_type: ImageMimeTypeOption | None = None
+    type: Literal["image"] = Field(..., description="Used as the OpenAPI type discriminator for the content oneof.")
+    resolution: MediaResolution | None = Field(None, description="The resolution of the media.")
 
 
 class AudioContent(BaseModel):
-    data: Optional[Base64Str] = None
-    uri: Optional[str] = None
-    mime_type: Optional[AudioMimeTypeOption] = None
-    type: Literal["audio"] = Field(
-        ..., description="Used as the OpenAPI type discriminator for the content oneof."
-    )
+    data: Base64Str | None = None
+    uri: str | None = None
+    mime_type: AudioMimeTypeOption | None = None
+    type: Literal["audio"] = Field(..., description="Used as the OpenAPI type discriminator for the content oneof.")
 
 
 class VideoContent(BaseModel):
-    data: Optional[Base64Str] = None
-    uri: Optional[str] = None
-    mime_type: Optional[VideoMimeTypeOption] = None
-    type: Literal["video"] = Field(
-        ..., description="Used as the OpenAPI type discriminator for the content oneof."
-    )
-    resolution: Optional[MediaResolution] = Field(
-        None, description="The resolution of the media."
-    )
+    data: Base64Str | None = None
+    uri: str | None = None
+    mime_type: VideoMimeTypeOption | None = None
+    type: Literal["video"] = Field(..., description="Used as the OpenAPI type discriminator for the content oneof.")
+    resolution: MediaResolution | None = Field(None, description="The resolution of the media.")
 
 
-class ThoughtSummary1(RootModel[Union[TextContent, ImageContent]]):
-    root: Union[TextContent, ImageContent] = Field(..., discriminator="type")
+class ThoughtSummary1(RootModel[TextContent | ImageContent]):
+    root: TextContent | ImageContent = Field(..., discriminator="type")
 
 
-class ThoughtSummary(RootModel[List[ThoughtSummary1]]):
-    root: List[ThoughtSummary1] = Field(..., description="A summary of the thought.")
+class ThoughtSummary(RootModel[list[ThoughtSummary1]]):
+    root: list[ThoughtSummary1] = Field(..., description="A summary of the thought.")
 
 
 class CodeExecutionCallContent(BaseModel):
-    arguments: Optional[CodeExecutionCallArguments] = Field(
+    arguments: CodeExecutionCallArguments | None = Field(
         None, description="The arguments to pass to the code execution."
     )
     type: Literal["code_execution_call"] = Field(
         ..., description="Used as the OpenAPI type discriminator for the content oneof."
     )
-    id: Optional[str] = Field(
-        None, description="A unique ID for this specific tool call."
-    )
+    id: str | None = Field(None, description="A unique ID for this specific tool call.")
 
 
 class UrlContextCallContent(BaseModel):
-    arguments: Optional[UrlContextCallArguments] = Field(
-        None, description="The arguments to pass to the URL context."
-    )
+    arguments: UrlContextCallArguments | None = Field(None, description="The arguments to pass to the URL context.")
     type: Literal["url_context_call"] = Field(
         ..., description="Used as the OpenAPI type discriminator for the content oneof."
     )
-    id: Optional[str] = Field(
-        None, description="A unique ID for this specific tool call."
-    )
+    id: str | None = Field(None, description="A unique ID for this specific tool call.")
 
 
 class GoogleSearchCallContent(BaseModel):
-    arguments: Optional[GoogleSearchCallArguments] = Field(
-        None, description="The arguments to pass to Google Search."
-    )
+    arguments: GoogleSearchCallArguments | None = Field(None, description="The arguments to pass to Google Search.")
     type: Literal["google_search_call"] = Field(
         ..., description="Used as the OpenAPI type discriminator for the content oneof."
     )
-    id: Optional[str] = Field(
-        None, description="A unique ID for this specific tool call."
-    )
+    id: str | None = Field(None, description="A unique ID for this specific tool call.")
 
 
 class Result(BaseModel):
-    items: Optional[List[Union[str, ImageContent]]] = None
+    items: list[str | ImageContent] | None = None
 
 
 class FunctionResultContent(BaseModel):
-    name: Optional[str] = Field(
-        None, description="The name of the tool that was called."
-    )
-    is_error: Optional[bool] = Field(
-        None, description="Whether the tool call resulted in an error."
-    )
+    name: str | None = Field(None, description="The name of the tool that was called.")
+    is_error: bool | None = Field(None, description="Whether the tool call resulted in an error.")
     type: Literal["function_result"] = Field(
         ..., description="Used as the OpenAPI type discriminator for the content oneof."
     )
-    result: Union[Result, Dict[str, Any], str] = Field(
-        ..., description="The result of the tool call."
-    )
-    call_id: str = Field(
-        ..., description="ID to match the ID from the function call block."
-    )
+    result: Result | dict[str, Any] | str = Field(..., description="The result of the tool call.")
+    call_id: str = Field(..., description="ID to match the ID from the function call block.")
 
 
 class UrlContextResultContent(BaseModel):
-    signature: Optional[str] = Field(
-        None, description="The signature of the URL context result."
-    )
-    result: Optional[List[UrlContextResult]] = Field(
-        None, description="The results of the URL context."
-    )
-    is_error: Optional[bool] = Field(
-        None, description="Whether the URL context resulted in an error."
-    )
+    signature: str | None = Field(None, description="The signature of the URL context result.")
+    result: list[UrlContextResult] | None = Field(None, description="The results of the URL context.")
+    is_error: bool | None = Field(None, description="Whether the URL context resulted in an error.")
     type: Literal["url_context_result"] = Field(
         ..., description="Used as the OpenAPI type discriminator for the content oneof."
     )
-    call_id: Optional[str] = Field(
-        None, description="ID to match the ID from the url context call block."
-    )
+    call_id: str | None = Field(None, description="ID to match the ID from the url context call block.")
 
 
 class GoogleSearchResultContent(BaseModel):
-    signature: Optional[str] = Field(
-        None, description="The signature of the Google Search result."
-    )
-    result: Optional[List[GoogleSearchResult]] = Field(
-        None, description="The results of the Google Search."
-    )
-    is_error: Optional[bool] = Field(
-        None, description="Whether the Google Search resulted in an error."
-    )
+    signature: str | None = Field(None, description="The signature of the Google Search result.")
+    result: list[GoogleSearchResult] | None = Field(None, description="The results of the Google Search.")
+    is_error: bool | None = Field(None, description="Whether the Google Search resulted in an error.")
     type: Literal["google_search_result"] = Field(
         ..., description="Used as the OpenAPI type discriminator for the content oneof."
     )
-    call_id: Optional[str] = Field(
-        None, description="ID to match the ID from the google search call block."
-    )
+    call_id: str | None = Field(None, description="ID to match the ID from the google search call block.")
 
 
 class McpServerToolResultContent(BaseModel):
-    name: Optional[str] = Field(
+    name: str | None = Field(
         None,
         description="Name of the tool which is called for this specific tool call.",
     )
-    server_name: Optional[str] = Field(
-        None, description="The name of the used MCP server."
-    )
+    server_name: str | None = Field(None, description="The name of the used MCP server.")
     type: Literal["mcp_server_tool_result"] = Field(
         ..., description="Used as the OpenAPI type discriminator for the content oneof."
     )
-    result: Union[Result, Dict[str, Any], str] = Field(
-        ..., description="The result of the tool call."
-    )
-    call_id: str = Field(
-        ..., description="ID to match the ID from the MCP server tool call block."
-    )
+    result: Result | dict[str, Any] | str = Field(..., description="The result of the tool call.")
+    call_id: str = Field(..., description="ID to match the ID from the MCP server tool call block.")
 
 
 class FileSearchResultContent(BaseModel):
-    result: Optional[List[FileSearchResult]] = Field(
-        None, description="The results of the File Search."
-    )
+    result: list[FileSearchResult] | None = Field(None, description="The results of the File Search.")
     type: Literal["file_search_result"] = Field(
         ..., description="Used as the OpenAPI type discriminator for the content oneof."
     )
 
 
 class AllowedTools(BaseModel):
-    mode: Optional[ToolChoiceType] = Field(
-        None, description="The mode of the tool choice."
-    )
-    tools: Optional[List[str]] = Field(
-        None, description="The names of the allowed tools."
-    )
+    mode: ToolChoiceType | None = Field(None, description="The mode of the tool choice.")
+    tools: list[str] | None = Field(None, description="The names of the allowed tools.")
 
 
 class DeepResearchAgentConfig(BaseModel):
@@ -614,540 +494,414 @@ class DeepResearchAgentConfig(BaseModel):
         "deep-research",
         description="Used as the OpenAPI type discriminator for the content oneof.",
     )
-    thinking_summaries: Optional[ThinkingSummaries] = Field(
+    thinking_summaries: ThinkingSummaries | None = Field(
         None, description="Whether to include thought summaries in the response."
     )
 
 
 class McpServer(BaseModel):
     type: Literal["mcp_server"]
-    name: Optional[str] = Field(None, description="The name of the MCPServer.")
-    url: Optional[str] = Field(
+    name: str | None = Field(None, description="The name of the MCPServer.")
+    url: str | None = Field(
         None,
         description='The full URL for the MCPServer endpoint.\nExample: "https://api.example.com/mcp"',
     )
-    headers: Optional[Dict[str, str]] = Field(
+    headers: dict[str, str] | None = Field(
         None,
         description="Optional: Fields for authentication headers, timeouts, etc., if needed.",
     )
-    allowed_tools: Optional[List[AllowedTools]] = Field(
-        None, description="The allowed tools."
-    )
+    allowed_tools: list[AllowedTools] | None = Field(None, description="The allowed tools.")
 
 
 class ModalityTokens(BaseModel):
-    modality: Optional[ResponseModality] = Field(
-        None, description="The modality associated with the token count."
-    )
-    tokens: Optional[int] = Field(
-        None, description="Number of tokens for the modality."
-    )
+    modality: ResponseModality | None = Field(None, description="The modality associated with the token count.")
+    tokens: int | None = Field(None, description="Number of tokens for the modality.")
 
 
 class ImageDelta(BaseModel):
-    data: Optional[Base64Str] = None
-    uri: Optional[str] = None
-    mime_type: Optional[ImageMimeTypeOption] = None
-    type: Literal["image"] = Field(
-        ..., description="Used as the OpenAPI type discriminator for the content oneof."
-    )
-    resolution: Optional[MediaResolution] = Field(
-        None, description="The resolution of the media."
-    )
+    data: Base64Str | None = None
+    uri: str | None = None
+    mime_type: ImageMimeTypeOption | None = None
+    type: Literal["image"] = Field(..., description="Used as the OpenAPI type discriminator for the content oneof.")
+    resolution: MediaResolution | None = Field(None, description="The resolution of the media.")
 
 
 class AudioDelta(BaseModel):
-    data: Optional[Base64Str] = None
-    uri: Optional[str] = None
-    mime_type: Optional[AudioMimeTypeOption] = None
-    type: Literal["audio"] = Field(
-        ..., description="Used as the OpenAPI type discriminator for the content oneof."
-    )
+    data: Base64Str | None = None
+    uri: str | None = None
+    mime_type: AudioMimeTypeOption | None = None
+    type: Literal["audio"] = Field(..., description="Used as the OpenAPI type discriminator for the content oneof.")
 
 
 class VideoDelta(BaseModel):
-    data: Optional[Base64Str] = None
-    uri: Optional[str] = None
-    mime_type: Optional[VideoMimeTypeOption] = None
-    type: Literal["video"] = Field(
-        ..., description="Used as the OpenAPI type discriminator for the content oneof."
-    )
-    resolution: Optional[MediaResolution] = Field(
-        None, description="The resolution of the media."
-    )
+    data: Base64Str | None = None
+    uri: str | None = None
+    mime_type: VideoMimeTypeOption | None = None
+    type: Literal["video"] = Field(..., description="Used as the OpenAPI type discriminator for the content oneof.")
+    resolution: MediaResolution | None = Field(None, description="The resolution of the media.")
 
 
 class ThoughtSummaryDelta(BaseModel):
     type: Literal["thought_summary"] = Field(
         ..., description="Used as the OpenAPI type discriminator for the content oneof."
     )
-    content: Optional[Union[TextContent, ImageContent]] = Field(
-        None, discriminator="type"
-    )
+    content: TextContent | ImageContent | None = Field(None, discriminator="type")
 
 
 class FunctionResultDelta(BaseModel):
-    name: Optional[str] = None
-    is_error: Optional[bool] = None
+    name: str | None = None
+    is_error: bool | None = None
     type: Literal["function_result"] = Field(
         ..., description="Used as the OpenAPI type discriminator for the content oneof."
     )
-    result: Optional[Union[Result, str]] = Field(
-        None, description="Tool call result delta."
-    )
-    call_id: Optional[str] = Field(
-        None, description="ID to match the ID from the function call block."
-    )
+    result: Result | str | None = Field(None, description="Tool call result delta.")
+    call_id: str | None = Field(None, description="ID to match the ID from the function call block.")
 
 
 class McpServerToolResultDelta(BaseModel):
-    name: Optional[str] = None
-    server_name: Optional[str] = None
+    name: str | None = None
+    server_name: str | None = None
     type: Literal["mcp_server_tool_result"] = Field(
         ..., description="Used as the OpenAPI type discriminator for the content oneof."
     )
-    result: Optional[Union[Result, str]] = Field(
-        None, description="Tool call result delta."
-    )
-    call_id: Optional[str] = Field(
-        None, description="ID to match the ID from the function call block."
-    )
+    result: Result | str | None = Field(None, description="Tool call result delta.")
+    call_id: str | None = Field(None, description="ID to match the ID from the function call block.")
 
 
 class ErrorEvent(BaseModel):
     event_type: Literal["error"] = "error"
-    error: Optional[Error] = None
-    event_id: Optional[str] = Field(
+    error: Error | None = None
+    event_id: str | None = Field(
         None,
         description="The event_id token to be used to resume the interaction stream, from\nthis event.",
     )
 
 
 class ToolChoiceConfig(BaseModel):
-    allowed_tools: Optional[AllowedTools] = None
+    allowed_tools: AllowedTools | None = None
 
 
-class Tool(
-    RootModel[
-        Union[
-            Function,
-            GoogleSearch,
-            CodeExecution,
-            UrlContext,
-            ComputerUse,
-            McpServer,
-            FileSearch,
-        ]
-    ]
-):
-    root: Union[
-        Function,
-        GoogleSearch,
-        CodeExecution,
-        UrlContext,
-        ComputerUse,
-        McpServer,
-        FileSearch,
-    ] = Field(..., discriminator="type")
+class Tool(RootModel[Function | GoogleSearch | CodeExecution | UrlContext | ComputerUse | McpServer | FileSearch]):
+    root: Function | GoogleSearch | CodeExecution | UrlContext | ComputerUse | McpServer | FileSearch = Field(
+        ..., discriminator="type"
+    )
 
 
 class ThoughtContent(BaseModel):
-    signature: Optional[Base64Str] = Field(
+    signature: Base64Str | None = Field(
         None,
         description="Signature to match the backend source to be part of the generation.",
     )
-    type: Literal["thought"] = Field(
-        ..., description="Used as the OpenAPI type discriminator for the content oneof."
-    )
-    summary: Optional[ThoughtSummary] = Field(
-        None, description="A summary of the thought."
-    )
+    type: Literal["thought"] = Field(..., description="Used as the OpenAPI type discriminator for the content oneof.")
+    summary: ThoughtSummary | None = Field(None, description="A summary of the thought.")
 
 
-class ToolChoice(RootModel[Union[ToolChoiceType, ToolChoiceConfig]]):
-    root: Union[ToolChoiceType, ToolChoiceConfig] = Field(
-        ..., description="The configuration for tool choice."
-    )
+class ToolChoice(RootModel[ToolChoiceType | ToolChoiceConfig]):
+    root: ToolChoiceType | ToolChoiceConfig = Field(..., description="The configuration for tool choice.")
 
 
 class Usage(BaseModel):
-    total_input_tokens: Optional[int] = Field(
-        None, description="Number of tokens in the prompt (context)."
-    )
-    input_tokens_by_modality: Optional[List[ModalityTokens]] = Field(
+    total_input_tokens: int | None = Field(None, description="Number of tokens in the prompt (context).")
+    input_tokens_by_modality: list[ModalityTokens] | None = Field(
         None, description="A breakdown of input token usage by modality."
     )
-    total_cached_tokens: Optional[int] = Field(
+    total_cached_tokens: int | None = Field(
         None,
         description="Number of tokens in the cached part of the prompt (the cached content).",
     )
-    cached_tokens_by_modality: Optional[List[ModalityTokens]] = Field(
+    cached_tokens_by_modality: list[ModalityTokens] | None = Field(
         None, description="A breakdown of cached token usage by modality."
     )
-    total_output_tokens: Optional[int] = Field(
+    total_output_tokens: int | None = Field(
         None, description="Total number of tokens across all the generated responses."
     )
-    output_tokens_by_modality: Optional[List[ModalityTokens]] = Field(
+    output_tokens_by_modality: list[ModalityTokens] | None = Field(
         None, description="A breakdown of output token usage by modality."
     )
-    total_tool_use_tokens: Optional[int] = Field(
-        None, description="Number of tokens present in tool-use prompt(s)."
-    )
-    tool_use_tokens_by_modality: Optional[List[ModalityTokens]] = Field(
+    total_tool_use_tokens: int | None = Field(None, description="Number of tokens present in tool-use prompt(s).")
+    tool_use_tokens_by_modality: list[ModalityTokens] | None = Field(
         None, description="A breakdown of tool-use token usage by modality."
     )
-    total_reasoning_tokens: Optional[int] = Field(
-        None, description="Number of tokens of thoughts for thinking models."
-    )
-    total_tokens: Optional[int] = Field(
+    total_reasoning_tokens: int | None = Field(None, description="Number of tokens of thoughts for thinking models.")
+    total_tokens: int | None = Field(
         None,
         description="Total token count for the interaction request (prompt + responses + other\ninternal tokens).",
     )
 
 
 class ContentDelta(BaseModel):
-    index: Optional[int] = None
+    index: int | None = None
     event_type: Literal["content.delta"] = "content.delta"
-    event_id: Optional[str] = Field(
+    event_id: str | None = Field(
         None,
         description="The event_id token to be used to resume the interaction stream, from\nthis event.",
     )
-    delta: Optional[
-        Union[
-            TextDelta,
-            ImageDelta,
-            AudioDelta,
-            DocumentDelta,
-            VideoDelta,
-            ThoughtSummaryDelta,
-            ThoughtSignatureDelta,
-            FunctionCallDelta,
-            FunctionResultDelta,
-            CodeExecutionCallDelta,
-            CodeExecutionResultDelta,
-            UrlContextCallDelta,
-            UrlContextResultDelta,
-            GoogleSearchCallDelta,
-            GoogleSearchResultDelta,
-            McpServerToolCallDelta,
-            McpServerToolResultDelta,
-            FileSearchResultDelta,
-        ]
-    ] = Field(None, discriminator="type")
+    delta: (
+        TextDelta
+        | ImageDelta
+        | AudioDelta
+        | DocumentDelta
+        | VideoDelta
+        | ThoughtSummaryDelta
+        | ThoughtSignatureDelta
+        | FunctionCallDelta
+        | FunctionResultDelta
+        | CodeExecutionCallDelta
+        | CodeExecutionResultDelta
+        | UrlContextCallDelta
+        | UrlContextResultDelta
+        | GoogleSearchCallDelta
+        | GoogleSearchResultDelta
+        | McpServerToolCallDelta
+        | McpServerToolResultDelta
+        | FileSearchResultDelta
+        | None
+    ) = Field(None, discriminator="type")
 
 
 class Content(
     RootModel[
-        Union[
-            TextContent,
-            ImageContent,
-            AudioContent,
-            DocumentContent,
-            VideoContent,
-            ThoughtContent,
-            FunctionCallContent,
-            FunctionResultContent,
-            CodeExecutionCallContent,
-            CodeExecutionResultContent,
-            UrlContextCallContent,
-            UrlContextResultContent,
-            GoogleSearchCallContent,
-            GoogleSearchResultContent,
-            McpServerToolCallContent,
-            McpServerToolResultContent,
-            FileSearchResultContent,
-        ]
+        TextContent
+        | ImageContent
+        | AudioContent
+        | DocumentContent
+        | VideoContent
+        | ThoughtContent
+        | FunctionCallContent
+        | FunctionResultContent
+        | CodeExecutionCallContent
+        | CodeExecutionResultContent
+        | UrlContextCallContent
+        | UrlContextResultContent
+        | GoogleSearchCallContent
+        | GoogleSearchResultContent
+        | McpServerToolCallContent
+        | McpServerToolResultContent
+        | FileSearchResultContent
     ]
 ):
-    root: Union[
-        TextContent,
-        ImageContent,
-        AudioContent,
-        DocumentContent,
-        VideoContent,
-        ThoughtContent,
-        FunctionCallContent,
-        FunctionResultContent,
-        CodeExecutionCallContent,
-        CodeExecutionResultContent,
-        UrlContextCallContent,
-        UrlContextResultContent,
-        GoogleSearchCallContent,
-        GoogleSearchResultContent,
-        McpServerToolCallContent,
-        McpServerToolResultContent,
-        FileSearchResultContent,
-    ] = Field(..., description="The content of the response.", discriminator="type")
+    root: (
+        TextContent
+        | ImageContent
+        | AudioContent
+        | DocumentContent
+        | VideoContent
+        | ThoughtContent
+        | FunctionCallContent
+        | FunctionResultContent
+        | CodeExecutionCallContent
+        | CodeExecutionResultContent
+        | UrlContextCallContent
+        | UrlContextResultContent
+        | GoogleSearchCallContent
+        | GoogleSearchResultContent
+        | McpServerToolCallContent
+        | McpServerToolResultContent
+        | FileSearchResultContent
+    ) = Field(..., description="The content of the response.", discriminator="type")
 
 
 class Turn(BaseModel):
-    role: Optional[str] = Field(
+    role: str | None = Field(
         None,
         description="The originator of this turn. Must be user for input or model for\nmodel output.",
     )
-    content: Optional[Union[str, List[Content]]] = Field(
-        None, description="The content of the turn."
-    )
+    content: str | list[Content] | None = Field(None, description="The content of the turn.")
 
 
 class GenerationConfig(BaseModel):
-    temperature: Optional[float] = Field(
-        None, description="Controls the randomness of the output."
-    )
-    top_p: Optional[float] = Field(
+    temperature: float | None = Field(None, description="Controls the randomness of the output.")
+    top_p: float | None = Field(
         None,
         description="The maximum cumulative probability of tokens to consider when sampling.",
     )
-    seed: Optional[int] = Field(
-        None, description="Seed used in decoding for reproducibility."
-    )
-    stop_sequences: Optional[List[str]] = Field(
+    seed: int | None = Field(None, description="Seed used in decoding for reproducibility.")
+    stop_sequences: list[str] | None = Field(
         None,
         description="A list of character sequences that will stop output interaction.",
     )
-    tool_choice: Optional[ToolChoice] = Field(
-        None, description="The tool choice for the interaction."
-    )
-    thinking_level: Optional[ThinkingLevel] = Field(
+    tool_choice: ToolChoice | None = Field(None, description="The tool choice for the interaction.")
+    thinking_level: ThinkingLevel | None = Field(
         None, description="The level of thought tokens that the model should generate."
     )
-    thinking_summaries: Optional[ThinkingSummaries] = Field(
+    thinking_summaries: ThinkingSummaries | None = Field(
         None, description="Whether to include thought summaries in the response."
     )
-    max_output_tokens: Optional[int] = Field(
-        None, description="The maximum number of tokens to include in the response."
-    )
-    speech_config: Optional[List[SpeechConfig]] = Field(
-        None, description="Configuration for speech interaction."
-    )
+    max_output_tokens: int | None = Field(None, description="The maximum number of tokens to include in the response.")
+    speech_config: list[SpeechConfig] | None = Field(None, description="Configuration for speech interaction.")
 
 
 class ContentStart(BaseModel):
-    index: Optional[int] = None
-    content: Optional[Content] = None
+    index: int | None = None
+    content: Content | None = None
     event_type: Literal["content.start"] = "content.start"
-    event_id: Optional[str] = Field(
+    event_id: str | None = Field(
         None,
         description="The event_id token to be used to resume the interaction stream, from\nthis event.",
     )
 
 
 class Interaction(BaseModel):
-    model: Optional[ModelOption] = Field(
-        None, description="The name of the `Model` used for generating the interaction."
-    )
-    agent: Optional[AgentOption] = Field(
-        None, description="The name of the `Agent` used for generating the interaction."
-    )
+    model: ModelOption | None = Field(None, description="The name of the `Model` used for generating the interaction.")
+    agent: AgentOption | None = Field(None, description="The name of the `Agent` used for generating the interaction.")
     id: str = Field(
         ...,
         description="Output only. A unique identifier for the interaction completion.",
     )
-    status: Status1 = Field(
-        ..., description="Output only. The status of the interaction."
-    )
-    created: Optional[AwareDatetime] = Field(
+    status: Status1 = Field(..., description="Output only. The status of the interaction.")
+    created: AwareDatetime | None = Field(
         None,
         description="Output only. The time at which the response was created in ISO 8601 format\n(YYYY-MM-DDThh:mm:ssZ).",
     )
-    updated: Optional[AwareDatetime] = Field(
+    updated: AwareDatetime | None = Field(
         None,
         description="Output only. The time at which the response was last updated in ISO 8601 format\n(YYYY-MM-DDThh:mm:ssZ).",
     )
-    role: Optional[str] = Field(
-        None, description="Output only. The role of the interaction."
-    )
-    outputs: Optional[List[Content]] = Field(
-        None, description="Output only. Responses from the model."
-    )
-    system_instruction: Optional[str] = Field(
-        None, description="System instruction for the interaction."
-    )
-    tools: Optional[List[Tool]] = Field(
+    outputs: list[Content] | None = Field(None, description="Output only. Responses from the model.")
+    system_instruction: str | None = Field(None, description="System instruction for the interaction.")
+    tools: list[Tool] | None = Field(
         None,
         description="A list of tool declarations the model may call during interaction.",
     )
-    background: Optional[bool] = Field(
-        None, description="Whether to run the model interaction in the background."
-    )
+    background: bool | None = Field(None, description="Whether to run the model interaction in the background.")
     object: Literal["interaction"] = Field(
         "interaction",
         description="Output only. The object type of the interaction. Always set to `interaction`.",
     )
-    usage: Optional[Usage] = Field(
+    usage: Usage | None = Field(
         None,
         description="Output only. Statistics on the interaction request's token usage.",
     )
-    response_modalities: Optional[List[ResponseModality]] = Field(
+    response_modalities: list[ResponseModality] | None = Field(
         None,
         description="The requested modalities of the response (TEXT, IMAGE, AUDIO).",
     )
-    response_format: Optional[Any] = Field(
+    response_format: Any | None = Field(
         None,
         description="Enforces that the generated response is a JSON object that complies with\nthe JSON schema specified in this field.",
     )
-    response_mime_type: Optional[str] = Field(
+    response_mime_type: str | None = Field(
         None,
         description="The mime type of the response. This is required if response_format is set.",
     )
-    previous_interaction_id: Optional[str] = Field(
-        None, description="The ID of the previous interaction, if any."
-    )
-    input: Optional[Union[str, List[Content], List[Turn], Content]] = Field(
+    previous_interaction_id: str | None = Field(None, description="The ID of the previous interaction, if any.")
+    input: str | list[Content] | list[Turn] | Content | None = Field(
         None, description="The inputs for the interaction."
     )
-    generation_config: Optional[GenerationConfig] = Field(
+    generation_config: GenerationConfig | None = Field(
         None,
         description="Input only. Configuration parameters for the model interaction.",
     )
-    agent_config: Optional[Union[DynamicAgentConfig, DeepResearchAgentConfig]] = Field(
+    agent_config: DynamicAgentConfig | DeepResearchAgentConfig | None = Field(
         None, description="Configuration for the agent.", discriminator="type"
     )
 
 
 class CreateModelInteractionParams(BaseModel):
-    model: ModelOption = Field(
-        ..., description="The name of the `Model` used for generating the interaction."
-    )
-    stream: Optional[bool] = Field(
-        None, description="Input only. Whether the interaction will be streamed."
-    )
-    store: Optional[bool] = Field(
+    model: ModelOption = Field(..., description="The name of the `Model` used for generating the interaction.")
+    stream: bool | None = Field(None, description="Input only. Whether the interaction will be streamed.")
+    store: bool | None = Field(
         None,
         description="Input only. Whether to store the response and request for later retrieval.",
     )
-    id: Optional[str] = Field(
+    id: str | None = Field(
         None,
         description="Output only. A unique identifier for the interaction completion.",
     )
-    status: Optional[Status3] = Field(
-        None, description="Output only. The status of the interaction."
-    )
-    created: Optional[AwareDatetime] = Field(
+    status: Status3 | None = Field(None, description="Output only. The status of the interaction.")
+    created: AwareDatetime | None = Field(
         None,
         description="Output only. The time at which the response was created in ISO 8601 format\n(YYYY-MM-DDThh:mm:ssZ).",
     )
-    updated: Optional[AwareDatetime] = Field(
+    updated: AwareDatetime | None = Field(
         None,
         description="Output only. The time at which the response was last updated in ISO 8601 format\n(YYYY-MM-DDThh:mm:ssZ).",
     )
-    role: Optional[str] = Field(
-        None, description="Output only. The role of the interaction."
-    )
-    outputs: Optional[List[Content]] = Field(
-        None, description="Output only. Responses from the model."
-    )
-    system_instruction: Optional[str] = Field(
-        None, description="System instruction for the interaction."
-    )
-    tools: Optional[List[Tool]] = Field(
+    outputs: list[Content] | None = Field(None, description="Output only. Responses from the model.")
+    system_instruction: str | None = Field(None, description="System instruction for the interaction.")
+    tools: list[Tool] | None = Field(
         None,
         description="A list of tool declarations the model may call during interaction.",
     )
-    background: Optional[bool] = Field(
-        None, description="Whether to run the model interaction in the background."
-    )
-    usage: Optional[Usage] = Field(
+    background: bool | None = Field(None, description="Whether to run the model interaction in the background.")
+    usage: Usage | None = Field(
         None,
         description="Output only. Statistics on the interaction request's token usage.",
     )
-    response_modalities: Optional[List[ResponseModality]] = Field(
+    response_modalities: list[ResponseModality] | None = Field(
         None,
         description="The requested modalities of the response (TEXT, IMAGE, AUDIO).",
     )
-    response_format: Optional[Any] = Field(
+    response_format: Any | None = Field(
         None,
         description="Enforces that the generated response is a JSON object that complies with\nthe JSON schema specified in this field.",
     )
-    response_mime_type: Optional[str] = Field(
+    response_mime_type: str | None = Field(
         None,
         description="The mime type of the response. This is required if response_format is set.",
     )
-    previous_interaction_id: Optional[str] = Field(
-        None, description="The ID of the previous interaction, if any."
-    )
-    input: Union[str, List[Content], List[Turn], Content] = Field(
-        ..., description="The inputs for the interaction."
-    )
-    generation_config: Optional[GenerationConfig] = Field(
+    previous_interaction_id: str | None = Field(None, description="The ID of the previous interaction, if any.")
+    input: str | list[Content] | list[Turn] | Content = Field(..., description="The inputs for the interaction.")
+    generation_config: GenerationConfig | None = Field(
         None,
         description="Input only. Configuration parameters for the model interaction.",
     )
 
 
 class CreateAgentInteractionParams(BaseModel):
-    agent: AgentOption = Field(
-        ..., description="The name of the `Agent` used for generating the interaction."
-    )
-    stream: Optional[bool] = Field(
-        None, description="Input only. Whether the interaction will be streamed."
-    )
-    store: Optional[bool] = Field(
+    agent: AgentOption = Field(..., description="The name of the `Agent` used for generating the interaction.")
+    stream: bool | None = Field(None, description="Input only. Whether the interaction will be streamed.")
+    store: bool | None = Field(
         None,
         description="Input only. Whether to store the response and request for later retrieval.",
     )
-    id: Optional[str] = Field(
+    id: str | None = Field(
         None,
         description="Output only. A unique identifier for the interaction completion.",
     )
-    status: Optional[Status3] = Field(
-        None, description="Output only. The status of the interaction."
-    )
-    created: Optional[AwareDatetime] = Field(
+    status: Status3 | None = Field(None, description="Output only. The status of the interaction.")
+    created: AwareDatetime | None = Field(
         None,
         description="Output only. The time at which the response was created in ISO 8601 format\n(YYYY-MM-DDThh:mm:ssZ).",
     )
-    updated: Optional[AwareDatetime] = Field(
+    updated: AwareDatetime | None = Field(
         None,
         description="Output only. The time at which the response was last updated in ISO 8601 format\n(YYYY-MM-DDThh:mm:ssZ).",
     )
-    role: Optional[str] = Field(
-        None, description="Output only. The role of the interaction."
-    )
-    outputs: Optional[List[Content]] = Field(
-        None, description="Output only. Responses from the model."
-    )
-    system_instruction: Optional[str] = Field(
-        None, description="System instruction for the interaction."
-    )
-    tools: Optional[List[Tool]] = Field(
+    outputs: list[Content] | None = Field(None, description="Output only. Responses from the model.")
+    system_instruction: str | None = Field(None, description="System instruction for the interaction.")
+    tools: list[Tool] | None = Field(
         None,
         description="A list of tool declarations the model may call during interaction.",
     )
-    background: Optional[bool] = Field(
-        None, description="Whether to run the model interaction in the background."
-    )
-    usage: Optional[Usage] = Field(
+    background: bool | None = Field(None, description="Whether to run the model interaction in the background.")
+    usage: Usage | None = Field(
         None,
         description="Output only. Statistics on the interaction request's token usage.",
     )
-    response_modalities: Optional[List[ResponseModality]] = Field(
+    response_modalities: list[ResponseModality] | None = Field(
         None,
         description="The requested modalities of the response (TEXT, IMAGE, AUDIO).",
     )
-    response_format: Optional[Any] = Field(
+    response_format: Any | None = Field(
         None,
         description="Enforces that the generated response is a JSON object that complies with\nthe JSON schema specified in this field.",
     )
-    response_mime_type: Optional[str] = Field(
+    response_mime_type: str | None = Field(
         None,
         description="The mime type of the response. This is required if response_format is set.",
     )
-    previous_interaction_id: Optional[str] = Field(
-        None, description="The ID of the previous interaction, if any."
-    )
-    input: Union[str, List[Content], List[Turn], Content] = Field(
-        ..., description="The inputs for the interaction."
-    )
-    agent_config: Optional[Union[DynamicAgentConfig, DeepResearchAgentConfig]] = Field(
+    previous_interaction_id: str | None = Field(None, description="The ID of the previous interaction, if any.")
+    input: str | list[Content] | list[Turn] | Content = Field(..., description="The inputs for the interaction.")
+    agent_config: DynamicAgentConfig | DeepResearchAgentConfig | None = Field(
         None, description="Configuration for the agent.", discriminator="type"
     )
 
 
 class InteractionEvent(BaseModel):
     event_type: Literal["interaction.start", "interaction.complete"]
-    interaction: Optional[Interaction] = None
-    event_id: Optional[str] = Field(
+    interaction: Interaction | None = None
+    event_id: str | None = Field(
         None,
         description="The event_id token to be used to resume the interaction stream, from\nthis event.",
     )
@@ -1164,12 +918,12 @@ class StepStart(BaseModel):
     """Emitted when a new step begins (replaces content.start)."""
 
     event_type: Literal["step.start"] = "step.start"
-    index: Optional[int] = None
-    step: Optional[Dict[str, Any]] = Field(
+    index: int | None = None
+    step: dict[str, Any] | None = Field(
         None,
         description="The initial step data (type, content, signature, etc.).",
     )
-    event_id: Optional[str] = Field(
+    event_id: str | None = Field(
         None,
         description="The event_id token to be used to resume the interaction stream.",
     )
@@ -1179,12 +933,12 @@ class StepDelta(BaseModel):
     """Emitted for incremental step content (replaces content.delta)."""
 
     event_type: Literal["step.delta"] = "step.delta"
-    index: Optional[int] = None
-    delta: Optional[Dict[str, Any]] = Field(
+    index: int | None = None
+    delta: dict[str, Any] | None = Field(
         None,
         description="Incremental content delta (e.g. text, arguments_delta for function calls).",
     )
-    event_id: Optional[str] = Field(
+    event_id: str | None = Field(
         None,
         description="The event_id token to be used to resume the interaction stream.",
     )
@@ -1194,12 +948,12 @@ class StepStop(BaseModel):
     """Emitted when a step finishes (replaces content.stop)."""
 
     event_type: Literal["step.stop"] = "step.stop"
-    index: Optional[int] = None
-    status: Optional[str] = Field(
+    index: int | None = None
+    status: str | None = Field(
         None,
         description="Step completion status (e.g. 'done').",
     )
-    event_id: Optional[str] = Field(
+    event_id: str | None = Field(
         None,
         description="The event_id token to be used to resume the interaction stream.",
     )
@@ -1209,8 +963,8 @@ class InteractionCreated(BaseModel):
     """Emitted when the interaction is first created (replaces interaction.start)."""
 
     event_type: Literal["interaction.created"] = "interaction.created"
-    interaction: Optional[Dict[str, Any]] = None
-    event_id: Optional[str] = Field(
+    interaction: dict[str, Any] | None = None
+    event_id: str | None = Field(
         None,
         description="The event_id token to be used to resume the interaction stream.",
     )
@@ -1220,8 +974,8 @@ class InteractionInProgress(BaseModel):
     """Emitted while the interaction is running."""
 
     event_type: Literal["interaction.in_progress"] = "interaction.in_progress"
-    interaction_id: Optional[str] = None
-    event_id: Optional[str] = Field(
+    interaction_id: str | None = None
+    event_id: str | None = Field(
         None,
         description="The event_id token to be used to resume the interaction stream.",
     )
@@ -1231,8 +985,8 @@ class InteractionCompleted(BaseModel):
     """Emitted when the interaction finishes (replaces interaction.complete)."""
 
     event_type: Literal["interaction.completed"] = "interaction.completed"
-    interaction: Optional[Dict[str, Any]] = None
-    event_id: Optional[str] = Field(
+    interaction: dict[str, Any] | None = None
+    event_id: str | None = Field(
         None,
         description="The event_id token to be used to resume the interaction stream.",
     )
@@ -1242,8 +996,8 @@ class InteractionRequiresAction(BaseModel):
     """Emitted when the interaction is paused waiting for a tool result."""
 
     event_type: Literal["interaction.requires_action"] = "interaction.requires_action"
-    interaction_id: Optional[str] = None
-    event_id: Optional[str] = Field(
+    interaction_id: str | None = None
+    event_id: str | None = Field(
         None,
         description="The event_id token to be used to resume the interaction stream.",
     )
@@ -1251,42 +1005,38 @@ class InteractionRequiresAction(BaseModel):
 
 class InteractionSseEvent(
     RootModel[
-        Union[
-            # New schema events (Api-Revision: 2026-05-20)
-            StepStart,
-            StepDelta,
-            StepStop,
-            InteractionCreated,
-            InteractionInProgress,
-            InteractionCompleted,
-            InteractionRequiresAction,
-            # Legacy schema events (Api-Revision: 2026-05-07, removed June 8 2026)
-            InteractionEvent,
-            InteractionStatusUpdate,
-            ContentStart,
-            ContentDelta,
-            ContentStop,
-            ErrorEvent,
-        ]
+        # New schema events (Api-Revision: 2026-05-20)
+        StepStart
+        | StepDelta
+        | StepStop
+        | InteractionCreated
+        | InteractionInProgress
+        | InteractionCompleted
+        | InteractionRequiresAction
+        # Legacy schema events (Api-Revision: 2026-05-07, removed June 8 2026)
+        | InteractionEvent
+        | InteractionStatusUpdate
+        | ContentStart
+        | ContentDelta
+        | ContentStop
+        | ErrorEvent
     ]
 ):
-    root: Union[
-        # New schema events (Api-Revision: 2026-05-20)
-        StepStart,
-        StepDelta,
-        StepStop,
-        InteractionCreated,
-        InteractionInProgress,
-        InteractionCompleted,
-        InteractionRequiresAction,
-        # Legacy schema events (Api-Revision: 2026-05-07, removed June 8 2026)
-        InteractionEvent,
-        InteractionStatusUpdate,
-        ContentStart,
-        ContentDelta,
-        ContentStop,
-        ErrorEvent,
-    ] = Field(..., discriminator="event_type")
+    root: (
+        StepStart
+        | StepDelta
+        | StepStop
+        | InteractionCreated
+        | InteractionInProgress
+        | InteractionCompleted
+        | InteractionRequiresAction
+        | InteractionEvent
+        | InteractionStatusUpdate
+        | ContentStart
+        | ContentDelta
+        | ContentStop
+        | ErrorEvent
+    ) = Field(..., discriminator="event_type")
 
 
 # ============================================================
@@ -1301,7 +1051,7 @@ from pydantic import PrivateAttr
 from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject
 
 # Type alias for input
-InteractionInput = Union[str, Content, List[Content], List[Turn]]
+InteractionInput = str | Content | list[Content] | list[Turn]
 
 
 class InteractionsAPIResponse(BaseLiteLLMOpenAIResponseObject):
@@ -1316,19 +1066,18 @@ class InteractionsAPIResponse(BaseLiteLLMOpenAIResponseObject):
     Both fields are kept here so callers work with either schema.
     """
 
-    id: Optional[str] = None
-    object: Optional[str] = "interaction"
-    model: Optional[str] = None
-    agent: Optional[str] = None
-    status: Optional[str] = None
-    created: Optional[str] = None
-    updated: Optional[str] = None
-    role: Optional[str] = None
+    id: str | None = None
+    object: str | None = "interaction"
+    model: str | None = None
+    agent: str | None = None
+    status: str | None = None
+    created: str | None = None
+    updated: str | None = None
     # Legacy schema field (Api-Revision: 2026-05-07). Remove after June 8, 2026.
-    outputs: Optional[List[Dict[str, Any]]] = None
+    outputs: list[dict[str, Any]] | None = None
     # New schema field (Api-Revision: 2026-05-20).
-    steps: Optional[List[Dict[str, Any]]] = None
-    usage: Optional[Dict[str, Any]] = None
+    steps: list[dict[str, Any]] | None = None
+    usage: dict[str, Any] | None = None
 
     _hidden_params: dict = PrivateAttr(default_factory=dict)
 
@@ -1348,26 +1097,25 @@ class InteractionsAPIStreamingResponse(BaseLiteLLMOpenAIResponseObject):
     - error
     """
 
-    event_type: Optional[str] = None
-    id: Optional[str] = None
-    object: Optional[str] = "interaction"
-    model: Optional[str] = None
-    agent: Optional[str] = None
-    status: Optional[str] = None
-    created: Optional[str] = None
-    updated: Optional[str] = None
-    role: Optional[str] = None
+    event_type: str | None = None
+    id: str | None = None
+    object: str | None = "interaction"
+    model: str | None = None
+    agent: str | None = None
+    status: str | None = None
+    created: str | None = None
+    updated: str | None = None
     # Legacy schema field (Api-Revision: 2026-05-07). Remove after June 8, 2026.
-    outputs: Optional[List[Dict[str, Any]]] = None
+    outputs: list[dict[str, Any]] | None = None
     # New schema field (Api-Revision: 2026-05-20).
-    steps: Optional[List[Dict[str, Any]]] = None
-    usage: Optional[Dict[str, Any]] = None
-    delta: Optional[Dict[str, Any]] = None
+    steps: list[dict[str, Any]] | None = None
+    usage: dict[str, Any] | None = None
+    delta: dict[str, Any] | None = None
     # New schema streaming fields
-    index: Optional[int] = None
-    step: Optional[Dict[str, Any]] = None
-    interaction_id: Optional[str] = None
-    interaction: Optional[Dict[str, Any]] = None
+    index: int | None = None
+    step: dict[str, Any] | None = None
+    interaction_id: str | None = None
+    interaction: dict[str, Any] | None = None
 
     _hidden_params: dict = PrivateAttr(default_factory=dict)
 
@@ -1376,7 +1124,7 @@ class DeleteInteractionResult(BaseLiteLLMOpenAIResponseObject):
     """Result of deleting an interaction."""
 
     success: bool = True
-    id: Optional[str] = None
+    id: str | None = None
 
     _hidden_params: dict = PrivateAttr(default_factory=dict)
 
@@ -1384,16 +1132,16 @@ class DeleteInteractionResult(BaseLiteLLMOpenAIResponseObject):
 class CancelInteractionResult(BaseLiteLLMOpenAIResponseObject):
     """Result of cancelling an interaction."""
 
-    id: Optional[str] = None
-    status: Optional[str] = None
+    id: str | None = None
+    status: str | None = None
 
     _hidden_params: dict = PrivateAttr(default_factory=dict)
 
 
 # Backwards compatibility aliases
 InteractionTool = Tool
-InteractionToolChoiceConfig = ToolChoiceConfig
-InteractionsAPIOptionalRequestParams = Dict[str, Any]
+InteractionToolChoiceConfig: Final = ToolChoiceConfig
+InteractionsAPIOptionalRequestParams = dict[str, Any]
 
 # Agent interaction execution environment
-InteractionEnvironment = Union[str, Dict[str, Any]]
+InteractionEnvironment = str | dict[str, Any]

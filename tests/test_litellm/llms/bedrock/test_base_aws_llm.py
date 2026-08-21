@@ -1,6 +1,8 @@
 import json
 import os
 import sys
+import threading
+import time
 
 import pytest
 from fastapi.testclient import TestClient
@@ -11,10 +13,11 @@ sys.path.insert(
 
 
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 from unittest.mock import MagicMock, patch
 
 from botocore.awsrequest import AWSPreparedRequest, AWSRequest
+from botocore.auth import SigV4Auth
 from botocore.credentials import Credentials
 
 import litellm
@@ -163,21 +166,183 @@ def test_aws_profile_path_not_cached_in_iam_cache():
         assert mock_profile.call_count == 2
 
 
-def test_web_identity_path_not_cached_in_iam_cache():
+def test_get_credentials_does_not_expand_request_env_reference():
+    """
+    A parameter of the form os.environ/<VAR> reaching get_credentials is left as-is
+    rather than expanded against the process environment, so the downstream auth
+    helper only ever receives the literal value.
+    """
+    env = _os_environ_without_aws_keys()
+    env["SERVER_ONLY_VALUE"] = "config-managed-value"
+    base = BaseAWSLLM()
+    with patch.dict(os.environ, env, clear=True), patch.object(
+        base,
+        "_auth_with_aws_profile",
+        return_value=(Credentials("ak", "sk", None), None),
+    ) as mock_profile:
+        base.get_credentials(aws_profile_name="os.environ/SERVER_ONLY_VALUE")
+
+    assert mock_profile.call_args.args[0] == "os.environ/SERVER_ONLY_VALUE"
+    assert "config-managed-value" not in str(mock_profile.call_args)
+
+
+def test_get_credentials_falls_back_to_ambient_aws_profile_name_env():
+    """
+    The fixed AWS_* ambient fallback keeps working: an unset aws_profile_name
+    resolves from the AWS_PROFILE_NAME environment variable.
+    """
+    env = _os_environ_without_aws_keys()
+    env["AWS_PROFILE_NAME"] = "ambient-profile"
+    base = BaseAWSLLM()
+    with patch.dict(os.environ, env, clear=True), patch.object(
+        base,
+        "_auth_with_aws_profile",
+        return_value=(Credentials("ak", "sk", None), None),
+    ) as mock_profile:
+        base.get_credentials(aws_profile_name=None)
+
+    assert mock_profile.call_args.args[0] == "ambient-profile"
+
+
+def test_get_credentials_ambient_fallback_resolves_aws_external_id():
+    """
+    Each unset param falls back to its own AWS_* env var. Regression for an index
+    misalignment between the value list and the env-name list, which left
+    AWS_EXTERNAL_ID unresolved.
+    """
+    env = _os_environ_without_aws_keys()
+    env["AWS_EXTERNAL_ID"] = "ext-from-env"
+    base = BaseAWSLLM()
+    with patch.dict(os.environ, env, clear=True), patch.object(
+        base,
+        "_auth_with_aws_role",
+        return_value=(Credentials("ak", "sk", "tok"), None),
+    ) as mock_role:
+        base.get_credentials(
+            aws_role_name="arn:aws:iam::123456789012:role/x",
+            aws_session_name="s",
+        )
+
+    assert mock_role.call_args.kwargs["aws_external_id"] == "ext-from-env"
+
+
+def _capturing_sts_client(captured: Dict[str, Any]) -> MagicMock:
+    sts = MagicMock()
+
+    def _assume(**params):
+        captured["WebIdentityToken"] = params.get("WebIdentityToken")
+        return {
+            "Credentials": {
+                "AccessKeyId": "AKIA",
+                "SecretAccessKey": "sk",
+                "SessionToken": "tok",
+            },
+            "PackedPolicySize": 10,
+        }
+
+    sts.assume_role_with_web_identity.side_effect = _assume
+    return sts
+
+
+@pytest.mark.parametrize(
+    "token_ref",
+    ["os.environ/SERVER_ONLY_VALUE", "SERVER_ONLY_VALUE"],
+    ids=["os_environ_prefix", "bare_env_name"],
+)
+def test_web_identity_token_env_reference_not_expanded(token_ref):
+    """
+    A web-identity token that is an environment-variable reference (an os.environ/
+    prefix, or a bare name matching an env var) is rejected rather than expanded, so
+    the process-environment value is never used as the token.
+    """
+    env = _os_environ_without_aws_keys()
+    env["SERVER_ONLY_VALUE"] = "server-only-value"
+    captured: Dict[str, Any] = {}
+    base = BaseAWSLLM()
+    with patch.dict(os.environ, env, clear=True), patch(
+        "boto3.client", side_effect=lambda *a, **k: _capturing_sts_client(captured)
+    ), patch("boto3.Session", return_value=MagicMock()):
+        with pytest.raises(AwsAuthError):
+            base.get_credentials(
+                aws_web_identity_token=token_ref,
+                aws_role_name="arn:aws:iam::123456789012:role/x",
+                aws_session_name="s",
+                aws_sts_endpoint="https://custom-sts.example",
+            )
+
+    assert "server-only-value" not in str(captured)
+
+
+def test_web_identity_token_oidc_reference_still_resolved():
+    """
+    The env-reference guard does not over-reject: an oidc/ reference still flows to
+    get_secret (mocked to None here), surfacing the existing 401 rather than the 400
+    used for rejected env-var references.
+    """
+    base = BaseAWSLLM()
+    env = _os_environ_without_aws_keys()
+    with patch.dict(os.environ, env, clear=True), patch(
+        "litellm.llms.bedrock.base_aws_llm.get_secret", return_value=None
+    ):
+        with pytest.raises(AwsAuthError) as exc:
+            base.get_credentials(
+                aws_web_identity_token="oidc/circleci/",
+                aws_role_name="arn:aws:iam::123456789012:role/x",
+                aws_session_name="s",
+            )
+
+    assert exc.value.status_code == 401
+
+
+def test_web_identity_credentials_cached_in_iam_cache():
+    """
+    Web identity STS credentials are cached for their STS lifetime, so repeated
+    get_credentials calls (e.g. per-request guardrail auth) reuse the assumed-role
+    credentials instead of replaying the OIDC token to STS on every request.
+    """
     base = BaseAWSLLM()
     with patch.object(
         base,
         "_auth_with_web_identity_token",
-        return_value=(Credentials("wi-ak", "wi-sk", "wi-tok"), None),
+        return_value=(Credentials("wi-ak", "wi-sk", "wi-tok"), 3540),
     ) as mock_wi:
         kwargs = dict(
-            aws_web_identity_token="jwt-token",
+            aws_web_identity_token="oidc/google/https://example.com/",
             aws_role_name="arn:aws:iam::123456789012:role/WebIdentity",
             aws_session_name="web-id-session",
         )
-        base.get_credentials(**kwargs)
-        base.get_credentials(**kwargs)
+        first = base.get_credentials(**kwargs)
+        second = base.get_credentials(**kwargs)
+        assert mock_wi.call_count == 1
+        assert first is second
+
+
+def test_web_identity_cache_is_keyed_on_credential_args():
+    """
+    Two web identity configs that differ in any credential arg (here the role)
+    must not share cached credentials.
+    """
+    base = BaseAWSLLM()
+    with patch.object(
+        base,
+        "_auth_with_web_identity_token",
+        side_effect=[
+            (Credentials("wi-ak-a", "wi-sk-a", "wi-tok-a"), 3540),
+            (Credentials("wi-ak-b", "wi-sk-b", "wi-tok-b"), 3540),
+        ],
+    ) as mock_wi:
+        first = base.get_credentials(
+            aws_web_identity_token="oidc/google/https://example.com/",
+            aws_role_name="arn:aws:iam::123456789012:role/RoleA",
+            aws_session_name="web-id-session",
+        )
+        second = base.get_credentials(
+            aws_web_identity_token="oidc/google/https://example.com/",
+            aws_role_name="arn:aws:iam::123456789012:role/RoleB",
+            aws_session_name="web-id-session",
+        )
         assert mock_wi.call_count == 2
+        assert first.access_key != second.access_key
 
 
 def test_boto3_init_tracer_wrapping():
@@ -640,6 +805,30 @@ def test_get_request_headers_with_sigv4():
         assert result == mock_request.prepare.return_value
 
 
+def test_sigv4_matches_rust_golden_vector():
+    request = AWSRequest(
+        method="POST",
+        url="https://bedrock-runtime.us-east-1.amazonaws.com/model/amazon.titan-text-express-v1/invoke",
+        data=b'{"input":"hello"}',
+        headers={"Content-Type": "application/json"},
+    )
+    credentials = Credentials(
+        "AKIDEXAMPLE",
+        "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY",
+        "session-token",
+    )
+    with patch("botocore.auth.get_current_datetime", return_value=datetime(2024, 1, 2, 3, 4, 5)):
+        SigV4Auth(credentials, "bedrock", "us-east-1").add_auth(request)
+    assert request.headers["X-Amz-Date"] == "20240102T030405Z"
+    assert request.headers["X-Amz-Security-Token"] == "session-token"
+    assert (
+        request.headers["Authorization"]
+        == "AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20240102/us-east-1/bedrock/aws4_request, "
+        "SignedHeaders=content-type;host;x-amz-date;x-amz-security-token, "
+        "Signature=55c027ef47527d3ad63f1735f9d099efdbc99f296ff914bd94e727e24ec0e464"
+    )
+
+
 def test_get_request_headers_with_api_key_bearer_token():
     """
     Test that get_request_headers uses the api_key parameter as a bearer token when provided
@@ -746,7 +935,7 @@ def test_role_assumption_without_session_name():
         call_args = mock_sts_client.assume_role.call_args
         assert call_args[1]["RoleSessionName"] == "my-custom-session"
 
-    # Test case 3: AssumeRole is not stored in iam_cache; identical calls each invoke STS.
+    # Test case 3: identical AssumeRole args reuse the cached STS session instead of re-assuming.
     BaseAWSLLM._shared_iam_cache.flush_cache()
     mock_sts_client.reset_mock()
     with patch("boto3.client", return_value=mock_sts_client):
@@ -758,49 +947,218 @@ def test_role_assumption_without_session_name():
             aws_role_name="arn:aws:iam::2222222222222:role/LitellmEvalBedrockRole"
         )
 
-        assert mock_sts_client.assume_role.call_count == 2
+        assert mock_sts_client.assume_role.call_count == 1
         assert credentials1.access_key == credentials2.access_key
 
 
-def test_assume_role_path_does_not_use_process_iam_cache():
-    """AssumeRole credentials are not cached; each get_credentials repeats STS AssumeRole."""
-    base_aws_llm = BaseAWSLLM()
-
+def _assume_role_sts_mock(access_key: str = "assumed-access-key") -> MagicMock:
+    """STS client mock whose caller identity is a different role, forcing the AssumeRole path."""
     mock_sts_client = MagicMock()
-    mock_expiry = MagicMock()
-    mock_expiry.tzinfo = timezone.utc
-    time_diff = MagicMock()
-    time_diff.total_seconds.return_value = 3600
-    mock_expiry.__sub__ = MagicMock(return_value=time_diff)
-
     mock_sts_client.assume_role.return_value = {
         "Credentials": {
-            "AccessKeyId": "assumed-access-key",
+            "AccessKeyId": access_key,
             "SecretAccessKey": "assumed-secret-key",
             "SessionToken": "assumed-session-token",
-            "Expiration": mock_expiry,
+            "Expiration": datetime.now(timezone.utc) + timedelta(hours=1),
         }
     }
     mock_sts_client.get_caller_identity.return_value = {
         "Arn": "arn:aws:sts::111111111111:assumed-role/SomeOtherRole/session-name",
     }
+    return mock_sts_client
 
-    role_arn = "arn:aws:iam::2222222222222:role/LitellmEvalBedrockRole"
-    env_without_irsa = {
+
+def _env_without_irsa() -> dict:
+    return {
         k: v
         for k, v in os.environ.items()
         if k not in ("AWS_ROLE_ARN", "AWS_WEB_IDENTITY_TOKEN_FILE")
     }
 
-    with patch.dict(os.environ, env_without_irsa, clear=True):
+
+def test_assume_role_path_uses_process_iam_cache():
+    """Repeat calls with identical AssumeRole args make no further STS calls of either kind."""
+    base_aws_llm = BaseAWSLLM()
+    mock_sts_client = _assume_role_sts_mock()
+    role_arn = "arn:aws:iam::2222222222222:role/LitellmEvalBedrockRole"
+
+    with patch.dict(os.environ, _env_without_irsa(), clear=True):
         with patch("boto3.client", return_value=mock_sts_client):
-            base_aws_llm.get_credentials(aws_role_name=role_arn)
+            first = base_aws_llm.get_credentials(
+                aws_role_name=role_arn, aws_session_name="attributed-user-1"
+            )
             mock_sts_client.get_caller_identity.reset_mock()
 
-            base_aws_llm.get_credentials(aws_role_name=role_arn)
+            second = base_aws_llm.get_credentials(
+                aws_role_name=role_arn, aws_session_name="attributed-user-1"
+            )
 
-            mock_sts_client.get_caller_identity.assert_called()
-            assert mock_sts_client.assume_role.call_count == 2
+            mock_sts_client.get_caller_identity.assert_not_called()
+            assert mock_sts_client.assume_role.call_count == 1
+            assert first.access_key == second.access_key
+            assert first.token == second.token
+
+
+def test_assume_role_cache_is_scoped_per_session_name():
+    """Each attributed identity gets its own STS session; no user is served another user's creds."""
+    base_aws_llm = BaseAWSLLM()
+    mock_sts_client = _assume_role_sts_mock()
+    mock_sts_client.assume_role.side_effect = [
+        {
+            "Credentials": {
+                "AccessKeyId": f"assumed-access-key-{session_name}",
+                "SecretAccessKey": "assumed-secret-key",
+                "SessionToken": f"assumed-session-token-{session_name}",
+                "Expiration": datetime.now(timezone.utc) + timedelta(hours=1),
+            }
+        }
+        for session_name in ("attributed-user-1", "attributed-user-2")
+    ]
+    role_arn = "arn:aws:iam::2222222222222:role/LitellmEvalBedrockRole"
+
+    with patch.dict(os.environ, _env_without_irsa(), clear=True):
+        with patch("boto3.client", return_value=mock_sts_client):
+            user_1 = base_aws_llm.get_credentials(
+                aws_role_name=role_arn, aws_session_name="attributed-user-1"
+            )
+            user_2 = base_aws_llm.get_credentials(
+                aws_role_name=role_arn, aws_session_name="attributed-user-2"
+            )
+            user_1_again = base_aws_llm.get_credentials(
+                aws_role_name=role_arn, aws_session_name="attributed-user-1"
+            )
+
+    assert mock_sts_client.assume_role.call_count == 2
+    session_names = [
+        call.kwargs["RoleSessionName"] for call in mock_sts_client.assume_role.call_args_list
+    ]
+    assert session_names == ["attributed-user-1", "attributed-user-2"]
+
+    assert user_1.access_key == "assumed-access-key-attributed-user-1"
+    assert user_2.access_key == "assumed-access-key-attributed-user-2"
+    assert user_1_again.access_key == user_1.access_key
+
+
+def test_assume_role_cache_entry_expires_with_the_sts_session():
+    """The cache entry is written with the STS lifetime, not an indefinite or default TTL."""
+    base_aws_llm = BaseAWSLLM()
+    mock_sts_client = _assume_role_sts_mock()
+    role_arn = "arn:aws:iam::2222222222222:role/LitellmEvalBedrockRole"
+
+    with patch.dict(os.environ, _env_without_irsa(), clear=True):
+        with patch("boto3.client", return_value=mock_sts_client):
+            base_aws_llm.get_credentials(
+                aws_role_name=role_arn, aws_session_name="attributed-user-1"
+            )
+
+    in_memory_cache = BaseAWSLLM._shared_iam_cache.in_memory_cache
+    assert len(in_memory_cache.ttl_dict) == 1
+    remaining_ttl = list(in_memory_cache.ttl_dict.values())[0] - time.time()
+    # 1h STS session minus the 60s safety margin, minus test execution time
+    assert 3400 < remaining_ttl <= 3540
+
+
+def test_assume_role_credentials_expired_in_cache_trigger_a_fresh_sts_call():
+    """Once the STS session lapses the next call re-assumes rather than serving dead credentials."""
+    base_aws_llm = BaseAWSLLM()
+    mock_sts_client = _assume_role_sts_mock()
+    role_arn = "arn:aws:iam::2222222222222:role/LitellmEvalBedrockRole"
+
+    with patch.dict(os.environ, _env_without_irsa(), clear=True):
+        with patch("boto3.client", return_value=mock_sts_client):
+            base_aws_llm.get_credentials(
+                aws_role_name=role_arn, aws_session_name="attributed-user-1"
+            )
+
+            in_memory_cache = BaseAWSLLM._shared_iam_cache.in_memory_cache
+            expired_key = list(in_memory_cache.ttl_dict.keys())[0]
+            in_memory_cache.ttl_dict[expired_key] = time.time() - 1
+
+            base_aws_llm.get_credentials(
+                aws_role_name=role_arn, aws_session_name="attributed-user-1"
+            )
+
+    assert mock_sts_client.assume_role.call_count == 2
+
+
+def test_concurrent_cold_cache_calls_for_one_identity_make_a_single_sts_call():
+    """Concurrent misses on one identity single-flight instead of each issuing its own AssumeRole."""
+    base_aws_llm = BaseAWSLLM()
+    role_arn = "arn:aws:iam::2222222222222:role/LitellmEvalBedrockRole"
+
+    calling_threads = set()
+    threads_lock = threading.Lock()
+
+    def slow_assume_role(**kwargs):
+        with threads_lock:
+            calling_threads.add(threading.get_ident())
+        # Hold the fetch open so every other worker is inside get_credentials while this one runs;
+        # without that overlap the test would pass against unsynchronised code.
+        time.sleep(0.2)
+        return {
+            "Credentials": {
+                "AccessKeyId": "assumed-access-key",
+                "SecretAccessKey": "assumed-secret-key",
+                "SessionToken": "assumed-session-token",
+                "Expiration": datetime.now(timezone.utc) + timedelta(hours=1),
+            }
+        }
+
+    mock_sts_client = _assume_role_sts_mock()
+    mock_sts_client.assume_role.side_effect = slow_assume_role
+
+    barrier = threading.Barrier(8)
+    resolved = []
+
+    def resolve():
+        barrier.wait()
+        resolved.append(
+            base_aws_llm.get_credentials(aws_role_name=role_arn, aws_session_name="attribution-1")
+        )
+
+    with patch.dict(os.environ, _env_without_irsa(), clear=True):
+        with patch("boto3.client", return_value=mock_sts_client):
+            workers = [threading.Thread(target=resolve) for _ in range(8)]
+            for worker in workers:
+                worker.start()
+            for worker in workers:
+                worker.join(timeout=30)
+
+    # The harness has to have produced real concurrency, or the assertion below proves nothing
+    assert len(resolved) == 8
+    assert len({id(credentials) for credentials in resolved}) == 1
+
+    assert mock_sts_client.assume_role.call_count == 1
+    assert len(calling_threads) == 1
+
+
+def test_ambient_identity_matching_target_role_is_cached_without_repeating_the_probe():
+    """The skip-AssumeRole branch caches too, so GetCallerIdentity stops running per request."""
+    base_aws_llm = BaseAWSLLM()
+    role_arn = "arn:aws:iam::2222222222222:role/LitellmEvalBedrockRole"
+
+    mock_sts_client = MagicMock()
+    mock_sts_client.get_caller_identity.return_value = {
+        "Arn": "arn:aws:sts::2222222222222:assumed-role/LitellmEvalBedrockRole/session-name",
+    }
+
+    mock_ambient_credentials = MagicMock()
+    mock_ambient_credentials.access_key = "ambient-access-key"
+
+    with patch.dict(os.environ, _env_without_irsa(), clear=True):
+        with patch("boto3.client", return_value=mock_sts_client):
+            with patch.object(
+                base_aws_llm,
+                "_auth_with_env_vars",
+                return_value=(mock_ambient_credentials, None),
+            ) as mock_env_auth:
+                first = base_aws_llm.get_credentials(aws_role_name=role_arn)
+                second = base_aws_llm.get_credentials(aws_role_name=role_arn)
+
+    assert mock_sts_client.get_caller_identity.call_count == 1
+    assert mock_sts_client.assume_role.call_count == 0
+    mock_env_auth.assert_called_once()
+    assert first.access_key == second.access_key == "ambient-access-key"
 
 
 def test_cache_keys_are_different_for_different_roles():
@@ -1774,7 +2132,10 @@ def test_auth_with_aws_role_irsa_environment():
                 assert creds.access_key == "irsa-access-key"
                 assert creds.secret_key == "irsa-secret-key"
                 assert creds.token == "irsa-session-token"
-                assert ttl > 0  # TTL should be positive
+                # 1h STS session minus the safety margin, so a cached entry retires before AWS
+                # expires the credential
+                assert ttl is not None
+                assert 3400 < ttl <= 3540
     finally:
         # Clean up the temporary file
         os.unlink(token_file)
@@ -2149,20 +2510,19 @@ def test_get_credentials_ecs_same_role_skips_assume_role():
                     aws_region_name="us-east-1",
                 )
 
-                # Each get_credentials must check identity first; second call still checks before
-                # taking the iam_cache hit (no pre-peek that bypasses _is_already_running_as_role).
-                assert mock_already_running.call_count == 2
-                # Cached env resolution: second call hits iam_cache, not _auth_with_env_vars again.
+                # The identity probe and the env resolution are both behind the iam_cache, so the
+                # second call repeats neither.
+                mock_already_running.assert_called_once()
                 mock_env_auth.assert_called_once()
                 mock_role_auth.assert_not_called()
                 assert credentials.access_key == "ecs-access-key"
 
 
-def test_get_credentials_role_second_call_not_same_role_uses_assume_not_env_cache():
+def test_get_credentials_role_reevaluates_identity_once_the_cached_entry_lapses():
     """
     First request: already target role -> env path fills iam_cache.
-    Second request (e.g. identity changed): not same role -> AssumeRole path; must not reuse
-    cached env resolution from the first call.
+    Once that entry expires and the identity no longer matches, the next request must take the
+    AssumeRole path rather than serving the cached env resolution.
     """
     base_aws_llm = BaseAWSLLM()
 
@@ -2197,6 +2557,11 @@ def test_get_credentials_role_second_call_not_same_role_uses_assume_not_env_cach
                     aws_role_name=role_arn,
                     aws_region_name="us-east-1",
                 )
+
+                in_memory_cache = BaseAWSLLM._shared_iam_cache.in_memory_cache
+                lapsed_key = list(in_memory_cache.ttl_dict.keys())[0]
+                in_memory_cache.ttl_dict[lapsed_key] = time.time() - 1
+
                 second = base_aws_llm.get_credentials(
                     aws_role_name=role_arn,
                     aws_region_name="us-east-1",
@@ -2525,3 +2890,184 @@ class TestGetBedrockModelIdArnHandling:
         """invoke/ prefix stripping still works after the fix."""
         model_id = self._call("invoke/anthropic.claude-3-sonnet-20240229-v1:0")
         assert model_id == "anthropic.claude-3-sonnet-20240229-v1:0"
+
+
+def _recomputed_sigv4_signature(url: str, secret_key: str, authorization: str, headers: Dict[str, Any], body) -> str:
+    import hashlib
+    import hmac
+    from urllib.parse import urlparse
+
+    parsed = urlparse(url)
+    credential_scope = authorization.split("Credential=")[1].split(",")[0].split("/", 1)[1]
+    signed_header_names = authorization.split("SignedHeaders=")[1].split(",")[0].split(";")
+    header_lookup = {name.lower(): str(value) for name, value in headers.items()}
+    header_lookup["host"] = parsed.netloc
+    body_bytes = body if isinstance(body, bytes) else str(body).encode()
+    canonical_request = "\n".join(
+        [
+            "POST",
+            parsed.path or "/",
+            "",
+            "".join(f"{name}:{header_lookup[name]}\n" for name in signed_header_names),
+            ";".join(signed_header_names),
+            hashlib.sha256(body_bytes).hexdigest(),
+        ]
+    )
+    string_to_sign = "\n".join(
+        [
+            "AWS4-HMAC-SHA256",
+            header_lookup["x-amz-date"],
+            credential_scope,
+            hashlib.sha256(canonical_request.encode()).hexdigest(),
+        ]
+    )
+    key = f"AWS4{secret_key}".encode()
+    for scope_part in credential_scope.split("/"):
+        key = hmac.new(key, scope_part.encode(), hashlib.sha256).digest()
+    return hmac.new(key, string_to_sign.encode(), hashlib.sha256).hexdigest()
+
+
+class TestSignRequestResign:
+    """Regression: retrying a Bedrock request with headers from a previous SigV4 sign
+    (e.g. the /v1/messages strip-thinking-and-retry path) must produce a fresh
+    Authorization / X-Amz-Date for the new body, not inherit the stale ones and 403."""
+
+    URL = "https://bedrock-runtime.us-east-1.amazonaws.com/model/test-model/invoke"
+    ACCESS_KEY = "AKIAIOSFODNN7EXAMPLE"
+    SECRET_KEY = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+
+    @pytest.fixture(autouse=True)
+    def _clean_aws_env(self, monkeypatch):
+        for env_var in ("AWS_BEARER_TOKEN_BEDROCK", "AWS_SESSION_TOKEN", "AWS_PROFILE"):
+            monkeypatch.delenv(env_var, raising=False)
+
+    def _optional_params(self) -> Dict[str, Any]:
+        return {
+            "aws_access_key_id": self.ACCESS_KEY,
+            "aws_secret_access_key": self.SECRET_KEY,
+            "aws_region_name": "us-east-1",
+        }
+
+    def _sign(self, headers: Dict[str, Any], request_data: Dict[str, Any]):
+        return BaseAWSLLM()._sign_request(
+            service_name="bedrock",
+            headers=headers,
+            optional_params=self._optional_params(),
+            request_data=request_data,
+            api_base=self.URL,
+        )
+
+    def test_resign_with_previously_signed_headers_replaces_stale_sigv4_headers(self):
+        original_body = {
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": [{"type": "thinking", "thinking": "x", "signature": ""}],
+                }
+            ]
+        }
+        first_headers, _ = self._sign(headers={"Content-Type": "application/json"}, request_data=original_body)
+        assert first_headers["Authorization"].startswith("AWS4-HMAC-SHA256")
+
+        stale_headers = {**first_headers, "X-Amz-Date": "20200101T000000Z"}
+        stripped_body = {"messages": [{"role": "user", "content": "hi"}]}
+        second_headers, second_signed_body = self._sign(headers=stale_headers, request_data=stripped_body)
+
+        assert second_headers["X-Amz-Date"] != "20200101T000000Z"
+        assert second_headers["Authorization"] != stale_headers["Authorization"]
+        assert second_headers["Authorization"].split("Signature=")[1] == _recomputed_sigv4_signature(
+            url=self.URL,
+            secret_key=self.SECRET_KEY,
+            authorization=second_headers["Authorization"],
+            headers=second_headers,
+            body=second_signed_body,
+        )
+
+    def test_forwarded_headers_still_added_back_after_signing(self):
+        signed_headers, _ = self._sign(
+            headers={"Content-Type": "application/json", "anthropic-version": "bedrock-2023-05-31"},
+            request_data={"messages": []},
+        )
+        assert signed_headers["anthropic-version"] == "bedrock-2023-05-31"
+        assert signed_headers["Content-Type"] == "application/json"
+
+    def test_caller_supplied_bearer_authorization_survives_signing(self):
+        signed_headers, _ = self._sign(
+            headers={"Content-Type": "application/json", "Authorization": "Bearer caller-token"},
+            request_data={"messages": []},
+        )
+        assert signed_headers["Authorization"] == "Bearer caller-token"
+
+
+class TestGetRequestHeadersResign:
+    """Regression: get_request_headers (invoke/converse/embed/image paths) must not let
+    stale SigV4 values present in the input headers clobber the freshly computed signature."""
+
+    URL = "https://bedrock-runtime.us-east-1.amazonaws.com/model/test-model/converse"
+    ACCESS_KEY = "AKIAIOSFODNN7EXAMPLE"
+    SECRET_KEY = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+    SESSION_TOKEN = "fresh-session-token"
+
+    @pytest.fixture(autouse=True)
+    def _clean_aws_env(self, monkeypatch):
+        for env_var in ("AWS_BEARER_TOKEN_BEDROCK", "AWS_SESSION_TOKEN", "AWS_PROFILE"):
+            monkeypatch.delenv(env_var, raising=False)
+
+    def _prepare(self, headers: Dict[str, Any], data: str, extra_headers: Optional[Dict[str, str]] = None):
+        return BaseAWSLLM().get_request_headers(
+            credentials=Credentials(self.ACCESS_KEY, self.SECRET_KEY, self.SESSION_TOKEN),
+            aws_region_name="us-east-1",
+            extra_headers=extra_headers,
+            endpoint_url=self.URL,
+            data=data,
+            headers=headers,
+        )
+
+    def test_stale_sigv4_headers_in_input_replaced_by_fresh_signature(self):
+        first_prepped = self._prepare(
+            headers={"Content-Type": "application/json"},
+            data=json.dumps({"messages": [{"role": "user", "content": "original"}]}),
+        )
+        stale_authorization = first_prepped.headers["Authorization"]
+        assert stale_authorization.startswith("AWS4-HMAC-SHA256")
+
+        stale_headers = {
+            "Content-Type": "application/json",
+            "Authorization": stale_authorization,
+            "X-Amz-Date": "20200101T000000Z",
+            "X-Amz-Security-Token": "stale-session-token",
+        }
+        retry_data = json.dumps({"messages": [{"role": "user", "content": "retry"}]})
+        second_prepped = self._prepare(headers=stale_headers, data=retry_data)
+
+        assert second_prepped.headers["X-Amz-Date"] != "20200101T000000Z"
+        assert second_prepped.headers["X-Amz-Security-Token"] == self.SESSION_TOKEN
+        assert second_prepped.headers["Authorization"] != stale_authorization
+        assert second_prepped.headers["Authorization"].split("Signature=")[1] == _recomputed_sigv4_signature(
+            url=self.URL,
+            secret_key=self.SECRET_KEY,
+            authorization=second_prepped.headers["Authorization"],
+            headers=dict(second_prepped.headers),
+            body=retry_data,
+        )
+
+    def test_forwarded_headers_still_added_back_after_signing(self):
+        prepped = self._prepare(
+            headers={
+                "Content-Type": "application/json",
+                "anthropic-version": "bedrock-2023-05-31",
+                "user-agent": "litellm-test-client",
+            },
+            data=json.dumps({"messages": []}),
+        )
+        assert prepped.headers["anthropic-version"] == "bedrock-2023-05-31"
+        assert prepped.headers["user-agent"] == "litellm-test-client"
+        assert prepped.headers["Content-Type"] == "application/json"
+
+    def test_extra_headers_bearer_authorization_still_overrides_signature(self):
+        prepped = self._prepare(
+            headers={"Content-Type": "application/json"},
+            data=json.dumps({"messages": []}),
+            extra_headers={"Authorization": "Bearer foo"},
+        )
+        assert prepped.headers["Authorization"] == "Bearer foo"

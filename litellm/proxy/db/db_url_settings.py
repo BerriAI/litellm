@@ -32,7 +32,7 @@ password when their ``*_READ_REPLICA`` counterpart is unset.
 
 import os
 import urllib.parse
-from typing import Optional, cast
+from typing import Final, cast
 
 from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -41,8 +41,43 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 # AWS-touching token mint stays patchable at its canonical location in tests.
 from litellm.proxy.auth import rds_iam_token
 
-_IAM_ENV_KEY = "IAM_TOKEN_DB_AUTH"
-_DEFAULT_PG_PORT = "5432"
+_IAM_ENV_KEY: Final = "IAM_TOKEN_DB_AUTH"
+_DEFAULT_PG_PORT: Final = "5432"
+
+# schema.prisma pins `provider = "postgresql"`, so these are the only schemes
+# Prisma can actually connect with.
+SUPPORTED_DB_SCHEMES: Final[frozenset[str]] = frozenset({"postgresql", "postgres"})
+_MISSING_SCHEME: Final = "<missing scheme>"
+
+
+def unsupported_db_scheme(database_url: str) -> str | None:
+    """Return the connection URL scheme when it is not PostgreSQL, else None.
+
+    A `sqlite://` / `mysql://` URL can never connect against the
+    postgresql-only datasource, but the resulting Prisma failure is opaque and
+    version-dependent (a confusing migration error, or a startup that never
+    binds). Callers use this to reject the URL up front with an actionable
+    error instead.
+
+    A schemeless value (e.g. a malformed DSN like ``user:pass@host/db``) yields
+    the ``_MISSING_SCHEME`` placeholder rather than the raw URL, so callers that
+    log the return value never echo embedded credentials.
+    """
+    scheme: Final = urllib.parse.urlsplit(database_url).scheme.lower()
+    if scheme in SUPPORTED_DB_SCHEMES:
+        return None
+    return scheme or _MISSING_SCHEME
+
+
+def unsupported_db_scheme_message(env_var: str, scheme: str) -> str:
+    """Operator-facing message naming the offending env var and scheme."""
+    return (
+        f"{env_var} uses unsupported scheme '{scheme}'. LiteLLM's database "
+        "features (virtual keys, store_model_in_db, spend tracking) require "
+        "PostgreSQL; use a 'postgresql://' connection string. SQLite and other "
+        "engines are not supported. "
+        "See https://docs.litellm.ai/docs/proxy/virtual_keys"
+    )
 
 
 class DatabaseURLSettings(BaseSettings):
@@ -58,55 +93,36 @@ class DatabaseURLSettings(BaseSettings):
     iam_token_db_auth: bool = Field(default=False, validation_alias=_IAM_ENV_KEY)
 
     # Writer
-    database_url: Optional[str] = Field(default=None, validation_alias="DATABASE_URL")
-    database_host: Optional[str] = Field(default=None, validation_alias="DATABASE_HOST")
-    database_port: str = Field(
-        default=_DEFAULT_PG_PORT, validation_alias="DATABASE_PORT"
-    )
-    database_user: Optional[str] = Field(
+    database_url: str | None = Field(default=None, validation_alias="DATABASE_URL")
+    direct_url: str | None = Field(default=None, validation_alias="DIRECT_URL")
+    database_host: str | None = Field(default=None, validation_alias="DATABASE_HOST")
+    database_port: str = Field(default=_DEFAULT_PG_PORT, validation_alias="DATABASE_PORT")
+    database_user: str | None = Field(
         default=None,
         validation_alias=AliasChoices("DATABASE_USER", "DATABASE_USERNAME"),
     )
-    database_name: Optional[str] = Field(default=None, validation_alias="DATABASE_NAME")
-    database_schema: Optional[str] = Field(
-        default=None, validation_alias="DATABASE_SCHEMA"
-    )
-    database_password: Optional[str] = Field(
-        default=None, validation_alias="DATABASE_PASSWORD"
-    )
+    database_name: str | None = Field(default=None, validation_alias="DATABASE_NAME")
+    database_schema: str | None = Field(default=None, validation_alias="DATABASE_SCHEMA")
+    database_password: str | None = Field(default=None, validation_alias="DATABASE_PASSWORD")
 
     # Read replica
-    database_url_read_replica: Optional[str] = Field(
-        default=None, validation_alias="DATABASE_URL_READ_REPLICA"
-    )
-    database_host_read_replica: Optional[str] = Field(
-        default=None, validation_alias="DATABASE_HOST_READ_REPLICA"
-    )
-    database_port_read_replica: Optional[str] = Field(
-        default=None, validation_alias="DATABASE_PORT_READ_REPLICA"
-    )
-    database_user_read_replica: Optional[str] = Field(
+    database_url_read_replica: str | None = Field(default=None, validation_alias="DATABASE_URL_READ_REPLICA")
+    database_host_read_replica: str | None = Field(default=None, validation_alias="DATABASE_HOST_READ_REPLICA")
+    database_port_read_replica: str | None = Field(default=None, validation_alias="DATABASE_PORT_READ_REPLICA")
+    database_user_read_replica: str | None = Field(
         default=None,
-        validation_alias=AliasChoices(
-            "DATABASE_USER_READ_REPLICA", "DATABASE_USERNAME_READ_REPLICA"
-        ),
+        validation_alias=AliasChoices("DATABASE_USER_READ_REPLICA", "DATABASE_USERNAME_READ_REPLICA"),
     )
-    database_name_read_replica: Optional[str] = Field(
-        default=None, validation_alias="DATABASE_NAME_READ_REPLICA"
-    )
-    database_schema_read_replica: Optional[str] = Field(
-        default=None, validation_alias="DATABASE_SCHEMA_READ_REPLICA"
-    )
-    database_password_read_replica: Optional[str] = Field(
-        default=None, validation_alias="DATABASE_PASSWORD_READ_REPLICA"
-    )
+    database_name_read_replica: str | None = Field(default=None, validation_alias="DATABASE_NAME_READ_REPLICA")
+    database_schema_read_replica: str | None = Field(default=None, validation_alias="DATABASE_SCHEMA_READ_REPLICA")
+    database_password_read_replica: str | None = Field(default=None, validation_alias="DATABASE_PASSWORD_READ_REPLICA")
 
     @classmethod
     def from_env(cls) -> "DatabaseURLSettings":
         """Load the settings from ``os.environ`` (read at call time)."""
         return cls()
 
-    def build_writer_url(self) -> Optional[str]:
+    def build_writer_url(self) -> str | None:
         """Return the writer URL to set, or ``None`` to leave it as-is.
 
         Raises ``RuntimeError`` (naming the offending vars) when IAM auth is
@@ -114,7 +130,7 @@ class DatabaseURLSettings(BaseSettings):
         from this and a clear startup error beats a Prisma connect failure.
         """
         if self.iam_token_db_auth:
-            missing = [
+            missing: Final = [
                 env
                 for env, val in (
                     ("DATABASE_HOST", self.database_host),
@@ -129,14 +145,12 @@ class DatabaseURLSettings(BaseSettings):
                     f"are unset: {', '.join(missing)}. Set them so the writer "
                     "DATABASE_URL can be assembled with a minted IAM token."
                 )
-            host = cast(str, self.database_host)
-            user = cast(str, self.database_user)
-            name = cast(str, self.database_name)
+            host: Final = cast(str, self.database_host)
+            user: Final = cast(str, self.database_user)
+            name: Final = cast(str, self.database_name)
             # IAM token is already URL-quoted by generate_iam_auth_token;
             # user/name embedded raw (parity with proxy_cli.py / IAMEndpoint).
-            token = rds_iam_token.generate_iam_auth_token(
-                db_host=host, db_port=self.database_port, db_user=user
-            )
+            token: Final = rds_iam_token.generate_iam_auth_token(db_host=host, db_port=self.database_port, db_user=user)
             url = f"postgresql://{user}:{token}@{host}:{self.database_port}/{name}"
             if self.database_schema:
                 url += f"?schema={self.database_schema}"
@@ -156,7 +170,7 @@ class DatabaseURLSettings(BaseSettings):
             )
         return None
 
-    def build_reader_url(self) -> Optional[str]:
+    def build_reader_url(self) -> str | None:
         """Return the read-replica URL to set, or ``None`` to leave it as-is.
 
         Opt-in via ``DATABASE_HOST_READ_REPLICA``; never clobbers a
@@ -168,15 +182,15 @@ class DatabaseURLSettings(BaseSettings):
         if self.database_url_read_replica:
             return None  # never clobber an operator-supplied reader URL
 
-        host = self.database_host_read_replica
-        port = self.database_port_read_replica or self.database_port
+        host: Final = self.database_host_read_replica
+        port: Final = self.database_port_read_replica or self.database_port
         user = self.database_user_read_replica or self.database_user
         name = self.database_name_read_replica or self.database_name
-        schema = self.database_schema_read_replica or self.database_schema
-        password = self.database_password_read_replica or self.database_password
+        schema: Final = self.database_schema_read_replica or self.database_schema
+        password: Final = self.database_password_read_replica or self.database_password
 
         if self.iam_token_db_auth:
-            missing = [
+            missing: Final = [
                 env
                 for env, val in (
                     ("DATABASE_USER[_READ_REPLICA]", user),
@@ -194,9 +208,7 @@ class DatabaseURLSettings(BaseSettings):
                 )
             user = cast(str, user)
             name = cast(str, name)
-            token = rds_iam_token.generate_iam_auth_token(
-                db_host=host, db_port=port, db_user=user
-            )
+            token: Final = rds_iam_token.generate_iam_auth_token(db_host=host, db_port=port, db_user=user)
             url = f"postgresql://{user}:{token}@{host}:{port}/{name}"
             if schema:
                 url += f"?schema={schema}"
@@ -217,20 +229,20 @@ class DatabaseURLSettings(BaseSettings):
     def _password_url(
         *,
         user: str,
-        password: Optional[str],
+        password: str | None,
         host: str,
         port: str,
         name: str,
-        schema: Optional[str],
+        schema: str | None,
     ) -> str:
         """Percent-encode credentials into a ``postgresql://`` URL.
 
         Parity with ``construct_database_url_from_env_vars`` in
         ``proxy/utils.py``; ``password`` may be empty for a passwordless URL.
         """
-        quote = urllib.parse.quote_plus
-        user_p = quote(user)
-        name_p = quote(name)
+        quote: Final = urllib.parse.quote_plus
+        user_p: Final = quote(user)
+        name_p: Final = quote(name)
         if password:
             url = f"postgresql://{user_p}:{quote(password)}@{host}:{port}/{name_p}"
         else:
@@ -239,6 +251,26 @@ class DatabaseURLSettings(BaseSettings):
             url += f"?schema={schema}"
         return url
 
+    def _raise_for_unsupported_scheme(self) -> None:
+        """Reject an operator-pinned non-PostgreSQL writer / direct / reader URL.
+
+        The componentized entrypoints (gateway / backend / migrations) call
+        ``apply_to_env`` and then hand the URL straight to Prisma, bypassing
+        the CLI's own guard. A pinned URL flows through untouched, so validate
+        the same three vars the CLI guard checks (DATABASE_URL, DIRECT_URL, and
+        the read replica) rather than letting Prisma stall on an unusable scheme.
+        """
+        for env_var, url in (
+            ("DATABASE_URL", self.database_url),
+            ("DIRECT_URL", self.direct_url),
+            ("DATABASE_URL_READ_REPLICA", self.database_url_read_replica),
+        ):
+            if not url:
+                continue
+            bad_scheme = unsupported_db_scheme(url)
+            if bad_scheme is not None:
+                raise RuntimeError(unsupported_db_scheme_message(env_var, bad_scheme))
+
     def apply_to_env(self) -> bool:
         """Write the assembled URL(s) into ``os.environ``.
 
@@ -246,8 +278,9 @@ class DatabaseURLSettings(BaseSettings):
         password auth that assembled a fresh URL). False means there was
         nothing to do — an operator-pinned URL, or no discrete fields.
         """
+        self._raise_for_unsupported_scheme()
         wrote_writer = False
-        writer_url = self.build_writer_url()
+        writer_url: Final = self.build_writer_url()
         if writer_url is not None:
             os.environ["DATABASE_URL"] = writer_url
             if self.iam_token_db_auth:
@@ -256,7 +289,7 @@ class DatabaseURLSettings(BaseSettings):
                 os.environ[_IAM_ENV_KEY] = "True"
             wrote_writer = True
 
-        reader_url = self.build_reader_url()
+        reader_url: Final = self.build_reader_url()
         if reader_url is not None:
             os.environ["DATABASE_URL_READ_REPLICA"] = reader_url
 

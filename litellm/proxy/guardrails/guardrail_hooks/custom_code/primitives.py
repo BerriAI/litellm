@@ -7,10 +7,13 @@ and provide safe, sandboxed functionality for common guardrail operations.
 
 import json
 import re
-from typing import Any, Dict, List, Optional, Tuple, Type, Union
+from collections.abc import Mapping, Sequence
+from typing import Any, Final
 from urllib.parse import urlparse
 
 import httpx
+from pydantic import JsonValue
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
@@ -21,7 +24,7 @@ from litellm.types.llms.custom_http import httpxSpecialProvider
 # =============================================================================
 
 
-def allow() -> Dict[str, Any]:
+def allow() -> dict[str, object]:
     """
     Allow the request/response to proceed unchanged.
 
@@ -31,9 +34,7 @@ def allow() -> Dict[str, Any]:
     return {"action": "allow"}
 
 
-def block(
-    reason: str, detection_info: Optional[Dict[str, Any]] = None
-) -> Dict[str, Any]:
+def block(reason: str, detection_info: Mapping[str, object] | None = None) -> dict[str, object]:
     """
     Block the request/response with a reason.
 
@@ -44,17 +45,17 @@ def block(
     Returns:
         Dict indicating the request should be blocked
     """
-    result: Dict[str, Any] = {"action": "block", "reason": reason}
+    result: Final[dict[str, object]] = {"action": "block", "reason": reason}
     if detection_info:
         result["detection_info"] = detection_info
     return result
 
 
 def modify(
-    texts: Optional[List[str]] = None,
-    images: Optional[List[Any]] = None,
-    tool_calls: Optional[List[Any]] = None,
-) -> Dict[str, Any]:
+    texts: Sequence[str] | None = None,
+    images: Sequence[object] | None = None,
+    tool_calls: Sequence[object] | None = None,
+) -> dict[str, object]:
     """
     Modify the request/response content.
 
@@ -66,7 +67,7 @@ def modify(
     Returns:
         Dict indicating the content should be modified
     """
-    result: Dict[str, Any] = {"action": "modify"}
+    result: Final[dict[str, object]] = {"action": "modify"}
     if texts is not None:
         result["texts"] = texts
     if images is not None:
@@ -96,7 +97,7 @@ def regex_match(text: str, pattern: str, flags: int = 0) -> bool:
     try:
         return bool(re.search(pattern, text, flags))
     except re.error as e:
-        verbose_proxy_logger.warning(f"Starlark regex_match error: {e}")
+        verbose_proxy_logger.warning("Starlark regex_match error: %s", e)
         return False
 
 
@@ -115,7 +116,7 @@ def regex_match_all(text: str, pattern: str, flags: int = 0) -> bool:
     try:
         return bool(re.fullmatch(pattern, text, flags))
     except re.error as e:
-        verbose_proxy_logger.warning(f"Starlark regex_match_all error: {e}")
+        verbose_proxy_logger.warning("Starlark regex_match_all error: %s", e)
         return False
 
 
@@ -135,11 +136,11 @@ def regex_replace(text: str, pattern: str, replacement: str, flags: int = 0) -> 
     try:
         return re.sub(pattern, replacement, text, flags=flags)
     except re.error as e:
-        verbose_proxy_logger.warning(f"Starlark regex_replace error: {e}")
+        verbose_proxy_logger.warning("Starlark regex_replace error: %s", e)
         return text
 
 
-def regex_find_all(text: str, pattern: str, flags: int = 0) -> List[str]:
+def regex_find_all(text: str, pattern: str, flags: int = 0) -> list[str]:
     """
     Find all occurrences of a pattern in text.
 
@@ -154,7 +155,7 @@ def regex_find_all(text: str, pattern: str, flags: int = 0) -> List[str]:
     try:
         return re.findall(pattern, text, flags)
     except re.error as e:
-        verbose_proxy_logger.warning(f"Starlark regex_find_all error: {e}")
+        verbose_proxy_logger.warning("Starlark regex_find_all error: %s", e)
         return []
 
 
@@ -163,7 +164,15 @@ def regex_find_all(text: str, pattern: str, flags: int = 0) -> List[str]:
 # =============================================================================
 
 
-def json_parse(text: str) -> Optional[Any]:
+class JsonSchemaNode(TypedDict, total=False):
+    """Subset of JSON Schema keywords understood by the built-in validator."""
+
+    type: ReadOnly[str]
+    required: ReadOnly[Sequence[str]]
+    properties: ReadOnly[Mapping[str, "JsonSchemaNode"]]
+
+
+def json_parse(text: str) -> JsonValue:
     """
     Parse a JSON string into a Python object.
 
@@ -176,11 +185,11 @@ def json_parse(text: str) -> Optional[Any]:
     try:
         return json.loads(text)
     except (json.JSONDecodeError, TypeError) as e:
-        verbose_proxy_logger.debug(f"Starlark json_parse error: {e}")
+        verbose_proxy_logger.debug("Starlark json_parse error: %s", e)
         return None
 
 
-def json_stringify(obj: Any) -> str:
+def json_stringify(obj: object) -> str:
     """
     Convert a Python object to a JSON string.
 
@@ -193,11 +202,11 @@ def json_stringify(obj: Any) -> str:
     try:
         return json.dumps(obj)
     except (TypeError, ValueError) as e:
-        verbose_proxy_logger.warning(f"Starlark json_stringify error: {e}")
+        verbose_proxy_logger.warning("Starlark json_stringify error: %s", e)
         return ""
 
 
-def json_schema_valid(obj: Any, schema: Dict[str, Any]) -> bool:
+def json_schema_valid(obj: JsonValue, schema: JsonSchemaNode) -> bool:
     """
     Validate an object against a JSON schema.
 
@@ -224,13 +233,11 @@ def json_schema_valid(obj: Any, schema: Dict[str, Any]) -> bool:
                 return False
             raise
     except Exception as e:
-        verbose_proxy_logger.warning(f"Custom code json_schema_valid error: {e}")
+        verbose_proxy_logger.warning("Custom code json_schema_valid error: %s", e)
         return False
 
 
-def _basic_json_schema_validate(
-    obj: Any, schema: Dict[str, Any], max_depth: int = 50
-) -> bool:
+def _basic_json_schema_validate(obj: JsonValue, schema: JsonSchemaNode, max_depth: int = 50) -> bool:
     """
     Basic JSON schema validation without external library.
     Handles: type, required, properties
@@ -238,7 +245,7 @@ def _basic_json_schema_validate(
     Uses an iterative approach with a stack to avoid recursion limits.
     max_depth limits nesting to prevent infinite loops from circular schemas.
     """
-    type_map: Dict[str, Union[Type, Tuple[Type, ...]]] = {
+    type_map: Final[Mapping[str, type | tuple[type, ...]]] = {
         "object": dict,
         "array": list,
         "string": str,
@@ -249,7 +256,7 @@ def _basic_json_schema_validate(
     }
 
     # Stack of (obj, schema, depth) tuples to process
-    stack: List[Tuple[Any, Dict[str, Any], int]] = [(obj, schema, 0)]
+    stack: Final[list[tuple[JsonValue, JsonSchemaNode, int]]] = [(obj, schema, 0)]
 
     while stack:
         current_obj, current_schema, depth = stack.pop()
@@ -261,19 +268,19 @@ def _basic_json_schema_validate(
         # Check type
         schema_type = current_schema.get("type")
         if schema_type:
-            expected_type = type_map.get(schema_type)
+            expected_type: type | tuple[type, ...] | None = type_map.get(schema_type)
             if expected_type is not None and not isinstance(current_obj, expected_type):
                 return False
 
         # Check required fields and properties for dicts
         if isinstance(current_obj, dict):
-            required = current_schema.get("required", [])
+            required: Sequence[str] = current_schema.get("required", [])
             for field in required:
                 if field not in current_obj:
                     return False
 
             # Queue property validations
-            properties = current_schema.get("properties", {})
+            properties: Mapping[str, JsonSchemaNode] = current_schema.get("properties", {})
             for prop_name, prop_schema in properties.items():
                 if prop_name in current_obj:
                     stack.append((current_obj[prop_name], prop_schema, depth + 1))
@@ -287,12 +294,10 @@ def _basic_json_schema_validate(
 
 
 # Common URL pattern for extraction
-_URL_PATTERN = re.compile(
-    r"https?://(?:[-\w.]|(?:%[\da-fA-F]{2}))+[^\s]*", re.IGNORECASE
-)
+_URL_PATTERN: Final = re.compile(r"https?://(?:[-\w.]|(?:%[\da-fA-F]{2}))+[^\s]*", re.IGNORECASE)
 
 
-def extract_urls(text: str) -> List[str]:
+def extract_urls(text: str) -> list[str]:
     """
     Extract all URLs from text.
 
@@ -316,7 +321,7 @@ def is_valid_url(url: str) -> bool:
         True if the URL is valid, False otherwise
     """
     try:
-        result = urlparse(url)
+        result: Final = urlparse(url)
         return all([result.scheme, result.netloc])
     except Exception:
         return False
@@ -332,11 +337,11 @@ def all_urls_valid(text: str) -> bool:
     Returns:
         True if all URLs are valid (or no URLs), False otherwise
     """
-    urls = extract_urls(text)
+    urls: Final = extract_urls(text)
     return all(is_valid_url(url) for url in urls)
 
 
-def get_url_domain(url: str) -> Optional[str]:
+def get_url_domain(url: str) -> str | None:
     """
     Extract the domain from a URL.
 
@@ -347,7 +352,7 @@ def get_url_domain(url: str) -> Optional[str]:
         The domain, or None if invalid
     """
     try:
-        result = urlparse(url)
+        result: Final = urlparse(url)
         return result.netloc if result.netloc else None
     except Exception:
         return None
@@ -358,13 +363,23 @@ def get_url_domain(url: str) -> Optional[str]:
 # =============================================================================
 
 # Default timeout for HTTP requests (in seconds)
-_HTTP_DEFAULT_TIMEOUT = 30.0
+_HTTP_DEFAULT_TIMEOUT: Final = 30.0
 
 # Maximum allowed timeout (in seconds)
-_HTTP_MAX_TIMEOUT = 60.0
+_HTTP_MAX_TIMEOUT: Final = 60.0
 
 
-def _http_error_response(error: str) -> Dict[str, Any]:
+class HttpResponseResult(TypedDict):
+    """Outcome of an HTTP primitive call, as handed back to custom code."""
+
+    status_code: ReadOnly[int]
+    body: ReadOnly[JsonValue]
+    headers: ReadOnly[Mapping[str, str]]
+    success: ReadOnly[bool]
+    error: ReadOnly[str | None]
+
+
+def _http_error_response(error: str) -> HttpResponseResult:
     """Create a standardized error response for HTTP requests."""
     return {
         "status_code": 0,
@@ -375,9 +390,9 @@ def _http_error_response(error: str) -> Dict[str, Any]:
     }
 
 
-def _http_success_response(response: httpx.Response) -> Dict[str, Any]:
+def _http_success_response(response: httpx.Response) -> HttpResponseResult:
     """Create a standardized success response from an httpx Response."""
-    parsed_body: Any
+    parsed_body: JsonValue
     try:
         parsed_body = response.json()
     except (json.JSONDecodeError, ValueError):
@@ -393,8 +408,8 @@ def _http_success_response(response: httpx.Response) -> Dict[str, Any]:
 
 
 def _prepare_http_body(
-    body: Optional[Any],
-) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    body: JsonValue,
+) -> tuple[dict[str, JsonValue] | None, str | None]:
     """Prepare body arguments for HTTP request - returns (json_body, data_body)."""
     if body is None:
         return None, None
@@ -410,10 +425,10 @@ def _prepare_http_body(
 async def http_request(
     url: str,
     method: str = "GET",
-    headers: Optional[Dict[str, str]] = None,
-    body: Optional[Any] = None,
-    timeout: Optional[float] = None,
-) -> Dict[str, Any]:
+    headers: dict[str, str] | None = None,
+    body: JsonValue = None,
+    timeout: float | None = None,
+) -> HttpResponseResult:
     """
     Make an async HTTP request to an external service.
 
@@ -458,11 +473,9 @@ async def http_request(
 
     # Validate and normalize method
     method = method.upper()
-    allowed_methods = {"GET", "POST", "PUT", "DELETE", "PATCH"}
+    allowed_methods: Final = {"GET", "POST", "PUT", "DELETE", "PATCH"}
     if method not in allowed_methods:
-        return _http_error_response(
-            f"Invalid HTTP method: {method}. Allowed: {', '.join(allowed_methods)}"
-        )
+        return _http_error_response(f"Invalid HTTP method: {method}. Allowed: {', '.join(allowed_methods)}")
 
     # Apply timeout limits
     if timeout is None:
@@ -471,37 +484,35 @@ async def http_request(
         timeout = min(max(0.1, timeout), _HTTP_MAX_TIMEOUT)
 
     # Get the global cached async HTTP client
-    client = get_async_httpx_client(
+    client: Final = get_async_httpx_client(
         llm_provider=httpxSpecialProvider.GuardrailCallback,
         params={"timeout": httpx.Timeout(timeout=timeout, connect=5.0)},
     )
 
     try:
-        response = await _execute_http_request(
-            client, method, url, headers, body, timeout
-        )
+        response: Final = await _execute_http_request(client, method, url, headers, body, timeout)
         return _http_success_response(response)
 
     except httpx.TimeoutException as e:
-        verbose_proxy_logger.warning(f"Custom code http_request timeout: {e}")
+        verbose_proxy_logger.warning("Custom code http_request timeout: %s", e)
         return _http_error_response(f"Request timeout after {timeout}s")
     except httpx.HTTPStatusError as e:
         # Return the response even for non-2xx status codes
         return _http_success_response(e.response)
     except httpx.RequestError as e:
-        verbose_proxy_logger.warning(f"Custom code http_request error: {e}")
-        return _http_error_response(f"Request failed: {str(e)}")
+        verbose_proxy_logger.warning("Custom code http_request error: %s", e)
+        return _http_error_response(f"Request failed: {e}")
     except Exception as e:
-        verbose_proxy_logger.warning(f"Custom code http_request unexpected error: {e}")
-        return _http_error_response(f"Unexpected error: {str(e)}")
+        verbose_proxy_logger.warning("Custom code http_request unexpected error: %s", e)
+        return _http_error_response(f"Unexpected error: {e}")
 
 
 async def _execute_http_request(
     client: Any,
     method: str,
     url: str,
-    headers: Optional[Dict[str, str]],
-    body: Optional[Any],
+    headers: dict[str, str] | None,
+    body: JsonValue,
     timeout: float,
 ) -> httpx.Response:
     """Execute the HTTP request using the appropriate client method."""
@@ -510,30 +521,22 @@ async def _execute_http_request(
     if method == "GET":
         return await client.get(url=url, headers=headers)
     elif method == "POST":
-        return await client.post(
-            url=url, headers=headers, json=json_body, data=data_body, timeout=timeout
-        )
+        return await client.post(url=url, headers=headers, json=json_body, data=data_body, timeout=timeout)
     elif method == "PUT":
-        return await client.put(
-            url=url, headers=headers, json=json_body, data=data_body, timeout=timeout
-        )
+        return await client.put(url=url, headers=headers, json=json_body, data=data_body, timeout=timeout)
     elif method == "DELETE":
-        return await client.delete(
-            url=url, headers=headers, json=json_body, data=data_body, timeout=timeout
-        )
+        return await client.delete(url=url, headers=headers, json=json_body, data=data_body, timeout=timeout)
     elif method == "PATCH":
-        return await client.patch(
-            url=url, headers=headers, json=json_body, data=data_body, timeout=timeout
-        )
+        return await client.patch(url=url, headers=headers, json=json_body, data=data_body, timeout=timeout)
     else:
         raise ValueError(f"Unsupported HTTP method: {method}")
 
 
 async def http_get(
     url: str,
-    headers: Optional[Dict[str, str]] = None,
-    timeout: Optional[float] = None,
-) -> Dict[str, Any]:
+    headers: dict[str, str] | None = None,
+    timeout: float | None = None,
+) -> HttpResponseResult:
     """
     Make an async HTTP GET request.
 
@@ -552,10 +555,10 @@ async def http_get(
 
 async def http_post(
     url: str,
-    body: Optional[Any] = None,
-    headers: Optional[Dict[str, str]] = None,
-    timeout: Optional[float] = None,
-) -> Dict[str, Any]:
+    body: JsonValue = None,
+    headers: dict[str, str] | None = None,
+    timeout: float | None = None,
+) -> HttpResponseResult:
     """
     Make an async HTTP POST request.
 
@@ -570,9 +573,7 @@ async def http_post(
     Returns:
         Same as http_request
     """
-    return await http_request(
-        url=url, method="POST", headers=headers, body=body, timeout=timeout
-    )
+    return await http_request(url=url, method="POST", headers=headers, body=body, timeout=timeout)
 
 
 # =============================================================================
@@ -581,7 +582,7 @@ async def http_post(
 
 
 # Common code patterns for detection
-_CODE_PATTERNS = {
+_CODE_PATTERNS: Final = {
     "sql": [
         r"\b(SELECT|INSERT|UPDATE|DELETE|DROP|CREATE|ALTER|TRUNCATE)\b.*\b(FROM|INTO|TABLE|SET|WHERE)\b",
         r"\b(SELECT)\s+[\w\*,\s]+\s+FROM\s+\w+",
@@ -645,7 +646,7 @@ def detect_code(text: str) -> bool:
     return len(detect_code_languages(text)) > 0
 
 
-def detect_code_languages(text: str) -> List[str]:
+def detect_code_languages(text: str) -> list[str]:
     """
     Detect which programming languages are present in text.
 
@@ -655,7 +656,7 @@ def detect_code_languages(text: str) -> List[str]:
     Returns:
         List of detected language names
     """
-    detected = []
+    detected: Final = []
     for lang, patterns in _CODE_PATTERNS.items():
         for pattern in patterns:
             try:
@@ -667,7 +668,7 @@ def detect_code_languages(text: str) -> List[str]:
     return detected
 
 
-def contains_code_language(text: str, languages: List[str]) -> bool:
+def contains_code_language(text: str, languages: list[str]) -> bool:
     """
     Check if text contains code from specific languages.
 
@@ -678,7 +679,7 @@ def contains_code_language(text: str, languages: List[str]) -> bool:
     Returns:
         True if any of the specified languages are detected
     """
-    detected = detect_code_languages(text)
+    detected: Final = detect_code_languages(text)
     return any(lang.lower() in [d.lower() for d in detected] for lang in languages)
 
 
@@ -701,7 +702,7 @@ def contains(text: str, substring: str) -> bool:
     return substring in text
 
 
-def contains_any(text: str, substrings: List[str]) -> bool:
+def contains_any(text: str, substrings: list[str]) -> bool:
     """
     Check if text contains any of the given substrings.
 
@@ -715,7 +716,7 @@ def contains_any(text: str, substrings: List[str]) -> bool:
     return any(s in text for s in substrings)
 
 
-def contains_all(text: str, substrings: List[str]) -> bool:
+def contains_all(text: str, substrings: list[str]) -> bool:
     """
     Check if text contains all of the given substrings.
 
@@ -775,7 +776,7 @@ def trim(text: str) -> str:
 # =============================================================================
 
 
-def get_custom_code_primitives() -> Dict[str, Any]:
+def get_custom_code_primitives() -> dict[str, object]:
     """
     Get all primitives to inject into the custom code environment.
 

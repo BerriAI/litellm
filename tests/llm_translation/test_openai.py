@@ -285,12 +285,6 @@ class TestOpenAIChatCompletion(BaseLLMChatTest):
         """Test that tool calls with no arguments is translated correctly. Relevant issue: https://github.com/BerriAI/litellm/issues/6833"""
         pass
 
-    def test_prompt_caching(self):
-        """
-        Test that prompt caching works correctly.
-        Skip for now, as it's working locally but not in CI
-        """
-        pass
 
     def test_prompt_caching(self):
         """
@@ -518,7 +512,7 @@ async def test_openai_codex_stream(sync_mode):
     from litellm.main import stream_chunk_builder
 
     kwargs = {
-        "model": "openai/gpt-5.2-codex",
+        "model": "openai/gpt-5.3-codex",
         "messages": [{"role": "user", "content": "Hey!"}],
         "stream": True,
     }
@@ -550,7 +544,7 @@ async def test_openai_codex(sync_mode):
             {
                 "model_name": "openai-codex-mini-latest",
                 "litellm_params": {
-                    "model": "openai/gpt-5.2-codex",
+                    "model": "openai/gpt-5.3-codex",
                 },
             }
         ]
@@ -613,13 +607,13 @@ async def test_openai_via_gemini_streaming_bridge():
     assert len(printed_chunks) > 0
 
 
-def test_openai_deepresearch_model_bridge():
+def test_openai_responses_only_model_bridge():
     """
-    Test that the deepresearch model bridge works correctly
+    Test that the responses-only model bridge works correctly
     """
     litellm._turn_on_debug()
     response = litellm.completion(
-        model="o3-deep-research-2025-06-26",
+        model="gpt-5.5-pro",
         messages=[{"role": "user", "content": "Hey, how's it going?"}],
         tools=[
             {"type": "web_search_preview"},
@@ -838,7 +832,7 @@ def test_gpt_5_reasoning_streaming():
 def test_openai_gpt_5_codex_reasoning():
     litellm._turn_on_debug()
     completion_kwargs = {
-        "model": "gpt-5-codex",
+        "model": "gpt-5.3-codex",
         "messages": [
             {
                 "role": "system",

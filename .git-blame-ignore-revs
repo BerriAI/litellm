@@ -11,3 +11,30 @@
 
 # style(ui): run prettier --write across the dashboard (#29622)
 7edf3a9cb55548b143df1692f4ed7c4681d7fcf7
+
+# style: reformat litellm/ with ruff format (#31317)
+17bfd415aeb5a57fb646b5cc67da1c730aa7c50b
+
+# style: unify ruff format width on 120 (#31518)
+48b5a5a0cc5a694a11219416ee0b6eb6e620e74e
+
+# refactor(imports): move collections.abc names out of typing (#35495)
+397e8e4918777e4e60a7f5e88699e0a9a7dabb3d
+
+# refactor(lint): apply every safe ruff autofix and zero 28 strict-rule budgets (#35495)
+b604e2b20c6db2099085a2f0e59b7e99e87eed6f
+
+# refactor(logging): drop redundant !s conversion flags from f-strings (#35546)
+7b2d3440cba3160277470f7a0180098ae9b87864
+
+# perf: build log messages lazily so filtered-out log records cost nothing (#35703)
+c9887a1f94bc1e7e4bdfe64d640f0509a0bc19dd
+
+# feat(lint): enforce Final on locals and freeze function parameters (#35807)
+2708620d6a599cc73c1950a942d26ac26a7ed3d4
+
+# chore(lint): remove litellm/types from the ruff lint exclusion (#35926)
+4e32a8bf6a1e1af1e04b67c759841ccef44b2235
+
+# chore(lint): strip inert type: ignore comments and zero LIT009/LIT010/LIT011 headroom (#35928)
+338e411103ad5d7003e97f34f04fa36bca542dbe

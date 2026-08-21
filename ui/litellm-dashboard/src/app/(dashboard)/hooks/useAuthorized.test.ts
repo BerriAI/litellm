@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 import React from "react";
 import { renderHook, waitFor } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import useAuthorized from "./useAuthorized";
 
@@ -24,12 +24,6 @@ const {
   decodeTokenMock: vi.fn(),
   checkTokenValidityMock: vi.fn(),
   buildLoginUrlWithReturnMock: vi.fn((baseUrl: string) => baseUrl),
-}));
-
-vi.mock("next/navigation", () => ({
-  useRouter: () => ({
-    replace: replaceMock,
-  }),
 }));
 
 vi.mock("@/components/networking", async (importOriginal) => {
@@ -91,7 +85,28 @@ const clearCookie = () => {
 };
 
 describe("useAuthorized", () => {
+  const originalLocation = window.location;
+
+  beforeEach(() => {
+    Object.defineProperty(window, "location", {
+      value: {
+        href: "http://proxy.example/ui/?page=api-keys",
+        origin: "http://proxy.example",
+        hostname: "proxy.example",
+        pathname: "/ui/",
+        search: "?page=api-keys",
+        protocol: "http:",
+        replace: replaceMock,
+      },
+      writable: true,
+    });
+  });
+
   afterEach(() => {
+    Object.defineProperty(window, "location", {
+      value: originalLocation,
+      writable: true,
+    });
     replaceMock.mockReset();
     clearTokenCookiesMock.mockReset();
     getProxyBaseUrlMock.mockClear();
@@ -115,7 +130,7 @@ describe("useAuthorized", () => {
       key: "api-key-123",
       user_id: "user-1",
       user_email: "user@example.com",
-      user_role: "app_admin",
+      user_role: "proxy_admin",
       premium_user: true,
       disabled_non_admin_personal_key_creation: false,
       login_method: "username_password",
@@ -137,9 +152,49 @@ describe("useAuthorized", () => {
     expect(result.current.userId).toBe("user-1");
     expect(result.current.userEmail).toBe("user@example.com");
     expect(result.current.userRole).toBe("Admin");
+    expect(result.current.userRoleLabel).toBe("Admin");
+    expect(result.current.isViewOnly).toBe(false);
     expect(result.current.premiumUser).toBe(true);
     expect(result.current.disabledPersonalKeyCreation).toBe(false);
     expect(result.current.showSSOBanner).toBe(true);
+    expect(replaceMock).not.toHaveBeenCalled();
+    expect(clearTokenCookiesMock).not.toHaveBeenCalled();
+  });
+
+  it("should present proxy_admin_viewer as Admin while flagging it view-only", async () => {
+    getUiConfigMock.mockResolvedValue({
+      server_root_path: "/",
+      proxy_base_url: null,
+      auto_redirect_to_sso: false,
+      admin_ui_disabled: false,
+      sso_configured: false,
+    });
+
+    const decodedPayload = {
+      key: "api-key-456",
+      user_id: "user-2",
+      user_email: "viewer@example.com",
+      user_role: "proxy_admin_viewer",
+      premium_user: true,
+      disabled_non_admin_personal_key_creation: false,
+      login_method: "username_password",
+    };
+
+    decodeTokenMock.mockReturnValue(decodedPayload);
+    checkTokenValidityMock.mockReturnValue(true);
+
+    const token = createJwt(decodedPayload);
+    document.cookie = `token=${token}; path=/;`;
+
+    const { result } = renderHook(() => useAuthorized(), { wrapper });
+
+    await waitFor(() => {
+      expect(result.current.token).toBe(token);
+    });
+
+    expect(result.current.userRole).toBe("Admin");
+    expect(result.current.userRoleLabel).toBe("Admin Viewer");
+    expect(result.current.isViewOnly).toBe(true);
     expect(replaceMock).not.toHaveBeenCalled();
     expect(clearTokenCookiesMock).not.toHaveBeenCalled();
   });
@@ -164,7 +219,7 @@ describe("useAuthorized", () => {
       expect(clearTokenCookiesMock).toHaveBeenCalled();
     });
 
-    expect(replaceMock).toHaveBeenCalledWith("http://proxy.example/ui/login");
+    expect(replaceMock).toHaveBeenCalledWith("http://proxy.example/ui/login/");
     expect(result.current.accessToken).toBeNull();
     expect(result.current.userRole).toBe("Undefined Role");
   });
@@ -182,7 +237,7 @@ describe("useAuthorized", () => {
       key: "api-key-123",
       user_id: "user-1",
       user_email: "user@example.com",
-      user_role: "app_admin",
+      user_role: "proxy_admin",
       premium_user: true,
       disabled_non_admin_personal_key_creation: false,
       login_method: "username_password",
@@ -197,7 +252,7 @@ describe("useAuthorized", () => {
     const { result } = renderHook(() => useAuthorized(), { wrapper });
 
     await waitFor(() => {
-      expect(replaceMock).toHaveBeenCalledWith("http://proxy.example/ui/login");
+      expect(replaceMock).toHaveBeenCalledWith("http://proxy.example/ui/login/");
     });
 
     expect(result.current.accessToken).toBe("api-key-123");
@@ -221,7 +276,7 @@ describe("useAuthorized", () => {
     const { result } = renderHook(() => useAuthorized(), { wrapper });
 
     await waitFor(() => {
-      expect(replaceMock).toHaveBeenCalledWith("http://proxy.example/ui/login");
+      expect(replaceMock).toHaveBeenCalledWith("http://proxy.example/ui/login/");
     });
 
     expect(clearTokenCookiesMock).not.toHaveBeenCalled();
@@ -241,7 +296,7 @@ describe("useAuthorized", () => {
       key: "api-key-123",
       user_id: "user-1",
       user_email: "user@example.com",
-      user_role: "app_admin",
+      user_role: "proxy_admin",
     };
 
     decodeTokenMock.mockReturnValue(decodedPayload);
@@ -250,13 +305,13 @@ describe("useAuthorized", () => {
     const token = createJwt(decodedPayload);
     document.cookie = `token=${token}; path=/;`;
 
-    const { result } = renderHook(() => useAuthorized(), { wrapper });
+    renderHook(() => useAuthorized(), { wrapper });
 
     await waitFor(() => {
       expect(clearTokenCookiesMock).toHaveBeenCalled();
     });
 
-    expect(replaceMock).toHaveBeenCalledWith("http://proxy.example/ui/login");
+    expect(replaceMock).toHaveBeenCalledWith("http://proxy.example/ui/login/");
     expect(checkTokenValidityMock).toHaveBeenCalledWith(token);
   });
 });

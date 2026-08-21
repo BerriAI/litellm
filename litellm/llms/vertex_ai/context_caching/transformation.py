@@ -5,7 +5,8 @@ Why separate file? Make it easy to see how transformation works
 """
 
 import re
-from typing import List, Optional, Tuple, Literal
+from collections.abc import Sequence
+from typing import Final, Literal
 
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.llms.vertex_ai import CachedContentRequestBody
@@ -19,7 +20,7 @@ from ..gemini.transformation import (
 
 
 def get_first_continuous_block_idx(
-    filtered_messages: List[Tuple[int, AllMessageValues]],  # (idx, message)
+    filtered_messages: list[tuple[int, AllMessageValues]],  # (idx, message)
 ) -> int:
     """
     Find the array index that ends the first continuous sequence of message blocks.
@@ -48,7 +49,7 @@ def get_first_continuous_block_idx(
     return len(filtered_messages) - 1
 
 
-def extract_ttl_from_cached_messages(messages: List[AllMessageValues]) -> Optional[str]:
+def extract_ttl_from_cached_messages(messages: list[AllMessageValues]) -> str | None:
     """
     Extract TTL from cached messages. Returns the first valid TTL found.
 
@@ -100,23 +101,23 @@ def _is_valid_ttl_format(ttl: str) -> bool:
         return False
 
     # TTL should end with 's' and contain a valid number before it
-    pattern = r"^([0-9]*\.?[0-9]+)s$"
-    match = re.match(pattern, ttl)
+    pattern: Final = r"^([0-9]*\.?[0-9]+)s$"
+    match: Final = re.match(pattern, ttl)
 
     if not match:
         return False
 
     try:
         # Ensure the numeric part is valid and positive
-        numeric_part = float(match.group(1))
+        numeric_part: Final = float(match.group(1))
         return numeric_part > 0
     except ValueError:
         return False
 
 
 def separate_cached_messages(
-    messages: List[AllMessageValues],
-) -> Tuple[List[AllMessageValues], List[AllMessageValues]]:
+    messages: list[AllMessageValues],
+) -> tuple[list[AllMessageValues], list[AllMessageValues]]:
     """
     Returns separated cached and non-cached messages.
 
@@ -128,63 +129,73 @@ def separate_cached_messages(
         - cached_messages: List of cached messages.
         - non_cached_messages: List of non-cached messages.
     """
-    cached_messages: List[AllMessageValues] = []
-    non_cached_messages: List[AllMessageValues] = []
+    cached_messages: list[AllMessageValues] = []
+    non_cached_messages: list[AllMessageValues] = []
 
     # Extract cached messages and their indices
-    filtered_messages: List[Tuple[int, AllMessageValues]] = []
+    filtered_messages: Final[list[tuple[int, AllMessageValues]]] = []
     for idx, message in enumerate(messages):
         if is_cached_message(message=message):
             filtered_messages.append((idx, message))
 
     # Validate only one block of continuous cached messages
-    last_continuous_block_idx = get_first_continuous_block_idx(filtered_messages)
+    last_continuous_block_idx: Final = get_first_continuous_block_idx(filtered_messages)
     # Separate messages based on the block of cached messages
     if filtered_messages and last_continuous_block_idx is not None:
-        first_cached_idx = filtered_messages[0][0]
-        last_cached_idx = filtered_messages[last_continuous_block_idx][0]
+        first_cached_idx: Final = filtered_messages[0][0]
+        last_cached_idx: Final = filtered_messages[last_continuous_block_idx][0]
 
         cached_messages = messages[first_cached_idx : last_cached_idx + 1]
-        non_cached_messages = (
-            messages[:first_cached_idx] + messages[last_cached_idx + 1 :]
-        )
+        non_cached_messages = messages[:first_cached_idx] + messages[last_cached_idx + 1 :]
     else:
         non_cached_messages = messages
 
     return cached_messages, non_cached_messages
 
 
+def cached_messages_end_on_supported_turn(cached_messages: Sequence[AllMessageValues]) -> bool:
+    """
+    The cachedContents API rejects contents ending on a model turn, which is how it
+    classifies both assistant messages and tool results, with HTTP 400
+    "Requests ending with a model turn are not supported". System messages are
+    extracted into system_instruction before contents are built, so the terminal
+    turn is the last non-system message.
+    """
+    non_system_messages: Final = tuple(message for message in cached_messages if message.get("role") != "system")
+    if not non_system_messages:
+        return bool(cached_messages)
+    return non_system_messages[-1].get("role") not in ("assistant", "tool", "function")
+
+
 def transform_openai_messages_to_gemini_context_caching(
     model: str,
-    messages: List[AllMessageValues],
+    messages: list[AllMessageValues],
     custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
     cache_key: str,
-    vertex_project: Optional[str],
-    vertex_location: Optional[str],
+    vertex_project: str | None,
+    vertex_location: str | None,
 ) -> CachedContentRequestBody:
     # Extract TTL from cached messages BEFORE system message transformation
-    ttl = extract_ttl_from_cached_messages(messages)
+    ttl: Final = extract_ttl_from_cached_messages(messages)
 
-    supports_system_message = get_supports_system_message(
-        model=model, custom_llm_provider=custom_llm_provider
-    )
+    supports_system_message: Final = get_supports_system_message(model=model, custom_llm_provider=custom_llm_provider)
 
     transformed_system_messages, new_messages = _transform_system_message(
         supports_system_message=supports_system_message, messages=messages
     )
 
-    transformed_messages = _gemini_convert_messages_with_history(
+    transformed_messages: Final = _gemini_convert_messages_with_history(
         messages=new_messages,
         model=model,
         custom_llm_provider=custom_llm_provider,
     )
 
-    model_name = "models/{}".format(model)
+    model_name = f"models/{model}"
 
     if custom_llm_provider == "vertex_ai" or custom_llm_provider == "vertex_ai_beta":
         model_name = f"projects/{vertex_project}/locations/{vertex_location}/publishers/google/{model_name}"
 
-    data = CachedContentRequestBody(
+    data: Final = CachedContentRequestBody(
         contents=transformed_messages,
         model=model_name,
         displayName=cache_key,

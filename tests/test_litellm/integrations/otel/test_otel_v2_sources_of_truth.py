@@ -1,6 +1,13 @@
 """Tests for the OTel v2 sources of truth: span registry, semconv keys, config,
 and the typed StandardLoggingPayload adapter. These need no OTel SDK."""
 
+import logging
+import re
+from pathlib import Path
+
+import pytest
+
+import litellm
 from litellm.integrations.otel import (
     BAGGAGE_PROMOTED_KEYS,
     DB,
@@ -17,7 +24,11 @@ from litellm.integrations.otel import (
     resolve_provider,
 )
 from litellm.integrations.otel.model import spans as spans_mod
-from litellm.integrations.otel.model.payloads import LLMCallSpanData, RequestIdentity
+from litellm.integrations.otel.model.payloads import (
+    LLMCallSpanData,
+    RequestIdentity,
+    _upstream_address_port,
+)
 from litellm.integrations.otel.model.spans import (
     SPAN_REGISTRY,
     LiteLLMSpanKind,
@@ -26,6 +37,13 @@ from litellm.integrations.otel.model.spans import (
     root_roles,
     validate_registry,
 )
+
+
+@pytest.fixture(autouse=True)
+def _clear_otel_v2_flag_cache():
+    is_otel_v2_enabled.cache_clear()
+    yield
+    is_otel_v2_enabled.cache_clear()
 
 
 def _sample_payload(**overrides):
@@ -85,19 +103,32 @@ def test_registry_parent_integrity_no_orphans():
 
 
 def test_registry_hierarchy_shape():
-    assert set(root_roles()) == {SpanRole.PROXY_REQUEST}
+    # MCP roles have no in-process parent: per the MCP semconv they root (or adopt
+    # the client's propagated _meta context), so they sit alongside PROXY_REQUEST.
+    assert set(root_roles()) == {
+        SpanRole.PROXY_REQUEST,
+        SpanRole.MCP_TOOL_CALL,
+        SpanRole.MCP_LIST_TOOLS,
+    }
     # Guardrails parent to the request span, not the LLM call: a pre-call
     # guardrail runs before the LLM call exists, so it's a sibling of it.
     assert set(child_roles(SpanRole.PROXY_REQUEST)) == {
         SpanRole.LLM_CALL,
-        SpanRole.MCP_TOOL_CALL,
         SpanRole.GUARDRAIL,
         SpanRole.DB_CALL,
         SpanRole.SERVICE,
     }
     assert SPAN_REGISTRY[SpanRole.LLM_CALL].kind is LiteLLMSpanKind.CLIENT
-    # The proxy is an MCP client to the upstream tool server: CLIENT span.
+    # The proxy is an MCP client to the upstream tool server: CLIENT span. Listing
+    # tools is the same client relationship, so it's a CLIENT span too.
     assert SPAN_REGISTRY[SpanRole.MCP_TOOL_CALL].kind is LiteLLMSpanKind.CLIENT
+    assert SPAN_REGISTRY[SpanRole.MCP_LIST_TOOLS].kind is LiteLLMSpanKind.CLIENT
+    # MCP spans don't nest under the transport: they link the PROXY_REQUEST span
+    # instead of parenting to it (OTel GenAI MCP semconv).
+    assert SPAN_REGISTRY[SpanRole.MCP_TOOL_CALL].parent is None
+    assert SPAN_REGISTRY[SpanRole.MCP_LIST_TOOLS].parent is None
+    assert SPAN_REGISTRY[SpanRole.MCP_TOOL_CALL].links is SpanRole.PROXY_REQUEST
+    assert SPAN_REGISTRY[SpanRole.MCP_LIST_TOOLS].links is SpanRole.PROXY_REQUEST
     assert SPAN_REGISTRY[SpanRole.PROXY_REQUEST].kind is LiteLLMSpanKind.SERVER
     assert SPAN_REGISTRY[SpanRole.GUARDRAIL].parent is SpanRole.PROXY_REQUEST
     # An outbound datastore call is a CLIENT span; an internal service is INTERNAL.
@@ -122,11 +153,11 @@ def _all_constants(cls):
 
 
 def test_attribute_keys_are_unique_across_namespaces():
-    from litellm.integrations.otel import MCP, Client, JsonRpc, Network
+    from litellm.integrations.otel import MCP, Client, JsonRpc, LiteLLMError, Network
 
     # prefixes are allowed to be substrings; exact keys must not collide.
     exact = set()
-    for cls in (GenAI, Error, Server, HTTP, DB, MCP, JsonRpc, Network, Client):
+    for cls in (GenAI, Error, LiteLLMError, Server, HTTP, DB, MCP, JsonRpc, Network, Client):
         for key in _all_constants(cls):
             assert key not in exact, f"duplicate attribute key {key}"
             exact.add(key)
@@ -150,6 +181,7 @@ def test_mcp_attribute_vocabulary_is_complete():
         "mcp.resource.uri",
         "jsonrpc.request.id",
         "jsonrpc.protocol.version",
+        "rpc.system",
         "rpc.response.status_code",
         "gen_ai.operation.name",
         "gen_ai.tool.name",
@@ -184,6 +216,103 @@ def test_operation_resolution():
     assert resolve_operation(None) is GenAIOperation.CHAT
     # An MCP tool call is an ``execute_tool`` operation, not a chat completion.
     assert resolve_operation("call_mcp_tool") is GenAIOperation.EXECUTE_TOOL
+
+
+@pytest.mark.parametrize("call_type", ["vector_store_search", "avector_store_search"])
+def test_vector_store_search_is_a_retrieval_operation(call_type):
+    """A vector-store search is a retrieval, so its duration and cost must not
+    land in the chat series that dashboards read latency off."""
+    assert resolve_operation(call_type) is GenAIOperation.RETRIEVAL
+    assert resolve_operation(call_type).value == "retrieval"
+
+
+@pytest.mark.parametrize("call_type", ["query", "aquery"])
+def test_rag_query_is_a_retrieval_operation(call_type):
+    """``/rag/query`` reaches the same recorder as a vector-store search and is the
+    same operation, so it must not be the one retrieval surface left reading as chat."""
+    assert resolve_operation(call_type) is GenAIOperation.RETRIEVAL
+
+
+@pytest.mark.parametrize(
+    "call_type",
+    [
+        f"{prefix}vector_store_{verb}"
+        for verb in ("create", "retrieve", "list", "update", "delete")
+        for prefix in ("", "a")
+    ],
+)
+def test_vector_store_management_is_not_chat(call_type):
+    """The store lifecycle calls are not GenAI client operations and the convention
+    names nothing for them, so they take a vendor value rather than defaulting into
+    the chat series."""
+    assert resolve_operation(call_type) is GenAIOperation.LITELLM_VECTOR_STORE_MANAGEMENT
+    assert resolve_operation(call_type).value == "litellm.vector_store_management"
+
+
+@pytest.mark.parametrize(
+    "call_type",
+    [
+        f"{prefix}vector_store_file_{verb}"
+        for verb in ("create", "list", "retrieve", "content", "update", "delete")
+        for prefix in ("", "a")
+    ],
+)
+def test_vector_store_file_management_is_not_chat(call_type):
+    """The file operations are a distinct REST resource from the store lifecycle, so
+    they get their own vendor value instead of sharing one bucket."""
+    assert resolve_operation(call_type) is GenAIOperation.LITELLM_VECTOR_STORE_FILE_MANAGEMENT
+    assert resolve_operation(call_type).value == "litellm.vector_store_file_management"
+
+
+def test_vendor_operation_values_are_namespaced():
+    """A vendor value must stay under the ``litellm.`` prefix: an unprefixed invented
+    name could collide with a value the convention adds later, silently changing what
+    a conformant consumer thinks it is reading."""
+    vendor = [op for op in GenAIOperation if op.name.startswith("LITELLM_")]
+    assert vendor, "no vendor operation values defined"
+    assert all(op.value.startswith("litellm.") for op in vendor)
+
+
+@pytest.mark.parametrize("call_type", ["send_message", "asend_message", "asend_message_streaming"])
+def test_agent_message_is_an_invoke_agent_operation(call_type):
+    """An agent (A2A) message send is an agent invocation, not a chat completion.
+
+    The streaming spelling counts: ``_build_streaming_logging_obj`` in
+    ``litellm/a2a_protocol/main.py`` stamps ``asend_message_streaming`` on the
+    logging object the streaming iterator dispatches success handlers with, so a
+    missing entry sends every streamed agent turn into the chat series. There is
+    no sync spelling because A2A streaming is async-only.
+    """
+    assert resolve_operation(call_type) is GenAIOperation.INVOKE_AGENT
+    assert resolve_operation(call_type).value == "invoke_agent"
+
+
+def test_every_call_type_the_a2a_package_stamps_is_an_agent_operation():
+    """Pins the map to the call types the A2A code actually stamps on its logging
+    objects. A new spelling added there without a map entry fails here instead of
+    quietly landing in the chat series, which is how the streaming one was missed."""
+    a2a_package = Path(litellm.__file__).parent / "a2a_protocol"
+    stamped = {
+        call_type
+        for source in a2a_package.rglob("*.py")
+        for call_type in re.findall(r'call_type="([^"]+)"', source.read_text())
+    }
+    assert stamped, "no call_type literals found in litellm/a2a_protocol"
+    unmapped = {
+        call_type: resolve_operation(call_type).value
+        for call_type in stamped
+        if resolve_operation(call_type) is not GenAIOperation.INVOKE_AGENT
+    }
+    assert not unmapped, f"add these to _OPERATION_BY_CALL_TYPE: {unmapped}"
+
+
+def test_unmapped_call_type_falls_back_to_chat_loudly(caplog):
+    """The fallback still labels the series ``chat`` so it is never unlabelled,
+    but it says so at debug: a silent default is how retrieval and agent calls
+    ended up in the chat charts in the first place."""
+    with caplog.at_level(logging.DEBUG, logger="LiteLLM"):
+        assert resolve_operation("some_future_call_type") is GenAIOperation.CHAT
+    assert any("some_future_call_type" in record.getMessage() for record in caplog.records)
 
 
 # --- MCP tool-call (source of truth #1/#2/#3) ------------------------------- #
@@ -318,6 +447,47 @@ def test_llm_call_adapter_failure_path():
     assert data.error is not None
     assert data.error.error_type == "RateLimitError"
     assert data.error.message == "429 slow down"
+
+
+def test_llm_call_adapter_carries_error_detail_fields():
+    """``_parse_error`` threads the full detail set from ``error_information``
+    (``error_code``, ``traceback``, ``llm_provider``) onto ``SpanError`` so the
+    emitter can stamp them as span attributes."""
+    payload = _sample_payload(
+        status="failure",
+        error_information={
+            "error_class": "BadRequestError",
+            "error_message": "400 violated moderation policy",
+            "error_code": "400",
+            "traceback": "File proxy_server.py line 8570 ...",
+            "llm_provider": "openai",
+        },
+    )
+    data = LLMCallSpanData.from_standard_logging_payload(payload)
+    assert data.error is not None
+    assert data.error.error_type == "BadRequestError"
+    assert data.error.message == "400 violated moderation policy"
+    assert data.error.code == "400"
+    assert data.error.stack_trace == "File proxy_server.py line 8570 ..."
+    assert data.error.llm_provider == "openai"
+
+
+def test_llm_call_adapter_error_details_default_to_none_when_absent():
+    """Guardrail-shape payloads carry only ``error_class`` + ``error_message``.
+    The detail fields must stay ``None`` so the emitter's ``if error.code:``
+    guards skip stamping empty attributes."""
+    payload = _sample_payload(
+        status="failure",
+        error_information={
+            "error_class": "ContentFilter",
+            "error_message": "guardrail rejected",
+        },
+    )
+    data = LLMCallSpanData.from_standard_logging_payload(payload)
+    assert data.error is not None
+    assert data.error.code is None
+    assert data.error.stack_trace is None
+    assert data.error.llm_provider is None
 
 
 def test_adapter_is_resilient_to_minimal_payload():
@@ -561,9 +731,35 @@ def test_capture_message_content_normalizer_only_touches_strings():
 
 def test_v2_flag_is_off_by_default(monkeypatch):
     monkeypatch.delenv("LITELLM_OTEL_V2", raising=False)
+    is_otel_v2_enabled.cache_clear()
     assert is_otel_v2_enabled() is False
     monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+    is_otel_v2_enabled.cache_clear()
     assert is_otel_v2_enabled() is True
+
+
+def test_v2_flag_resolved_once_not_per_call(monkeypatch):
+    """Regression for LIT-3895: ``is_otel_v2_enabled`` sits on the proxy hot path
+    (auth, logging-callback setup). Building the pydantic-settings model on every
+    call re-scanned the environment at ~28us a pop and dropped throughput, so the
+    flag must be resolved once and cached rather than reconstructed per call."""
+    from litellm.integrations.otel.model import config as config_mod
+
+    constructions = 0
+    real_flag = config_mod._OTelV2Flag
+
+    def _counting_flag(*args, **kwargs):
+        nonlocal constructions
+        constructions += 1
+        return real_flag(*args, **kwargs)
+
+    monkeypatch.setattr(config_mod, "_OTelV2Flag", _counting_flag)
+    config_mod.is_otel_v2_enabled.cache_clear()
+
+    for _ in range(50):
+        config_mod.is_otel_v2_enabled()
+
+    assert constructions == 1
 
 
 def test_config_from_env(monkeypatch):
@@ -617,3 +813,34 @@ def test_promoted_baggage_is_bounded_allowlist():
     # http.* is never a promoted key
     assert HTTP.ROUTE not in promoted
     assert HTTP.REQUEST_METHOD not in promoted
+
+
+@pytest.mark.parametrize(
+    "resource, expected",
+    [
+        ("https://weather.example.com", ("weather.example.com", 443)),
+        ("http://weather.example.com", ("weather.example.com", 80)),
+        ("https://weather.example.com:8443", ("weather.example.com", 8443)),
+        ("mcp://weather.example.com", ("weather.example.com", None)),
+        ("http://::1:8080", (None, None)),
+        ("http://fe80::1%25eth0:80", (None, None)),
+        (None, (None, None)),
+        ("", (None, None)),
+    ],
+    ids=[
+        "https-default",
+        "http-default",
+        "explicit-port",
+        "no-default-port",
+        "ipv6-unbracketed",
+        "ipv6-zone-scoped",
+        "none",
+        "empty",
+    ],
+)
+def test_upstream_address_port(resource, expected):
+    """The redacted MCP origin resolves to the address and port a consumer names its
+    dependency from. A scheme outside the default-port map yields no port, and an IPv6
+    origin yields nothing at all because the redactor rebuilds it without its brackets;
+    both are why the mapper gates ``rpc.system`` on the complete pair."""
+    assert _upstream_address_port(resource) == expected

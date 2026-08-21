@@ -209,6 +209,75 @@ async def test_escalation_step1_fails_step2_blocks():
         litellm.callbacks = original_callbacks
 
 
+@pytest.mark.skipif(HTTPException is None, reason="fastapi not installed")
+@pytest.mark.asyncio
+async def test_block_carries_original_guardrail_exception():
+    """A blocking step must expose the guardrail's own raised exception on the
+    result so the caller can re-raise it verbatim, giving the policy path the
+    same response/trace as a direct guardrail attachment."""
+    guard = AlwaysFailGuardrail(guardrail_name="moderation-filter")
+
+    pipeline = GuardrailPipeline(
+        mode="pre_call",
+        steps=[
+            PipelineStep(
+                guardrail="moderation-filter", on_fail="block", on_pass="allow"
+            )
+        ],
+    )
+
+    original_callbacks = litellm.callbacks.copy()
+    litellm.callbacks = [guard]
+
+    try:
+        result = await PipelineExecutor.execute_steps(
+            steps=pipeline.steps,
+            mode=pipeline.mode,
+            data={"messages": [{"role": "user", "content": "bad content"}]},
+            user_api_key_dict=MagicMock(),
+            call_type="completion",
+            policy_name="content-safety",
+        )
+
+        assert result.terminal_action == "block"
+        assert isinstance(result.original_exception, HTTPException)
+        assert result.original_exception.status_code == 400
+        assert result.original_exception.detail == "Content policy violation"
+    finally:
+        litellm.callbacks = original_callbacks
+
+
+@pytest.mark.asyncio
+async def test_unsupported_mode_yields_error_outcome_without_exception():
+    """An unexpected hook mode must surface as an error outcome (carrying no
+    original exception), not crash or run the guardrail."""
+    guard = AlwaysPassGuardrail(guardrail_name="filter")
+
+    original_callbacks = litellm.callbacks.copy()
+    litellm.callbacks = [guard]
+
+    try:
+        result = await PipelineExecutor.execute_steps(
+            steps=[PipelineStep(guardrail="filter", on_error="block", on_fail="block")],
+            mode="during_call",
+            data={"messages": [{"role": "user", "content": "hi"}]},
+            user_api_key_dict=MagicMock(),
+            call_type="completion",
+            policy_name="content-safety",
+        )
+
+        assert guard.calls == 0
+        assert result.terminal_action == "block"
+        assert result.step_results[0].outcome == "error"
+        assert (
+            "Unsupported pipeline mode: during_call"
+            in result.step_results[0].error_detail
+        )
+        assert result.original_exception is None
+    finally:
+        litellm.callbacks = original_callbacks
+
+
 @pytest.mark.asyncio
 async def test_passthrough_guardrail_failure_can_pipeline_block():
     """
@@ -728,3 +797,42 @@ async def test_step_results_include_duration():
         assert result.step_results[0].duration_seconds >= 0
     finally:
         litellm.callbacks = original_callbacks
+
+
+class _PolicyOptOutGuardrail(CustomGuardrail):
+    """Implements apply_guardrail for the direct endpoint but keeps its native hooks.
+
+    apply_guardrail is defined here rather than inherited because the dispatch check
+    reads the leaf class __dict__.
+    """
+
+    use_native_lifecycle_hooks = True
+
+    def __init__(self):
+        super().__init__(guardrail_name="policy-opt-out", default_on=True)
+        self.native_pre_call_ran = False
+
+    async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+        return inputs
+
+    async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+        self.native_pre_call_ran = True
+
+
+@pytest.mark.asyncio
+async def test_pipeline_step_keeps_native_hook_when_opted_out(monkeypatch):
+    guardrail = _PolicyOptOutGuardrail()
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
+
+    data = {"messages": [{"role": "user", "content": "hi"}]}
+    outcome, _, _, _ = await PipelineExecutor._run_step(
+        step=PipelineStep(guardrail="policy-opt-out", on_fail="block", on_pass="allow"),
+        mode="pre_call",
+        data=data,
+        user_api_key_dict=MagicMock(),
+        call_type="completion",
+    )
+
+    assert outcome == "pass"
+    assert guardrail.native_pre_call_ran is True
+    assert "guardrail_to_apply" not in data

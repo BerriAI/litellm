@@ -1,7 +1,9 @@
 import asyncio
 import json
 import time
-from typing import Any, AsyncIterator, Dict, Optional, cast
+from collections.abc import AsyncIterator, Mapping
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Any, Final, NamedTuple, cast, get_args
 from uuid import uuid4
 
 import fastapi
@@ -10,6 +12,9 @@ from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import ModifyResponseException
+from litellm.llms.base_llm.guardrail_translation.utils import (
+    blocked_responses_api_usage as _blocked_responses_api_usage,
+)
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import (
     UserAPIKeyAuth,
@@ -17,10 +22,149 @@ from litellm.proxy.auth.user_api_key_auth import (
     user_api_key_auth_websocket,
 )
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
-from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
+from litellm.proxy.common_utils.http_parsing_utils import (
+    _read_request_body,
+    _safe_set_request_parsed_body,
+)
+from litellm.types.llms.openai import REASONING_EFFORT, ResponsesAPIResponse
 from litellm.types.responses.main import DeleteResponseResult
 
-router = APIRouter()
+if TYPE_CHECKING:
+    from litellm.router import Router
+
+router: Final = APIRouter()
+
+_user_api_key_auth_dep: Final = Depends(user_api_key_auth)
+_RESPONSES_TAGS: Final = ["responses"]  # mutable-ok: fastapi's route signature requires List[str] tags
+
+_TOOL_PAYLOAD_KEYS: Final[Mapping[str, tuple[str, ...]]] = MappingProxyType(
+    {
+        "custom": ("name", "description", "format"),
+        "function": ("name", "description", "parameters", "strict"),
+    }
+)
+_EMPTY_TOOL_PAYLOAD: Final[Mapping[str, Any]] = MappingProxyType({})
+
+
+def _convert_tool_payload_value(key: str, value: object, *, to_chat: bool) -> object:
+    if key != "format" or not isinstance(value, dict):
+        return value
+    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        convert_custom_tool_format_to_chat_shape,
+        convert_custom_tool_format_to_responses_shape,
+    )
+
+    convert = convert_custom_tool_format_to_chat_shape if to_chat else convert_custom_tool_format_to_responses_shape
+    return convert(value)
+
+
+def _convert_tool_envelope(obj: object, *, to_chat: bool) -> object:
+    if not isinstance(obj, dict):
+        return obj
+    tool_type: Final = obj.get("type")
+    payload_keys: Final = _TOOL_PAYLOAD_KEYS.get(tool_type)
+    if payload_keys is None:
+        return obj
+    nested: Final = obj.get(tool_type)
+    nested_source: Final = nested if isinstance(nested, dict) else _EMPTY_TOOL_PAYLOAD
+    payload: Final = {  # mutable-ok: tool entries are embedded verbatim in the JSON request body
+        key: _convert_tool_payload_value(key, nested_source[key] if key in nested_source else obj[key], to_chat=to_chat)
+        for key in payload_keys
+        if key in nested_source or key in obj
+    }
+    if "name" not in payload:
+        return obj
+    return {"type": tool_type, tool_type: payload} if to_chat else {"type": tool_type, **payload}  # mutable-ok: same
+
+
+def _normalize_tool_dialect(
+    data: dict, *, to_chat: bool
+) -> dict:  # mutable-ok: the parsed request body contract is a plain dict
+    tools: Final = data.get("tools")
+    tool_choice: Final = data.get("tool_choice")
+    normalized_tools: Final = (
+        [
+            _convert_tool_envelope(tool, to_chat=to_chat) for tool in tools
+        ]  # mutable-ok: body's tools stays a plain JSON list
+        if isinstance(tools, list)
+        else tools
+    )
+    normalized_choice: Final = _convert_tool_envelope(tool_choice, to_chat=to_chat)
+    if normalized_tools == tools and normalized_choice == tool_choice:
+        return data
+    replaceable: Final = (("tools", normalized_tools), ("tool_choice", normalized_choice))
+    return {**data, **{key: value for key, value in replaceable if key in data}}  # mutable-ok: plain body dict
+
+
+def _is_chat_completions_body(data: Mapping[str, Any]) -> bool:
+    messages: Final = data.get("messages")
+    if isinstance(messages, list) and messages:
+        return True
+    return "messages" in data and "input" not in data
+
+
+_CURSOR_THINKING_SEPARATOR: Final = "-thinking-"
+_CURSOR_FAST_SUFFIX: Final = "-fast"
+_CURSOR_THINKING_LEVELS: Final[frozenset[str]] = frozenset(get_args(REASONING_EFFORT))
+
+
+class _CursorModelVariant(NamedTuple):
+    base_model: str
+    reasoning_effort: str | None
+
+
+def _parse_cursor_model_variant(model: str) -> _CursorModelVariant:
+    stripped: Final = model.removesuffix(_CURSOR_FAST_SUFFIX)
+    base, separator, level = stripped.rpartition(_CURSOR_THINKING_SEPARATOR)
+    if separator and base and level in _CURSOR_THINKING_LEVELS:
+        return _CursorModelVariant(base, level)
+    return _CursorModelVariant(stripped, None)
+
+
+def _router_can_serve(model: str, llm_router: "Router | None") -> bool:
+    if llm_router is None:
+        return False
+    if llm_router.is_recognized_model(model):
+        return True
+    if model in llm_router.team_public_model_names:
+        return True
+    return bool(llm_router.pattern_router.get_pattern(model))
+
+
+def _resolve_cursor_model_variant(
+    data: dict, llm_router: "Router | None"
+) -> dict:  # mutable-ok: the parsed request body contract is a plain dict
+    model: Final = data.get("model")
+    if not isinstance(model, str) or _router_can_serve(model, llm_router):
+        return data
+    variant: Final = _parse_cursor_model_variant(model)
+    if variant.base_model == model or not _router_can_serve(variant.base_model, llm_router):
+        return data
+    resolved: Final = {**data, "model": variant.base_model}  # mutable-ok: plain body dict
+    if variant.reasoning_effort is None:
+        return resolved
+    if _is_chat_completions_body(data):
+        if "reasoning_effort" in data:
+            return resolved
+        return {**resolved, "reasoning_effort": variant.reasoning_effort}  # mutable-ok: plain body dict
+    reasoning: Final = data.get("reasoning")
+    if isinstance(reasoning, dict):
+        if reasoning.get("effort"):
+            return resolved
+        return {**resolved, "reasoning": {**reasoning, "effort": variant.reasoning_effort}}  # mutable-ok: same
+    return {**resolved, "reasoning": {"effort": variant.reasoning_effort}}  # mutable-ok: plain body dict
+
+
+async def _resolve_cursor_model_variant_before_auth(request: Request) -> None:
+    from litellm.proxy.proxy_server import llm_router
+
+    try:
+        raw_body: Final = await _read_request_body(request=request)
+    except (json.JSONDecodeError, ProxyException):
+        return
+    resolved: Final = _resolve_cursor_model_variant(raw_body, llm_router)
+    if resolved is not raw_body:
+        _safe_set_request_parsed_body(request=request, parsed_body=resolved)
 
 
 @router.post(
@@ -97,7 +241,7 @@ async def responses_api(
         should_use_polling_for_request,
     )
 
-    should_use_polling = should_use_polling_for_request(
+    should_use_polling: Final = should_use_polling_for_request(
         background_mode=data.get("background", False),
         polling_via_cache_enabled=polling_via_cache_enabled,
         redis_cache=redis_usage_cache,
@@ -115,9 +259,7 @@ async def responses_api(
             ResponsePollingHandler,
         )
 
-        verbose_proxy_logger.info(
-            f"Starting background response with polling for model={data.get('model')}"
-        )
+        verbose_proxy_logger.info("Starting background response with polling for model=%s", data.get("model"))
 
         # Run pre-call checks (rate limits, guardrails, budget) BEFORE creating
         # polling ID. This ensures rate-limited requests get a synchronous 429
@@ -149,16 +291,16 @@ async def responses_api(
             )
 
         # Initialize polling handler with configured TTL (from global config)
-        polling_handler = ResponsePollingHandler(
+        polling_handler: Final = ResponsePollingHandler(
             redis_cache=redis_usage_cache,
             ttl=polling_cache_ttl,  # Global var set at startup
         )
 
         # Generate polling ID
-        polling_id = ResponsePollingHandler.generate_polling_id()
+        polling_id: Final = ResponsePollingHandler.generate_polling_id()
 
         # Create initial state in Redis
-        initial_state = await polling_handler.create_initial_state(
+        initial_state: Final = await polling_handler.create_initial_state(
             polling_id=polling_id,
             request_data=data,
         )
@@ -195,7 +337,7 @@ async def responses_api(
     # Normal response flow
     processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
-        response = await processor.base_process_llm_request(
+        response: Final = await processor.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
@@ -217,28 +359,27 @@ async def responses_api(
         # Store in managed objects table if background mode is enabled
         if data.get("background") and isinstance(response, ResponsesAPIResponse):
             if response.status in ["queued", "in_progress"]:
-                from litellm_enterprise.proxy.hooks.managed_files import (  # type: ignore
+                from litellm_enterprise.proxy.hooks.managed_files import (
                     _PROXY_LiteLLMManagedFiles,
                 )
 
-                managed_files_obj = cast(
-                    Optional[_PROXY_LiteLLMManagedFiles],
+                managed_files_obj: Final = cast(
+                    _PROXY_LiteLLMManagedFiles | None,
                     proxy_logging_obj.get_proxy_hook("managed_files"),
                 )
 
                 if managed_files_obj and llm_router:
                     try:
                         # Get the actual deployment model_id from hidden params
-                        hidden_params = getattr(response, "_hidden_params", {}) or {}
-                        model_id = hidden_params.get("model_id", None)
+                        hidden_params: Final = getattr(response, "_hidden_params", {}) or {}
+                        model_id: Final = hidden_params.get("model_id", None)
 
                         if not model_id:
                             verbose_proxy_logger.warning(
-                                f"No model_id found in response hidden params for response {response.id}, skipping managed object storage"
+                                "No model_id found in response hidden params for response %s, skipping managed object storage",
+                                response.id,
                             )
-                            raise Exception(
-                                "No model_id found in response hidden params"
-                            )
+                            raise Exception("No model_id found in response hidden params")
                         # Store in managed objects table
                         await managed_files_obj.store_unified_object_id(
                             unified_object_id=response.id,
@@ -250,32 +391,34 @@ async def responses_api(
                         )
 
                         verbose_proxy_logger.info(
-                            f"Stored background response {response.id} in managed objects table with unified_id={response.id}"
+                            "Stored background response %s in managed objects table with unified_id=%s",
+                            response.id,
+                            response.id,
                         )
                     except Exception as e:
                         verbose_proxy_logger.error(
-                            f"Failed to store background response in managed objects table: {str(e)}"
+                            "Failed to store background response in managed objects table: %s", e
                         )
 
         return response
     except ModifyResponseException as e:
         # Guardrail passthrough: return violation message in Responses API format (200)
-        _data = e.request_data
+        _data: Final = e.request_data
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict,
             original_exception=e,
             request_data=_data,
         )
 
-        violation_text = e.message
-        response_obj = ResponsesAPIResponse(
+        violation_text: Final = e.message
+        response_obj: Final = ResponsesAPIResponse(
             id=f"resp_{uuid4()}",
             object="response",
             created_at=int(time.time()),
             model=e.model or data.get("model"),
             output=cast(Any, [{"content": [{"type": "text", "text": violation_text}]}]),
             status="completed",
-            usage=ResponseAPIUsage(input_tokens=0, output_tokens=0, total_tokens=0),
+            usage=_blocked_responses_api_usage(e.original_response),
         )
         return response_obj
     except Exception as e:
@@ -287,9 +430,39 @@ async def responses_api(
         )
 
 
+@router.get(
+    "/cursor/models",
+    dependencies=(_user_api_key_auth_dep,),
+    tags=_RESPONSES_TAGS,
+)
+@router.get(
+    "/cursor/v1/models",
+    dependencies=(_user_api_key_auth_dep,),
+    tags=_RESPONSES_TAGS,
+)
+async def cursor_model_list(
+    user_api_key_dict: UserAPIKeyAuth = _user_api_key_auth_dep,
+):
+    """
+    OpenAI-compatible model listing for the Cursor BYOK base URL.
+
+    Clients pointed at `<proxy>/cursor` as an OpenAI-compatible base URL resolve and
+    verify models via `GET {base}/models` (the OpenAI SDK contract). Without this
+    route those requests fall through to the Cursor Cloud Agents passthrough, which
+    demands a Cursor API key and 401s, so key verification silently fails before any
+    chat request is ever sent. Delegates to the standard `/v1/models` handler.
+    """
+    from litellm.proxy.proxy_server import model_list
+
+    return await model_list(user_api_key_dict=user_api_key_dict)
+
+
 @router.post(
     "/cursor/chat/completions",
-    dependencies=[Depends(user_api_key_auth)],
+    dependencies=[
+        Depends(_resolve_cursor_model_variant_before_auth),
+        Depends(user_api_key_auth),
+    ],
     tags=["responses"],
 )
 async def cursor_chat_completions(
@@ -298,11 +471,21 @@ async def cursor_chat_completions(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
-    Cursor-specific endpoint that accepts Responses API input format but returns chat completions format.
-    
-    This endpoint handles requests from Cursor IDE which sends Responses API format (`input` field)
-    but expects chat completions format response (`choices`, `messages`, etc.).
-    
+    Cursor BYOK endpoint. Accepts both request shapes Cursor sends to its OpenAI-compatible
+    base URL and always answers in chat completions format.
+
+    Cursor agent mode sends Responses API format bodies (`input`, flat tool defs, `reasoning`,
+    custom tools) to the chat/completions path while expecting chat completions responses;
+    those are routed through the Responses API pipeline and converted back. Genuine chat
+    completions bodies (`messages` present) are routed through the standard chat completions
+    pipeline, after normalizing each level of the `tools` array and `tool_choice` to the chat
+    completions shapes OpenAI requires. Cursor mixes Responses API shapes into chat bodies
+    per level, independently: a flat tool def (`{"type": "custom", "name": "ApplyPatch", ...}`)
+    gets nested under `custom`, and a flat grammar format
+    (`{"type": "grammar", "definition", "syntax"}`) gets wrapped as
+    `{"type": "grammar", "grammar": {...}}` wherever it appears, including inside tool defs
+    Cursor already sent pre-nested.
+
     ```bash
     curl -X POST http://localhost:4000/cursor/chat/completions \
     -H "Content-Type: application/json" \
@@ -319,8 +502,8 @@ async def cursor_chat_completions(
     )
     from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
     from litellm.proxy.proxy_server import (
-        _read_request_body,
         async_data_generator,
+        chat_completion,
         general_settings,
         llm_router,
         proxy_config,
@@ -332,20 +515,40 @@ async def cursor_chat_completions(
         user_temperature,
         version,
     )
-    from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
     from litellm.types.llms.openai import ResponsesAPIResponse
     from litellm.types.utils import ModelResponse
 
-    data = await _read_request_body(request=request)
+    raw_body: Final = await _read_request_body(request=request)
 
-    # Convert 'messages' to 'input' for Responses API compatibility
-    # Cursor sends 'messages' but Responses API expects 'input'
-    if "messages" in data and "input" not in data:
-        data["input"] = data.pop("messages")
+    if _is_chat_completions_body(raw_body):
+        # Genuine chat completions body (Cursor sends these for models whose BYOK it
+        # already fixed); delegate so behavior matches /chat/completions exactly.
+        # Keyed on messages CONTENT, not key presence: Cursor can send a null or
+        # empty messages stub alongside a real agent-mode input array
+        normalized: Final = _normalize_tool_dialect(raw_body, to_chat=True)
+        if normalized is not raw_body:
+            _safe_set_request_parsed_body(request=request, parsed_body=normalized)
+        return await chat_completion(
+            request=request,
+            fastapi_response=fastapi_response,
+            model=None,
+            user_api_key_dict=user_api_key_dict,
+        )
 
-    processor = ProxyBaseLLMRequestProcessing(data=data)
+    # OpenAI's Responses API rejects chat-completions-only stream_options
+    # (Cursor sends include_usage); usage arrives via response.completed anyway.
+    # Rebuild rather than pop: _read_request_body can return the request-scope
+    # cached parsed-body dict itself, and removing keys from it corrupts the
+    # cache's key snapshot so later readers get an empty body
+    body_without_stream_options: Final = {  # mutable-ok: base_process_llm_request mutates the body dict in place
+        key: value for key, value in raw_body.items() if key != "stream_options"
+    }
 
-    def cursor_data_generator(response, user_api_key_dict, request_data):
+    data: Final = _normalize_tool_dialect(body_without_stream_options, to_chat=False)
+
+    processor: Final = ProxyBaseLLMRequestProcessing(data=data)
+
+    def cursor_data_generator(response, user_api_key_dict, request_data, request=None):
         """
         Custom generator that transforms Responses API streaming chunks to chat completion chunks.
 
@@ -353,27 +556,29 @@ async def cursor_chat_completions(
         to chat completion format that Cursor IDE expects.
 
         Args:
-            response: The streaming response (BaseResponsesAPIStreamingIterator or other)
+            response: The streaming Responses API event iterator (router-wrapped or not)
             user_api_key_dict: User API key authentication dict
             request_data: Request data containing model, logging_obj, etc.
+            request: The originating FastAPI request, forwarded for disconnect handling
 
         Returns:
             Async generator that yields SSE-formatted chat completion chunks
         """
-        # If response is a BaseResponsesAPIStreamingIterator, transform it first
-        if isinstance(response, BaseResponsesAPIStreamingIterator):
+        # Any async-iterable here is a Responses API event stream needing conversion.
+        # Class-identity checks miss router-wrapped streams (e.g.
+        # HiddenParamsAsyncIteratorWrapper around LiteLLMCompletionStreamingIterator),
+        # which previously leaked raw Responses events to the client.
+        if hasattr(response, "__anext__"):
             # Transform Responses API iterator to chat completion iterator
-            # Cast to AsyncIterator[str] since BaseResponsesAPIStreamingIterator implements __aiter__/__anext__
-            completion_stream = (
-                responses_api_bridge.transformation_handler.get_model_response_iterator(
-                    streaming_response=cast(AsyncIterator[str], response),
-                    sync_stream=False,
-                    json_mode=False,
-                )
+            # Cast to AsyncIterator[str] since the stream implements __aiter__/__anext__
+            completion_stream: Final = responses_api_bridge.transformation_handler.get_model_response_iterator(
+                streaming_response=cast(AsyncIterator[str], response),
+                sync_stream=False,
+                json_mode=False,
             )
             # Wrap in CustomStreamWrapper to get the async generator
-            logging_obj = request_data.get("litellm_logging_obj")
-            streamwrapper = CustomStreamWrapper(
+            logging_obj: Final = request_data.get("litellm_logging_obj")
+            streamwrapper: Final = CustomStreamWrapper(
                 completion_stream=completion_stream,
                 model=request_data.get("model", ""),
                 custom_llm_provider=None,
@@ -384,16 +589,18 @@ async def cursor_chat_completions(
                 response=streamwrapper,
                 user_api_key_dict=user_api_key_dict,
                 request_data=request_data,
+                request=request,
             )
         # Otherwise, use the default generator
         return async_data_generator(
             response=response,
             user_api_key_dict=user_api_key_dict,
             request_data=request_data,
+            request=request,
         )
 
     try:
-        response = await processor.base_process_llm_request(
+        response: Final = await processor.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
@@ -414,21 +621,19 @@ async def cursor_chat_completions(
 
         # Transform non-streaming Responses API response to chat completions format
         if isinstance(response, ResponsesAPIResponse):
-            logging_obj = processor.data.get("litellm_logging_obj")
-            transformed_response = (
-                responses_api_bridge.transformation_handler.transform_response(
-                    model=processor.data.get("model", ""),
-                    raw_response=response,
-                    model_response=ModelResponse(),
-                    logging_obj=cast(Any, logging_obj),
-                    request_data=processor.data,
-                    messages=processor.data.get("input", []),
-                    optional_params={},
-                    litellm_params={},
-                    encoding=None,
-                    api_key=None,
-                    json_mode=None,
-                )
+            logging_obj: Final = processor.data.get("litellm_logging_obj")
+            transformed_response: Final = responses_api_bridge.transformation_handler.transform_response(
+                model=processor.data.get("model", ""),
+                raw_response=response,
+                model_response=ModelResponse(),
+                logging_obj=cast(Any, logging_obj),
+                request_data=processor.data,
+                messages=processor.data.get("input", []),
+                optional_params={},
+                litellm_params={},
+                encoding=None,
+                api_key=None,
+                json_mode=None,
             )
             return transformed_response
 
@@ -509,10 +714,10 @@ async def get_response(
                 detail="Redis cache not configured. Polling requires Redis.",
             )
 
-        polling_handler = ResponsePollingHandler(redis_cache=redis_usage_cache)
+        polling_handler: Final = ResponsePollingHandler(redis_cache=redis_usage_cache)
 
         # Get current state from cache
-        state = await polling_handler.get_state(response_id)
+        state: Final = await polling_handler.get_state(response_id)
 
         if not state:
             raise HTTPException(
@@ -525,9 +730,9 @@ async def get_response(
         return state
 
     # Normal provider response flow
-    data = await _read_request_body(request=request)
+    data: Final = await _read_request_body(request=request)
     data["response_id"] = response_id
-    processor = ProxyBaseLLMRequestProcessing(data=data)
+    processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
         return await processor.base_process_llm_request(
             request=request,
@@ -614,30 +819,26 @@ async def delete_response(
         if not redis_usage_cache:
             raise HTTPException(status_code=500, detail="Redis cache not configured.")
 
-        polling_handler = ResponsePollingHandler(redis_cache=redis_usage_cache)
+        polling_handler: Final = ResponsePollingHandler(redis_cache=redis_usage_cache)
 
         # Get state to verify access
-        state = await polling_handler.get_state(response_id)
+        state: Final = await polling_handler.get_state(response_id)
 
         if not state:
-            raise HTTPException(
-                status_code=404, detail=f"Polling response {response_id} not found"
-            )
+            raise HTTPException(status_code=404, detail=f"Polling response {response_id} not found")
 
         # Delete from cache
-        success = await polling_handler.delete_polling(response_id)
+        success: Final = await polling_handler.delete_polling(response_id)
 
         if success:
             return DeleteResponseResult(id=response_id, object="response", deleted=True)
         else:
-            raise HTTPException(
-                status_code=500, detail="Failed to delete polling response"
-            )
+            raise HTTPException(status_code=500, detail="Failed to delete polling response")
 
     # Normal provider response flow
-    data = await _read_request_body(request=request)
+    data: Final = await _read_request_body(request=request)
     data["response_id"] = response_id
-    processor = ProxyBaseLLMRequestProcessing(data=data)
+    processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
         return await processor.base_process_llm_request(
             request=request,
@@ -703,9 +904,9 @@ async def get_response_input_items(
         version,
     )
 
-    data = await _read_request_body(request=request)
+    data: Final = await _read_request_body(request=request)
     data["response_id"] = response_id
-    processor = ProxyBaseLLMRequestProcessing(data=data)
+    processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
         return await processor.base_process_llm_request(
             request=request,
@@ -786,8 +987,8 @@ async def compact_response(
         version,
     )
 
-    data = await _read_request_body(request=request)
-    processor = ProxyBaseLLMRequestProcessing(data=data)
+    data: Final = await _read_request_body(request=request)
+    processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
         return await processor.base_process_llm_request(
             request=request,
@@ -879,34 +1080,30 @@ async def cancel_response(
         if not redis_usage_cache:
             raise HTTPException(status_code=500, detail="Redis cache not configured.")
 
-        polling_handler = ResponsePollingHandler(redis_cache=redis_usage_cache)
+        polling_handler: Final = ResponsePollingHandler(redis_cache=redis_usage_cache)
 
         # Get current state to verify it exists
-        state = await polling_handler.get_state(response_id)
+        state: Final = await polling_handler.get_state(response_id)
 
         if not state:
-            raise HTTPException(
-                status_code=404, detail=f"Polling response {response_id} not found"
-            )
+            raise HTTPException(status_code=404, detail=f"Polling response {response_id} not found")
 
         # Cancel the polling response (sets status to "cancelled")
-        success = await polling_handler.cancel_polling(response_id)
+        success: Final = await polling_handler.cancel_polling(response_id)
 
         if success:
             # Fetch the updated state with cancelled status
-            updated_state = await polling_handler.get_state(response_id)
+            updated_state: Final = await polling_handler.get_state(response_id)
 
             # Return the whole state directly (now with status="cancelled")
             return updated_state
         else:
-            raise HTTPException(
-                status_code=500, detail="Failed to cancel polling response"
-            )
+            raise HTTPException(status_code=500, detail="Failed to cancel polling response")
 
     # Normal provider response flow
-    data = await _read_request_body(request=request)
+    data: Final = await _read_request_body(request=request)
     data["response_id"] = response_id
-    processor = ProxyBaseLLMRequestProcessing(data=data)
+    processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
         return await processor.base_process_llm_request(
             request=request,
@@ -937,27 +1134,25 @@ async def cancel_response(
 
 async def _read_ws_model_from_first_frame(
     websocket: WebSocket,
-) -> Optional[tuple]:
+) -> tuple | None:
     """Read the first WS frame and return (model, raw_message), or None on error.
 
     Sends an appropriate error frame and closes the socket before returning None.
     """
     try:
-        first_message = await asyncio.wait_for(websocket.receive_text(), timeout=30)
+        first_message: Final = await asyncio.wait_for(websocket.receive_text(), timeout=30)
     except asyncio.TimeoutError:
         await websocket.close(code=1008, reason="Timed out waiting for first message")
         return None
     except WebSocketDisconnect:
         return None
     except Exception:
-        verbose_proxy_logger.exception(
-            "Responses WebSocket error reading first message"
-        )
+        verbose_proxy_logger.exception("Responses WebSocket error reading first message")
         await websocket.close(code=1011, reason="Internal server error")
         return None
 
     try:
-        first_event = json.loads(first_message)
+        first_event: Final = json.loads(first_message)
     except json.JSONDecodeError:
         await websocket.send_text(
             json.dumps(
@@ -973,10 +1168,7 @@ async def _read_ws_model_from_first_frame(
         await websocket.close(code=1008, reason="Invalid JSON in first message")
         return None
 
-    if (
-        not isinstance(first_event, dict)
-        or first_event.get("type") != "response.create"
-    ):
+    if not isinstance(first_event, dict) or first_event.get("type") != "response.create":
         await websocket.send_text(
             json.dumps(
                 {
@@ -991,7 +1183,7 @@ async def _read_ws_model_from_first_frame(
         await websocket.close(code=1008, reason="Invalid first message")
         return None
 
-    model = _extract_model_from_first_ws_event(first_event)
+    model: Final = _extract_model_from_first_ws_event(first_event)
     if not model:
         await websocket.send_text(
             json.dumps(
@@ -1010,7 +1202,7 @@ async def _read_ws_model_from_first_frame(
     return model, first_message
 
 
-def _extract_model_from_first_ws_event(first_event: Any) -> Optional[str]:
+def _extract_model_from_first_ws_event(first_event: Any) -> str | None:
     """Extract model from a response.create WS event, handling flat and nested formats.
 
     Flat:   {"type": "response.create", "model": "gpt-4o", ...}
@@ -1018,17 +1210,15 @@ def _extract_model_from_first_ws_event(first_event: Any) -> Optional[str]:
     """
     if not isinstance(first_event, dict):
         return None
-    nested = first_event.get("response")
-    return (
-        nested.get("model") if isinstance(nested, dict) else None
-    ) or first_event.get("model")
+    nested: Final = first_event.get("response")
+    return (nested.get("model") if isinstance(nested, dict) else None) or first_event.get("model")
 
 
 async def _enforce_responses_ws_first_frame_model_auth(
     request: Request,
     model: str,
     user_api_key_dict: UserAPIKeyAuth,
-    llm_router: Optional[Any],
+    llm_router: Any | None,
 ) -> None:
     from litellm.proxy.auth.user_api_key_auth import (
         _enforce_key_and_fallback_model_access,
@@ -1041,17 +1231,15 @@ async def _enforce_responses_ws_first_frame_model_auth(
         user_custom_auth,
     )
 
-    request_data = {"model": model}
-    route = request.scope.get("path") or "/v1/responses"
+    request_data: Final = {"model": model}
+    route: Final = request.scope.get("path") or "/v1/responses"
     if master_key is None and not (
         general_settings.get("enable_jwt_auth", False)
         or general_settings.get("enable_oauth2_auth", False)
         or general_settings.get("enable_oauth2_proxy_auth", False)
     ):
         return
-    if user_custom_auth is not None and not general_settings.get(
-        "custom_auth_run_common_checks", False
-    ):
+    if user_custom_auth is not None and not general_settings.get("custom_auth_run_common_checks", False):
         return
     await _enforce_key_and_fallback_model_access(
         valid_token=user_api_key_dict,
@@ -1073,9 +1261,7 @@ async def _enforce_responses_ws_first_frame_model_auth(
 @router.websocket("/responses")
 async def responses_websocket_endpoint(
     websocket: WebSocket,
-    model: Optional[str] = fastapi.Query(
-        None, description="The model to use for the responses WebSocket session."
-    ),
+    model: str | None = fastapi.Query(None, description="The model to use for the responses WebSocket session."),
     user_api_key_dict=Depends(user_api_key_auth_websocket),
 ):
     """
@@ -1106,24 +1292,22 @@ async def responses_websocket_endpoint(
 
     # Accept the WebSocket handshake. Key was already validated by the Depends
     # above; we can safely accept regardless of whether ?model= was supplied.
-    requested_protocols = [
-        p.strip()
-        for p in (websocket.headers.get("sec-websocket-protocol") or "").split(",")
-        if p.strip()
+    requested_protocols: Final = [
+        p.strip() for p in (websocket.headers.get("sec-websocket-protocol") or "").split(",") if p.strip()
     ]
-    accept_kwargs: dict = {}
+    accept_kwargs: Final[dict] = {}
     if requested_protocols:
         accept_kwargs["subprotocol"] = requested_protocols[0]
     await websocket.accept(**accept_kwargs)
 
-    first_message: Optional[str] = None
+    first_message: str | None = None
     if not model:
-        result = await _read_ws_model_from_first_frame(websocket)
+        result: Final = await _read_ws_model_from_first_frame(websocket)
         if result is None:
             return
         model, first_message = result
 
-    data: Dict[str, Any] = {
+    data: dict[str, Any] = {
         "model": model,
         "websocket": websocket,
     }
@@ -1131,25 +1315,25 @@ async def responses_websocket_endpoint(
         data["first_message"] = first_message
 
     # Construct a synthetic Request for pre-call processing
-    headers_list = list(websocket.scope.get("headers") or [])
-    scope: Dict[str, Any] = {
+    headers_list: Final = list(websocket.scope.get("headers") or [])
+    scope: Final[dict[str, Any]] = {
         "type": "http",
         "method": "POST",
         "path": "/v1/responses",
         "headers": headers_list,
     }
-    request = Request(scope=scope)
+    request: Final = Request(scope=scope)
     request._url = websocket.url
 
-    _body_bytes = json.dumps({"model": model}).encode()
+    _body_bytes: Final = json.dumps({"model": model}).encode()
 
     async def return_body():
         return _body_bytes
 
-    request.body = return_body  # type: ignore
+    request.body = return_body
 
     # Phase 1: pre-call processing (auth, guardrails, rate limits)
-    base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
+    base_llm_response_processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
         if first_message is not None:
             await _enforce_responses_ws_first_frame_model_auth(
@@ -1198,7 +1382,7 @@ async def responses_websocket_endpoint(
     # Phase 2: route to upstream provider
     try:
         data["user_api_key_dict"] = user_api_key_dict
-        llm_call = await route_request(
+        llm_call: Final = await route_request(
             data=data,
             route_type="_aresponses_websocket",
             llm_router=llm_router,
