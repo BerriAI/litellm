@@ -236,6 +236,7 @@ except (ImportError, AttributeError, TypeError):
 claude_json_str = json.dumps(json_data)
 import importlib.metadata
 from collections.abc import Callable, Iterable, Mapping, Sequence
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Union, cast, get_args
 
 from litellm import utils as litellm_utils
@@ -7819,6 +7820,24 @@ def _get_model_cost_entry_for_provider_config(
     return {}
 
 
+# Model-info configs that need nothing but the provider: no deferred import, no model name.
+# The factories stay lazy so litellm.<Config> still resolves through the lazy import registry.
+_MODEL_INFO_FACTORIES: Final[Mapping[LlmProviders, Callable[[], BaseLLMModelInfo]]] = MappingProxyType(
+    {
+        LlmProviders.OPENAI: lambda: litellm.OpenAIGPTConfig(),
+        LlmProviders.ANTHROPIC: lambda: litellm.AnthropicModelInfo(),
+        LlmProviders.FIREWORKS_AI: lambda: litellm.FireworksAIConfig(),
+        LlmProviders.TOGETHER_AI: lambda: litellm.TogetherAIConfig(),
+        LlmProviders.GEMINI: lambda: litellm.GeminiModelInfo(),
+        LlmProviders.LITELLM_PROXY: lambda: litellm.LiteLLMProxyChatConfig(),
+        LlmProviders.TOPAZ: lambda: litellm.TopazModelInfo(),
+        LlmProviders.XAI: lambda: litellm.XAIModelInfo(),
+        LlmProviders.LEMONADE: lambda: litellm.LemonadeChatConfig(),
+        LlmProviders.CLARIFAI: lambda: litellm.ClarifaiConfig(),
+    }
+)
+
+
 class ProviderConfigManager:
     # Dictionary mapping for O(1) provider lookup
     # Stores tuples of (factory_function, needs_model_parameter)
@@ -8570,24 +8589,13 @@ class ProviderConfigManager:
         model: str | None,
         provider: LlmProviders,
     ) -> BaseLLMModelInfo | None:
-        if LlmProviders.FIREWORKS_AI == provider:
-            return litellm.FireworksAIConfig()
-        elif LlmProviders.OPENAI == provider:
-            return litellm.OpenAIGPTConfig()
-        elif LlmProviders.GEMINI == provider:
-            return litellm.GeminiModelInfo()
-        elif LlmProviders.VERTEX_AI == provider:
+        factory: Final = _MODEL_INFO_FACTORIES.get(provider)
+        if factory is not None:
+            return factory()
+        if LlmProviders.VERTEX_AI == provider:
             from litellm.llms.vertex_ai.common_utils import VertexAIModelInfo
 
             return VertexAIModelInfo()
-        elif LlmProviders.LITELLM_PROXY == provider:
-            return litellm.LiteLLMProxyChatConfig()
-        elif LlmProviders.TOPAZ == provider:
-            return litellm.TopazModelInfo()
-        elif LlmProviders.ANTHROPIC == provider:
-            return litellm.AnthropicModelInfo()
-        elif LlmProviders.XAI == provider:
-            return litellm.XAIModelInfo()
         elif LlmProviders.OLLAMA == provider or LlmProviders.OLLAMA_CHAT == provider:
             # Dynamic model listing for Ollama server
             from litellm.llms.ollama.common_utils import OllamaModelInfo
@@ -8599,10 +8607,6 @@ class ProviderConfigManager:
             )
 
             return VLLMModelInfo()
-        elif LlmProviders.LEMONADE == provider:
-            return litellm.LemonadeChatConfig()
-        elif LlmProviders.CLARIFAI == provider:
-            return litellm.ClarifaiConfig()
         elif LlmProviders.BEDROCK == provider:
             from litellm.llms.bedrock.common_utils import BedrockModelInfo
 
