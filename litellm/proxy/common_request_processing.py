@@ -3560,10 +3560,27 @@ class ProxyBaseLLMRequestProcessing:
     def _logging_obj_cost_or_none(
         model_response: ModelResponse, litellm_logging_obj: LiteLLMLoggingObj
     ) -> float | None:
+        # Pricing a frame stamps cost_breakdown and, on failure, the cost-failure debug key onto
+        # the live logging object. The pass-through handlers never recompute either one, so a
+        # frame-derived breakdown would outlive the stream and land in the spend log. Snapshot
+        # both and put them back, so pricing here stays a read as far as the request is concerned
+        breakdown_before: Final = getattr(litellm_logging_obj, "cost_breakdown", None)
+        call_details: Final = getattr(litellm_logging_obj, "model_call_details", None)
+        debug_key: Final = "response_cost_failure_debug_information"
+        debug_missing: Final = object()
+        debug_before: Final = call_details.get(debug_key, debug_missing) if isinstance(call_details, dict) else None
         try:
             cost: Final = litellm_logging_obj._response_cost_calculator(result=model_response)  # pyright: ignore[reportPrivateUsage]  # reuse the call's own cost calc for pricing parity with the logging callback
         except Exception:  # noqa: BLE001  # a pricing failure falls back to model-name pricing instead of breaking the stream
             return None
+        finally:
+            if hasattr(litellm_logging_obj, "cost_breakdown"):
+                litellm_logging_obj.cost_breakdown = breakdown_before
+            if isinstance(call_details, dict):
+                if debug_before is debug_missing:
+                    call_details.pop(debug_key, None)
+                else:
+                    call_details[debug_key] = debug_before
         return float(cost) if isinstance(cost, (int, float)) and not isinstance(cost, bool) else None
 
     @staticmethod
