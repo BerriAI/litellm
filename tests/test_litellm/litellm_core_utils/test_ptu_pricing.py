@@ -155,6 +155,49 @@ def test_a_rate_the_deployment_declares_itself_is_zeroed_too():
     assert override[extra] == 0.0
 
 
+@pytest.mark.parametrize(
+    "threshold_field",
+    [
+        "input_cost_per_token_above_32k_tokens",
+        "output_cost_per_token_above_32k_tokens",
+        "cache_read_input_token_cost_above_32k_tokens",
+        "cache_creation_input_token_cost_above_32k_tokens",
+        "cache_creation_input_token_cost_above_1hr_above_32k_tokens",
+    ],
+)
+def test_arbitrary_threshold_rate_the_deployment_declares_is_zeroed_too(threshold_field):
+    """Threshold rates a deployment can declare but CustomPricingLiteLLMParams does not
+    enumerate (e.g. input_cost_per_token_above_32k_tokens) must be zeroed like any other
+    declared rate, or a PTU deployment bills per token past the threshold on top of the
+    hourly charge."""
+    assert threshold_field not in CUSTOM_PRICING_FIELDS
+    assert threshold_field not in PTU_ZEROED_PRICING_FIELDS
+
+    override = _with_flag(_VALID, declared={threshold_field: 9e-06})
+
+    assert override is not None
+    assert override.get(threshold_field, 9e-06) == 0.0
+
+
+@pytest.mark.parametrize(
+    "param_field",
+    [
+        "api_key_above_32k_tokens",
+        "secret_above_32k_tokens",
+        "credential_above_32k_tokens",
+        "custom_provider_param_above_32k_tokens",
+    ],
+)
+def test_threshold_like_non_pricing_params_are_left_alone(param_field):
+    """The threshold matcher must only cover the cost calculator's pricing base keys: a
+    deployment param that merely ends in _above_<N>k_tokens is not a charge and must keep
+    its value."""
+    override = _with_flag(_VALID, declared={param_field: "keep-me"})
+
+    assert override is not None
+    assert param_field not in override
+
+
 def test_a_setting_that_is_not_a_charge_is_left_alone():
     """CustomPricingLiteLLMParams also carries configuration, and zeroing one of those
     would break the deployment rather than stop a charge."""

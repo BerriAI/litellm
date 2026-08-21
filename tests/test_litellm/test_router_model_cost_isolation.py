@@ -1825,8 +1825,7 @@ def test_price_data_reload_preserves_arbitrary_above_threshold_pricing(monkeypat
         assert rebuilt["cache_read_input_token_cost_above_32k_tokens"] == 4e-6
         assert router.model_list
     finally:
-        litellm.model_cost = saved_model_cost
-        _invalidate_model_cost_lowercase_map()
+        _restore_model_cost_entries(saved_model_cost)
 
 
 def test_strategy_router_alias_pricing_never_enters_model_cost(monkeypatch):
@@ -1983,6 +1982,24 @@ def test_a_config_ptu_deployment_bills_nothing_per_token():
     assert entry["litellm_params"]["output_cost_per_token"] == 0.0
     assert entry["model_info"]["input_cost_per_token"] == 0.0
     assert litellm.model_cost[entry["model_info"]["id"]]["input_cost_per_token"] == 0.0
+
+
+def test_a_config_ptu_deployment_zeroes_custom_threshold_rates():
+    """A custom threshold rate the deployment declares (e.g.
+    input_cost_per_token_above_32k_tokens) must be zeroed like every other declared rate,
+    or the PTU deployment bills per token past the threshold on top of the hourly charge."""
+    router = _ptu_router(
+        litellm_params={
+            "input_cost_per_token": 5e-06,
+            "input_cost_per_token_above_32k_tokens": 9e-06,
+        }
+    )
+    entry = router.model_list[0]
+
+    assert entry["litellm_params"]["input_cost_per_token"] == 0.0
+    assert entry["litellm_params"]["input_cost_per_token_above_32k_tokens"] == 0.0
+    assert litellm.model_cost[entry["model_info"]["id"]]["input_cost_per_token"] == 0.0
+    assert litellm.model_cost[entry["model_info"]["id"]]["input_cost_per_token_above_32k_tokens"] == 0.0
 
 
 @pytest.mark.parametrize(
