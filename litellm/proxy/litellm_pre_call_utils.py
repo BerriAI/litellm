@@ -64,6 +64,11 @@ _TRANSPORT_ONLY_CREDENTIAL_KEYS: Final = frozenset({"provider_specific_header", 
 # Excludes the two explicit litellm headers which are handled with higher priority.
 _GENERIC_SESSION_ID_HEADER_RE: Final = re.compile(r"^x-.+-session-id$", re.IGNORECASE)
 _EXPLICIT_SESSION_HEADERS: Final = frozenset({"x-litellm-trace-id", "x-litellm-session-id"})
+# Codex carries its conversation uuid in unprefixed headers, so the
+# x-<vendor>-session-id convention above never matches it. Current builds send
+# ``session-id``/``thread-id``; builds before the codex-api split sent
+# ``session_id``/``conversation_id``. Ordered session before thread.
+_CODEX_SESSION_ID_HEADERS: Final = ("session-id", "session_id", "thread-id", "conversation_id")
 # Session-id values must be non-empty strings of alphanumerics, hyphens, or underscores
 # (covers UUIDs and most common session-id formats).
 _SESSION_ID_VALUE_RE: Final = re.compile(r"^[a-zA-Z0-9_\-]{8,}$")
@@ -583,6 +588,35 @@ def _extract_generic_session_id_from_headers(
     return None
 
 
+def _extract_codex_session_id_from_headers(
+    normalized: dict[str, str],
+) -> str | None:
+    """
+    Read Codex's conversation uuid off one of ``_CODEX_SESSION_ID_HEADERS``.
+
+    Codex sends no request metadata the Anthropic path could parse and no
+    ``x-``-prefixed session header, so without this every turn of a Codex session
+    falls through to a freshly generated per-call trace id and lands as its own
+    row in the logs instead of grouping.
+
+    Unprefixed names like ``session-id`` are generic enough that another client
+    could send one meaning something unrelated, and colliding values across
+    callers would merge their traces, so this only applies to callers that
+    identify as Codex.
+    """
+    user_agent: Final = normalized.get("user-agent")
+    if not isinstance(user_agent, str) or not is_codex_user_agent(user_agent):
+        return None
+    return next(
+        (
+            value
+            for value in (normalized.get(header) for header in _CODEX_SESSION_ID_HEADERS)
+            if isinstance(value, str) and _SESSION_ID_VALUE_RE.match(value)
+        ),
+        None,
+    )
+
+
 def get_chain_id_from_headers(headers: dict[str, str] | None) -> str | None:
     """
     Extract chain id for call chaining from request headers.
@@ -592,6 +626,7 @@ def get_chain_id_from_headers(headers: dict[str, str] | None) -> str | None:
     2. ``x-litellm-session-id`` (explicit)
     3. Any ``x-<vendor>-session-id`` header whose value looks like a session id
        (alphanumeric / UUID, at least 8 chars).  E.g. ``x-claude-code-session-id``.
+    4. Codex's unprefixed ``session-id`` / ``thread-id``, for Codex callers only.
 
     Header keys are matched case-insensitively so this works with raw header
     dicts from any transport.
@@ -606,6 +641,7 @@ def get_chain_id_from_headers(headers: dict[str, str] | None) -> str | None:
         normalized.get("x-litellm-trace-id")
         or normalized.get("x-litellm-session-id")
         or _extract_generic_session_id_from_headers(normalized)
+        or _extract_codex_session_id_from_headers(normalized)
     )
 
 

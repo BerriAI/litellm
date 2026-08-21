@@ -3167,6 +3167,89 @@ def test_get_chain_id_from_headers_generic_vendor_session_id():
     )
 
 
+CODEX_USER_AGENT = "codex_cli_rs/0.62.0 (Mac OS 25.5.0; arm64) Apple_Terminal"
+CODEX_SESSION_UUID = "0199f0c2-8b41-7c3e-9a52-6d1f4b8e2a77"
+
+
+@pytest.mark.parametrize(
+    "header",
+    ["session-id", "session_id", "thread-id", "conversation_id", "Session-Id"],
+)
+def test_get_chain_id_from_headers_codex_unprefixed_session_id(header: str):
+    """Codex sends its conversation uuid unprefixed, so the x-<vendor>-session-id regex misses it."""
+    from litellm.proxy.litellm_pre_call_utils import get_chain_id_from_headers
+
+    assert get_chain_id_from_headers({"user-agent": CODEX_USER_AGENT, header: CODEX_SESSION_UUID}) == CODEX_SESSION_UUID
+
+
+@pytest.mark.parametrize(
+    "user_agent",
+    ["curl/8.7.1", "claude-cli/2.1.0 (external, cli)", "OpenAI/Python 1.0.0"],
+)
+def test_get_chain_id_from_headers_unprefixed_session_id_requires_codex(user_agent: str):
+    """An unprefixed session-id from a non-Codex caller must not group traces.
+
+    The name is generic enough that two unrelated callers could collide on a value
+    and have their sessions merged, so the bare-header path is Codex-only.
+    """
+    from litellm.proxy.litellm_pre_call_utils import get_chain_id_from_headers
+
+    assert get_chain_id_from_headers({"user-agent": user_agent, "session-id": CODEX_SESSION_UUID}) is None
+    assert get_chain_id_from_headers({"session-id": CODEX_SESSION_UUID}) is None
+
+
+def test_get_chain_id_from_headers_codex_prefers_session_over_thread():
+    from litellm.proxy.litellm_pre_call_utils import get_chain_id_from_headers
+
+    assert (
+        get_chain_id_from_headers(
+            {
+                "user-agent": CODEX_USER_AGENT,
+                "thread-id": "e96634a3-fa28-4083-b354-55542e2dca01",
+                "session-id": CODEX_SESSION_UUID,
+            }
+        )
+        == CODEX_SESSION_UUID
+    )
+
+
+def test_get_chain_id_from_headers_codex_ignores_implausible_value():
+    from litellm.proxy.litellm_pre_call_utils import get_chain_id_from_headers
+
+    assert get_chain_id_from_headers({"user-agent": CODEX_USER_AGENT, "session-id": "short"}) is None
+    assert get_chain_id_from_headers({"user-agent": CODEX_USER_AGENT, "session-id": "has spaces!!"}) is None
+
+
+def test_get_chain_id_from_headers_explicit_beats_codex_header():
+    from litellm.proxy.litellm_pre_call_utils import get_chain_id_from_headers
+
+    assert (
+        get_chain_id_from_headers(
+            {
+                "user-agent": CODEX_USER_AGENT,
+                "x-litellm-trace-id": "explicit-id-value",
+                "session-id": CODEX_SESSION_UUID,
+            }
+        )
+        == "explicit-id-value"
+    )
+
+
+def test_add_litellm_metadata_groups_codex_turns_into_one_session():
+    """Every turn of a Codex session must log under one session id, not a fresh per-call trace id."""
+    headers = {"user-agent": CODEX_USER_AGENT, "session-id": CODEX_SESSION_UUID}
+    turns = [{"litellm_metadata": {}}, {"litellm_metadata": {}}]
+    for turn in turns:
+        LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+            headers=headers, data=turn, _metadata_variable_name="litellm_metadata"
+        )
+
+    for turn in turns:
+        assert turn["litellm_session_id"] == CODEX_SESSION_UUID
+        assert turn["litellm_trace_id"] == CODEX_SESSION_UUID
+        assert turn["litellm_metadata"]["session_id"] == CODEX_SESSION_UUID
+
+
 def test_trace_id_from_traceparent_valid():
     from litellm.proxy.litellm_pre_call_utils import _trace_id_from_traceparent
 
