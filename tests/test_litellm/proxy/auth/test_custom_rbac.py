@@ -251,6 +251,17 @@ class TestEngineLoading:
             assert await get_active_custom_rbac_engine() is None
 
     @pytest.mark.asyncio
+    async def test_prisma_client_without_db_does_not_break_auth(self):
+        class _ClientWithoutDb:
+            pass
+
+        with (
+            patch("litellm.proxy.proxy_server.general_settings", {}),
+            patch("litellm.proxy.proxy_server.prisma_client", _ClientWithoutDb()),
+        ):
+            assert await get_active_custom_rbac_engine() is None
+
+    @pytest.mark.asyncio
     async def test_assigning_undefined_custom_role_is_rejected(self):
         table = _FakeTable(records=(_FakeRecord("db-role", ("/team/info",)),))
         with (

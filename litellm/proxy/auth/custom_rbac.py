@@ -195,8 +195,8 @@ async def get_active_custom_rbac_engine() -> CustomRBACEngine | None:
     if cached is not None:
         return cached
 
-    table: Final = _custom_role_table()
     try:
+        table: Final = _custom_role_table()
         db_roles: Final = () if table is None else await get_db_custom_rbac_roles(table=table)
     except Exception as exc:  # noqa: BLE001  # any DB failure must keep the last known policy, not drop it
         verbose_proxy_logger.exception("Failed to load custom RBAC roles from the DB: %s", exc)
