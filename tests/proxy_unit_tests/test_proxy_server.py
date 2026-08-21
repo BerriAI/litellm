@@ -475,11 +475,10 @@ async def test_team_disable_guardrails(mock_acompletion, client_no_auth):
 
     request._body = json_bytes
 
-    try:
+    with pytest.raises(ProxyException) as exc_info:
         await user_api_key_auth(request=request, api_key="Bearer " + user_key)
-        pytest.fail("Expected to raise 403 forbidden error.")
-    except ProxyException as e:
-        assert e.code == str(403)
+    e = exc_info.value
+    assert e.code == str(403)
 
 
 from test_custom_callback_input import CompletionCustomHandler
@@ -1467,17 +1466,19 @@ async def test_create_team_member_add_team_admin(
                 MagicMock(return_value=tx_cm),
             ),
         ):
+            error = None
             try:
                 await team_member_add(
                     data=team_member_add_request,
                     user_api_key_dict=valid_token,
                 )
             except HTTPException as e:
-                if user_role == "user" or new_member_method == "user_id":
-                    assert e.status_code == 403
-                    return
-                else:
-                    raise e
+                error = e
+
+            if error is not None:
+                assert user_role == "user" or new_member_method == "user_id"
+                assert error.status_code == 403
+                return
 
             mock_client.assert_called()
 
