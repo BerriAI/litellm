@@ -161,7 +161,8 @@ def _get_all_migrations():
     return results
 
 
-_SQL_COMMENT = re.compile(r"--.*$")
+_LINE_COMMENT = re.compile(r"--.*$")
+_BLOCK_COMMENT = re.compile(r"/\*.*?\*/", re.DOTALL)
 
 _PRE_GUARD_MIGRATIONS = frozenset({
     "20260331000000_add_prompt_environment_and_created_by",
@@ -181,15 +182,24 @@ _PRE_GUARD_MIGRATIONS = frozenset({
 })
 
 
+def _blanked_block_comments(sql):
+    """`sql` with every `/* ... */` body blanked out, newlines kept so lines still count.
+
+    Prisma opens a destructive migration with a `/* Warnings: You are about to drop the
+    column ... */` header, which is prose about the statement rather than the statement.
+    """
+    return _BLOCK_COMMENT.sub(lambda m: re.sub(r"[^\n]", " ", m.group(0)), sql)
+
+
 def _statements(sql):
-    """(line_number, sql) for each line, with `--` comments removed.
+    """(line_number, sql) for each line, with comments removed.
 
     Prisma writes its own explanations as `-- CREATE INDEX CONCURRENTLY ...`, which a
     raw-line scan reads as the statement it is describing.
     """
     return [
-        (number, _SQL_COMMENT.sub("", line))
-        for number, line in enumerate(sql.splitlines(), 1)
+        (number, _LINE_COMMENT.sub("", line))
+        for number, line in enumerate(_blanked_block_comments(sql).splitlines(), 1)
     ]
 
 
@@ -408,6 +418,25 @@ class TestMigrationGuardScope:
     def test_a_comment_describing_ddl_is_not_the_ddl(self):
         sql = '-- CREATE TABLE "Foo" (id TEXT);\n-- ADD COLUMN "bar" TEXT;\n'
         assert self._run_rules([(self._NEW, sql)]) == []
+
+    def test_a_prisma_warning_block_is_not_the_ddl_it_describes(self):
+        sql = (
+            "/*\n"
+            "  Warnings:\n"
+            "\n"
+            "  - You are about to CREATE TABLE \"Foo\" and ADD COLUMN \"bar\".\n"
+            "\n"
+            "*/\n"
+            'CREATE TABLE IF NOT EXISTS "Foo" (id TEXT);\n'
+        )
+        assert self._run_rules([(self._NEW, sql)]) == []
+
+    def test_a_block_comment_does_not_shift_the_reported_line(self):
+        sql = "/* filler\nfiller */\n" + 'CREATE TABLE "Foo" (id TEXT);\n'
+        suite = TestMigrationSQLIdempotency()
+        with pytest.raises(AssertionError) as failure:
+            suite.test_create_table_uses_if_not_exists([(self._NEW, sql)])
+        assert f"{self._NEW}:3:" in str(failure.value)
 
     def test_a_new_migration_with_bare_create_table_fails(self):
         assert "test_create_table_uses_if_not_exists" in self._run_rules(
