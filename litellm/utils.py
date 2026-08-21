@@ -7703,7 +7703,12 @@ def cleanup_none_field_in_message(message: AllMessageValues):
     remove None fields in the message - e.g. {"function": None} - some providers raise validation errors
     """
     new_message: Final = message.copy()
-    return {k: v for k, v in new_message.items() if v is not None}
+    return {
+        k: v
+        for k, v in new_message.items()
+        if v is not None
+        or (k == "content" and new_message.get("role") == "assistant" and new_message.get("tool_calls"))
+    }
 
 
 def validate_chat_completion_user_messages(messages: list[AllMessageValues]):
