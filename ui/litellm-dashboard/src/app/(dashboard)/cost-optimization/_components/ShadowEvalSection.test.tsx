@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -77,7 +77,17 @@ const job = (overrides: Partial<ShadowEvalJob> = {}): ShadowEvalJob => ({
   baseline_model: null,
   judge_model: "anthropic/claude-sonnet-5",
   shadow_percentage: 10,
-  max_turns: 200,
+  keys: [
+    {
+      api_key_id: "hashed-key-abc",
+      max_turns: 10000,
+      max_budget: 10,
+      spend: 3.21,
+      stopped_at: null,
+      key_alias: "prod-alpha",
+      key_name: "sk-...alpha",
+    },
+  ],
   judged_count: 42,
   error_count: 1,
   judge_spend: 3.21,
@@ -110,16 +120,28 @@ const job = (overrides: Partial<ShadowEvalJob> = {}): ShadowEvalJob => ({
         avg_judge_confidence: 0.8,
       },
     ],
+    by_key: [],
     overall_shadow_win_rate_pct: 48.0,
     overall_tie_rate_pct: 22.0,
   },
   created_at: "2026-08-07T00:00:00Z",
   ends_at: "2026-09-07T00:00:00Z",
-  stopped_at: null,
-  api_key_id: "hashed-key-abc",
-  key_alias: "prod-alpha",
-  key_name: "sk-...alpha",
   last_error: null,
+  ...overrides,
+});
+
+const keyEntry = (
+  api_key_id: string,
+  overrides: Partial<ShadowEvalJob["keys"][number]> = {},
+): ShadowEvalJob["keys"][number] => ({
+  api_key_id,
+  max_turns: 10000,
+  max_budget: 10,
+  spend: 0,
+  stopped_at: null,
+  attempt_count: null,
+  key_alias: null,
+  key_name: null,
   ...overrides,
 });
 
@@ -199,8 +221,8 @@ describe("ShadowEvalSection", () => {
   it("gives every active job its own card with a stop button, with the form still offered", () => {
     mockHooks({
       jobs: [
-        job({ job_id: "job-a", status: "running", api_key_id: "key-a" }),
-        job({ job_id: "job-b", status: "running", api_key_id: "key-b" }),
+        job({ job_id: "job-a", status: "running", keys: [keyEntry("key-a")] }),
+        job({ job_id: "job-b", status: "running", keys: [keyEntry("key-b")] }),
       ],
     });
     render(<ShadowEvalSection />);
@@ -303,6 +325,21 @@ describe("ShadowEvalSection", () => {
     expect(screen.getByText(/ends in 3 days/)).toBeInTheDocument();
   });
 
+  it("shows recorded eval spend against the job's dollar budget", () => {
+    const j = job();
+    mockHooks({ jobs: [j], detailsById: { "job-1": j } });
+    render(<ShadowEvalSection />);
+    expect(screen.getByText(/\$3\.21 of \$10\.00 eval spend/)).toBeInTheDocument();
+  });
+
+  it("shows spend without a budget cap for a job from before spend budgets existed", () => {
+    const j = job({ keys: [keyEntry("hashed-key-abc", { max_budget: null, spend: 3.21 })] });
+    mockHooks({ jobs: [j], detailsById: { "job-1": j } });
+    render(<ShadowEvalSection />);
+    expect(screen.getByText(/\$3\.21 eval spend/)).toBeInTheDocument();
+    expect(screen.queryByText(/of \$/)).not.toBeInTheDocument();
+  });
+
   it("flags rows with fewer than 30 judged turns as low sample", () => {
     const j = job();
     mockHooks({ jobs: [j], detailsById: { "job-1": j } });
@@ -342,15 +379,19 @@ describe("ShadowEvalSection", () => {
     expect(container).toBeEmptyDOMElement();
   });
 
-  it("keeps the start button disabled until key, router, and judge model are picked, then submits them", async () => {
+  it("keeps the start button disabled until key, router, and judge model are picked, then submits every picked key", async () => {
     const user = userEvent.setup();
     const { start } = mockHooks({});
     render(<ShadowEvalSection />);
 
     expect(screen.getByText("Start shadow eval")).toBeDisabled();
 
-    await user.click(screen.getByPlaceholderText("Search keys by alias"));
-    await user.click(await screen.findByText("prod-alpha"));
+    const keyInput = screen.getByPlaceholderText("Search keys by alias");
+    await user.click(keyInput);
+    const keyList = await screen.findByTestId("paginated-multi-select-list");
+    await user.click(within(keyList).getByText("prod-alpha"));
+    await user.click(keyInput);
+    await user.click(within(keyList).getByText("staging-beta"));
     await user.click(screen.getByPlaceholderText("Select an auto-router"));
     await user.click(await screen.findByText("gpt-auto"));
 
@@ -361,12 +402,12 @@ describe("ShadowEvalSection", () => {
     await user.click(screen.getByText("Start shadow eval"));
 
     const expectedBody = {
-      api_key_id: "hash-alpha",
+      api_key_ids: ["hash-alpha", "hash-beta"],
       router_name: "gpt-auto",
       direction: "forward",
       shadow_percentage: 10,
       duration_days: 7,
-      max_turns: 200,
+      max_budget: 10,
       judge_model: "anthropic/claude-sonnet-5",
     };
     expect(start.mutate).toHaveBeenCalledWith(expectedBody);
@@ -382,7 +423,8 @@ describe("ShadowEvalSection", () => {
     await user.click(screen.getByText("Adoption check: key's traffic vs the router"));
     await user.click(await screen.findByText("Regression check: router's picks vs a baseline"));
     await user.click(screen.getByPlaceholderText("Search keys by alias"));
-    await user.click(await screen.findByText("prod-alpha"));
+    const keyList = await screen.findByTestId("paginated-multi-select-list");
+    await user.click(within(keyList).getByText("prod-alpha"));
     await user.click(screen.getByPlaceholderText("Select an auto-router"));
     await user.click(await screen.findByText("gpt-auto"));
     await user.click(screen.getByPlaceholderText("Select a judge model"));
@@ -396,13 +438,13 @@ describe("ShadowEvalSection", () => {
     await user.click(screen.getByText("Start shadow eval"));
 
     const expectedBody = {
-      api_key_id: "hash-alpha",
+      api_key_ids: ["hash-alpha"],
       router_name: "gpt-auto",
       direction: "reverse",
       baseline_model: "prod-claude",
       shadow_percentage: 10,
       duration_days: 7,
-      max_turns: 200,
+      max_budget: 10,
       judge_model: "anthropic/claude-sonnet-5",
     };
     expect(start.mutate).toHaveBeenCalledWith(expectedBody);
@@ -429,9 +471,123 @@ describe("ShadowEvalSection", () => {
   });
 
   it("labels the shadowed key by alias, then masked name, then truncated hash", () => {
-    expect(shadowedKeyLabel(job())).toBe("prod-alpha");
-    expect(shadowedKeyLabel(job({ key_alias: null }))).toBe("sk-...alpha");
-    expect(shadowedKeyLabel(job({ key_alias: null, key_name: null }))).toBe("hashed-key…");
+    expect(shadowedKeyLabel(job().keys[0])).toBe("prod-alpha");
+    expect(shadowedKeyLabel(keyEntry("hashed-key-abc", { key_name: "sk-...alpha" }))).toBe("sk-...alpha");
+    expect(shadowedKeyLabel(keyEntry("hashed-key-abc"))).toBe("hashed-key…");
+  });
+
+  it("breaks results down per key, so one key exhausting its own budget is visible while a sibling runs on", () => {
+    mockHooks({
+      jobs: [
+        job({
+          judged_count: 205,
+          keys: [
+            keyEntry("hash-spent", { max_budget: 2, spend: 1.5, stopped_at: "2026-08-08T00:00:00Z" }),
+            keyEntry("hash-hungry", { max_budget: 5, spend: 0.2 }),
+          ],
+          results: {
+            by_tier: [],
+            by_current_model: [],
+            by_key: [
+              {
+                group: "hash-spent",
+                turn_count: 200,
+                real_win_rate_pct: 20.0,
+                shadow_win_rate_pct: 60.0,
+                tie_rate_pct: 20.0,
+                avg_judge_confidence: 0.9,
+              },
+            ],
+            overall_shadow_win_rate_pct: 60.0,
+            overall_tie_rate_pct: 20.0,
+          },
+        }),
+      ],
+    });
+    render(<ShadowEvalSection />);
+
+    const spent = screen.getByText("hash-spent…").closest("tr");
+    const hungry = screen.getByText("hash-hungr…").closest("tr");
+    if (!spent || !hungry) throw new Error("expected a table row per scoped key");
+
+    expect(within(spent).getByText("stopped")).toBeInTheDocument();
+    expect(within(spent).getByText("$1.50 / $2.00")).toBeInTheDocument();
+    expect(within(spent).getByText("60.0%")).toBeInTheDocument();
+
+    expect(within(hungry).getByText("running")).toBeInTheDocument();
+    expect(within(hungry).getByText("$0.2000 / $5.00")).toBeInTheDocument();
+    expect(within(hungry).getByText("No verdicts yet")).toBeInTheDocument();
+
+    expect(screen.getByText(/205 turns judged/)).toBeInTheDocument();
+    expect(screen.getByText(/Shadowing 10% of/)).toBeInTheDocument();
+    expect(screen.getByText("2 keys")).toBeInTheDocument();
+  });
+
+  it("reads a key that spent its budget as completed even before the sweep stamps it", () => {
+    const legacyTurnBudgetLeg = { max_budget: null, spend: 0.5, max_turns: 500, attempt_count: 3 };
+    mockHooks({
+      jobs: [
+        job({
+          keys: [
+            keyEntry("hash-spent", { max_budget: 2, spend: 2, attempt_count: 40 }),
+            keyEntry("hash-hungry", legacyTurnBudgetLeg),
+          ],
+        }),
+      ],
+    });
+    render(<ShadowEvalSection />);
+
+    const spent = screen.getByText("hash-spent…").closest("tr");
+    const hungry = screen.getByText("hash-hungr…").closest("tr");
+    if (!spent || !hungry) throw new Error("expected a table row per scoped key");
+    expect(within(spent).getByText("completed")).toBeInTheDocument();
+    expect(within(spent).getByText("$2.00 / $2.00")).toBeInTheDocument();
+    expect(within(hungry).getByText("running")).toBeInTheDocument();
+    expect(within(hungry).getByText("3 / 500 turns")).toBeInTheDocument();
+  });
+
+  it("shows the per-key table while a multi-key job is still collecting, before any verdicts exist", () => {
+    mockHooks({
+      jobs: [
+        job({
+          judged_count: 0,
+          results: null,
+          keys: [
+            keyEntry("hash-spent", { max_budget: 0.5, spend: 0.5, attempt_count: 2 }),
+            keyEntry("hash-hungry", { max_budget: 5, spend: 0.01, attempt_count: 1 }),
+          ],
+        }),
+      ],
+    });
+    render(<ShadowEvalSection />);
+
+    const spent = screen.getByText("hash-spent…").closest("tr");
+    if (!spent) throw new Error("expected a per-key row before verdicts exist");
+    expect(within(spent).getByText("completed")).toBeInTheDocument();
+    expect(within(spent).getByText("$0.5000 / $0.5000")).toBeInTheDocument();
+    expect(screen.getByText("Budget used")).toBeInTheDocument();
+    expect(screen.queryByText("Judged turns")).not.toBeInTheDocument();
+    expect(screen.getByText(/Collecting verdicts/)).toBeInTheDocument();
+  });
+
+  it("reads every key as completed once the job's window closes, whatever its own stop state", () => {
+    mockHooks({
+      jobs: [
+        job({
+          status: "completed",
+          keys: [
+            keyEntry("hash-spent", { max_turns: 200, stopped_at: "2026-08-08T00:00:00Z" }),
+            keyEntry("hash-hungry", { max_turns: 500 }),
+          ],
+        }),
+      ],
+    });
+    render(<ShadowEvalSection />);
+
+    const hungry = screen.getByText("hash-hungr…").closest("tr");
+    if (!hungry) throw new Error("expected a table row per scoped key");
+    expect(within(hungry).getByText("completed")).toBeInTheDocument();
+    expect(within(hungry).queryByText("running")).not.toBeInTheDocument();
   });
 
   it("keeps an older job's verdicts reachable through the previous evaluations list", async () => {

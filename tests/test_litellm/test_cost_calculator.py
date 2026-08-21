@@ -1742,6 +1742,81 @@ def test_azure_ai_cache_cost_calculation():
     ), f"Output cost mismatch: got {output_cost}, expected {expected_output_cost}"
 
 
+def test_vertex_regional_deployment_costs_uplift_over_global(monkeypatch):
+    """
+    Regression for https://github.com/BerriAI/litellm/issues/34393: two Vertex
+    deployments differing only in vertex_location must not price identically.
+    Google bills non-global endpoints at 1.1x for regional-pricing models, so the
+    regional request costs 1.1x the global one for the exact same usage, through
+    both vertex cost routes (Claude via cost_per_token, Gemini via
+    cost_per_character's token fallback).
+    """
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+    usage = Usage(prompt_tokens=15, completion_tokens=5, total_tokens=20)
+    for model in ("claude-haiku-4-5@20251001", "gemini-3.5-flash"):
+        global_prompt, global_completion = cost_per_token(
+            model=model,
+            custom_llm_provider="vertex_ai",
+            usage_object=usage,
+            vertex_location="global",
+        )
+        regional_prompt, regional_completion = cost_per_token(
+            model=model,
+            custom_llm_provider="vertex_ai",
+            usage_object=usage,
+            vertex_location="us-east5",
+        )
+        global_total = global_prompt + global_completion
+        regional_total = regional_prompt + regional_completion
+        assert global_total > 0
+        assert regional_total == pytest.approx(global_total * 1.10, rel=1e-9), (
+            f"{model}: regional Vertex request must cost 1.1x the global one"
+        )
+
+
+def test_vertex_uplift_composes_with_above_128k_pricing(monkeypatch):
+    """The regional-endpoint uplift multiplies whatever rate the request priced at,
+    including the above-128k dynamic rates, so a synthetic model carrying both keys
+    prices regional above-128k usage at 1.1x the above-128k rate."""
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            **litellm.get_model_cost_map(url=""),
+            "vertex_ai/fake-regional-128k-model": {
+                "litellm_provider": "vertex_ai",
+                "mode": "chat",
+                "input_cost_per_token": 1e-06,
+                "output_cost_per_token": 2e-06,
+                "input_cost_per_token_above_128k_tokens": 2e-06,
+                "output_cost_per_token_above_128k_tokens": 4e-06,
+                "regional_endpoint_uplift_multiplier": 1.1,
+            },
+        },
+    )
+
+    usage = Usage(prompt_tokens=200_000, completion_tokens=10, total_tokens=200_010)
+    global_prompt, global_completion = cost_per_token(
+        model="fake-regional-128k-model",
+        custom_llm_provider="vertex_ai",
+        usage_object=usage,
+        vertex_location="global",
+    )
+    regional_prompt, regional_completion = cost_per_token(
+        model="fake-regional-128k-model",
+        custom_llm_provider="vertex_ai",
+        usage_object=usage,
+        vertex_location="europe-west1",
+    )
+
+    assert global_prompt == pytest.approx(200_000 * 2e-06, rel=1e-9)
+    assert regional_prompt == pytest.approx(global_prompt * 1.10, rel=1e-9)
+    assert regional_completion == pytest.approx(global_completion * 1.10, rel=1e-9)
+
+
 def test_cost_discount_vertex_ai():
     """
     Test that cost discount is applied correctly for Vertex AI provider

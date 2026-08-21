@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import userEvent, { PointerEventsCheckLevel } from "@testing-library/user-event";
-import { renderWithProviders, screen, waitFor } from "../../../../../../tests/test-utils";
+import { fireEvent, renderWithProviders, screen, waitFor } from "../../../../../../tests/test-utils";
 import { EditProjectModal } from "./EditProjectModal";
 import { ProjectResponse } from "@/app/(dashboard)/hooks/projects/useProjects";
 
@@ -171,7 +171,7 @@ describe("EditProjectModal submit payload", () => {
     const nameInput = await screen.findByDisplayValue("My Project");
 
     await user.clear(nameInput);
-    await user.type(nameInput, "Renamed");
+    fireEvent.change(nameInput, { target: { value: "Renamed" } });
     await save(user);
 
     await waitFor(() => expect(mutate).toHaveBeenCalled());

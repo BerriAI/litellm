@@ -1,6 +1,6 @@
 import React from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { renderWithProviders } from "../../../../../tests/test-utils";
 import CostTrackingSettings from "./cost_tracking_settings";
@@ -72,7 +72,7 @@ describe("CostTrackingSettings submit paths", () => {
     const header = screen.getByText("Provider Discounts").closest("button");
     if (header) await user.click(header);
     await user.click(await screen.findByRole("button", { name: /add provider discount/i }));
-    await screen.findByText("Add Provider Discount", { selector: "h2" });
+    await screen.findByRole("dialog", { name: "Add Provider Discount" });
   };
 
   const submitDiscount = () =>
@@ -87,7 +87,7 @@ describe("CostTrackingSettings submit paths", () => {
 
     await user.click(screen.getAllByRole("combobox")[0]);
     await user.click((await screen.findAllByRole("option"))[0]);
-    await user.type(screen.getByLabelText(/Discount Percentage/i), "5");
+    fireEvent.change(screen.getByLabelText(/Discount Percentage/i), { target: { value: "5" } });
     await user.click(submitDiscount());
 
     await waitFor(() => expect(stableDiscountCallbacks.handleAddProvider).toHaveBeenCalled());
@@ -101,11 +101,11 @@ describe("CostTrackingSettings submit paths", () => {
     const header = screen.getByText("Fee/Price Margin").closest("button");
     if (header) await user.click(header);
     await user.click(await screen.findByRole("button", { name: /add provider margin/i }));
-    await screen.findByText("Add Provider Margin", { selector: "h2" });
+    await screen.findByRole("dialog", { name: "Add Provider Margin" });
 
     await user.click(screen.getAllByRole("combobox")[0]);
     await user.click((await screen.findAllByRole("option"))[0]);
-    await user.type(screen.getByLabelText(/Margin Percentage/i), "10");
+    fireEvent.change(screen.getByLabelText(/Margin Percentage/i), { target: { value: "10" } });
 
     const submit = screen
       .getAllByRole("button")
@@ -136,7 +136,7 @@ describe("CostTrackingSettings submit paths", () => {
     const header = screen.getByText("Fee/Price Margin").closest("button");
     if (header) await user.click(header);
     await user.click(await screen.findByRole("button", { name: /add provider margin/i }));
-    await screen.findByText("Add Provider Margin", { selector: "h2" });
+    await screen.findByRole("dialog", { name: "Add Provider Margin" });
 
     await user.click(screen.getAllByRole("combobox")[0]);
     await user.click((await screen.findAllByRole("option"))[0]);

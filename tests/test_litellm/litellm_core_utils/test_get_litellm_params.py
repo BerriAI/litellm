@@ -215,3 +215,32 @@ class TestMetadataFallsBackToLitellmMetadata:
         assert result["metadata"] is not litellm_metadata
         result["metadata"].pop("trace_id")
         assert litellm_metadata == {"trace_id": "trace-1"}
+
+
+class TestRustOptIn:
+    """`rust: true` is a litellm param, so it has to reach `litellm_params`.
+
+    `all_litellm_params` keeps it out of the provider body; without it also
+    being carried into `litellm_params` the chat completions handlers cannot
+    see the opt-in and the Rust path is silently never taken.
+    """
+
+    def test_rust_is_an_optional_kwargs_key(self):
+        assert "rust" in _OPTIONAL_KWARGS_KEYS
+
+    def test_rust_is_forwarded_from_completion_kwargs(self):
+        from litellm.litellm_core_utils.get_litellm_params import FORWARDED_KWARGS_KEYS
+
+        assert "rust" in FORWARDED_KWARGS_KEYS
+
+    def test_rust_survives_into_litellm_params(self):
+        params = get_litellm_params(rust=True)
+        assert params["rust"] is True
+
+    def test_rust_is_absent_when_the_deployment_did_not_set_it(self):
+        assert "rust" not in get_litellm_params()
+
+    def test_rust_stays_out_of_the_provider_body(self):
+        from litellm.types.utils import all_litellm_params
+
+        assert "rust" in all_litellm_params

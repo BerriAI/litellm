@@ -1,6 +1,5 @@
 "use client";
 
-import { Modal } from "antd";
 import React, { useMemo } from "react";
 import BaseSSOSettingsForm, {
   emptySSOSettingsFormValues,
@@ -15,6 +14,7 @@ import { parseErrorMessage } from "@/components/shared/errorUtils";
 import { detectSSOProvider, processSSOSettingsPayload } from "../utils";
 import { useSSOSettings, type SSOSettingsValues } from "@/app/(dashboard)/hooks/sso/useSSOSettings";
 import { useEditSSOSettings } from "@/app/(dashboard)/hooks/sso/useEditSSOSettings";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 interface EditSSOSettingsModalProps {
   isVisible: boolean;
@@ -108,29 +108,29 @@ const EditSSOSettingsModal: React.FC<EditSSOSettingsModalProps> = ({ isVisible, 
   };
 
   return (
-    <Modal
-      title="Edit SSO Settings"
-      open={isVisible}
-      width={800}
-      footer={
-        <div className="flex items-center justify-end gap-2">
-          <Button type="button" variant="outline" onClick={handleCancel} disabled={isPending}>
-            Cancel
-          </Button>
-          <Button
-            type="button"
-            disabled={isPending}
-            onClick={submitMountedSSOValues(form, "sso-settings", handleFormSubmit)}
-          >
-            {isPending && <UiLoadingSpinner className="size-4 mr-1" />}
-            {isPending ? "Saving..." : "Save"}
-          </Button>
-        </div>
-      }
-      onCancel={handleCancel}
-    >
-      <BaseSSOSettingsForm form={form} onFormSubmit={handleFormSubmit} />
-    </Modal>
+    <Dialog open={isVisible} onOpenChange={(open) => !open && handleCancel()}>
+      <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[800px]">
+        <DialogHeader>
+          <DialogTitle>Edit SSO Settings</DialogTitle>
+        </DialogHeader>
+        <BaseSSOSettingsForm form={form} onFormSubmit={handleFormSubmit} />
+        <DialogFooter>
+          <div className="flex items-center justify-end gap-2">
+            <Button type="button" variant="outline" onClick={handleCancel} disabled={isPending}>
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              disabled={isPending}
+              onClick={submitMountedSSOValues(form, "sso-settings", handleFormSubmit)}
+            >
+              {isPending && <UiLoadingSpinner className="size-4 mr-1" />}
+              {isPending ? "Saving..." : "Save"}
+            </Button>
+          </div>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 };
 

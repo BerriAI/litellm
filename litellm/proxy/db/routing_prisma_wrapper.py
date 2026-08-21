@@ -248,14 +248,14 @@ class RoutingPrismaWrapper:
     async def _recreate_reader(self, http_client: Any | None = None) -> None:
         """Resolve the reader URL and recreate its Prisma client.
 
-        IAM-enabled readers regenerate their token (host/port/user came from
-        the parsed reader URL at construction time). Non-IAM readers reuse
-        the URL stored in `DATABASE_URL_READ_REPLICA`.
+        Token-authenticated readers regenerate their token (host/port/user came
+        from the parsed reader URL at construction time). Password-authenticated
+        readers reuse the URL stored in `DATABASE_URL_READ_REPLICA`.
         """
         if self._reader.iam_token_db_auth:
             new_reader_url: Final = self._reader.get_rds_iam_token()
             if not new_reader_url:
-                raise RuntimeError("Failed to generate fresh IAM token for read replica")
+                raise RuntimeError(f"Failed to generate fresh {self._reader.token_label} for read replica")
             await self._reader.recreate_prisma_client(new_reader_url, http_client=http_client)
             return
         reader_url: Final = os.getenv("DATABASE_URL_READ_REPLICA", "")

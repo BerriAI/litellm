@@ -1286,6 +1286,75 @@ class TestOpenAIPassthroughIntegration:
         mock_chat_handler.assert_called_once()
         assert result == {"result": None, "kwargs": {}}
 
+    def test_openai_passthrough_handler_embeddings_unmapped_model_logs_zero_cost(self):
+        response_body = {
+            "object": "list",
+            "model": "lit5787-unmapped-embeddings-deployment",
+            "data": [{"object": "embedding", "index": 0, "embedding": [0.1, 0.2]}],
+            "usage": {"prompt_tokens": 9, "total_tokens": 9},
+        }
+        mock_logging_obj = self._create_mock_logging_obj()
+        result = OpenAIPassthroughLoggingHandler.openai_passthrough_handler(
+            httpx_response=self._create_mock_httpx_response(response_body),
+            response_body=response_body,
+            logging_obj=mock_logging_obj,
+            url_route="https://my-resource.openai.azure.com/openai/v1/embeddings",
+            result="",
+            start_time=self.start_time,
+            end_time=self.end_time,
+            cache_hit=False,
+            request_body={
+                "model": "lit5787-unmapped-embeddings-deployment",
+                "input": "spend probe",
+            },
+            passthrough_logging_payload=PassthroughStandardLoggingPayload(
+                url="https://my-resource.openai.azure.com/openai/v1/embeddings",
+                request_body={
+                    "model": "lit5787-unmapped-embeddings-deployment",
+                    "input": "spend probe",
+                },
+                request_method="POST",
+            ),
+            litellm_params={},
+        )
+
+        assert result["result"] is not None
+        assert result["result"].usage.prompt_tokens == 9
+        assert result["kwargs"]["response_cost"] == 0.0
+        assert result["kwargs"]["model"] == "lit5787-unmapped-embeddings-deployment"
+        assert result["result"]._hidden_params["response_cost"] == 0.0
+        assert mock_logging_obj.model_call_details["response_cost"] == 0.0
+
+    def test_openai_passthrough_handler_embeddings_error_skips_chat_fallback(self):
+        response_body = {
+            "object": "list",
+            "model": "text-embedding-3-small",
+            "usage": {"prompt_tokens": 9, "total_tokens": 9},
+        }
+        kwargs_in = {
+            "passthrough_logging_payload": PassthroughStandardLoggingPayload(
+                url="https://api.openai.com/v1/embeddings",
+                request_body={"model": "text-embedding-3-small", "input": "spend probe"},
+                request_method="POST",
+            ),
+            "litellm_params": {},
+        }
+        result = OpenAIPassthroughLoggingHandler.openai_passthrough_handler(
+            httpx_response=self._create_mock_httpx_response(response_body),
+            response_body=response_body,
+            logging_obj=self._create_mock_logging_obj(),
+            url_route="https://api.openai.com/v1/embeddings",
+            result="",
+            start_time=self.start_time,
+            end_time=self.end_time,
+            cache_hit=False,
+            request_body={"model": "text-embedding-3-small", "input": "spend probe"},
+            **kwargs_in,
+        )
+
+        assert result["result"] is None
+        assert result["kwargs"]["passthrough_logging_payload"] == kwargs_in["passthrough_logging_payload"]
+
     @patch(
         "litellm.proxy.pass_through_endpoints.llm_provider_handlers.openai_passthrough_logging_handler.OpenAIPassthroughLoggingHandler.openai_passthrough_handler"
     )

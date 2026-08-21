@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import sys
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -35,6 +36,7 @@ from litellm.utils import (
     ProviderConfigManager,
     TextCompletionStreamWrapper,
     _check_provider_match,
+    _get_potential_model_names,
     _is_streaming_request,
     get_api_key,
     get_llm_provider,
@@ -126,6 +128,74 @@ def test_get_model_info_surfaces_supports_adaptive_thinking(local_model_cost_map
         model="claude-opus-4-9", custom_llm_provider="anthropic"
     )
     assert generalized["supports_adaptive_thinking"] is True
+
+
+def test_potential_model_names_keeps_provider_prefixed_candidate():
+    """A provider whose own model ids repeat the litellm provider name (Perplexity's
+    Agent API serves `perplexity/glm-5.2`, mapped as `perplexity/perplexity/glm-5.2`)
+    needs the un-stripped `<provider>/<model>` candidate. Every other candidate reads
+    the leading `perplexity/` as the litellm prefix and strips it away."""
+    already_prefixed = _get_potential_model_names(
+        model="perplexity/glm-5.2", custom_llm_provider="perplexity"
+    )
+    assert already_prefixed["provider_prefixed_model_name"] == "perplexity/perplexity/glm-5.2"
+    assert already_prefixed["split_model"] == "glm-5.2"
+    assert already_prefixed["combined_model_name"] == "perplexity/glm-5.2"
+    assert already_prefixed["combined_stripped_model_name"] == "perplexity/glm-5.2"
+
+    bare = _get_potential_model_names(model="glm-5.2", custom_llm_provider="perplexity")
+    assert bare["provider_prefixed_model_name"] == bare["combined_model_name"] == "perplexity/glm-5.2"
+
+
+def test_get_model_info_resolves_provider_prefixed_model_ids(local_model_cost_map):
+    """Perplexity's Agent API third-party models are keyed `perplexity/perplexity/<id>`
+    because Perplexity's own id already starts with `perplexity/`. Callers run
+    `get_llm_provider` first, which hands `_get_potential_model_names` model
+    `perplexity/glm-5.2` with provider `perplexity`, and every candidate but the
+    provider-prefixed one strips that second `perplexity/` off. Regression: the
+    entries were unreachable from `supports_reasoning` and from the cost calculator's
+    per-token fallback, so a mapped model reported no reasoning support and raised
+    "This model isn't mapped yet" on the only path where its rates are ever used."""
+    for model, reasoning in (
+        ("perplexity/perplexity/glm-5.2", True),
+        ("perplexity/perplexity/kimi-k3", True),
+        ("perplexity/perplexity/deepseek-v4-flash-0731", True),
+        ("perplexity/perplexity/kimi-k2.7-code", False),
+    ):
+        assert litellm.supports_reasoning(model=model) is reasoning, model
+
+    via_provider = litellm.get_model_info(
+        model="perplexity/glm-5.2", custom_llm_provider="perplexity"
+    )
+    assert via_provider["key"] == "perplexity/perplexity/glm-5.2"
+    assert via_provider["input_cost_per_token"] == 1.4e-06
+    assert via_provider["output_cost_per_token"] == 4.4e-06
+    assert via_provider["mode"] == "responses"
+
+
+def test_provider_prefixed_lookup_never_outranks_an_existing_row(local_model_cost_map):
+    """The provider-prefixed candidate is tried last, after every candidate that
+    already existed, so no model that resolves today can change answer. `perplexity/sonar`
+    is the case that proves it: both `perplexity/sonar` and `perplexity/perplexity/sonar`
+    are cost-map keys, and the shorter one must keep winning."""
+    sonar = litellm.get_model_info(model="sonar", custom_llm_provider="perplexity")
+    assert sonar["key"] == "perplexity/sonar"
+    assert sonar["mode"] == "chat"
+    assert sonar["input_cost_per_token"] == 1e-06
+
+    still_sonar = litellm.get_model_info(
+        model="perplexity/sonar", custom_llm_provider="perplexity"
+    )
+    assert still_sonar["key"] == "perplexity/sonar"
+    assert still_sonar["mode"] == "chat"
+
+    for model, provider, expected_key in (
+        ("claude-sonnet-4-5", "anthropic", "claude-sonnet-4-5"),
+        ("anthropic/claude-sonnet-4-5", "anthropic", "claude-sonnet-4-5"),
+        ("gemini/gemini-2.0-flash", "gemini", "gemini/gemini-2.0-flash"),
+        ("openrouter/openai/gpt-4o", "openrouter", "openrouter/openai/gpt-4o"),
+    ):
+        assert litellm.get_model_info(model=model, custom_llm_provider=provider)["key"] == expected_key
 
 
 def test_check_provider_match_azure_ai_allows_openai_and_azure():
@@ -831,6 +901,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "output_cost_per_token_above_200k_tokens_priority": {"type": "number"},
                 "output_cost_per_token_above_272k_tokens_priority": {"type": "number"},
                 "output_cost_per_token_above_272k_tokens_flex": {"type": "number"},
+                "regional_endpoint_uplift_multiplier": {"type": "number"},
                 "regional_processing_uplift_multiplier_eu": {"type": "number"},
                 "regional_processing_uplift_multiplier_us": {"type": "number"},
                 "input_cost_per_pixel": {"type": "number"},
@@ -919,6 +990,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "supports_parallel_tool_use_config": {"type": "boolean"},
                 "supports_pdf_input": {"type": "boolean"},
                 "prompt_cache_min_tokens": {"type": "number"},
+                "supports_prompt_cache_breakpoint": {"type": "boolean"},
                 "supports_prompt_caching": {"type": "boolean"},
                 "supports_response_schema": {"type": "boolean"},
                 "supports_system_messages": {"type": "boolean"},
@@ -3718,7 +3790,7 @@ class TestMetadataNoneHandling:
 
         # Attempting 'in' on None raises TypeError
         with pytest.raises(TypeError):
-            "model_group" in kwargs.get("metadata", {})
+            _ = "model_group" in kwargs.get("metadata", {})
 
     def test_litellm_params_metadata_none(self):
         """litellm_params.get("metadata") or {} should handle None value."""
@@ -3766,6 +3838,20 @@ class TestValidateAndFixThinkingParam:
         assert "budgetTokens" in thinking
         assert "budget_tokens" not in thinking
 
+    def test_bool_true_maps_to_enabled_with_default_budget(self):
+        from litellm.constants import DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET
+        from litellm.utils import validate_and_fix_thinking_param
+
+        assert validate_and_fix_thinking_param(thinking=True) == {
+            "type": "enabled",
+            "budget_tokens": DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
+        }
+
+    def test_bool_false_returns_none(self):
+        from litellm.utils import validate_and_fix_thinking_param
+
+        assert validate_and_fix_thinking_param(thinking=False) is None
+
 
 def test_deepseek_v4_models_in_cost_map():
     """
@@ -3773,8 +3859,8 @@ def test_deepseek_v4_models_in_cost_map():
     configured in model_prices_and_context_window.json.
 
     Prices sourced from https://api-docs.deepseek.com/quick_start/pricing:
-    - deepseek-v4-flash: $0.14/M input, $0.28/M output
-    - deepseek-v4-pro:   $0.435/M input, $0.87/M output (75% discounted active price)
+    - deepseek-v4-flash: $0.44/M input, $1.32/M output
+    - deepseek-v4-pro:   $1.32/M input, $3.96/M output
 
     Closes https://github.com/BerriAI/litellm/issues/26709
     """
@@ -3787,8 +3873,8 @@ def test_deepseek_v4_models_in_cost_map():
 
     # --- bare model names ---
     for key, expected_input, expected_output, expected_cache in [
-        ("deepseek-v4-flash", 1.4e-07, 2.8e-07, 2.8e-09),
-        ("deepseek-v4-pro", 4.35e-07, 8.7e-07, 3.625e-09),
+        ("deepseek-v4-flash", 4.4e-07, 1.32e-06, 1.4e-08),
+        ("deepseek-v4-pro", 1.32e-06, 3.96e-06, 4.4e-08),
     ]:
         info = model_cost.get(key)
         assert info is not None, f"{key} missing from model_prices_and_context_window.json"
@@ -3803,8 +3889,8 @@ def test_deepseek_v4_models_in_cost_map():
 
     # --- provider-prefixed names ---
     for key, expected_input, expected_output, expected_cache in [
-        ("deepseek/deepseek-v4-flash", 1.4e-07, 2.8e-07, 2.8e-09),
-        ("deepseek/deepseek-v4-pro", 4.35e-07, 8.7e-07, 3.625e-09),
+        ("deepseek/deepseek-v4-flash", 4.4e-07, 1.32e-06, 1.4e-08),
+        ("deepseek/deepseek-v4-pro", 1.32e-06, 3.96e-06, 4.4e-08),
     ]:
         info = model_cost.get(key)
         assert info is not None, f"{key} missing from model_prices_and_context_window.json"
@@ -3831,8 +3917,8 @@ def test_deepseek_v4_models_in_backup_cost_map():
 
     # --- bare model names ---
     for key, expected_input, expected_output, expected_cache in [
-        ("deepseek-v4-flash", 1.4e-07, 2.8e-07, 2.8e-09),
-        ("deepseek-v4-pro", 4.35e-07, 8.7e-07, 3.625e-09),
+        ("deepseek-v4-flash", 4.4e-07, 1.32e-06, 1.4e-08),
+        ("deepseek-v4-pro", 1.32e-06, 3.96e-06, 4.4e-08),
     ]:
         info = model_cost.get(key)
         assert info is not None, f"{key} missing from backup JSON"
@@ -3845,8 +3931,8 @@ def test_deepseek_v4_models_in_backup_cost_map():
 
     # --- provider-prefixed names ---
     for key, expected_input, expected_output, expected_cache in [
-        ("deepseek/deepseek-v4-flash", 1.4e-07, 2.8e-07, 2.8e-09),
-        ("deepseek/deepseek-v4-pro", 4.35e-07, 8.7e-07, 3.625e-09),
+        ("deepseek/deepseek-v4-flash", 4.4e-07, 1.32e-06, 1.4e-08),
+        ("deepseek/deepseek-v4-pro", 1.32e-06, 3.96e-06, 4.4e-08),
     ]:
         info = model_cost.get(key)
         assert info is not None, f"{key} missing from backup JSON"
@@ -4368,6 +4454,45 @@ def test_get_prompt_cache_min_tokens_differs_per_platform_for_same_model(local_m
     assert get_prompt_cache_min_tokens(model="claude-fable-5") != get_prompt_cache_min_tokens(
         model="anthropic.claude-fable-5"
     )
+
+
+GEMINI_4096_CACHE_MIN_MODELS: Final = tuple(
+    prefix + base
+    for base in (
+        "gemini-3.5-flash",
+        "gemini-3.6-flash",
+        "gemini-3.7-flash",
+        "gemini-3.1-pro-preview",
+        "gemini-3.1-pro-preview-customtools",
+    )
+    for prefix in ("", "gemini/", "vertex_ai/")
+)
+
+
+def test_gemini_3_flash_and_31_pro_preview_resolve_4096_cache_minimum(local_model_cost_map: None) -> None:
+    """Regression for the cost map missing prompt_cache_min_tokens on these models: Google rejects
+    explicit caching below 4,096 tokens for them (https://ai.google.dev/gemini-api/docs/caching), so
+    the 1024 default sent cachedContents creates Vertex answered with a hard 400."""
+    wrong: Final = {
+        model: get_prompt_cache_min_tokens(model=model)
+        for model in GEMINI_4096_CACHE_MIN_MODELS
+        if get_prompt_cache_min_tokens(model=model) != 4096
+    }
+    assert not wrong, f"prompt_cache_min_tokens must be 4096: {wrong}"
+
+
+def test_gemini_4096_cache_minimum_present_in_root_cost_map() -> None:
+    """The root map ships to the CDN independently of the bundled backup, so both must carry the
+    minimum or proxies reading one of them regress to the 1024 default."""
+    root_map_path: Final = os.path.join(os.path.dirname(__file__), "..", "..", "model_prices_and_context_window.json")
+    with open(root_map_path) as f:
+        root_map: Final = json.load(f)
+    wrong: Final = {
+        model: root_map[model].get("prompt_cache_min_tokens")
+        for model in GEMINI_4096_CACHE_MIN_MODELS
+        if root_map[model].get("prompt_cache_min_tokens") != 4096
+    }
+    assert not wrong, f"prompt_cache_min_tokens must be 4096: {wrong}"
 
 
 def test_get_prompt_cache_min_tokens_unmapped_model_falls_back_to_default(local_model_cost_map: None) -> None:

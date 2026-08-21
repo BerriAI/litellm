@@ -1,6 +1,6 @@
 import React from "react";
 import { describe, expect, it, vi } from "vitest";
-import { screen } from "@testing-library/react";
+import { fireEvent, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { renderWithProviders } from "@/../tests/test-utils";
 import PipelineFlowBuilder, { PipelineInfoDisplay } from "./pipeline_flow_builder";
@@ -151,7 +151,7 @@ describe("PipelineFlowBuilder", () => {
       />,
     );
 
-    await user.type(screen.getByPlaceholderText("Enter custom response..."), "x");
+    fireEvent.change(screen.getByPlaceholderText("Enter custom response..."), { target: { value: "x" } });
 
     expect(onChange.mock.calls[0][0].steps[0].modify_response_message).toBe("x");
   });

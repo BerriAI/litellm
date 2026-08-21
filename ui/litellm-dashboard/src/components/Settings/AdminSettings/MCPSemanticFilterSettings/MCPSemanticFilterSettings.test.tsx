@@ -228,7 +228,7 @@ describe("MCPSemanticFilterSettings", () => {
 
     const topK = screen.getByRole("spinbutton");
     await user.clear(topK);
-    await user.type(topK, "7");
+    fireEvent.change(topK, { target: { value: "7" } });
     await user.click(screen.getByRole("button", { name: /save settings/i }));
 
     expect(mockMutate).toHaveBeenCalledWith(DEFAULTED_PAYLOAD, expect.anything());
@@ -243,7 +243,7 @@ describe("MCPSemanticFilterSettings", () => {
 
     const topK = screen.getByRole("spinbutton");
     await user.clear(topK);
-    await user.type(topK, "25");
+    fireEvent.change(topK, { target: { value: "25" } });
 
     const slider = screen.getByRole("slider", { hidden: true });
     fireEvent.keyDown(slider, { key: "ArrowRight", keyCode: 39, which: 39 });
@@ -251,7 +251,7 @@ describe("MCPSemanticFilterSettings", () => {
     const embeddingModel = screen.getByRole("combobox");
     await user.click(embeddingModel);
     await user.clear(embeddingModel);
-    await user.type(embeddingModel, "large");
+    fireEvent.change(embeddingModel, { target: { value: "large" } });
     fireEvent.keyDown(embeddingModel, { key: "ArrowDown", keyCode: 40, which: 40 });
     fireEvent.keyDown(embeddingModel, { key: "Enter", keyCode: 13, which: 13 });
 
@@ -277,7 +277,7 @@ describe("MCPSemanticFilterSettings", () => {
 
     const topK = screen.getByRole("spinbutton");
     await user.clear(topK);
-    await user.type(topK, "500");
+    fireEvent.change(topK, { target: { value: "500" } });
     await user.tab();
     await user.click(screen.getByRole("button", { name: /save settings/i }));
 
@@ -290,7 +290,7 @@ describe("MCPSemanticFilterSettings", () => {
 
     const topK = screen.getByRole("spinbutton");
     await user.clear(topK);
-    await user.type(topK, "0");
+    fireEvent.change(topK, { target: { value: "0" } });
     await user.tab();
     await user.click(screen.getByRole("button", { name: /save settings/i }));
 

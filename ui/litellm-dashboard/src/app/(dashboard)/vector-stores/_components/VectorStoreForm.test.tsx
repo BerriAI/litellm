@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { CredentialItem, vectorStoreCreateCall } from "@/components/networking";
@@ -49,7 +49,7 @@ describe("VectorStoreForm", () => {
     const user = userEvent.setup();
     renderForm();
 
-    await user.type(screen.getByLabelText(/Vector Store ID/), "vs-created");
+    fireEvent.change(screen.getByLabelText(/Vector Store ID/), { target: { value: "vs-created" } });
     await user.click(screen.getByRole("button", { name: "Create" }));
 
     await vi.waitFor(() => expect(vectorStoreCreateCall).toHaveBeenCalledTimes(1));
@@ -61,7 +61,7 @@ describe("VectorStoreForm", () => {
     const onCancel = vi.fn();
     renderForm(onCancel);
 
-    await user.type(screen.getByLabelText(/Vector Store ID/), "vs-abandoned");
+    fireEvent.change(screen.getByLabelText(/Vector Store ID/), { target: { value: "vs-abandoned" } });
     await user.click(screen.getByRole("button", { name: "Cancel" }));
 
     expect(onCancel).toHaveBeenCalledTimes(1);

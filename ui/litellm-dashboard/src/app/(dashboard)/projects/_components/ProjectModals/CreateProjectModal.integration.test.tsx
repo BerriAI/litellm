@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import userEvent, { PointerEventsCheckLevel } from "@testing-library/user-event";
-import { renderWithProviders, screen, waitFor } from "../../../../../../tests/test-utils";
+import { fireEvent, renderWithProviders, screen, waitFor } from "../../../../../../tests/test-utils";
 import { CreateProjectModal } from "./CreateProjectModal";
 
 const mutate = vi.fn();
@@ -68,7 +68,7 @@ describe("CreateProjectModal submit payload", () => {
     const user = setup();
     renderModal();
 
-    await user.type(screen.getByLabelText("Project Name"), "My Project");
+    fireEvent.change(screen.getByLabelText("Project Name"), { target: { value: "My Project" } });
     await pickTeam(user);
     await submit(user);
 
@@ -100,7 +100,7 @@ describe("CreateProjectModal submit payload", () => {
     const user = setup();
     renderModal();
 
-    await user.type(screen.getByLabelText("Project Name"), "My Project");
+    fireEvent.change(screen.getByLabelText("Project Name"), { target: { value: "My Project" } });
     await submit(user);
 
     expect(await screen.findByText("Please select a team")).toBeInTheDocument();
@@ -111,10 +111,10 @@ describe("CreateProjectModal submit payload", () => {
     const user = setup();
     renderModal();
 
-    await user.type(screen.getByLabelText("Project Name"), "My Project");
+    fireEvent.change(screen.getByLabelText("Project Name"), { target: { value: "My Project" } });
     await pickTeam(user);
-    await user.type(screen.getByLabelText("Description"), "Handles support");
-    await user.type(screen.getByPlaceholderText("0.00"), "42.567");
+    fireEvent.change(screen.getByLabelText("Description"), { target: { value: "Handles support" } });
+    fireEvent.change(screen.getByPlaceholderText("0.00"), { target: { value: "42.567" } });
     await submit(user);
 
     await waitFor(() => expect(mutate).toHaveBeenCalled());
@@ -126,7 +126,7 @@ describe("CreateProjectModal submit payload", () => {
     const user = setup();
     renderModal();
 
-    await user.type(screen.getByLabelText("Project Name"), "My Project");
+    fireEvent.change(screen.getByLabelText("Project Name"), { target: { value: "My Project" } });
     await pickTeam(user);
     await user.click(screen.getByLabelText(/Allowed Models/));
     await user.click(await screen.findByTitle("gpt-4"));
@@ -140,7 +140,7 @@ describe("CreateProjectModal submit payload", () => {
     const user = setup();
     renderModal();
 
-    await user.type(screen.getByLabelText("Project Name"), "My Project");
+    fireEvent.change(screen.getByLabelText("Project Name"), { target: { value: "My Project" } });
     await pickTeam(user);
     await user.click(screen.getByLabelText(/Allowed Models/));
     await user.click(await screen.findByTitle("gpt-4"));
@@ -155,7 +155,7 @@ describe("CreateProjectModal submit payload", () => {
     const user = setup();
     renderModal();
 
-    await user.type(screen.getByLabelText("Project Name"), "My Project");
+    fireEvent.change(screen.getByLabelText("Project Name"), { target: { value: "My Project" } });
     await pickTeam(user);
     await expandAdvanced(user);
     await user.click(screen.getByRole("switch"));
@@ -169,7 +169,7 @@ describe("CreateProjectModal submit payload", () => {
     const user = setup();
     renderModal();
 
-    await user.type(screen.getByLabelText("Project Name"), "My Project");
+    fireEvent.change(screen.getByLabelText("Project Name"), { target: { value: "My Project" } });
     await pickTeam(user);
     await expandAdvanced(user);
     await submit(user);
@@ -185,14 +185,14 @@ describe("CreateProjectModal submit payload", () => {
     const user = setup();
     renderModal();
 
-    await user.type(screen.getByLabelText("Project Name"), "My Project");
+    fireEvent.change(screen.getByLabelText("Project Name"), { target: { value: "My Project" } });
     await pickTeam(user);
     await expandAdvanced(user);
 
     await user.click(screen.getByRole("button", { name: /add model limit/i }));
-    await user.type(screen.getByPlaceholderText("Model name (e.g. gpt-4)"), "gpt-4");
-    await user.type(screen.getByPlaceholderText("TPM Limit"), "100");
-    await user.type(screen.getByPlaceholderText("RPM Limit"), "20");
+    fireEvent.change(screen.getByPlaceholderText("Model name (e.g. gpt-4)"), { target: { value: "gpt-4" } });
+    fireEvent.change(screen.getByPlaceholderText("TPM Limit"), { target: { value: "100" } });
+    fireEvent.change(screen.getByPlaceholderText("RPM Limit"), { target: { value: "20" } });
     await submit(user);
 
     await waitFor(() => expect(mutate).toHaveBeenCalled());
@@ -204,13 +204,13 @@ describe("CreateProjectModal submit payload", () => {
     const user = setup();
     renderModal();
 
-    await user.type(screen.getByLabelText("Project Name"), "My Project");
+    fireEvent.change(screen.getByLabelText("Project Name"), { target: { value: "My Project" } });
     await pickTeam(user);
     await expandAdvanced(user);
 
     await user.click(screen.getByRole("button", { name: /add key-value pair/i }));
-    await user.type(screen.getByPlaceholderText("Key"), "owner");
-    await user.type(screen.getByPlaceholderText("Value"), "platform");
+    fireEvent.change(screen.getByPlaceholderText("Key"), { target: { value: "owner" } });
+    fireEvent.change(screen.getByPlaceholderText("Value"), { target: { value: "platform" } });
     await submit(user);
 
     await waitFor(() => expect(mutate).toHaveBeenCalled());
@@ -221,7 +221,7 @@ describe("CreateProjectModal submit payload", () => {
     const user = setup();
     renderModal();
 
-    await user.type(screen.getByLabelText("Project Name"), "My Project");
+    fireEvent.change(screen.getByLabelText("Project Name"), { target: { value: "My Project" } });
     await pickTeam(user);
     await expandAdvanced(user);
 
@@ -238,15 +238,15 @@ describe("CreateProjectModal submit payload", () => {
     const user = setup();
     renderModal();
 
-    await user.type(screen.getByLabelText("Project Name"), "My Project");
+    fireEvent.change(screen.getByLabelText("Project Name"), { target: { value: "My Project" } });
     await pickTeam(user);
     await expandAdvanced(user);
 
     await user.click(screen.getByRole("button", { name: /add model limit/i }));
     await user.click(screen.getByRole("button", { name: /add model limit/i }));
     const modelInputs = screen.getAllByPlaceholderText("Model name (e.g. gpt-4)");
-    await user.type(modelInputs[0], "gpt-4");
-    await user.type(modelInputs[1], "gpt-4");
+    fireEvent.change(modelInputs[0], { target: { value: "gpt-4" } });
+    fireEvent.change(modelInputs[1], { target: { value: "gpt-4" } });
     await submit(user);
 
     expect(await screen.findByText("Duplicate model")).toBeInTheDocument();

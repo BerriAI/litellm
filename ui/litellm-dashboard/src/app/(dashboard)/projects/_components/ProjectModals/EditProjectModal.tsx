@@ -1,7 +1,6 @@
 "use client";
 
 import { useState } from "react";
-import { Modal } from "antd";
 import { Save } from "lucide-react";
 
 import { toast } from "@/lib/toast";
@@ -13,6 +12,7 @@ import { useUpdateProject, ProjectUpdateParams } from "@/app/(dashboard)/hooks/p
 import { ProjectBaseForm } from "./ProjectBaseForm";
 import { projectFormSchema, type ProjectFormValues } from "./projectFormSchema";
 import { buildProjectApiParams } from "./projectFormUtils";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 interface EditProjectModalProps {
   isOpen: boolean;
@@ -107,15 +107,13 @@ function EditProjectForm({ project, onClose, onSuccess }: Omit<EditProjectModalP
 
 export function EditProjectModal({ isOpen, project, onClose, onSuccess }: EditProjectModalProps) {
   return (
-    <Modal
-      title={<span className="text-lg font-semibold text-foreground">Edit Project</span>}
-      open={isOpen}
-      onCancel={onClose}
-      width={720}
-      destroyOnHidden
-      footer={null}
-    >
-      <EditProjectForm key={project.project_id} project={project} onClose={onClose} onSuccess={onSuccess} />
-    </Modal>
+    <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[720px]">
+        <DialogHeader>
+          <DialogTitle className="text-lg">Edit Project</DialogTitle>
+        </DialogHeader>
+        <EditProjectForm key={project.project_id} project={project} onClose={onClose} onSuccess={onSuccess} />
+      </DialogContent>
+    </Dialog>
   );
 }

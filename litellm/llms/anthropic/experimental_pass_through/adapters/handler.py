@@ -484,10 +484,14 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         if "output_config" in extra_kwargs:
             request_data["output_config"] = extra_kwargs["output_config"]
 
+        custom_llm_provider: Final = extra_kwargs.get("custom_llm_provider")
         (
             openai_request,
             tool_name_mapping,
-        ) = ANTHROPIC_ADAPTER.translate_completion_input_params_with_tool_mapping(request_data)
+        ) = ANTHROPIC_ADAPTER.translate_completion_input_params_with_tool_mapping(
+            request_data,
+            custom_llm_provider=custom_llm_provider if isinstance(custom_llm_provider, str) else None,
+        )
 
         if openai_request is None:
             raise ValueError("Failed to translate request to OpenAI format")
@@ -525,6 +529,10 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                 setattr(value, "stream_options", completion_kwargs.get("stream_options"))
             if key not in excluded_keys and key not in completion_kwargs and value is not None:
                 completion_kwargs[key] = value
+
+        explicit_prompt_cache_key: Final = extra_kwargs.get("prompt_cache_key")
+        if explicit_prompt_cache_key is not None:
+            completion_kwargs["prompt_cache_key"] = explicit_prompt_cache_key
 
         # Normalize reasoning_effort based on model capabilities
         # (e.g. "max" → "xhigh"/"high", "minimal" → "low" if unsupported)

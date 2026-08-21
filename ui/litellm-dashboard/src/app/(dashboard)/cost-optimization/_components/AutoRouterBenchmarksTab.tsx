@@ -62,7 +62,7 @@ const HeroCard: React.FC<{ view: BenchmarkView }> = ({ view }) => {
             <p className="text-5xl font-semibold tracking-tight text-foreground">{usd(stats.saved_spend)}</p>
             <Badge
               variant="secondary"
-              className={cheaper ? "bg-emerald-50 text-emerald-700" : "bg-red-50 text-destructive"}
+              className={cheaper ? "bg-success/10 text-success" : "bg-destructive/10 text-destructive"}
             >
               {stats.saved_spend !== 0 && (cheaper ? "-" : "+")}
               {Math.abs(stats.saved_pct).toFixed(0)}%

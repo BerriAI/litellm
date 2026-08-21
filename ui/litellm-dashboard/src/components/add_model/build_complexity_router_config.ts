@@ -1,5 +1,6 @@
 import { KeywordTierRule } from "./KeywordTierRules";
 import { emptyKeywordTierRuleIndexes, serializeKeywordTierRules } from "./complexity_router_keywords";
+import { TierModelParams, TierModelParamsByTier, serializeTierModelConfigs } from "./complexity_router_tiers";
 import {
   AdaptiveEligible,
   AdaptiveRouterWeights,
@@ -46,6 +47,7 @@ interface ScorerKnobInputs {
   tierBoundaries: TierBoundaries | undefined;
   tokenThresholds: TokenThresholds | undefined;
   dimensionWeights: DimensionWeights | undefined;
+  reasoningOverrideMinScore: number | undefined;
 }
 
 /**
@@ -59,6 +61,7 @@ const scorerKnobPayload = ({
   tierBoundaries,
   tokenThresholds,
   dimensionWeights,
+  reasoningOverrideMinScore,
 }: ScorerKnobInputs) =>
   heuristicScoringRoleFor(classifierType, classifierFallback) === "never"
     ? {}
@@ -66,6 +69,7 @@ const scorerKnobPayload = ({
         ...(tierBoundaries && { tier_boundaries: tierBoundaries }),
         ...(tokenThresholds && { token_thresholds: tokenThresholds }),
         ...(dimensionWeights && { dimension_weights: dimensionWeights }),
+        ...(reasoningOverrideMinScore !== undefined && { reasoning_override_min_score: reasoningOverrideMinScore }),
       };
 
 export interface BuildComplexityRouterConfigParams {
@@ -95,6 +99,8 @@ export interface BuildComplexityRouterConfigParams {
   tierBoundaries?: TierBoundaries;
   tokenThresholds?: TokenThresholds;
   dimensionWeights?: DimensionWeights;
+  reasoningOverrideMinScore?: number;
+  tierModelParams?: TierModelParamsByTier;
 }
 
 export interface ComplexityRouterConfigPayload {
@@ -124,6 +130,8 @@ export interface ComplexityRouterConfigPayload {
   tier_boundaries?: TierBoundaries;
   token_thresholds?: TokenThresholds;
   dimension_weights?: DimensionWeights;
+  reasoning_override_min_score?: number;
+  tier_model_configs?: Record<string, { model_name: string; litellm_params: TierModelParams }[]>;
 }
 
 const TIER_KEYS: Array<keyof ComplexityTiers> = ["SIMPLE", "MEDIUM", "COMPLEX", "REASONING"];
@@ -230,15 +238,26 @@ export const buildComplexityRouterConfig = ({
   tierBoundaries,
   tokenThresholds,
   dimensionWeights,
+  reasoningOverrideMinScore,
+  tierModelParams,
 }: BuildComplexityRouterConfigParams): ComplexityRouterConfigPayload => {
+  const serializedTierModelConfigs = serializeTierModelConfigs(tiers, tierModelParams);
   const cleanedEscalationKeywords = escalationKeywords.map((keyword) => keyword.trim()).filter(Boolean);
   const cleanedKeywordTierRules = serializeKeywordTierRules(keywordTierRules);
   const cleanedTierLabels = serializeTierLabels(tierLabels);
-  const scorerInputs = { classifierType, classifierFallback, tierBoundaries, tokenThresholds, dimensionWeights };
+  const scorerInputs = {
+    classifierType,
+    classifierFallback,
+    tierBoundaries,
+    tokenThresholds,
+    dimensionWeights,
+    reasoningOverrideMinScore,
+  };
   const scorerKnobs = scorerKnobPayload(scorerInputs);
 
   return {
     tiers,
+    ...(serializedTierModelConfigs && { tier_model_configs: serializedTierModelConfigs }),
     ...(defaultModel?.trim() && { default_model: defaultModel }),
     ...(planModeMinTier?.trim() && { plan_mode_min_tier: planModeMinTier }),
     ...(cleanedTierLabels && { tier_labels: cleanedTierLabels }),

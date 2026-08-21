@@ -770,6 +770,214 @@ async def test_ProxyConfig_get_config_missing_file_raises(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# ProxyConfig._initialize_secret_manager_from_raw_config
+# ---------------------------------------------------------------------------
+
+VAULT_SECRET_MANAGER_MODULE = '''
+import os
+
+from litellm.integrations.custom_secret_manager import CustomSecretManager
+
+VAULT = {"LITELLM_MASTER_KEY": "master-from-vault", "MY_PROVIDER_KEY": "provider-from-vault"}
+
+
+class VaultSecretManager(CustomSecretManager):
+    def __init__(self):
+        super().__init__()
+        # The loader re-executes this module on every construction, so an in-module counter
+        # would reset. Append to a file instead, to count constructions across the whole load.
+        with open(os.environ["VAULT_CONSTRUCTION_LOG"], "a") as f:
+            f.write("constructed\\n")
+
+    def sync_read_secret(self, secret_name, optional_params=None, timeout=None, **kwargs):
+        return VAULT.get(secret_name)
+
+    async def async_read_secret(self, secret_name, optional_params=None, timeout=None, **kwargs):
+        return VAULT.get(secret_name)
+'''
+
+VAULT_BACKED_CONFIG = """
+model_list:
+  - model_name: my-model
+    litellm_params:
+      model: openai/gpt-4o-mini
+      api_key: os.environ/MY_PROVIDER_KEY
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+  key_management_system: custom
+  key_management_settings:
+    custom_secret_manager: vault_secret_manager.VaultSecretManager
+    hosted_keys:
+      - LITELLM_MASTER_KEY
+      - MY_PROVIDER_KEY
+"""
+
+
+def _write_vault_backed_config(tmp_path, monkeypatch, config_yaml: str) -> str:
+    """Write a config whose secrets live only in a custom secret manager, never in the env."""
+    (tmp_path / "vault_secret_manager.py").write_text(VAULT_SECRET_MANAGER_MODULE)
+    config_file = tmp_path / "c.yaml"
+    config_file.write_text(config_yaml)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
+    monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
+    monkeypatch.delenv("LITELLM_MASTER_KEY", raising=False)
+    monkeypatch.delenv("MY_PROVIDER_KEY", raising=False)
+    monkeypatch.setenv("VAULT_CONSTRUCTION_LOG", str(tmp_path / "constructions.log"))
+    monkeypatch.setattr(litellm, "secret_manager_client", None)
+    return str(config_file)
+
+
+def _construction_count(tmp_path) -> int:
+    log = tmp_path / "constructions.log"
+    return len(log.read_text().splitlines()) if log.exists() else 0
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_get_config_resolves_keys_held_only_by_the_secret_manager(tmp_path, monkeypatch):
+    """Regression for GH #35239.
+
+    get_config() used to resolve every ``os.environ/<KEY>`` reference and write the result
+    back into the config before the secret manager was initialized, so any key that lived
+    only in the manager became a permanent ``None``.
+    """
+    config_file_path = _write_vault_backed_config(tmp_path, monkeypatch, VAULT_BACKED_CONFIG)
+
+    cfg = await ProxyConfig().get_config(config_file_path=config_file_path)
+
+    assert {
+        "master_key": cfg["general_settings"]["master_key"],
+        "api_key": cfg["model_list"][0]["litellm_params"]["api_key"],
+        "hosted_keys": litellm._key_management_settings.hosted_keys,
+    } == {
+        "master_key": "master-from-vault",
+        "api_key": "provider-from-vault",
+        "hosted_keys": ["LITELLM_MASTER_KEY", "MY_PROVIDER_KEY"],
+    }
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_load_config_builds_the_secret_manager_exactly_once(tmp_path, monkeypatch):
+    """The full startup path must not build the manager, then throw it away and build another.
+
+    A discarded client costs a Vault/CyberArk re-auth and leaks a gRPC channel on Google KMS.
+    """
+    config_file_path = _write_vault_backed_config(tmp_path, monkeypatch, VAULT_BACKED_CONFIG)
+
+    _router, _model_list, general_settings = await ProxyConfig().load_config(
+        router=None, config_file_path=config_file_path
+    )
+
+    assert {
+        "constructions": _construction_count(tmp_path),
+        "master_key": general_settings["master_key"],
+    } == {"constructions": 1, "master_key": "master-from-vault"}
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_get_config_reuses_an_already_initialized_secret_manager(tmp_path, monkeypatch):
+    """get_config() also runs on management-endpoint request paths.
+
+    Rebuilding the client on every call would re-execute the custom manager module, drop the
+    Vault/CyberArk token caches, and leak a gRPC channel per request on Google KMS.
+    """
+    config_file_path = _write_vault_backed_config(tmp_path, monkeypatch, VAULT_BACKED_CONFIG)
+
+    await ProxyConfig().get_config(config_file_path=config_file_path)
+    first_client = litellm.secret_manager_client
+    second = await ProxyConfig().get_config(config_file_path=config_file_path)
+
+    assert {
+        "client_reused": litellm.secret_manager_client is first_client,
+        "master_key": second["general_settings"]["master_key"],
+    } == {"client_reused": True, "master_key": "master-from-vault"}
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_get_config_without_key_management_system_leaves_secret_manager_unset(
+    tmp_path, monkeypatch
+):
+    """No ``key_management_system`` means no manager, an unresolvable reference stays None, and
+    nothing is warned about: with no manager there is nothing to have been absent from."""
+    config_yaml = VAULT_BACKED_CONFIG.replace("  key_management_system: custom\n", "")
+    config_file_path = _write_vault_backed_config(tmp_path, monkeypatch, config_yaml)
+    warn = MagicMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.verbose_proxy_logger.warning", warn)
+
+    cfg = await ProxyConfig().get_config(config_file_path=config_file_path)
+
+    assert {
+        "master_key": cfg["general_settings"]["master_key"],
+        "api_key": cfg["model_list"][0]["litellm_params"]["api_key"],
+        "client": litellm.secret_manager_client,
+        "warned_about": [call.args[1] for call in warn.call_args_list],
+    } == {"master_key": None, "api_key": None, "client": None, "warned_about": []}
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_get_config_warns_when_a_reference_is_missing_from_the_secret_manager(
+    tmp_path, monkeypatch
+):
+    """A reference the manager cannot resolve is logged, instead of silently becoming None."""
+    config_yaml = VAULT_BACKED_CONFIG.replace("MY_PROVIDER_KEY", "NOT_IN_VAULT")
+    config_file_path = _write_vault_backed_config(tmp_path, monkeypatch, config_yaml)
+    warn = MagicMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.verbose_proxy_logger.warning", warn)
+
+    cfg = await ProxyConfig().get_config(config_file_path=config_file_path)
+
+    assert {
+        "api_key": cfg["model_list"][0]["litellm_params"]["api_key"],
+        "warned_about": [call.args[1] for call in warn.call_args_list],
+    } == {"api_key": None, "warned_about": ["os.environ/NOT_IN_VAULT"]}
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_get_config_does_not_warn_for_a_name_outside_hosted_keys(tmp_path, monkeypatch):
+    """``hosted_keys`` is an allowlist, so a name outside it is never looked up in the manager.
+
+    Warning about it would claim a lookup that never happened, on every optional env-only
+    reference, on every config reload.
+    """
+    config_yaml = VAULT_BACKED_CONFIG.replace("api_key: os.environ/MY_PROVIDER_KEY", "api_key: os.environ/ENV_ONLY")
+    config_file_path = _write_vault_backed_config(tmp_path, monkeypatch, config_yaml)
+    warn = MagicMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.verbose_proxy_logger.warning", warn)
+
+    cfg = await ProxyConfig().get_config(config_file_path=config_file_path)
+
+    assert {
+        "api_key": cfg["model_list"][0]["litellm_params"]["api_key"],
+        "client_is_up": litellm.secret_manager_client is not None,
+        "warned_about": [call.args[1] for call in warn.call_args_list],
+    } == {"api_key": None, "client_is_up": True, "warned_about": []}
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_get_config_does_not_warn_under_write_only_access_mode(tmp_path, monkeypatch):
+    """``write_only`` means reads never reach the manager, so an absent name is not its fault.
+
+    That mode exists so the manager can store virtual keys while config secrets stay in the
+    environment, which makes env-only references the expected state rather than an error.
+    """
+    config_yaml = VAULT_BACKED_CONFIG.replace(
+        "  key_management_settings:\n", "  key_management_settings:\n    access_mode: write_only\n"
+    )
+    config_file_path = _write_vault_backed_config(tmp_path, monkeypatch, config_yaml)
+    warn = MagicMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.verbose_proxy_logger.warning", warn)
+
+    cfg = await ProxyConfig().get_config(config_file_path=config_file_path)
+
+    assert {
+        "master_key": cfg["general_settings"]["master_key"],
+        "client_is_up": litellm.secret_manager_client is not None,
+        "warned_about": [call.args[1] for call in warn.call_args_list],
+    } == {"master_key": None, "client_is_up": True, "warned_about": []}
+
+
+# ---------------------------------------------------------------------------
 # ProxyConfig.update_config_state / get_config_state
 # ---------------------------------------------------------------------------
 
@@ -2409,6 +2617,33 @@ async def test_ProxyConfig__reschedule_spend_log_cleanup_job_invalid_cron(monkey
     assert fake_scheduler.add_job.call_count == 0
 
 
+@pytest.mark.asyncio
+async def test_ProxyConfig__reschedule_spend_log_cleanup_job_health_check_retention(monkeypatch):
+    fake_scheduler = MagicMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.scheduler", fake_scheduler)
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.general_settings",
+        {"maximum_health_check_retention_period": "30d"},
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    pc = ProxyConfig()
+    await pc._reschedule_spend_log_cleanup_job()
+    assert fake_scheduler.add_job.call_count == 1
+    assert fake_scheduler.add_job.call_args.kwargs["id"] == "spend_log_cleanup_job"
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig__update_general_settings_updates_health_check_retention(monkeypatch):
+    settings = {}
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", settings)
+    pc = ProxyConfig()
+    reschedule = AsyncMock()
+    monkeypatch.setattr(pc, "_reschedule_spend_log_cleanup_job", reschedule)
+    await pc._update_general_settings({"maximum_health_check_retention_period": "30d"})
+    assert settings["maximum_health_check_retention_period"] == "30d"
+    reschedule.assert_awaited_once()
+
+
 # ---------------------------------------------------------------------------
 # ProxyConfig._update_general_settings
 # ---------------------------------------------------------------------------
@@ -2440,6 +2675,43 @@ async def test_ProxyConfig__update_general_settings_updates_max_parallel(monkeyp
         "global_max_parallel_requests": 99,
         "ui_access_mode": "admin_only",
     }
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig__update_general_settings_applies_db_max_batch_file_size_mb(monkeypatch):
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+    pc = ProxyConfig()
+    await pc._update_general_settings({"max_batch_file_size_mb": 5})
+    from litellm.proxy import proxy_server as ps
+
+    assert ps.general_settings.get("max_batch_file_size_mb") == 5
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig__update_general_settings_yaml_max_batch_file_size_mb_wins_over_db(monkeypatch):
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.general_settings",
+        {"max_batch_file_size_mb": 3},
+    )
+    pc = ProxyConfig()
+    pc._yaml_general_settings_keys = {"max_batch_file_size_mb"}
+    await pc._update_general_settings({"max_batch_file_size_mb": 5})
+    from litellm.proxy import proxy_server as ps
+
+    assert ps.general_settings.get("max_batch_file_size_mb") == 3
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig__update_general_settings_cleared_db_max_batch_file_size_mb_lifts_cap(monkeypatch):
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.general_settings",
+        {"max_batch_file_size_mb": 8},
+    )
+    pc = ProxyConfig()
+    await pc._update_general_settings({"max_parallel_requests": 1})
+    from litellm.proxy import proxy_server as ps
+
+    assert ps.general_settings.get("max_batch_file_size_mb") is None
 
 
 @pytest.mark.asyncio

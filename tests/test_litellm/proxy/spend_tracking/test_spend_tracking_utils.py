@@ -3164,3 +3164,80 @@ def test_batch_cost_row_id_is_stable_across_repeated_accounting():
     ]
 
     assert ids[0] == ids[1] == "batch_same_batch_cost"
+
+
+def _make_failed_request_standard_logging_payload() -> StandardLoggingPayload:
+    base: Final = _make_standard_logging_payload_with_usage_object(usage_object={})
+    return cast(
+        StandardLoggingPayload,
+        {
+            **base,
+            "status": "failure",
+            "call_type": "aresponses",
+            "model_id": "mid-123",
+            "model_group": "group-x",
+            "api_base": "https://api.openai.com/v1/responses",
+            "custom_llm_provider": "openai",
+        },
+    )
+
+
+def test_get_logging_payload_failed_request_falls_back_to_standard_logging_payload():
+    """Failed-request kwargs from the proxy failure hook carry no deployment info
+    (LIT-5795), so the attribution columns must come from the failure-time
+    standard_logging_object."""
+    payload = get_logging_payload(
+        kwargs={
+            "model": "group-x",
+            "litellm_params": {"metadata": {"user_api_key": "test-key", "status": "failure"}},
+            "standard_logging_object": _make_failed_request_standard_logging_payload(),
+        },
+        response_obj={},
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+    assert payload["model_id"] == "mid-123"
+    assert payload["model_group"] == "group-x"
+    assert payload["api_base"] == "https://api.openai.com/v1/responses"
+    assert payload["custom_llm_provider"] == "openai"
+
+
+def test_get_logging_payload_request_kwargs_win_over_standard_logging_payload():
+    payload = get_logging_payload(
+        kwargs={
+            "model": "group-y",
+            "custom_llm_provider": "anthropic",
+            "litellm_params": {
+                "api_base": "https://kwargs.example.com",
+                "metadata": {
+                    "user_api_key": "test-key",
+                    "model_group": "kwargs-group",
+                    "model_info": {"id": "kwargs-mid"},
+                },
+            },
+            "standard_logging_object": _make_failed_request_standard_logging_payload(),
+        },
+        response_obj={},
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+    assert payload["model_id"] == "kwargs-mid"
+    assert payload["model_group"] == "kwargs-group"
+    assert payload["api_base"] == "https://kwargs.example.com"
+    assert payload["custom_llm_provider"] == "anthropic"
+
+
+def test_get_logging_payload_failed_request_without_standard_logging_payload_leaves_fields_empty():
+    payload = get_logging_payload(
+        kwargs={
+            "model": "group-x",
+            "litellm_params": {"metadata": {"user_api_key": "test-key", "status": "failure"}},
+        },
+        response_obj={},
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+    assert payload["model_id"] == ""
+    assert payload["model_group"] == ""
+    assert payload["api_base"] == ""
+    assert payload["custom_llm_provider"] == ""
