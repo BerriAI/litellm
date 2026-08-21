@@ -1,9 +1,11 @@
 import asyncio
 import base64
 import os
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional
+from collections.abc import Mapping, Sequence
+from typing import TYPE_CHECKING, Final, Literal, Optional
 
 from fastapi import HTTPException
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import (
@@ -24,6 +26,41 @@ if TYPE_CHECKING:
 
 class PromptSecurityGuardrailMissingSecrets(Exception):
     pass
+
+
+class _ProtectVerdict(TypedDict, total=False):
+    """One side (``prompt`` or ``response``) of an ``/api/protect`` verdict."""
+
+    action: ReadOnly[str]
+    violations: ReadOnly[Sequence[str]]
+    modified_messages: ReadOnly[Sequence[Mapping[str, object]]]
+    modified_text: ReadOnly[str]
+
+
+class _ProtectResult(TypedDict, total=False):
+    prompt: ReadOnly[_ProtectVerdict | None]
+    response: ReadOnly[_ProtectVerdict | None]
+
+
+class _ProtectResponse(TypedDict, total=False):
+    result: ReadOnly[_ProtectResult]
+
+
+class _SanitizeUploadResponse(TypedDict, total=False):
+    jobId: ReadOnly[str]
+
+
+class _SanitizeMetadata(TypedDict, total=False):
+    action: ReadOnly[str]
+    violations: ReadOnly[Sequence[str]]
+
+
+class _SanitizeStatusResponse(TypedDict, total=False):
+    """One poll of ``/api/sanitizeFile``."""
+
+    status: ReadOnly[str]
+    content: ReadOnly[str]
+    metadata: ReadOnly[_SanitizeMetadata]
 
 
 class PromptSecurityGuardrail(CustomGuardrail):
@@ -199,7 +236,7 @@ class PromptSecurityGuardrail(CustomGuardrail):
             json=payload,
         )
         response.raise_for_status()
-        res: Final = response.json()
+        res: Final[_ProtectResponse] = response.json()
 
         self._log_api_response(
             url=f"{self.api_base}/api/protect",
@@ -261,7 +298,7 @@ class PromptSecurityGuardrail(CustomGuardrail):
             json=payload,
         )
         response.raise_for_status()
-        res: Final = response.json()
+        res: Final[_ProtectResponse] = response.json()
 
         self._log_api_response(
             url=f"{self.api_base}/api/protect",
@@ -290,7 +327,7 @@ class PromptSecurityGuardrail(CustomGuardrail):
 
         return inputs
 
-    def _extract_texts_from_messages(self, messages: list) -> list[str]:
+    def _extract_texts_from_messages(self, messages: Sequence[Mapping[str, object]]) -> list[str]:
         """Extract text content from messages."""
         texts: Final = []
         for message in messages:
@@ -379,7 +416,7 @@ class PromptSecurityGuardrail(CustomGuardrail):
             files=files,
         )
         upload_response.raise_for_status()
-        upload_result: Final = upload_response.json()
+        upload_result: Final[_SanitizeUploadResponse] = upload_response.json()
         job_id: Final = upload_result.get("jobId")
 
         self._log_api_response(
@@ -409,7 +446,7 @@ class PromptSecurityGuardrail(CustomGuardrail):
                 params={"jobId": job_id},
             )
             poll_response.raise_for_status()
-            result = poll_response.json()
+            result: _SanitizeStatusResponse = poll_response.json()
 
             self._log_api_response(
                 url=f"{self.api_base}/api/sanitizeFile",
@@ -656,7 +693,7 @@ class PromptSecurityGuardrail(CustomGuardrail):
         method: str,
         url: str,
         headers: dict,
-        payload: Any,
+        payload: object,
     ) -> None:
         verbose_proxy_logger.debug(
             "Prompt Security request %s %s headers=%s payload=%s",
@@ -670,7 +707,7 @@ class PromptSecurityGuardrail(CustomGuardrail):
         self,
         url: str,
         status_code: int,
-        payload: Any,
+        payload: object,
     ) -> None:
         verbose_proxy_logger.debug(
             "Prompt Security response %s status=%s payload=%s",

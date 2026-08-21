@@ -1,11 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { prepareModelAddRequest } from "./handle_add_model_submit";
-
-vi.mock("../molecules/notifications_manager", () => ({
-  default: {
-    fromBackend: vi.fn(),
-  },
-}));
 
 describe("prepareModelAddRequest", () => {
   it("returns deployment data for the most basic form", async () => {

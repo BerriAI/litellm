@@ -33,13 +33,17 @@ from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     websocket_passthrough_request,
 )
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY,
 )
 from litellm.proxy.pass_through_endpoints.success_handler import (
     PassThroughEndpointLogging,
 )
+
+import litellm
+
+MESSAGE_START_SSE_FRAME = b'event: message_start\ndata: {"type": "message_start"}\n\n'
 
 
 # Test is_multipart
@@ -346,7 +350,7 @@ async def test_pass_through_request_failure_handler():
                 mock_user_api_key_dict = MagicMock()
 
                 # Call the function with a target that will trigger an HTTPError
-                with pytest.raises(Exception):
+                with pytest.raises(ProxyException):
                     await pass_through_request(
                         request=mock_request,
                         target="http://test.com",
@@ -364,6 +368,39 @@ async def test_pass_through_request_failure_handler():
                     call_args["original_exception"], TypeError
                 )  # Now expecting TypeError
                 assert "traceback_str" in call_args
+
+
+@pytest.mark.asyncio
+async def test_pass_through_request_preserves_proxy_exception_status():
+    original = ProxyException(
+        message="Invalid 'limit': integer above maximum value. Expected a value <= 100, but got 101 instead.",
+        type="invalid_request_error",
+        param="limit",
+        code=400,
+        openai_code="integer_above_max_value",
+    )
+
+    with patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging:
+        mock_proxy_logging.post_call_failure_hook = AsyncMock()
+        mock_proxy_logging.pre_call_hook = AsyncMock(side_effect=original)
+
+        mock_request = MagicMock(spec=Request)
+        mock_request.method = "GET"
+        mock_request.body = AsyncMock(return_value=b"")
+        mock_request.headers = Headers({})
+        mock_request.query_params = QueryParams({"limit": "101"})
+
+        with pytest.raises(ProxyException) as exc:
+            await pass_through_request(
+                request=mock_request,
+                target="http://test.com/v1/batches",
+                custom_headers={},
+                user_api_key_dict=MagicMock(),
+            )
+
+        assert exc.value is original
+        assert exc.value.code == "400"
+        assert exc.value.param == "limit"
 
 
 def test_is_langfuse_route():
@@ -1117,7 +1154,7 @@ async def test_pass_through_request_uses_resolved_timeout():
 
             mock_user_api_key_dict = MagicMock()
 
-            with pytest.raises(Exception):
+            with pytest.raises(TypeError):
                 await pass_through_request(
                     request=mock_request,
                     target="http://test.com",
@@ -4957,6 +4994,287 @@ async def test_websocket_passthrough_forwards_non_ascii_first_frame():
     assert all(call.kwargs.get("code") != 1011 for call in websocket.close.await_args_list)
 
 
+class ClosingUpstreamWebSocket:
+    def __init__(self, close_exc: Exception):
+        self._close_exc = close_exc
+        self.close = AsyncMock()
+        self.send = AsyncMock()
+
+    async def recv(self, decode: bool = True):
+        raise self._close_exc
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        raise StopAsyncIteration
+
+
+class RecordingUpstreamWebSocket:
+    def __init__(self):
+        self.close = AsyncMock()
+        self.send = AsyncMock()
+
+    async def recv(self, decode: bool = True):
+        await asyncio.Event().wait()
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        raise StopAsyncIteration
+
+
+def _client_websocket(receive):
+    from starlette.websockets import WebSocketState
+
+    websocket = MagicMock()
+    websocket.accept = AsyncMock()
+    websocket.send_text = AsyncMock()
+    websocket.send_bytes = AsyncMock()
+    websocket.receive = receive
+    websocket.headers = {}
+    websocket.client_state = WebSocketState.CONNECTED
+    websocket.application_state = WebSocketState.CONNECTED
+
+    def _mark_closed(*args, **kwargs):
+        websocket.application_state = WebSocketState.DISCONNECTED
+
+    websocket.close = AsyncMock(side_effect=_mark_closed)
+    return websocket
+
+
+@contextmanager
+def _patched_websocket_passthrough_environment(upstream_ws):
+    with (
+        patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging,
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.connect",
+            return_value=FakeUpstreamConnect(upstream_ws),
+        ),
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.GLOBAL_LOGGING_WORKER"
+        ) as mock_worker,
+    ):
+        mock_proxy_logging.pre_call_hook = AsyncMock(return_value={})
+        mock_proxy_logging.post_call_success_hook = AsyncMock()
+        mock_proxy_logging.post_call_failure_hook = AsyncMock()
+        mock_worker.ensure_initialized_and_enqueue = MagicMock(
+            side_effect=lambda async_coroutine: async_coroutine.close()
+        )
+        yield
+
+
+async def _pending_receive():
+    await asyncio.Event().wait()
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_relays_upstream_policy_close_to_client():
+    from websockets.exceptions import ConnectionClosedError
+    from websockets.frames import Close
+
+    upstream_reason = "Publisher Model `projects/p/locations/global/publishers/google/models/nope` was not found"
+    upstream_ws = ClosingUpstreamWebSocket(
+        ConnectionClosedError(
+            rcvd=Close(1008, upstream_reason),
+            sent=Close(1008, ""),
+            rcvd_then_sent=True,
+        )
+    )
+    websocket = _client_websocket(_pending_receive)
+
+    with _patched_websocket_passthrough_environment(upstream_ws):
+        await websocket_passthrough_request(
+            websocket=websocket,
+            target="wss://aiplatform.googleapis.com/ws/google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent",
+            custom_headers={"Authorization": "Bearer token"},
+            user_api_key_dict=UserAPIKeyAuth(),
+            forward_headers=False,
+            endpoint="/vertex_ai/live",
+            accept_websocket=False,
+        )
+
+    websocket.close.assert_awaited_once_with(code=1008, reason=upstream_reason)
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_keeps_normal_upstream_close_normal():
+    from websockets.exceptions import ConnectionClosedOK
+    from websockets.frames import Close
+
+    upstream_ws = ClosingUpstreamWebSocket(
+        ConnectionClosedOK(rcvd=Close(1000, ""), sent=Close(1000, ""), rcvd_then_sent=True)
+    )
+    websocket = _client_websocket(_pending_receive)
+
+    with _patched_websocket_passthrough_environment(upstream_ws):
+        await websocket_passthrough_request(
+            websocket=websocket,
+            target="wss://aiplatform.googleapis.com/ws/google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent",
+            custom_headers={"Authorization": "Bearer token"},
+            user_api_key_dict=UserAPIKeyAuth(),
+            forward_headers=False,
+            endpoint="/vertex_ai/live",
+            accept_websocket=False,
+        )
+
+    websocket.close.assert_awaited_once_with()
+
+
+async def _run_setup_rewrite_passthrough(setup_model: str, llm_router) -> str:
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+        _build_vertex_live_setup_model_rewriter,
+    )
+
+    upstream_ws = RecordingUpstreamWebSocket()
+    setup_frame = json.dumps({"setup": {"model": setup_model, "generationConfig": {"responseModalities": ["TEXT"]}}})
+    websocket = _client_websocket(
+        AsyncMock(
+            side_effect=[
+                {"type": "websocket.receive", "text": setup_frame},
+                {"type": "websocket.disconnect"},
+            ]
+        )
+    )
+
+    with _patched_websocket_passthrough_environment(upstream_ws):
+        await websocket_passthrough_request(
+            websocket=websocket,
+            target="wss://aiplatform.googleapis.com/ws/google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent",
+            custom_headers={"Authorization": "Bearer token"},
+            user_api_key_dict=UserAPIKeyAuth(),
+            forward_headers=False,
+            endpoint="/vertex_ai/live",
+            accept_websocket=False,
+            setup_model_rewriter=_build_vertex_live_setup_model_rewriter(
+                vertex_project="proj-db",
+                vertex_location="global",
+                llm_router=llm_router,
+            ),
+        )
+
+    upstream_ws.send.assert_awaited_once()
+    return upstream_ws.send.await_args.args[0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "setup_model",
+    ["gemini-live-2.5-flash", "publishers/google/models/gemini-live-2.5-flash"],
+)
+async def test_websocket_passthrough_rewrites_setup_model_to_full_resource(setup_model):
+    sent_frame = await _run_setup_rewrite_passthrough(setup_model, llm_router=None)
+
+    sent_setup = json.loads(sent_frame)["setup"]
+    assert sent_setup["model"] == "projects/proj-db/locations/global/publishers/google/models/gemini-live-2.5-flash"
+    assert sent_setup["generationConfig"] == {"responseModalities": ["TEXT"]}
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_rewrites_gateway_alias_setup_model():
+    llm_router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gemini-live",
+                "litellm_params": {"model": "vertex_ai/gemini-live-2.5-flash"},
+            }
+        ]
+    )
+
+    sent_frame = await _run_setup_rewrite_passthrough("gemini-live", llm_router=llm_router)
+
+    sent_setup = json.loads(sent_frame)["setup"]
+    assert sent_setup["model"] == "projects/proj-db/locations/global/publishers/google/models/gemini-live-2.5-flash"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("rcvd_close", [None, "abnormal", "no_status"])
+async def test_websocket_passthrough_does_not_relay_unsendable_upstream_close(rcvd_close):
+    from websockets.exceptions import ConnectionClosedError
+    from websockets.frames import Close
+
+    rcvd = {
+        None: None,
+        "abnormal": Close(1006, "connection died"),
+        "no_status": Close(1005, ""),
+    }[rcvd_close]
+    upstream_ws = ClosingUpstreamWebSocket(
+        ConnectionClosedError(rcvd=rcvd, sent=None, rcvd_then_sent=None)
+    )
+    websocket = _client_websocket(_pending_receive)
+
+    with _patched_websocket_passthrough_environment(upstream_ws):
+        await websocket_passthrough_request(
+            websocket=websocket,
+            target="wss://aiplatform.googleapis.com/ws/google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent",
+            custom_headers={"Authorization": "Bearer token"},
+            user_api_key_dict=UserAPIKeyAuth(),
+            forward_headers=False,
+            endpoint="/vertex_ai/live",
+            accept_websocket=False,
+        )
+
+    websocket.close.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_rewrites_alias_of_unrecognised_upstream_model():
+    llm_router = MagicMock()
+    llm_router.get_model_list.return_value = [
+        {"model_name": "gemini-live", "litellm_params": {"model": "self-hosted-live-endpoint"}}
+    ]
+
+    sent_frame = await _run_setup_rewrite_passthrough("gemini-live", llm_router=llm_router)
+
+    sent_setup = json.loads(sent_frame)["setup"]
+    assert sent_setup["model"] == "projects/proj-db/locations/global/publishers/google/models/self-hosted-live-endpoint"
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_leaves_full_resource_setup_model_untouched():
+    full_resource = "projects/other/locations/us-central1/publishers/google/models/gemini-2.0-flash-live-preview-04-09"
+
+    sent_frame = await _run_setup_rewrite_passthrough(full_resource, llm_router=None)
+
+    assert json.loads(sent_frame)["setup"]["model"] == full_resource
+    assert sent_frame == json.dumps(
+        {"setup": {"model": full_resource, "generationConfig": {"responseModalities": ["TEXT"]}}}
+    )
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_does_not_close_twice_when_success_logging_fails():
+    from websockets.exceptions import ConnectionClosedError
+    from websockets.frames import Close
+
+    upstream_reason = "Publisher Model `projects/p/locations/global/publishers/google/models/nope` was not found"
+    upstream_ws = ClosingUpstreamWebSocket(
+        ConnectionClosedError(rcvd=Close(1008, upstream_reason), sent=Close(1008, ""), rcvd_then_sent=True)
+    )
+    websocket = _client_websocket(_pending_receive)
+
+    with (
+        _patched_websocket_passthrough_environment(upstream_ws),
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints."
+            "GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue",
+            side_effect=RuntimeError("logging worker down"),
+        ),
+    ):
+        await websocket_passthrough_request(
+            websocket=websocket,
+            target="wss://aiplatform.googleapis.com/ws/google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent",
+            custom_headers={"Authorization": "Bearer token"},
+            user_api_key_dict=UserAPIKeyAuth(),
+            forward_headers=False,
+            endpoint="/vertex_ai/live",
+            accept_websocket=False,
+        )
+
+    websocket.close.assert_awaited_once_with(code=1008, reason=upstream_reason)
+
+
 def _passthrough_kwargs_for_reservation(
     user_api_key_dict: UserAPIKeyAuth, parsed_body: Optional[dict] = None
 ) -> dict:
@@ -5071,3 +5389,185 @@ async def test_passthrough_body_cannot_forge_budget_reservation():
 
     increment_spend_counters.assert_awaited_once()
     assert increment_spend_counters.await_args.kwargs["budget_reservation"] is None
+
+
+async def _drive_streaming_pass_through(
+    upstream_content_type, chunk_delay_seconds, client_asked_for_stream=True
+):
+    """Drive pass_through_request against an upstream that stalls before its first byte.
+
+    ``client_asked_for_stream`` picks which of pass_through_request's two streaming
+    dispatch branches runs: the up-front one, and the one that only discovers the
+    response is a stream from its content-type.
+    """
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        PassThroughStreamingHandler,
+    )
+
+    with ExitStack() as stack:
+        mock_proxy_logging = stack.enter_context(
+            patch("litellm.proxy.proxy_server.proxy_logging_obj")
+        )
+        mock_get_client = stack.enter_context(
+            patch(
+                "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_async_httpx_client"
+            )
+        )
+        mock_chunk_processor = stack.enter_context(
+            patch.object(PassThroughStreamingHandler, "chunk_processor")
+        )
+
+        mock_proxy_logging.pre_call_hook = AsyncMock(
+            return_value={"model": "claude-3", "stream": True}
+            if client_asked_for_stream
+            else {"model": "claude-3"}
+        )
+        mock_proxy_logging.post_call_failure_hook = AsyncMock()
+        mock_proxy_logging.post_call_response_headers_hook = AsyncMock(return_value={})
+
+        upstream_response = MagicMock()
+        upstream_response.status_code = 200
+        upstream_response.headers = {"content-type": upstream_content_type}
+        upstream_response.raise_for_status = MagicMock()
+
+        async_client = MagicMock()
+        async_client.build_request = MagicMock(return_value=MagicMock())
+        async_client.send = AsyncMock(return_value=upstream_response)
+        mock_get_client.return_value = MagicMock(client=async_client)
+
+        async def _slow_first_chunk(*args, **kwargs):
+            await asyncio.sleep(chunk_delay_seconds)
+            yield MESSAGE_START_SSE_FRAME
+
+        mock_chunk_processor.return_value = _slow_first_chunk()
+
+        mock_request = MagicMock(spec=Request)
+        mock_request.method = "POST"
+        mock_request.url = "http://test-proxy.com/v1/messages"
+        mock_request.body = AsyncMock(
+            return_value=b'{"model": "claude-3", "stream": true}'
+            if client_asked_for_stream
+            else b'{"model": "claude-3"}'
+        )
+        mock_request.headers = Headers({})
+        mock_request.query_params = QueryParams({})
+
+        response = await pass_through_request(
+            request=mock_request,
+            target="http://target-api.com/v1/messages",
+            custom_headers={},
+            user_api_key_dict=MagicMock(),
+            stream=client_asked_for_stream,
+        )
+        return [chunk async for chunk in response.body_iterator]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("client_asked_for_stream", [True, False])
+async def test_pass_through_sse_stream_emits_keepalive_before_the_first_upstream_byte(
+    client_asked_for_stream,
+):
+    """
+    Regression for #34819: a passthrough SSE stream wrote zero bytes during the
+    model's time-to-first-token, so an intermediary with an idle read timeout
+    (ALB, nginx) dropped a healthy connection before any token arrived.
+
+    Both dispatch branches are covered: a request that declared stream=true, and
+    one whose response is only recognised as a stream from its content-type.
+    """
+    with patch.object(litellm, "sse_keepalive_ping_interval_seconds", 0.05):
+        collected = await _drive_streaming_pass_through(
+            upstream_content_type="text/event-stream",
+            chunk_delay_seconds=0.2,
+            client_asked_for_stream=client_asked_for_stream,
+        )
+
+    assert collected[0] == b": ping\n\n"
+    assert collected[-1] == MESSAGE_START_SSE_FRAME
+
+
+@pytest.mark.asyncio
+async def test_pass_through_sse_stream_stays_silent_when_keepalive_is_unconfigured():
+    with patch.object(litellm, "sse_keepalive_ping_interval_seconds", None):
+        collected = await _drive_streaming_pass_through(
+            upstream_content_type="text/event-stream", chunk_delay_seconds=0.2
+        )
+
+    assert collected == [MESSAGE_START_SSE_FRAME]
+
+
+@pytest.mark.asyncio
+async def test_pass_through_binary_event_stream_is_never_given_an_sse_comment():
+    """An AWS event stream is a binary transport: a ": ping" frame would corrupt it."""
+    with patch.object(litellm, "sse_keepalive_ping_interval_seconds", 0.05):
+        collected = await _drive_streaming_pass_through(
+            upstream_content_type="application/vnd.amazon.eventstream",
+            chunk_delay_seconds=0.2,
+        )
+
+    assert collected == [MESSAGE_START_SSE_FRAME]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("configured_interval, expect_ping", [(0.05, True), (None, False)])
+async def test_pass_through_route_pings_while_the_upstream_call_is_still_running(
+    configured_interval, expect_ping
+):
+    """The upstream withholds its response headers until its first token, so the
+    whole time-to-first-token is spent inside pass_through_request with nothing on
+    the wire (issue #34819)."""
+    from fastapi import Response
+    from fastapi.responses import StreamingResponse
+
+    module = "litellm.proxy.pass_through_endpoints.pass_through_endpoints"
+
+    async def _relayed():
+        yield MESSAGE_START_SSE_FRAME
+
+    async def slow_pass_through(**kwargs):
+        await asyncio.sleep(0.25)
+        return StreamingResponse(_relayed(), media_type="text/event-stream")
+
+    with ExitStack() as stack:
+        stack.enter_context(
+            patch(
+                f"{module}.InitPassThroughEndpointHelpers.is_registered_pass_through_route",
+                return_value=True,
+            )
+        )
+        stack.enter_context(
+            patch(
+                f"{module}.InitPassThroughEndpointHelpers.get_registered_pass_through_route",
+                return_value=None,
+            )
+        )
+        stack.enter_context(patch(f"{module}.pass_through_request", slow_pass_through))
+        stack.enter_context(
+            patch.object(litellm, "sse_keepalive_ping_interval_seconds", configured_interval)
+        )
+
+        endpoint_func = create_pass_through_route(
+            endpoint="/v1/messages",
+            target="https://api.anthropic.com/v1/messages",
+            custom_headers={},
+            is_streaming_request=True,
+        )
+
+        mock_request = MagicMock(spec=Request)
+        mock_request.method = "POST"
+        mock_request.url = httpx.URL("http://test-proxy.com/v1/messages")
+        mock_request.scope = {}
+        mock_request.body = AsyncMock(return_value=b'{"model": "claude-3"}')
+        mock_request.headers = Headers({"content-type": "application/json"})
+        mock_request.query_params = QueryParams({})
+        mock_request.state = SimpleNamespace()
+
+        response = await endpoint_func(
+            request=mock_request,
+            fastapi_response=Response(),
+            user_api_key_dict=MagicMock(),
+        )
+        collected = [chunk async for chunk in response.body_iterator]
+
+    assert (collected[0] == b": ping\n\n") is expect_ping
+    assert collected[-1] in (MESSAGE_START_SSE_FRAME, MESSAGE_START_SSE_FRAME.decode())

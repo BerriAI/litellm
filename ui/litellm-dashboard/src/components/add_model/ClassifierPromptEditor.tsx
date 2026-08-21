@@ -2,7 +2,7 @@ import React, { useCallback, useState } from "react";
 import { TriangleAlert } from "lucide-react";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { getAutoRouterClassifierDefaultPromptCall } from "@/components/networking";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
@@ -47,7 +47,7 @@ const ClassifierPromptEditor: React.FC<ClassifierPromptEditorProps> = ({
       setDefaultPrompt(fetched);
       setDraft(initialDraftText(systemPrompt, fetched));
     } catch {
-      NotificationsManager.fromBackend("Could not load the default classifier prompt");
+      toast.fromError("Could not load the default classifier prompt");
       setIsOpen(false);
     } finally {
       setIsLoading(false);
@@ -83,7 +83,7 @@ const ClassifierPromptEditor: React.FC<ClassifierPromptEditorProps> = ({
             <DialogTitle>Classifier prompt</DialogTitle>
           </DialogHeader>
 
-          <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+          <div className="rounded-md border border-warning/30 bg-warning/10 p-3 text-sm text-warning">
             <p className="flex items-center gap-2 font-medium">
               <TriangleAlert className="size-4" aria-hidden />
               Proceed with caution

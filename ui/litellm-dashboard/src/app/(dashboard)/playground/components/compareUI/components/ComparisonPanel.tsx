@@ -85,7 +85,7 @@ export function ComparisonPanel({
   };
 
   const disabledOpacity = comparison.useAdvancedParams ? 1 : 0.4;
-  const disabledTextColor = comparison.useAdvancedParams ? "text-gray-700" : "text-gray-400";
+  const disabledTextColor = comparison.useAdvancedParams ? "text-foreground" : "text-muted-foreground";
 
   const handleTogglePopover = () => {
     setPopoverVisible((prev) => !prev);
@@ -100,7 +100,7 @@ export function ComparisonPanel({
       {/* Close button in top right */}
       <button
         onClick={handleClosePopover}
-        className="absolute top-0 right-0 p-1 hover:bg-gray-100 rounded-sm transition-colors text-gray-500 hover:text-gray-700 z-10"
+        className="absolute top-0 right-0 p-1 hover:bg-accent rounded-sm transition-colors text-muted-foreground hover:text-foreground z-10"
       >
         <X size={14} />
       </button>
@@ -123,10 +123,10 @@ export function ComparisonPanel({
 
         {/* General Settings */}
         <div>
-          <h4 className="text-xs font-semibold text-gray-700 mb-1.5 uppercase tracking-wide">General Settings</h4>
+          <h4 className="text-xs font-semibold text-foreground mb-1.5 uppercase tracking-wide">General Settings</h4>
           <div className="space-y-2">
             <div>
-              <label className="text-xs font-medium text-gray-600 block mb-0.5">Tags</label>
+              <label className="text-xs font-medium text-muted-foreground block mb-0.5">Tags</label>
               <TagSelector
                 value={comparison.tags}
                 onChange={(value) => handleSettingChange("tags", value)}
@@ -134,7 +134,7 @@ export function ComparisonPanel({
               />
             </div>
             <div>
-              <label className="text-xs font-medium text-gray-600 block mb-0.5">Vector Stores</label>
+              <label className="text-xs font-medium text-muted-foreground block mb-0.5">Vector Stores</label>
               <VectorStoreSelector
                 value={comparison.vectorStores}
                 onChange={(value) => handleSettingChange("vectorStores", value)}
@@ -142,7 +142,7 @@ export function ComparisonPanel({
               />
             </div>
             <div>
-              <label className="text-xs font-medium text-gray-600 block mb-0.5">Guardrails</label>
+              <label className="text-xs font-medium text-muted-foreground block mb-0.5">Guardrails</label>
               <GuardrailSelector
                 value={comparison.guardrails}
                 onChange={(value) => handleSettingChange("guardrails", value)}
@@ -153,7 +153,7 @@ export function ComparisonPanel({
         </div>
         {/* Advanced Settings */}
         <div>
-          <h4 className="text-xs font-semibold text-gray-700 mb-1.5 uppercase tracking-wide">Advanced Settings</h4>
+          <h4 className="text-xs font-semibold text-foreground mb-1.5 uppercase tracking-wide">Advanced Settings</h4>
           <div className="space-y-2">
             <div className="flex items-center gap-2 pb-1">
               <Checkbox
@@ -211,7 +211,7 @@ export function ComparisonPanel({
   );
 
   return (
-    <div className="bg-white first:border-l-0 border-l border-gray-200 flex flex-col min-h-0">
+    <div className="bg-card first:border-l-0 border-l border-border flex flex-col min-h-0">
       <div className="border-b flex items-center justify-between gap-3 px-4 py-3">
         <div className="flex items-center gap-3 flex-1">
           <UnifiedSelector
@@ -236,7 +236,7 @@ export function ComparisonPanel({
                       handleTogglePopover();
                     }}
                     className={`p-2 rounded-lg transition-colors ${
-                      popoverVisible ? "bg-gray-200 text-gray-700" : "hover:bg-gray-100 text-gray-600"
+                      popoverVisible ? "bg-border text-foreground" : "hover:bg-accent text-muted-foreground"
                     }`}
                   >
                     <Settings size={18} />
@@ -255,7 +255,7 @@ export function ComparisonPanel({
               event.stopPropagation();
               onRemove();
             }}
-            className="p-2 hover:bg-red-50 text-red-600 rounded-lg transition-colors"
+            className="p-2 hover:bg-destructive/10 text-destructive rounded-lg transition-colors"
           >
             <X size={18} />
           </button>

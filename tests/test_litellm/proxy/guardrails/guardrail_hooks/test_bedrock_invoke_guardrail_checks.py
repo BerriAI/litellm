@@ -56,7 +56,7 @@ def _patched(guardrail: BedrockGuardrail, http_response):
 
 
 def test_init_rejects_both_identifier_and_checks():
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match='Bedrock guardrail accepts either'):
         BedrockGuardrail(guardrailIdentifier="gid", checks=CONTENT_FILTER_CHECKS)
 
 
@@ -304,7 +304,7 @@ async def test_truncated_pii_ignored_when_pii_check_not_configured():
 
 @pytest.mark.asyncio
 async def test_checks_with_guardrail_version_rejected():
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match='Bedrock guardrail accepts either'):
         BedrockGuardrail(checks=CONTENT_FILTER_CHECKS, guardrailVersion="DRAFT")
 
 
