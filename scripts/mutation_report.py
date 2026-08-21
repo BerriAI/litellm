@@ -233,13 +233,20 @@ def render_meta_style_mutant(
 
 def clean_sweep_is_provable(stats: dict | None) -> bool:
     """`mutmut results` omits killed mutants, so its silence is equally consistent with a
-    perfect run and with a run that never started. Only the stats file can tell them apart."""
-    return bool(stats) and stats.get("killed", 0) > 0
+    perfect run and with a run that never started. Only the stats file can tell them apart,
+    and only when it agrees that nothing survived."""
+    return bool(stats) and stats.get("killed", 0) > 0 and stats.get("survived", 0) == 0
 
 
 def no_survivors_verdict(results: MutmutResults, stats: dict | None) -> str:
     if clean_sweep_is_provable(stats):
         return "**No surviving mutants, and the run killed some, so the test suite caught every mutation.**"
+    if stats and stats.get("survived", 0) > 0:
+        return (
+            f"**mutmut-cicd-stats.json counts {stats['survived']} surviving mutant(s) that "
+            "`mutmut results` did not list, so the two disagree and neither can be trusted. "
+            "This is not a passing score.**"
+        )
     if stats:
         return "**Not one mutant was killed. This is not a passing score.**"
     return (
