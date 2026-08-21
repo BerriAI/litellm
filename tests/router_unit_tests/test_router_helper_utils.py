@@ -1382,6 +1382,24 @@ def test_get_num_retries_from_retry_policy(
     assert calc_num_retries == num_retries
 
 
+def test_get_num_retries_from_retry_policy_handles_internal_server_error_directly():
+    from litellm.router_utils.get_retry_from_policy import (
+        get_num_retries_from_retry_policy,
+    )
+    from litellm.types.router import RetryPolicy
+
+    calc_num_retries = get_num_retries_from_retry_policy(
+        exception=litellm.InternalServerError(
+            message="test",
+            llm_provider="openai",
+            model="gpt-5-mini",
+        ),
+        retry_policy=RetryPolicy(InternalServerErrorRetries=5),
+    )
+
+    assert calc_num_retries == 5
+
+
 @pytest.mark.parametrize(
     "exception_type, exception_name, allowed_fails",
     [
