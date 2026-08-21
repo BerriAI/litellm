@@ -39,15 +39,23 @@ TQ005   `litellm.<attr> = ...` module-global mutation. The SDK's module globals 
         what the 491-line save/restore conftest exists to paper over. Inject the
         dependency or use a fixture that restores it.
 TQ006   A `pytest.skip` reached only when a credential-shaped environment variable is
-        absent. Absence is what the condition has to say: `not key`, `key is None`,
-        `"KEY" not in os.environ`. A skip taken when the credential is present is
-        somebody's deliberate branch and is left alone. On a runner that does not hold that credential the guard fires every
+        absent. On a runner that does not hold that credential the guard fires every
         time, so the test reports green having executed nothing and is indistinguishable
         from coverage that exists. Fake the provider at the HTTP boundary, or fail
-        loudly, so a missing credential shows up as a missing credential. The gate is
-        followed through one local or module-level binding, which is the
-        `key = os.getenv(...)` then `if not key: pytest.skip(...)` shape most of these
-        use.
+        loudly, so a missing credential shows up as a missing credential. Absence is
+        what the condition has to say -- `not key`, `key is None`, `"KEY" not in
+        os.environ` -- since a skip taken when the credential is present is somebody's
+        deliberate branch. The gate follows one local or module-level binding, which is
+        the `key = os.getenv(...)` then `if not key: pytest.skip(...)` shape most of
+        these use.
+TQ007   A module global that a conftest saves before every test and restores after it.
+        The save/restore list is a hand-maintained inventory of the leaks the suite
+        already knows about, so it is allowed to shrink and never to grow: a new entry
+        means one more global whose lifetime the tests manage instead of the code owning
+        it. Give the consumers an injection seam rather than another snapshot line. The
+        names are read from the keys the conftest assigns directly and from whatever the
+        save loop iterates, including a module-level tuple or dict it names rather than
+        spells out.
 
 Every rule is suppressible with `# test-quality-ok: <reason>` on the reported
 line, following the repo's `*-ok: <reason>` convention. A suppression without a
@@ -123,6 +131,9 @@ PATCH_MEMBERS: Final = frozenset(("object", "dict", "multiple"))
 ENVIRON_READERS: Final = frozenset(("os.environ.get", "environ.get", "os.getenv", "getenv"))
 ENVIRON_MAPPINGS: Final = frozenset(("os.environ", "environ"))
 SKIP_CALLS: Final = frozenset(("pytest.skip", "skip"))
+CONFTEST_NAME: Final = "conftest.py"
+SDK_MODULE: Final = "litellm"
+
 CREDENTIAL_NAME_RE: Final = re.compile(
     r"(?:API_KEY|_KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|DATABASE_URL|ACCESS_KEY_ID)$"
 )
@@ -547,6 +558,105 @@ def iter_credential_skip_violations(path: Path, tree: ast.Module) -> Iterator[Vi
                     )
 
 
+def _reads_sdk_attribute(node: ast.AST) -> bool:
+    return any(
+        (
+            isinstance(inner, ast.Call)
+            and _dotted_name(inner.func) == "getattr"
+            and bool(inner.args)
+            and _dotted_name(inner.args[0]) == SDK_MODULE
+        )
+        or (isinstance(inner, ast.Attribute) and _dotted_name(inner.value) == SDK_MODULE)
+        for inner in ast.walk(node)
+    )
+
+
+def _subscript_targets(node: ast.AST) -> Iterator[ast.Subscript]:
+    for inner in ast.walk(node):
+        if isinstance(inner, ast.Assign):
+            yield from (target for target in inner.targets if isinstance(target, ast.Subscript))
+
+
+def _saves_sdk_attribute_by_key(node: ast.AST) -> Iterator[ast.Subscript]:
+    """Every `<dict>["name"] = <something read off litellm>`, whatever the dict is called.
+
+    Matching on the shape rather than on a list of blessed dict names is what reaches
+    the conftest that builds its snapshot inside a helper and calls the dict `state`.
+    """
+    for inner in ast.walk(node):
+        if isinstance(inner, ast.Assign) and _reads_sdk_attribute(inner.value):
+            yield from (target for target in inner.targets if isinstance(target, ast.Subscript))
+
+
+def _saves_sdk_attributes_in_loop(node: ast.For) -> bool:
+    """A save loop reads the SDK and stores under the loop variable, in either order.
+
+    The read is often bound to a local first (`val = getattr(litellm, attr)`) and only
+    then stored, so the read and the store are separate statements and cannot be
+    required of the same assignment.
+    """
+    if not isinstance(node.target, ast.Name):
+        return False
+    stores_by_key: Final = any(
+        isinstance(subscript.slice, ast.Name) and subscript.slice.id == node.target.id
+        for statement in node.body
+        for subscript in _subscript_targets(statement)
+    )
+    return stores_by_key and any(_reads_sdk_attribute(statement) for statement in node.body)
+
+
+def _module_constants(tree: ast.Module) -> Mapping[str, ast.expr]:
+    return MappingProxyType({
+        target.id: node.value
+        for node in tree.body
+        if isinstance(node, ast.Assign)
+        for target in node.targets
+        if isinstance(target, ast.Name)
+    })
+
+
+def _string_members(node: ast.expr) -> Iterator[tuple[str, int]]:
+    """The string names a collection literal holds: a tuple/list's items, a dict's keys."""
+    elements: Final = (
+        node.elts if isinstance(node, (ast.Tuple, ast.List)) else node.keys if isinstance(node, ast.Dict) else ()
+    )
+    yield from (
+        (element.value, element.lineno)
+        for element in elements
+        if isinstance(element, ast.Constant) and isinstance(element.value, str)
+    )
+
+
+def _snapshotted_names(tree: ast.Module) -> Iterator[tuple[str, int]]:
+    constants: Final = _module_constants(tree)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            yield from (
+                (subscript.slice.value, subscript.lineno)
+                for subscript in _saves_sdk_attribute_by_key(node)
+                if isinstance(subscript.slice, ast.Constant) and isinstance(subscript.slice.value, str)
+            )
+        elif isinstance(node, ast.For) and _saves_sdk_attributes_in_loop(node):
+            iterable: Final = constants.get(node.iter.id) if isinstance(node.iter, ast.Name) else node.iter
+            if iterable is not None:
+                yield from _string_members(iterable)
+
+
+def iter_conftest_inventory_violations(path: Path, tree: ast.Module) -> Iterator[Violation]:
+    if path.name != CONFTEST_NAME:
+        return
+    seen: Final = dict(reversed(tuple(_snapshotted_names(tree))))
+    for name, line in sorted(seen.items(), key=lambda item: item[1]):
+        yield Violation(
+            path,
+            line,
+            "TQ007",
+            f"`litellm.{name}` is saved and restored around every test in this tree; the list is an "
+            "inventory of known leaks and may only shrink, so give the consumers an injection seam "
+            f"instead of adding to it (suppress: `# {SUPPRESSION_TOKEN}: <reason>`)",
+        )
+
+
 def check_file(path: Path) -> tuple[Violation, ...]:
     try:
         source: Final = path.read_text(encoding="utf-8")
@@ -567,6 +677,7 @@ def check_file(path: Path) -> tuple[Violation, ...]:
             *iter_environ_violations(path, tree),
             *iter_global_mutation_violations(path, tree),
             *iter_credential_skip_violations(path, tree),
+            *iter_conftest_inventory_violations(path, tree),
         )
         if violation.line not in skip
     )
