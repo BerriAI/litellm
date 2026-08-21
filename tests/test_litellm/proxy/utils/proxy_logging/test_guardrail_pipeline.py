@@ -354,13 +354,20 @@ async def test_maybe_execute_pipelines_skips_pipelines_with_other_mode(proxy_log
     assert out is data
 
 
+@pytest.mark.parametrize(
+    ("policy_state_key", "caller_metadata_key", "call_type"),
+    [
+        ("litellm_metadata", "metadata", "anthropic_messages"),
+        ("metadata", "litellm_metadata", "completion"),
+    ],
+)
 @pytest.mark.asyncio
-async def test_maybe_execute_pipelines_reads_litellm_metadata_when_caller_sends_own_metadata(
-    proxy_logging, make_user_api_key_auth, monkeypatch
+async def test_maybe_execute_pipelines_finds_policy_state_when_caller_sends_own_metadata(
+    proxy_logging, make_user_api_key_auth, monkeypatch, policy_state_key, caller_metadata_key, call_type
 ):
-    """On /v1/messages the proxy stores policy state in ``litellm_metadata``, while the
-    caller's provider-facing ``metadata`` (Claude Code sends ``metadata.user_id``) stays
-    untouched. The pipeline must still run and block."""
+    """The route picks the bucket the policy engine writes to (``litellm_metadata`` on
+    /v1/messages, ``metadata`` on chat completions), and the caller can populate the other
+    one, e.g. Claude Code sending ``metadata.user_id``. The pipeline must still run and block."""
 
     class BlockingGuardrail(CustomGuardrail):
         async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
@@ -369,8 +376,8 @@ async def test_maybe_execute_pipelines_reads_litellm_metadata_when_caller_sends_
     monkeypatch.setattr(litellm, "callbacks", [BlockingGuardrail(guardrail_name="gr-1")])
     pipeline = GuardrailPipeline(mode="pre_call", steps=[PipelineStep(guardrail="gr-1", on_fail="block")])
     data = {
-        "metadata": {"user_id": "user_abc"},
-        "litellm_metadata": {"_guardrail_pipelines": [("policy-1", pipeline)]},
+        caller_metadata_key: {"user_id": "user_abc"},
+        policy_state_key: {"_guardrail_pipelines": [("policy-1", pipeline)]},
         "messages": [],
         "model": "m",
     }
@@ -379,7 +386,7 @@ async def test_maybe_execute_pipelines_reads_litellm_metadata_when_caller_sends_
         await proxy_logging._maybe_execute_pipelines(
             data=data,
             user_api_key_dict=make_user_api_key_auth(),
-            call_type="anthropic_messages",
+            call_type=call_type,
             event_hook="pre_call",
         )
     assert exc_info.value.detail["error"] == "blocked by pipeline"
