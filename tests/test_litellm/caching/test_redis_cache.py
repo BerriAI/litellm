@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import os
 import sys
 from unittest.mock import MagicMock, patch
@@ -613,3 +614,140 @@ async def test_only_connectivity_failures_open_the_breaker(error, opens_breaker)
         await _run_under_circuit_breaker(breaker, "op", failing_call)
 
     assert breaker.is_open() is opens_breaker
+
+
+# Every Redis write error logged the value being written (#11157), so an ordinary
+# retryable failure — a pooled socket the server had already reaped, a read timeout —
+# put the full upstream response object (choices[].message.content included) into the
+# proxy's ERROR log, where it is shipped to wherever the proxy's stdout goes. The
+# failure still has to be reported; the payload does not belong in the report.
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "fail_at",
+    [
+        pytest.param("client", id="client_init_failure"),
+        pytest.param("write", id="write_failure"),
+    ],
+)
+async def test_async_set_cache_error_log_omits_the_cached_value(
+    fail_at, monkeypatch, redis_no_ping, caplog
+):
+    """A failed async_set_cache must report the error and the key, never the value."""
+    from redis.exceptions import ConnectionError as RedisConnectionError
+
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache = RedisCache()
+
+    response_marker = "response-body-marker"
+    value = {"choices": [{"message": {"content": f"{response_marker} " * 20}}]}
+    redis_error = RedisConnectionError("Connection closed by server.")
+
+    mock_redis_instance = AsyncMock()
+    if fail_at == "write":
+        mock_redis_instance.set.side_effect = redis_error
+        client_patch = patch.object(
+            redis_cache, "init_async_client", return_value=mock_redis_instance
+        )
+    else:
+        client_patch = patch.object(
+            redis_cache, "init_async_client", side_effect=redis_error
+        )
+
+    with caplog.at_level(logging.ERROR, logger="LiteLLM"), client_patch:
+        if fail_at == "client":
+            with pytest.raises(RedisConnectionError):
+                await redis_cache.async_set_cache("lit4930", value)
+        else:
+            await redis_cache.async_set_cache("lit4930", value)
+
+    logged = [
+        record.getMessage()
+        for record in caplog.records
+        if "async set()" in record.getMessage()
+    ]
+    assert logged, "a failed cache write still has to be reported"
+    assert all(
+        response_marker not in message for message in logged
+    ), "the cached value must not reach the log record"
+    assert any("Connection closed by server." in message for message in logged)
+    assert any("lit4930" in message for message in logged)
+    assert any(
+        "value_bytes=" in message for message in logged
+    ), "the size of the dropped write is the accounting the value used to carry"
+
+
+@pytest.mark.asyncio
+async def test_async_set_cache_pipeline_error_log_omits_the_cached_values(
+    monkeypatch, redis_no_ping, caplog
+):
+    """Same contract for the bulk path, which logged a `cache_value` that was
+    unconditionally None — it leaked nothing here only because it reported nothing."""
+    from redis.exceptions import TimeoutError as RedisTimeoutError
+
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache = RedisCache()
+
+    response_marker = "pipeline-body-marker"
+    cache_list = [
+        ("lit4930", {"choices": [{"message": {"content": f"{response_marker} " * 20}}]}),
+        ("lit4931", {"choices": [{"message": {"content": f"{response_marker} " * 20}}]}),
+    ]
+    redis_error = RedisTimeoutError("Timeout reading from my-test-host:6379")
+
+    mock_redis_instance = AsyncMock()
+    mock_redis_instance.pipeline = MagicMock(side_effect=redis_error)
+
+    with caplog.at_level(logging.ERROR, logger="LiteLLM"), patch.object(
+        redis_cache, "init_async_client", return_value=mock_redis_instance
+    ):
+        await redis_cache.async_set_cache_pipeline(cache_list=cache_list)
+
+    logged = [
+        record.getMessage()
+        for record in caplog.records
+        if "async set_cache_pipeline()" in record.getMessage()
+    ]
+    assert logged, "a failed pipeline write still has to be reported"
+    assert all(
+        response_marker not in message for message in logged
+    ), "the cached values must not reach the log record"
+    assert any("Timeout reading from my-test-host:6379" in message for message in logged)
+    assert any(
+        "num_keys=2" in message for message in logged
+    ), "how much was dropped is what the operator needs from this line"
+
+
+@pytest.mark.asyncio
+async def test_async_set_cache_sadd_error_log_omits_the_cached_value(
+    monkeypatch, redis_no_ping, caplog
+):
+    """The set-member path takes caller-supplied values too, and swallows its error."""
+    from redis.exceptions import ConnectionError as RedisConnectionError
+
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache = RedisCache()
+
+    member_marker = "sadd-member-marker"
+    redis_error = RedisConnectionError("Connection closed by server.")
+
+    mock_redis_instance = AsyncMock()
+    mock_redis_instance.sadd.side_effect = redis_error
+
+    with caplog.at_level(logging.ERROR, logger="LiteLLM"), patch.object(
+        redis_cache, "init_async_client", return_value=mock_redis_instance
+    ):
+        await redis_cache.async_set_cache_sadd(
+            key="lit4930", value=[f"{member_marker}-1", f"{member_marker}-2"], ttl=60
+        )
+
+    logged = [
+        record.getMessage()
+        for record in caplog.records
+        if "async set_cache_sadd()" in record.getMessage()
+    ]
+    assert logged, "a failed sadd still has to be reported"
+    assert all(member_marker not in message for message in logged)
+    assert any("Connection closed by server." in message for message in logged)
+    assert any("lit4930" in message for message in logged)

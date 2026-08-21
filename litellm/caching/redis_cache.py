@@ -536,9 +536,10 @@ class RedisCache(BaseCache):
             end_time = time.time()
             _duration = end_time - start_time
             verbose_logger.error(
-                "LiteLLM Redis Caching: increment_cache() - Got exception from REDIS %s, Writing value=%s",
+                "LiteLLM Redis Caching: increment_cache() - Got exception from REDIS %s, key=%s, value_bytes=%s",
                 str(e),
-                value,
+                key,
+                len(str(value)),
             )
             raise e
 
@@ -708,10 +709,10 @@ class RedisCache(BaseCache):
                 )
             )
             verbose_logger.error(
-                "LiteLLM Redis Caching: async set() - Got exception from REDIS %s, key=%r, value=%r",
+                "LiteLLM Redis Caching: async set() - Got exception from REDIS %s, key=%r, value_bytes=%s",
                 str(e),
                 key,
-                value,
+                len(str(value)),
             )
             raise e
 
@@ -760,9 +761,10 @@ class RedisCache(BaseCache):
                 )
             )
             verbose_logger.error(
-                "LiteLLM Redis Caching: async set() - Got exception from REDIS %s, Writing value=%s",
+                "LiteLLM Redis Caching: async set() - Got exception from REDIS %s, key=%s, value_bytes=%s",
                 str(e),
-                value,
+                key,
+                len(str(value)),
             )
             _record_swallowed_redis_failure(self._circuit_breaker, e)
 
@@ -809,7 +811,6 @@ class RedisCache(BaseCache):
         start_time: Final = time.time()
 
         print_verbose(f"Set Async Redis Cache: key list: {cache_list}\nttl={ttl}, redis_version={self.redis_version}")
-        cache_value: Final = None
         try:
             async with _redis_client.pipeline(transaction=False) as pipe:
                 results: Final = await self._pipeline_helper(pipe, cache_list, ttl)
@@ -847,9 +848,10 @@ class RedisCache(BaseCache):
             )
 
             verbose_logger.error(
-                "LiteLLM Redis Caching: async set_cache_pipeline() - Got exception from REDIS %s, Writing value=%s",
+                "LiteLLM Redis Caching: async set_cache_pipeline() - Got exception from REDIS %s, num_keys=%s, value_bytes=%s",
                 str(e),
-                cache_value,
+                len(cache_list),
+                sum(len(str(cache_value)) for _, cache_value in cache_list),
             )
             _record_swallowed_redis_failure(self._circuit_breaker, e)
 
@@ -893,9 +895,10 @@ class RedisCache(BaseCache):
             )
             # NON blocking - notify users Redis is throwing an exception
             verbose_logger.error(
-                "LiteLLM Redis Caching: async set() - Got exception from REDIS %s, Writing value=%s",
+                "LiteLLM Redis Caching: async set() - Got exception from REDIS %s, key=%s, value_bytes=%s",
                 str(e),
-                value,
+                key,
+                len(str(value)),
             )
             raise e
 
@@ -932,9 +935,10 @@ class RedisCache(BaseCache):
             )
             # NON blocking - notify users Redis is throwing an exception
             verbose_logger.error(
-                "LiteLLM Redis Caching: async set_cache_sadd() - Got exception from REDIS %s, Writing value=%s",
+                "LiteLLM Redis Caching: async set_cache_sadd() - Got exception from REDIS %s, key=%s, value_bytes=%s",
                 str(e),
-                value,
+                key,
+                len(str(value)),
             )
             _record_swallowed_redis_failure(self._circuit_breaker, e)
 
@@ -1004,9 +1008,10 @@ class RedisCache(BaseCache):
                 )
             )
             verbose_logger.error(
-                "LiteLLM Redis Caching: async async_increment() - Got exception from REDIS %s, Writing value=%s",
+                "LiteLLM Redis Caching: async async_increment() - Got exception from REDIS %s, key=%s, value_bytes=%s",
                 str(e),
-                value,
+                key,
+                len(str(value)),
             )
             raise e
 
