@@ -64,7 +64,11 @@ def _is_master_key(api_key: str | None, _master_key: str | None) -> bool:
     return secrets.compare_digest(api_key, _master_key)
 
 
-_HASHED_JWT_RE = re.compile(r"^hashed-jwt-[a-fA-F0-9]{64}$")
+_HASHED_JWT_RE = re.compile(r"hashed-jwt-[a-fA-F0-9]{64}")
+
+
+def _is_prehashed_key_shape(value: str) -> bool:
+    return is_valid_sha256_hash(value) or _HASHED_JWT_RE.fullmatch(value) is not None
 
 
 def _redact_logged_api_key(value: str | None, *, already_hashed: bool = False) -> str | None:
@@ -73,9 +77,7 @@ def _redact_logged_api_key(value: str | None, *, already_hashed: bool = False) -
     stripped: Final = re.sub(r"(?i)^bearer ", "", value)
     if not stripped:
         return None
-    if already_hashed and is_valid_sha256_hash(stripped):
-        return stripped
-    if _HASHED_JWT_RE.match(stripped):
+    if already_hashed and _is_prehashed_key_shape(stripped):
         return stripped
     return hash_token(stripped)
 
@@ -136,7 +138,7 @@ def _get_spend_logs_metadata(
     _raw_key: Final = clean_metadata.get("user_api_key")
     _trusted_hash: Final = metadata.get("user_api_key_hash")
     _already_hashed: Final = (
-        isinstance(_trusted_hash, str) and is_valid_sha256_hash(_trusted_hash) and _trusted_hash == _raw_key
+        isinstance(_trusted_hash, str) and _is_prehashed_key_shape(_trusted_hash) and _trusted_hash == _raw_key
     )
     clean_metadata["user_api_key"] = _redact_logged_api_key(_raw_key, already_hashed=_already_hashed)
     clean_metadata["applied_guardrails"] = applied_guardrails
@@ -296,7 +298,7 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogs
         standard_logging_total_tokens = standard_logging_payload.get("total_tokens", 0)
     _trusted_hash = metadata.get("user_api_key_hash")
     _key_already_hashed = (
-        isinstance(_trusted_hash, str) and is_valid_sha256_hash(_trusted_hash) and _trusted_hash == api_key
+        isinstance(_trusted_hash, str) and _is_prehashed_key_shape(_trusted_hash) and _trusted_hash == api_key
     )
     api_key = _redact_logged_api_key(api_key, already_hashed=_key_already_hashed) or ""
 
