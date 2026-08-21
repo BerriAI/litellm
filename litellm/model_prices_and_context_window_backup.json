@@ -4662,7 +4662,7 @@
         "supports_web_search": false
     },
     "azure/gpt-4.1-nano": {
-        "deprecation_date": "2026-10-14",
+        "deprecation_date": "2027-04-14",
         "cache_read_input_token_cost": 2.5e-08,
         "input_cost_per_token": 1e-07,
         "input_cost_per_token_batches": 5e-08,
@@ -4695,7 +4695,7 @@
         "supports_vision": true
     },
     "azure/gpt-4.1-nano-2025-04-14": {
-        "deprecation_date": "2026-10-14",
+        "deprecation_date": "2027-04-14",
         "cache_read_input_token_cost": 2.5e-08,
         "input_cost_per_token": 1e-07,
         "input_cost_per_token_batches": 5e-08,
@@ -4747,6 +4747,7 @@
         "supports_vision": true
     },
     "azure/gpt-4o": {
+        "deprecation_date": "2027-04-14",
         "cache_read_input_token_cost": 1.25e-06,
         "input_cost_per_token": 2.5e-06,
         "litellm_provider": "azure",
@@ -5121,6 +5122,7 @@
         "supports_tool_choice": true
     },
     "azure/gpt-4o-mini-transcribe": {
+        "deprecation_date": "2027-06-15",
         "input_cost_per_audio_token": 1.25e-06,
         "input_cost_per_token": 1.25e-06,
         "litellm_provider": "azure",
@@ -5133,6 +5135,7 @@
         ]
     },
     "azure/gpt-4o-mini-tts": {
+        "deprecation_date": "2027-06-15",
         "input_cost_per_token": 2.5e-06,
         "litellm_provider": "azure",
         "mode": "audio_speech",
@@ -8412,7 +8415,7 @@
         "supports_web_search": false
     },
     "azure/us/gpt-4.1-nano-2025-04-14": {
-        "deprecation_date": "2026-10-14",
+        "deprecation_date": "2027-04-14",
         "cache_read_input_token_cost": 2.5e-08,
         "input_cost_per_token": 1.1e-07,
         "input_cost_per_token_batches": 6e-08,
@@ -17151,6 +17154,7 @@
         "cache_creation_input_token_cost": 3.75e-06
     },
     "eu.anthropic.claude-opus-4-1-20250805-v1:0": {
+        "deprecation_date": "2027-01-08",
         "cache_creation_input_token_cost": 1.875e-05,
         "cache_read_input_token_cost": 1.5e-06,
         "input_cost_per_token": 1.5e-05,
@@ -37300,7 +37304,7 @@
         "source": "https://docs.mistral.ai/capabilities/code_generation/"
     },
     "text-embedding-004": {
-        "deprecation_date": "2026-01-14",
+        "deprecation_date": "2027-04-01",
         "input_cost_per_character": 2.5e-08,
         "input_cost_per_token": 1e-07,
         "litellm_provider": "vertex_ai-embedding-models",
@@ -43608,6 +43612,7 @@
         ]
     },
     "azure/sora-2": {
+        "deprecation_date": "2026-09-15",
         "litellm_provider": "azure",
         "mode": "video_generation",
         "output_cost_per_video_per_second": 0.1,
@@ -49348,6 +49353,32 @@
         "supports_tool_choice": true,
         "supports_vision": false
     },
+    "deepseek-v4-flash-vision-exp": {
+        "cache_creation_input_token_cost": 0.0,
+        "cache_read_input_token_cost": 1.4e-08,
+        "input_cost_per_token": 4.4e-07,
+        "input_cost_per_token_cache_hit": 1.4e-08,
+        "litellm_provider": "deepseek",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 393216,
+        "max_tokens": 393216,
+        "mode": "chat",
+        "output_cost_per_token": 1.32e-06,
+        "source": "https://api-docs.deepseek.com/quick_start/pricing",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_assistant_prefill": true,
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_parallel_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
     "deepseek-v4-pro": {
         "cache_creation_input_token_cost": 0.0,
         "cache_read_input_token_cost": 4.4e-08,
@@ -49399,6 +49430,32 @@
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_vision": false
+    },
+    "deepseek/deepseek-v4-flash-vision-exp": {
+        "cache_creation_input_token_cost": 0.0,
+        "cache_read_input_token_cost": 1.4e-08,
+        "input_cost_per_token": 4.4e-07,
+        "input_cost_per_token_cache_hit": 1.4e-08,
+        "litellm_provider": "deepseek",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 393216,
+        "max_tokens": 393216,
+        "mode": "chat",
+        "output_cost_per_token": 1.32e-06,
+        "source": "https://api-docs.deepseek.com/quick_start/pricing",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_assistant_prefill": true,
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_parallel_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
     },
     "deepseek/deepseek-v4-pro": {
         "cache_creation_input_token_cost": 0.0,
