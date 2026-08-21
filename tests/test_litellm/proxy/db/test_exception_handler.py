@@ -117,6 +117,8 @@ def test_is_database_connection_generic_errors():
         TimeoutError("timed out"),
         OSError("network is unreachable"),
         asyncio.TimeoutError(),
+        httpx.ConnectError("connection refused"),
+        httpx.ConnectTimeout("connect timed out"),
         HTTPClientClosedError(),
         ClientNotConnectedError(),
         PrismaError("can't reach database server"),

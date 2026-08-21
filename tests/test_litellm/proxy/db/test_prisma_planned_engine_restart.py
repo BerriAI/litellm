@@ -913,7 +913,7 @@ async def test_health_check_alerts_for_non_connection_errors_during_a_replacemen
         await _yield_to_loop()
         assert wrapper._reconnection_lock.locked() is True
 
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match='malformed SELECT'):
             await client.health_check()
 
         gate.set()

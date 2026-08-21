@@ -36,6 +36,7 @@ from litellm.utils import (
     ProviderConfigManager,
     TextCompletionStreamWrapper,
     _check_provider_match,
+    _get_potential_model_names,
     _is_streaming_request,
     get_api_key,
     get_llm_provider,
@@ -127,6 +128,74 @@ def test_get_model_info_surfaces_supports_adaptive_thinking(local_model_cost_map
         model="claude-opus-4-9", custom_llm_provider="anthropic"
     )
     assert generalized["supports_adaptive_thinking"] is True
+
+
+def test_potential_model_names_keeps_provider_prefixed_candidate():
+    """A provider whose own model ids repeat the litellm provider name (Perplexity's
+    Agent API serves `perplexity/glm-5.2`, mapped as `perplexity/perplexity/glm-5.2`)
+    needs the un-stripped `<provider>/<model>` candidate. Every other candidate reads
+    the leading `perplexity/` as the litellm prefix and strips it away."""
+    already_prefixed = _get_potential_model_names(
+        model="perplexity/glm-5.2", custom_llm_provider="perplexity"
+    )
+    assert already_prefixed["provider_prefixed_model_name"] == "perplexity/perplexity/glm-5.2"
+    assert already_prefixed["split_model"] == "glm-5.2"
+    assert already_prefixed["combined_model_name"] == "perplexity/glm-5.2"
+    assert already_prefixed["combined_stripped_model_name"] == "perplexity/glm-5.2"
+
+    bare = _get_potential_model_names(model="glm-5.2", custom_llm_provider="perplexity")
+    assert bare["provider_prefixed_model_name"] == bare["combined_model_name"] == "perplexity/glm-5.2"
+
+
+def test_get_model_info_resolves_provider_prefixed_model_ids(local_model_cost_map):
+    """Perplexity's Agent API third-party models are keyed `perplexity/perplexity/<id>`
+    because Perplexity's own id already starts with `perplexity/`. Callers run
+    `get_llm_provider` first, which hands `_get_potential_model_names` model
+    `perplexity/glm-5.2` with provider `perplexity`, and every candidate but the
+    provider-prefixed one strips that second `perplexity/` off. Regression: the
+    entries were unreachable from `supports_reasoning` and from the cost calculator's
+    per-token fallback, so a mapped model reported no reasoning support and raised
+    "This model isn't mapped yet" on the only path where its rates are ever used."""
+    for model, reasoning in (
+        ("perplexity/perplexity/glm-5.2", True),
+        ("perplexity/perplexity/kimi-k3", True),
+        ("perplexity/perplexity/deepseek-v4-flash-0731", True),
+        ("perplexity/perplexity/kimi-k2.7-code", False),
+    ):
+        assert litellm.supports_reasoning(model=model) is reasoning, model
+
+    via_provider = litellm.get_model_info(
+        model="perplexity/glm-5.2", custom_llm_provider="perplexity"
+    )
+    assert via_provider["key"] == "perplexity/perplexity/glm-5.2"
+    assert via_provider["input_cost_per_token"] == 1.4e-06
+    assert via_provider["output_cost_per_token"] == 4.4e-06
+    assert via_provider["mode"] == "responses"
+
+
+def test_provider_prefixed_lookup_never_outranks_an_existing_row(local_model_cost_map):
+    """The provider-prefixed candidate is tried last, after every candidate that
+    already existed, so no model that resolves today can change answer. `perplexity/sonar`
+    is the case that proves it: both `perplexity/sonar` and `perplexity/perplexity/sonar`
+    are cost-map keys, and the shorter one must keep winning."""
+    sonar = litellm.get_model_info(model="sonar", custom_llm_provider="perplexity")
+    assert sonar["key"] == "perplexity/sonar"
+    assert sonar["mode"] == "chat"
+    assert sonar["input_cost_per_token"] == 1e-06
+
+    still_sonar = litellm.get_model_info(
+        model="perplexity/sonar", custom_llm_provider="perplexity"
+    )
+    assert still_sonar["key"] == "perplexity/sonar"
+    assert still_sonar["mode"] == "chat"
+
+    for model, provider, expected_key in (
+        ("claude-sonnet-4-5", "anthropic", "claude-sonnet-4-5"),
+        ("anthropic/claude-sonnet-4-5", "anthropic", "claude-sonnet-4-5"),
+        ("gemini/gemini-2.0-flash", "gemini", "gemini/gemini-2.0-flash"),
+        ("openrouter/openai/gpt-4o", "openrouter", "openrouter/openai/gpt-4o"),
+    ):
+        assert litellm.get_model_info(model=model, custom_llm_provider=provider)["key"] == expected_key
 
 
 def test_check_provider_match_azure_ai_allows_openai_and_azure():
@@ -921,6 +990,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "supports_parallel_tool_use_config": {"type": "boolean"},
                 "supports_pdf_input": {"type": "boolean"},
                 "prompt_cache_min_tokens": {"type": "number"},
+                "supports_prompt_cache_breakpoint": {"type": "boolean"},
                 "supports_prompt_caching": {"type": "boolean"},
                 "supports_response_schema": {"type": "boolean"},
                 "supports_system_messages": {"type": "boolean"},
@@ -3720,7 +3790,7 @@ class TestMetadataNoneHandling:
 
         # Attempting 'in' on None raises TypeError
         with pytest.raises(TypeError):
-            "model_group" in kwargs.get("metadata", {})
+            _ = "model_group" in kwargs.get("metadata", {})
 
     def test_litellm_params_metadata_none(self):
         """litellm_params.get("metadata") or {} should handle None value."""
@@ -4300,7 +4370,7 @@ class TestVertexEmbeddingEncodingFormat:
         assert "encoding_format" not in optional_params
 
     def test_encoding_format_base64_still_rejected_without_drop_params(self):
-        with pytest.raises(Exception) as excinfo:
+        with pytest.raises(Exception, match='To drop these, set `litellm\\.drop_params=True` or for proxy') as excinfo:
             litellm.utils.get_optional_params_embeddings(
                 model="gemini-embedding-001",
                 encoding_format="base64",

@@ -402,7 +402,7 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({ promptId, onClose, accessTo
                   </TableBody>
                 </Table>
               ) : (
-                <p className="text-muted-foreground/70">No versions found in {selectedEnv}</p>
+                <p className="text-muted-foreground">No versions found in {selectedEnv}</p>
               )}
             </Card>
           </TabsContent>

@@ -2412,12 +2412,14 @@ async def test_proxy_server_prisma_setup():
 
 
 @pytest.mark.asyncio
-async def test_proxy_server_prisma_setup_invalid_db():
+async def test_proxy_server_prisma_setup_invalid_db(monkeypatch):
     """
     PROD TEST: Test that proxy server startup fails when it's unable to connect to the database
 
     Think 2-3 times before editing / deleting this test, it's important for PROD
     """
+    import httpx
+
     from litellm.proxy.proxy_server import ProxyStartupEvent
     from litellm.proxy.utils import ProxyLogging
     from litellm.caching import DualCache
@@ -2425,24 +2427,14 @@ async def test_proxy_server_prisma_setup_invalid_db():
     user_api_key_cache = DualCache()
     invalid_db_url = "postgresql://invalid:invalid@localhost:5432/nonexistent"
 
-    _old_db_url = os.getenv("DATABASE_URL")
-    os.environ["DATABASE_URL"] = invalid_db_url
+    monkeypatch.setenv("DATABASE_URL", invalid_db_url)
 
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(httpx.ConnectError):
         await ProxyStartupEvent._setup_prisma_client(
             database_url=invalid_db_url,
             proxy_logging_obj=ProxyLogging(user_api_key_cache=user_api_key_cache),
             user_api_key_cache=user_api_key_cache,
         )
-        print("GOT EXCEPTION=", exc_info)
-
-        assert "httpx.ConnectError" in str(exc_info.value)
-
-    # # Verify the error message indicates a database connection issue
-    # assert any(x in str(exc_info.value).lower() for x in ["database", "connection", "authentication"])
-
-    if _old_db_url:
-        os.environ["DATABASE_URL"] = _old_db_url
 
 
 @pytest.mark.asyncio

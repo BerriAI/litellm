@@ -2325,7 +2325,7 @@ class TestTemporaryMCPSessionEndpoints:
             "litellm.proxy.management_endpoints.mcp_management_endpoints.validate_and_normalize_mcp_server_payload",
             MagicMock(),
         ):
-            with pytest.raises(Exception) as exc_info:
+            with pytest.raises(Exception, match='User does not have permission to create temporary mcp') as exc_info:
                 await add_session_mcp_server(
                     payload=payload,
                     user_api_key_dict=non_admin,

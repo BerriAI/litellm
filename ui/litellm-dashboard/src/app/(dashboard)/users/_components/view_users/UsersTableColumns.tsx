@@ -208,7 +208,7 @@ export const getUsersTableColumns = ({
           return (
             <Badge
               variant="outline"
-              className="whitespace-nowrap border-indigo-200 bg-indigo-50 font-normal text-indigo-600"
+              className="whitespace-nowrap border-indigo-200 bg-indigo-50 font-normal text-indigo-600 dark:border-indigo-800 dark:bg-indigo-950 dark:text-indigo-300"
             >
               {keyCount} {keyCount === 1 ? "Key" : "Keys"}
             </Badge>
