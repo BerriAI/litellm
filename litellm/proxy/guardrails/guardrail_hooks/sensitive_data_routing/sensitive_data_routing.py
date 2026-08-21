@@ -80,7 +80,7 @@ class SensitiveDataRoutingGuardrail(CustomGuardrail):
         keywords: Sequence[str] | None = None,
         sticky_session: bool = True,
         session_ttl_seconds: int = DEFAULT_SESSION_TTL_SECONDS,
-        event_hook: GuardrailEventHooks | list[GuardrailEventHooks] | None = None,
+        event_hook: GuardrailEventHooks | list[GuardrailEventHooks] | None = None,  # mutable-ok: base type
         default_on: bool = False,
     ) -> None:
         if not on_premise_model:
@@ -105,7 +105,7 @@ class SensitiveDataRoutingGuardrail(CustomGuardrail):
         self.session_ttl_seconds = session_ttl_seconds
 
     @classmethod
-    def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:
+    def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:  # mutable-ok: base type
         return [GuardrailEventHooks.pre_call]
 
     @staticmethod
@@ -122,7 +122,7 @@ class SensitiveDataRoutingGuardrail(CustomGuardrail):
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
-        request_data: dict,
+        request_data: dict,  # mutable-ok: proxy request body, owned by the caller
         input_type: Literal["request", "response"],
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> GenericGuardrailAPIInputs:
