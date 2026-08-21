@@ -168,7 +168,7 @@ jobs:
               tests/test_litellm/proxy/ui_crud_endpoints
               tests/test_litellm/proxy/config_resolvers
               tests/test_litellm/proxy/utils
-            workers: 2
+            workers: 4
             reruns: 2
             timeout-minutes: 20
             job-timeout-minutes: 55
@@ -195,7 +195,7 @@ jobs:
               tests/test_litellm/proxy/types_utils
               tests/test_litellm/proxy/logging_endpoints
               tests/test_litellm/proxy/test_*.py
-            workers: 2
+            workers: 4
             reruns: 2
             timeout-minutes: 20
             job-timeout-minutes: 55
