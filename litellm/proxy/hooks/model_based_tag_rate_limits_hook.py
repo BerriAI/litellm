@@ -660,6 +660,29 @@ def _fixed_length_identity(tag_value: str) -> str:
     return hashlib.sha256(tag_value.encode()).hexdigest()
 
 
+def _policy_fingerprint(entry: TagRateLimitEntry) -> str:
+    """
+    Two entries can share a `name` and `tag_id` while genuinely disagreeing
+    on `limit`, `period_seconds`, or any of the four scoping fields --
+    `_DedupSignature`/`resolve_any` already treat that as two distinct
+    policies (see `distinct_signature_count_by_name` in `_build_group_limits`),
+    so the Redis/in-memory bucket key must too, or two differently-configured
+    entries that happen to share a name check and charge the identical
+    counter. Hashed to a fixed-length digest for the same reason
+    `_fixed_length_identity` hashes `tag_value`: an operator's own
+    `included_values`/`excluded_values` list has no length bound.
+    """
+    fingerprint_source: Final = (
+        entry.limit,
+        entry.period_seconds,
+        entry.included_values,
+        entry.excluded_values,
+        _scope_signature(entry.enabled_for),
+        _scope_signature(entry.disabled_for),
+    )
+    return hashlib.sha256(repr(fingerprint_source).encode()).hexdigest()[:16]
+
+
 def _hash_tag(model_group: str, configured: _ConfiguredLimit, tag_value: str, key_hash: str | None) -> str:
     # resolved_group overrides the caller-visible model_group when this
     # limit was found via resolve_any()'s per-deployment fallback (routing
@@ -675,9 +698,13 @@ def _hash_tag(model_group: str, configured: _ConfiguredLimit, tag_value: str, ke
     # scoping the lookup by (team_id, alias). See _ConfiguredLimit.team_scope.
     team_suffix: Final = f":team:{configured.team_scope}" if configured.team_scope is not None else ""
     key_suffix: Final = f":key:{key_hash}" if key_hash is not None else ""
+    # Two entries can share `name`/`tag_id` while disagreeing on limit,
+    # period_seconds, or scoping (see _policy_fingerprint) -- included so
+    # they never collide onto the same counter despite the shared name.
+    policy_suffix: Final = f":policy:{_policy_fingerprint(configured.entry)}"
     return (
         f"tag_rl:{effective_model_group}:{configured.unit}:{configured.entry.name}:{configured.entry.tag_id}:"
-        f"{scope}{team_suffix}:{_fixed_length_identity(tag_value)}{key_suffix}"
+        f"{scope}{team_suffix}:{_fixed_length_identity(tag_value)}{key_suffix}{policy_suffix}"
     )
 
 

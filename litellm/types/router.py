@@ -245,6 +245,11 @@ class TagRateLimitEntry(BaseModel):
         # defeats the entry; reject it at config load time instead.
         if math.isnan(self.limit):
             raise ValueError("limit must not be NaN")
+        if math.isinf(self.limit):
+            raise ValueError(
+                "limit must be finite -- positive infinity makes admission never reject (current + increment "
+                "> limit is always false), negative infinity makes it always reject every tagged request"
+            )
         return self
 
     @model_validator(mode="after")

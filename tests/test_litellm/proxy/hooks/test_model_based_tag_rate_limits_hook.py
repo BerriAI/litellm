@@ -104,16 +104,38 @@ def _expected_bucket_key(
     team_scope: str | None = None,
     resolved_group: str | None = None,
     key_hash: str | None = None,
+    limit: float = 1,
+    included_values: tuple | None = None,
+    excluded_values: tuple | None = None,
+    enabled_for: dict | None = None,
+    disabled_for: dict | None = None,
 ) -> str:
     """
     Builds the exact key the real code would compute (via _hash_tag's
     fixed-length hashing of tag_value), instead of hand-writing the raw
     tag value into a literal string -- the internal key format (hashed or
     not) is an implementation detail these tests shouldn't hardcode.
+
+    `limit` and the four scoping fields default to values that produce a
+    stable fingerprint for tests that don't care about it, but must be
+    passed matching the real entry's own configuration whenever a test's
+    router declares a `limit` other than 1 (or any scoping) for the entry
+    whose key this reproduces -- see _policy_fingerprint, which folds them
+    into the key precisely so two differently-configured entries sharing a
+    name never collide onto the same counter.
     """
     configured = _ConfiguredLimit(
         unit=unit,
-        entry=TagRateLimitEntry(name=name, tag_id=tag_id, limit=1, period_seconds=period_seconds),
+        entry=TagRateLimitEntry(
+            name=name,
+            tag_id=tag_id,
+            limit=limit,
+            period_seconds=period_seconds,
+            included_values=included_values,
+            excluded_values=excluded_values,
+            enabled_for=enabled_for,
+            disabled_for=disabled_for,
+        ),
         deployment_scope=deployment_scope,
         team_scope=team_scope,
         resolved_group=resolved_group,
@@ -250,6 +272,20 @@ def test_tag_rate_limit_entry_rejects_nan_limit():
     """
     with pytest.raises(ValidationError, match="limit must not be NaN"):
         TagRateLimitEntry(name="n", limit=float("nan"), period_seconds=60)
+
+
+def test_tag_rate_limit_entry_rejects_infinite_limit():
+    """
+    Positive infinity makes the atomic requests/concurrency
+    current + increment > limit check always false, so admission never
+    rejects; negative infinity makes it always true, rejecting every tagged
+    request. Same silent-misconfiguration class as NaN, just via a different
+    non-finite float rather than a non-ordering one.
+    """
+    with pytest.raises(ValidationError, match="limit must be finite"):
+        TagRateLimitEntry(name="n", limit=float("inf"), period_seconds=60)
+    with pytest.raises(ValidationError, match="limit must be finite"):
+        TagRateLimitEntry(name="n", limit=float("-inf"), period_seconds=60)
 
 
 # ---------------------------------------------------------------------------
@@ -481,6 +517,48 @@ def test_tag_rate_limit_entry_normalizes_included_and_excluded_values_order_and_
 def test_tag_rate_limit_scope_normalizes_values_order_and_duplicates():
     scope = TagRateLimitScope(tag_id="company_id", values=("1032", "1001", "1001"))
     assert scope.values == ("1001", "1032")
+
+
+# ---------------------------------------------------------------------------
+# _hash_tag / _bucket_key -- policy identity folds into the Redis key itself
+# ---------------------------------------------------------------------------
+
+
+def test_bucket_key_differs_for_same_named_entries_with_different_limits():
+    """
+    A plain, unscoped entry and a stricter, scoped override can legitimately
+    share a `name` (the worked example in the docs uses distinct names, but
+    nothing in validation requires that) -- resolve_any/_build_group_limits
+    already treat differing limit/scoping as genuinely distinct policies for
+    dedup purposes, so the actual counter key must too, or two
+    differently-configured entries that happen to share a name check and
+    charge the identical Redis/in-memory bucket.
+    """
+    now = 0.0
+    default_key = _expected_bucket_key("grp", "requests", "daily", "end_user_id", "u1", 86400, now, limit=2500)
+    override_key = _expected_bucket_key(
+        "grp",
+        "requests",
+        "daily",
+        "end_user_id",
+        "u1",
+        86400,
+        now,
+        limit=1,
+        enabled_for={"tag_id": "company_id", "values": ["1032"]},
+    )
+    assert default_key != override_key
+
+
+def test_bucket_key_differs_for_same_named_entries_with_different_scoping_only():
+    now = 0.0
+    excluding_u1 = _expected_bucket_key(
+        "grp", "requests", "daily", "end_user_id", "u2", 86400, now, limit=100, excluded_values=("u1",)
+    )
+    excluding_u2 = _expected_bucket_key(
+        "grp", "requests", "daily", "end_user_id", "u2", 86400, now, limit=100, excluded_values=("u2",)
+    )
+    assert excluding_u1 != excluding_u2
 
 
 # ---------------------------------------------------------------------------
@@ -1248,8 +1326,8 @@ async def test_log_success_event_increments_configured_units(time_controller):
     await asyncio.sleep(0)
 
     now = time_controller.now().timestamp()
-    token_key = _expected_bucket_key("grp", "tokens", "daily", "end_user_id", "u1", 86400, now)
-    dollar_key = _expected_bucket_key("grp", "dollars", "monthly", "end_user_id", "u1", 2592000, now)
+    token_key = _expected_bucket_key("grp", "tokens", "daily", "end_user_id", "u1", 86400, now, limit=500000)
+    dollar_key = _expected_bucket_key("grp", "dollars", "monthly", "end_user_id", "u1", 2592000, now, limit=50.0)
 
     assert (
         float(await limiter.internal_usage_cache.async_get_cache(key=token_key, litellm_parent_otel_span=None)) == 42.0
@@ -1260,7 +1338,7 @@ async def test_log_success_event_increments_configured_units(time_controller):
 
     # "requests" is accounted atomically at admission (async_filter_deployments),
     # not here -- async_log_success_event must not touch its bucket at all.
-    request_key = _expected_bucket_key("grp", "requests", "daily", "end_user_id", "u1", 86400, now)
+    request_key = _expected_bucket_key("grp", "requests", "daily", "end_user_id", "u1", 86400, now, limit=100)
     assert await limiter.internal_usage_cache.async_get_cache(key=request_key, litellm_parent_otel_span=None) is None
 
 
@@ -1305,7 +1383,7 @@ async def test_log_success_event_reads_nested_litellm_metadata_when_that_is_auth
     await asyncio.sleep(0)
 
     now = time_controller.now().timestamp()
-    token_key = _expected_bucket_key("grp", "tokens", "daily", "end_user_id", "u1", 86400, now)
+    token_key = _expected_bucket_key("grp", "tokens", "daily", "end_user_id", "u1", 86400, now, limit=500000)
     assert (
         float(await limiter.internal_usage_cache.async_get_cache(key=token_key, litellm_parent_otel_span=None)) == 42.0
     )
@@ -1351,7 +1429,7 @@ async def test_log_success_event_falls_back_to_serving_deployment_model_name_for
     await asyncio.sleep(0)
 
     now = time_controller.now().timestamp()
-    token_key = _expected_bucket_key("backend-a", "tokens", "daily", "end_user_id", "u1", 86400, now)
+    token_key = _expected_bucket_key("backend-a", "tokens", "daily", "end_user_id", "u1", 86400, now, limit=500000)
     assert (
         float(await limiter.internal_usage_cache.async_get_cache(key=token_key, litellm_parent_otel_span=None)) == 42.0
     )
@@ -1418,7 +1496,7 @@ async def test_log_success_event_accounts_against_the_same_bucket_admission_chec
 
     now = time_controller.now().timestamp()
     token_key = _expected_bucket_key(
-        "my-group", "tokens", "daily", "end_user_id", "u1", 86400, now, resolved_group=admission_bucket_group
+        "my-group", "tokens", "daily", "end_user_id", "u1", 86400, now, resolved_group=admission_bucket_group, limit=500000
     )
     assert (
         float(await limiter.internal_usage_cache.async_get_cache(key=token_key, litellm_parent_otel_span=None)) == 42.0
@@ -1461,7 +1539,7 @@ async def test_admission_dedups_against_the_full_group_not_just_currently_health
     # since backend-a is the only one excluded below) stays empty.
     now = time_controller.now().timestamp()
     over_limit_key = _expected_bucket_key(
-        "my-group", "tokens", "daily", "end_user_id", "u1", 86400, now, resolved_group="backend-a"
+        "my-group", "tokens", "daily", "end_user_id", "u1", 86400, now, resolved_group="backend-a", limit=10
     )
     await limiter.internal_usage_cache.async_set_cache(key=over_limit_key, value=20.0, litellm_parent_otel_span=None)
 
@@ -1521,8 +1599,12 @@ async def test_log_success_event_accounts_against_the_key_hash_admission_checked
     await asyncio.sleep(0)
 
     now = time_controller.now().timestamp()
-    keyed_bucket = _expected_bucket_key("grp", "tokens", "daily", "end_user_id", "u1", 86400, now, key_hash="keyA")
-    unkeyed_bucket = _expected_bucket_key("grp", "tokens", "daily", "end_user_id", "u1", 86400, now, key_hash=None)
+    keyed_bucket = _expected_bucket_key(
+        "grp", "tokens", "daily", "end_user_id", "u1", 86400, now, key_hash="keyA", limit=500000
+    )
+    unkeyed_bucket = _expected_bucket_key(
+        "grp", "tokens", "daily", "end_user_id", "u1", 86400, now, key_hash=None, limit=500000
+    )
     assert (
         float(await limiter.internal_usage_cache.async_get_cache(key=keyed_bucket, litellm_parent_otel_span=None))
         == 42.0
@@ -1569,9 +1651,11 @@ async def test_log_success_event_charges_the_window_admission_checked_not_a_late
     await limiter.async_log_success_event(kwargs=kwargs, response_obj=None, start_time=0, end_time=0)
     await asyncio.sleep(0)
 
-    admitted_window_bucket = _expected_bucket_key("grp", "tokens", "per_minute", "end_user_id", "u1", 60, admission_time)
+    admitted_window_bucket = _expected_bucket_key(
+        "grp", "tokens", "per_minute", "end_user_id", "u1", 60, admission_time, limit=500
+    )
     later_window_bucket = _expected_bucket_key(
-        "grp", "tokens", "per_minute", "end_user_id", "u1", 60, time_controller.now().timestamp()
+        "grp", "tokens", "per_minute", "end_user_id", "u1", 60, time_controller.now().timestamp(), limit=500
     )
     assert (
         float(
@@ -1636,9 +1720,11 @@ async def test_log_success_event_accounts_against_the_team_id_admission_checked(
 
     now = time_controller.now().timestamp()
     correct_bucket = _expected_bucket_key(
-        "team-alias-name", "tokens", "daily", "end_user_id", "u1", 86400, now, team_scope="team-1"
+        "team-alias-name", "tokens", "daily", "end_user_id", "u1", 86400, now, team_scope="team-1", limit=500
     )
-    wrong_bucket = _expected_bucket_key("team-alias-name", "tokens", "daily", "end_user_id", "u1", 86400, now)
+    wrong_bucket = _expected_bucket_key(
+        "team-alias-name", "tokens", "daily", "end_user_id", "u1", 86400, now, limit=500
+    )
     assert (
         float(await limiter.internal_usage_cache.async_get_cache(key=correct_bucket, litellm_parent_otel_span=None))
         == 42.0
@@ -1719,7 +1805,7 @@ async def test_cross_unit_rejection_does_not_leave_a_phantom_increment(time_cont
     assert exc_info.value.detail["type"] == "concurrency"
 
     now = time_controller.now().timestamp()
-    request_key = _expected_bucket_key("grp", "requests", "per_minute", "end_user_id", "u1", 60, now)
+    request_key = _expected_bucket_key("grp", "requests", "per_minute", "end_user_id", "u1", 60, now, limit=10)
     requests_value = await limiter.internal_usage_cache.async_get_cache(key=request_key, litellm_parent_otel_span=None)
     assert (float(requests_value) if requests_value is not None else 0.0) == 1.0
 
@@ -2028,7 +2114,7 @@ async def test_success_event_token_accounting_is_wired_through_the_background_re
     assert len(_BACKGROUND_TASKS) == 0
 
     now = time_controller.now().timestamp()
-    token_key = _expected_bucket_key("grp", "tokens", "daily", "end_user_id", "u1", 86400, now)
+    token_key = _expected_bucket_key("grp", "tokens", "daily", "end_user_id", "u1", 86400, now, limit=500000)
     assert (
         float(await limiter.internal_usage_cache.async_get_cache(key=token_key, litellm_parent_otel_span=None)) == 42.0
     )
@@ -2460,7 +2546,7 @@ async def test_token_limit_rejects_once_bucket_is_seeded_at_limit(time_controlle
     healthy = router.model_list
 
     now = time_controller.now().timestamp()
-    key = _expected_bucket_key("grp", "tokens", "daily", "end_user_id", "u1", 86400, now)
+    key = _expected_bucket_key("grp", "tokens", "daily", "end_user_id", "u1", 86400, now, limit=1000)
     await limiter.internal_usage_cache.async_set_cache(key=key, value=1000, ttl=86400, litellm_parent_otel_span=None)
 
     with pytest.raises(ProxyRateLimitError) as exc_info:
@@ -2494,7 +2580,7 @@ async def test_dollar_limit_rejects_once_bucket_is_seeded_at_limit(time_controll
     healthy = router.model_list
 
     now = time_controller.now().timestamp()
-    key = _expected_bucket_key("grp", "dollars", "monthly", "team_id", "t1", 2592000, now)
+    key = _expected_bucket_key("grp", "dollars", "monthly", "team_id", "t1", 2592000, now, limit=50.0)
     await limiter.internal_usage_cache.async_set_cache(key=key, value=50.0, ttl=2592000, litellm_parent_otel_span=None)
 
     with pytest.raises(ProxyRateLimitError) as exc_info:
@@ -2619,7 +2705,7 @@ async def test_redis_backed_cross_unit_rejection_does_not_leave_a_phantom_increm
     assert exc_info.value.detail["type"] == "concurrency"
 
     now = time_controller.now().timestamp()
-    request_key = _expected_bucket_key("grp", "requests", "per_minute", "end_user_id", tag, 60, now)
+    request_key = _expected_bucket_key("grp", "requests", "per_minute", "end_user_id", tag, 60, now, limit=10)
     requests_value = await limiter.internal_usage_cache.async_get_cache(key=request_key, litellm_parent_otel_span=None)
     assert (float(requests_value) if requests_value is not None else 0.0) == 1.0
 
@@ -3159,7 +3245,7 @@ async def test_cross_unit_refund_leaves_no_phantom_increment_in_memory(time_cont
         )
 
     now = time_controller.now().timestamp()
-    request_key = _expected_bucket_key("grp", "requests", "per_minute", "end_user_id", "refund-check", 60, now)
+    request_key = _expected_bucket_key("grp", "requests", "per_minute", "end_user_id", "refund-check", 60, now, limit=10)
     value = await limiter.internal_usage_cache.async_get_cache(key=request_key, litellm_parent_otel_span=None)
     assert (float(value) if value is not None else 0.0) == 1.0
 
