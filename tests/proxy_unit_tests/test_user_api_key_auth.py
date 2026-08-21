@@ -559,7 +559,6 @@ def test_get_api_key_from_custom_header_different_casing():
     )
 
 
-from litellm.proxy._types import LitellmUserRoles
 
 
 @pytest.mark.parametrize(

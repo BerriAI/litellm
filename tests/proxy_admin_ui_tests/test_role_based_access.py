@@ -14,7 +14,6 @@ from fastapi.routing import APIRoute
 
 load_dotenv()
 import io
-import os
 import time
 
 # this file is to test litellm/proxy
@@ -77,7 +76,6 @@ from litellm.proxy.utils import PrismaClient, ProxyLogging, hash_token, update_s
 
 verbose_proxy_logger.setLevel(level=logging.DEBUG)
 
-from starlette.datastructures import URL
 
 from litellm.caching.caching import DualCache
 from litellm.proxy._types import *

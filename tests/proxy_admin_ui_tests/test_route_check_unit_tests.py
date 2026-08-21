@@ -11,7 +11,6 @@ from fastapi.routing import APIRoute
 
 load_dotenv()
 import io
-import os
 import time
 
 
@@ -23,7 +22,7 @@ sys.path.insert(
 import asyncio
 import logging
 
-from fastapi import HTTPException, Request
+from fastapi import HTTPException
 import pytest
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy._types import LiteLLM_UserTable, LitellmUserRoles, UserAPIKeyAuth

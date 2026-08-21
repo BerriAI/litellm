@@ -18,7 +18,6 @@ from datetime import datetime
 from dotenv import load_dotenv
 
 load_dotenv()
-import os
 
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -45,7 +44,6 @@ from litellm.proxy.proxy_server import (
     embeddings,
 )
 from litellm.proxy.utils import ProxyLogging, hash_token
-from litellm.router import Router
 
 
 class testLogger(CustomLogger):
