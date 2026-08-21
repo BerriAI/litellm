@@ -28,6 +28,7 @@ class TestOpentelemetryRedaction:
         """When redact_user_api_key_info is True, metadata.user_api_key_* span
         attributes must not be emitted."""
         litellm.logging_callback_manager._reset_all_callbacks()
+        original_callbacks = litellm.callbacks
         litellm.redact_user_api_key_info = True
         litellm.callbacks = ["otel"]
 
@@ -48,13 +49,9 @@ class TestOpentelemetryRedaction:
 
             from litellm.integrations.opentelemetry import OpenTelemetry
 
-            otel_logger = None
-            for cb in litellm.logging_callback_manager.callbacks:
-                if isinstance(cb, OpenTelemetry):
-                    otel_logger = cb
-                    break
-
-            assert otel_logger is not None, "OpenTelemetry logger not found"
+            assert any(isinstance(cb, OpenTelemetry) for cb in litellm._async_success_callback), (
+                "OpenTelemetry logger not found"
+            )
 
             from litellm.litellm_core_utils.redact_messages import (
                 redact_user_api_key_info,
@@ -75,6 +72,8 @@ class TestOpentelemetryRedaction:
             assert "generation_name" in redacted
         finally:
             litellm.redact_user_api_key_info = False
+            litellm.logging_callback_manager._reset_all_callbacks()
+            litellm.callbacks = original_callbacks
 
     def test_redact_user_api_key_info_filters_correctly(self):
         """Direct unit test for the redaction function used by the OTEL path."""
@@ -139,6 +138,47 @@ class TestOpentelemetryRedaction:
             )
 
             otel_logger.safe_set_attribute.assert_not_called()
+        finally:
+            litellm.redact_user_api_key_info = original_flag
+
+    def test_set_attributes_redacts_user_api_key_metadata_before_span_export(self):
+        """The OTEL attribute path must filter user_api_key_* metadata."""
+        from litellm.integrations.opentelemetry import OpenTelemetry
+
+        original_flag = litellm.redact_user_api_key_info
+        litellm.redact_user_api_key_info = True
+        try:
+            otel_logger = OpenTelemetry()
+            otel_logger.safe_set_attribute = MagicMock()
+            otel_logger._set_inference_identity_attributes = MagicMock()
+            otel_logger._set_service_tier_attributes = MagicMock()
+            otel_logger._capture_in_span = MagicMock(return_value=False)
+
+            otel_logger.set_attributes(
+                span=MagicMock(),
+                kwargs={
+                    "litellm_params": {"custom_llm_provider": "openai"},
+                    "standard_logging_object": {
+                        "call_type": "completion",
+                        "metadata": {
+                            "user_api_key_hash": "hashed-secret",
+                            "user_api_key_user_id": "uid-123",
+                            "user_api_key_user_email": "user@example.com",
+                            "user_api_key_team_id": "team-456",
+                            "generation_name": "test-gen",
+                        },
+                    },
+                },
+                response_obj=None,
+            )
+
+            attribute_keys = [call.kwargs["key"] for call in otel_logger.safe_set_attribute.call_args_list]
+
+            assert "metadata.generation_name" in attribute_keys
+            assert "metadata.user_api_key_hash" not in attribute_keys
+            assert "metadata.user_api_key_user_id" not in attribute_keys
+            assert "metadata.user_api_key_user_email" not in attribute_keys
+            assert "metadata.user_api_key_team_id" not in attribute_keys
         finally:
             litellm.redact_user_api_key_info = original_flag
 
