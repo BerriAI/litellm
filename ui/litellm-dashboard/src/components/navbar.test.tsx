@@ -157,6 +157,21 @@ describe("Navbar", () => {
     expect(screen.getByRole("link", { name: /litellm brand/i })).toHaveAttribute("href", "/ui");
   });
 
+  it("pairs the logo with a dark-mode variant that swaps on the dark class", () => {
+    renderWithProviders(<Navbar {...defaultProps} />);
+
+    const [light, dark] = Array.from(screen.getByRole("link", { name: /litellm brand/i }).querySelectorAll("img"));
+    const classesOf = (el: Element) => new Set(el.className.split(/\s+/));
+
+    const lightSrc = light.getAttribute("src") ?? "";
+    expect(light).toHaveAttribute("src", expect.stringMatching(/\/get_image$/));
+    expect(dark).toHaveAttribute("src", `${lightSrc}?theme=dark`);
+    expect(classesOf(light).has("dark:hidden")).toBe(true);
+    expect(classesOf(light).has("hidden")).toBe(false);
+    expect(classesOf(dark).has("hidden")).toBe(true);
+    expect(classesOf(dark).has("dark:block")).toBe(true);
+  });
+
   it("should display user information in dropdown", async () => {
     const user = userEvent.setup();
     renderWithProviders(<Navbar {...defaultProps} />);

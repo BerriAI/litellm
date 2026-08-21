@@ -1468,9 +1468,6 @@
     },
     "local/no-complex-jsx-arrow": {
       "count": 1
-    },
-    "react-hooks/set-state-in-effect": {
-      "count": 2
     }
   },
   "src/components/add_model/handle_add_auto_router_submit.tsx": {

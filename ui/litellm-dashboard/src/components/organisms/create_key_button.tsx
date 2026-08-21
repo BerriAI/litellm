@@ -773,7 +773,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                   </MountedFormField>
                 )}
                 {keyOwner === "agent" && (
-                  <div className="mt-4 p-4 bg-purple-50 border border-purple-200 rounded-md">
+                  <div className="mt-4 p-4 bg-purple-50 border border-purple-200 rounded-md dark:bg-purple-950 dark:border-purple-800">
                     <div className="mb-3">
                       <label htmlFor="create-key-agent" className="text-sm font-medium text-foreground">
                         Select Agent <span className="text-destructive">*</span>

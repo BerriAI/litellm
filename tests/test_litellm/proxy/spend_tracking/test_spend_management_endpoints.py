@@ -2659,7 +2659,7 @@ class TestSpendLogsPayload:
                 payload, expected_payload, ignore_keys=ignored_keys
             )
             if differences:
-                assert False, f"Dictionary mismatch: {differences}"
+                pytest.fail(f"Dictionary mismatch: {differences}")
 
     def mock_anthropic_response(*args, **kwargs):
         mock_response = MagicMock()
@@ -2755,7 +2755,7 @@ class TestSpendLogsPayload:
                 payload, expected_payload, ignore_keys=ignored_keys
             )
             if differences:
-                assert False, f"Dictionary mismatch: {differences}"
+                pytest.fail(f"Dictionary mismatch: {differences}")
 
     @pytest.mark.asyncio
     async def test_spend_logs_payload_success_log_with_router(self, monkeypatch):
@@ -2849,7 +2849,7 @@ class TestSpendLogsPayload:
                 payload, expected_payload, ignore_keys=ignored_keys
             )
             if differences:
-                assert False, f"Dictionary mismatch: {differences}"
+                pytest.fail(f"Dictionary mismatch: {differences}")
 
 
 def _compare_nested_dicts(

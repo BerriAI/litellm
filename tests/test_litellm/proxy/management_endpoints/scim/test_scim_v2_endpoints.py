@@ -15,10 +15,12 @@ from litellm.proxy._types import (
     ProxyException,
 )
 from litellm.proxy.management_endpoints.scim.scim_v2 import (
+    SCIMRosterSyncError,
     UserProvisionerHelpers,
     _apply_group_patch_updates,
     _extract_group_member_ids,
     _extract_ids_from_path_filter,
+    _handle_group_membership_changes,
     _handle_team_membership_changes,
     _parse_member_entries,
     _process_group_patch_operations,
@@ -32,6 +34,7 @@ from litellm.proxy.management_endpoints.scim.scim_v2 import (
     get_users,
     get_service_provider_config,
     patch_group,
+    patch_team_membership,
     patch_user,
     update_group,
     update_user,
@@ -548,7 +551,12 @@ async def test_handle_existing_user_by_email_no_existing_user(mocker):
 
 @pytest.mark.asyncio
 async def test_handle_existing_user_by_email_existing_user_updated(mocker):
-    """Should rename the existing user, sync team roster, and return SCIMUser"""
+    """Should keep the existing user_id, sync team roster, and return SCIMUser
+
+    Regression: a SCIM userName differing from the matched row's user_id used to
+    re-key the user row, orphaning virtual keys, team rosters, memberships and
+    spend logs that still referenced the old id.
+    """
     existing_user = mocker.MagicMock()
     existing_user.user_id = "old-user-id"
     existing_user.user_email = "test@example.com"
@@ -557,7 +565,7 @@ async def test_handle_existing_user_by_email_existing_user_updated(mocker):
     existing_user.metadata = {"old": "data"}
 
     updated_user = {
-        "user_id": "new-user-id",
+        "user_id": "old-user-id",
         "user_email": "test@example.com",
         "user_alias": "New Name",
         "teams": ["new-team"],
@@ -566,8 +574,8 @@ async def test_handle_existing_user_by_email_existing_user_updated(mocker):
 
     mock_scim_user = SCIMUser(
         schemas=["urn:ietf:params:scim:schemas:core:2.0:User"],
-        id="new-user-id",
-        userName="new-user-id",
+        id="old-user-id",
+        userName="test@example.com",
         name=SCIMUserName(familyName="Name", givenName="New"),
         emails=[SCIMUserEmail(value="test@example.com")],
     )
@@ -605,13 +613,9 @@ async def test_handle_existing_user_by_email_existing_user_updated(mocker):
     mock_prisma_client.db.litellm_usertable.find_first.assert_called_once_with(where={"user_email": "test@example.com"})
 
     update_calls = mock_prisma_client.db.litellm_usertable.update.call_args_list
-    assert len(update_calls) == 2
+    assert len(update_calls) == 1
     assert update_calls[0].kwargs == {
         "where": {"user_id": "old-user-id"},
-        "data": {"user_id": "new-user-id"},
-    }
-    assert update_calls[1].kwargs == {
-        "where": {"user_id": "new-user-id"},
         "data": {
             "user_email": "test@example.com",
             "user_alias": "New Name",
@@ -621,13 +625,63 @@ async def test_handle_existing_user_by_email_existing_user_updated(mocker):
     }
 
     mock_membership.assert_awaited_once_with(
-        user_id="new-user-id",
+        user_id="old-user-id",
         existing_teams=["old-team"],
         new_teams=["new-team"],
-        raise_on_error=True,
     )
 
     mock_transform.assert_called_once_with(updated_user)
+
+
+@pytest.mark.asyncio
+async def test_handle_existing_user_by_email_roster_changes_use_existing_user_id(mocker):
+    """Roster add/remove must be issued for the matched row's user_id, not the SCIM userName.
+
+    Regression: the rename made removals run against the new id, so a roster still
+    holding the old id reported "User not found in team" and the stale entry survived.
+    """
+    existing_user = mocker.MagicMock()
+    existing_user.user_id = "oidc-sub-123"
+    existing_user.user_email = "member@example.com"
+    existing_user.user_alias = "Member"
+    existing_user.teams = ["old-team"]
+    existing_user.metadata = {}
+
+    mock_prisma_client = mocker.MagicMock()
+    mock_prisma_client.db = mocker.MagicMock()
+    mock_prisma_client.db.litellm_usertable = mocker.MagicMock()
+    mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(return_value=existing_user)
+    mock_prisma_client.db.litellm_usertable.update = AsyncMock(return_value={})
+
+    mock_team_member_add = mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2.team_member_add",
+        AsyncMock(),
+    )
+    mock_team_member_delete = mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2.team_member_delete",
+        AsyncMock(),
+    )
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2.ScimTransformations.transform_litellm_user_to_scim_user",
+        AsyncMock(return_value=None),
+    )
+
+    new_user_request = NewUserRequest(
+        user_id="scim-username",
+        user_email="member@example.com",
+        user_alias="Member",
+        teams=["new-team"],
+        metadata={},
+        auto_create_key=False,
+    )
+
+    await UserProvisionerHelpers.handle_existing_user_by_email(
+        prisma_client=mock_prisma_client, new_user_request=new_user_request
+    )
+
+    assert mock_team_member_add.await_args.kwargs["data"].member.user_id == "oidc-sub-123"
+    assert mock_team_member_delete.await_args.kwargs["data"].user_id == "oidc-sub-123"
+    assert mock_prisma_client.db.litellm_usertable.update.await_args.kwargs["where"] == {"user_id": "oidc-sub-123"}
 
 
 @pytest.mark.asyncio
@@ -679,7 +733,6 @@ async def test_handle_existing_user_by_email_syncs_roster_and_dedups_teams(mocke
         user_id="same-id",
         existing_teams=[],
         new_teams=["team-a", "team-b"],
-        raise_on_error=True,
     )
 
     update_calls = mock_prisma_client.db.litellm_usertable.update.call_args_list
@@ -724,12 +777,13 @@ async def test_handle_existing_user_by_email_roster_add_failure_blocks_teams_wri
         auto_create_key=False,
     )
 
-    with pytest.raises(HTTPException):
+    with pytest.raises(SCIMRosterSyncError) as exc_info:
         await UserProvisionerHelpers.handle_existing_user_by_email(
             prisma_client=mock_prisma_client, new_user_request=new_user_request
         )
 
     mock_team_member_add.assert_awaited_once()
+    assert "add uid to missing-team" in str(exc_info.value)
     assert mock_prisma_client.db.litellm_usertable.update.await_count == 0
 
 
@@ -816,12 +870,13 @@ async def test_handle_existing_user_by_email_roster_remove_failure_blocks_teams_
         auto_create_key=False,
     )
 
-    with pytest.raises(HTTPException):
+    with pytest.raises(SCIMRosterSyncError) as exc_info:
         await UserProvisionerHelpers.handle_existing_user_by_email(
             prisma_client=mock_prisma_client, new_user_request=new_user_request
         )
 
     mock_team_member_delete.assert_awaited_once()
+    assert "remove uid from old-team" in str(exc_info.value)
     assert mock_prisma_client.db.litellm_usertable.update.await_count == 0
 
 
@@ -1234,6 +1289,11 @@ async def test_update_group_metadata_serialization_issue(mocker):
         AsyncMock(return_value=mock_prisma_client),
     )
 
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2.patch_team_membership",
+        AsyncMock(),
+    )
+
     # Mock the transformation function
     mock_scim_group_response = SCIMGroup(
         schemas=["urn:ietf:params:scim:schemas:core:2.0:Group"],
@@ -1244,6 +1304,10 @@ async def test_update_group_metadata_serialization_issue(mocker):
     mocker.patch(
         "litellm.proxy.management_endpoints.scim.scim_v2.ScimTransformations.transform_litellm_team_to_scim_group",
         AsyncMock(return_value=mock_scim_group_response),
+    )
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2.patch_team_membership",
+        AsyncMock(),
     )
 
     # Call the function that had the bug
@@ -2921,9 +2985,7 @@ async def test_patch_group_rename_recomputes_retained_members(mocker):
 
 
 @pytest.mark.asyncio
-async def test_process_group_patch_operations_add_retains_existing_members(
-    mocker, monkeypatch
-):
+async def test_process_group_patch_operations_add_retains_existing_members(mocker, monkeypatch):
     """A SCIM group ``add`` operation must not drop members already in the team.
 
     Team membership lives in members_with_roles; team creation leaves the legacy
@@ -2948,18 +3010,14 @@ async def test_process_group_patch_operations_add_retains_existing_members(
     )
     patch_ops = SCIMPatchOp(
         schemas=["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
-        Operations=[
-            SCIMPatchOperation(op="add", path="members", value=[{"value": "new-user"}])
-        ],
+        Operations=[SCIMPatchOperation(op="add", path="members", value=[{"value": "new-user"}])],
     )
 
     mock_prisma_client = mocker.MagicMock()
     mock_prisma_client.db = mocker.MagicMock()
     mock_prisma_client.db.litellm_usertable = mocker.MagicMock()
     # new-user already exists in the DB
-    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(
-        return_value=mocker.MagicMock(user_id="new-user")
-    )
+    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=mocker.MagicMock(user_id="new-user"))
 
     _, final_members, _ = await _process_group_patch_operations(
         patch_ops=patch_ops,
@@ -2971,9 +3029,7 @@ async def test_process_group_patch_operations_add_retains_existing_members(
 
 
 @pytest.mark.asyncio
-async def test_process_group_patch_operations_remove_uses_members_with_roles(
-    mocker, monkeypatch
-):
+async def test_process_group_patch_operations_remove_uses_members_with_roles(mocker, monkeypatch):
     """A ``remove`` op must diff against members_with_roles, so removing one
     member leaves the rest of the team intact rather than emptying it."""
 
@@ -2995,19 +3051,13 @@ async def test_process_group_patch_operations_remove_uses_members_with_roles(
     )
     patch_ops = SCIMPatchOp(
         schemas=["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
-        Operations=[
-            SCIMPatchOperation(
-                op="remove", path="members", value=[{"value": "drop-user"}]
-            )
-        ],
+        Operations=[SCIMPatchOperation(op="remove", path="members", value=[{"value": "drop-user"}])],
     )
 
     mock_prisma_client = mocker.MagicMock()
     mock_prisma_client.db = mocker.MagicMock()
     mock_prisma_client.db.litellm_usertable = mocker.MagicMock()
-    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(
-        return_value=mocker.MagicMock(user_id="drop-user")
-    )
+    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=mocker.MagicMock(user_id="drop-user"))
 
     _, final_members, _ = await _process_group_patch_operations(
         patch_ops=patch_ops,
@@ -3451,9 +3501,7 @@ async def test_process_group_patch_remove_filtered_path_without_value(mocker):
     prisma_client = mocker.MagicMock()
     prisma_client.db = mocker.MagicMock()
     prisma_client.db.litellm_usertable = mocker.MagicMock()
-    prisma_client.db.litellm_usertable.find_unique = AsyncMock(
-        return_value=LiteLLM_UserTable(user_id="user-1")
-    )
+    prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=LiteLLM_UserTable(user_id="user-1"))
 
     _, final_members, _ = await _process_group_patch_operations(
         patch_ops=patch_ops,
@@ -3482,9 +3530,7 @@ async def test_process_group_patch_add_filtered_path_without_value(mocker):
     prisma_client = mocker.MagicMock()
     prisma_client.db = mocker.MagicMock()
     prisma_client.db.litellm_usertable = mocker.MagicMock()
-    prisma_client.db.litellm_usertable.find_unique = AsyncMock(
-        return_value=LiteLLM_UserTable(user_id="user-3")
-    )
+    prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=LiteLLM_UserTable(user_id="user-3"))
 
     _, final_members, _ = await _process_group_patch_operations(
         patch_ops=patch_ops,
@@ -3501,9 +3547,7 @@ async def test_process_group_patch_replace_empty_value_does_not_use_path_filter(
     id from the filtered path, which would retain one member and drop the rest."""
     patch_ops = SCIMPatchOp(
         schemas=["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
-        Operations=[
-            SCIMPatchOperation(op="replace", path='members[value eq "user-1"]', value=[])
-        ],
+        Operations=[SCIMPatchOperation(op="replace", path='members[value eq "user-1"]', value=[])],
     )
 
     existing_team = LiteLLM_TeamTable(
@@ -3519,9 +3563,7 @@ async def test_process_group_patch_replace_empty_value_does_not_use_path_filter(
     prisma_client = mocker.MagicMock()
     prisma_client.db = mocker.MagicMock()
     prisma_client.db.litellm_usertable = mocker.MagicMock()
-    prisma_client.db.litellm_usertable.find_unique = AsyncMock(
-        return_value=LiteLLM_UserTable(user_id="user-1")
-    )
+    prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=LiteLLM_UserTable(user_id="user-1"))
 
     _, final_members, _ = await _process_group_patch_operations(
         patch_ops=patch_ops,
@@ -3550,9 +3592,7 @@ def _member_resolution_prisma(mocker, *, users: set, teams: set, unmanaged_teams
     prisma_client.db = mocker.MagicMock()
     prisma_client.db.litellm_usertable = mocker.MagicMock()
     prisma_client.db.litellm_usertable.find_unique = AsyncMock(
-        side_effect=lambda where: (
-            LiteLLM_UserTable(user_id=where["user_id"]) if where["user_id"] in users else None
-        )
+        side_effect=lambda where: LiteLLM_UserTable(user_id=where["user_id"]) if where["user_id"] in users else None
     )
     prisma_client.db.litellm_teamtable = mocker.MagicMock()
     prisma_client.db.litellm_teamtable.find_unique = AsyncMock(side_effect=lambda where: team_row(where["team_id"]))
@@ -3723,9 +3763,7 @@ async def test_process_group_patch_operations_ignores_lowercase_group_type(mocke
     nested_group_id = "8f1e9d70-0000-4a0e-9a1e-nested"
     patch_ops = SCIMPatchOp(
         schemas=["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
-        Operations=[
-            SCIMPatchOperation(op="add", path="members", value=[{"value": nested_group_id, "type": "group"}])
-        ],
+        Operations=[SCIMPatchOperation(op="add", path="members", value=[{"value": nested_group_id, "type": "group"}])],
     )
     existing_team = LiteLLM_TeamTable(
         team_id="parent-group",
@@ -3778,9 +3816,7 @@ async def test_process_group_patch_operations_skips_member_matching_existing_tea
 
 
 @pytest.mark.asyncio
-async def test_process_group_patch_operations_prefers_user_over_team_for_colliding_id(
-    mocker, scim_upsert_user_enabled
-):
+async def test_process_group_patch_operations_prefers_user_over_team_for_colliding_id(mocker, scim_upsert_user_enabled):
     """Nothing stops a user id from also being a team id, so the user lookup has to
     win; ordering the team check first would silently stop syncing that user."""
     patch_ops = SCIMPatchOp(
@@ -4401,3 +4437,316 @@ async def test_get_groups_members_are_typed_as_users(mocker):
     response = await get_groups(startIndex=1, count=10, filter=None)
 
     assert [m.type for m in response.Resources[0].members] == ["User"]
+
+
+@pytest.mark.asyncio
+async def test_update_user_roster_add_failure_propagates_and_skips_teams_write(mocker):
+    """PUT /Users must surface a genuine roster add failure instead of returning 200.
+
+    Regression: the failure was swallowed, the IdP recorded the push as successful
+    and never retried, and the user row was still written with a teams array the
+    team roster never received.
+    """
+    existing_user = mocker.MagicMock()
+    existing_user.teams = ["old-team"]
+
+    scim_user = SCIMUser(
+        schemas=["urn:ietf:params:scim:schemas:core:2.0:User"],
+        userName="test-user",
+        name=SCIMUserName(familyName="User", givenName="Updated"),
+        emails=[SCIMUserEmail(value="updated@example.com")],
+        groups=[SCIMUserGroup(value="new-team")],
+    )
+
+    mock_prisma_client = mocker.MagicMock()
+    mock_prisma_client.db = mocker.MagicMock()
+    mock_prisma_client.db.litellm_usertable = mocker.MagicMock()
+    mock_prisma_client.db.litellm_usertable.update = AsyncMock()
+
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._get_prisma_client_or_raise_exception",
+        AsyncMock(return_value=mock_prisma_client),
+    )
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._check_user_exists",
+        AsyncMock(return_value=existing_user),
+    )
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2.team_member_add",
+        AsyncMock(side_effect=HTTPException(status_code=404, detail={"error": "Team not found"})),
+    )
+    delete_mock = mocker.patch("litellm.proxy.management_endpoints.scim.scim_v2.team_member_delete", AsyncMock())
+
+    with pytest.raises(ProxyException) as exc_info:
+        await update_user(user_id="test-user", user=scim_user)
+
+    delete_mock.assert_awaited_once()
+    assert exc_info.value.code == "404"
+    assert "add test-user to new-team" in exc_info.value.message
+    mock_prisma_client.db.litellm_usertable.update.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_patch_user_roster_remove_failure_propagates_and_skips_teams_write(mocker):
+    """PATCH /Users must surface a genuine roster remove failure instead of returning 200."""
+    existing_user = mocker.MagicMock()
+    existing_user.teams = ["team1", "team2"]
+    existing_user.metadata = {}
+
+    patch_ops = SCIMPatchOp(
+        schemas=["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+        Operations=[SCIMPatchOperation(op="remove", path="groups", value=[{"value": "team2"}])],
+    )
+
+    mock_prisma_client = mocker.MagicMock()
+    mock_prisma_client.db = mocker.MagicMock()
+    mock_prisma_client.db.litellm_usertable = mocker.MagicMock()
+    mock_prisma_client.db.litellm_usertable.update = AsyncMock()
+
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._get_prisma_client_or_raise_exception",
+        AsyncMock(return_value=mock_prisma_client),
+    )
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._check_user_exists",
+        AsyncMock(return_value=existing_user),
+    )
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2.team_member_delete",
+        AsyncMock(side_effect=HTTPException(status_code=500, detail={"error": "db unavailable"})),
+    )
+
+    with pytest.raises(ProxyException):
+        await patch_user(user_id="test-user", patch_ops=patch_ops)
+
+    mock_prisma_client.db.litellm_usertable.update.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failing_member", ["user0", "user1", "user2", "user3"])
+async def test_handle_group_membership_changes_attempts_every_member_and_names_failures(mocker, failing_member):
+    """One failing member must not strand the rest of the roster unattempted.
+
+    Regression: reconciliation stopped at the first failure, so a group push carrying
+    several membership changes left the later ones neither written nor reported, and the
+    IdP got one opaque error. Every member is attempted now and only the writes that
+    actually failed are named, so the next push closes exactly that gap.
+    """
+
+    async def add_member(**kwargs):
+        if kwargs["data"].member.user_id == failing_member:
+            raise HTTPException(status_code=500, detail={"error": "db unavailable"})
+
+    async def remove_member(**kwargs):
+        if kwargs["data"].user_id == failing_member:
+            raise HTTPException(status_code=500, detail={"error": "db unavailable"})
+
+    add_mock = AsyncMock(side_effect=add_member)
+    delete_mock = AsyncMock(side_effect=remove_member)
+    mocker.patch("litellm.proxy.management_endpoints.scim.scim_v2.team_member_add", add_mock)
+    mocker.patch("litellm.proxy.management_endpoints.scim.scim_v2.team_member_delete", delete_mock)
+
+    with pytest.raises(SCIMRosterSyncError) as exc_info:
+        await _handle_group_membership_changes(
+            group_id="group-1",
+            current_members={"user0"},
+            final_members={"user1", "user2", "user3"},
+        )
+
+    assert [call.kwargs["data"].member.user_id for call in add_mock.call_args_list] == ["user1", "user2", "user3"]
+    assert [call.kwargs["data"].user_id for call in delete_mock.call_args_list] == ["user0"]
+
+    message = str(exc_info.value)
+    assert "1 of 4 team membership writes" in message
+    failed_write = "remove user0 from group-1" if failing_member == "user0" else f"add {failing_member} to group-1"
+    assert failed_write in message
+    all_writes = {
+        "remove user0 from group-1",
+        "add user1 to group-1",
+        "add user2 to group-1",
+        "add user3 to group-1",
+    }
+    assert not [write for write in all_writes - {failed_write} if write in message]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "first_status, second_status, expected_status",
+    [(404, 404, 404), (404, 500, 500), (500, 500, 500)],
+)
+async def test_roster_sync_error_status_follows_unanimous_failures(
+    mocker, first_status, second_status, expected_status
+):
+    """Aggregating several failures must not flatten a unanimous 4xx into a 500.
+
+    A push naming a team that does not exist is not retryable, so the IdP has to keep
+    seeing the 404. Only a batch whose failures disagree falls back to 500.
+    """
+
+    async def add_member(**kwargs):
+        status = first_status if kwargs["data"].team_id == "team-a" else second_status
+        raise HTTPException(status_code=status, detail={"error": "nope"})
+
+    mocker.patch("litellm.proxy.management_endpoints.scim.scim_v2.team_member_add", AsyncMock(side_effect=add_member))
+
+    with pytest.raises(SCIMRosterSyncError) as exc_info:
+        await patch_team_membership(
+            user_id="user1",
+            teams_ids_to_add_user_to=["team-a", "team-b"],
+            teams_ids_to_remove_user_from=[],
+            raise_on_error=True,
+        )
+
+    assert exc_info.value.status_code == expected_status
+    assert "2 of 2 team membership writes" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failing_team", ["team-a", "team-b", "team-c"])
+async def test_patch_team_membership_attempts_every_team_before_reporting(mocker, failing_team):
+    """A failing team must not strand the same user's remaining adds and removes.
+
+    Regression: the add loop bailed on the first failure, which skipped both the later
+    adds and every removal, so a multi-team SCIM push reconciled only a prefix of the
+    requested changes while reporting one failure.
+    """
+
+    async def add_member(**kwargs):
+        if kwargs["data"].team_id == failing_team:
+            raise HTTPException(status_code=500, detail={"error": "db unavailable"})
+
+    add_mock = AsyncMock(side_effect=add_member)
+    delete_mock = AsyncMock()
+    mocker.patch("litellm.proxy.management_endpoints.scim.scim_v2.team_member_add", add_mock)
+    mocker.patch("litellm.proxy.management_endpoints.scim.scim_v2.team_member_delete", delete_mock)
+
+    with pytest.raises(SCIMRosterSyncError) as exc_info:
+        await patch_team_membership(
+            user_id="user1",
+            teams_ids_to_add_user_to=["team-a", "team-b", "team-c"],
+            teams_ids_to_remove_user_from=["team-d"],
+            raise_on_error=True,
+        )
+
+    assert [call.kwargs["data"].team_id for call in add_mock.call_args_list] == ["team-a", "team-b", "team-c"]
+    assert [call.kwargs["data"].team_id for call in delete_mock.call_args_list] == ["team-d"]
+
+    message = str(exc_info.value)
+    assert "1 of 4 team membership writes" in message
+    assert f"add user1 to {failing_team}" in message
+    assert not [team for team in {"team-a", "team-b", "team-c"} - {failing_team} if f"add user1 to {team}" in message]
+
+
+@pytest.mark.asyncio
+async def test_update_group_roster_failure_propagates(mocker):
+    """PUT /Groups must fail loudly when a member roster write fails, instead of
+    reporting a successful membership sync to the IdP."""
+    group_id = "test-team-123"
+    existing_team = LiteLLM_TeamTable(
+        team_id=group_id,
+        team_alias="Engineering",
+        members_with_roles=[Member(user_id="user1", role="user")],
+        metadata={},
+    )
+    scim_group = SCIMGroup(
+        schemas=["urn:ietf:params:scim:schemas:core:2.0:Group"],
+        id=group_id,
+        displayName="Engineering",
+        members=[SCIMMember(value="user1"), SCIMMember(value="user2")],
+    )
+
+    mock_prisma_client = mocker.MagicMock()
+    mock_prisma_client.db = mocker.MagicMock()
+    mock_prisma_client.db.litellm_teamtable = mocker.MagicMock()
+    mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=existing_team)
+    mock_prisma_client.db.litellm_teamtable.update = AsyncMock(return_value=existing_team)
+    mock_prisma_client.db.litellm_usertable = mocker.MagicMock()
+    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=mocker.MagicMock())
+
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._get_prisma_client_or_raise_exception",
+        AsyncMock(return_value=mock_prisma_client),
+    )
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2.team_member_add",
+        AsyncMock(side_effect=HTTPException(status_code=500, detail={"error": "db unavailable"})),
+    )
+    recompute_mock = mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._recompute_scim_member_roles",
+        AsyncMock(),
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
+        await update_group(group_id=group_id, group=scim_group)
+
+    assert "add user2 to test-team-123" in exc_info.value.message
+    recompute_mock.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_resolve_group_member_ids_raises_when_creation_fails(mocker, scim_upsert_user_enabled):
+    """A member whose user row can neither be found nor created must fail the
+    request. Regression: the resolver silently dropped that member and the group
+    write reported success, so the IdP recorded the user as provisioned while the
+    team roster was missing them."""
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._create_user_if_not_exists",
+        AsyncMock(return_value=None),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _resolve_group_member_ids(
+            members=[SCIMMember(value="member-1")],
+            created_via="scim_group_membership",
+            prisma_client=_member_resolution_prisma(mocker, users=set(), teams=set()),
+        )
+
+    assert exc_info.value.status_code == 500
+    assert "member-1" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_resolve_group_member_ids_admits_member_created_concurrently(mocker, scim_upsert_user_enabled):
+    """When creation fails because a concurrent request already created the user,
+    the member is still admitted: the id resolves to a real user row, so failing
+    or dropping it would be wrong either way."""
+    prisma_client = _member_resolution_prisma(mocker, users=set(), teams=set())
+    prisma_client.db.litellm_usertable.find_unique = AsyncMock(
+        side_effect=[None, LiteLLM_UserTable(user_id="raced-user")]
+    )
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._create_user_if_not_exists",
+        AsyncMock(return_value=None),
+    )
+
+    result = await _resolve_group_member_ids(
+        members=[SCIMMember(value="raced-user")],
+        created_via="scim_group_membership",
+        prisma_client=prisma_client,
+    )
+
+    assert result.all_member_ids == ["raced-user"]
+    assert len(result.created_users) == 0
+
+
+@pytest.mark.asyncio
+async def test_handle_group_membership_changes_already_in_team_is_noop(mocker):
+    """The strict path must keep treating an already-enrolled member as a no-op
+    and continue with the remaining members instead of failing the sync."""
+    mock_team_member_add = mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2.team_member_add",
+        AsyncMock(
+            side_effect=ProxyException(
+                message="already in team",
+                type=ProxyErrorTypes.team_member_already_in_team.value,
+                param=None,
+                code=400,
+            )
+        ),
+    )
+
+    await _handle_group_membership_changes(
+        group_id="group-1", current_members=set(), final_members={"user-1", "user-2"}
+    )
+
+    assert mock_team_member_add.await_count == 2

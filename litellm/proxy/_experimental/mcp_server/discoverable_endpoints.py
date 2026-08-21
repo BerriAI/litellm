@@ -47,8 +47,12 @@ from litellm.proxy._experimental.mcp_server.gateway_dcr_flow import (
     aggregate_token,
     complete_connect_flow,
     is_gateway_dcr_client_id,
+    is_proxy_api_resource,
+    native_client_auth_contract,
+    native_client_authorize,
     register_aggregate_client,
     relative_request_url,
+    revoke_refresh_token,
 )
 from litellm.proxy._experimental.mcp_server.oauth_utils import (
     TOKEN_NO_CACHE_HEADERS,
@@ -57,6 +61,10 @@ from litellm.proxy._experimental.mcp_server.oauth_utils import (
     resolve_upstream_resource,
     validate_trusted_redirect_uri,
     well_known_root_suffix,
+)
+from litellm.proxy._experimental.mcp_server.proxy_api_credentials import (
+    lookup_consent_teams,
+    mint_proxy_credential,
 )
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
@@ -1663,6 +1671,18 @@ async def authorize(
     )
 
     if mcp_server_name is None and client_id and is_gateway_dcr_client_id(client_id):
+        if is_proxy_api_resource(request, resource):
+            return await native_client_authorize(
+                request=request,
+                client_id=client_id,
+                redirect_uri=redirect_uri,
+                state=state,
+                code_challenge=code_challenge,
+                code_challenge_method=code_challenge_method,
+                response_type=response_type,
+                session_user_id=_session_cookie_user_id(request),
+                lookup_consent_teams=lookup_consent_teams,
+            )
         return aggregate_authorize(
             request=request,
             client_id=client_id,
@@ -1764,6 +1784,7 @@ async def token_endpoint(
             reload_user=_reload_active_user_by_id,
             cache=user_api_key_cache,
             resource=resource,
+            mint_proxy_credential=mint_proxy_credential,
         )
 
     lookup_name: Final = mcp_server_name or client_id
@@ -1793,12 +1814,19 @@ async def token_endpoint(
 
 
 @router.post("/authorize/complete")
-async def authorize_complete(request: Request, flow: str = Form(...), delivery: str | None = Form(None)):
+async def authorize_complete(
+    request: Request,
+    flow: str = Form(...),
+    delivery: str | None = Form(None),
+    team_id: str | None = Form(None),
+    decision: str | None = Form(None),
+) -> Response:
     """Finish an aggregate connect flow: mint the gateway authorization code for the
     signed-in user and hand it back to the DCR client, by 303 redirect (default) or, for
     a loopback client on a different machine, as a copyable callback URL
     (``delivery=manual``). POST plus the per-flow HttpOnly cookie set at /authorize; an
-    anonymous or bad-flow request just 400s."""
+    anonymous or bad-flow request just 400s. The native-client consent page adds
+    ``decision`` (approve or deny) and the ``team_id`` the credential is attributed to."""
     from litellm.proxy.proxy_server import user_api_key_cache  # noqa: PLC0415  # circular import at module load
 
     return await complete_connect_flow(
@@ -1807,7 +1835,29 @@ async def authorize_complete(request: Request, flow: str = Form(...), delivery: 
         session_user_id=_session_cookie_user_id(request),
         cache=user_api_key_cache,
         delivery=delivery,
+        team_id=team_id,
+        decision=decision,
     )
+
+
+@router.post("/revoke")
+async def revoke_endpoint(request: Request, token: str = Form(...), client_id: str = Form(...)) -> Response:
+    """RFC 7009 revocation for the gateway's refresh tokens (``lite logout``): 200 for a known
+    client whatever the token's state, 503 when the shared single-use record cannot be written;
+    access tokens expire on their own."""
+    from litellm.proxy.proxy_server import (  # noqa: PLC0415  # circular import at module load
+        master_key,
+        user_api_key_cache,
+    )
+
+    return await revoke_refresh_token(token=token, client_id=client_id, master_key=master_key, cache=user_api_key_cache)
+
+
+@router.get("/.well-known/litellm-cli-auth")
+async def native_client_auth_discovery(request: Request) -> JSONResponse:
+    """The versioned contract a native client (``lite login --pkce``, or a CLI in any other
+    language) reads to sign a user in through the browser and obtain a proxy credential."""
+    return JSONResponse(native_client_auth_contract(request), headers=TOKEN_NO_CACHE_HEADERS)
 
 
 # Per RFC 6749 §4.1.2.1, an IdP that rejects an OAuth authorization request
