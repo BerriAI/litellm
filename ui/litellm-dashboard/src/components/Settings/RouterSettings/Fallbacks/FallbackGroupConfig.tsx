@@ -70,8 +70,8 @@ export function FallbackGroupConfig({
     <div className="flex flex-col gap-8 py-4">
       {/* Primary Model Section */}
       <div className="relative">
-        <label htmlFor={primaryModelInputId} className="block text-sm font-semibold text-gray-700 mb-2">
-          Primary Model <span className="text-red-500">*</span>
+        <label htmlFor={primaryModelInputId} className="block text-sm font-semibold text-foreground mb-2">
+          Primary Model <span className="text-destructive">*</span>
         </label>
         <SearchSelect
           inputId={primaryModelInputId}
@@ -84,7 +84,7 @@ export function FallbackGroupConfig({
           className="h-12"
         />
         {!disablePrimaryModel && !group.primaryModel && (
-          <div className="mt-2 flex items-center gap-2 text-amber-600 text-xs bg-amber-50 p-2 rounded-sm">
+          <div className="mt-2 flex items-center gap-2 text-warning text-xs bg-warning/10 p-2 rounded-sm">
             <AlertCircle className="w-4 h-4" />
             <span>Select a model to begin configuring fallbacks</span>
           </div>
@@ -93,7 +93,7 @@ export function FallbackGroupConfig({
 
       {/* Visual Connection */}
       <div className="flex items-center justify-center -my-4 z-10">
-        <div className="bg-indigo-50 text-indigo-500 px-4 py-1 rounded-full text-xs font-bold border border-indigo-100 flex items-center gap-2 shadow-xs">
+        <div className="bg-indigo-50 text-indigo-500 px-4 py-1 rounded-full text-xs font-bold border border-indigo-100 flex items-center gap-2 shadow-xs dark:bg-indigo-950 dark:text-indigo-300 dark:border-indigo-900">
           <ArrowDown className="w-4 h-4" />
           IF FAILS, TRY...
         </div>
@@ -103,12 +103,14 @@ export function FallbackGroupConfig({
       <div
         className={`transition-opacity duration-300 ${!group.primaryModel ? "opacity-50 pointer-events-none" : "opacity-100"}`}
       >
-        <label className="block text-sm font-semibold text-gray-700 mb-2">
-          Fallback Chain <span className="text-red-500">*</span>
-          <span className="text-xs text-gray-500 font-normal ml-2">(Max {maxFallbacks} fallbacks at a time)</span>
+        <label className="block text-sm font-semibold text-foreground mb-2">
+          Fallback Chain <span className="text-destructive">*</span>
+          <span className="text-xs text-muted-foreground font-normal ml-2">
+            (Max {maxFallbacks} fallbacks at a time)
+          </span>
         </label>
 
-        <div className="bg-gray-50 rounded-xl p-4 border border-gray-200">
+        <div className="bg-muted rounded-xl p-4 border border-border">
           {/* Add Fallback Input */}
           <div className="mb-4">
             <MultiSelect
@@ -122,7 +124,7 @@ export function FallbackGroupConfig({
               disabled={!group.primaryModel}
               className="w-full"
             />
-            <p className="text-xs text-gray-500 mt-1 ml-1">
+            <p className="text-xs text-muted-foreground mt-1 ml-1">
               {canAddMoreFallbacks
                 ? `Search and select multiple models. Selected models will appear below in order. (${group.fallbackModels.length}/${maxFallbacks} used)`
                 : `Maximum ${maxFallbacks} fallbacks reached. Remove some to add more.`}
@@ -132,7 +134,7 @@ export function FallbackGroupConfig({
           {/* Fallback List */}
           <div className="space-y-2 min-h-[100px]">
             {group.fallbackModels.length === 0 ? (
-              <div className="h-32 border-2 border-dashed border-gray-300 rounded-lg flex flex-col items-center justify-center text-gray-400">
+              <div className="h-32 border-2 border-dashed border-border rounded-lg flex flex-col items-center justify-center text-muted-foreground">
                 <span className="text-sm">No fallback models selected</span>
                 <span className="text-xs mt-1">Add models from the dropdown above</span>
               </div>
@@ -141,14 +143,14 @@ export function FallbackGroupConfig({
                 {group.fallbackModels.map((modelValue, index) => (
                   <li
                     key={`${modelValue}-${index}`}
-                    className="group flex items-center justify-between p-3 bg-white rounded-lg border border-gray-200 hover:border-indigo-300 hover:shadow-xs transition-all"
+                    className="group flex items-center justify-between p-3 bg-card rounded-lg border border-border hover:border-indigo-300 hover:shadow-xs transition-all"
                   >
                     <div className="flex items-center gap-3">
-                      <div className="flex items-center justify-center w-6 h-6 rounded-sm bg-gray-100 text-gray-400 group-hover:text-indigo-500 group-hover:bg-indigo-50">
+                      <div className="flex items-center justify-center w-6 h-6 rounded-sm bg-muted text-muted-foreground group-hover:text-indigo-500 group-hover:bg-indigo-50 dark:group-hover:text-indigo-300 dark:group-hover:bg-indigo-950">
                         <span className="text-xs font-bold">{index + 1}</span>
                       </div>
                       <div>
-                        <span className="font-medium text-gray-800">{modelValue}</span>
+                        <span className="font-medium text-foreground">{modelValue}</span>
                       </div>
                     </div>
 
@@ -156,7 +158,7 @@ export function FallbackGroupConfig({
                       type="button"
                       aria-label={`Remove ${modelValue}`}
                       onClick={() => removeFallback(index)}
-                      className="opacity-0 group-hover:opacity-100 transition-opacity text-gray-400 hover:text-red-500 p-1"
+                      className="opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-destructive p-1"
                     >
                       <X className="w-4 h-4" />
                     </button>

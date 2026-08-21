@@ -6,7 +6,6 @@ from dotenv import load_dotenv
 
 load_dotenv()
 import io
-import os
 
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -357,14 +356,13 @@ def test_parallel_function_call_anthropic_error_msg(
 
         if expect_unsupported_params_error:
             with pytest.raises(litellm.UnsupportedParamsError) as e:
-                second_response = litellm.completion(
+                litellm.completion(
                     model=model,
                     messages=messages,
                     temperature=0.2,
                     seed=22,
                     drop_params=True,
-                )  # get a new response from the model where it can see the function response
-                print("second response\n", second_response)
+                )
         else:
             second_response = litellm.completion(
                 model=model,

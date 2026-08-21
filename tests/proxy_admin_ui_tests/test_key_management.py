@@ -12,7 +12,6 @@ from unittest.mock import MagicMock, patch
 
 load_dotenv()
 import io
-import os
 import time
 
 # this file is to test litellm/proxy
@@ -893,9 +892,6 @@ async def test_key_update_with_model_specific_params(prisma_client):
     setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
     await litellm.proxy.proxy_server.prisma_client.connect()
 
-    from litellm.proxy.management_endpoints.key_management_endpoints import (
-        update_key_fn,
-    )
     from litellm.proxy._types import UpdateKeyRequest
 
     new_key = await generate_key_fn(
@@ -1340,6 +1336,6 @@ async def test_team_model_alias(prisma_client, requested_model, should_pass):
         }, "Expected model aliases to be present"
     else:
         # Verify the key fails with non-aliased models
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(ProxyException) as exc_info:
             await user_api_key_auth(request=request, api_key=f"Bearer {generated_key}")
         assert exc_info.value.type == ProxyErrorTypes.key_model_access_denied

@@ -68,10 +68,10 @@ export function GuardrailConfig({ guardrailName, guardrailType, provider }: Guar
   return (
     <div className="space-y-6">
       {/* Version Bar */}
-      <div className="bg-white border border-gray-200 rounded-lg p-4">
+      <div className="bg-card border border-border rounded-lg p-4">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <span className="text-sm font-medium text-gray-700">Version:</span>
+            <span className="text-sm font-medium text-foreground">Version:</span>
             <Select
               items={versions.map((v) => ({ value: v.id, label: v.label }))}
               value={version}
@@ -105,23 +105,23 @@ export function GuardrailConfig({ guardrailName, guardrailType, provider }: Guar
         </div>
 
         {showVersionHistory && (
-          <div className="mt-4 border-t border-gray-100 pt-4 space-y-2">
+          <div className="mt-4 border-t border-border pt-4 space-y-2">
             {versions.map((v) => (
               <div
                 key={v.id}
                 className={`flex items-center justify-between p-2.5 rounded-md text-sm ${
-                  v.id === version ? "bg-blue-50 border border-blue-200" : "bg-gray-50"
+                  v.id === version ? "bg-info/10 border border-info/20" : "bg-muted"
                 }`}
               >
                 <div className="flex items-center gap-3">
                   <span
-                    className={`font-mono text-xs font-medium ${v.id === version ? "text-blue-600" : "text-gray-500"}`}
+                    className={`font-mono text-xs font-medium ${v.id === version ? "text-info" : "text-muted-foreground"}`}
                   >
                     {v.id}
                   </span>
-                  <span className="text-gray-700">{v.changes}</span>
+                  <span className="text-foreground">{v.changes}</span>
                 </div>
-                <div className="flex items-center gap-3 text-xs text-gray-500">
+                <div className="flex items-center gap-3 text-xs text-muted-foreground">
                   <span>{v.author}</span>
                   <span>{v.date}</span>
                 </div>
@@ -132,13 +132,13 @@ export function GuardrailConfig({ guardrailName, guardrailType, provider }: Guar
       </div>
 
       {/* Parameters */}
-      <div className="bg-white border border-gray-200 rounded-lg p-6">
-        <h3 className="text-base font-semibold text-gray-900 mb-1">Parameters</h3>
-        <p className="text-xs text-gray-500 mb-5">Configure {guardrailName} behavior</p>
+      <div className="bg-card border border-border rounded-lg p-6">
+        <h3 className="text-base font-semibold text-foreground mb-1">Parameters</h3>
+        <p className="text-xs text-muted-foreground mb-5">Configure {guardrailName} behavior</p>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1.5">Action on Failure</label>
+            <label className="block text-sm font-medium text-foreground mb-1.5">Action on Failure</label>
             <Select
               items={ACTION_ITEMS}
               value={action}
@@ -158,7 +158,7 @@ export function GuardrailConfig({ guardrailName, guardrailType, provider }: Guar
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1.5">Provider</label>
+            <label className="block text-sm font-medium text-foreground mb-1.5">Provider</label>
             <Select items={PROVIDER_ITEMS} defaultValue={provider}>
               <SelectTrigger className="w-full">
                 <SelectValue />
@@ -174,7 +174,7 @@ export function GuardrailConfig({ guardrailName, guardrailType, provider }: Guar
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1.5">Guardrail Type</label>
+            <label className="block text-sm font-medium text-foreground mb-1.5">Guardrail Type</label>
             <Select items={GUARDRAIL_TYPE_ITEMS} defaultValue={guardrailType}>
               <SelectTrigger className="w-full">
                 <SelectValue />
@@ -190,13 +190,13 @@ export function GuardrailConfig({ guardrailName, guardrailType, provider }: Guar
           </div>
 
           <div className="md:col-span-2">
-            <label className="block text-sm font-medium text-gray-700 mb-1.5">Categories (comma-separated)</label>
+            <label className="block text-sm font-medium text-foreground mb-1.5">Categories (comma-separated)</label>
             <Input defaultValue="violence, hate_speech, sexual_content, self_harm, illegal_activity" />
           </div>
 
           <div className="md:col-span-2 flex items-center gap-3">
             <Switch id={enabledToggleId} checked={enabled} onCheckedChange={setEnabled} />
-            <Label htmlFor={enabledToggleId} className="font-normal text-gray-700">
+            <Label htmlFor={enabledToggleId} className="font-normal text-foreground">
               Guardrail enabled in production
             </Label>
           </div>
@@ -204,14 +204,16 @@ export function GuardrailConfig({ guardrailName, guardrailType, provider }: Guar
       </div>
 
       {/* Custom Code Override */}
-      <div className="bg-white border border-gray-200 rounded-lg p-6">
+      <div className="bg-card border border-border rounded-lg p-6">
         <div className="flex items-center justify-between mb-4">
           <div>
-            <h3 className="text-base font-semibold text-gray-900 flex items-center gap-2">
-              <Code className="size-4 text-gray-500" />
+            <h3 className="text-base font-semibold text-foreground flex items-center gap-2">
+              <Code className="size-4 text-muted-foreground" />
               Custom Code Override
             </h3>
-            <p className="text-xs text-gray-500 mt-0.5">Replace the built-in guardrail with custom evaluation code</p>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              Replace the built-in guardrail with custom evaluation code
+            </p>
           </div>
           <Switch aria-label="Custom Code Override" checked={useCustomCode} onCheckedChange={setUseCustomCode} />
         </div>
@@ -233,9 +235,9 @@ export function GuardrailConfig({ guardrailName, guardrailType, provider }: Guar
       </div>
 
       {/* Re-run on Failing Logs */}
-      <div className="bg-white border border-gray-200 rounded-lg p-6">
-        <h3 className="text-base font-semibold text-gray-900 mb-1">Test Configuration</h3>
-        <p className="text-xs text-gray-500 mb-4">
+      <div className="bg-card border border-border rounded-lg p-6">
+        <h3 className="text-base font-semibold text-foreground mb-1">Test Configuration</h3>
+        <p className="text-xs text-muted-foreground mb-4">
           Re-run this guardrail on recent failing logs to validate your changes
         </p>
 
@@ -246,12 +248,12 @@ export function GuardrailConfig({ guardrailName, guardrailType, provider }: Guar
           </Button>
 
           {rerunStatus === "success" && (
-            <span className="text-sm text-green-600 flex items-center gap-2">
+            <span className="text-sm text-success flex items-center gap-2">
               <CircleCheck className="size-4" /> 7/10 would now pass with new config
             </span>
           )}
 
-          {rerunStatus === "error" && <span className="text-sm text-red-600">Error running tests</span>}
+          {rerunStatus === "error" && <span className="text-sm text-destructive">Error running tests</span>}
         </div>
       </div>
     </div>

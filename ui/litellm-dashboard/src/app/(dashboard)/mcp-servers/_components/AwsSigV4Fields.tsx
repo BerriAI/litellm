@@ -8,13 +8,13 @@ import { PasswordInput } from "@/components/shared/PasswordInput";
 import { Input } from "@/components/ui/input";
 import { requiredWhenSiblingSet, textControl } from "./mcpFieldRules";
 
-const fieldClassName = "rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500";
+const fieldClassName = "rounded-lg border-border focus:border-info focus:ring-ring";
 
 const FieldLabel: React.FC<{ label: string; tooltip: string }> = ({ label, tooltip }) => (
-  <span className="text-sm font-medium text-gray-700 flex items-center">
+  <span className="text-sm font-medium text-foreground flex items-center">
     {label}
     <SimpleTooltip content={tooltip}>
-      <Info className="ml-2 size-4 text-blue-400 hover:text-blue-600 cursor-help" />
+      <Info className="ml-2 size-4 text-info hover:text-info/80 cursor-help" />
     </SimpleTooltip>
   </span>
 );
@@ -24,13 +24,13 @@ const SECRET_KEY_PATH = ["credentials", "aws_secret_access_key"] as const;
 
 const AwsSigV4Fields: React.FC = () => (
   <>
-    <p className="text-sm text-gray-500 mb-2">
+    <p className="text-sm text-muted-foreground mb-2">
       For MCP servers hosted on AWS Bedrock AgentCore.{" "}
       <a
         href="https://docs.litellm.ai/docs/mcp_aws_sigv4"
         target="_blank"
         rel="noopener noreferrer"
-        className="text-blue-500 hover:text-blue-700"
+        className="text-info hover:text-info/80"
       >
         View docs &rarr;
       </a>

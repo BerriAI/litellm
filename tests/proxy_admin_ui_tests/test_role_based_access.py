@@ -9,12 +9,11 @@ from litellm._uuid import uuid
 from datetime import datetime
 
 from dotenv import load_dotenv
-from fastapi import Request
+from fastapi import HTTPException, Request
 from fastapi.routing import APIRoute
 
 load_dotenv()
 import io
-import os
 import time
 
 # this file is to test litellm/proxy
@@ -77,7 +76,6 @@ from litellm.proxy.utils import PrismaClient, ProxyLogging, hash_token, update_s
 
 verbose_proxy_logger.setLevel(level=logging.DEBUG)
 
-from starlette.datastructures import URL
 
 from litellm.caching.caching import DualCache
 from litellm.proxy._types import *
@@ -530,7 +528,7 @@ async def test_user_role_permissions(prisma_client, route, user_role, expected_r
             print(f"Auth passed as expected for {route} with role {user_role}")
         else:
             # Should raise an error
-            with pytest.raises(Exception) as exc_info:
+            with pytest.raises((ProxyException, HTTPException)) as exc_info:
                 await user_api_key_auth(request=request, api_key=bearer_token)
             print(f"Auth failed as expected for {route} with role {user_role}")
             print(f"Error message: {str(exc_info.value)}")

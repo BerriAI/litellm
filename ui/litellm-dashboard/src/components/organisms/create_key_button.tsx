@@ -61,6 +61,7 @@ import ProjectDropdown from "../common_components/ProjectDropdown";
 import { CreateUserButton } from "../CreateUserButton";
 import { BudgetFallbacksEditor } from "../key_team_helpers/BudgetFallbacksEditor";
 import { BudgetWindowEntry, BudgetWindowsEditor } from "../key_team_helpers/BudgetWindowsEditor";
+import { ModelMaxBudget, ModelMaxBudgetEditor } from "../key_team_helpers/ModelMaxBudgetEditor";
 import { TagRateLimitEditor, TagRateLimitEntry } from "../key_team_helpers/TagRateLimitEditor";
 import {
   excludeProxyWideSentinel,
@@ -280,6 +281,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
   const [routerSettings, setRouterSettings] = useState<RouterSettingsAccordionValue | null>(null);
   const routerSettingsRef = useRef<RouterSettingsAccordionRef>(null);
   const [budgetLimits, setBudgetLimits] = useState<BudgetWindowEntry[]>([]);
+  const [modelMaxBudget, setModelMaxBudget] = useState<ModelMaxBudget>({});
   const [tagRateLimits, setTagRateLimits] = useState<TagRateLimitEntry[]>([]);
   const [budgetFallbacks, setBudgetFallbacks] = useState<Record<string, string[]>>({});
   const [budgetFallbacksKey, setBudgetFallbacksKey] = useState<number>(0);
@@ -449,6 +451,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
         modelAliases,
         routerSettings: routerSettingsRef.current?.getValue() ?? routerSettings,
         budgetLimits,
+        modelMaxBudget,
         tagRateLimits,
         budgetFallbacks,
       };
@@ -773,7 +776,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                   </MountedFormField>
                 )}
                 {keyOwner === "agent" && (
-                  <div className="mt-4 p-4 bg-purple-50 border border-purple-200 rounded-md">
+                  <div className="mt-4 p-4 bg-purple-50 border border-purple-200 rounded-md dark:bg-purple-950 dark:border-purple-800">
                     <div className="mb-3">
                       <label htmlFor="create-key-agent" className="text-sm font-medium text-foreground">
                         Select Agent <span className="text-destructive">*</span>
@@ -873,8 +876,8 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
 
               {/* Show message when team selection is required */}
               {isFormDisabled && (
-                <div className="mb-8 p-4 bg-blue-50 border border-blue-200 rounded-md">
-                  <p className="text-blue-800 text-sm">
+                <div className="mb-8 p-4 bg-info/10 border border-info/20 rounded-md">
+                  <p className="text-info text-sm">
                     Please select a team to continue configuring your Virtual Key. If you do not see any teams, please
                     contact your Proxy Admin to either provide you with access to models or to add you to a team.
                   </p>
@@ -1062,6 +1065,22 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                           </span>
                         </FieldLabel>
                         <BudgetWindowsEditor value={budgetLimits} onChange={setBudgetLimits} />
+                      </Field>
+                      <Field className="mt-4">
+                        <FieldLabel>
+                          <span>
+                            Per-Model Budgets{" "}
+                            <SimpleTooltip content="Cap spend on individual models, each with its own reset window. Enforced across every request this key makes; usage is reported on the key's info page.">
+                              <Info className="ml-1 inline size-3.5 align-text-bottom" />
+                            </SimpleTooltip>
+                          </span>
+                        </FieldLabel>
+                        <ModelMaxBudgetEditor
+                          value={modelMaxBudget}
+                          onChange={setModelMaxBudget}
+                          availableModels={modelsToPick}
+                          premiumUser={premiumUser === true}
+                        />
                       </Field>
                       <Field className="mt-4">
                         <FieldLabel>
@@ -1712,7 +1731,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                                     }
                                     target="_blank"
                                     rel="noopener noreferrer"
-                                    className="text-blue-400 hover:text-blue-300"
+                                    className="text-info hover:text-info/80"
                                   >
                                     documentation
                                   </a>

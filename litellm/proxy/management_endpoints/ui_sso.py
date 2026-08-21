@@ -19,6 +19,7 @@ import secrets
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from html import escape
+from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
     Annotated,
@@ -245,6 +246,7 @@ def _team_detail_db(repo: "_HasTeamDetailTable") -> "_PrismaTableActions[_TeamDe
 
 
 _MODEL_ALIASES_ADAPTER: Final = TypeAdapter(dict[str, str])
+_SSO_TOKEN_CLAIMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 
 
 def _decode_model_aliases(value: object) -> object:
@@ -270,7 +272,7 @@ class _TeamRowGrants(BaseModel):
     litellm_model_table: _TeamModelAliasTable | None = None
 
 
-class _CliSsoTeamDetail(BaseModel):
+class CliSsoTeamDetail(BaseModel):
     """The per-team snapshot cached in the CLI SSO flow and echoed to the CLI on poll."""
 
     team_id: str | None = None
@@ -279,8 +281,8 @@ class _CliSsoTeamDetail(BaseModel):
     team_model_aliases: Mapping[str, str] | None = None
 
 
-_CLI_SSO_TEAM_DETAILS_ADAPTER: Final = TypeAdapter(tuple[_CliSsoTeamDetail, ...])
-_TEAMLESS_CLI_SSO_TEAM_DETAIL: Final = _CliSsoTeamDetail(team_models=())
+_CLI_SSO_TEAM_DETAILS_ADAPTER: Final = TypeAdapter(tuple[CliSsoTeamDetail, ...])
+_TEAMLESS_CLI_SSO_TEAM_DETAIL: Final = CliSsoTeamDetail(team_models=())
 
 
 class _CustomSsoCall(Protocol):
@@ -1002,6 +1004,30 @@ def process_sso_jwt_access_token(
     return None
 
 
+def _decode_sso_token_claims(token: str | None) -> Mapping[str, object]:
+    if not token:
+        return MappingProxyType({})
+    try:
+        return MappingProxyType(
+            _SSO_TOKEN_CLAIMS_ADAPTER.validate_python(jwt.decode(token, options={"verify_signature": False}))
+        )
+    except (jwt.exceptions.InvalidTokenError, ValidationError):
+        verbose_proxy_logger.debug("SSO token is not a decodable JWT, skipping token claims")
+        return MappingProxyType({})
+
+
+def _merge_sso_token_claims(
+    userinfo: Mapping[str, object],
+    id_token: str | None,
+    access_token: str | None,
+) -> Mapping[str, object]:
+    sources: Final = (userinfo, _decode_sso_token_claims(id_token), _decode_sso_token_claims(access_token))
+    claim_names: Final = frozenset(key for source in sources for key in source)
+    return MappingProxyType(
+        {key: next((source[key] for source in sources if source.get(key) is not None), None) for key in claim_names}
+    )
+
+
 async def _raise_if_sso_exceeds_free_user_limit(premium_user: bool, prisma_client: PrismaClient | None) -> None:
     """Free tier allows SSO for up to 5 billable users; beyond that requires an Enterprise license."""
     if premium_user is True:
@@ -1534,12 +1560,34 @@ async def get_generic_sso_response(
 
     role_mappings: Final = await _setup_role_mappings()
     team_mappings: Final = await _setup_team_mappings()
+    generic_include_token_claims: Final = os.getenv("GENERIC_INCLUDE_TOKEN_CLAIMS", "false").lower() == "true"
 
-    def response_convertor(response, client):
+    def response_convertor(response: Mapping[str, object], httpx_session: object):
         nonlocal received_response  # return for user debugging
-        received_response = response
+        response_id_token: Final = response.get("id_token")
+        response_access_token: Final = response.get("access_token")
+        id_token: Final = (
+            response_id_token if isinstance(response_id_token, str) and response_id_token else generic_sso.id_token
+        )
+        access_token: Final = (
+            response_access_token
+            if isinstance(response_access_token, str) and response_access_token
+            else generic_sso.access_token
+        )
+        claims: Final = (
+            _merge_sso_token_claims(
+                userinfo=response,
+                id_token=id_token,
+                access_token=access_token,
+            )
+            if generic_include_token_claims
+            else response
+        )
+        received_response = {  # mutable-ok: preserve the existing dict return contract
+            key: value for key, value in claims.items() if key not in _OAUTH_TOKEN_FIELDS
+        }
         return generic_response_convertor(
-            response=response,
+            response=claims,
             jwt_handler=jwt_handler,
             sso_jwt_handler=sso_jwt_handler,
             role_mappings=role_mappings,
@@ -1641,13 +1689,6 @@ async def get_generic_sso_response(
             # Pass the full response so custom response_convertor implementations
             # can access all fields (including id_token for claim extraction).
             result = response_convertor(combined_response, generic_sso)
-            # Strip bearer credentials from combined_response before storing in
-            # received_response. received_response may appear in restricted-group
-            # error messages — bearer tokens (access_token, id_token, refresh_token)
-            # must not be exposed to callers.
-            # Assign directly rather than relying on nonlocal mutation so that Pyright
-            # can track that received_response is non-None from this point on.
-            received_response = {k: v for k, v in combined_response.items() if k not in _OAUTH_TOKEN_FIELDS}
             sso_assertion = assertion_from_sso_login(
                 combined_response.get("id_token"), combined_response.get("refresh_token")
             )
@@ -2192,10 +2233,10 @@ async def _build_cli_sso_user_defined_values(
     )
 
 
-def _cli_sso_team_detail(team_row: Mapping[str, object]) -> _CliSsoTeamDetail:
+def _cli_sso_team_detail(team_row: Mapping[str, object]) -> CliSsoTeamDetail:
     team: Final = _TeamRowGrants.model_validate(team_row)
     alias_table: Final = team.litellm_model_table
-    return _CliSsoTeamDetail(
+    return CliSsoTeamDetail(
         team_id=team.team_id,
         team_alias=team.team_alias,
         team_models=team.models,
@@ -2203,10 +2244,10 @@ def _cli_sso_team_detail(team_row: Mapping[str, object]) -> _CliSsoTeamDetail:
     )
 
 
-async def _fetch_cli_sso_team_details(
+async def fetch_cli_sso_team_details(
     prisma_client: PrismaClient,
     teams: Sequence[str],
-) -> tuple[_CliSsoTeamDetail, ...] | None:
+) -> tuple[CliSsoTeamDetail, ...] | None:
     """``None`` means the lookup itself failed, which is not the same as the user having no teams."""
     if not teams:
         return ()
@@ -2221,7 +2262,7 @@ async def _fetch_cli_sso_team_details(
     return tuple(_cli_sso_team_detail(team_row.model_dump()) for team_row in prisma_teams)
 
 
-def _cli_sso_session_teams(team_details: Sequence[_CliSsoTeamDetail]) -> list[str]:
+def _cli_sso_session_teams(team_details: Sequence[CliSsoTeamDetail]) -> list[str]:
     """The teams a login may bind to: only those whose row still exists.
 
     A team deleted out from under a membership, which is what deleting an organization
@@ -2231,7 +2272,7 @@ def _cli_sso_session_teams(team_details: Sequence[_CliSsoTeamDetail]) -> list[st
     return [detail.team_id for detail in team_details if detail.team_id is not None]
 
 
-def _selected_cli_sso_team_detail(team_details: object, team_id: str | None) -> _CliSsoTeamDetail | None:
+def selected_cli_sso_team_detail(team_details: object, team_id: str | None) -> CliSsoTeamDetail | None:
     """``None`` means the team's grants are unknown. An empty grant is a real value meaning unrestricted,
     so an unknown one must not be minted as empty."""
     if team_id is None:
@@ -2282,7 +2323,7 @@ async def _complete_cli_sso_callback_session(
     if hasattr(user_info, "teams") and user_info.teams:
         teams = user_info.teams if isinstance(user_info.teams, list) else []
 
-    team_details: Final = await _fetch_cli_sso_team_details(prisma_client=prisma_client, teams=teams)
+    team_details: Final = await fetch_cli_sso_team_details(prisma_client=prisma_client, teams=teams)
     if team_details is None:
         raise HTTPException(
             status_code=500,
@@ -2483,7 +2524,7 @@ async def cli_poll_key(
                 # If no team_id provided and user has 0 or 1 team, use first team (or None)
                 team_id = user_teams[0] if len(user_teams) > 0 else None
 
-            selected_team: Final = _selected_cli_sso_team_detail(
+            selected_team: Final = selected_cli_sso_team_detail(
                 team_details=user_team_details,
                 team_id=team_id,
             )

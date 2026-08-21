@@ -472,9 +472,9 @@ async def test_file_sanitization_block():
     async def mock_get(*args, **kwargs):
         return mock_poll_response
 
-    with pytest.raises(HTTPException) as excinfo:
-        with patch.object(guardrail.async_handler, "post", side_effect=mock_post):
-            with patch.object(guardrail.async_handler, "get", side_effect=mock_get):
+    with patch.object(guardrail.async_handler, "post", side_effect=mock_post):
+        with patch.object(guardrail.async_handler, "get", side_effect=mock_get):
+            with pytest.raises(HTTPException) as excinfo:
                 await guardrail.apply_guardrail(
                     inputs=inputs,
                     request_data=request_data,

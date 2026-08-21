@@ -656,3 +656,20 @@ describe("getPlanModeTierError", () => {
     expect(getPlanModeTierError("COMPLEX", tiersWithEmptyComplex)).toContain("COMPLEX");
   });
 });
+
+describe("buildComplexityRouterConfig tier model params", () => {
+  it("keeps tier_model_configs out of the payload when nothing is set", () => {
+    expect(buildComplexityRouterConfig(baseParams)).not.toHaveProperty("tier_model_configs");
+  });
+
+  it("emits tier_model_configs beside string tiers when efforts are set", () => {
+    const config = buildComplexityRouterConfig({
+      ...baseParams,
+      tierModelParams: { COMPLEX: { "claude-sonnet-4": { reasoning_effort: "high" } } },
+    });
+    expect(config.tiers).toEqual(tiers);
+    expect(config.tier_model_configs).toEqual({
+      COMPLEX: [{ model_name: "claude-sonnet-4", litellm_params: { reasoning_effort: "high" } }],
+    });
+  });
+});

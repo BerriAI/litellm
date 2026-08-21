@@ -36,7 +36,7 @@ interface OAuthFormFieldsProps {
   docsUrl?: string | null;
 }
 
-const fieldClassName = "rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500";
+const fieldClassName = "rounded-lg border-border focus:border-info focus:ring-ring";
 
 const OAUTH_FLOW_ITEMS = [
   { value: OAUTH_FLOW.M2M, label: "Machine-to-Machine (M2M)" },
@@ -51,10 +51,10 @@ const UPSTREAM_RESOURCE_TOOLTIP =
   "invalid_target, the authorization server needs it set.";
 
 const FieldLabel: React.FC<{ label: string; tooltip: string }> = ({ label, tooltip }) => (
-  <span className="text-sm font-medium text-gray-700 flex items-center">
+  <span className="text-sm font-medium text-foreground flex items-center">
     {label}
     <SimpleTooltip content={tooltip}>
-      <Info className="ml-2 size-4 text-blue-400 hover:text-blue-600 cursor-help" />
+      <Info className="ml-2 size-4 text-info hover:text-info/80 cursor-help" />
     </SimpleTooltip>
   </span>
 );
@@ -190,7 +190,7 @@ const OAuthFormFields: React.FC<OAuthFormFieldsProps> = ({
                     href={docsUrl}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="text-xs text-blue-500 hover:text-blue-700 ml-2 font-normal"
+                    className="text-xs text-info hover:text-info/80 ml-2 font-normal"
                     onClick={(e) => e.stopPropagation()}
                   >
                     Create OAuth App →
@@ -312,7 +312,7 @@ const OAuthFormFields: React.FC<OAuthFormFieldsProps> = ({
                 {...textControl(control)}
                 placeholder={'{\n  "organization": "my-org",\n  "team.id": "123"\n}'}
                 rows={4}
-                className="font-mono text-sm rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+                className="font-mono text-sm rounded-lg border-border focus:border-info focus:ring-ring"
               />
             )}
           </MountedFormField>
@@ -330,8 +330,8 @@ const OAuthFormFields: React.FC<OAuthFormFieldsProps> = ({
             )}
           </MountedFormField>
           {oauthFlow && (
-            <div className="rounded-lg border border-dashed border-gray-300 p-4 space-y-2">
-              <p className="text-sm text-gray-600">
+            <div className="rounded-lg border border-dashed border-border p-4 space-y-2">
+              <p className="text-sm text-muted-foreground">
                 Use OAuth to fetch a fresh access token and temporarily save it in the session as the authentication
                 value.
               </p>
@@ -346,9 +346,9 @@ const OAuthFormFields: React.FC<OAuthFormFieldsProps> = ({
                     ? "Exchanging authorization code..."
                     : "Authorize & Fetch Token"}
               </Button>
-              {oauthFlow.error && <p className="text-sm text-red-500">{oauthFlow.error}</p>}
+              {oauthFlow.error && <p className="text-sm text-destructive">{oauthFlow.error}</p>}
               {oauthFlow.status === "success" && oauthFlow.tokenResponse?.access_token && (
-                <p className="text-sm text-green-600">
+                <p className="text-sm text-success">
                   Token fetched. Expires in {oauthFlow.tokenResponse.expires_in ?? "?"} seconds.
                 </p>
               )}
