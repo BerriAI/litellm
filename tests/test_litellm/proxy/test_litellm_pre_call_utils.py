@@ -2279,12 +2279,12 @@ def test_get_num_retries_from_request():
 
     # Test case 7: Header present with invalid value (should raise ValueError when int() is called)
     headers_with_invalid = {"x-litellm-num-retries": "invalid"}
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match='invalid literal for int\\(\\) with base'):
         LiteLLMProxyRequestSetup._get_num_retries_from_request(headers_with_invalid)
 
     # Test case 8: Header present with float string (should raise ValueError when int() is called)
     headers_with_float = {"x-litellm-num-retries": "3.5"}
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match='invalid literal for int\\(\\) with base'):
         LiteLLMProxyRequestSetup._get_num_retries_from_request(headers_with_float)
 
     # Test case 9: Header present with negative number
@@ -2324,7 +2324,7 @@ def test_get_keepalive_seconds_from_request():
 
     # Header present with invalid value raises ValueError, matching the other
     # x-litellm-* numeric header helpers (_get_timeout_from_request, etc.)
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="could not convert string to float: 'not-a-number"):
         LiteLLMProxyRequestSetup._get_keepalive_seconds_from_request(
             {"x-litellm-keepalive-seconds": "not-a-number"}
         )

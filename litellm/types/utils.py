@@ -11,6 +11,7 @@ from typing import (
     get_args,
 )
 
+import httpx
 from openai._models import BaseModel as OpenAIObject
 from openai.types.audio.transcription_create_params import (
     FileTypes as FileTypes,
@@ -49,7 +50,7 @@ from litellm.types.llms.base import (
 )
 from litellm.types.mcp import MCPServerCostInfo
 
-from ..litellm_core_utils.core_helpers import map_finish_reason
+from ..litellm_core_utils.core_helpers import map_finish_reason, process_response_headers
 from .agents import LiteLLMSendMessageResponse
 from .guardrails import GuardrailEventHooks
 from .llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
@@ -141,6 +142,7 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_tool_choice: bool | None
     supports_assistant_prefill: bool | None
     supports_prompt_caching: bool | None
+    supports_prompt_cache_breakpoint: ReadOnly[bool | None]
     supports_computer_use: bool | None
     supports_audio_input: bool | None
     supports_embedding_image_input: bool | None
@@ -248,6 +250,9 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     regional_processing_uplift_multiplier_us: (
         float | None
     )  # OpenAI US data-residency uplift multiplier applied to all token costs (e.g. 1.10 = +10%)
+    regional_endpoint_uplift_multiplier: ReadOnly[
+        float | None
+    ]  # Vertex AI non-global (regional) endpoint uplift multiplier applied to all token costs (e.g. 1.10 = +10%)
     output_cost_per_character: float | None  # only for vertex ai models
     output_cost_per_audio_token: float | None
     output_cost_per_token_above_128k_tokens: float | None  # only for vertex ai models
@@ -1912,6 +1917,10 @@ class ModelResponseBase(OpenAIObject):
 
     _response_headers: dict | None = None
 
+    def set_provider_response_headers(self, headers: httpx.Headers) -> None:
+        """Surface a provider's raw response headers to the caller as `llm_provider-*` headers."""
+        self._hidden_params["additional_headers"] = process_response_headers(headers)
+
     def model_dump(self, **kwargs):
         """Default to exclude_unset to avoid Pydantic serializer warnings for OpenAIObject-derived types."""
         if "exclude_unset" not in kwargs and "exclude_none" not in kwargs:
@@ -2836,9 +2845,11 @@ class StandardLoggingRoutingDecision(TypedDict, total=False):
     classifier_cost: float
     escalated: bool
     tier_boundaries: StandardLoggingRoutingDecisionTierBoundaries
+    reasoning_override_min_score: ReadOnly[float]
     conversation_continuing: bool
     savings_baseline_model: str
     savings_baseline_deployment_id: str
+    tier_litellm_params: Mapping[str, object]  # writable-ok: Pydantic warns on ReadOnly TypedDict fields
 
 
 # Fields whose values quote the caller's prompt. Dropped when an operator turns message
@@ -2860,9 +2871,11 @@ DERIVED_ROUTING_DECISION_FIELDS: Final[frozenset[str]] = frozenset(
         "classifier_cost",
         "escalated",
         "tier_boundaries",
+        "reasoning_override_min_score",
         "conversation_continuing",
         "savings_baseline_model",
         "savings_baseline_deployment_id",
+        "tier_litellm_params",
     }
 )
 
@@ -3113,16 +3126,17 @@ class CostBreakdown(TypedDict, total=False):
     """
     Detailed cost breakdown for a request.
 
-    ``service_tier`` and ``data_residency`` record the pricing basis the cost was
-    computed on, not what the caller asked for. A consumer that has to price a
-    counterfactual against this request (what another model would have charged for
-    it) needs the same basis to compare like with like, and re-deriving it from the
-    request is not possible after the fact: the tier the biller used comes from
-    ``optional_params``, which no log record carries.
+    ``service_tier``, ``data_residency``, and ``vertex_location`` record the pricing
+    basis the cost was computed on, not what the caller asked for. A consumer that has
+    to price a counterfactual against this request (what another model would have
+    charged for it) needs the same basis to compare like with like, and re-deriving it
+    from the request is not possible after the fact: the tier the biller used comes
+    from ``optional_params``, which no log record carries.
     """
 
     service_tier: str | None
     data_residency: str | None
+    vertex_location: ReadOnly[str | None]
     input_cost: float  # Cost of raw (non-cached) input tokens only
     cache_read_cost: float  # Cost of cache-read tokens (discounted rate)
     cache_creation_cost: float  # Cost of cache-write tokens (premium rate)
@@ -3388,6 +3402,7 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     annotation_cost_per_page: float | None = None
     regional_processing_uplift_multiplier_eu: float | None = None
     regional_processing_uplift_multiplier_us: float | None = None
+    regional_endpoint_uplift_multiplier: float | None = None
 
     @classmethod
     def strip_custom_pricing_fields(cls, model_info: dict[str, Any]) -> dict[str, Any]:
@@ -3772,6 +3787,7 @@ class LlmProviders(str, Enum):
     TENSORMESH = "tensormesh"
     LIBERTAI = "libertai"
     PINSTRIPES = "pinstripes"
+    COGNITION = "cognition"
     DARKBLOOM = "darkbloom"
     META = "meta"
     LITELLM_AGENT = "litellm_agent"
@@ -3818,6 +3834,7 @@ class SearchProviders(str, Enum):
     YOU_COM = "you_com"
     APISERPENT = "apiserpent"
     TINYFISH = "tinyfish"
+    AGENTCORE = "agentcore"
     NIMBLE = "nimble"
 
 

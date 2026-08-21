@@ -2926,11 +2926,14 @@ def test_unit_test_custom_stream_wrapper_repeating_chunk(
     print(f"expected_chunk_fail: {expected_chunk_fail}")
 
     if (loop_amount > litellm.REPEATED_STREAMING_CHUNK_LIMIT) and expected_chunk_fail:
+        def _drain():
+            for chunk in response:
+                continue
+
         with pytest.raises(
             (litellm.InternalServerError, litellm.exceptions.MidStreamFallbackError)
         ):
-            for chunk in response:
-                continue
+            _drain()
     else:
         for chunk in response:
             continue

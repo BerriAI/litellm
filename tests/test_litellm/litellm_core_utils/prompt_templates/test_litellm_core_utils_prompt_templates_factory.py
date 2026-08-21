@@ -1169,7 +1169,7 @@ def test_bedrock_image_processor_content_type_fallback_failure():
     # Test with URL without recognizable extension
     image_url = "https://example.com/unknown-file"
 
-    with pytest.raises(ValueError) as excinfo:
+    with pytest.raises(ValueError, match='Unable to determine content type from URL: https') as excinfo:
         BedrockImageProcessor._post_call_image_processing(mock_response, image_url)
 
     assert "Unable to determine content type" in str(excinfo.value)

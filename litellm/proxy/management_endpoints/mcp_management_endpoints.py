@@ -64,7 +64,10 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
     encrypt_value_helper,
 )
-from litellm.proxy.management_helpers.audit_logs import get_audit_log_changed_by
+from litellm.proxy.management_helpers.audit_logs import (
+    get_audit_log_changed_by,
+    is_audit_logging_enabled,
+)
 from litellm.repositories.table_repositories import (
     MCPServerRepository,
     MCPUserCredentialsRepository,
@@ -2018,7 +2021,7 @@ if MCP_AVAILABLE:
         await global_mcp_server_manager.reload_servers_from_database()
 
         # TODO: Enterprise: Finish audit log trail
-        if litellm.store_audit_logs:
+        if is_audit_logging_enabled():
             pass
 
         # TODO: Delete from virtual keys
@@ -2613,7 +2616,7 @@ if MCP_AVAILABLE:
                 )
 
         # TODO: Enterprise: Finish audit log trail
-        if litellm.store_audit_logs:
+        if is_audit_logging_enabled():
             pass
 
         return _redact_mcp_credentials(mcp_server_record_updated)

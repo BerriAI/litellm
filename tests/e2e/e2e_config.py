@@ -13,6 +13,9 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from fixture_mode import deterministic_marker, parse_fixture_mode
+from provider_edge import provider_edge_api_base
+
 # Local runs keep provider / DataDog keys in tests/e2e/.env (see CONTRIBUTING.md).
 # Compose injects them into the proxy container, but pytest on the host does not
 # inherit that file unless we load it. override=False so a real shell export wins.
@@ -90,6 +93,24 @@ PROPAGATION_TIMEOUT = float(os.environ.get("E2E_PROPAGATION_TIMEOUT", "15"))
 
 EXPECT_RUST = os.environ.get("E2E_EXPECT_RUST", "").strip().lower() in ("1", "true", "yes")
 
+# Record/replay fixture selection (see fixture_mode.py and provider_edge.py).
+# The raw mode value is parsed and validated there; "live" (the default, also
+# for empty values) means the harness behaves exactly as before this knob
+# existed.
+FIXTURE_MODE_RAW = os.environ.get("E2E_FIXTURE_MODE", "live")
+FIXTURE_DIR = Path(
+    os.environ.get("E2E_FIXTURE_DIR", "").strip()
+    or str(Path(__file__).resolve().parent / ".fixtures")
+)
+
+# Where the provider-edge server binds, and the host name edge api_base URLs
+# advertise to the proxy. They differ when the proxy runs in a container and
+# reaches the pytest host via a gateway name like host.docker.internal.
+PROVIDER_EDGE_BIND_HOST = os.environ.get("E2E_PROVIDER_EDGE_BIND_HOST", "").strip() or "127.0.0.1"
+PROVIDER_EDGE_ADVERTISE_HOST = (
+    os.environ.get("E2E_PROVIDER_EDGE_ADVERTISE_HOST", "").strip() or PROVIDER_EDGE_BIND_HOST
+)
+
 # Deliberately modest concurrency. The suite shares its proxy with every other
 # suite in the run, and 750 users at spawn rate 50 saturated the request path hard
 # enough to distort latency-sensitive neighbours (and to spend real provider money
@@ -146,9 +167,27 @@ def datadog_mcp_url(*, toolsets: str = "core") -> str:
     return f"{base}?toolsets={toolsets}" if toolsets else base
 
 
+def provider_edge_base(mount: str) -> str | None:
+    """The api_base an edge-wired deployment should register with, using this
+    process's fixture-mode and edge-host configuration: None in live mode, the
+    shared edge server's mount URL in record and replay."""
+    return provider_edge_api_base(
+        mount,
+        mode_raw=FIXTURE_MODE_RAW,
+        bundle_dir=FIXTURE_DIR,
+        bind_host=PROVIDER_EDGE_BIND_HOST,
+        advertise_host=PROVIDER_EDGE_ADVERTISE_HOST,
+        forward_timeout=REQUEST_TIMEOUT,
+    )
+
+
 def unique_marker() -> str:
     """A short unique token per call/run, so concurrent runs and the shared
-    response cache never collide on prompts, tags, or customer ids."""
+    response cache never collide on prompts, tags, or customer ids. In record
+    and replay modes the token is deterministic per test instead, so a replay
+    run regenerates the exact requests the record run sent."""
+    if parse_fixture_mode(FIXTURE_MODE_RAW) in ("record", "replay"):
+        return deterministic_marker()
     return uuid.uuid4().hex[:12]
 
 

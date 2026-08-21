@@ -723,7 +723,7 @@ class ChunkProcessor:
         for choice in response.choices:
             if (
                 hasattr(cast(Choices, choice).message, "reasoning_content")
-                and cast(Choices, choice).message.reasoning_content is not None
+                and cast(Choices, choice).message.reasoning_content
             ):
                 if reasoning_tokens is None:
                     reasoning_tokens = 0
@@ -987,7 +987,12 @@ class ChunkProcessor:
                 returned_usage.completion_tokens_details is not None
                 and returned_usage.completion_tokens_details.reasoning_tokens is None
             ):
-                returned_usage.completion_tokens_details.reasoning_tokens = reasoning_tokens
+                capped_reasoning_tokens: Final = min(max(0, reasoning_tokens), returned_usage.completion_tokens)
+                returned_usage.completion_tokens_details.reasoning_tokens = capped_reasoning_tokens
+                if returned_usage.completion_tokens_details.text_tokens is None:
+                    returned_usage.completion_tokens_details.text_tokens = (
+                        returned_usage.completion_tokens - capped_reasoning_tokens
+                    )
         if prompt_tokens_details is not None:
             returned_usage.prompt_tokens_details = prompt_tokens_details
 

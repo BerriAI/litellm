@@ -75,7 +75,7 @@ from litellm.litellm_core_utils.chat_completion_agentic_loop import (
 from litellm.litellm_core_utils.completion_timeout import CompletionTimeout
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.get_litellm_params import (
-    AWS_CREDENTIAL_KWARGS_KEYS,
+    FORWARDED_KWARGS_KEYS,
     OPTIONAL_KWARGS_KEYS,
 )
 from litellm.litellm_core_utils.get_provider_specific_headers import (
@@ -507,6 +507,7 @@ async def acompletion(
         custom_llm_provider=cast(str | None, custom_llm_provider),  # cast-ok: read from untyped kwargs
         tools=tools,
         enable_prompt_caching=cast(bool | None, kwargs.get("enable_prompt_caching")),  # cast-ok: untyped kwargs
+        api_base=kwargs.get("api_base") or base_url,
     )
 
     if isinstance(litellm_logging_obj, LiteLLMLoggingObj) and (
@@ -5007,7 +5008,6 @@ def completion(
     tool_choice = validate_chat_completion_tool_choice(tool_choice=tool_choice)
     # validate optional params
     stop = validate_openai_optional_params(stop=stop)
-    # normalize camelCase thinking keys (e.g. budgetTokens -> budget_tokens)
     thinking = validate_and_fix_thinking_param(thinking=thinking)
 
     ######### unpacking kwargs #####################
@@ -5172,6 +5172,7 @@ def completion(
         custom_llm_provider=cast(str | None, kwargs.get("custom_llm_provider")),  # cast-ok: untyped kwargs
         tools=tools,
         enable_prompt_caching=cast(bool | None, kwargs.get("enable_prompt_caching")),  # cast-ok: untyped kwargs
+        api_base=kwargs.get("api_base") or base_url,
     )
 
     if isinstance(litellm_logging_obj, LiteLLMLoggingObj) and (
@@ -5450,7 +5451,7 @@ def completion(
             tpm=kwargs.get("tpm"),
             rpm=kwargs.get("rpm"),
             use_xai_oauth=kwargs.get("use_xai_oauth", False),
-            **{key: kwargs[key] for key in AWS_CREDENTIAL_KWARGS_KEYS if key in kwargs},
+            **{key: kwargs[key] for key in FORWARDED_KWARGS_KEYS if key in kwargs},
         )
         cast(LiteLLMLoggingObj, logging).update_environment_variables(
             model=model,
@@ -5973,7 +5974,7 @@ def embedding(
     # Optional params
     dimensions: int | None = None,
     encoding_format: str | None = None,
-    timeout=600,  # default to 10 minutes
+    timeout: float = 600,  # default to 10 minutes
     # set api_base, api_version, api_key
     api_base: str | None = None,
     api_version: str | None = None,
@@ -5999,7 +6000,7 @@ def embedding(
     # Optional params
     dimensions: int | None = None,
     encoding_format: str | None = None,
-    timeout=600,  # default to 10 minutes
+    timeout: float = 600,  # default to 10 minutes
     # set api_base, api_version, api_key
     api_base: str | None = None,
     api_version: str | None = None,
@@ -6026,7 +6027,7 @@ def embedding(
     # Optional params
     dimensions: int | None = None,
     encoding_format: str | None = None,
-    timeout=600,  # default to 10 minutes
+    timeout: float = 600,  # default to 10 minutes
     # set api_base, api_version, api_key
     api_base: str | None = None,
     api_version: str | None = None,

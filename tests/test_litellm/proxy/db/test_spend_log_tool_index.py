@@ -327,7 +327,7 @@ class TestFlushToolUsageTransactions:
     async def test_non_connection_errors_do_not_retry(self):
         prisma = MagicMock()
         prisma.db.batch_ = MagicMock(side_effect=ValueError("bad data"))
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="bad data"):
             await flush_tool_usage_transactions(prisma_client=prisma, transactions=[_transaction("r1")])
         prisma.db.batch_.assert_called_once()
 

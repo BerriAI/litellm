@@ -61,10 +61,10 @@ const SessionManagement: React.FC<SessionManagementProps> = ({
       {/* Session Management Toggle */}
       <div className="flex items-center justify-between mb-2">
         <div className="flex items-center gap-2">
-          <span className="text-sm font-medium text-gray-700">Session Management</span>
+          <span className="text-sm font-medium text-foreground">Session Management</span>
           <Tooltip>
             <TooltipTrigger aria-label="About session management">
-              <Info className="size-3 text-gray-400" />
+              <Info className="size-3 text-muted-foreground" />
             </TooltipTrigger>
             <TooltipContent>
               Choose between LiteLLM API session management (using previous_response_id) or UI-based session management
@@ -72,7 +72,7 @@ const SessionManagement: React.FC<SessionManagementProps> = ({
             </TooltipContent>
           </Tooltip>
         </div>
-        <div className="flex items-center gap-2 text-xs text-gray-600">
+        <div className="flex items-center gap-2 text-xs text-muted-foreground">
           <span aria-hidden="true">UI</span>
           <Switch
             checked={useApiSessionManagement}
@@ -88,8 +88,8 @@ const SessionManagement: React.FC<SessionManagementProps> = ({
       <div
         className={`text-xs p-2 rounded-md ${
           responsesSessionId
-            ? "bg-green-50 text-green-700 border border-green-200"
-            : "bg-blue-50 text-blue-700 border border-blue-200"
+            ? "bg-success/10 text-success border border-success/20"
+            : "bg-info/10 text-info border border-info/20"
         }`}
       >
         <div className="flex items-center justify-between">
@@ -107,7 +107,7 @@ const SessionManagement: React.FC<SessionManagementProps> = ({
                     size="icon-xs"
                     onClick={handleCopySessionId}
                     aria-label="Copy response ID"
-                    className="ml-2 hover:bg-green-100"
+                    className="ml-2 hover:bg-success/15"
                   />
                 }
               >
