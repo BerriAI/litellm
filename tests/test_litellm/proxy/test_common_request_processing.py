@@ -5593,6 +5593,31 @@ class TestStreamingClientDisconnectBilling:
         assert standard_logging_object["response_cost"] > 0.0
 
     @pytest.mark.asyncio
+    async def test_disconnect_billing_keeps_the_routed_model_when_request_data_model_was_rewritten(self):
+        """
+        Pre-call processing rewrites request_data["model"] for aliasing and routing, so the
+        routed model on the later chunks can end up matching it. Only the name the client
+        sent says whether the proxy restamped this stream.
+        """
+
+        def restamp_like_azure_model_router(response):
+            response.chunks[0].model = "azure-model-router"
+            for chunk in response.chunks[1:]:
+                chunk.model = "gpt-4.1-nano-2025-04-14"
+
+        event = await self._bill_and_collect_success_event(
+            restamp_like_azure_model_router,
+            request_data={
+                "model": "gpt-4.1-nano-2025-04-14",
+                "_litellm_client_requested_model": "azure-model-router",
+            },
+        )
+
+        assert event["response_obj"].model == "gpt-4.1-nano-2025-04-14"
+        standard_logging_object = event["kwargs"]["standard_logging_object"]
+        assert standard_logging_object["response_cost"] > 0.0
+
+    @pytest.mark.asyncio
     async def test_disconnect_billing_backfills_missing_cache_fields(self):
         event = await self._bill_and_collect_success_event()
 

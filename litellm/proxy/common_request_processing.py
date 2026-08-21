@@ -303,12 +303,15 @@ def _assembled_model_is_the_name_the_client_asked_for(request_data: dict, assemb
     """Report whether the assembled model is the public name the proxy stamps onto chunks.
 
     That stamp is what leaves an unpriced alias on the partial response, so the deployment's
-    own model has to go back on before the row is costed.
+    own model has to go back on before the row is costed. Pre-call processing rewrites
+    `request_data["model"]` for aliasing and routing, so the client's own name wins when it
+    is there, in the same order the proxy picks the name it stamps.
     """
-    return assembled_model in (
-        request_data.get("_litellm_client_requested_model"),
-        request_data.get("model"),
+    client_requested_model: Final = request_data.get("_litellm_client_requested_model")
+    stamped_model: Final = (
+        client_requested_model if isinstance(client_requested_model, str) else request_data.get("model")
     )
+    return isinstance(stamped_model, str) and assembled_model == stamped_model
 
 
 async def _bill_partial_streamed_spend_on_disconnect(request_data: dict, response: object) -> bool:
