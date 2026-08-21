@@ -5025,6 +5025,7 @@ async def test_streaming_success_callbacks_survive_standard_logging_payload_fail
     ):
         await logging_obj.async_success_handler(result=_assembled_stream_result())
 
+    assert logging_obj.model_call_details.get("standard_logging_object") is None
     releasing.async_log_success_event.assert_awaited_once()
 
 
