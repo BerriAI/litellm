@@ -34,6 +34,7 @@ class SensitiveDataRoutingGuardrailConfigModel(GuardrailConfigModel):
     )
     session_ttl_seconds: int = Field(
         default=DEFAULT_SESSION_TTL_SECONDS,
+        ge=1,
         description="How long a session stays pinned to the on-premise model after detection.",
     )
 

@@ -1,6 +1,7 @@
 """Tests for the built-in Sensitive Data Routing guardrail."""
 
 import pytest
+from pydantic import ValidationError
 
 from litellm.exceptions import SensitiveDataRouteException
 from litellm.proxy.guardrails.guardrail_hooks.sensitive_data_routing import (
@@ -13,6 +14,9 @@ from litellm.proxy.guardrails.guardrail_registry import (
     guardrail_initializer_registry,
 )
 from litellm.types.guardrails import GuardrailEventHooks, LitellmParams
+from litellm.types.proxy.guardrails.guardrail_hooks.sensitive_data_routing import (
+    SensitiveDataRoutingGuardrailConfigModel,
+)
 
 DOCUMENTED_LITELLM_PARAMS = {
     "guardrail": "sensitive_data_routing",
@@ -64,6 +68,17 @@ class TestSensitiveDataRoutingGuardrailRegistration:
     def test_unknown_prebuilt_pattern_fails_fast(self):
         with pytest.raises(ValueError, match="Unknown pattern name"):
             make_guardrail(prebuilt_patterns=["not_a_real_pattern"])
+
+    @pytest.mark.parametrize("ttl", [0, -1])
+    def test_non_positive_session_ttl_is_rejected(self, ttl):
+        """A non-positive TTL expires the pin immediately, so reject it at config time
+        instead of silently never pinning the session."""
+        with pytest.raises(ValidationError):
+            SensitiveDataRoutingGuardrailConfigModel(
+                on_premise_model="on-prem-model",
+                keywords=["confidential"],
+                session_ttl_seconds=ttl,
+            )
 
 
 class TestSensitiveDataRoutingGuardrailDetection:
