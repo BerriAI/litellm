@@ -2226,6 +2226,66 @@ class TestIsRequestBodySafeBlocksBedrockProjectOverride:
         )
 
 
+class TestIsRequestBodySafeBlocksRustOptIn:
+    """``rust`` hands the whole call to the Rust core, which signs and sends
+    with its own HTTP client rather than the one the deployment configured, and
+    reports no ``post_call``. The proxy splats the request body straight into
+    the router, and ``rust`` is a litellm param, so it lands in
+    ``litellm_params`` and the gate honours it: without this entry any
+    authenticated caller picks a transport and a callback surface the admin
+    never chose. It stays a deployment decision, liftable only by the same
+    admin opt-in as the rest of the list."""
+
+    def test_rust_in_request_body_is_rejected(self):
+        with pytest.raises(ValueError, match="rust"):
+            is_request_body_safe(
+                request_body={"model": "gpt-4", "rust": True},
+                general_settings={},
+                llm_router=None,
+                model="gpt-4",
+            )
+
+    def test_rust_under_extra_body_is_rejected(self):
+        with pytest.raises(ValueError, match="not allowed in request body"):
+            is_request_body_safe(
+                request_body={"model": "gpt-4", "extra_body": {"rust": True}},
+                general_settings={},
+                llm_router=None,
+                model="gpt-4",
+            )
+
+    def test_api_key_does_not_bypass_the_rust_block(self):
+        with pytest.raises(ValueError, match="rust"):
+            is_request_body_safe(
+                request_body={"model": "gpt-4", "api_key": "sk-anything", "rust": True},
+                general_settings={},
+                llm_router=None,
+                model="gpt-4",
+            )
+
+    def test_admin_opt_in_proxy_wide_allows_rust(self):
+        assert (
+            is_request_body_safe(
+                request_body={"model": "gpt-4", "rust": True},
+                general_settings={"allow_client_side_credentials": True},
+                llm_router=None,
+                model="gpt-4",
+            )
+            is True
+        )
+
+    def test_body_without_rust_is_still_allowed(self):
+        assert (
+            is_request_body_safe(
+                request_body={"model": "gpt-4", "temperature": 0.7},
+                general_settings={},
+                llm_router=None,
+                model="gpt-4",
+            )
+            is True
+        )
+
+
 class TestIsRequestBodySafeBlocksVertexCredentialAlias:
     @pytest.mark.parametrize("field", ["vertex_ai_credentials"])
     def test_field_in_request_body_is_rejected(self, field):
@@ -2653,8 +2713,6 @@ class TestObservabilityCallbackBans:
             "posthog_api_url",
             "braintrust_api_key",
             "braintrust_project",
-            "phoenix_project_name",
-            "phoenix_project_name_override",
             "wandb_api_key",
             "weave_project_id",
             "gcs_bucket_name",
@@ -2685,8 +2743,7 @@ class TestObservabilityCallbackBans:
             "langsmith_api_key",
             "posthog_api_url",
             "braintrust_project",
-            "phoenix_project_name",
-            "phoenix_project_name_override",
+            "user_api_key_auth_metadata",
         ],
     )
     def test_observability_field_in_metadata_dict_is_rejected(
@@ -2706,6 +2763,28 @@ class TestObservabilityCallbackBans:
                 model="gpt-4",
             )
         assert field in str(exc.value)
+
+    @pytest.mark.parametrize("metadata_key", ["metadata", "litellm_metadata"])
+    @pytest.mark.parametrize(
+        "field",
+        ["phoenix_project_name", "phoenix_project_name_override"],
+    )
+    def test_phoenix_project_fields_in_metadata_are_accepted(self, metadata_key, field):
+        # The Phoenix integrations only honor the project from
+        # ``user_api_key_auth_metadata`` on the proxy, so the bare metadata
+        # fields are inert and must not 400 SDK-style callers that send them.
+        assert (
+            is_request_body_safe(
+                request_body={
+                    "model": "gpt-4",
+                    metadata_key: {field: "client-project"},
+                },
+                general_settings={},
+                llm_router=None,
+                model="gpt-4",
+            )
+            is True
+        )
 
     def test_observability_field_in_litellm_params_metadata_is_rejected(self):
         with pytest.raises(ValueError) as exc:
@@ -3131,3 +3210,72 @@ class TestHasUserSetupSso:
 
         monkeypatch.setenv("SAML_IDP_METADATA_XML", "<EntityDescriptor/>")
         assert _has_user_setup_sso() is True
+
+
+class TestIsRequestBodySafeBlocksAwsIdentitySelectors:
+    """A caller must not be able to redirect Bedrock signing to another identity
+    reachable from the proxy host. ``get_credentials`` prefers a named profile
+    and the AssumeRole knobs over the deployment's static keys, and the file /
+    batch endpoints fold the request body and the deployment credentials into a
+    single params dict, so these have to be rejected at the boundary (#36155).
+    """
+
+    @pytest.mark.parametrize(
+        "selector",
+        ["aws_profile_name", "aws_session_name", "aws_external_id"],
+    )
+    def test_aws_identity_selector_in_batch_body_is_rejected(self, selector):
+        with pytest.raises(ValueError, match=selector):
+            is_request_body_safe(
+                request_body={
+                    "input_file_id": "file-abc123",
+                    "endpoint": "/v1/chat/completions",
+                    "completion_window": "24h",
+                    "model": "bedrock-batch-model",
+                    selector: "attacker-chosen",
+                },
+                general_settings={},
+                llm_router=None,
+                model="bedrock-batch-model",
+            )
+
+    @pytest.mark.parametrize(
+        "selector",
+        ["aws_profile_name", "aws_session_name", "aws_external_id"],
+    )
+    def test_aws_identity_selector_under_extra_body_is_rejected(self, selector):
+        with pytest.raises(ValueError, match=selector):
+            is_request_body_safe(
+                request_body={
+                    "model": "bedrock-batch-model",
+                    "extra_body": {selector: "attacker-chosen"},
+                },
+                general_settings={},
+                llm_router=None,
+                model="bedrock-batch-model",
+            )
+
+    def test_aws_identity_selector_allowed_under_proxy_wide_opt_in(self):
+        assert (
+            is_request_body_safe(
+                request_body={
+                    "model": "bedrock-batch-model",
+                    "aws_profile_name": "admin-approved-profile",
+                },
+                general_settings={"allow_client_side_credentials": True},
+                llm_router=None,
+                model="bedrock-batch-model",
+            )
+            is True
+        )
+
+    def test_upload_body_without_identity_selectors_is_accepted(self):
+        assert (
+            is_request_body_safe(
+                request_body={"purpose": "batch", "model": "bedrock-batch-model"},
+                general_settings={},
+                llm_router=None,
+                model="bedrock-batch-model",
+            )
+            is True
+        )

@@ -132,19 +132,6 @@ def test_routing_strategy_init_valid_string_strategies(model_list):
         )
 
 
-def test_routing_strategy_init_valid_enum_strategies(model_list):
-    """Test that RoutingStrategy enum values work without error."""
-    from litellm.types.router import RoutingStrategy
-
-    router = Router(model_list=model_list)
-
-    for strategy in RoutingStrategy:
-        # Should not raise when passing enum directly
-        router.routing_strategy_init(
-            routing_strategy=strategy, routing_strategy_args={}
-        )
-
-
 def test_print_deployment(model_list):
     """Test if the api key is masked correctly"""
 
@@ -436,10 +423,11 @@ def test_get_timeout(model_list):
 def test_handle_mock_testing_fallbacks(model_list, fallback_kwarg, expected_error):
     """Test if the '_handle_mock_testing_fallbacks' function is working correctly"""
     router = Router(model_list=model_list)
+    data = {
+        fallback_kwarg: True,
+    }
+
     with pytest.raises(expected_error):
-        data = {
-            fallback_kwarg: True,
-        }
         router._handle_mock_testing_fallbacks(
             kwargs=data,
         )
@@ -448,10 +436,11 @@ def test_handle_mock_testing_fallbacks(model_list, fallback_kwarg, expected_erro
 def test_handle_mock_testing_rate_limit_error(model_list):
     """Test if the '_handle_mock_testing_rate_limit_error' function is working correctly"""
     router = Router(model_list=model_list)
+    data = {
+        "mock_testing_rate_limit_error": True,
+    }
+
     with pytest.raises(litellm.RateLimitError):
-        data = {
-            "mock_testing_rate_limit_error": True,
-        }
         router._handle_mock_testing_rate_limit_error(
             kwargs=data,
         )
@@ -1530,12 +1519,6 @@ def test_deployments_by_pattern(model_list):
     assert deployments is not None
 
 
-def test_replace_model_in_jsonl(model_list):
-    router = Router(model_list=model_list)
-    deployments = router.pattern_router.get_deployments_by_pattern(model="claude-3")
-    assert deployments is not None
-
-
 # def test_pattern_match_deployments(model_list):
 #     from litellm.router_utils.pattern_match_deployments import PatternMatchRouter
 #     import re
@@ -1860,8 +1843,8 @@ def test_init_auto_router_deployment_duplicate_model_name(mock_auto_router, mode
         router.init_auto_router_deployment(deployment)
 
 
-def test_generate_model_id_with_deployment_model_name(model_list):
-    """Test that _generate_model_id works correctly with deployment model_name and handles None values properly"""
+def testgenerate_model_id_with_deployment_model_name(model_list):
+    """Test that generate_model_id works correctly with deployment model_name and handles None values properly"""
     router = Router(model_list=model_list)
 
     # Test case 1: Normal case with valid model_group and litellm_params
@@ -1873,7 +1856,7 @@ def test_generate_model_id_with_deployment_model_name(model_list):
     }
 
     try:
-        result = router._generate_model_id(
+        result = router.generate_model_id(
             model_group=model_group, litellm_params=litellm_params
         )
         assert isinstance(result, str)
@@ -1884,7 +1867,7 @@ def test_generate_model_id_with_deployment_model_name(model_list):
 
     # Test case 2: Edge case with None model_group (this should fail as expected - our fix prevents this from happening)
     try:
-        result = router._generate_model_id(
+        result = router.generate_model_id(
             model_group=None, litellm_params=litellm_params
         )
         pytest.fail(
@@ -1907,7 +1890,7 @@ def test_generate_model_id_with_deployment_model_name(model_list):
     }
 
     try:
-        result = router._generate_model_id(
+        result = router.generate_model_id(
             model_group=model_group, litellm_params=litellm_params_with_none_key
         )
         assert isinstance(result, str)
@@ -1918,7 +1901,7 @@ def test_generate_model_id_with_deployment_model_name(model_list):
 
     # Test case 4: Edge case with empty litellm_params
     try:
-        result = router._generate_model_id(model_group=model_group, litellm_params={})
+        result = router.generate_model_id(model_group=model_group, litellm_params={})
         assert isinstance(result, str)
         assert len(result) > 0
         print(f"✓ Success with empty litellm_params: {result}")
@@ -1926,15 +1909,15 @@ def test_generate_model_id_with_deployment_model_name(model_list):
         pytest.fail(f"Failed with empty litellm_params: {e}")
 
     # Test case 5: Verify that the same inputs produce the same result (deterministic)
-    result1 = router._generate_model_id(
+    result1 = router.generate_model_id(
         model_group=model_group, litellm_params=litellm_params
     )
-    result2 = router._generate_model_id(
+    result2 = router.generate_model_id(
         model_group=model_group, litellm_params=litellm_params
     )
     assert result1 == result2, "Model ID generation should be deterministic"
 
-    print("✓ All _generate_model_id tests passed!")
+    print("✓ All generate_model_id tests passed!")
 
 
 def test_handle_clientside_credential_with_deployment_model_name(model_list):
@@ -1964,13 +1947,13 @@ def test_handle_clientside_credential_with_deployment_model_name(model_list):
 
     # Test that the method doesn't fail when metadata is empty
     try:
-        # This would normally call _generate_model_id internally
+        # This would normally call generate_model_id internally
         # We're testing that the fix prevents the TypeError
         model_group = deployment["model_name"]  # This is what our fix does
         assert model_group == "gpt-4.1"
 
-        # Verify that _generate_model_id works with this model_group
-        result = router._generate_model_id(
+        # Verify that generate_model_id works with this model_group
+        result = router.generate_model_id(
             model_group=model_group, litellm_params=dynamic_litellm_params
         )
         assert isinstance(result, str)

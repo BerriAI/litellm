@@ -436,7 +436,7 @@ def test_ui_token_route_access(route, user_role, should_be_allowed):
         )
         assert result is True
     else:
-        with pytest.raises(Exception):
+        with pytest.raises(Exception, match="Only proxy admin can be used to generate"):
             _is_api_route_allowed(
                 route=route,
                 request=request,
@@ -526,15 +526,6 @@ def _assert_api_key_from_custom_header(headers, custom_header_name, expected_api
 
 
 def test_get_api_key_from_custom_header_bearer_token():
-    token = "sk-" + "1" * 8
-    _assert_api_key_from_custom_header(
-        headers={"x-custom-api-key": f"Bearer {token}"},
-        custom_header_name="x-custom-api-key",
-        expected_api_key=token,
-    )
-
-
-def test_get_api_key_from_custom_header_raw_token():
     token = "sk-" + "1" * 8
     _assert_api_key_from_custom_header(
         headers={"x-custom-api-key": f"Bearer {token}"},

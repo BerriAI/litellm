@@ -1,15 +1,15 @@
 {
   "reportAny": {
-    "limit": 26391
+    "limit": 19955
   },
   "reportArgumentType": {
-    "limit": 2614
+    "limit": 2566
   },
   "reportAssignmentType": {
-    "limit": 327
+    "limit": 320
   },
   "reportAttributeAccessIssue": {
-    "limit": 514
+    "limit": 488
   },
   "reportCallIssue": {
     "limit": 114
@@ -18,19 +18,19 @@
     "limit": 40
   },
   "reportDeprecated": {
-    "limit": 215
+    "limit": 213
   },
   "reportDuplicateImport": {
     "limit": 19
   },
   "reportExplicitAny": {
-    "limit": 8319
+    "limit": 6049
   },
   "reportFunctionMemberAccess": {
     "limit": 7
   },
   "reportGeneralTypeIssues": {
-    "limit": 157
+    "limit": 154
   },
   "reportIncompatibleMethodOverride": {
     "limit": 56
@@ -54,10 +54,10 @@
     "limit": 0
   },
   "reportMissingParameterType": {
-    "limit": 5825
+    "limit": 5663
   },
   "reportMissingTypeArgument": {
-    "limit": 15695
+    "limit": 15555
   },
   "reportMissingTypeStubs": {
     "limit": 40
@@ -72,7 +72,7 @@
     "limit": 0
   },
   "reportOptionalMemberAccess": {
-    "limit": 1077
+    "limit": 1061
   },
   "reportOptionalOperand": {
     "limit": 0
@@ -84,7 +84,7 @@
     "limit": 56
   },
   "reportPrivateUsage": {
-    "limit": 1824
+    "limit": 1823
   },
   "reportRedeclaration": {
     "limit": 8
@@ -99,46 +99,46 @@
     "limit": 0
   },
   "reportUnknownArgumentType": {
-    "limit": 44996
+    "limit": 44655
   },
   "reportUnknownLambdaType": {
-    "limit": 113
+    "limit": 109
   },
   "reportUnknownMemberType": {
-    "limit": 39643
+    "limit": 39011
   },
   "reportUnknownParameterType": {
-    "limit": 20132
+    "limit": 19885
   },
   "reportUnknownVariableType": {
-    "limit": 31153
+    "limit": 30569
   },
   "reportUnnecessaryCast": {
-    "limit": 118
+    "limit": 117
   },
   "reportUnnecessaryComparison": {
-    "limit": 701
+    "limit": 699
   },
   "reportUnnecessaryContains": {
     "limit": 5
   },
   "reportUnnecessaryIsInstance": {
-    "limit": 857
+    "limit": 836
   },
   "reportUntypedBaseClass": {
     "limit": 0
   },
   "reportUntypedFunctionDecorator": {
-    "limit": 33
+    "limit": 27
   },
   "reportUnusedClass": {
-    "limit": 23
+    "limit": 21
   },
   "reportUnusedFunction": {
     "limit": 139
   },
   "reportUnusedImport": {
-    "limit": 555
+    "limit": 545
   },
   "reportUnusedVariable": {
     "limit": 146

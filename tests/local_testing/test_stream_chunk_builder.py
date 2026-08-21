@@ -871,7 +871,7 @@ def load_env():
     }
     LLAMA3_3 = {
         "messages": messages,
-        "model": "groq/llama-3.3-70b-versatile",
+        "model": "groq/openai/gpt-oss-120b",
         "api_base": "https://api.groq.com/openai/v1",
         "temperature": 0.0,
         "tools": tools,

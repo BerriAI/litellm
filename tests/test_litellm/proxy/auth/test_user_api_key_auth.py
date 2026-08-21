@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import sys
+from contextlib import contextmanager
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
@@ -3739,6 +3740,140 @@ async def test_centralized_common_checks_skipped_for_custom_auth_without_flag():
             setattr(_proxy_server_mod, k, v)
 
 
+def _unrestricted_end_user_prisma(spend: float):
+    """Prisma stand-in where "customer-1" exists but restricts nothing: no row matches the
+    restricted-registry query, and the row itself carries only spend."""
+    end_user_row = MagicMock()
+    end_user_row.user_id = "customer-1"
+    end_user_row.dict = lambda: {"user_id": "customer-1", "blocked": False, "spend": spend}
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_endusertable.find_many = AsyncMock(return_value=[])
+    mock_prisma.db.litellm_endusertable.find_unique = AsyncMock(return_value=end_user_row)
+    mock_prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
+    mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=None)
+    mock_prisma.db.litellm_verificationtoken.find_unique = AsyncMock(return_value=None)
+    return mock_prisma
+
+
+@contextmanager
+def _custom_auth_end_user_world(mock_prisma):
+    """The proxy globals a custom-auth deployment running the centralized gate reads, with cold
+    spend counters. Real caches, so the end user's spend reaches the counter the way it does in
+    production: through the cache entry get_end_user_object writes."""
+    import litellm.proxy.proxy_server as _proxy_server_mod
+
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.utils import ProxyLogging
+
+    key_cache = UserApiKeyCache()
+    attrs = {
+        **_proxy_attrs_for_centralized_checks(user_custom_auth=AsyncMock(), flag=True),
+        "prisma_client": mock_prisma,
+        "user_api_key_cache": key_cache,
+        "spend_counter_cache": DualCache(),
+        "proxy_logging_obj": ProxyLogging(user_api_key_cache=key_cache),
+    }
+    originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
+    try:
+        for k, v in attrs.items():
+            setattr(_proxy_server_mod, k, v)
+        yield
+    finally:
+        for k, v in originals.items():
+            setattr(_proxy_server_mod, k, v)
+
+
+def _chat_request():
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    request = Request(scope={"type": "http"})
+    request._url = URL(url="/chat/completions")
+    return request
+
+
+@pytest.mark.asyncio
+async def test_centralized_checks_enforce_token_end_user_budget_against_row_spend():
+    """
+    Regression: a token-supplied end-user budget must still be checked against the end user's
+    recorded spend.
+
+    A user_custom_auth callable can set end_user_max_budget on the token for an end user whose own
+    row carries no budget, which keeps that row out of the restricted-id registry. Auth must still
+    load it, because the reservation counter cold-starts from the spend on the loaded row; skipping
+    the load admits a customer who is already double their budget.
+    """
+    mock_prisma = _unrestricted_end_user_prisma(spend=100.0)
+    token = UserAPIKeyAuth(
+        api_key="sk-test",
+        token="hashed-token",
+        user_id="u1",
+        end_user_id="customer-1",
+        end_user_max_budget=50.0,
+    )
+
+    with _custom_auth_end_user_world(mock_prisma):
+        with (
+            patch(
+                "litellm.proxy.auth.user_api_key_auth.common_checks",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "litellm.proxy.spend_tracking.budget_reservation.estimate_request_max_cost",
+                return_value=0.6,
+            ),
+            pytest.raises(litellm.BudgetExceededError) as exc_info,
+        ):
+            await _run_centralized_common_checks(
+                user_api_key_auth_obj=token,
+                request=_chat_request(),
+                request_data={
+                    "model": "gpt-4o-mini",
+                    "messages": [{"role": "user", "content": "hi"}],
+                },
+                route="/chat/completions",
+            )
+
+    assert exc_info.value.max_budget == 50.0
+    assert exc_info.value.current_cost == pytest.approx(100.6)
+
+
+@pytest.mark.asyncio
+async def test_centralized_checks_skip_end_user_lookup_without_a_token_budget():
+    """The companion case: with no token budget an unrestricted end user costs zero row reads."""
+    mock_prisma = _unrestricted_end_user_prisma(spend=100.0)
+    token = UserAPIKeyAuth(
+        api_key="sk-test",
+        token="hashed-token",
+        user_id="u1",
+        end_user_id="customer-1",
+    )
+
+    with _custom_auth_end_user_world(mock_prisma):
+        with (
+            patch(
+                "litellm.proxy.auth.user_api_key_auth.common_checks",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "litellm.proxy.spend_tracking.budget_reservation.estimate_request_max_cost",
+                return_value=0.6,
+            ),
+        ):
+            await _run_centralized_common_checks(
+                user_api_key_auth_obj=token,
+                request=_chat_request(),
+                request_data={
+                    "model": "gpt-4o-mini",
+                    "messages": [{"role": "user", "content": "hi"}],
+                },
+                route="/chat/completions",
+            )
+
+    mock_prisma.db.litellm_endusertable.find_unique.assert_not_awaited()
+
+
 @pytest.mark.asyncio
 async def test_centralized_common_checks_runs_for_custom_auth_with_flag():
     """Custom-auth deployments that opt in via custom_auth_run_common_checks
@@ -4847,6 +4982,79 @@ async def test_user_api_key_auth_authenticates_before_raising_malformed_body_err
             setattr(_proxy_server_mod, k, v)
 
 
+async def _run_auth_with_malformed_body(post_call_failure_hook):
+    """Drive ``user_api_key_auth`` for an authenticated caller whose body never parses,
+    with ``proxy_logging_obj.post_call_failure_hook`` swapped for the passed double.
+    Returns the raised ProxyException."""
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    import litellm.proxy.proxy_server as _proxy_server_mod
+
+    builder_token = UserAPIKeyAuth(api_key="sk-test", user_id="u1", team_id="team-1")
+
+    request = Request(
+        scope={
+            "type": "http",
+            "headers": [(b"content-type", b"application/json")],
+            "method": "POST",
+        }
+    )
+    request._url = URL(url="/chat/completions")
+    request._body = b'{}{"model": "gpt-4o"}'
+
+    attrs = _proxy_attrs_for_centralized_checks(user_custom_auth=None)
+    attrs["proxy_logging_obj"].post_call_failure_hook = post_call_failure_hook
+    originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
+    try:
+        for k, v in attrs.items():
+            setattr(_proxy_server_mod, k, v)
+        with (
+            patch(
+                "litellm.proxy.auth.user_api_key_auth._user_api_key_auth_builder",
+                new_callable=AsyncMock,
+                return_value=builder_token,
+            ),
+            patch(
+                "litellm.proxy.auth.user_api_key_auth.RouteChecks.should_call_route",
+            ),
+        ):
+            with pytest.raises(ProxyException) as exc_info:
+                await user_api_key_auth(request=request, api_key="Bearer sk-test")
+        return exc_info.value
+    finally:
+        for k, v in originals.items():
+            setattr(_proxy_server_mod, k, v)
+
+
+@pytest.mark.asyncio
+async def test_user_api_key_auth_logs_the_failure_for_a_body_that_never_parses():
+    """The endpoint never runs for an unparsable body, so the 400 the caller sees only
+    reaches Request Logs if auth runs the failure hook that writes the spend log row."""
+    hook = AsyncMock(return_value=None)
+
+    raised = await _run_auth_with_malformed_body(hook)
+
+    assert "Invalid JSON payload" in str(raised.message)
+    assert raised.code == str(status.HTTP_400_BAD_REQUEST)
+    hook.assert_awaited_once()
+    hook_kwargs = hook.await_args.kwargs
+    assert hook_kwargs["original_exception"] is raised
+    assert hook_kwargs["error_type"] == ProxyErrorTypes.bad_request_error
+    assert hook_kwargs["route"] == "/chat/completions"
+    assert hook_kwargs["user_api_key_dict"].user_id == "u1"
+    assert hook_kwargs["user_api_key_dict"].team_id == "team-1"
+
+
+@pytest.mark.asyncio
+async def test_user_api_key_auth_returns_the_parse_error_even_if_logging_it_fails():
+    """Logging the rejected request must never change what the caller sees."""
+    raised = await _run_auth_with_malformed_body(AsyncMock(side_effect=Exception("logging is down")))
+
+    assert "Invalid JSON payload" in str(raised.message)
+    assert raised.code == str(status.HTTP_400_BAD_REQUEST)
+
+
 @pytest.mark.asyncio
 async def test_user_api_key_auth_malformed_body_with_rejected_key_still_returns_the_parse_error():
     """The body is read before the key is authenticated, so a caller who sends both a
@@ -4892,6 +5100,58 @@ async def test_user_api_key_auth_malformed_body_with_rejected_key_still_returns_
 
         assert "Invalid JSON payload" in str(exc_info.value.message)
         assert exc_info.value.code == str(status.HTTP_400_BAD_REQUEST)
+    finally:
+        for k, v in originals.items():
+            setattr(_proxy_server_mod, k, v)
+
+
+@pytest.mark.asyncio
+async def test_user_api_key_auth_does_not_double_log_a_malformed_body_from_a_rejected_key():
+    """The auth failure this caller also earns is already logged by the handler that
+    rejected the key, so the unparsable-body hook must stay out of that path and leave
+    Request Logs with one row instead of two."""
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    import litellm.proxy.proxy_server as _proxy_server_mod
+
+    request = Request(
+        scope={
+            "type": "http",
+            "headers": [(b"content-type", b"application/json")],
+            "method": "POST",
+        }
+    )
+    request._url = URL(url="/chat/completions")
+    request._body = b'{}{"model": "gpt-4o"}'
+
+    hook = AsyncMock(return_value=None)
+    attrs = _proxy_attrs_for_centralized_checks(user_custom_auth=None)
+    attrs["proxy_logging_obj"].post_call_failure_hook = hook
+    originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
+    try:
+        for k, v in attrs.items():
+            setattr(_proxy_server_mod, k, v)
+        with (
+            patch(
+                "litellm.proxy.auth.user_api_key_auth._user_api_key_auth_builder",
+                new_callable=AsyncMock,
+                side_effect=ProxyException(
+                    message="Authentication Error, invalid key",
+                    type="auth_error",
+                    param="None",
+                    code=status.HTTP_401_UNAUTHORIZED,
+                ),
+            ),
+            patch(
+                "litellm.proxy.auth.user_api_key_auth.RouteChecks.should_call_route",
+            ),
+        ):
+            with pytest.raises(ProxyException):
+                await user_api_key_auth(request=request, api_key="Bearer sk-bad")
+
+        await asyncio.sleep(0.05)
+        hook.assert_not_awaited()
     finally:
         for k, v in originals.items():
             setattr(_proxy_server_mod, k, v)
