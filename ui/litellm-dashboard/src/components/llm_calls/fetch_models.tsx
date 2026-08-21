@@ -19,12 +19,15 @@ interface AvailableModel {
   supported_reasoning_efforts?: string[] | null;
 }
 
-const toModelGroup = (item: AvailableModel): ModelGroup => ({
-  model_group: item.model_group || item.id || item.model_name || "",
-  ...(item.mode && { mode: item.mode }),
-  ...(item.supports_reasoning === true && { supports_reasoning: true }),
-  ...(item.supported_reasoning_efforts && { supported_reasoning_efforts: item.supported_reasoning_efforts }),
-});
+const toModelGroup = (item: AvailableModel): ModelGroup => {
+  const groupName = (item.model_group || item.id || item.model_name) ?? "";
+  return {
+    model_group: groupName,
+    ...(item.mode && { mode: item.mode }),
+    ...(item.supports_reasoning === true && { supports_reasoning: true }),
+    ...(item.supported_reasoning_efforts && { supported_reasoning_efforts: item.supported_reasoning_efforts }),
+  };
+};
 
 /**
  * /models carries no capability metadata, so the team-allowed names are joined against
