@@ -137,6 +137,7 @@ describe("provider_info_helpers", () => {
         Providers.AUTO_ROUTER,
         Providers.BYTEZ,
         Providers.CLARIFAI,
+        Providers.Cognition,
         Providers.COMPACTIFAI,
         Providers.DATAROBOT,
         Providers.DOCKER_MODEL_RUNNER,
@@ -250,6 +251,10 @@ describe("provider_info_helpers", () => {
     it("should resolve enum keys from the provider dropdown, not just enum values", () => {
       expect(getPlaceholder("NVIDIA_RIVA")).toBe("nvidia_riva/nvidia/parakeet-ctc-1_1b-asr");
       expect(getPlaceholder("WATSONX")).toBe("watsonx/ibm/granite-3-3-8b-instruct");
+    });
+
+    it("should return cognition/swe-1.7 placeholder for Cognition provider", () => {
+      expect(getPlaceholder(Providers.Cognition)).toBe("cognition/swe-1.7");
     });
 
     it("should return default gpt-3.5-turbo placeholder for unknown provider", () => {
