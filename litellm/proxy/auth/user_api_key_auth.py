@@ -1067,11 +1067,20 @@ async def _read_request_body_deferring_parse_failure(
     return populate_request_with_path_params(request_data=parsed_body, request=request), None
 
 
+def _request_http_method(request: Request) -> str | None:
+    scope: Final = getattr(request, "scope", None)
+    if isinstance(scope, dict):
+        method: Final = scope.get("method")
+        return method if isinstance(method, str) else None
+    fallback_method: Final = getattr(request, "method", None)
+    return fallback_method if isinstance(fallback_method, str) else None
+
+
 async def _read_request_data_for_auth(
     request: Request,
     route: str,
 ) -> tuple[dict, ProxyException | None]:  # mutable-ok: request_data is a plain dict across the whole auth path
-    if request.method == "POST" and route.rstrip("/") in _ASSEMBLYAI_UPLOAD_ROUTES:
+    if _request_http_method(request) == "POST" and route.rstrip("/") in _ASSEMBLYAI_UPLOAD_ROUTES:
         return {}, None  # mutable-ok: request_data is a plain dict across the whole auth path
     return await _read_request_body_deferring_parse_failure(request=request)
 
