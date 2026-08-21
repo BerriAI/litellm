@@ -33,11 +33,28 @@ MOCK_V1_RESPONSE = {
 }
 
 
-def _mock_response():
+def _mock_response(payload=None):
     mock_response = MagicMock()
     mock_response.status_code = 200
-    mock_response.json.return_value = MOCK_V1_RESPONSE
+    mock_response.json.return_value = payload if payload is not None else MOCK_V1_RESPONSE
     return mock_response
+
+
+
+@pytest.fixture
+def bundled_cost_map(monkeypatch):
+    """Price lookups against the bundled cost map.
+
+    litellm caches model-info lookups, so swapping ``model_cost`` only takes
+    effect once those caches are invalidated -- on the way in and back out.
+    """
+    from litellm.utils import _invalidate_model_cost_lowercase_map
+
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+    _invalidate_model_cost_lowercase_map()
+    yield
+    monkeypatch.undo()
+    _invalidate_model_cost_lowercase_map()
 
 
 class TestParallelAISearch:
@@ -341,3 +358,117 @@ class TestParallelAISearch:
                 query="AI developments",
                 search_provider="parallel_ai",
             )
+
+    @pytest.mark.asyncio
+    async def test_flat_source_and_fetch_params_nest_under_advanced_settings(self):
+        with patch(
+            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+            new_callable=AsyncMock,
+        ) as mock_post:
+            mock_post.return_value = _mock_response()
+
+            await litellm.asearch(
+                query="AI developments",
+                search_provider="parallel_ai",
+                objective="find peer-reviewed AI research",
+                include_domains=["arxiv.org"],
+                after_date="2026-01-01",
+                location="gb",
+                fetch_policy={"max_age_seconds": 600, "disable_cache_fallback": True},
+                client_model="claude-fable-5",
+            )
+
+            json_data = mock_post.call_args.kwargs.get("json")
+            assert json_data["objective"] == "find peer-reviewed AI research"
+            assert json_data["client_model"] == "claude-fable-5"
+
+            advanced_settings = json_data["advanced_settings"]
+            assert advanced_settings["location"] == "gb"
+            assert advanced_settings["fetch_policy"] == {
+                "max_age_seconds": 600,
+                "disable_cache_fallback": True,
+            }
+            assert advanced_settings["source_policy"]["include_domains"] == ["arxiv.org"]
+            assert advanced_settings["source_policy"]["after_date"] == "2026-01-01"
+
+            assert "include_domains" not in json_data
+            assert "after_date" not in json_data
+            assert "location" not in json_data
+            assert "fetch_policy" not in json_data
+
+    @pytest.mark.asyncio
+    async def test_response_preserves_raw_parallel_fields(self):
+        with patch(
+            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+            new_callable=AsyncMock,
+        ) as mock_post:
+            mock_post.return_value = _mock_response()
+
+            response = await litellm.asearch(
+                query="AI developments",
+                search_provider="parallel_ai",
+            )
+
+            dumped = response.model_dump()
+            assert dumped["search_id"] == "search_abc123"
+            assert dumped["session_id"] == "session_xyz"
+            assert dumped["parallel_usage"] == [{"name": "search_advanced", "count": 1}]
+
+            first = response.results[0].model_dump()
+            assert first["excerpts"] == ["First excerpt.", "Second excerpt."]
+
+    @pytest.mark.parametrize(
+        "mode,usage,max_results,expected_cost",
+        [
+            ("turbo", [{"name": "sku_search", "count": 1}], None, 0.001),
+            ("basic", [{"name": "sku_search", "count": 1}], None, 0.005),
+            ("advanced", [{"name": "sku_search", "count": 1}], None, 0.005),
+            (
+                "basic",
+                [
+                    {"name": "sku_search", "count": 1},
+                    {"name": "sku_search_additional_results", "count": 2},
+                ],
+                20,
+                0.007,
+            ),
+            ("basic", None, 20, 0.015),
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_search_cost_uses_mode_and_provider_usage(self, mode, usage, max_results, expected_cost, bundled_cost_map):
+        response_payload = {**MOCK_V1_RESPONSE, "usage": usage}
+        with patch(
+            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+            new_callable=AsyncMock,
+        ) as mock_post:
+            mock_post.return_value = _mock_response(response_payload)
+
+            response = await litellm.asearch(
+                query="AI developments",
+                search_provider="parallel_ai",
+                mode=mode,
+                max_results=max_results,
+            )
+
+            assert response._hidden_params["response_cost"] == pytest.approx(expected_cost)
+
+    @pytest.mark.asyncio
+    async def test_search_cost_treats_keyword_queries_as_one_request(self, bundled_cost_map):
+        response_payload = {
+            **MOCK_V1_RESPONSE,
+            "usage": [{"name": "sku_search", "count": 1}],
+        }
+        with patch(
+            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+            new_callable=AsyncMock,
+        ) as mock_post:
+            mock_post.return_value = _mock_response(response_payload)
+
+            response = await litellm.asearch(
+                query=["AI developments", "machine learning trends"],
+                search_provider="parallel_ai",
+                mode="basic",
+            )
+
+            assert response._hidden_params["response_cost"] == pytest.approx(0.005)
