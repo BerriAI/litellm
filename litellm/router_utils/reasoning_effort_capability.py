@@ -11,7 +11,7 @@ in one place instead of re-encoding it in every consumer.
 from collections.abc import Mapping, Sequence
 from typing import Final
 
-REASONING_EFFORT_CAPABILITY_ORDER: Final = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
+REASONING_EFFORT_CAPABILITY_ORDER: Final = ("none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra")
 
 _OPT_OUT_FLAGS: Final = (
     ("none", "supports_none_reasoning_effort"),
@@ -21,6 +21,7 @@ _OPT_OUT_FLAGS: Final = (
 _OPT_IN_FLAGS: Final = (
     ("xhigh", "supports_xhigh_reasoning_effort"),
     ("max", "supports_max_reasoning_effort"),
+    ("ultra", "supports_ultra_reasoning_effort"),
 )
 _UNCONDITIONAL_EFFORTS: Final = frozenset(("medium", "high"))
 

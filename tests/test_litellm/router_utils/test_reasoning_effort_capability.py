@@ -48,6 +48,14 @@ class TestResolveSupportedReasoningEfforts:
         )
         assert resolved == ("none", "minimal", "low", "medium", "high", "xhigh", "max")
 
+    def test_ultra_is_opt_in(self):
+        without_flag = resolve_supported_reasoning_efforts({"supports_reasoning": True})
+        with_flag = resolve_supported_reasoning_efforts(
+            {"supports_reasoning": True, "supports_ultra_reasoning_effort": True}
+        )
+        assert without_flag is not None and "ultra" not in without_flag
+        assert with_flag is not None and with_flag[-1] == "ultra"
+
     def test_opt_in_flag_set_false_stays_excluded(self):
         resolved = resolve_supported_reasoning_efforts(
             {"supports_reasoning": True, "supports_xhigh_reasoning_effort": False}

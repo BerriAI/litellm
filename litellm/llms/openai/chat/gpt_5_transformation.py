@@ -16,7 +16,7 @@ def _normalize_reasoning_effort_for_chat_completion(
 ) -> str | None:
     """Convert reasoning_effort to the string format expected by OpenAI chat completion API.
 
-    The chat completion API expects a simple string: 'none', 'low', 'medium', 'high', or 'xhigh'.
+    The chat completion API expects a simple effort string ('none' through 'ultra').
     Config/deployments may pass the Responses API format: {'effort': 'high', 'summary': 'detailed'}.
     """
     if value is None:
@@ -222,8 +222,8 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
                 if "reasoning_effort" in optional_params:
                     optional_params["reasoning_effort"] = normalized
 
-        if effective_effort == "xhigh":
-            # xhigh is an opt-in capability: only allow if model explicitly supports it.
+        if effective_effort in ("xhigh", "ultra"):
+            # xhigh/ultra are opt-in capabilities: only allow if model explicitly supports them.
             if not self._supports_reasoning_effort_level(model, effective_effort):
                 if litellm.drop_params or drop_params:
                     non_default_params.pop("reasoning_effort", None)
