@@ -1803,7 +1803,9 @@ async def test_realtime_session_created_injects_session_update_for_audio_guardra
 
 
 @pytest.mark.asyncio
-async def test_realtime_session_created_does_not_inject_session_update_for_pre_call_only(monkeypatch: pytest.MonkeyPatch):
+async def test_realtime_session_created_does_not_inject_session_update_for_pre_call_only(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """
     pre_call-only guardrails must not inject create_response:false on realtime
     sessions — that breaks server_vad for audio-only voice agents (e.g. Model Armor).
