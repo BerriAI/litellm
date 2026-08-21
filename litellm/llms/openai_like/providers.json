@@ -188,5 +188,10 @@
       "max_completion_tokens": "max_tokens"
     },
     "supported_endpoints": ["/v1/chat/completions", "/v1/responses", "/v1/embeddings"]
+  },
+  "monet": {
+    "base_url": "https://monet.gg/api/v1",
+    "api_key_env": "MONET_API_KEY",
+    "api_base_env": "MONET_API_BASE"
   }
 }
