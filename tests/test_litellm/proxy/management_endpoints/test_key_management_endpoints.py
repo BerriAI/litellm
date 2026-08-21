@@ -17299,11 +17299,12 @@ async def test_key_budgets_never_read_the_proxy_budget_row_for_a_caller_who_may_
         _budgets_world(**_fully_populated_world()),
         patch(f"{_BUDGETS_RESOLVER}.UserRepository", user_repository),
     ):
-        await resolve_key_budgets(
+        budgets = await resolve_key_budgets(
             valid_token=_budgets_token(), end_user_id=None, deps=_budgets_deps(proxy_spend_visible=False)
         )
 
     user_repository.return_value.find_by_id.assert_not_awaited()
+    assert next(e for e in budgets if e.scope == "proxy").spend_state == "restricted"
 
 
 @pytest.mark.parametrize(

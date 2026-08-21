@@ -541,7 +541,7 @@ async def test_auth_failure_on_a_key_route_does_not_hand_the_key_to_the_failure_
         "litellm.proxy.proxy_server.general_settings",
         {"allow_requests_on_db_unavailable": False},
     ):
-        with pytest.raises(Exception):
+        with pytest.raises(ProxyException):
             await handler._handle_authentication_error(
                 HTTPException(status_code=401, detail="Invalid proxy server token passed"),
                 MagicMock(),
