@@ -6197,6 +6197,79 @@ class TestInjectCostIntoUsageDict:
             + 8 * pricing["output_cost_per_token"]
         )
 
+    def test_message_delta_falls_back_to_model_pricing_when_the_logging_obj_raises(self):
+        """A pricing failure mid-stream must not break the frame, so the raise falls back to
+        model-name pricing rather than propagating into the response body."""
+
+        class _StubLoggingObj:
+            def _response_cost_calculator(self, result):
+                raise ValueError("no pricing for this deployment")
+
+        model = "claude-haiku-4-5"
+        pricing = litellm.model_cost[model]
+        event = {
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn"},
+            "usage": {"input_tokens": 14, "output_tokens": 8, "cache_read_input_tokens": 3202},
+        }
+
+        result = ProxyBaseLLMRequestProcessing._inject_cost_into_usage_dict(event, model, _StubLoggingObj())
+
+        assert result is not None
+        assert result["usage"]["cost"] == pytest.approx(
+            14 * pricing["input_cost_per_token"]
+            + 3202 * pricing["cache_read_input_token_cost"]
+            + 8 * pricing["output_cost_per_token"]
+        )
+
+    def test_openai_chunk_prices_through_the_logging_obj_so_custom_pricing_applies(self):
+        """The chat.completion.chunk path rides the same pricer, so a discounted deployment
+        streaming /v1/chat/completions gets its negotiated price instead of sticker."""
+
+        class _StubLoggingObj:
+            def __init__(self, cost):
+                self._cost = cost
+                self.captured_result = None
+
+            def _response_cost_calculator(self, result):
+                self.captured_result = result
+                return self._cost
+
+        discounted_cost = 0.00031
+        stub = _StubLoggingObj(discounted_cost)
+        event = {
+            "id": "chatcmpl-1",
+            "object": "chat.completion.chunk",
+            "choices": [],
+            "usage": {"prompt_tokens": 1000, "completion_tokens": 100, "total_tokens": 1100},
+        }
+
+        result = ProxyBaseLLMRequestProcessing._inject_cost_into_usage_dict(event, "gpt-4o-mini", stub)
+
+        assert result is not None
+        assert result["usage"]["cost"] == discounted_cost
+        assert result["usage"]["cost"] != pytest.approx(self._expected_cost("gpt-4o-mini", 1000, 100))
+        usage = stub.captured_result.usage
+        assert usage.prompt_tokens == 1000
+        assert usage.completion_tokens == 100
+
+    def test_openai_chunk_falls_back_to_model_pricing_when_the_logging_obj_returns_no_cost(self):
+        class _StubLoggingObj:
+            def _response_cost_calculator(self, result):
+                return None
+
+        event = {
+            "id": "chatcmpl-1",
+            "object": "chat.completion.chunk",
+            "choices": [],
+            "usage": {"prompt_tokens": 11, "completion_tokens": 4, "total_tokens": 15},
+        }
+
+        result = ProxyBaseLLMRequestProcessing._inject_cost_into_usage_dict(event, "gpt-4o-mini", _StubLoggingObj())
+
+        assert result is not None
+        assert result["usage"]["cost"] == pytest.approx(self._expected_cost("gpt-4o-mini", 11, 4))
+
 
 class TestProcessChunkWithCostInjection:
     def test_complete_usage_frame_chunk_is_injected(self, monkeypatch):
