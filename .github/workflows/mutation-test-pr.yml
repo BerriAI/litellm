@@ -1,0 +1,167 @@
+name: "Mutation Test (PR diff)"
+
+# Diff-scoped mutation testing, modeled on Google's "State of Mutation Testing
+# at Google" (https://research.google/pubs/state-of-mutation-testing-at-google/):
+# mutate only what the pull request changed, not the whole codebase.
+#
+# scripts/mutation_diff_scope.py rewrites [tool.mutmut] so paths_to_mutate is
+# the changed production files and tests_dir is the tests mirroring them, then
+# emits mutant-name globs for the functions containing the changed lines.
+#
+# Advisory only: the result is written to the job summary and uploaded as an
+# artifact. Nothing here blocks a merge.
+
+on:
+  pull_request:
+    paths:
+      - "litellm/**.py"
+      - "scripts/mutation_diff_scope.py"
+      - ".github/workflows/mutation-test-pr.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mutation-test-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  mutation:
+    name: Mutate the diff
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
+          # The scope script diffs HEAD against the merge base with the target
+          # branch, so the full history has to be present.
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Scope the run to the diff
+        id: scope
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: |
+          python scripts/mutation_diff_scope.py \
+            --base "origin/$BASE_REF" \
+            --write-pyproject | tee mutmut-scope.log
+
+      - name: Set up uv
+        if: steps.scope.outputs.has_scope == 'true'
+        uses: ./.github/actions/setup-uv-with-retries
+        with:
+          version: "0.10.9"
+
+      - name: Cache uv dependencies
+        if: steps.scope.outputs.has_scope == 'true'
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.cache/uv
+            .venv
+          key: ${{ runner.os }}-uv-${{ hashFiles('uv.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-uv-
+
+      - name: Install dependencies
+        if: steps.scope.outputs.has_scope == 'true'
+        run: |
+          .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router --extra saml
+
+      - name: Cache Prisma binaries
+        if: steps.scope.outputs.has_scope == 'true'
+        uses: ./.github/actions/cache-prisma-binaries
+
+      - name: Generate Prisma client
+        if: steps.scope.outputs.has_scope == 'true'
+        run: |
+          uv run --no-sync prisma generate --schema litellm/proxy/schema.prisma
+
+      # See .github/workflows/mutation-test.yml for why these two steps exist:
+      # an editable install shadows the mutants/ sandbox, and pytest-retry
+      # crashes under mutmut's in-process pytest.main() call.
+      - name: Reinstall litellm non-editable (so mutants/ is not shadowed)
+        if: steps.scope.outputs.has_scope == 'true'
+        run: |
+          uv pip uninstall litellm
+          uv pip install . --no-deps
+
+      - name: Remove pytest plugins that conflict with mutmut
+        if: steps.scope.outputs.has_scope == 'true'
+        run: |
+          uv pip uninstall pytest-retry || true
+
+      # mutmut catches an interrupt and still exits 0, so its exit code separates
+      # nothing. The report step is what decides: it fails when a mutant this run
+      # asked for was never checked.
+      - name: Run mutmut on the changed functions
+        if: steps.scope.outputs.has_scope == 'true'
+        continue-on-error: true
+        timeout-minutes: 10
+        env:
+          PYTHONPATH: ${{ github.workspace }}/mutants
+        run: |
+          set -o pipefail
+          # mutants/ has to exist before mutmut starts: it is on PYTHONPATH, and Python
+          # caches a missing sys.path entry, so a directory created later is never searched.
+          mkdir -p mutants
+          GLOBS=()
+          while IFS= read -r glob || [ -n "$glob" ]; do
+            [ -n "$glob" ] && GLOBS+=("$glob")
+          done < mutmut-scope-globs.txt
+          uv run --no-sync --with mutmut==3.5.0 mutmut run "${GLOBS[@]}" 2>&1 | tee mutmut-run.log
+
+      - name: Generate mutation report
+        if: always() && steps.scope.outputs.has_scope == 'true'
+        run: |
+          set +e
+          uv run --no-sync --with mutmut==3.5.0 mutmut export-cicd-stats > /dev/null 2>&1
+          uv run --no-sync --with mutmut==3.5.0 mutmut results --all=true > mutmut-results.txt 2>&1
+          uv run --no-sync python scripts/mutation_report.py
+          report_status=$?
+          {
+            echo "## Mutation testing on this diff"
+            echo ""
+            echo '```'
+            cat mutmut-scope.log
+            echo '```'
+            echo ""
+            head -c 900000 mutation-report.md
+          } >> "$GITHUB_STEP_SUMMARY"
+          # Surviving mutants stay advisory. A run that checked nothing is a broken job,
+          # and reporting that as a clean sweep is the one failure mode worth going red for.
+          exit $report_status
+
+      - name: Report that nothing was in scope
+        if: steps.scope.outputs.has_scope != 'true'
+        run: |
+          {
+            echo "## Mutation testing on this diff"
+            echo ""
+            echo "No mutable production code changed, or no mirrored tests were found for it."
+            echo ""
+            echo '```'
+            cat mutmut-scope.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload mutation artifacts
+        if: always() && steps.scope.outputs.has_scope == 'true'
+        uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1 # v4.6.1
+        with:
+          name: mutmut-pr-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            mutation-report.md
+            mutmut-results.txt
+            mutmut-run.log
+            mutmut-scope.json
+            mutmut-scope.log
+          if-no-files-found: warn
+          retention-days: 14
