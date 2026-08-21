@@ -10,6 +10,7 @@ Flagged, per statement, by its leading keyword:
 
   UPDATE      rewrites every matching row, and `WHERE` does not bound the scan
   DELETE      same scan, and the dead tuples outlive the migration
+  MERGE       both of the above in one statement
   INSERT      only when it draws rows from a `SELECT`; `INSERT ... VALUES` is bounded
               by the literal row list and passes
   WITH        a CTE-led statement containing any of the above
@@ -176,15 +177,10 @@ def skip_block_comment(sql: str, start: int) -> int:
 
 
 def skip_quoted(sql: str, start: int, quote: str) -> int:
-    index = start + 1
-    while index < len(sql):
-        if sql[index] != quote:
-            index += 1
-        elif sql[index + 1 : index + 2] == quote:
-            index += 2
-        else:
-            return index + 1
-    return len(sql)
+    """One quoted run, up to and including its closing quote. A doubled quote needs no
+    special case: closing on the first and reopening on the second masks the same span."""
+    stop = sql.find(quote, start + 1)
+    return len(sql) if stop == -1 else stop + 1
 
 
 def strip_parens(statement: str) -> str:
@@ -304,8 +300,8 @@ def main() -> int:
         print(f"{name}: listed in GRANDFATHERED but no longer violates; remove it from the set")
 
     if violations:
-        print(GUIDANCE, file=sys.stderr)
-        print(f"{len(violations)} data-rewriting statement(s) in migrations.", file=sys.stderr)
+        print(f"\n{len(violations)} data-rewriting statement(s) in migrations.")
+        print(GUIDANCE)
 
     if violations or stale:
         return 1

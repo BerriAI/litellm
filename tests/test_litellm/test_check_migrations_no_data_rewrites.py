@@ -132,9 +132,35 @@ class TestDollarQuotedBlocks:
         )
         assert _keywords(tmp_path, sql) == ()
 
+    def test_guarded_update_is_flagged(self, tmp_path):
+        sql = (
+            "DO $$\n"
+            "BEGIN\n"
+            '    IF EXISTS (SELECT 1 FROM "Foo") THEN\n'
+            '        UPDATE "Foo" SET "a" = 1;\n'
+            "    END IF;\n"
+            "END $$;"
+        )
+        assert _keywords(tmp_path, sql) == ("UPDATE",)
+
+    def test_guard_with_a_nested_call_still_flags_the_update(self, tmp_path):
+        sql = (
+            "DO $$\n"
+            "BEGIN\n"
+            '    IF EXISTS (SELECT 1 FROM "Foo" WHERE lower("a") = \'x\' UNION SELECT 1) THEN\n'
+            '        UPDATE "Foo" SET "a" = 1;\n'
+            "    END IF;\n"
+            "END $$;"
+        )
+        assert _keywords(tmp_path, sql) == ("UPDATE",)
+
     def test_tagged_dollar_quote_is_scanned(self, tmp_path):
         sql = 'DO $body$\nBEGIN\n    DELETE FROM "Foo";\nEND $body$;'
         assert _keywords(tmp_path, sql) == ("DELETE",)
+
+    def test_tagged_dollar_quote_holds_an_apostrophe(self, tmp_path):
+        sql = 'INSERT INTO "Foo" ("t") VALUES ($body$don\'t$body$);\nUPDATE "Bar" SET "b" = 1;'
+        assert _keywords(tmp_path, sql) == ("UPDATE",)
 
     def test_semicolons_inside_do_block_do_not_split_outer_statements(self, tmp_path):
         sql = 'DO $$ BEGIN PERFORM 1; END $$;\nALTER TABLE "Foo" ADD COLUMN "b" TEXT;'
@@ -143,7 +169,7 @@ class TestDollarQuotedBlocks:
 
 class TestQuotingAndComments:
     def test_update_inside_string_literal_passes(self, tmp_path):
-        sql = "ALTER TABLE \"Foo\" ADD COLUMN \"note\" TEXT NOT NULL DEFAULT 'UPDATE nothing';"
+        sql = 'ALTER TABLE "Foo" ADD COLUMN "note" TEXT NOT NULL DEFAULT \'UPDATE nothing\';'
         assert _keywords(tmp_path, sql) == ()
 
     def test_escaped_quote_inside_string_does_not_leak(self, tmp_path):
@@ -160,8 +186,19 @@ class TestQuotingAndComments:
         sql = '/* outer /* UPDATE "Foo" SET "a" = 1; */ still comment */\nDROP TABLE "Bar";'
         assert _keywords(tmp_path, sql) == ()
 
+    def test_nested_block_comment_masks_past_the_inner_close(self, tmp_path):
+        sql = '/* outer /* inner */ UPDATE "Foo" SET "a" = 1; */\nDROP TABLE "Bar";'
+        assert _keywords(tmp_path, sql) == ()
+
     def test_update_inside_quoted_identifier_passes(self, tmp_path):
         assert _keywords(tmp_path, 'ALTER TABLE "UPDATE Foo" ADD COLUMN "b" TEXT;') == ()
+
+    def test_select_in_a_quoted_identifier_does_not_make_an_insert_a_rewrite(self, tmp_path):
+        assert _keywords(tmp_path, 'INSERT INTO "SELECT Foo" ("id") VALUES (\'a\');') == ()
+
+    def test_update_in_a_quoted_identifier_does_not_make_a_cte_a_rewrite(self, tmp_path):
+        sql = 'WITH batch AS (SELECT "id" FROM "UPDATE Foo") SELECT count(*) FROM batch;'
+        assert _keywords(tmp_path, sql) == ()
 
     def test_positional_parameter_is_not_a_dollar_quote(self, tmp_path):
         sql = 'ALTER TABLE "Foo" ADD COLUMN "b" TEXT;\nUPDATE "Foo" SET "b" = $1;'
@@ -177,11 +214,7 @@ class TestEscapeHatch:
         assert _keywords(tmp_path, '-- data-migration-ok:\nUPDATE "Foo" SET "a" = 1;') == ("UPDATE",)
 
     def test_marker_exempts_only_its_own_statement(self, tmp_path):
-        sql = (
-            "-- data-migration-ok: bounded to in-flight jobs\n"
-            'UPDATE "Foo" SET "a" = 1;\n'
-            'UPDATE "Bar" SET "b" = 2;\n'
-        )
+        sql = '-- data-migration-ok: bounded to in-flight jobs\nUPDATE "Foo" SET "a" = 1;\nUPDATE "Bar" SET "b" = 2;\n'
         assert _keywords(tmp_path, sql) == ("UPDATE",)
         assert _scan(tmp_path, sql)[0].line == 3
 
