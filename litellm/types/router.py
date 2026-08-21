@@ -4,6 +4,7 @@ litellm.Router Types - includes RouterConfig, UpdateRouterConfig, ModelInfo etc
 
 import datetime
 import enum
+import math
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Generic, Literal, TypeVar, get_type_hints
@@ -175,6 +176,22 @@ class TagRateLimitScope(BaseModel):
             raise ValueError("values must be a non-empty list of strings")
         return self
 
+    @model_validator(mode="after")
+    def _normalize_values(self) -> "TagRateLimitScope":
+        # Sorted and deduplicated: `values` is only ever used for membership
+        # tests (see _entry_applies), never order-dependent, but is also
+        # folded verbatim into the dedup signature two deployments' entries
+        # are compared by (see _scope_signature) -- an unsorted tuple would
+        # make config-order alone, not policy, decide whether two entries
+        # dedup to one shared bucket or wrongly split into two.
+        # object.__setattr__ bypasses this frozen model's own assignment
+        # guard -- returning a replacement instance from an "after" validator
+        # is silently ignored when constructing via __init__ (only takes
+        # effect via model_validate), so mutating in place is the only way
+        # this normalization reliably applies regardless of construction path.
+        object.__setattr__(self, "values", tuple(sorted(set(self.values))))
+        return self
+
 
 class TagRateLimitEntry(BaseModel):
     name: str
@@ -218,6 +235,19 @@ class TagRateLimitEntry(BaseModel):
     model_config = ConfigDict(protected_namespaces=())
 
     @model_validator(mode="after")
+    def _validate_limit(self) -> "TagRateLimitEntry":
+        # NaN compares False against every ordering operator, so a NaN limit
+        # makes the atomic requests/concurrency check-and-increment (which
+        # rejects when the new value exceeds the limit) never reject --
+        # admitting indefinitely -- while the read-only tokens/dollars check
+        # (which admits when the current value is under the limit) never
+        # admits, rejecting every tagged request. Either outcome silently
+        # defeats the entry; reject it at config load time instead.
+        if math.isnan(self.limit):
+            raise ValueError("limit must not be NaN")
+        return self
+
+    @model_validator(mode="after")
     def _validate_period_seconds(self) -> "TagRateLimitEntry":
         if self.period_seconds <= 0:
             raise ValueError("period_seconds must be a positive integer")
@@ -246,6 +276,19 @@ class TagRateLimitEntry(BaseModel):
             raise ValueError("included_values must be a non-empty list of strings when set")
         if self.excluded_values is not None and not self.excluded_values:
             raise ValueError("excluded_values must be a non-empty list of strings when set")
+        return self
+
+    @model_validator(mode="after")
+    def _normalize_included_and_excluded_values(self) -> "TagRateLimitEntry":
+        # Sorted and deduplicated for the same reason as
+        # TagRateLimitScope._normalize_values: only ever used for membership
+        # tests, but also folded verbatim into the dedup signature, where an
+        # unsorted tuple would make config-order alone decide whether two
+        # deployments' entries dedup to one shared bucket.
+        if self.included_values is not None:
+            self.included_values = tuple(sorted(set(self.included_values)))
+        if self.excluded_values is not None:
+            self.excluded_values = tuple(sorted(set(self.excluded_values)))
         return self
 
 

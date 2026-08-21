@@ -468,6 +468,10 @@ class _LimitsIndex:
                     limit.entry.limit,
                     limit.entry.period_seconds,
                     limit.entry.scope_by_key_hash,
+                    limit.entry.included_values,
+                    limit.entry.excluded_values,
+                    _scope_signature(limit.entry.enabled_for),
+                    _scope_signature(limit.entry.disabled_for),
                     limit.deployment_scope,
                     limit.team_scope,
                 )

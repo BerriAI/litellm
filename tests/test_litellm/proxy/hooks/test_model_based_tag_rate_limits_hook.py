@@ -236,6 +236,23 @@ def test_extract_team_id_ignores_a_forged_value_in_the_non_authoritative_field()
 
 
 # ---------------------------------------------------------------------------
+# TagRateLimitEntry -- limit validation
+# ---------------------------------------------------------------------------
+
+
+def test_tag_rate_limit_entry_rejects_nan_limit():
+    """
+    NaN compares False against every ordering operator, so a NaN limit makes
+    the atomic requests/concurrency check-and-increment (rejects when the new
+    value exceeds the limit) admit indefinitely, while the read-only
+    tokens/dollars check (admits when the current value is under the limit)
+    rejects every tagged request -- either way silently defeating the entry.
+    """
+    with pytest.raises(ValidationError, match="limit must not be NaN"):
+        TagRateLimitEntry(name="n", limit=float("nan"), period_seconds=60)
+
+
+# ---------------------------------------------------------------------------
 # TagRateLimitEntry -- period_seconds validation
 # ---------------------------------------------------------------------------
 
@@ -442,6 +459,30 @@ def test_tag_rate_limit_entry_rejects_enabled_for_missing_values():
         TagRateLimitEntry(name="daily", limit=1, period_seconds=60, enabled_for={"tag_id": "company_id"})
 
 
+def test_tag_rate_limit_entry_normalizes_included_and_excluded_values_order_and_duplicates():
+    """
+    These fields are only ever used for membership tests (order never
+    matters for behavior) but are folded verbatim into the dedup signature
+    two deployments' entries are compared by -- an unsorted, undeduplicated
+    tuple would make config-order alone, not policy, decide whether two
+    entries dedup to one shared bucket or wrongly split into two.
+    """
+    entry = TagRateLimitEntry(
+        name="daily",
+        limit=1,
+        period_seconds=60,
+        included_values=("b", "a", "a"),
+        excluded_values=("d", "c"),
+    )
+    assert entry.included_values == ("a", "b")
+    assert entry.excluded_values == ("c", "d")
+
+
+def test_tag_rate_limit_scope_normalizes_values_order_and_duplicates():
+    scope = TagRateLimitScope(tag_id="company_id", values=("1032", "1001", "1001"))
+    assert scope.values == ("1001", "1032")
+
+
 # ---------------------------------------------------------------------------
 # _build_group_limits -- scoping fields fold into the dedup signature
 # ---------------------------------------------------------------------------
@@ -505,6 +546,43 @@ def test_build_group_limits_chain_wide_when_excluded_values_agree():
                 "token_limits": {
                     "limits": [
                         {"name": "daily", "limit": 500, "period_seconds": 86400, "excluded_values": ["u1"]}
+                    ]
+                }
+            },
+        ),
+    ]
+    configured = _build_group_limits(deployments, "tokens")
+    assert len(configured) == 1
+    assert configured[0].deployment_scope is None
+
+
+def test_build_group_limits_chain_wide_when_excluded_values_agree_in_different_order():
+    """
+    Two deployments declaring the identical excluded_values set, just in a
+    different config order, must dedup to one chain-wide entry -- config
+    order is not a policy difference. Relies on TagRateLimitEntry's own
+    normalization (sorting) of included_values/excluded_values at
+    construction time, not on this dedup path re-sorting them itself.
+    """
+    deployments = [
+        _deployment(
+            "grp",
+            "dep-1",
+            {
+                "token_limits": {
+                    "limits": [
+                        {"name": "daily", "limit": 500, "period_seconds": 86400, "excluded_values": ["u1", "u2"]}
+                    ]
+                }
+            },
+        ),
+        _deployment(
+            "grp",
+            "dep-2",
+            {
+                "token_limits": {
+                    "limits": [
+                        {"name": "daily", "limit": 500, "period_seconds": 86400, "excluded_values": ["u2", "u1"]}
                     ]
                 }
             },
@@ -762,6 +840,42 @@ def test_resolve_any_keeps_divergent_signatures_across_member_model_names_separa
     resolved = index.resolve_any("my-group", team_id=None, candidate_model_names=("backend-a", "backend-b"))
     assert len(resolved) == 2
     assert {c.entry.limit for c in resolved} == {1, 2}
+
+
+def test_resolve_any_keeps_divergent_excluded_values_across_member_model_names_separate():
+    """
+    resolve_any's own dedup key omitted included_values/excluded_values/
+    enabled_for/disabled_for, so two routing-group members agreeing on
+    tag_id/limit/period_seconds but declaring different excluded_values
+    collapsed to whichever model_name sorted first -- silently applying the
+    wrong member's policy (and, for the discarded one, no enforcement or
+    accounting at all for callers only that policy covers). This is the same
+    class of bug test_build_group_limits_per_deployment_when_excluded_values_diverge
+    already guards against for the sibling load-balanced-group dedup path.
+    """
+    concurrency_limits_excluding_u1 = {
+        "concurrency_limits": {
+            "limits": [
+                {"name": "inflight", "tag_id": "end_user_id", "limit": 1, "period_seconds": 300, "excluded_values": ["u1"]}
+            ]
+        }
+    }
+    concurrency_limits_excluding_u2 = {
+        "concurrency_limits": {
+            "limits": [
+                {"name": "inflight", "tag_id": "end_user_id", "limit": 1, "period_seconds": 300, "excluded_values": ["u2"]}
+            ]
+        }
+    }
+    index = _build_limits_index(
+        [
+            _deployment("backend-a", "dep-a", concurrency_limits_excluding_u1),
+            _deployment("backend-b", "dep-b", concurrency_limits_excluding_u2),
+        ]
+    )
+    resolved = index.resolve_any("my-group", team_id=None, candidate_model_names=("backend-a", "backend-b"))
+    assert len(resolved) == 2
+    assert {c.entry.excluded_values for c in resolved} == {("u1",), ("u2",)}
 
 
 def test_resolve_any_picks_the_same_resolved_group_regardless_of_hash_seed():
