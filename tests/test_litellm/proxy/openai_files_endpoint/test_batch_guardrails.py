@@ -412,6 +412,18 @@ def test_load_balancing_finds_the_routing_record_in_any_file_the_upload_accepts(
     assert get_first_json_object(payload)["body"]["model"] == "gpt-4o-mini"
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("url", ["http://[", "http://[::1", "https://["], ids=["open_bracket", "unclosed_v6", "https_bracket"])
+async def test_a_malformed_url_does_not_escape_the_scan(url):
+    """Validation only checks the url key is present, and urlsplit rejects some authorities."""
+    record = {**_record("m"), "url": url}
+
+    result = await _scan_full(_jsonl(record), FakeProxyLogging())
+
+    assert result.changes == ()
+    assert result.scanned_records == 1, "the record should still be scanned by its body shape"
+
+
 @pytest.mark.parametrize(
     "custom_id, expected",
     [("req-1", "req-1"), ("caf\u00e9-42", "caf\u00e9-42"), ("a\ud800b", "a?b")],

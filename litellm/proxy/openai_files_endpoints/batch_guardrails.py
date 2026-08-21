@@ -288,7 +288,13 @@ def _call_type_from_url(url: str) -> CallTypesLiteral | None:
     ``/v1/responses`` in full would fall through to its body, where ``input`` reads as an
     embedding and the record gets scanned as the wrong call type rather than the right one.
     """
-    path: Final = urlsplit(url).path.split("?")[0].rstrip("/")
+    try:
+        path: Final = urlsplit(url).path.split("?")[0].rstrip("/")
+    except ValueError:
+        # urlsplit rejects a few malformed authorities outright, and the validation that ran
+        # before this only checks the key is present. An unreadable url is one we do not
+        # recognize, which is what falling back to the body shape already handles.
+        return None
     call_types: Final = get_call_types_for_route(path)
     if call_types is None:
         return None
