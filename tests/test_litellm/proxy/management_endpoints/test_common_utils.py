@@ -1005,6 +1005,21 @@ class TestCheckTeamAdminCanManageTeamMembership:
             ],
         )
 
+    @staticmethod
+    async def _status_code(
+        user: UserAPIKeyAuth,
+        team_obj: LiteLLM_TeamTable,
+        action: str,
+    ) -> int | None:
+        """The HTTP status the lockdown check raises, or None when the caller is allowed."""
+        try:
+            await check_team_admin_can_manage_team_membership(
+                user_api_key_dict=user, team_obj=team_obj, action=action
+            )
+        except HTTPException as exc:
+            return exc.status_code
+        return None
+
     @pytest.mark.parametrize("action, flag", _CASES)
     @pytest.mark.asyncio
     async def test_team_admin_blocked_when_flag_on(self, action, flag):
@@ -1012,11 +1027,10 @@ class TestCheckTeamAdminCanManageTeamMembership:
             user_id="team-admin-user", user_role=LitellmUserRoles.INTERNAL_USER.value
         )
         with patch.dict(self._GS_PATH, {flag: True}, clear=True):
-            with pytest.raises(HTTPException) as exc_info:
-                await check_team_admin_can_manage_team_membership(
-                    user_api_key_dict=user, team_obj=self._team(), action=action
-                )
-        assert exc_info.value.status_code == 403
+            status_code = await self._status_code(
+                user=user, team_obj=self._team(), action=action
+            )
+        assert status_code == 403
 
     @pytest.mark.parametrize("action, flag", _CASES)
     @pytest.mark.asyncio
@@ -1025,9 +1039,10 @@ class TestCheckTeamAdminCanManageTeamMembership:
             user_id="team-admin-user", user_role=LitellmUserRoles.INTERNAL_USER.value
         )
         with patch.dict(self._GS_PATH, {flag: False}, clear=True):
-            await check_team_admin_can_manage_team_membership(
-                user_api_key_dict=user, team_obj=self._team(), action=action
+            status_code = await self._status_code(
+                user=user, team_obj=self._team(), action=action
             )
+        assert status_code is None
 
     @pytest.mark.parametrize("action, flag", _CASES)
     @pytest.mark.asyncio
@@ -1037,9 +1052,10 @@ class TestCheckTeamAdminCanManageTeamMembership:
             user_id="team-admin-user", user_role=LitellmUserRoles.INTERNAL_USER.value
         )
         with patch.dict(self._GS_PATH, {flag: True}, clear=True):
-            await check_team_admin_can_manage_team_membership(
-                user_api_key_dict=user, team_obj=self._team(), action=other_action
+            status_code = await self._status_code(
+                user=user, team_obj=self._team(), action=other_action
             )
+        assert status_code is None
 
     @pytest.mark.parametrize("action, flag", _CASES)
     @pytest.mark.asyncio
@@ -1048,9 +1064,10 @@ class TestCheckTeamAdminCanManageTeamMembership:
             user_id="team-admin-user", user_role=LitellmUserRoles.PROXY_ADMIN.value
         )
         with patch.dict(self._GS_PATH, {flag: True}, clear=True):
-            await check_team_admin_can_manage_team_membership(
-                user_api_key_dict=user, team_obj=self._team(), action=action
+            status_code = await self._status_code(
+                user=user, team_obj=self._team(), action=action
             )
+        assert status_code is None
 
     @pytest.mark.parametrize("action, flag", _CASES)
     @pytest.mark.asyncio
@@ -1060,9 +1077,10 @@ class TestCheckTeamAdminCanManageTeamMembership:
             user_id="someone-else", user_role=LitellmUserRoles.INTERNAL_USER.value
         )
         with patch.dict(self._GS_PATH, {flag: True}, clear=True):
-            await check_team_admin_can_manage_team_membership(
-                user_api_key_dict=user, team_obj=self._team(), action=action
+            status_code = await self._status_code(
+                user=user, team_obj=self._team(), action=action
             )
+        assert status_code is None
 
     @pytest.mark.parametrize("action, flag", _CASES)
     @pytest.mark.asyncio
@@ -1075,11 +1093,12 @@ class TestCheckTeamAdminCanManageTeamMembership:
                 "litellm.proxy.management_endpoints.common_utils._is_user_org_admin_for_team",
                 new=AsyncMock(return_value=True),
             ):
-                await check_team_admin_can_manage_team_membership(
-                    user_api_key_dict=user,
+                status_code = await self._status_code(
+                    user=user,
                     team_obj=self._team(organization_id="org-1"),
                     action=action,
                 )
+        assert status_code is None
 
 
 class TestHasNonEmptyValue:
