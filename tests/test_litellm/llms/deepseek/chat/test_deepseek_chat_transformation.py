@@ -106,7 +106,7 @@ async def test_async_transform_request_strips_unsupported_tools_from_body():
     assert body["tools"][0]["function"]["name"] == "shell"
 
 
-def test_fill_reasoning_content_warns_once_per_request_and_preserves_history():
+def test_transform_request_warns_once_per_replayed_history_and_preserves_history():
     messages = [
         {"role": "user", "content": "Use both tools."},
         {
@@ -130,17 +130,20 @@ def test_fill_reasoning_content_warns_once_per_request_and_preserves_history():
 
     warning_path = "litellm.llms.deepseek.chat.transformation.litellm.verbose_logger.warning"
     with patch(warning_path) as warning:
-        first_result = config._fill_reasoning_content(messages)
-        warning.assert_called_once()
+        results = [
+            config.transform_request(
+                model="deepseek-reasoner",
+                messages=messages,
+                optional_params={"thinking": {"type": "enabled"}},
+                litellm_params={},
+                headers={},
+            )
+            for _ in range(2)
+        ]
 
-    with patch(warning_path) as warning:
-        second_result = config._fill_reasoning_content(messages)
-        warning.assert_called_once()
-
-    assert [first_result[index]["reasoning_content"] for index in (1, 3)] == [" ", " "]
-    assert [second_result[index]["reasoning_content"] for index in (1, 3)] == [" ", " "]
-    assert first_result[0] is messages[0]
-    assert second_result[4] is messages[4]
+    assert warning.call_count == 2
+    for result in results:
+        assert [result["messages"][index]["reasoning_content"] for index in (1, 3)] == [" ", " "]
     assert messages == original_messages
 
 
