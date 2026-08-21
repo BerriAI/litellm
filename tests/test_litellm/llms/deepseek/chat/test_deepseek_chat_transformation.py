@@ -108,6 +108,129 @@ def test_thinking_mode_active_bool_thinking_returns_false_without_crashing():
     assert config._thinking_mode_active(model="deepseek-reasoner", optional_params={"thinking": True}) is False
 
 
+class TestDeepSeekVisionMultimodalContent:
+    """Test that image/audio/file content lists are preserved for DeepSeek vision models."""
+
+    def setup_method(self):
+        self.config = DeepSeekChatConfig()
+
+    def test_transform_messages_preserves_image_url_content_list(self):
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "what is in this image?"},
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": "https://example.com/image.jpg",
+                            "detail": "auto",
+                        },
+                    },
+                ],
+            }
+        ]
+
+        result = self.config._transform_messages(messages, model="deepseek-v4-flash-vision")
+
+        assert isinstance(result[0]["content"], list)
+        assert result[0]["content"][0]["type"] == "text"
+        assert result[0]["content"][1]["type"] == "image_url"
+        assert result[0]["content"][1]["image_url"]["url"] == "https://example.com/image.jpg"
+
+    def test_transform_messages_collapses_text_only_content_list(self):
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Hello "},
+                    {"type": "text", "text": "world"},
+                ],
+            }
+        ]
+
+        result = self.config._transform_messages(messages, model="deepseek-chat")
+
+        assert isinstance(result[0]["content"], str)
+        assert result[0]["content"] == "Hello world"
+
+    def test_transform_messages_keeps_search_results_text_on_collapse(self):
+        """Backward compat: search_results text is folded into collapsed content."""
+        messages = [
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "context: "}],
+                "search_results": [{"source": "kb", "content": [{"text": "article body"}]}],
+            }
+        ]
+
+        result = self.config._transform_messages(messages, model="deepseek-chat")
+
+        assert result[0]["content"] == "context: kbarticle body"
+
+    def test_transform_messages_preserves_empty_content_list(self):
+        """Backward compat: empty content lists are left untouched."""
+        messages = [{"role": "user", "content": []}]
+
+        result = self.config._transform_messages(messages, model="deepseek-chat")
+
+        assert result[0]["content"] == []
+
+    def test_transform_request_preserves_image_url_block(self):
+        body = self.config.transform_request(
+            model="deepseek-v4-flash-vision",
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "what is in this image?"},
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": "https://example.com/image.jpg",
+                                "detail": "auto",
+                            },
+                        },
+                    ],
+                }
+            ],
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+
+        content = body["messages"][0]["content"]
+        assert isinstance(content, list)
+        assert any(block.get("type") == "image_url" for block in content)
+
+    async def test_async_transform_request_preserves_image_url_block(self):
+        body = await self.config.async_transform_request(
+            model="deepseek-v4-flash-vision",
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "what is in this image?"},
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": "https://example.com/image.jpg",
+                                "detail": "auto",
+                            },
+                        },
+                    ],
+                }
+            ],
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+
+        content = body["messages"][0]["content"]
+        assert isinstance(content, list)
+        assert any(block.get("type") == "image_url" for block in content)
+
+
 class TestDeepSeekThinkingParams:
     """Test thinking and reasoning_effort parameter handling for DeepSeek."""
 

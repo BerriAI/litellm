@@ -117,9 +117,24 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         self, messages: list[AllMessageValues], model: str, is_async: bool = False
     ) -> list[AllMessageValues] | Coroutine[Any, Any, list[AllMessageValues]]:
         """
-        DeepSeek does not support content in list format.
+        DeepSeek vision models accept multimodal content lists
+        (https://api-docs.deepseek.com/guides/vision/), so lists carrying
+        non-text blocks (image_url, input_audio, file, ...) are forwarded
+        as-is. All other messages keep the historical behavior of collapsing
+        content lists to a plain string.
         """
-        messages = handle_messages_with_content_list_to_str_conversion(messages)
+        text_only_messages: Final[list[AllMessageValues]] = []
+        for message in messages:
+            content = message.get("content")
+            if isinstance(content, list) and any(
+                not isinstance(block, dict)
+                or block.get("type") not in (None, "text", "input_text", "output_text")
+                for block in content
+            ):
+                continue
+            text_only_messages.append(message)
+        handle_messages_with_content_list_to_str_conversion(text_only_messages)
+
         if is_async:
             return super()._transform_messages(messages=messages, model=model, is_async=True)
         else:
