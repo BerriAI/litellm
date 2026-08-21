@@ -1,5 +1,6 @@
 import os
 import sys
+from typing import Any, Final
 from unittest.mock import patch
 
 import pytest
@@ -1141,6 +1142,16 @@ def test_get_token_url():
     pass
 
 
+class FakeGeminiCountTokensClient:
+    def __init__(self, response: dict[str, Any]) -> None:
+        self.response: Final = response
+        self.calls: Final[list[dict[str, Any]]] = []  # mutable-ok: test spy records calls
+
+    async def acount_tokens(self, contents: Any, model: str, **kwargs: Any) -> dict[str, Any]:
+        self.calls.append({"contents": contents, "model": model, **kwargs})
+        return self.response
+
+
 @pytest.mark.asyncio
 async def test_vertex_ai_token_counter_routes_partner_models():
     """
@@ -1238,41 +1249,29 @@ async def test_vertex_ai_token_counter_routes_gemini_models():
     Test that VertexAITokenCounter correctly routes Gemini models
     to the Gemini token counter (not partner models).
     """
-    from unittest.mock import AsyncMock, patch
-
     from litellm.llms.vertex_ai.common_utils import VertexAITokenCounter
     from litellm.types.utils import TokenCountResponse
 
-    token_counter = VertexAITokenCounter()
+    fake_gemini_counter = FakeGeminiCountTokensClient(response={"totalTokens": 50, "tokenizer_used": "gemini"})
+    token_counter = VertexAITokenCounter(gemini_token_counter=fake_gemini_counter)
 
-    # Mock the Gemini handler (different import path)
-    with patch(
-        "litellm.llms.vertex_ai.count_tokens.handler.VertexAITokenCounter.acount_tokens"
-    ) as mock_gemini_count_tokens:
-        mock_gemini_count_tokens.return_value = {
-            "totalTokens": 50,
-            "tokenizer_used": "gemini",
-        }
+    result = await token_counter.count_tokens(
+        model_to_use="gemini-1.5-pro",
+        messages=[{"role": "user", "content": "Hello"}],
+        contents=None,
+        deployment={
+            "litellm_params": {
+                "vertex_project": "test-project",
+                "vertex_location": "us-central1",
+            }
+        },
+        request_model="vertex_ai/gemini-1.5-pro",
+    )
 
-        # Test with a Gemini model (not a partner model)
-        result = await token_counter.count_tokens(
-            model_to_use="gemini-1.5-pro",
-            messages=[{"role": "user", "content": "Hello"}],
-            contents=None,
-            deployment={
-                "litellm_params": {
-                    "vertex_project": "test-project",
-                    "vertex_location": "us-central1",
-                }
-            },
-            request_model="vertex_ai/gemini-1.5-pro",
-        )
-
-        # Verify Gemini handler was called
-        assert mock_gemini_count_tokens.called
-        assert result is not None
-        assert isinstance(result, TokenCountResponse)
-        assert result.total_tokens == 50
+    assert len(fake_gemini_counter.calls) == 1
+    assert result is not None
+    assert isinstance(result, TokenCountResponse)
+    assert result.total_tokens == 50
 
 
 @pytest.mark.asyncio
@@ -1283,40 +1282,27 @@ async def test_vertex_ai_token_counter_converts_messages_to_contents_for_gemini(
     silent zero token count. Verify messages are converted to Gemini
     contents format when contents is None.
     """
-    from unittest.mock import patch
-
     from litellm.llms.vertex_ai.common_utils import VertexAITokenCounter
 
-    token_counter = VertexAITokenCounter()
+    fake_gemini_counter = FakeGeminiCountTokensClient(response={"totalTokens": 42, "tokenizer_used": "gemini"})
+    token_counter = VertexAITokenCounter(gemini_token_counter=fake_gemini_counter)
 
-    with patch(
-        "litellm.llms.vertex_ai.count_tokens.handler.VertexAITokenCounter.acount_tokens"
-    ) as mock_acount_tokens:
-        mock_acount_tokens.return_value = {
-            "totalTokens": 42,
-            "tokenizer_used": "gemini",
-        }
+    await token_counter.count_tokens(
+        model_to_use="gemini-2.5-flash",
+        messages=[{"role": "user", "content": "Hello, how are you?"}],
+        contents=None,
+        deployment={
+            "litellm_params": {
+                "vertex_project": "test-project",
+                "vertex_location": "us-central1",
+            }
+        },
+        request_model="vertex_ai/gemini-2.5-flash",
+    )
 
-        await token_counter.count_tokens(
-            model_to_use="gemini-2.5-flash",
-            messages=[{"role": "user", "content": "Hello, how are you?"}],
-            contents=None,
-            deployment={
-                "litellm_params": {
-                    "vertex_project": "test-project",
-                    "vertex_location": "us-central1",
-                }
-            },
-            request_model="vertex_ai/gemini-2.5-flash",
-        )
-
-        mock_acount_tokens.assert_called_once()
-        call_kwargs = mock_acount_tokens.call_args.kwargs
-        passed_contents = call_kwargs["contents"]
-        assert passed_contents is not None
-        assert isinstance(passed_contents, list)
-        assert len(passed_contents) >= 1
-        assert "parts" in passed_contents[0]
+    assert len(fake_gemini_counter.calls) == 1
+    passed_contents = fake_gemini_counter.calls[0]["contents"]
+    assert passed_contents == [{"role": "user", "parts": [{"text": "Hello, how are you?"}]}]
 
 
 @pytest.mark.asyncio
@@ -1327,31 +1313,25 @@ async def test_vertex_ai_token_counter_returns_none_when_api_omits_total_tokens(
     and returned a silent zero. Verify we now return None so the caller falls
     back to local token counting.
     """
-    from unittest.mock import patch
-
     from litellm.llms.vertex_ai.common_utils import VertexAITokenCounter
 
-    token_counter = VertexAITokenCounter()
+    fake_gemini_counter = FakeGeminiCountTokensClient(response={"tokenizer_used": "gemini"})
+    token_counter = VertexAITokenCounter(gemini_token_counter=fake_gemini_counter)
 
-    with patch(
-        "litellm.llms.vertex_ai.count_tokens.handler.VertexAITokenCounter.acount_tokens"
-    ) as mock_acount_tokens:
-        mock_acount_tokens.return_value = {"tokenizer_used": "gemini"}
+    result = await token_counter.count_tokens(
+        model_to_use="gemini-2.5-flash",
+        messages=[{"role": "user", "content": "Hello"}],
+        contents=None,
+        deployment={
+            "litellm_params": {
+                "vertex_project": "test-project",
+                "vertex_location": "us-central1",
+            }
+        },
+        request_model="vertex_ai/gemini-2.5-flash",
+    )
 
-        result = await token_counter.count_tokens(
-            model_to_use="gemini-2.5-flash",
-            messages=[{"role": "user", "content": "Hello"}],
-            contents=None,
-            deployment={
-                "litellm_params": {
-                    "vertex_project": "test-project",
-                    "vertex_location": "us-central1",
-                }
-            },
-            request_model="vertex_ai/gemini-2.5-flash",
-        )
-
-        assert result is None
+    assert result is None
 
 
 @pytest.mark.asyncio
