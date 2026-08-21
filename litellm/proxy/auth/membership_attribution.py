@@ -43,8 +43,8 @@ from litellm.proxy._types import LiteLLM_UserTable, UserAPIKeyAuth
 if TYPE_CHECKING:
     from opentelemetry.trace import Span
 
-    from litellm.caching.caching import DualCache
     from litellm.proxy._types import LiteLLM_TeamTableCachedObj
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
     from litellm.proxy.utils import PrismaClient, ProxyLogging
 
 SPEND_ATTRIBUTION_SETTING: Final = "track_spend_across_all_user_teams"
@@ -131,7 +131,7 @@ async def resolve_membership_attribution(
     user_object: LiteLLM_UserTable | None,
     general_settings: Mapping[str, object] | None,
     prisma_client: "PrismaClient | None",
-    user_api_key_cache: "DualCache",
+    user_api_key_cache: "UserApiKeyCache",
     proxy_logging_obj: "ProxyLogging | None" = None,
 ) -> None:
     """Populate the attributed-membership fields on ``user_api_key_auth_obj``.
@@ -239,7 +239,7 @@ async def _load_team_objects(
     *,
     team_ids: Sequence[str],
     prisma_client: "PrismaClient",
-    user_api_key_cache: "DualCache",
+    user_api_key_cache: "UserApiKeyCache",
     parent_otel_span: "Span | None",
     proxy_logging_obj: "ProxyLogging | None",
 ) -> tuple[TeamResolution, ...]:

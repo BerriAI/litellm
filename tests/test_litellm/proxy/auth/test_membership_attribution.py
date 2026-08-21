@@ -11,13 +11,9 @@ and every one of those tests is a regression guard proving the default path is
 byte-for-byte what it was before the feature existed.
 """
 
-import os
-import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
-sys.path.insert(0, os.path.abspath("../../../.."))
 
 import litellm
 from litellm.proxy._types import Litellm_EntityType, LiteLLM_UserTable, UserAPIKeyAuth
@@ -372,21 +368,67 @@ def _token_with_memberships():
     return token
 
 
-@pytest.mark.asyncio
-async def test_attributed_team_budget_check_noop_when_setting_off():
-    """Populated memberships must not gate budgets unless the SPEND setting is
-    on. Enabling only rate-limit attribution must not silently add budget gates.
+async def _team_budget_error(token, general_settings):
+    """The budget error the team gate raised, or None if the caller got through.
+
+    Asserting on this instead of on which internals ran keeps these tests about
+    the only thing a caller can observe: blocked, or not blocked.
     """
-    token = _token_with_memberships()
-    with patch("litellm.proxy.auth.auth_checks.get_team_object", new=AsyncMock()) as mock_get_team:
+    try:
         await _attributed_teams_max_budget_check(
             valid_token=token,
             prisma_client=MagicMock(),
             user_api_key_cache=MagicMock(),
             proxy_logging_obj=_proxy_logging(),
-            general_settings={"enforce_rate_limits_across_all_user_teams": True},
+            general_settings=general_settings,
         )
-    mock_get_team.assert_not_called()
+    except litellm.BudgetExceededError as e:
+        return e
+    return None
+
+
+async def _org_budget_error(token, general_settings):
+    """The budget error the org gate raised, or None if the caller got through."""
+    try:
+        await _attributed_orgs_max_budget_check(
+            valid_token=token,
+            prisma_client=MagicMock(),
+            user_api_key_cache=MagicMock(),
+            proxy_logging_obj=_proxy_logging(),
+            general_settings=general_settings,
+        )
+    except litellm.BudgetExceededError as e:
+        return e
+    return None
+
+
+def _over_budget_team(team_id, **kwargs):
+    """A team whose budget is already blown, for proving a gate is inert."""
+    return _team(team_id, max_budget=1.0, spend=999.0)
+
+
+async def _spend_always_over(counter_key, fallback_spend, max_budget=None, **kwargs):
+    return 999.0
+
+
+@pytest.mark.asyncio
+async def test_attributed_team_budget_check_noop_when_setting_off():
+    """Populated memberships must not gate budgets unless the SPEND setting is on.
+
+    Enabling only rate-limit attribution must not silently add budget gates, so
+    a caller whose other team is wildly over budget still gets through.
+    """
+    token = _token_with_memberships()
+    with (
+        patch(
+            "litellm.proxy.auth.auth_checks.get_team_object",
+            new=AsyncMock(side_effect=lambda team_id, **kwargs: _over_budget_team(team_id)),
+        ),
+        patch("litellm.proxy.proxy_server.get_current_spend", _spend_always_over),
+    ):
+        error = await _team_budget_error(token, {"enforce_rate_limits_across_all_user_teams": True})
+
+    assert error is None
 
 
 @pytest.mark.asyncio
@@ -449,6 +491,7 @@ async def test_attributed_team_budget_check_skips_stamped_team():
 
 @pytest.mark.asyncio
 async def test_attributed_team_budget_check_passes_under_budget():
+    """A membership with room left does not block the caller."""
     token = _token_with_memberships()
 
     async def _get_team(team_id, **kwargs):
@@ -461,31 +504,26 @@ async def test_attributed_team_budget_check_passes_under_budget():
         patch("litellm.proxy.auth.auth_checks.get_team_object", new=AsyncMock(side_effect=_get_team)),
         patch("litellm.proxy.proxy_server.get_current_spend", _spend),
     ):
-        await _attributed_teams_max_budget_check(
-            valid_token=token,
-            prisma_client=MagicMock(),
-            user_api_key_cache=MagicMock(),
-            proxy_logging_obj=_proxy_logging(),
-            general_settings=SPEND_ON,
-        )
+        error = await _team_budget_error(token, SPEND_ON)
+
+    assert error is None
 
 
 @pytest.mark.asyncio
 async def test_attributed_team_budget_check_ignores_unloadable_team():
-    """A team that cannot be loaded contributes no ceiling rather than a 500."""
+    """A team that cannot be loaded contributes no ceiling rather than a 500.
+
+    The caller is neither blocked nor served an internal error.
+    """
     token = _token_with_memberships()
 
     async def _get_team(team_id, **kwargs):
         raise Exception("team row is gone")
 
     with patch("litellm.proxy.auth.auth_checks.get_team_object", new=AsyncMock(side_effect=_get_team)):
-        await _attributed_teams_max_budget_check(
-            valid_token=token,
-            prisma_client=MagicMock(),
-            user_api_key_cache=MagicMock(),
-            proxy_logging_obj=_proxy_logging(),
-            general_settings=SPEND_ON,
-        )
+        error = await _team_budget_error(token, SPEND_ON)
+
+    assert error is None
 
 
 @pytest.mark.asyncio
@@ -520,16 +558,20 @@ async def test_attributed_org_budget_check_raises_for_other_org():
 
 @pytest.mark.asyncio
 async def test_attributed_org_budget_check_noop_when_setting_off():
+    """An over-budget non-stamped org does not block while the setting is off."""
     token = _token_with_memberships()
-    with patch("litellm.proxy.auth.auth_checks.get_org_object", new=AsyncMock()) as mock_get_org:
-        await _attributed_orgs_max_budget_check(
-            valid_token=token,
-            prisma_client=MagicMock(),
-            user_api_key_cache=MagicMock(),
-            proxy_logging_obj=_proxy_logging(),
-            general_settings={},
-        )
-    mock_get_org.assert_not_called()
+    org = MagicMock()
+    org.spend = 999.0
+    org.litellm_budget_table = MagicMock()
+    org.litellm_budget_table.max_budget = 1.0
+
+    with (
+        patch("litellm.proxy.auth.auth_checks.get_org_object", new=AsyncMock(return_value=org)),
+        patch("litellm.proxy.proxy_server.get_current_spend", _spend_always_over),
+    ):
+        error = await _org_budget_error(token, {})
+
+    assert error is None
 
 
 # --------------------------------------------------------------------------- #
