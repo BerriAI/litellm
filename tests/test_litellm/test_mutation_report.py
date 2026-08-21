@@ -50,7 +50,30 @@ def test_survivors_are_read_out_of_the_verdicts_they_came_with(monkeypatch):
     assert results.survivors == (
         "litellm.proxy.management_endpoints.key_management_endpoints.x_2",
     )
-    assert results.reported == 2
+    assert results.reported == 3
+
+
+def test_every_multi_word_verdict_mutmut_can_emit_still_counts(monkeypatch):
+    class _Proc:
+        stdout = "".join(
+            f"litellm.proxy.management_endpoints.key_management_endpoints.x_{i}: {verdict}\n"
+            for i, verdict in enumerate(
+                (
+                    "no tests",
+                    "not checked",
+                    "caught by type check",
+                    "check was interrupted by user",
+                )
+            )
+        )
+
+    monkeypatch.setattr(report.subprocess, "run", lambda *a, **k: _Proc())
+
+    results = report.get_survivors()
+
+    assert results.survivors == ()
+    assert results.reported == 4
+    assert "not a passing score" not in report.render(_CONFIG, results, None)
 
 
 def test_an_empty_mutmut_results_reports_nothing_rather_than_zero_survivors(monkeypatch):

@@ -46,7 +46,7 @@ def get_survivors() -> MutmutResults:
     verdicts = tuple(
         m.groups()
         for line in proc.stdout.splitlines()
-        if (m := re.match(r"\s*(\S+):\s*(\w+)\s*$", line))
+        if (m := re.match(r"\s*(\S+):\s*(\S.*?)\s*$", line))
     )
     return MutmutResults(
         survivors=tuple(name for name, verdict in verdicts if verdict == "survived"),
