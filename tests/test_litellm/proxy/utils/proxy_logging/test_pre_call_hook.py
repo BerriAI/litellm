@@ -286,3 +286,110 @@ async def test_default_path_still_applies_prompt_templates(proxy_logging, make_u
         call_type="acompletion",
     )
     process.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# enforces_request_content: which CustomLoggers a guardrails-only walk reaches
+# ---------------------------------------------------------------------------
+
+
+class _Enforcer(CustomLogger):
+    """Stands in for detect_prompt_injection: judges the payload, so batch records need it."""
+
+    enforces_request_content = True
+
+    def __init__(self):
+        super().__init__()
+        self.calls = 0
+
+    async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+        self.calls += 1
+        return data
+
+
+class _Accountant(CustomLogger):
+    """Stands in for a rate limiter: counts a request, so it must not see records."""
+
+    def __init__(self):
+        super().__init__()
+        self.calls = 0
+
+    async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+        self.calls += 1
+        return data
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("guardrails_only", [False, True])
+async def test_a_content_enforcer_runs_in_both_walks(proxy_logging, monkeypatch, guardrails_only):
+    enforcer = _Enforcer()
+    monkeypatch.setattr(litellm, "callbacks", [enforcer])
+    ProxyLogging._callback_capabilities_cache.clear()
+
+    await proxy_logging.pre_call_hook(
+        user_api_key_dict=MagicMock(),
+        data={"model": "m", "messages": [{"role": "user", "content": "hi"}]},
+        call_type="acompletion",
+        guardrails_only=guardrails_only,
+    )
+
+    assert enforcer.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_an_accounting_hook_is_skipped_by_a_guardrails_only_walk(proxy_logging, monkeypatch):
+    """Charging budget or taking a rate-limit slot once per batch record is the bug this prevents."""
+    accountant = _Accountant()
+    monkeypatch.setattr(litellm, "callbacks", [accountant])
+    ProxyLogging._callback_capabilities_cache.clear()
+
+    await proxy_logging.pre_call_hook(
+        user_api_key_dict=MagicMock(),
+        data={"model": "m", "messages": [{"role": "user", "content": "hi"}]},
+        call_type="acompletion",
+        guardrails_only=True,
+    )
+    assert accountant.calls == 0
+
+    await proxy_logging.pre_call_hook(
+        user_api_key_dict=MagicMock(),
+        data={"model": "m", "messages": [{"role": "user", "content": "hi"}]},
+        call_type="acompletion",
+        guardrails_only=False,
+    )
+    assert accountant.calls == 1, "the online path must be untouched"
+
+
+def test_has_pre_call_guardrails_counts_a_content_enforcer(proxy_logging, monkeypatch):
+    """The batch scan is gated on this, so an enforcer-only proxy must still stream the file."""
+    monkeypatch.setattr(litellm, "callbacks", [_Accountant()])
+    ProxyLogging._callback_capabilities_cache.clear()
+    assert proxy_logging.has_pre_call_guardrails({}) is False
+
+    monkeypatch.setattr(litellm, "callbacks", [_Enforcer()])
+    ProxyLogging._callback_capabilities_cache.clear()
+    assert proxy_logging.has_pre_call_guardrails({}) is True
+
+
+def test_the_in_tree_hooks_are_classified():
+    """A hook that judges content opts in; every hook that counts a request stays out."""
+    from litellm.proxy.hooks.azure_content_safety import _PROXY_AzureContentSafety
+    from litellm.proxy.hooks.cache_control_check import _PROXY_CacheControlCheck
+    from litellm.proxy.hooks.max_budget_limiter import _PROXY_MaxBudgetLimiter
+    from litellm.proxy.hooks.max_budget_per_session_limiter import _PROXY_MaxBudgetPerSessionHandler
+    from litellm.proxy.hooks.max_iterations_limiter import _PROXY_MaxIterationsHandler
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import _PROXY_MaxParallelRequestsHandler_v3
+    from litellm.proxy.hooks.prompt_injection_detection import _OPTIONAL_PromptInjectionDetection
+
+    assert CustomLogger.enforces_request_content is False
+    for enforcing in (_OPTIONAL_PromptInjectionDetection, _PROXY_AzureContentSafety):
+        assert enforcing.enforces_request_content is True, enforcing.__name__
+    for counting in (
+        _PROXY_MaxBudgetLimiter,
+        _PROXY_MaxParallelRequestsHandler_v3,
+        _PROXY_MaxIterationsHandler,
+        _PROXY_MaxBudgetPerSessionHandler,
+        _PROXY_CacheControlCheck,
+    ):
+        assert counting.enforces_request_content is False, counting.__name__
+
