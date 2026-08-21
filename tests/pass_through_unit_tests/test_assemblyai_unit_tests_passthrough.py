@@ -121,6 +121,8 @@ def test_poll_assembly_for_transcript_response(
         ("http://127.0.0.1:4000/eu.assemblyai/v2/transcript", "eu"),
         ("http://localhost:4000/assemblyai/v2/upload", None),
         ("https://eu.assemblyai.com/v2/upload", "eu"),
+        ("https://api.eu.assemblyai.com/v2/transcript/abc", "eu"),
+        ("https://api.assemblyai.com/v2/transcript/abc", None),
         (None, None),
     ),
 )

@@ -93,6 +93,7 @@ from litellm.proxy.utils import (
 )
 from litellm.repositories.table_repositories import TeamMembershipRepository
 from litellm.secret_managers.main import get_secret_bool
+from litellm.types.passthrough_endpoints.assembly_ai import ASSEMBLYAI_UPLOAD_ROUTES
 from litellm.types.services import ServiceTypes
 
 try:
@@ -106,13 +107,6 @@ except ImportError as e:
     enterprise_custom_auth = None
 
 user_api_key_service_logger_obj: Final = ServiceLogging()  # used for tracking latency on OTEL
-
-_ASSEMBLYAI_UPLOAD_ROUTES: Final = frozenset(
-    (
-        "/assemblyai/v2/upload",
-        "/eu.assemblyai/v2/upload",
-    )
-)
 
 
 def _normalize_public_auth_route(route: str) -> str:
@@ -1080,7 +1074,7 @@ async def _read_request_data_for_auth(
     request: Request,
     route: str,
 ) -> tuple[dict, ProxyException | None]:  # mutable-ok: request_data is a plain dict across the whole auth path
-    if _request_http_method(request) == "POST" and route.rstrip("/") in _ASSEMBLYAI_UPLOAD_ROUTES:
+    if _request_http_method(request) == "POST" and route.rstrip("/") in ASSEMBLYAI_UPLOAD_ROUTES:
         return {}, None  # mutable-ok: request_data is a plain dict across the whole auth path
     return await _read_request_body_deferring_parse_failure(request=request)
 
