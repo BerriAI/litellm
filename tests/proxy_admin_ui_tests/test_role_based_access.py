@@ -3,6 +3,7 @@ RBAC tests
 """
 
 import os
+import re
 import sys
 import traceback
 from litellm._uuid import uuid
@@ -411,7 +412,7 @@ async def test_org_admin_create_user_team_wrong_org_permissions(prisma_client):
     request.body = return_body
 
     with pytest.raises(
-        Exception, match="You do not have a role within the selected organization. Passed organization_id"
+        Exception, match=re.escape("You do not have a role within the selected organization. Passed organization_id")
     ) as exc_info:
         response = await user_api_key_auth(request=request, api_key="Bearer " + new_key)
     e = exc_info.value
