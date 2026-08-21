@@ -141,7 +141,7 @@ async def test_refuses_to_map_non_identity_fields(configure_proxy, privileged_fi
     configure_proxy(mappings={privileged_field: f"x-{privileged_field}"})
     request = _request_with_headers({f"x-{privileged_field}": "proxy_admin"})
 
-    with pytest.raises(ValueError) as exc:
+    with pytest.raises(ValueError, match='proxy auth refuses to map non-identity UserAPIKeyAuth') as exc:
         await handle_oauth2_proxy_request(request)
     assert privileged_field in str(exc.value)
 

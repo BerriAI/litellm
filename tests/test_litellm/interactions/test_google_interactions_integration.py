@@ -18,6 +18,7 @@ sys.path.insert(0, os.path.abspath("../../.."))
 
 import litellm
 import litellm.interactions as interactions
+import openai
 
 # Test API key - should be set in environment
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
@@ -258,7 +259,7 @@ class TestGoogleInteractionsErrorHandling:
 
     def test_invalid_model(self, api_key):
         """Test error handling for invalid model."""
-        with pytest.raises(Exception):
+        with pytest.raises(openai.APIError):
             interactions.create(
                 model="gemini/invalid-model-name-xyz",
                 input="Hello",
@@ -267,7 +268,7 @@ class TestGoogleInteractionsErrorHandling:
 
     def test_missing_model_and_agent(self, api_key):
         """Test error when neither model nor agent is provided."""
-        with pytest.raises(Exception):  # Can be ValueError or APIConnectionError
+        with pytest.raises((ValueError, litellm.APIConnectionError)):
             interactions.create(
                 input="Hello",
                 api_key=api_key,

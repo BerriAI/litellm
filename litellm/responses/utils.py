@@ -37,8 +37,28 @@ def normalize_responses_api_stream_options(
     return ResponsesAPIStreamOptions(include_obfuscation=include_obfuscation)
 
 
+def _is_chat_text_part(part: object) -> bool:
+    return isinstance(part, dict) and part.get("type") == "text"
+
+
+def _as_input_text_part(part: object) -> object:
+    if isinstance(part, dict) and part.get("type") == "text":
+        return {**part, "type": "input_text"}  # mutable-ok: fresh part so the caller's block keeps its chat type
+    return part
+
+
 class ResponsesAPIRequestUtils:
     """Helper utils for constructing ResponseAPI requests"""
+
+    @staticmethod
+    def shape_prompt_managed_message_for_responses(message: object) -> object:
+        if not isinstance(message, dict) or message.get("role") == "assistant":
+            return message
+        content: object = message.get("content")
+        if not isinstance(content, list) or not any(_is_chat_text_part(part) for part in content):
+            return message
+        shaped_content: Final = [_as_input_text_part(part) for part in content]  # mutable-ok: Responses-shaped copy
+        return {**message, "content": shaped_content}  # mutable-ok: copy, the hook's message stays untouched
 
     @staticmethod
     def merge_prompt_management_input(
@@ -46,15 +66,16 @@ class ResponsesAPIRequestUtils:
         client_input: list[AllMessageValues],
         merged_input: list[AllMessageValues],
     ) -> list[object]:
+        shape: Final = ResponsesAPIRequestUtils.shape_prompt_managed_message_for_responses
         if isinstance(original_input, str):
-            return [*merged_input]
+            return [shape(message) for message in merged_input]
 
         original_items: Final = tuple(original_input)
         client_item_ids: Final = frozenset(id(item) for item in client_input)
         message_positions = tuple(index for index, item in enumerate(original_items) if id(item) in client_item_ids)
 
         if len(message_positions) == len(original_items):
-            return [*merged_input]
+            return [shape(message) for message in merged_input]
         if not message_positions:
             verbose_logger.warning(
                 "Prompt management hook returned messages without Responses API input messages; merged messages were ignored"
@@ -69,7 +90,7 @@ class ResponsesAPIRequestUtils:
         if corresponding_messages:
             merged_by_position: Final = dict(zip(message_positions, merged_input))
             return [
-                merged_by_position[index] if index in merged_by_position else item
+                shape(merged_by_position[index]) if index in merged_by_position else item
                 for index, item in enumerate(original_items)
             ]
 
@@ -82,14 +103,14 @@ class ResponsesAPIRequestUtils:
                 for index, position in enumerate(message_positions)
             }
             trailing_items: Final = original_items[message_positions[-1] + 1 :]
-            return [item for merged in merged_input for item in (*prefixes.get(id(merged), ()), merged)] + list(
+            return [item for merged in merged_input for item in (*prefixes.get(id(merged), ()), shape(merged))] + list(
                 trailing_items
             )
 
         verbose_logger.warning(
             "Prompt management hook replaced Responses API messages; non-message input items were dropped"
         )
-        return [*merged_input]
+        return [shape(message) for message in merged_input]
 
     @staticmethod
     def merge_client_forwarded_headers(

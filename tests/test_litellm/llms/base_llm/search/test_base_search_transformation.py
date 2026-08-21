@@ -270,7 +270,7 @@ async def test_asearch_does_not_leak_server_key_to_caller_api_base(
             new_callable=AsyncMock,
         ) as mock_get,
     ):
-        with pytest.raises(Exception):
+        with pytest.raises(litellm.APIConnectionError):
             await litellm.asearch(
                 query="secrets",
                 search_provider="serper",
@@ -319,7 +319,7 @@ async def test_query_param_key_not_leaked_with_dummy_caller_key(
         "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.get",
         fake_get,
     ):
-        with pytest.raises(Exception):
+        with pytest.raises(litellm.APIConnectionError):
             await litellm.asearch(
                 query="secrets",
                 search_provider=provider,

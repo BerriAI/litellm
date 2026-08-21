@@ -5105,3 +5105,101 @@ def test_set_cost_breakdown_stores_vertex_location():
         cost_for_built_in_tools_cost_usd_dollar=0.0,
     )
     assert no_location.cost_breakdown.get("vertex_location") is None
+
+
+def test_prompt_hooks_skip_prompt_managers_when_no_prompt_id(logging_obj, tmp_path, monkeypatch):
+    """
+    Regression for UI-injected `vector_store_ids: []` and always-on non-empty `vector_store_ids`
+    with a registered prompt manager (e.g. dotprompt): requests without a prompt_id 500'd with
+    "prompt_id is required for Prompt Management Base class" instead of completing normally.
+    """
+    from litellm.integrations.arize.arize_phoenix_prompt_manager import ArizePhoenixPromptManager
+    from litellm.integrations.dotprompt.dotprompt_manager import DotpromptManager
+    from litellm.integrations.vector_store_integrations.base_vector_store import BaseVectorStore
+    from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook import (
+        VectorStorePreCallHook,
+    )
+    from litellm.types.vector_stores import LiteLLM_ManagedVectorStore
+    from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
+
+    (tmp_path / "stem.prompt").write_text("---\nmodel: gemini-2.5-flash\n---\nyou are a stem tutor\n")
+    dotprompt_manager = DotpromptManager(prompt_directory=str(tmp_path))
+    arize_manager = ArizePhoenixPromptManager(api_key="fake-key", api_base="http://127.0.0.1:9")
+    litellm.logging_callback_manager.add_litellm_callback(dotprompt_manager)
+    litellm.logging_callback_manager.add_litellm_callback(arize_manager)
+    monkeypatch.setattr(
+        litellm,
+        "vector_store_registry",
+        VectorStoreRegistry(
+            vector_stores=[LiteLLM_ManagedVectorStore(vector_store_id="vs_123", custom_llm_provider="openai")]
+        ),
+    )
+
+    messages = [{"role": "user", "content": "hi"}]
+    try:
+        assert not logging_obj.should_run_prompt_management_hooks(
+            prompt_id=None, non_default_params={"vector_store_ids": []}
+        )
+
+        assert logging_obj.get_chat_completion_prompt(
+            model="gemini-2.5-flash",
+            messages=messages,
+            non_default_params={"vector_store_ids": []},
+            prompt_variables=None,
+            prompt_id=None,
+        ) == ("gemini-2.5-flash", messages, {"vector_store_ids": []})
+
+        assert dotprompt_manager.get_chat_completion_prompt(
+            model="gemini-2.5-flash",
+            messages=messages,
+            non_default_params={},
+            prompt_id=None,
+            prompt_variables=None,
+            dynamic_callback_params={},
+        ) == ("gemini-2.5-flash", messages, {})
+
+        assert not arize_manager.should_run_prompt_management(
+            prompt_id=None, prompt_spec=None, dynamic_callback_params={}
+        )
+
+        assert logging_obj.should_run_prompt_management_hooks(
+            prompt_id=None, non_default_params={"vector_store_ids": ["vs_123"]}
+        )
+        selected_logger = logging_obj.get_custom_logger_for_prompt_management(
+            model="gemini-2.5-flash",
+            non_default_params={"vector_store_ids": ["vs_123"]},
+            prompt_id=None,
+            dynamic_callback_params={},
+        )
+        assert isinstance(selected_logger, VectorStorePreCallHook)
+
+        assert logging_obj._prompt_manager_runs_without_prompt_id(
+            logger=BaseVectorStore(), prompt_spec=None, dynamic_callback_params=None
+        )
+        assert not logging_obj._prompt_manager_runs_without_prompt_id(
+            logger=selected_logger, prompt_spec=None, dynamic_callback_params=None
+        )
+        assert not logging_obj._prompt_manager_runs_without_prompt_id(
+            logger=dotprompt_manager, prompt_spec=None, dynamic_callback_params=None
+        )
+        assert not logging_obj._prompt_manager_runs_without_prompt_id(
+            logger=arize_manager, prompt_spec=None, dynamic_callback_params=None
+        )
+
+        assert isinstance(
+            logging_obj.get_custom_logger_for_prompt_management(
+                model="gemini-2.5-flash",
+                non_default_params={},
+                prompt_id="stem",
+                dynamic_callback_params={},
+            ),
+            DotpromptManager,
+        )
+    finally:
+        for manager in (dotprompt_manager, arize_manager):
+            litellm.logging_callback_manager.remove_callback_from_list_by_object(litellm.callbacks, manager)
+            litellm.logging_callback_manager.remove_callback_from_list_by_object(
+                litellm._async_success_callback, manager
+            )
+        for hook in [cb for cb in litellm.callbacks if isinstance(cb, VectorStorePreCallHook)]:
+            litellm.logging_callback_manager.remove_callback_from_list_by_object(litellm.callbacks, hook)

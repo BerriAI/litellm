@@ -554,7 +554,7 @@ def test_token_type_rejected_from_either_list(attributes, monkeypatch):
     recorder rather than silently ignored, so the misconfig is caught at all."""
     recorder = _recorder(monkeypatch, attributes)
     kwargs, response_obj, start, end = _build_call()
-    with pytest.raises(ValueError) as exc_info:
+    with pytest.raises(ValueError, match='otel\\.attributes: gen_ai\\.token\\.type is a structural') as exc_info:
         recorder.record(kwargs, response_obj, start, end)
     # The dedicated discriminator guard, not the generic unknown-name path: assert
     # the specific reason so dropping that guard (and falling through to "unknown
