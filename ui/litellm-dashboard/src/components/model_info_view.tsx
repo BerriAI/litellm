@@ -42,7 +42,11 @@ import {
 } from "./networking";
 import { Logo } from "@/components/molecules/logo/Logo";
 import UpdateModelCredentialsModal from "./update_model_credentials_modal";
-import ModelInfoEditForm, { type ModelEditFormValues, type TouchedPricingField } from "./ModelInfoEditForm";
+import ModelInfoEditForm, {
+  editableExtraParams,
+  type ModelEditFormValues,
+  type TouchedPricingField,
+} from "./ModelInfoEditForm";
 import { Tag } from "./tag_management/types";
 import { getDisplayModelName } from "./view_model/model_name_display";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -426,6 +430,15 @@ export default function ModelInfoView({
         return;
       }
 
+      // Keys the user deleted from the LiteLLM Params JSON editor must be sent as
+      // explicit nulls: the backend PATCH merges params, so an absent key would
+      // silently keep its old value.
+      for (const key of Object.keys(editableExtraParams(localModelData?.litellm_params))) {
+        if (!(key in parsedExtraParams) && updatedLitellmParams[key] === undefined) {
+          updatedLitellmParams[key] = null;
+        }
+      }
+
       // Final guard: never PATCH a redacted secret. The /model/info snapshot that
       // seeds this form masks secrets, and any save re-sends the whole params blob;
       // without this strip a masked value would be re-encrypted over the real secret.
@@ -440,11 +453,12 @@ export default function ModelInfoView({
 
       await modelPatchUpdateCall(accessToken, updateData, modelId);
 
+      // The backend removes explicitly-null keys, so mirror that removal locally.
       const updatedModelData = {
         ...localModelData,
         model_name: values.model_name,
         litellm_model_name: values.litellm_model_name,
-        litellm_params: safeLitellmParams,
+        litellm_params: Object.fromEntries(Object.entries(safeLitellmParams).filter(([, value]) => value !== null)),
         model_info: updatedModelInfo,
       };
 

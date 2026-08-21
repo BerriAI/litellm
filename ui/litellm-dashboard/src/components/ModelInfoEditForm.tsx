@@ -205,6 +205,15 @@ const perMillionTokens = (...rates: (number | null | undefined)[]): number | nul
   return rate == null ? null : rate * 1_000_000;
 };
 
+export const editableExtraParams = (
+  litellmParams: Record<string, unknown> | null | undefined,
+): Record<string, unknown> =>
+  Object.fromEntries(
+    Object.entries(litellmParams || {}).filter(
+      ([key, value]) => key !== "litellm_credential_name" && !isMaskedSecret(value),
+    ),
+  );
+
 export const toModelEditFormValues = (localModelData: any, isWildcardModel: boolean): ModelEditFormValues => ({
   model_name: localModelData.model_name,
   litellm_model_name: localModelData.litellm_model_name,
@@ -251,15 +260,7 @@ export const toModelEditFormValues = (localModelData: any, isWildcardModel: bool
   // antd never mounted this field for a non-wildcard model, so the key must be absent, not null.
   ...(isWildcardModel ? { health_check_model: localModelData.model_info?.health_check_model } : {}),
   litellm_credential_name: localModelData.litellm_params?.litellm_credential_name || "",
-  litellm_extra_params: JSON.stringify(
-    Object.fromEntries(
-      Object.entries(localModelData.litellm_params || {}).filter(
-        ([key, value]) => key !== "litellm_credential_name" && !isMaskedSecret(value),
-      ),
-    ),
-    null,
-    2,
-  ),
+  litellm_extra_params: JSON.stringify(editableExtraParams(localModelData.litellm_params), null, 2),
 });
 
 const displayCost = (localModelData: any, field: TouchedPricingField): string => {

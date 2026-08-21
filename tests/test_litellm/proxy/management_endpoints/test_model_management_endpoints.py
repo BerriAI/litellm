@@ -3030,6 +3030,49 @@ class TestUpdateDBModelClearPricing:
         # team_id must survive
         assert info.get("team_id") == "team-keep-me"
 
+    def test_null_extra_param_removes_it_from_litellm_params(self):
+        """The UI's LiteLLM Params JSON editor sends explicit nulls for keys the
+        user deleted. Those keys must be removed from the stored params instead
+        of being resurrected by the merge (regression: deleted reasoning_effort
+        reappeared after a page refresh)."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_db_model,
+        )
+        from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo, updateLiteLLMParams
+
+        db_model = Deployment(
+            model_name="gpt-4o",
+            litellm_params=LiteLLM_Params(model="openai/gpt-4o", reasoning_effort="high"),
+            model_info=ModelInfo(id="dep-extra-0"),
+        )
+
+        result = update_db_model(
+            db_model=db_model,
+            updated_patch=updateDeployment(
+                litellm_params=updateLiteLLMParams(**{"reasoning_effort": None})
+            ),
+        )
+
+        params = json.loads(result["litellm_params"])
+        assert "reasoning_effort" not in params
+        assert params["model"] == "openai/gpt-4o"
+
+    def test_null_model_is_never_cleared(self):
+        """A deployment without a model is invalid, so an explicit-null model
+        must not remove the stored one."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_db_model,
+        )
+        from litellm.types.router import updateLiteLLMParams
+
+        result = update_db_model(
+            db_model=_build_db_model_with_pricing(),
+            updated_patch=updateDeployment(litellm_params=updateLiteLLMParams(model=None)),
+        )
+
+        params = json.loads(result["litellm_params"])
+        assert params["model"] == "openai/*"
+
     def test_clear_survives_model_info_passthrough_with_old_pricing(self):
         """Realistic UI submit shape: the patch carries BOTH blobs. The
         model_info portion still has the old pricing because the form

@@ -1571,6 +1571,34 @@ describe("ModelInfoView", () => {
       expect(payload.litellm_params.drop_params).toBe(true);
     });
 
+    it("sends an explicit null for a key deleted from the LiteLLM extra params", async () => {
+      const withExtraParam = {
+        ...defaultModelData,
+        litellm_params: { ...defaultModelData.litellm_params, reasoning_effort: "high" },
+      };
+      mockUseModelsInfo.mockReturnValue({ data: { data: [withExtraParam] }, isLoading: false, error: null });
+      mockModelInfoV1Call.mockResolvedValue({ data: [withExtraParam] });
+      const user = userEvent.setup();
+      await enterEditMode(user);
+
+      const extraParams = screen
+        .getAllByRole("textbox")
+        .find(
+          (input) =>
+            input.tagName === "TEXTAREA" && (input as HTMLTextAreaElement).value.includes('"reasoning_effort"'),
+        ) as HTMLTextAreaElement;
+      const withoutReasoningEffort = JSON.parse(extraParams.value);
+      delete withoutReasoningEffort.reasoning_effort;
+      await user.clear(extraParams);
+      await user.paste(JSON.stringify(withoutReasoningEffort));
+
+      const payload = await save(user);
+
+      expect(payload.litellm_params.reasoning_effort).toBeNull();
+      expect(payload.litellm_params.model).toBe("gpt-4");
+      expect(payload.litellm_params.api_base).toBe("https://api.openai.com/v1");
+    });
+
     it("sends the credential picked in the selector", async () => {
       mockCredentialListCall.mockResolvedValue({
         credentials: [

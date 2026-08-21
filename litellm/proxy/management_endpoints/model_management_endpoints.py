@@ -511,15 +511,19 @@ def update_db_model(db_model: Deployment, updated_patch: updateDeployment) -> Pr
     # passes through (which today re-sends the OLD pricing on every save) cannot
     # silently undo a litellm_params clear via .update().
     #
-    # Restricted to SPECIAL_MODEL_INFO_PARAMS (input/output cost per token/character
-    # and cache read/write costs) so this path cannot be used to null out privileged
-    # model_info fields like team_id or access groups. SPECIAL_MODEL_INFO_PARAMS are
-    # mirrored between litellm_params and model_info by Deployment.__init__, so the
-    # clear propagates to both blobs.
+    # Any litellm_params field sent as an explicit null is removed from the stored
+    # params (PATCH semantics; the UI relies on this to persist deletions from the
+    # LiteLLM Params JSON editor). "model" is exempt since a deployment without a
+    # model is invalid. The model_info mirror is restricted to
+    # SPECIAL_MODEL_INFO_PARAMS (pricing fields mirrored between the two blobs by
+    # Deployment.__init__) so this path cannot null out privileged model_info
+    # fields like team_id or access groups.
     if updated_patch.litellm_params:
         for field in updated_patch.litellm_params.model_fields_set:
-            if field in SPECIAL_MODEL_INFO_PARAMS and getattr(updated_patch.litellm_params, field) is None:
-                merged_litellm_params.pop(field, None)
+            if field == "model" or getattr(updated_patch.litellm_params, field) is not None:
+                continue
+            merged_litellm_params.pop(field, None)
+            if field in SPECIAL_MODEL_INFO_PARAMS:
                 merged_model_info.pop(field, None)
     if updated_patch.model_info:
         for field in updated_patch.model_info.model_fields_set:
