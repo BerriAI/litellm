@@ -114,6 +114,20 @@ def test_poll_assembly_for_transcript_response(
             )
 
 
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    (
+        ("http://localhost:4000/eu.assemblyai/v2/upload", "eu"),
+        ("http://127.0.0.1:4000/eu.assemblyai/v2/transcript", "eu"),
+        ("http://localhost:4000/assemblyai/v2/upload", None),
+        ("https://eu.assemblyai.com/v2/upload", "eu"),
+        (None, None),
+    ),
+)
+def test_get_assembly_region_from_proxy_path(url, expected):
+    assert AssemblyAIPassthroughLoggingHandler._get_assembly_region_from_url(url) == expected
+
+
 def test_is_assemblyai_route():
     """
     Test that the is_assemblyai_route method correctly identifies AssemblyAI routes

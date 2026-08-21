@@ -3249,6 +3249,67 @@ async def test_pass_through_request_non_streaming_uses_content_for_state_raw_bod
 
 
 @pytest.mark.asyncio
+async def test_regression_pass_through_skips_json_parse_for_binary_state_raw_body():
+    raw_audio = b"\xff\x00binary-body"
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.method = "POST"
+    mock_request.query_params = QueryParams({})
+    mock_request.headers = Headers({"Content-Type": "audio/mp4"})
+    mock_request.state = SimpleNamespace()
+    setattr(mock_request.state, LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY, raw_audio)
+    mock_request.body = AsyncMock(return_value=raw_audio)
+
+    mock_user = MagicMock()
+    mock_user.api_key = "sk-test"
+
+    upstream = httpx.Response(
+        status_code=200,
+        headers={"content-type": "application/json"},
+        content=b'{"upload_url": "https://cdn.assemblyai.com/upload/test"}',
+        request=httpx.Request("POST", "https://api.eu.assemblyai.com/v2/upload"),
+    )
+
+    mock_async_client = AsyncMock()
+    mock_async_client.build_request = MagicMock(return_value=MagicMock())
+    mock_async_client.send = AsyncMock(return_value=upstream)
+    mock_client_obj = MagicMock()
+    mock_client_obj.client = mock_async_client
+
+    with (
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_async_httpx_client",
+            return_value=mock_client_obj,
+        ),
+        patch(
+            "litellm.proxy.proxy_server.proxy_logging_obj.pre_call_hook",
+            new=AsyncMock(side_effect=lambda **kwargs: kwargs["data"]),
+        ),
+        patch(
+            "litellm.proxy.proxy_server.proxy_logging_obj.post_call_response_headers_hook",
+            new=AsyncMock(return_value={}),
+        ),
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.pass_through_endpoint_logging.pass_through_async_success_handler",
+            new=AsyncMock(),
+        ),
+    ):
+        await pass_through_request(
+            request=mock_request,
+            target="https://api.eu.assemblyai.com/v2/upload",
+            custom_headers={"content-type": "audio/mp4"},
+            user_api_key_dict=mock_user,
+            stream=False,
+        )
+
+    mock_request.body.assert_not_awaited()
+    mock_async_client.build_request.assert_called_once()
+    build_kw = mock_async_client.build_request.call_args[1]
+    assert build_kw.get("content") == raw_audio
+    assert "json" not in build_kw
+
+
+@pytest.mark.asyncio
 async def test_pass_through_request_streaming_uses_content_for_state_raw_body():
     """Streaming pass-through with state raw body must use build_request(..., content=...)."""
     raw_signed = b'{"model":"m","stream":true}'

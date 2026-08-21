@@ -36,6 +36,7 @@ from litellm.proxy.auth.user_api_key_auth import (
     _check_key_model_budget_with_fallback,
     _PendingAutoRegister,
     _matches_routing_override,
+    _read_request_data_for_auth,
     _reserve_budget_after_common_checks,
     _route_requires_auth_despite_public,
     _routing_selector_matches_claim,
@@ -52,6 +53,27 @@ class _RoutingRequest:
         self.headers = headers or {}
         self.query_params = query_params or {}
         self.state = SimpleNamespace()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "route",
+    (
+        "/assemblyai/v2/upload",
+        "/eu.assemblyai/v2/upload",
+        "/eu.assemblyai/v2/upload/",
+    ),
+)
+async def test_regression_assemblyai_upload_auth_does_not_read_binary_body(route):
+    request = MagicMock()
+    request.method = "POST"
+    request.body = AsyncMock(return_value=bytes(range(256)) * 12289)
+
+    request_data, body_parse_exception = await _read_request_data_for_auth(request=request, route=route)
+
+    assert request_data == {}
+    assert body_parse_exception is None
+    request.body.assert_not_awaited()
 
 
 def test_get_api_key():

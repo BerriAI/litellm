@@ -107,6 +107,13 @@ except ImportError as e:
 
 user_api_key_service_logger_obj: Final = ServiceLogging()  # used for tracking latency on OTEL
 
+_ASSEMBLYAI_UPLOAD_ROUTES: Final = frozenset(
+    (
+        "/assemblyai/v2/upload",
+        "/eu.assemblyai/v2/upload",
+    )
+)
+
 
 def _normalize_public_auth_route(route: str) -> str:
     if route != "/" and route.endswith("/"):
@@ -1058,6 +1065,15 @@ async def _read_request_body_deferring_parse_failure(
     except ProxyException as parse_exception:
         return {}, parse_exception  # mutable-ok: request_data is a plain dict across the whole auth path
     return populate_request_with_path_params(request_data=parsed_body, request=request), None
+
+
+async def _read_request_data_for_auth(
+    request: Request,
+    route: str,
+) -> tuple[dict, ProxyException | None]:  # mutable-ok: request_data is a plain dict across the whole auth path
+    if request.method == "POST" and route.rstrip("/") in _ASSEMBLYAI_UPLOAD_ROUTES:
+        return {}, None  # mutable-ok: request_data is a plain dict across the whole auth path
+    return await _read_request_body_deferring_parse_failure(request=request)
 
 
 async def _record_unparsable_body_failure(
@@ -2644,8 +2660,8 @@ async def user_api_key_auth(
     # close, and the trace never reaches the backend.
     _ensure_parent_otel_span_on_request_state(request)
 
-    request_data, body_parse_exception = await _read_request_body_deferring_parse_failure(request=request)
     route: Final[str] = get_request_route(request=request)
+    request_data, body_parse_exception = await _read_request_data_for_auth(request=request, route=route)
     ## CHECK IF ROUTE IS ALLOWED
 
     # Run the whole auth phase inside a live ``auth`` span so the DB lookups it
