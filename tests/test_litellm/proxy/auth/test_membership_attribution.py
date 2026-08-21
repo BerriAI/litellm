@@ -19,7 +19,12 @@ import pytest
 
 sys.path.insert(0, os.path.abspath("../../../.."))
 
+import litellm
 from litellm.proxy._types import Litellm_EntityType, LiteLLM_UserTable, UserAPIKeyAuth
+from litellm.proxy.auth.auth_checks import (
+    _attributed_orgs_max_budget_check,
+    _attributed_teams_max_budget_check,
+)
 from litellm.proxy.auth.membership_attribution import (
     attributed_org_ids,
     attributed_team_ids,
@@ -29,6 +34,7 @@ from litellm.proxy.auth.membership_attribution import (
     spend_attribution_enabled,
 )
 from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
+from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 
 
 # --------------------------------------------------------------------------- #
@@ -335,3 +341,234 @@ def test_rate_limit_descriptors_added_for_other_teams_only():
     assert {d["key"] for d in descriptors} == {"team"}
     assert descriptors[0]["rate_limit"]["requests_per_unit"] == 10
     assert descriptors[1]["rate_limit"]["tokens_per_unit"] == 900
+
+
+# --------------------------------------------------------------------------- #
+# budget enforcement across memberships
+# --------------------------------------------------------------------------- #
+SPEND_ON = {"track_spend_across_all_user_teams": True}
+
+
+def _proxy_logging():
+    from litellm.proxy.utils import ProxyLogging
+
+    obj = ProxyLogging(user_api_key_cache=None)
+    obj.budget_alerts = AsyncMock()
+    return obj
+
+
+def _team(team_id, max_budget=None, spend=0.0, org="org-1"):
+    obj = MagicMock()
+    obj.team_id = team_id
+    obj.team_alias = f"{team_id}-alias"
+    obj.max_budget = max_budget
+    obj.spend = spend
+    obj.organization_id = org
+    return obj
+
+
+def _token_with_memberships():
+    token = UserAPIKeyAuth(api_key="sk-1", team_id="team-a", org_id="org-1")
+    token.attributed_team_ids = ["team-a", "team-b"]
+    token.attributed_org_ids = ["org-1", "org-2"]
+    return token
+
+
+@pytest.mark.asyncio
+async def test_attributed_team_budget_check_noop_when_setting_off():
+    """Populated memberships must not gate budgets unless the SPEND setting is
+    on. Enabling only rate-limit attribution must not silently add budget gates.
+    """
+    token = _token_with_memberships()
+    with patch("litellm.proxy.auth.auth_checks.get_team_object", new=AsyncMock()) as mock_get_team:
+        await _attributed_teams_max_budget_check(
+            valid_token=token,
+            prisma_client=MagicMock(),
+            user_api_key_cache=MagicMock(),
+            proxy_logging_obj=_proxy_logging(),
+            general_settings={"enforce_rate_limits_across_all_user_teams": True},
+        )
+    mock_get_team.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_attributed_team_budget_check_raises_for_other_team():
+    """A team the caller merely belongs to can now block them."""
+    token = _token_with_memberships()
+
+    async def _get_team(team_id, **kwargs):
+        return _team(team_id, max_budget=10.0)
+
+    async def _spend(counter_key, fallback_spend, max_budget=None, **kwargs):
+        return 25.0 if counter_key == "spend:team:team-b" else 0.0
+
+    with (
+        patch("litellm.proxy.auth.auth_checks.get_team_object", new=AsyncMock(side_effect=_get_team)),
+        patch("litellm.proxy.proxy_server.get_current_spend", _spend),
+    ):
+        with pytest.raises(litellm.BudgetExceededError) as exc:
+            await _attributed_teams_max_budget_check(
+                valid_token=token,
+                prisma_client=MagicMock(),
+                user_api_key_cache=MagicMock(),
+                proxy_logging_obj=_proxy_logging(),
+                general_settings=SPEND_ON,
+            )
+
+    assert exc.value.entity_id == "team-b"
+    assert exc.value.entity_type == Litellm_EntityType.TEAM.value
+    assert exc.value.current_cost == 25.0
+
+
+@pytest.mark.asyncio
+async def test_attributed_team_budget_check_skips_stamped_team():
+    """The stamped team is _team_max_budget_check's job. Checking it here too
+    would raise twice and fire a duplicate budget alert."""
+    token = _token_with_memberships()
+    seen = []
+
+    async def _get_team(team_id, **kwargs):
+        seen.append(team_id)
+        return _team(team_id, max_budget=100.0)
+
+    async def _spend(counter_key, fallback_spend, max_budget=None, **kwargs):
+        return 0.0
+
+    with (
+        patch("litellm.proxy.auth.auth_checks.get_team_object", new=AsyncMock(side_effect=_get_team)),
+        patch("litellm.proxy.proxy_server.get_current_spend", _spend),
+    ):
+        await _attributed_teams_max_budget_check(
+            valid_token=token,
+            prisma_client=MagicMock(),
+            user_api_key_cache=MagicMock(),
+            proxy_logging_obj=_proxy_logging(),
+            general_settings=SPEND_ON,
+        )
+
+    assert seen == ["team-b"]
+
+
+@pytest.mark.asyncio
+async def test_attributed_team_budget_check_passes_under_budget():
+    token = _token_with_memberships()
+
+    async def _get_team(team_id, **kwargs):
+        return _team(team_id, max_budget=100.0)
+
+    async def _spend(counter_key, fallback_spend, max_budget=None, **kwargs):
+        return 5.0
+
+    with (
+        patch("litellm.proxy.auth.auth_checks.get_team_object", new=AsyncMock(side_effect=_get_team)),
+        patch("litellm.proxy.proxy_server.get_current_spend", _spend),
+    ):
+        await _attributed_teams_max_budget_check(
+            valid_token=token,
+            prisma_client=MagicMock(),
+            user_api_key_cache=MagicMock(),
+            proxy_logging_obj=_proxy_logging(),
+            general_settings=SPEND_ON,
+        )
+
+
+@pytest.mark.asyncio
+async def test_attributed_team_budget_check_ignores_unloadable_team():
+    """A team that cannot be loaded contributes no ceiling rather than a 500."""
+    token = _token_with_memberships()
+
+    async def _get_team(team_id, **kwargs):
+        raise Exception("team row is gone")
+
+    with patch("litellm.proxy.auth.auth_checks.get_team_object", new=AsyncMock(side_effect=_get_team)):
+        await _attributed_teams_max_budget_check(
+            valid_token=token,
+            prisma_client=MagicMock(),
+            user_api_key_cache=MagicMock(),
+            proxy_logging_obj=_proxy_logging(),
+            general_settings=SPEND_ON,
+        )
+
+
+@pytest.mark.asyncio
+async def test_attributed_org_budget_check_raises_for_other_org():
+    """Only reachable when the caller's teams span several organizations."""
+    token = _token_with_memberships()
+
+    org = MagicMock()
+    org.spend = 0.0
+    org.litellm_budget_table = MagicMock()
+    org.litellm_budget_table.max_budget = 50.0
+
+    async def _spend(counter_key, fallback_spend, max_budget=None, **kwargs):
+        return 90.0 if counter_key == "spend:org:org-2" else 0.0
+
+    with (
+        patch("litellm.proxy.auth.auth_checks.get_org_object", new=AsyncMock(return_value=org)),
+        patch("litellm.proxy.proxy_server.get_current_spend", _spend),
+    ):
+        with pytest.raises(litellm.BudgetExceededError) as exc:
+            await _attributed_orgs_max_budget_check(
+                valid_token=token,
+                prisma_client=MagicMock(),
+                user_api_key_cache=MagicMock(),
+                proxy_logging_obj=_proxy_logging(),
+                general_settings=SPEND_ON,
+            )
+
+    assert exc.value.entity_id == "org-2"
+    assert exc.value.entity_type == Litellm_EntityType.ORGANIZATION.value
+
+
+@pytest.mark.asyncio
+async def test_attributed_org_budget_check_noop_when_setting_off():
+    token = _token_with_memberships()
+    with patch("litellm.proxy.auth.auth_checks.get_org_object", new=AsyncMock()) as mock_get_org:
+        await _attributed_orgs_max_budget_check(
+            valid_token=token,
+            prisma_client=MagicMock(),
+            user_api_key_cache=MagicMock(),
+            proxy_logging_obj=_proxy_logging(),
+            general_settings={},
+        )
+    mock_get_org.assert_not_called()
+
+
+# --------------------------------------------------------------------------- #
+# request-metadata stamping
+# --------------------------------------------------------------------------- #
+def test_metadata_stamped_only_when_setting_on():
+    from litellm.proxy.hooks.proxy_track_cost_callback import _metadata_id_list
+
+    token = _token_with_memberships()
+
+    data_off = {"metadata": {}}
+    with patch("litellm.proxy.proxy_server.general_settings", {}):
+        LiteLLMProxyRequestSetup._add_attributed_membership_metadata(
+            data=data_off, user_api_key_dict=token, _metadata_variable_name="metadata"
+        )
+    assert data_off["metadata"] == {}
+
+    data_on = {"metadata": {}}
+    with patch("litellm.proxy.proxy_server.general_settings", SPEND_ON):
+        LiteLLMProxyRequestSetup._add_attributed_membership_metadata(
+            data=data_on, user_api_key_dict=token, _metadata_variable_name="metadata"
+        )
+    assert data_on["metadata"]["user_api_key_attributed_team_ids"] == ["team-a", "team-b"]
+    assert data_on["metadata"]["user_api_key_attributed_org_ids"] == ["org-1", "org-2"]
+
+    # and the cost callback reads back exactly what was stamped
+    assert _metadata_id_list(data_on["metadata"], "user_api_key_attributed_team_ids") == [
+        "team-a",
+        "team-b",
+    ]
+
+
+def test_metadata_id_list_returns_none_when_absent():
+    """None, not [], so a writer can tell "attribution off" from "on, nothing
+    resolved"."""
+    from litellm.proxy.hooks.proxy_track_cost_callback import _metadata_id_list
+
+    assert _metadata_id_list({}, "user_api_key_attributed_team_ids") is None
+    assert _metadata_id_list({"user_api_key_attributed_team_ids": []}, "user_api_key_attributed_team_ids") is None
+    assert _metadata_id_list({"user_api_key_attributed_team_ids": "nope"}, "user_api_key_attributed_team_ids") is None

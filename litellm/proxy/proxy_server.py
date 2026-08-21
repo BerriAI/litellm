@@ -288,6 +288,7 @@ from litellm.proxy.auth.auth_utils import (
 )
 from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.litellm_license import LicenseCheck
+from litellm.proxy.auth.membership_attribution import attribution_targets
 from litellm.proxy.auth.model_checks import (
     expand_wildcard_deployments_for_model_info,
     get_all_fallbacks,

@@ -421,6 +421,83 @@ async def test_increment_spend_counters_increments_all_buckets(monkeypatch):
     }
 
 
+def _incremented_keys(fake_cache) -> set[str]:
+    """Counter keys passed to the Redis increment, however they were spelled."""
+    keys = set()
+    for call in fake_cache.redis_cache.async_increment.call_args_list:
+        key = call.kwargs.get("key")
+        if key is None and call.args:
+            key = call.args[0]
+        if isinstance(key, str):
+            keys.add(key)
+    return keys
+
+
+@pytest.mark.asyncio
+async def test_increment_spend_counters_fans_out_across_attributed_teams(monkeypatch):
+    """With track_spend_across_all_user_teams on, every attributed team gets its
+    own team and team-member counter, so budget gates reading Redis see the
+    spend against all of them immediately.
+
+    Baseline (single team) is 4 increments: key, team, team_member, user. Three
+    attributed teams makes it 8: key, 3 x team, 3 x team_member, user.
+    """
+    fake_cache = _make_spend_counter_cache(redis_get_value=None, redis_increment_value=5.0)
+    fake_user_cache = _make_user_api_key_cache(get_value=None)
+    monkeypatch.setattr(ps, "spend_counter_cache", fake_cache)
+    monkeypatch.setattr(ps, "user_api_key_cache", fake_user_cache)
+    monkeypatch.setattr(ps, "prisma_client", None)
+
+    async def _fake_coalesced(**kwargs):
+        return None
+
+    monkeypatch.setattr(ps.SpendCounterReseed, "coalesced", AsyncMock(side_effect=_fake_coalesced))
+
+    await ps.increment_spend_counters(
+        token="hashed-tok",
+        team_id="t1",
+        user_id="u1",
+        response_cost=5.0,
+        attributed_team_ids=["t1", "t2", "t3"],
+    )
+
+    incremented_keys = _incremented_keys(fake_cache)
+    assert {"spend:team:t1", "spend:team:t2", "spend:team:t3"} <= incremented_keys
+    assert {
+        "spend:team_member:u1:t1",
+        "spend:team_member:u1:t2",
+        "spend:team_member:u1:t3",
+    } <= incremented_keys
+    assert fake_cache.redis_cache.async_increment.call_count == 8
+
+
+@pytest.mark.asyncio
+async def test_increment_spend_counters_single_team_when_attribution_off(monkeypatch):
+    """Regression guard: without the setting, only the stamped team is charged."""
+    fake_cache = _make_spend_counter_cache(redis_get_value=None, redis_increment_value=5.0)
+    fake_user_cache = _make_user_api_key_cache(get_value=None)
+    monkeypatch.setattr(ps, "spend_counter_cache", fake_cache)
+    monkeypatch.setattr(ps, "user_api_key_cache", fake_user_cache)
+    monkeypatch.setattr(ps, "prisma_client", None)
+
+    async def _fake_coalesced(**kwargs):
+        return None
+
+    monkeypatch.setattr(ps.SpendCounterReseed, "coalesced", AsyncMock(side_effect=_fake_coalesced))
+
+    await ps.increment_spend_counters(
+        token="hashed-tok",
+        team_id="t1",
+        user_id="u1",
+        response_cost=5.0,
+    )
+
+    incremented_keys = _incremented_keys(fake_cache)
+    assert "spend:team:t1" in incremented_keys
+    assert not any(k.startswith("spend:team:t2") for k in incremented_keys)
+    assert fake_cache.redis_cache.async_increment.call_count == 4
+
+
 class _ConcurrencyProbe:
     """Stand-in for redis_cache.async_increment that pins concurrency.
 

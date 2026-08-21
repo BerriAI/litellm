@@ -4718,9 +4718,7 @@ async def _attributed_teams_max_budget_check(
     if valid_token is None or prisma_client is None:
         return
 
-    other_team_ids: Final = [
-        team_id for team_id in attributed_team_ids(valid_token) if team_id != valid_token.team_id
-    ]
+    other_team_ids: Final = [team_id for team_id in attributed_team_ids(valid_token) if team_id != valid_token.team_id]
     if not other_team_ids:
         return
 
@@ -4769,8 +4767,7 @@ async def _attributed_teams_max_budget_check(
             current_cost=spend,
             max_budget=team_object.max_budget,
             message=(
-                f"Budget has been exceeded! Team={team_id} Current cost: {spend}, "
-                f"Max budget: {team_object.max_budget}"
+                f"Budget has been exceeded! Team={team_id} Current cost: {spend}, Max budget: {team_object.max_budget}"
             ),
             entity_type=Litellm_EntityType.TEAM.value,
             entity_id=team_id,
