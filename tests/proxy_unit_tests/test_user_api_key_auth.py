@@ -1357,9 +1357,8 @@ async def test_user_model_budget_is_enforced_through_user_api_key_auth(over_budg
         new=fake_get_user_object,
     ):
         if expect_refusal:
-            with pytest.raises(Exception) as exc:
+            with pytest.raises(Exception, match=r"(?i)budget") as exc:
                 await user_api_key_auth(request=request, api_key="Bearer " + key)
-            assert "budget" in str(exc.value).lower()
             assert user_id in str(exc.value)
         else:
             result = await user_api_key_auth(request=request, api_key="Bearer " + key)
