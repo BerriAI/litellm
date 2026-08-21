@@ -1376,9 +1376,8 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 },
             )
 
-            if headers:
-                data["extra_headers"] = headers
-            response = await openai_aclient.images.generate(**data, timeout=timeout)
+            request_data: Final = {**data, "extra_headers": headers} if headers else data
+            response = await openai_aclient.images.generate(**request_data, timeout=timeout)
             stringified_response: Final = response.model_dump()
             ## LOGGING
             logging_obj.post_call(
@@ -1461,9 +1460,8 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             )
 
             ## COMPLETION CALL
-            if headers:
-                data["extra_headers"] = headers
-            _response: Final = openai_client.images.generate(**data, timeout=timeout)
+            request_data: Final = {**data, "extra_headers": headers} if headers else data
+            _response: Final = openai_client.images.generate(**request_data, timeout=timeout)
 
             response: Final = _response.model_dump()
             ## LOGGING
