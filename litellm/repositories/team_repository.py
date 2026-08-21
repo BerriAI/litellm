@@ -3,9 +3,10 @@ Team repository for database operations on LiteLLM_TeamTable.
 """
 
 import json
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
+from contextlib import AbstractAsyncContextManager
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, Protocol
 
 from pydantic import TypeAdapter
 
@@ -13,11 +14,44 @@ from litellm.models.team import LiteLLM_TeamTable, Member
 from litellm.repositories.base_repository import (
     BaseRepository,
     DbRecord,
+    PrismaCrudActions,
     record_to_dict,
 )
 
 if TYPE_CHECKING:
     from prisma import Prisma
+
+
+class _TeamTables(Protocol):
+    """The Prisma tables this repository reaches, on the client or inside a transaction."""
+
+    litellm_teamtable: PrismaCrudActions
+    litellm_deletedteamtable: PrismaCrudActions
+
+
+class _TeamArrays(Protocol):
+    """The string array columns of a team row, which the domain model leaves untyped."""
+
+    @property
+    def members(self) -> Sequence[str]: ...
+
+    @property
+    def admins(self) -> Sequence[str]: ...
+
+    @property
+    def models(self) -> Sequence[str]: ...
+
+
+def _team_arrays(team: LiteLLM_TeamTable) -> _TeamArrays:
+    """View a team's untyped list columns as sequences of ids."""
+    return team
+
+
+class _TeamDatabase(_TeamTables, Protocol):
+    """The Prisma client surface used for team reads, writes, and archival transactions."""
+
+    def tx(self) -> AbstractAsyncContextManager[_TeamTables]: ...
+
 
 _MEMBERS_WITH_ROLES_ADAPTER: Final = TypeAdapter(list[Member])
 _JSON_ENCODED_TEAM_FIELDS: Final = (
@@ -34,12 +68,16 @@ class TeamRepository(BaseRepository[LiteLLM_TeamTable]):
     """Repository for team database operations."""
 
     @property
-    def table(self) -> Any:  # any-ok: PrismaClient.db is an untyped runtime wrapper
-        return self.prisma_client.db.litellm_teamtable
+    def _db(self) -> _TeamDatabase:
+        return self.prisma_client.db
 
     @property
-    def deleted_table(self) -> Any:  # any-ok: PrismaClient.db is an untyped runtime wrapper
-        return self.prisma_client.db.litellm_deletedteamtable
+    def table(self) -> Any:  # any-ok: callers reach model-specific actions this repository does not use
+        return self._db.litellm_teamtable
+
+    @property
+    def deleted_table(self) -> PrismaCrudActions:
+        return self._db.litellm_deletedteamtable
 
     @property
     def model_class(self) -> type[LiteLLM_TeamTable]:
@@ -75,8 +113,8 @@ class TeamRepository(BaseRepository[LiteLLM_TeamTable]):
         )
         if not rows:
             return None
-        raw_value: Final = rows[0]["members_with_roles"]
-        parsed: Final = json.loads(raw_value) if isinstance(raw_value, str) else raw_value
+        raw_value: Final[object] = rows[0]["members_with_roles"]
+        parsed: Final[object] = json.loads(raw_value) if isinstance(raw_value, str) else raw_value
         if not parsed:
             return []
         return _MEMBERS_WITH_ROLES_ADAPTER.validate_python(parsed)
@@ -86,24 +124,24 @@ class TeamRepository(BaseRepository[LiteLLM_TeamTable]):
 
     async def find_by_alias(self, team_alias: str) -> LiteLLM_TeamTable | None:
         """Find a team by alias."""
-        records: Final = await self.table.find_many(where={"team_alias": team_alias})
+        records: Final = await self._crud_actions.find_many(where={"team_alias": team_alias})
         if records:
             return self._to_model(records[0])
         return None
 
     async def find_by_organization_id(self, organization_id: str) -> list[LiteLLM_TeamTable]:
         """Find all teams belonging to an organization."""
-        records: Final = await self.table.find_many(where={"organization_id": organization_id})
+        records: Final = await self._crud_actions.find_many(where={"organization_id": organization_id})
         return self._to_model_list(records)
 
     async def find_by_member(self, user_id: str) -> list[LiteLLM_TeamTable]:
         """Find all teams where user is a member."""
-        records: Final = await self.table.find_many(where={"members": {"has": user_id}})
+        records: Final = await self._crud_actions.find_many(where={"members": {"has": user_id}})
         return self._to_model_list(records)
 
     async def find_by_admin(self, user_id: str) -> list[LiteLLM_TeamTable]:
         """Find all teams where user is an admin."""
-        records: Final = await self.table.find_many(where={"admins": {"has": user_id}})
+        records: Final = await self._crud_actions.find_many(where={"admins": {"has": user_id}})
         return self._to_model_list(records)
 
     async def create_team(
@@ -232,7 +270,7 @@ class TeamRepository(BaseRepository[LiteLLM_TeamTable]):
         archive_data["litellm_changed_by"] = litellm_changed_by
         archive_data["deleted_at"] = datetime.utcnow()
 
-        async with self.prisma_client.db.tx() as tx:
+        async with self._db.tx() as tx:
             await tx.litellm_deletedteamtable.create(data=archive_data)
             await tx.litellm_teamtable.delete(where={"team_id": team_id})
 
@@ -293,7 +331,7 @@ class TeamRepository(BaseRepository[LiteLLM_TeamTable]):
         if not await self.exists(team_id, id_field="team_id"):
             return None
 
-        record: Final = await self.table.update(
+        record: Final = await self._crud_actions.update(
             where={"team_id": team_id},
             data={"members": {"push": user_id}},
         )
@@ -310,7 +348,7 @@ class TeamRepository(BaseRepository[LiteLLM_TeamTable]):
         if team is None:
             return None
 
-        members: Final = [m for m in team.members if m != user_id]
+        members: Final = [m for m in _team_arrays(team).members if m != user_id]
         return await self.update(team_id, {"members": members}, id_field="team_id")
 
     async def add_admin(self, team_id: str, user_id: str) -> LiteLLM_TeamTable | None:
@@ -318,7 +356,7 @@ class TeamRepository(BaseRepository[LiteLLM_TeamTable]):
         if not await self.exists(team_id, id_field="team_id"):
             return None
 
-        record: Final = await self.table.update(
+        record: Final = await self._crud_actions.update(
             where={"team_id": team_id},
             data={"admins": {"push": user_id}},
         )
@@ -335,7 +373,7 @@ class TeamRepository(BaseRepository[LiteLLM_TeamTable]):
         if team is None:
             return None
 
-        admins: Final = [a for a in team.admins if a != user_id]
+        admins: Final = [a for a in _team_arrays(team).admins if a != user_id]
         return await self.update(team_id, {"admins": admins}, id_field="team_id")
 
     async def add_models(self, team_id: str, models: list[str]) -> LiteLLM_TeamTable | None:
@@ -343,7 +381,7 @@ class TeamRepository(BaseRepository[LiteLLM_TeamTable]):
         if not await self.exists(team_id, id_field="team_id"):
             return None
 
-        record: Final = await self.table.update(
+        record: Final = await self._crud_actions.update(
             where={"team_id": team_id},
             data={"models": {"push": models}},
         )
@@ -360,5 +398,5 @@ class TeamRepository(BaseRepository[LiteLLM_TeamTable]):
         if team is None:
             return None
 
-        current_models: Final = [m for m in team.models if m not in models]
+        current_models: Final = [m for m in _team_arrays(team).models if m not in models]
         return await self.update(team_id, {"models": current_models}, id_field="team_id")

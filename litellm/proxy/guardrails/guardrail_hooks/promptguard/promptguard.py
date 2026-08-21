@@ -7,7 +7,10 @@ before and after LLM calls.
 """
 
 import os
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional
+
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
 from litellm.exceptions import GuardrailRaisedException
@@ -20,6 +23,7 @@ from litellm.llms.custom_httpx.http_handler import (
     httpxSpecialProvider,
 )
 from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
@@ -32,6 +36,16 @@ if TYPE_CHECKING:
 
 _DEFAULT_API_BASE: Final = "https://api.promptguard.co"
 _GUARD_ENDPOINT: Final = "/api/v1/guard"
+
+
+class PromptGuardResult(TypedDict, total=False):
+    """The fields this guardrail reads off a PromptGuard Guard API response."""
+
+    decision: ReadOnly[str]
+    threat_type: ReadOnly[str]
+    event_id: ReadOnly[str]
+    confidence: ReadOnly[float]
+    redacted_messages: ReadOnly[list[AllMessageValues]]
 
 
 class PromptGuardMissingCredentials(Exception):
@@ -96,7 +110,7 @@ class PromptGuardGuardrail(CustomGuardrail):
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
-        request_data: dict,
+        request_data: Mapping[str, object],
         input_type: Literal["request", "response"],
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> GenericGuardrailAPIInputs:
@@ -114,7 +128,7 @@ class PromptGuardGuardrail(CustomGuardrail):
 
         direction: Final = "input" if input_type == "request" else "output"
 
-        payload: Final[dict[str, Any]] = {
+        payload: Final[dict[str, object]] = {
             "messages": messages,
             "direction": direction,
         }
@@ -144,7 +158,7 @@ class PromptGuardGuardrail(CustomGuardrail):
                 timeout=10.0,
             )
             response.raise_for_status()
-            result: Final = response.json()
+            result: Final[PromptGuardResult] = response.json()
         except Exception as exc:
             verbose_proxy_logger.error("PromptGuard API error: %s", str(exc))
             if self.block_on_error:

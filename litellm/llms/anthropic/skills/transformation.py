@@ -2,9 +2,10 @@
 Anthropic Skills API configuration and transformations
 """
 
-from typing import Any, Final
+from typing import Final
 
 import httpx
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment
@@ -21,6 +22,25 @@ from litellm.types.llms.anthropic_skills import (
 )
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
+
+
+class _SkillPayload(TypedDict):
+    """The JSON body Anthropic returns for a single skill, before ``Skill`` validates it."""
+
+    id: ReadOnly[str]
+    created_at: ReadOnly[str]
+    source: ReadOnly[str]
+    updated_at: ReadOnly[str]
+    display_title: NotRequired[ReadOnly[str | None]]
+    latest_version: NotRequired[ReadOnly[str | None]]
+    type: NotRequired[ReadOnly[str]]
+
+
+class _DeleteSkillPayload(TypedDict):
+    """The JSON body Anthropic returns for a skill deletion, before ``DeleteSkillResponse`` validates it."""
+
+    id: ReadOnly[str]
+    type: NotRequired[ReadOnly[str]]
 
 
 class AnthropicSkillsConfig(BaseSkillsAPIConfig):
@@ -104,7 +124,7 @@ class AnthropicSkillsConfig(BaseSkillsAPIConfig):
         logging_obj: LiteLLMLoggingObj,
     ) -> Skill:
         """Transform Anthropic response to Skill object"""
-        response_json: Final = raw_response.json()
+        response_json: Final[_SkillPayload] = raw_response.json()
         verbose_logger.debug("Transforming create skill response: %s", response_json)
 
         return Skill(**response_json)
@@ -122,7 +142,7 @@ class AnthropicSkillsConfig(BaseSkillsAPIConfig):
         url: Final = self.get_complete_url(api_base=api_base, endpoint="skills")
 
         # Build query parameters
-        query_params: Final[dict[str, Any]] = {}
+        query_params: Final[dict[str, int | str]] = {}
         if "limit" in list_params and list_params["limit"]:
             query_params["limit"] = list_params["limit"]
         if "page" in list_params and list_params["page"]:
@@ -168,7 +188,7 @@ class AnthropicSkillsConfig(BaseSkillsAPIConfig):
         logging_obj: LiteLLMLoggingObj,
     ) -> Skill:
         """Transform Anthropic response to Skill object"""
-        response_json: Final = raw_response.json()
+        response_json: Final[_SkillPayload] = raw_response.json()
         verbose_logger.debug("Transforming get skill response: %s", response_json)
 
         return Skill(**response_json)
@@ -193,7 +213,7 @@ class AnthropicSkillsConfig(BaseSkillsAPIConfig):
         logging_obj: LiteLLMLoggingObj,
     ) -> DeleteSkillResponse:
         """Transform Anthropic response to DeleteSkillResponse"""
-        response_json: Final = raw_response.json()
+        response_json: Final[_DeleteSkillPayload] = raw_response.json()
         verbose_logger.debug("Transforming delete skill response: %s", response_json)
 
         return DeleteSkillResponse(**response_json)

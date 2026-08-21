@@ -15,6 +15,8 @@ restriction intact.
 """
 
 import operator
+from collections.abc import Callable
+from types import CodeType
 from typing import Any, Final
 
 from RestrictedPython import (
@@ -58,7 +60,7 @@ class AsyncAwareTransformer(RestrictingNodeTransformer):
         return self.node_contents_visit(node)
 
 
-_INPLACE_OPS: Final[dict[str, Any]] = {
+_INPLACE_OPS: Final[dict[str, Callable[[object, object], object]]] = {
     "+=": operator.iadd,
     "-=": operator.isub,
     "*=": operator.imul,
@@ -75,7 +77,7 @@ _INPLACE_OPS: Final[dict[str, Any]] = {
 }
 
 
-def _inplacevar_(op: str, x: Any, y: Any) -> Any:
+def _inplacevar_(op: str, x: object, y: object) -> object:
     # RestrictedPython rewrites ``x += 1`` on a simple name into
     # ``x = _inplacevar_("+=", x, 1)``. The package deliberately ships no
     # default, so we dispatch through ``operator``'s in-place helpers, which
@@ -86,7 +88,7 @@ def _inplacevar_(op: str, x: Any, y: Any) -> Any:
     return fn(x, y)
 
 
-def _build_sandbox_builtins() -> dict[str, Any]:
+def _build_sandbox_builtins() -> dict[str, object]:
     # ``limited_builtins`` overrides ``list``/``tuple``/``range`` from
     # ``safe_builtins`` with bounds-checking variants (e.g. ``limited_range``
     # rejects ``range(10**18)``). ``utility_builtins`` adds ``set``,
@@ -98,14 +100,14 @@ def _build_sandbox_builtins() -> dict[str, Any]:
     }
 
 
-def build_sandbox_globals() -> dict[str, Any]:
+def build_sandbox_globals() -> dict[str, object]:
     """Assemble the globals dict for executing guardrail code.
 
     Includes the LiteLLM-provided primitives (``regex_match``, ``http_get``,
     ``allow``/``block``/``modify``, etc.) plus the RestrictedPython guards
     that the compiled bytecode expects to find by name.
     """
-    sandbox: Final[dict[str, Any]] = get_custom_code_primitives().copy()
+    sandbox: Final[dict[str, object]] = get_custom_code_primitives().copy()
     sandbox["__builtins__"] = _build_sandbox_builtins()
     sandbox["_getattr_"] = safer_getattr
     sandbox["_getitem_"] = default_guarded_getitem
@@ -116,7 +118,7 @@ def build_sandbox_globals() -> dict[str, Any]:
     return sandbox
 
 
-def compile_sandboxed(source: str, filename: str = "<guardrail>") -> Any:
+def compile_sandboxed(source: str, filename: str = "<guardrail>") -> CodeType:
     """Compile guardrail source with RestrictedPython's AST transformer.
 
     Raises ``SyntaxError`` on either a Python syntax error or a restricted

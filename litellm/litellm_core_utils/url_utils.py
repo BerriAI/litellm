@@ -20,6 +20,7 @@ Admins can opt out via two ``litellm`` globals (wired from proxy config):
 """
 
 import socket
+from collections.abc import Sequence
 from ipaddress import ip_address, ip_network
 from typing import Any, Final
 from urllib.parse import quote, urlparse, urlunparse
@@ -44,7 +45,7 @@ class SSRFError(ValueError):
     """Raised when a URL targets a blocked network."""
 
 
-def encode_url_path_segment(value: Any, *, field_name: str = "path parameter") -> str:
+def encode_url_path_segment(value: object, *, field_name: str = "path parameter") -> str:
     """Percent-encode one user-controlled URL path segment.
 
     ``urllib.parse.quote(..., safe="")`` intentionally leaves RFC 3986
@@ -64,7 +65,7 @@ def encode_url_path_segment(value: Any, *, field_name: str = "path parameter") -
     return quote(value_str, safe="")
 
 
-def encode_url_path_segments(value: Any, *, field_name: str = "path") -> str:
+def encode_url_path_segments(value: object, *, field_name: str = "path") -> str:
     """Percent-encode a user-controlled URL path made of multiple segments.
 
     Empty segments are rejected, so leading, trailing, or consecutive slashes
@@ -77,9 +78,9 @@ def encode_url_path_segments(value: Any, *, field_name: str = "path") -> str:
     if value_str == "":
         raise ValueError(f"{field_name} is required")
 
-    encoded_segments: Final = []
-    for segment in value_str.split("/"):
-        encoded_segments.append(encode_url_path_segment(segment, field_name=field_name))
+    encoded_segments: Final = tuple(
+        encode_url_path_segment(segment, field_name=field_name) for segment in value_str.split("/")
+    )
 
     return "/".join(encoded_segments)
 
@@ -202,7 +203,7 @@ def _format_host_header(hostname: str, port: int, default_port: int) -> str:
     return f"{bracketed}:{port}"
 
 
-def _sockaddr_host(sockaddr: Any) -> str:
+def _sockaddr_host(sockaddr: Sequence[object]) -> str:
     """Return the host element of a ``getaddrinfo`` sockaddr as ``str``.
 
     ``getaddrinfo`` with ``IPPROTO_TCP`` returns AF_INET / AF_INET6 sockaddrs
@@ -285,7 +286,7 @@ def validate_url(url: str) -> tuple[str, str]:
         raise SSRFError(f"No addresses found for '{hostname}'")
 
     if not is_allowlisted:
-        for family, type_, proto, canonname, sockaddr in addrinfo:
+        for _family, _type, _proto, _canonname, sockaddr in addrinfo:
             resolved_ip = _sockaddr_host(sockaddr)
             if _is_blocked_ip(resolved_ip):
                 raise SSRFError(
@@ -363,7 +364,7 @@ def assert_same_origin(candidate_url: str, expected_url: str) -> None:
 _MAX_REDIRECTS: Final = 10
 
 
-def _extract_redirect_url(response: Any, request_url: str) -> str:
+def _extract_redirect_url(response: httpx.Response, request_url: str) -> str:
     """Extract and resolve the redirect target from a response's Location header."""
     location: Final = response.headers.get("location")
     if not isinstance(location, str) or not location:
@@ -372,7 +373,7 @@ def _extract_redirect_url(response: Any, request_url: str) -> str:
     return str(httpx.URL(request_url).join(location))
 
 
-def safe_get(client: Any, url: str, **kwargs: Any) -> Any:
+def safe_get(client: Any, url: str, **kwargs: Any) -> httpx.Response:
     """
     Fetch a user-supplied URL with SSRF protection on every redirect hop.
 
@@ -398,7 +399,7 @@ def safe_get(client: Any, url: str, **kwargs: Any) -> Any:
     caller_headers: Final = kwargs.pop("headers", {})
     for _ in range(_MAX_REDIRECTS):
         validated_url, original_host = validate_url(url)
-        response = client.get(
+        response: httpx.Response = client.get(
             validated_url,
             headers={**caller_headers, "Host": original_host},
             follow_redirects=False,
@@ -412,7 +413,7 @@ def safe_get(client: Any, url: str, **kwargs: Any) -> Any:
     raise SSRFError("Too many redirects")
 
 
-async def async_safe_get(client: Any, url: str, **kwargs: Any) -> Any:
+async def async_safe_get(client: Any, url: str, **kwargs: Any) -> httpx.Response:
     """Async version of safe_get."""
     if not getattr(litellm, "user_url_validation", True):
         kwargs.setdefault("follow_redirects", True)
@@ -421,7 +422,7 @@ async def async_safe_get(client: Any, url: str, **kwargs: Any) -> Any:
     caller_headers: Final = kwargs.pop("headers", {})
     for _ in range(_MAX_REDIRECTS):
         validated_url, original_host = validate_url(url)
-        response = await client.get(
+        response: httpx.Response = await client.get(
             validated_url,
             headers={**caller_headers, "Host": original_host},
             follow_redirects=False,

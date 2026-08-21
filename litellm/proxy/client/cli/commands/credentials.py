@@ -1,12 +1,40 @@
 import json
+from collections.abc import Mapping, Sequence
 from typing import Final, Literal
 
 import click
 import requests
 import rich
 from rich.table import Table
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from ...credentials import CredentialsManagementClient
+
+
+class _CliContext(TypedDict):
+    """Values the top-level CLI group stores on the click context."""
+
+    base_url: ReadOnly[str]
+    api_key: ReadOnly[str | None]
+
+
+class _CliContextView(TypedDict):
+    obj: ReadOnly[_CliContext]
+
+
+class _CredentialRow(TypedDict):
+    """Single credential entry as returned by ``GET /credentials``."""
+
+    credential_name: ReadOnly[NotRequired[str]]
+    credential_info: ReadOnly[NotRequired[Mapping[str, object]]]
+
+
+class _CredentialRowsView(TypedDict):
+    rows: ReadOnly[Sequence[_CredentialRow]]
+
+
+class _JsonBodyView(TypedDict):
+    body: ReadOnly[object]
 
 
 @click.group()
@@ -25,7 +53,8 @@ def credentials():
 @click.pass_context
 def list(ctx: click.Context, output_format: Literal["table", "json"]):
     """List all credentials"""
-    client: Final = CredentialsManagementClient(ctx.obj["base_url"], ctx.obj["api_key"])
+    context: Final[_CliContextView] = {"obj": ctx.obj}
+    client: Final = CredentialsManagementClient(context["obj"]["base_url"], context["obj"]["api_key"])
     response: Final = client.list()
     assert isinstance(response, dict)
 
@@ -39,7 +68,8 @@ def list(ctx: click.Context, output_format: Literal["table", "json"]):
         table.add_column("Custom LLM Provider", style="green")
 
         # Add rows
-        for cred in response.get("credentials", []):
+        credential_rows: Final[_CredentialRowsView] = {"rows": response.get("credentials", [])}
+        for cred in credential_rows["rows"]:
             info = cred.get("credential_info", {})
             table.add_row(
                 str(cred.get("credential_name", "")),
@@ -66,7 +96,8 @@ def list(ctx: click.Context, output_format: Literal["table", "json"]):
 @click.pass_context
 def create(ctx: click.Context, credential_name: str, info: str, values: str):
     """Create a new credential"""
-    client: Final = CredentialsManagementClient(ctx.obj["base_url"], ctx.obj["api_key"])
+    context: Final[_CliContextView] = {"obj": ctx.obj}
+    client: Final = CredentialsManagementClient(context["obj"]["base_url"], context["obj"]["api_key"])
     try:
         credential_info: Final = json.loads(info)
         credential_values: Final = json.loads(values)
@@ -79,8 +110,8 @@ def create(ctx: click.Context, credential_name: str, info: str, values: str):
     except requests.exceptions.HTTPError as e:
         click.echo(f"Error: HTTP {e.response.status_code}", err=True)
         try:
-            error_body: Final = e.response.json()
-            rich.print_json(data=error_body)
+            error_body: Final[_JsonBodyView] = {"body": e.response.json()}
+            rich.print_json(data=error_body["body"])
         except json.JSONDecodeError:
             click.echo(e.response.text, err=True)
         raise click.Abort()
@@ -91,15 +122,16 @@ def create(ctx: click.Context, credential_name: str, info: str, values: str):
 @click.pass_context
 def delete(ctx: click.Context, credential_name: str):
     """Delete a credential by name"""
-    client: Final = CredentialsManagementClient(ctx.obj["base_url"], ctx.obj["api_key"])
+    context: Final[_CliContextView] = {"obj": ctx.obj}
+    client: Final = CredentialsManagementClient(context["obj"]["base_url"], context["obj"]["api_key"])
     try:
         response: Final = client.delete(credential_name)
         rich.print_json(data=response)
     except requests.exceptions.HTTPError as e:
         click.echo(f"Error: HTTP {e.response.status_code}", err=True)
         try:
-            error_body: Final = e.response.json()
-            rich.print_json(data=error_body)
+            error_body: Final[_JsonBodyView] = {"body": e.response.json()}
+            rich.print_json(data=error_body["body"])
         except json.JSONDecodeError:
             click.echo(e.response.text, err=True)
         raise click.Abort()
@@ -110,6 +142,7 @@ def delete(ctx: click.Context, credential_name: str):
 @click.pass_context
 def get(ctx: click.Context, credential_name: str):
     """Get a credential by name"""
-    client: Final = CredentialsManagementClient(ctx.obj["base_url"], ctx.obj["api_key"])
+    context: Final[_CliContextView] = {"obj": ctx.obj}
+    client: Final = CredentialsManagementClient(context["obj"]["base_url"], context["obj"]["api_key"])
     response: Final = client.get(credential_name)
     rich.print_json(data=response)

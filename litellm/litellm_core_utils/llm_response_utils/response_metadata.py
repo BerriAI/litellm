@@ -1,5 +1,8 @@
 import datetime
+from collections.abc import Mapping
 from typing import Any, Final
+
+import httpx
 
 from litellm.constants import LITELLM_DETAILED_TIMING
 from litellm.litellm_core_utils.core_helpers import process_response_headers
@@ -25,11 +28,7 @@ class ResponseMetadata:
     @property
     def supports_response_time(self) -> bool:
         """Check if response type supports timing metrics"""
-        return (
-            isinstance(self.result, ModelResponse)
-            or isinstance(self.result, EmbeddingResponse)
-            or isinstance(self.result, TranscriptionResponse)
-        )
+        return isinstance(self.result, (ModelResponse, EmbeddingResponse, TranscriptionResponse))
 
     def set_hidden_params(self, logging_obj: LiteLLMLoggingObject, model: str | None, kwargs: dict) -> None:
         """Set hidden parameters on the response"""
@@ -45,14 +44,14 @@ class ResponseMetadata:
                 result=self.result, litellm_model_name=model, router_model_id=model_id
             ),
             "additional_headers": process_response_headers(
-                self._get_value_from_hidden_params("additional_headers") or {},
+                self._get_additional_headers_from_hidden_params() or {},
                 preserve_litellm_internal_headers=True,
             ),
             "litellm_model_name": model,
         }
         self._update_hidden_params(new_params)
 
-    def _update_hidden_params(self, new_params: dict) -> None:
+    def _update_hidden_params(self, new_params: Mapping[str, object]) -> None:
         """
         Update hidden params - handles when self._hidden_params is a dict or HiddenParams object
         """
@@ -64,12 +63,12 @@ class ResponseMetadata:
             for key, value in new_params.items():
                 setattr(self._hidden_params, key, value)
 
-    def _get_value_from_hidden_params(self, key: str) -> Any | None:
-        """Get value from hidden params - handles when self._hidden_params is a dict or HiddenParams object"""
+    def _get_additional_headers_from_hidden_params(self) -> httpx.Headers | dict[str, str] | None:
+        """Get `additional_headers` from hidden params - handles when self._hidden_params is a dict or HiddenParams object"""
         if isinstance(self._hidden_params, dict):
-            return self._hidden_params.get(key, None)
+            return self._hidden_params.get("additional_headers", None)
         elif isinstance(self._hidden_params, HiddenParams):
-            return getattr(self._hidden_params, key, None)
+            return getattr(self._hidden_params, "additional_headers", None)
 
     def set_timing_metrics(
         self,
@@ -96,7 +95,7 @@ class ResponseMetadata:
         #########################################################
         # 2. Add LiteLLM overhead duration
         #########################################################
-        llm_api_duration_ms: Final = logging_obj.model_call_details.get("llm_api_duration_ms")
+        llm_api_duration_ms: Final[float | None] = logging_obj.model_call_details.get("llm_api_duration_ms")
         if llm_api_duration_ms is not None:
             overhead_ms = round(total_response_time_ms - llm_api_duration_ms, 4)
             self._update_hidden_params(
@@ -108,7 +107,7 @@ class ResponseMetadata:
         #########################################################
         # 3. Add callback processing duration
         #########################################################
-        callback_duration_ms: Final = getattr(logging_obj, "callback_duration_ms", None)
+        callback_duration_ms: Final[float | None] = getattr(logging_obj, "callback_duration_ms", None)
         if callback_duration_ms is not None:
             self._update_hidden_params(
                 {
@@ -136,17 +135,17 @@ class ResponseMetadata:
         # 5. Detailed per-phase timing (opt-in via env var)
         #########################################################
         if LITELLM_DETAILED_TIMING and llm_api_duration_ms is not None:
-            detailed: Final[dict] = {
+            detailed: Final[dict[str, float]] = {
                 "timing_llm_api_ms": round(llm_api_duration_ms, 4),
             }
 
             # message copy time from Logging.__init__()
-            msg_copy_ms: Final = getattr(logging_obj, "message_copy_duration_ms", None)
+            msg_copy_ms: Final[float | None] = getattr(logging_obj, "message_copy_duration_ms", None)
             if msg_copy_ms is not None:
                 detailed["timing_message_copy_ms"] = round(msg_copy_ms, 4)
 
             # pre-processing = time from request start to LLM API call start
-            api_call_start: Final = logging_obj.model_call_details.get("api_call_start_time")
+            api_call_start: Final[datetime.datetime | None] = logging_obj.model_call_details.get("api_call_start_time")
             if api_call_start is not None and start_time is not None:
                 pre_ms: Final = (api_call_start - start_time).total_seconds() * 1000
                 detailed["timing_pre_processing_ms"] = round(pre_ms, 4)

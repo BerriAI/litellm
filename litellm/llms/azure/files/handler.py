@@ -40,6 +40,11 @@ class AzureOpenAIFilesAPI(BaseAzureLLM):
             data.pop("expires_after", None)
         return data
 
+    @staticmethod
+    def _to_openai_file_object(response: FileObject) -> OpenAIFileObject:
+        """Re-wrap the SDK's file object as litellm's, carrying every field across."""
+        return OpenAIFileObject(**response.model_dump())
+
     async def acreate_file(
         self,
         create_file_data: CreateFileRequest,
@@ -48,7 +53,7 @@ class AzureOpenAIFilesAPI(BaseAzureLLM):
         verbose_logger.debug("create_file_data=%s", create_file_data)
         response = await openai_client.files.create(**self._prepare_create_file_data(create_file_data))
         verbose_logger.debug("create_file_response=%s", response)
-        return OpenAIFileObject(**response.model_dump())
+        return self._to_openai_file_object(response)
 
     def create_file(
         self,
@@ -61,7 +66,7 @@ class AzureOpenAIFilesAPI(BaseAzureLLM):
         max_retries: int | None,
         client: AzureOpenAI | AsyncAzureOpenAI | OpenAI | AsyncOpenAI | None = None,
         litellm_params: dict | None = None,
-    ) -> OpenAIFileObject | Coroutine[Any, Any, OpenAIFileObject]:
+    ) -> OpenAIFileObject | Coroutine[None, None, OpenAIFileObject]:
         openai_client: AzureOpenAI | AsyncAzureOpenAI | OpenAI | AsyncOpenAI | None = self.get_azure_openai_client(
             litellm_params=litellm_params or {},
             api_key=api_key,
@@ -84,7 +89,7 @@ class AzureOpenAIFilesAPI(BaseAzureLLM):
         response: Final = cast(AzureOpenAI | OpenAI, openai_client).files.create(
             **self._prepare_create_file_data(create_file_data)
         )
-        return OpenAIFileObject(**response.model_dump())
+        return self._to_openai_file_object(response)
 
     async def afile_content(
         self,
@@ -105,7 +110,7 @@ class AzureOpenAIFilesAPI(BaseAzureLLM):
         api_version: str | None = None,
         client: AzureOpenAI | AsyncAzureOpenAI | OpenAI | AsyncOpenAI | None = None,
         litellm_params: dict | None = None,
-    ) -> HttpxBinaryResponseContent | Coroutine[Any, Any, HttpxBinaryResponseContent]:
+    ) -> HttpxBinaryResponseContent | Coroutine[None, None, HttpxBinaryResponseContent]:
         openai_client: AzureOpenAI | AsyncAzureOpenAI | OpenAI | AsyncOpenAI | None = self.get_azure_openai_client(
             litellm_params=litellm_params or {},
             api_key=api_key,

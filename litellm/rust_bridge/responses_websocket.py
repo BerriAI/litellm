@@ -2,14 +2,25 @@
 
 from __future__ import annotations
 
+from collections.abc import Awaitable
 from dataclasses import dataclass
-from typing import Any, Final, Protocol
+from typing import Final, Protocol
 
 import httpx
 from websockets.exceptions import ConnectionClosedOK
 
 from litellm.rust_bridge.loader import get_native_bridge
 from litellm.rust_bridge.timeouts import timeout_to_seconds
+
+
+class RustResponsesWebSocketSocket(Protocol):
+    """Open socket handle handed back by the native bridge."""
+
+    def send_text(self, text: str) -> Awaitable[None]: ...
+
+    def recv_text(self) -> Awaitable[str | None]: ...
+
+    def close(self) -> Awaitable[None]: ...
 
 
 class RustResponsesWebSocketConnection(Protocol):
@@ -19,7 +30,7 @@ class RustResponsesWebSocketConnection(Protocol):
         url: str,
         headers: dict[str, str],
         timeout_seconds: float | None,
-    ) -> Any:
+    ) -> Awaitable[RustResponsesWebSocketSocket]:
         raise NotImplementedError
 
 
@@ -32,7 +43,7 @@ _UNSET: Final[_Unset] = _Unset()
 
 @dataclass(slots=True)
 class _RustResponsesWebSocketState:
-    connection: Any = None
+    connection: type[RustResponsesWebSocketConnection] | None = None
 
 
 _STATE: Final[_RustResponsesWebSocketState] = _RustResponsesWebSocketState()
@@ -40,13 +51,13 @@ _STATE: Final[_RustResponsesWebSocketState] = _RustResponsesWebSocketState()
 
 def set_rust_responses_websocket(
     *,
-    connection: Any = _UNSET,
+    connection: type[RustResponsesWebSocketConnection] | None | _Unset = _UNSET,
 ) -> None:
     if not isinstance(connection, _Unset):
         _STATE.connection = connection
 
 
-def load_rust_responses_websocket() -> Any:
+def load_rust_responses_websocket() -> type[RustResponsesWebSocketConnection] | None:
     if _STATE.connection is not None:
         return _STATE.connection
     native_bridge: Final = get_native_bridge()
@@ -59,7 +70,7 @@ def load_rust_responses_websocket() -> Any:
 
 
 class _ConnectionAdapter:
-    def __init__(self, connection: Any):
+    def __init__(self, connection: RustResponsesWebSocketSocket):
         self._connection = connection
 
     async def send(self, text: str) -> None:

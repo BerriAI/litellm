@@ -4,7 +4,32 @@ Streaming utilities for ChatGPT provider.
 Normalizes non-spec-compliant tool_call chunks from the ChatGPT backend API.
 """
 
-from typing import Any, Final
+from collections.abc import Sequence
+from typing import Final, Protocol
+
+from litellm.types.utils import Delta
+
+
+class ChatGPTStreamChoice(Protocol):
+    """Streaming choice as read by :class:`ChatGPTToolCallNormalizer`."""
+
+    @property
+    def delta(self) -> Delta | None: ...
+
+
+class ChatGPTStreamChunk(Protocol):
+    """Streaming chunk as read by :class:`ChatGPTToolCallNormalizer`."""
+
+    @property
+    def choices(self) -> Sequence[ChatGPTStreamChoice]: ...
+
+
+class ChatGPTChunkStream(Protocol):
+    """Sync/async chunk source wrapped by :class:`ChatGPTToolCallNormalizer`."""
+
+    def __next__(self) -> ChatGPTStreamChunk: ...
+
+    async def __anext__(self) -> ChatGPTStreamChunk: ...
 
 
 class ChatGPTToolCallNormalizer:
@@ -20,36 +45,36 @@ class ChatGPTToolCallNormalizer:
     chunks to the consumer.
     """
 
-    def __init__(self, stream: Any):
+    def __init__(self, stream: ChatGPTChunkStream):
         self._stream = stream
         self._seen_ids: dict[str, int] = {}  # tool_call_id -> assigned_index
         self._next_index: int = 0
         self._last_id: str | None = None  # tracks which tool call the next delta belongs to
 
-    def __getattr__(self, name: str) -> Any:
+    def __getattr__(self, name: str) -> object:
         return getattr(self._stream, name)
 
-    def __iter__(self):
+    def __iter__(self) -> "ChatGPTToolCallNormalizer":
         return self
 
-    def __aiter__(self):
+    def __aiter__(self) -> "ChatGPTToolCallNormalizer":
         return self
 
-    def __next__(self):
+    def __next__(self) -> ChatGPTStreamChunk:
         while True:
             chunk = next(self._stream)
             result = self._normalize(chunk)
             if result is not None:
                 return result
 
-    async def __anext__(self):
+    async def __anext__(self) -> ChatGPTStreamChunk:
         while True:
             chunk = await self._stream.__anext__()
             result = self._normalize(chunk)
             if result is not None:
                 return result
 
-    def _normalize(self, chunk: Any) -> Any:
+    def _normalize(self, chunk: ChatGPTStreamChunk) -> ChatGPTStreamChunk | None:
         """Fix tool_calls in the chunk. Returns None to skip duplicate chunks."""
         if not chunk.choices:
             return chunk

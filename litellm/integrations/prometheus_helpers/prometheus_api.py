@@ -4,8 +4,12 @@ Helper functions to query prometheus API
 
 import json
 import time
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta
 from typing import Final
+
+from httpx import Response
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm import get_secret
 from litellm._logging import verbose_logger
@@ -19,9 +23,45 @@ PROMETHEUS_SELECTED_INSTANCE: Final[str | None] = get_secret("PROMETHEUS_SELECTE
 async_http_handler: Final = get_async_httpx_client(llm_provider=httpxSpecialProvider.LoggingCallback)
 
 
+class _PrometheusSeries(TypedDict):
+    """One time series in a Prometheus query result, with its labels and its ``[timestamp, value]`` samples."""
+
+    metric: ReadOnly[Mapping[str, str]]
+    values: ReadOnly[Sequence[Sequence[float | str]]]
+
+
+class _PrometheusResultData(TypedDict):
+    """The ``data`` envelope of a Prometheus query response."""
+
+    result: ReadOnly[Sequence[_PrometheusSeries]]
+
+
+class _PrometheusQueryResponse(TypedDict):
+    """The JSON body returned by the Prometheus ``/api/v1/query`` and ``/api/v1/query_range`` endpoints."""
+
+    data: ReadOnly[_PrometheusResultData]
+
+
+class _DailySpend(TypedDict):
+    """One day of spend, in the shape ``get_daily_spend_from_prometheus`` returns."""
+
+    date: ReadOnly[str]
+    spend: ReadOnly[float]
+
+
+def _query_body(response: Response) -> _PrometheusQueryResponse:
+    """Read the untyped JSON body of a Prometheus query response."""
+    return response.json()
+
+
+def _query_series(response: Response) -> Sequence[_PrometheusSeries]:
+    """Read the time series list out of the untyped JSON body of a Prometheus query response."""
+    return response.json()["data"]["result"]
+
+
 async def get_metric_from_prometheus(
     metric_name: str,
-):
+) -> Sequence[_PrometheusSeries]:
     # Get the start of the current day in Unix timestamp
     if PROMETHEUS_URL is None:
         raise ValueError("PROMETHEUS_URL not set please set 'PROMETHEUS_URL=<>' in .env")
@@ -31,13 +71,13 @@ async def get_metric_from_prometheus(
     response: Final = await async_http_handler.get(
         f"{PROMETHEUS_URL}/api/v1/query", params={"query": query, "time": now}
     )  # End of the day
-    _json_response: Final = response.json()
+    _json_response: Final = _query_body(response)
     verbose_logger.debug("json response from prometheus /query api %s", _json_response)
-    results: Final = response.json()["data"]["result"]
+    results: Final = _query_series(response)
     return results
 
 
-async def get_fallback_metric_from_prometheus():
+async def get_fallback_metric_from_prometheus() -> str:
     """
     Gets fallback metrics from prometheus for the last 24 hours
     """
@@ -96,7 +136,7 @@ def _quote_promql_string_literal(value: str) -> str:
     return json.dumps(value, ensure_ascii=False)
 
 
-async def get_daily_spend_from_prometheus(api_key: str | None):
+async def get_daily_spend_from_prometheus(api_key: str | None) -> Sequence[_DailySpend]:
     """
     Expected Response Format:
     [
@@ -133,9 +173,9 @@ async def get_daily_spend_from_prometheus(api_key: str | None):
     }
 
     response: Final = await async_http_handler.get(url, params=params)
-    _json_response: Final = response.json()
+    _json_response: Final = _query_body(response)
     verbose_logger.debug("json response from prometheus /query api %s", _json_response)
-    results: Final = response.json()["data"]["result"]
+    results: Final = _query_series(response)
     formatted_results: Final = []
 
     for result in results:

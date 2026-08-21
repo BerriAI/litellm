@@ -7,7 +7,9 @@ GET - /audit/{id} - Get audit log by id
 GET - /audit - Get all audit logs
 """
 
-from typing import Any, Dict, List, Optional
+from collections.abc import Mapping, Sequence
+from datetime import datetime
+from typing import Final, Protocol
 
 #### AUDIT LOGGING ####
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -15,6 +17,7 @@ from litellm_enterprise.types.proxy.audit_logging_endpoints import (
     AuditLogResponse,
     PaginatedAuditLogResponse,
 )
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -22,7 +25,44 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 router = APIRouter()
 
 
-def _build_json_field_or_condition(json_key: str, value: str) -> Dict[str, Any]:
+class _AuditLogFields(TypedDict):
+    """Columns of the `LiteLLM_AuditLog` table, as returned by `model_dump()`."""
+
+    id: ReadOnly[str]
+    updated_at: ReadOnly[datetime]
+    changed_by: ReadOnly[str]
+    changed_by_api_key: ReadOnly[str]
+    action: ReadOnly[str]
+    table_name: ReadOnly[str]
+    object_id: ReadOnly[str]
+    before_value: ReadOnly[dict[str, object] | None]
+    updated_values: ReadOnly[dict[str, object] | None]
+
+
+class _AuditLogRecord(Protocol):
+    """Row of the `LiteLLM_AuditLog` table as materialised by the Prisma client."""
+
+    def model_dump(self) -> _AuditLogFields: ...
+
+
+class _AuditLogTable(Protocol):
+    """The `litellm_auditlog` accessor of the Prisma client."""
+
+    async def find_many(
+        self,
+        *,
+        where: Mapping[str, object],
+        order: Mapping[str, str],
+        skip: int,
+        take: int,
+    ) -> Sequence[_AuditLogRecord]: ...
+
+    async def count(self, *, where: Mapping[str, object]) -> int: ...
+
+    async def find_unique(self, *, where: Mapping[str, str]) -> _AuditLogRecord | None: ...
+
+
+def _build_json_field_or_condition(json_key: str, value: str) -> dict[str, object]:
     """
     Build an OR condition that matches a value inside a JSON column at the
     given key, checking both before_value and updated_values.
@@ -53,33 +93,33 @@ async def get_audit_logs(
     page: int = Query(1, ge=1),
     page_size: int = Query(10, ge=1, le=100),
     # Filter parameters
-    changed_by: Optional[str] = Query(
+    changed_by: str | None = Query(
         None, description="Filter by user or system that performed the action"
     ),
-    changed_by_api_key: Optional[str] = Query(
+    changed_by_api_key: str | None = Query(
         None, description="Filter by API key hash that performed the action"
     ),
-    action: Optional[str] = Query(
+    action: str | None = Query(
         None, description="Filter by action type (create, update, delete)"
     ),
-    table_name: Optional[str] = Query(
+    table_name: str | None = Query(
         None, description="Filter by table name that was modified"
     ),
-    object_id: Optional[str] = Query(
+    object_id: str | None = Query(
         None, description="Filter by ID of the object that was modified"
     ),
-    start_date: Optional[str] = Query(None, description="Filter logs after this date"),
-    end_date: Optional[str] = Query(None, description="Filter logs before this date"),
-    object_team_id: Optional[str] = Query(
+    start_date: str | None = Query(None, description="Filter logs after this date"),
+    end_date: str | None = Query(None, description="Filter logs before this date"),
+    object_team_id: str | None = Query(
         None,
         description="Filter by team_id present in before_value or updated_values JSON (PostgreSQL only)",
     ),
-    object_key_hash: Optional[str] = Query(
+    object_key_hash: str | None = Query(
         None,
         description="Filter by token (key hash) present in before_value or updated_values JSON (PostgreSQL only)",
     ),
     # Sorting parameters
-    sort_by: Optional[str] = Query(
+    sort_by: str | None = Query(
         None,
         description="Column to sort by (e.g. 'updated_at', 'action', 'table_name')",
     ),
@@ -102,7 +142,7 @@ async def get_audit_logs(
         )
 
     # Build filter conditions
-    where_conditions: Dict[str, Any] = {}
+    where_conditions: Final[dict[str, object]] = {}
     if changed_by:
         where_conditions["changed_by"] = changed_by
     if changed_by_api_key:
@@ -114,33 +154,31 @@ async def get_audit_logs(
     if object_id:
         where_conditions["object_id"] = object_id
     if start_date or end_date:
-        date_filter: Dict[str, Any] = {}
-        if start_date:
-            date_filter["gte"] = start_date
-        if end_date:
-            date_filter["lte"] = end_date
+        date_filter: Final[Mapping[str, str]] = {
+            bound: bound_value for bound, bound_value in (("gte", start_date), ("lte", end_date)) if bound_value
+        }
         where_conditions["updated_at"] = date_filter
 
     # JSON field filters (PostgreSQL only) — each filter is AND'd with the
     # others, but checks both before_value and updated_values internally (OR).
-    if object_team_id:
-        where_conditions["AND"] = where_conditions.get("AND", []) + [
-            _build_json_field_or_condition("team_id", object_team_id)
-        ]
-    if object_key_hash:
-        where_conditions["AND"] = where_conditions.get("AND", []) + [
-            _build_json_field_or_condition("token", object_key_hash)
+    if object_team_id or object_key_hash:
+        where_conditions["AND"] = [
+            _build_json_field_or_condition(json_key, json_value)
+            for json_key, json_value in (
+                ("team_id", object_team_id),
+                ("token", object_key_hash),
+            )
+            if json_value
         ]
 
     # Build sort conditions
-    order_by: Dict[str, Any] = {}
-    if sort_by and isinstance(sort_by, str):
-        order_by[sort_by] = sort_order
-    else:
-        order_by["updated_at"] = sort_order  # Default sort by updated_at
+    sort_column: Final[str] = sort_by if sort_by and isinstance(sort_by, str) else "updated_at"
+    order_by: Final[Mapping[str, str]] = {sort_column: sort_order}
+
+    audit_log_table: Final[_AuditLogTable] = prisma_client.db.litellm_auditlog
 
     # Get paginated results
-    audit_logs = await prisma_client.db.litellm_auditlog.find_many(
+    audit_logs: Final = await audit_log_table.find_many(
         where=where_conditions,
         order=order_by,
         skip=(page - 1) * page_size,
@@ -148,8 +186,8 @@ async def get_audit_logs(
     )
 
     # Get total count for pagination
-    total_count = await prisma_client.db.litellm_auditlog.count(where=where_conditions)
-    total_pages = -(-total_count // page_size)  # Ceiling division
+    total_count: Final = await audit_log_table.count(where=where_conditions)
+    total_pages: Final = -(-total_count // page_size)  # Ceiling division
 
     # Return paginated response
     return PaginatedAuditLogResponse(
@@ -198,8 +236,10 @@ async def get_audit_log_by_id(
             detail={"message": CommonProxyErrors.db_not_connected_error.value},
         )
 
+    audit_log_table: Final[_AuditLogTable] = prisma_client.db.litellm_auditlog
+
     # Get the audit log by ID
-    audit_log = await prisma_client.db.litellm_auditlog.find_unique(where={"id": id})
+    audit_log: Final = await audit_log_table.find_unique(where={"id": id})
 
     if audit_log is None:
         raise HTTPException(
