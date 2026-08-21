@@ -1,5 +1,6 @@
 """Built-in Sensitive Data Routing guardrail: reroutes sensitive prompts to an on-premise model."""
 
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Final
 
 from litellm.types.guardrails import GuardrailEventHooks, Mode, SupportedGuardrailIntegrations
@@ -14,8 +15,8 @@ if TYPE_CHECKING:
 
 
 def _to_event_hook(
-    mode: str | list[str] | Mode | None,
-) -> GuardrailEventHooks | list[GuardrailEventHooks] | Mode | None:
+    mode: str | Sequence[str] | Mode | None,
+) -> GuardrailEventHooks | list[GuardrailEventHooks] | Mode | None:  # mutable-ok: base type
     if mode is None or isinstance(mode, Mode):
         return mode
     if isinstance(mode, str):
