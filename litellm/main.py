@@ -6145,7 +6145,10 @@ def embedding(
             model_info=kwargs.get("model_info"),
         )
 
-    litellm_params_dict: Final = get_litellm_params(**kwargs)
+    litellm_params_dict: Final = get_litellm_params(
+        custom_llm_provider=custom_llm_provider,
+        **kwargs,
+    )
 
     logging: Final[LiteLLMLoggingObj] = litellm_logging_obj
     logging.update_environment_variables(

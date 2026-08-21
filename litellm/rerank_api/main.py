@@ -167,6 +167,7 @@ def rerank(
 
         rerank_litellm_params: Final = {
             "litellm_call_id": litellm_call_id,
+            "custom_llm_provider": _custom_llm_provider,
             "proxy_server_request": proxy_server_request,
             "model_info": model_info,
             "preset_cache_key": None,

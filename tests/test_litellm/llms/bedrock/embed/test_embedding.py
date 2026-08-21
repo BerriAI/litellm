@@ -4,7 +4,7 @@ import sys
 sys.path.insert(
     0, os.path.abspath("../../../../..")
 )  # Adds the parent directory to the system path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -54,6 +54,20 @@ def test_bedrock_embedding_titan_app_profile(model: str):
             aws_secret_access_key="mockaws_secret_access_key",
         )
         assert mock_method.call_args.kwargs["endpoint_url"] == _mock_app_ip_url
+
+
+def test_embedding_logging_params_include_resolved_provider():
+    litellm_logging_obj = MagicMock()
+
+    embedding(
+        model="bedrock/amazon.titan-embed-text-v1",
+        input=["hello"],
+        mock_response=[0.1, 0.2],
+        litellm_logging_obj=litellm_logging_obj,
+    )
+
+    logged_params = litellm_logging_obj.update_environment_variables.call_args.kwargs["litellm_params"]
+    assert logged_params["custom_llm_provider"] == "bedrock"
 
 
 @pytest.mark.parametrize(

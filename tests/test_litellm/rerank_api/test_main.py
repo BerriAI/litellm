@@ -65,3 +65,22 @@ def test_rerank_does_not_log_request_content_at_info(caplog):
     assert all(
         r.levelno == logging.DEBUG for r in optional_params_logs
     ), "optional_rerank_params must be logged at DEBUG, not INFO"
+
+
+def test_rerank_logging_params_include_resolved_provider():
+    litellm_logging_obj = MagicMock()
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.HTTPHandler.post",
+        return_value=_mock_cohere_response(),
+    ):
+        litellm.rerank(
+            model="cohere/rerank-english-v3.0",
+            query="query",
+            documents=["document"],
+            api_key="test-api-key",
+            litellm_logging_obj=litellm_logging_obj,
+        )
+
+    logged_params = litellm_logging_obj.update_from_kwargs.call_args.kwargs["litellm_params"]
+    assert logged_params["custom_llm_provider"] == "cohere"
