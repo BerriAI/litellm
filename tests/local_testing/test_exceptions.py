@@ -581,38 +581,24 @@ def test_content_policy_violation_error_streaming():
 
 
 def test_completion_perplexity_exception_on_openai_client():
+    import openai
+
+    print("perplexity test\n\n")
+    litellm.set_verbose = False
+    old_perplexity_key = os.environ["PERPLEXITYAI_API_KEY"]
+    original_openai_key = os.environ["OPENAI_API_KEY"]
+    del os.environ["PERPLEXITYAI_API_KEY"]
+    del os.environ["OPENAI_API_KEY"]
     try:
-        import openai
-
-        print("perplexity test\n\n")
-        litellm.set_verbose = False
-        ## Test azure call
-        old_azure_key = os.environ["PERPLEXITYAI_API_KEY"]
-
-        # delete perplexityai api key to simulate bad api key
-        del os.environ["PERPLEXITYAI_API_KEY"]
-
-        # temporaily delete openai api key
-        original_openai_key = os.environ["OPENAI_API_KEY"]
-        del os.environ["OPENAI_API_KEY"]
-
-        response = completion(
-            model="perplexity/mistral-7b-instruct",
-            messages=[{"role": "user", "content": "hello"}],
-        )
-        os.environ["PERPLEXITYAI_API_KEY"] = old_azure_key
+        with pytest.raises(openai.OpenAIError) as exc_info:
+            completion(
+                model="perplexity/mistral-7b-instruct",
+                messages=[{"role": "user", "content": "hello"}],
+            )
+        assert "PERPLEXITY_API_KEY" in str(exc_info.value)
+    finally:
+        os.environ["PERPLEXITYAI_API_KEY"] = old_perplexity_key
         os.environ["OPENAI_API_KEY"] = original_openai_key
-        pytest.fail("Request should have failed - bad api key")
-    except openai.AuthenticationError as e:
-        os.environ["PERPLEXITYAI_API_KEY"] = old_azure_key
-        os.environ["OPENAI_API_KEY"] = original_openai_key
-        print("exception: ", e)
-        assert (
-            "The api_key client option must be set either by passing api_key to the client or by setting the PERPLEXITY_API_KEY environment variable"
-            in str(e)
-        )
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
 
 
 # test_completion_perplexity_exception_on_openai_client()
@@ -1055,17 +1041,21 @@ async def test_exception_with_headers(sync_mode, provider, model, call_type, str
 
     if sync_mode:
         if provider == "openai":
-            openai_client = openai.OpenAI(api_key="")
+            openai_client = openai.OpenAI(api_key="sk-test")
         elif provider == "azure":
             openai_client = openai.AzureOpenAI(
-                api_key="", base_url="", api_version=litellm.AZURE_DEFAULT_API_VERSION
+                api_key="sk-test",
+                base_url="",
+                api_version=litellm.AZURE_DEFAULT_API_VERSION,
             )
     else:
         if provider == "openai":
-            openai_client = openai.AsyncOpenAI(api_key="")
+            openai_client = openai.AsyncOpenAI(api_key="sk-test")
         elif provider == "azure":
             openai_client = openai.AsyncAzureOpenAI(
-                api_key="", base_url="", api_version=litellm.AZURE_DEFAULT_API_VERSION
+                api_key="sk-test",
+                base_url="",
+                api_version=litellm.AZURE_DEFAULT_API_VERSION,
             )
 
     data = {"model": model}
