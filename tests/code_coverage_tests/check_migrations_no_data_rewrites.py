@@ -115,6 +115,8 @@ REWRITES_ROWS = frozenset({"UPDATE", "DELETE", "MERGE"})
 
 JOINS_QUERIES = ("UNION", "INTERSECT", "EXCEPT")
 
+SET_OPERATION = re.compile(rf"\b(?:{'|'.join(JOINS_QUERIES)})\b", re.IGNORECASE)
+
 STATEMENT_KEYWORDS = REWRITES_ROWS | frozenset(
     {
         "INSERT",
@@ -378,20 +380,64 @@ def offending_keyword(statement: str) -> str | None:
 def row_source_keyword(statement: str) -> str | None:
     """Which keyword supplies an `INSERT` its rows, or `None` when a literal `VALUES` list
     does. A query outside every parenthesis is the row source outright. Failing that, a
-    `VALUES` outside every parenthesis is itself the row source, so the scalar subqueries
-    and helper CTEs nested within that list do not make the insert a rewrite, though only
-    while no set operation sits beside it at that same level: one that does joins the list
-    to a second query term, and that term is the row source however deeply it is
-    parenthesised. Failing both, the rows come from a parenthesised query, which Postgres
+    set operation at that same level joins several terms, and the insert is a rewrite when
+    any one of them is a query, so each term is read on its own rather than the statement
+    read whole. Failing that, a `VALUES` outside every parenthesis is itself the row source,
+    so the scalar subqueries and helper CTEs nested within that list do not make the insert
+    a rewrite. Failing all three, the rows come from a parenthesised group, which Postgres
     accepts and which reading only the unparenthesised text would let through:
     `INSERT INTO "t" ("a") (SELECT ...)` copies a whole table."""
     outer = strip_parens(statement)
     joined = row_source_in(outer)
     if joined is not None:
         return joined
-    if contains(outer, "VALUES") and not any(contains(outer, word) for word in JOINS_QUERIES):
+    if SET_OPERATION.search(outer):
+        sources = (row_source_keyword(term) for term in set_operation_terms(statement, outer))
+        return next((source for source in sources if source is not None), None)
+    if contains(outer, "VALUES"):
         return None
-    return row_source_in(statement)
+    wrapped = parenthesised_row_source(statement)
+    return row_source_in(statement) if wrapped is None else row_source_keyword(wrapped)
+
+
+def set_operation_terms(statement: str, outer: str) -> Iterator[str]:
+    """The terms a top-level set operation joins. The operators are read from the text outside
+    every parenthesis, which `strip_parens` blanks in place rather than removing, so their
+    offsets are offsets into the statement itself and each term comes back from the original
+    text with its own parentheses intact. Reading them at that level is what keeps a set
+    operation written inside a `VALUES` list from cutting the list in half. An `ALL` or a
+    `DISTINCT` stays at the head of the term that follows, where it names no row source and
+    so reads as nothing."""
+    edges = [0]
+    for operation in SET_OPERATION.finditer(outer):
+        edges += [operation.start(), operation.end()]
+    edges.append(len(statement))
+
+    for opens, closes in zip(edges[::2], edges[1::2]):
+        yield statement[opens:closes]
+
+
+def parenthesised_row_source(statement: str) -> str | None:
+    """What the last group of parentheses closed at the statement's outermost level holds,
+    which is where an `INSERT` keeps a row source it has wrapped, the column list before it
+    being a group of its own. Postgres takes `INSERT INTO "t" ("a") (SELECT ...)` and
+    `... (VALUES (1))` alike, so reading the wrapped text on its own terms is what stops a
+    scalar subquery nested inside a wrapped `VALUES` list standing in for the rows."""
+    depth = 0
+    opens = None
+    wrapped = None
+
+    for index, character in enumerate(statement):
+        if character == "(":
+            if depth == 0:
+                opens = index
+            depth += 1
+        elif character == ")":
+            depth = max(depth - 1, 0)
+            if depth == 0 and opens is not None:
+                wrapped = statement[opens + 1 : index]
+
+    return wrapped
 
 
 def row_source_in(text: str) -> str | None:
