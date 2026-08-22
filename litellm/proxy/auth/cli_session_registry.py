@@ -6,7 +6,9 @@ it by decrypting it. This registry is the server-side record that makes a sessio
 listable and revocable: one row per login, keyed by the sha256 of the session token.
 
 A session with no row predates the registry and still authenticates until it expires;
-only a row with ``revoked_at`` set is refused.
+only a row with ``revoked_at`` set is refused. Expired rows are dead weight, so every
+registration drops them first and the table stays bounded by the number of live
+sessions rather than by every login ever made.
 """
 
 from __future__ import annotations
@@ -49,6 +51,8 @@ class _CLISessionTable(Protocol):
 
     async def update(self, where: Mapping[str, object], data: Mapping[str, object]) -> _CLISessionRecord | None: ...
 
+    async def delete_many(self, where: Mapping[str, object]) -> int: ...
+
 
 def _cli_session_table(prisma_client: PrismaClient) -> _CLISessionTable:
     table: Final[_CLISessionTable] = CLISessionRepository(prisma_client).table
@@ -71,9 +75,14 @@ async def record_cli_session(
     user_id: str,
     team_id: str | None,
 ) -> CLISessionResponse:
-    """Register a freshly minted session. Raises if the row cannot be written, so a
-    session that could never be revoked is never handed to the CLI."""
-    created: Final = await _cli_session_table(prisma_client).create(
+    """Register a freshly minted session, first dropping rows that can no longer be
+    revoked. Raises if the row cannot be written, so a session that could never be
+    revoked is never handed to the CLI."""
+    table: Final = _cli_session_table(prisma_client)
+    await table.delete_many(
+        where={"expires_at": {"lte": get_utc_datetime()}}  # mutable-ok: prisma query filters are dict-shaped
+    )
+    created: Final = await table.create(
         data={  # mutable-ok: prisma payloads are plain dicts
             "session_id": cli_session_id(session_token),
             "user_id": user_id,
