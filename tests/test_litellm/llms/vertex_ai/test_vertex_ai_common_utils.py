@@ -144,6 +144,32 @@ def test_build_vertex_schema_preserves_oneof_unions():
     }
 
 
+def test_oneof_conversion_with_excessive_nesting():
+    from litellm.llms.vertex_ai.common_utils import _convert_oneof_to_anyof
+
+    schema = {"type": "object", "properties": {}}
+    current = schema
+    for _ in range(DEFAULT_MAX_RECURSE_DEPTH + 1):
+        current["properties"] = {"nested": {"oneOf": [{"type": "string"}], "properties": {}}}
+        current = current["properties"]["nested"]
+
+    with pytest.raises(
+        ValueError,
+        match=f"Max depth of {DEFAULT_MAX_RECURSE_DEPTH} exceeded while processing schema. Please check the schema for excessive nesting.",
+    ):
+        _convert_oneof_to_anyof(schema)
+
+
+def test_oneof_conversion_ignores_non_dict_nodes():
+    from litellm.llms.vertex_ai.common_utils import _convert_oneof_to_anyof
+
+    schema = {"type": "object", "properties": {"tags": {"type": "array", "items": "string"}}}
+
+    _convert_oneof_to_anyof(schema)
+
+    assert schema == {"type": "object", "properties": {"tags": {"type": "array", "items": "string"}}}
+
+
 def test_build_vertex_schema_converts_null_branch_inside_oneof():
     from litellm.llms.vertex_ai.common_utils import _build_vertex_schema
 
