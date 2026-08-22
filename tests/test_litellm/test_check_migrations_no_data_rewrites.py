@@ -375,6 +375,19 @@ class TestEscapeHatch:
         assert _keywords(tmp_path, sql) == ("UPDATE",)
         assert _scan(tmp_path, sql)[0].line == 1
 
+    def test_a_trailing_marker_exempts_only_the_statement_it_follows(self, tmp_path):
+        sql = 'DELETE FROM "Foo" WHERE "a" = 1; UPDATE "Bar" SET "b" = 2; -- data-migration-ok: one row'
+        assert _keywords(tmp_path, sql) == ("DELETE",)
+
+    def test_a_marker_above_a_shared_line_exempts_only_the_first_statement_on_it(self, tmp_path):
+        sql = '-- data-migration-ok: one row\nUPDATE "Foo" SET "a" = 1; DELETE FROM "Bar" WHERE "b" = 2;'
+        assert _keywords(tmp_path, sql) == ("DELETE",)
+
+    def test_a_marker_on_the_opening_line_of_a_statement_exempts_that_statement(self, tmp_path):
+        sql = 'UPDATE "Foo" -- data-migration-ok: one row\n   SET "a" = 1;\nDELETE FROM "Bar";'
+        assert _keywords(tmp_path, sql) == ("DELETE",)
+        assert _scan(tmp_path, sql)[0].line == 3
+
     def test_marker_above_a_do_block_does_not_exempt_a_rewrite_inside_it(self, tmp_path):
         sql = (
             "-- data-migration-ok: bounded, this belongs to the insert below\n"

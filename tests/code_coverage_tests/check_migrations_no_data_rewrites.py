@@ -172,16 +172,38 @@ class Violation:
 
 
 @dataclass(frozen=True, slots=True)
-class Markers:
-    lines: frozenset[int]
-    standalone: frozenset[int]
+class Marker:
+    start: int
+    end: int
+    standalone: bool
 
-    def exempt(self, first: int, last: int) -> bool:
-        """Whether a statement spanning `first` to `last` carries a marker. A marker alone on
-        its line speaks for the statement below it, which is how one written above a rewrite
-        exempts it. A marker sharing its line with the statement it follows speaks for that
-        statement only, so the next statement down does not inherit the exemption."""
-        return any(line in self.lines for line in range(first, last + 1)) or first - 1 in self.standalone
+
+@dataclass(frozen=True, slots=True)
+class Markers:
+    sql: str
+    written: tuple[Marker, ...]
+
+    def exempt(self, start: int, end: int) -> bool:
+        """Whether the statement spanning `start` to `end` carries a marker."""
+        return any(self.speaks_for(marker, start, end) for marker in self.written)
+
+    def speaks_for(self, marker: Marker, start: int, end: int) -> bool:
+        """Whether a marker is written against this statement. One alone on its line speaks for
+        the statement below it, which is how a marker written above a rewrite exempts it, and one
+        sharing its line with code speaks for the statement it follows. Either is matched by where
+        it sits rather than by the line it lands on, so a second statement sharing that line does
+        not inherit the exemption. A marker inside a statement speaks for it whichever kind it is,
+        which is how one on the opening line of a long statement still covers the whole of it."""
+        if start <= marker.start < end:
+            return True
+        if marker.standalone:
+            return self.only_separators(marker.end, start)
+        return self.only_separators(end, marker.start)
+
+    def only_separators(self, start: int, end: int) -> bool:
+        """Whether nothing but statement separators lie between two points, which is what makes a
+        marker and a statement adjacent whatever whitespace and line breaks sit between them."""
+        return start <= end and not self.sql[start:end].strip(" \t\r\n;")
 
 
 def blank(text: str) -> str:
@@ -463,16 +485,17 @@ def contains(statement: str, keyword: str) -> bool:
 
 
 def read_markers(sql: str) -> Markers:
-    lines: set[int] = set()
-    standalone: set[int] = set()
+    return Markers(
+        sql,
+        tuple(
+            Marker(match.start(), match.end(), alone_on_its_line(sql, match.start()))
+            for match in MARKER.finditer(sql)
+        ),
+    )
 
-    for match in MARKER.finditer(sql):
-        line = sql.count("\n", 0, match.start()) + 1
-        lines.add(line)
-        if not sql[sql.rfind("\n", 0, match.start()) + 1 : match.start()].strip():
-            standalone.add(line)
 
-    return Markers(frozenset(lines), frozenset(standalone))
+def alone_on_its_line(sql: str, start: int) -> bool:
+    return not sql[sql.rfind("\n", 0, start) + 1 : start].strip()
 
 
 def scan(sql: str, migration: str, markers: Markers) -> Iterator[Violation]:
@@ -482,16 +505,16 @@ def scan(sql: str, migration: str, markers: Markers) -> Iterator[Violation]:
 def scan_region(
     document: str, region: str, migration: str, markers: Markers, offset: int
 ) -> Iterator[Violation]:
-    """Violations in one region of `document`, whose text begins at `offset`. Lines are
-    always counted against the whole document, so a statement nested in a dollar-quoted
-    body reports its real file line and lines up with the markers read from that file."""
+    """Violations in one region of `document`, whose text begins at `offset`. Positions are
+    always counted against the whole document, so a statement nested in a dollar-quoted body
+    reports its real file line and lines up with the markers read from that file."""
     masked, bodies, literals = mask(region)
     executed = executed_names(masked)
 
     for match in STATEMENT.finditer(masked):
-        first = line_of(document, offset + keyword_start(match))
-        last = line_of(document, offset + match.end())
-        exempt = markers.exempt(first, last)
+        start = offset + statement_start(match)
+        end = offset + match.end()
+        exempt = markers.exempt(start, end)
 
         if hands_off_sql(match.group(), executed) and not exempt:
             for start, end in literals:
@@ -501,10 +524,17 @@ def scan_region(
         keyword = offending_keyword(match.group())
         if keyword is None or exempt:
             continue
-        yield Violation(migration, first, keyword)
+        yield Violation(migration, line_of(document, offset + keyword_start(match)), keyword)
 
     for start, end in bodies:
         yield from scan_region(document, region[start:end], migration, markers, offset + start)
+
+
+def statement_start(statement: re.Match[str]) -> int:
+    """Where the statement's own text begins, past the whitespace and blanked comments it picked
+    up from whatever sat between it and the statement before it, one of which can be a marker."""
+    text = statement.group()
+    return statement.start() + len(text) - len(text.lstrip())
 
 
 def keyword_start(statement: re.Match[str]) -> int:
