@@ -1,13 +1,17 @@
 from abc import ABC, abstractmethod
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Final, Optional, cast
+from typing import TYPE_CHECKING, Any, Final, Optional
 
 from litellm.llms.base_llm.guardrail_translation.utils import (
     effective_scan_only_tool_results_for_guardrail,
     effective_skip_system_message_for_guardrail,
     effective_skip_tool_message_for_guardrail,
     scoped_structured_message_indices,
+)
+from litellm.types.llms.openai import (
+    ChatCompletionAssistantMessage,
+    ChatCompletionAssistantToolCall,
 )
 
 if TYPE_CHECKING:
@@ -167,9 +171,9 @@ class BaseTranslation(ABC):
 
     def scoped_request_conversation(
         self,
-        request_data: dict,
+        request_data: dict,  # mutable-ok: API request payload
         guardrail_to_apply: "CustomGuardrail",
-    ) -> list["AllMessageValues"] | None:
+    ) -> tuple["AllMessageValues", ...] | None:
         """
         The request conversation as the guardrail's request scan saw it: the
         handler's structured messages with the operator scoping flags applied.
@@ -186,15 +190,14 @@ class BaseTranslation(ABC):
             skip_system=effective_skip_system_message_for_guardrail(guardrail_to_apply),
             skip_tool=effective_skip_tool_message_for_guardrail(guardrail_to_apply),
         )
-        scoped: Final = [structured_messages[index] for index in scoped_indices]
-        return scoped or None
+        return tuple(structured_messages[index] for index in scoped_indices) or None
 
     def response_scan_conversation(
         self,
-        request_data: dict | None,
+        request_data: dict | None,  # mutable-ok: API request payload
         guardrail_to_apply: "CustomGuardrail",
         response_turns: Sequence["AllMessageValues"],
-    ) -> list["AllMessageValues"] | None:
+    ) -> tuple["AllMessageValues", ...] | None:
         """
         Full conversation for a response scan: the scoped request conversation
         with the model's response turns appended.
@@ -208,13 +211,13 @@ class BaseTranslation(ABC):
         request_conversation: Final = self.scoped_request_conversation(request_data, guardrail_to_apply)
         if request_conversation is None:
             return None
-        return [*request_conversation, *response_turns]
+        return (*request_conversation, *response_turns)
 
     def request_tools_for_guardrail(
         self,
-        request_data: dict,
+        request_data: dict,  # mutable-ok: API request payload
         guardrail_to_apply: "CustomGuardrail",
-    ) -> list["ChatCompletionToolParam"] | None:
+    ) -> tuple["ChatCompletionToolParam", ...] | None:
         """
         The request's tool definitions in the shape the request scan sends them.
 
@@ -225,21 +228,24 @@ class BaseTranslation(ABC):
     @staticmethod
     def assistant_turn_from_extraction(
         texts: Sequence[str],
-        tool_calls: Sequence[Mapping[str, object]] | None = None,
-    ) -> list["AllMessageValues"]:
+        tool_calls: Sequence["ChatCompletionAssistantToolCall"] | None = None,
+    ) -> tuple["ChatCompletionAssistantMessage", ...]:
         """
         One OpenAI-shape assistant turn built from the texts and tool calls a
         handler's response extraction collected; empty when there is nothing.
         """
         tool_call_items: Final = tuple(tool_calls or ())
         if not texts and not tool_call_items:
-            return []
-        turn: Final = {
-            "role": "assistant",
-            "content": "\n".join(texts),
-            **({"tool_calls": list(tool_call_items)} if tool_call_items else {}),
-        }
-        return [cast("AllMessageValues", turn)]
+            return ()
+        if tool_call_items:
+            turn_with_tools: Final[ChatCompletionAssistantMessage] = {
+                "role": "assistant",
+                "content": "\n".join(texts),
+                "tool_calls": list(tool_call_items),  # mutable-ok: the message field type is a list
+            }
+            return (turn_with_tools,)
+        turn: Final[ChatCompletionAssistantMessage] = {"role": "assistant", "content": "\n".join(texts)}
+        return (turn,)
 
     def extract_request_tool_names(self, data: dict) -> list[str]:
         """

@@ -250,15 +250,15 @@ class OpenAIResponsesHandler(BaseTranslation):
 
     def request_tools_for_guardrail(
         self,
-        request_data: dict,
+        request_data: dict,  # mutable-ok: API request payload
         guardrail_to_apply: "CustomGuardrail",
-    ) -> list[ChatCompletionToolParam] | None:
+    ) -> tuple[ChatCompletionToolParam, ...] | None:
         raw_tools: Final = request_data.get("tools")
         if not raw_tools:
             return None
-        tools_to_check: Final[list[ChatCompletionToolParam]] = []
+        tools_to_check: Final[list[ChatCompletionToolParam]] = []  # mutable-ok: _extract_and_transform_tools appends
         self._extract_and_transform_tools(raw_tools, tools_to_check)
-        return tools_to_check or None
+        return tuple(tools_to_check) or None
 
     def _remap_tools_to_responses_api_format(self, guardrailed_tools: list[Any]) -> list[dict[str, object]]:
         """
@@ -473,10 +473,12 @@ class OpenAIResponsesHandler(BaseTranslation):
                 self.assistant_turn_from_extraction(texts_to_check, tool_calls_to_check),
             )
             if structured_conversation:
-                inputs["structured_messages"] = structured_conversation
+                inputs["structured_messages"] = list(
+                    structured_conversation
+                )  # mutable-ok: GenericGuardrailAPIInputs takes list
                 response_scan_tools: Final = self.request_tools_for_guardrail(request_data, guardrail_to_apply)
                 if response_scan_tools:
-                    inputs["tools"] = response_scan_tools
+                    inputs["tools"] = list(response_scan_tools)  # mutable-ok: GenericGuardrailAPIInputs takes list
 
             guardrailed_inputs: Final = await guardrail_to_apply.apply_guardrail(
                 inputs=inputs,
@@ -574,10 +576,12 @@ class OpenAIResponsesHandler(BaseTranslation):
                     self.assistant_turn_from_extraction(texts_to_check, tool_calls_to_check),
                 )
                 if structured_conversation:
-                    inputs["structured_messages"] = structured_conversation
+                    inputs["structured_messages"] = list(
+                        structured_conversation
+                    )  # mutable-ok: GenericGuardrailAPIInputs takes list
                     response_scan_tools: Final = self.request_tools_for_guardrail(request_data, guardrail_to_apply)
                     if response_scan_tools:
-                        inputs["tools"] = response_scan_tools
+                        inputs["tools"] = list(response_scan_tools)  # mutable-ok: GenericGuardrailAPIInputs takes list
 
                 guardrailed_inputs: Final = await guardrail_to_apply.apply_guardrail(
                     inputs=inputs,

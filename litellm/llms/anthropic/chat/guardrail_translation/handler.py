@@ -44,8 +44,10 @@ from litellm.types.llms.anthropic import (
 )
 from litellm.types.llms.openai import (
     AllMessageValues,
+    ChatCompletionAssistantToolCall,
     ChatCompletionRequest,
     ChatCompletionToolCallChunk,
+    ChatCompletionToolCallFunctionChunk,
     ChatCompletionToolParam,
 )
 from litellm.types.utils import (
@@ -316,9 +318,9 @@ class AnthropicMessagesHandler(BaseTranslation):
 
     def scoped_request_conversation(
         self,
-        request_data: dict,
+        request_data: dict,  # mutable-ok: API request payload
         guardrail_to_apply: "CustomGuardrail",
-    ) -> list[AllMessageValues] | None:
+    ) -> tuple[AllMessageValues, ...] | None:
         """
         Mirror the request scan's scoping: translate without the trusted
         top-level prompt, hoist it back unless skip_system, and keep
@@ -330,27 +332,26 @@ class AnthropicMessagesHandler(BaseTranslation):
         translation_source: Final = {  # mutable-ok: API message payload
             key: value for key, value in request_data.items() if key != "system"
         }
-        full_structured_messages: Final = cast(
-            list[AllMessageValues],
-            self._translate_to_openai(translation_source).get("messages", []),
-        )
+        translated_messages: Final = self._translate_to_openai(translation_source).get("messages")
         hoisted_system_message: Final = None if skip_system else self._hoisted_top_level_system_message(request_data)
-        if hoisted_system_message is not None:
-            full_structured_messages.insert(0, hoisted_system_message)
+        full_structured_messages: Final = (
+            (hoisted_system_message, *(translated_messages or ()))
+            if hoisted_system_message is not None
+            else tuple(translated_messages or ())
+        )
         scoped_indices: Final = scoped_structured_message_indices(
             full_structured_messages,
             scan_only_tool_results=effective_scan_only_tool_results_for_guardrail(guardrail_to_apply),
             skip_system=False,
             skip_tool=effective_skip_tool_message_for_guardrail(guardrail_to_apply),
         )
-        scoped: Final = [full_structured_messages[index] for index in scoped_indices]
-        return scoped or None
+        return tuple(full_structured_messages[index] for index in scoped_indices) or None
 
     def request_tools_for_guardrail(
         self,
-        request_data: dict,
+        request_data: dict,  # mutable-ok: API request payload
         guardrail_to_apply: "CustomGuardrail",
-    ) -> list[ChatCompletionToolParam] | None:
+    ) -> tuple[ChatCompletionToolParam, ...] | None:
         if effective_scan_only_tool_results_for_guardrail(guardrail_to_apply):
             return None
         if not request_data.get("tools"):
@@ -358,8 +359,8 @@ class AnthropicMessagesHandler(BaseTranslation):
         translation_source: Final = {  # mutable-ok: API message payload
             key: value for key, value in request_data.items() if key != "system"
         }
-        tools: Final = self._translate_to_openai(translation_source).get("tools", [])
-        return list(tools) if tools else None
+        tools: Final = self._translate_to_openai(translation_source).get("tools")
+        return tuple(tools) if tools else None
 
     async def process_input_messages(
         self,
@@ -949,10 +950,12 @@ class AnthropicMessagesHandler(BaseTranslation):
                 self.assistant_turn_from_extraction(texts_to_check, tool_calls_to_check),
             )
             if structured_conversation:
-                inputs["structured_messages"] = structured_conversation
+                inputs["structured_messages"] = list(
+                    structured_conversation
+                )  # mutable-ok: GenericGuardrailAPIInputs takes list
                 response_scan_tools: Final = self.request_tools_for_guardrail(request_data, guardrail_to_apply)
                 if response_scan_tools:
-                    inputs["tools"] = response_scan_tools
+                    inputs["tools"] = list(response_scan_tools)  # mutable-ok: GenericGuardrailAPIInputs takes list
 
             guardrailed_inputs: Final = await guardrail_to_apply.apply_guardrail(
                 inputs=inputs,
@@ -1020,24 +1023,36 @@ class AnthropicMessagesHandler(BaseTranslation):
                         user_api_key_dict,
                         key="response",
                     )
-                    stream_tool_call_dicts: Final = tuple(
-                        tool_call.model_dump() for tool_call in tool_calls_list or ()
+                    stream_tool_calls: Final = tuple(
+                        ChatCompletionAssistantToolCall(
+                            id=tool_call.id,
+                            type="function",
+                            function=ChatCompletionToolCallFunctionChunk(
+                                name=tool_call.function.name,
+                                arguments=tool_call.function.arguments,
+                            ),
+                        )
+                        for tool_call in tool_calls_list or ()
                     )
                     structured_conversation: Final = self.response_scan_conversation(
                         prepared_request_data,
                         guardrail_to_apply,
                         self.assistant_turn_from_extraction(
-                            [string_so_far] if isinstance(string_so_far, str) and string_so_far else [],
-                            stream_tool_call_dicts,
+                            (string_so_far,) if isinstance(string_so_far, str) and string_so_far else (),
+                            stream_tool_calls,
                         ),
                     )
                     if structured_conversation:
-                        guardrail_inputs["structured_messages"] = structured_conversation
+                        guardrail_inputs["structured_messages"] = list(
+                            structured_conversation
+                        )  # mutable-ok: GenericGuardrailAPIInputs takes list
                         response_scan_tools: Final = self.request_tools_for_guardrail(
                             prepared_request_data, guardrail_to_apply
                         )
                         if response_scan_tools:
-                            guardrail_inputs["tools"] = response_scan_tools
+                            guardrail_inputs["tools"] = list(
+                                response_scan_tools
+                            )  # mutable-ok: GenericGuardrailAPIInputs takes list
                     _guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
                         inputs=guardrail_inputs,
                         request_data=prepared_request_data,

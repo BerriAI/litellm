@@ -33,11 +33,18 @@ from litellm.llms.base_llm.guardrail_translation.utils import (
     scoped_structured_message_indices,
 )
 from litellm.main import stream_chunk_builder
-from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
+from litellm.types.llms.openai import (
+    AllMessageValues,
+    ChatCompletionAssistantMessage,
+    ChatCompletionAssistantToolCall,
+    ChatCompletionToolCallFunctionChunk,
+    ChatCompletionToolParam,
+)
 from litellm.types.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
     coerce_stream_holdback_value,
 )
 from litellm.types.utils import (
+    ChatCompletionMessageToolCall,
     Choices,
     GenericGuardrailAPIInputs,
     ModelResponse,
@@ -400,10 +407,12 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 request_data, guardrail_to_apply, self._build_response_turns(response)
             )
             if structured_conversation:
-                inputs["structured_messages"] = structured_conversation
+                inputs["structured_messages"] = list(
+                    structured_conversation
+                )  # mutable-ok: GenericGuardrailAPIInputs takes list
                 response_scan_tools: Final = self.request_tools_for_guardrail(request_data, guardrail_to_apply)
                 if response_scan_tools:
-                    inputs["tools"] = response_scan_tools
+                    inputs["tools"] = list(response_scan_tools)  # mutable-ok: GenericGuardrailAPIInputs takes list
 
             guardrailed_inputs: Final = await guardrail_to_apply.apply_guardrail(
                 inputs=inputs,
@@ -843,39 +852,43 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
 
     def request_tools_for_guardrail(
         self,
-        request_data: dict,
+        request_data: dict,  # mutable-ok: API request payload
         guardrail_to_apply: "CustomGuardrail",
-    ) -> list[ChatCompletionToolParam] | None:
+    ) -> tuple[ChatCompletionToolParam, ...] | None:
         if effective_scan_only_tool_results_for_guardrail(guardrail_to_apply):
             return None
         tools: Final = request_data.get("tools")
-        return cast(list[ChatCompletionToolParam], tools) if tools else None
+        return tuple(tools) if tools else None
 
-    def _build_response_turns(self, response: "ModelResponse") -> list[AllMessageValues]:
+    def _build_response_turns(self, response: "ModelResponse") -> tuple[ChatCompletionAssistantMessage, ...]:
         """Assistant turns for the response-scan conversation, one per choice."""
-        return [
-            turn
-            for choice in response.choices
-            if isinstance(choice, litellm.Choices) and (turn := self._choice_assistant_turn(choice)) is not None
-        ]
+        return tuple(turn for choice in response.choices if (turn := self._choice_assistant_turn(choice)) is not None)
 
-    def _choice_assistant_turn(self, choice: Choices) -> AllMessageValues | None:
-        tool_call_dicts: Final = tuple(
-            converted
-            for tool_call in (choice.message.tool_calls or [])
-            if (converted := self._convert_tool_call_to_dict(tool_call)) is not None
+    def _choice_assistant_turn(self, choice: Choices) -> ChatCompletionAssistantMessage | None:
+        tool_calls: Final = tuple(
+            ChatCompletionAssistantToolCall(
+                id=tool_call.id,
+                type="function",
+                function=ChatCompletionToolCallFunctionChunk(
+                    name=tool_call.function.name,
+                    arguments=tool_call.function.arguments,
+                ),
+            )
+            for tool_call in choice.message.tool_calls or ()
+            if isinstance(tool_call, ChatCompletionMessageToolCall)
         )
         content: Final = choice.message.content
-        if content is None and not tool_call_dicts:
+        if content is None and not tool_calls:
             return None
-        return cast(
-            AllMessageValues,
-            {
+        if tool_calls:
+            turn_with_tools: Final[ChatCompletionAssistantMessage] = {
                 "role": "assistant",
                 "content": content,
-                **({"tool_calls": list(tool_call_dicts)} if tool_call_dicts else {}),
-            },
-        )
+                "tool_calls": list(tool_calls),  # mutable-ok: the message field type is a list
+            }
+            return turn_with_tools
+        turn: Final[ChatCompletionAssistantMessage] = {"role": "assistant", "content": content}
+        return turn
 
     def _convert_tool_call_to_dict(self, tool_call: dict[str, Any] | Any) -> dict[str, Any] | None:
         """

@@ -994,8 +994,10 @@ async def test_openai_moderation_initialize_guardrail_forwards_streaming_flags()
 @pytest.mark.asyncio
 async def test_openai_moderation_response_scan_moderates_output_not_user_prompt():
     """On response scans the conversation is available in structured_messages,
-    but moderation must still target the model output carried in texts."""
-    from unittest.mock import AsyncMock
+    but moderation must still target the model output carried in texts. The fake
+    moderation endpoint flags only the harmful model answer: moderating the
+    (benign) user prompt instead would let the flagged output through."""
+    from fastapi import HTTPException
 
     from litellm.types.utils import GenericGuardrailAPIInputs
 
@@ -1004,34 +1006,33 @@ async def test_openai_moderation_response_scan_moderates_output_not_user_prompt(
             guardrail_name="test-openai-moderation",
         )
 
-        mock_response = OpenAIModerationResponse(
-            id="modr-123",
-            model="omni-moderation-latest",
-            results=[
-                OpenAIModerationResult(
-                    flagged=False,
-                    categories={},
-                    category_scores={},
-                    category_applied_input_types={},
-                )
-            ],
-        )
-
-        with patch.object(
-            guardrail, "async_make_request", new_callable=AsyncMock, return_value=mock_response
-        ) as mock_request:
-            inputs = GenericGuardrailAPIInputs(
-                texts=["the model's answer"],
-                structured_messages=[
-                    {"role": "user", "content": "the user's question"},
-                    {"role": "assistant", "content": "the model's answer"},
+        async def moderate(input_text: str) -> OpenAIModerationResponse:
+            flagged = "harmful answer" in input_text
+            return OpenAIModerationResponse(
+                id="modr-123",
+                model="omni-moderation-latest",
+                results=[
+                    OpenAIModerationResult(
+                        flagged=flagged,
+                        categories={"violence": flagged},
+                        category_scores={"violence": 0.99 if flagged else 0.0},
+                        category_applied_input_types={"violence": []},
+                    )
                 ],
             )
 
-            await guardrail.apply_guardrail(
-                inputs=inputs,
-                request_data={},
-                input_type="response",
+        with patch.object(guardrail, "async_make_request", side_effect=moderate):
+            inputs = GenericGuardrailAPIInputs(
+                texts=["a harmful answer"],
+                structured_messages=[
+                    {"role": "user", "content": "a benign question"},
+                    {"role": "assistant", "content": "a harmful answer"},
+                ],
             )
 
-            assert mock_request.call_args.kwargs["input_text"] == "the model's answer"
+            with pytest.raises(HTTPException):
+                await guardrail.apply_guardrail(
+                    inputs=inputs,
+                    request_data={},
+                    input_type="response",
+                )
