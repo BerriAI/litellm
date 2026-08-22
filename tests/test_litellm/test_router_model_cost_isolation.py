@@ -9,6 +9,7 @@ should still use the built-in pricing.
 
 import copy
 import os
+import re
 import sys
 from unittest.mock import patch
 
@@ -1892,7 +1893,7 @@ def test_a_reservation_without_a_declared_id_is_refused():
     duplicate is permanent."""
     anonymous = {k: v for k, v in _PTU_MODEL_INFO.items() if k != "id"}
 
-    with pytest.raises(ValueError, match="model_info.id is required"):
+    with pytest.raises(ValueError, match=re.escape("model_info.id is required")):
         _ptu_router(model_info=anonymous)
 
 
@@ -1976,7 +1977,7 @@ def test_a_bare_yaml_date_bound_does_not_escape_the_id_rule():
 
     windowed = {k: v for k, v in _PTU_MODEL_INFO.items() if k != "id"}
 
-    with pytest.raises(ValueError, match="model_info.id is required"):
+    with pytest.raises(ValueError, match=re.escape("model_info.id is required")):
         _ptu_router(model_info={**windowed, "ptu_effective_to": _dt.date(2027, 1, 1)})
 
 
