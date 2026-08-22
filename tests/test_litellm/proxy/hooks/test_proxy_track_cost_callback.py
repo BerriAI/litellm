@@ -871,6 +871,10 @@ async def test_track_cost_callback_releases_reservation_for_unpollable_interacti
     callback must release it there and then, or the pre-call estimate stays
     added to the key, user, team and org spend counters and starts refusing
     traffic against budget that was never actually spent.
+
+    A no-usage terminal create is also not a cost-tracking failure, so the
+    callback must not fire ``failed_tracking_alert``: doing so would flood
+    operators with false alerts and mask real cost-tracking failures.
     """
     from litellm.types.interactions import InteractionsAPIResponse
 
@@ -897,6 +901,7 @@ async def test_track_cost_callback_releases_reservation_for_unpollable_interacti
         )
 
         assert reservation["finalized"] is True
+        mock_proxy_logging.failed_tracking_alert.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -904,7 +909,8 @@ async def test_track_cost_callback_releases_reservation_for_interaction_without_
     """
     The scheduler also refuses a response with no id, since it has nothing to
     poll for, so the callback must not defer to a poll task that will never
-    exist.
+    exist, and it must not fire ``failed_tracking_alert`` for what is a
+    legitimate no-usage response rather than a cost-tracking failure.
     """
     from litellm.types.interactions import InteractionsAPIResponse
 
@@ -931,6 +937,7 @@ async def test_track_cost_callback_releases_reservation_for_interaction_without_
         )
 
         assert reservation["finalized"] is True
+        mock_proxy_logging.failed_tracking_alert.assert_not_called()
 
 
 @pytest.mark.parametrize(
