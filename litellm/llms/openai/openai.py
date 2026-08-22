@@ -1368,15 +1368,17 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             logging_obj.pre_call(
                 input=prompt,
                 api_key=openai_aclient.api_key,
-                additional_args={
-                    "headers": {"Authorization": f"Bearer {openai_aclient.api_key}"},
+                additional_args={  # mutable-ok: loggers isinstance-check this payload as a dict
+                    "headers": {"Authorization": f"Bearer {openai_aclient.api_key}"},  # mutable-ok: logged header map
                     "api_base": str(openai_aclient.base_url),
                     "acompletion": True,
                     "complete_input_dict": data,
                 },
             )
 
-            request_data: Final = {**data, "extra_headers": headers} if headers else data
+            request_data: Final = (  # mutable-ok: the OpenAI SDK takes the request body as a dict
+                {**data, "extra_headers": headers} if headers else data
+            )
             response = await openai_aclient.images.generate(**request_data, timeout=timeout)
             stringified_response: Final = response.model_dump()
             ## LOGGING
@@ -1460,7 +1462,9 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             )
 
             ## COMPLETION CALL
-            request_data: Final = {**data, "extra_headers": headers} if headers else data
+            request_data: Final = (  # mutable-ok: the OpenAI SDK takes the request body as a dict
+                {**data, "extra_headers": headers} if headers else data
+            )
             _response: Final = openai_client.images.generate(**request_data, timeout=timeout)
 
             response: Final = _response.model_dump()
@@ -1546,8 +1550,12 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         logging_obj.pre_call(
             input=input,
             api_key=api_key,
-            additional_args={
-                "complete_input_dict": {"model": model, "voice": voice, **optional_params},
+            additional_args={  # mutable-ok: loggers isinstance-check this payload as a dict
+                "complete_input_dict": {  # mutable-ok: logged as the raw request body
+                    "model": model,
+                    "voice": voice,
+                    **optional_params,
+                },
                 "api_base": str(sync_client.base_url),
             },
         )
@@ -1592,8 +1600,12 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         logging_obj.pre_call(
             input=input,
             api_key=api_key,
-            additional_args={
-                "complete_input_dict": {"model": model, "voice": voice, **optional_params},
+            additional_args={  # mutable-ok: loggers isinstance-check this payload as a dict
+                "complete_input_dict": {  # mutable-ok: logged as the raw request body
+                    "model": model,
+                    "voice": voice,
+                    **optional_params,
+                },
                 "api_base": str(openai_client.base_url),
             },
         )
