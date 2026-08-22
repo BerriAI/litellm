@@ -5875,7 +5875,10 @@ def _build_key_filter_conditions(
         else:
             user_condition["user_id"] = user_id
     if exclude_team_id and isinstance(exclude_team_id, str):
-        user_condition["team_id"] = {"not": exclude_team_id}
+        user_condition["OR"] = [
+            {"team_id": None},
+            {"team_id": {"not": exclude_team_id}},
+        ]
     if organization_id and isinstance(organization_id, str):
         user_condition["organization_id"] = organization_id
 

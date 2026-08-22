@@ -30,6 +30,7 @@ from litellm.proxy.auth.auth_checks import _project_cache_key
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.management_endpoints.key_management_endpoints import (
+    _build_key_filter_conditions,
     _check_org_key_limits,
     _check_project_key_limits,
     _check_team_key_limits,
@@ -239,11 +240,14 @@ async def test_list_keys_include_created_by_keys():
         elif "created_by" in condition:
             created_by_condition_with_exclude = condition
 
-    # Verify exclude_team_id is applied to user condition
+    # Verify exclude_team_id produces an OR clause that preserves NULL team_id rows
     assert (
         user_condition_with_exclude is not None
     ), "User condition with exclude should be present"
-    assert user_condition_with_exclude["team_id"] == {"not": "excluded-team-123"}
+    assert user_condition_with_exclude["OR"] == [
+        {"team_id": None},
+        {"team_id": {"not": "excluded-team-123"}},
+    ]
 
     # Verify created_by condition still only has created_by filter
     assert (
@@ -251,6 +255,73 @@ async def test_list_keys_include_created_by_keys():
     ), "Created by condition with exclude should be present"
     assert created_by_condition_with_exclude["created_by"] == test_user_id
     assert len(created_by_condition_with_exclude) == 1
+
+
+def test_build_key_filter_conditions_exclude_team_id_preserves_null():
+    """
+    Regression test for #37292: _build_key_filter_conditions must emit an OR
+    clause that retains keys where team_id IS NULL when exclude_team_id is set.
+
+    In SQL, `team_id != 'x'` silently drops rows where team_id is NULL because
+    NULL comparisons evaluate to UNKNOWN (neither TRUE nor FALSE). The fix
+    wraps the condition as OR([{team_id: None}, {team_id: {not: exclude_team_id}}])
+    so that unassigned-team keys are always included.
+    """
+    # Case 1: no user_id (matches the Prometheus metrics caller path)
+    cond = _build_key_filter_conditions(
+        user_id=None,
+        team_id=None,
+        organization_id=None,
+        key_alias=None,
+        key_hash=None,
+        exclude_team_id="litellm-dashboard",
+        admin_team_ids=None,
+    )
+    assert "OR" in cond, "Expected OR key when exclude_team_id is set"
+    assert {"team_id": None} in cond["OR"], (
+        "NULL team_id branch must be present so unassigned keys are not silently dropped"
+    )
+    assert {"team_id": {"not": "litellm-dashboard"}} in cond["OR"]
+
+    # Case 2: user_id provided alongside exclude_team_id
+    cond2 = _build_key_filter_conditions(
+        user_id="user-abc",
+        team_id=None,
+        organization_id=None,
+        key_alias=None,
+        key_hash=None,
+        exclude_team_id="excluded-team",
+        admin_team_ids=None,
+    )
+    assert cond2.get("user_id") == "user-abc"
+    assert cond2.get("OR") == [
+        {"team_id": None},
+        {"team_id": {"not": "excluded-team"}},
+    ]
+
+    # Case 3: exclude_team_id absent — user_id is set directly, no exclude_team_id OR injected.
+    # The top-level OR from _get_condition_to_filter_out_ui_session_tokens is always present;
+    # we assert that user_id appears as a direct key and that no exclude_team_id NOT pattern
+    # exists inside any OR list.
+    cond3 = _build_key_filter_conditions(
+        user_id="user-abc",
+        team_id=None,
+        organization_id=None,
+        key_alias=None,
+        key_hash=None,
+        exclude_team_id=None,
+        admin_team_ids=None,
+    )
+    assert cond3.get("user_id") == "user-abc", (
+        "user_id should be a direct top-level key when no exclude_team_id"
+    )
+    # Verify no exclude_team_id NOT pattern was injected (the only OR should be the
+    # session token filter, which doesn't have {team_id: {not: ...}} entries)
+    top_or = cond3.get("OR", [])
+    assert not any(
+        isinstance(c, dict) and c.get("team_id", {}) == {"not": "any-value"}
+        for c in top_or
+    ), "No {team_id: {not: ...}} pattern should appear when exclude_team_id is absent"
 
 
 @pytest.mark.asyncio
