@@ -79,8 +79,6 @@ class _PrismaUserTable(Protocol):
         self, *, where: Mapping[str, object], data: Mapping[str, Mapping[str, object]]
     ) -> _PrismaUserRecord | None: ...
 
-    async def create(self, *, data: Mapping[str, object]) -> _PrismaUserRecord | None: ...
-
     async def find_many(self, *, where: Mapping[str, object]) -> Sequence[_PrismaUserRecord]: ...
 
 
@@ -133,11 +131,27 @@ async def _find_users_by_email(
     return rows if rows is not None else ()
 
 
+async def _upsert_user_row(
+    user_table: _PrismaUserTable, user_id: str, create_data: Mapping[str, object]
+) -> _PrismaUserRecord | None:
+    """Insert the user row if it is absent, leaving an existing row as it is.
+
+    Upserting keeps concurrent provisioning of the same new user from racing on create.
+    The update branch re-states user_id rather than being empty because Prisma only
+    compiles an upsert down to INSERT ... ON CONFLICT when the update is non-empty, and
+    otherwise falls back to a racy SELECT-then-INSERT.
+    """
+    return await user_table.upsert(
+        where={"user_id": user_id},
+        data={"create": create_data, "update": {"user_id": user_id}},
+    )
+
+
 async def _create_user_row(
     prisma_client: PrismaClient, tx: MemberWriteTx | None, user_data: dict[str, object]
 ) -> _PrismaUserRecord | None:
     if tx is not None:
-        return await tx.litellm_usertable.create(data=jsonify_object(user_data))
+        return await _upsert_user_row(tx.litellm_usertable, str(user_data["user_id"]), jsonify_object(user_data))
     return await prisma_client.insert_data(data=user_data, table_name="user")
 
 
@@ -404,21 +418,12 @@ async def add_new_member(
     ## ADD TEAM ID, to USER TABLE IF NEW ##
     if new_member.user_id is not None:
         new_user_defaults = get_new_internal_user_defaults(user_id=new_member.user_id)
-        # Upsert ensures the user row exists atomically (no create race when the
-        # same new user is provisioned concurrently), seeding teams on create.
-        # The teams append lives in the filtered update below rather than the
-        # upsert's update branch so an already-existing user does not get a
-        # duplicate team id. The update branch still has to write something:
-        # Prisma only compiles an upsert down to INSERT ... ON CONFLICT when it
-        # is non-empty, and falls back to a racy SELECT-then-INSERT when it is
-        # not, so this re-states user_id as a no-op rather than being empty.
-        user_table: Final[_PrismaUserTable] = _user_table(prisma_client, tx)
-        _returned_user: _PrismaUserRecord | None = await user_table.upsert(
-            where={"user_id": new_member.user_id},
-            data={
-                "create": {"teams": [team_id], **new_user_defaults},
-                "update": {"user_id": new_member.user_id},
-            },
+        # The teams append lives in the filtered update below rather than the upsert's
+        # update branch so an already-existing user does not get a duplicate team id.
+        _returned_user: _PrismaUserRecord | None = await _upsert_user_row(
+            _user_table(prisma_client, tx),
+            new_member.user_id,
+            {"teams": [team_id], **new_user_defaults},
         )
         await _append_team_id_if_absent(prisma_client, new_member.user_id, team_id, tx)
         if _returned_user is not None:
