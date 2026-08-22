@@ -3824,6 +3824,28 @@ def test_assistant_thinking_blocks_become_a_reasoning_input_item():
     assert "id" not in reasoning_item
 
 
+def test_thinking_only_assistant_turn_still_sends_its_reasoning():
+    """An assistant turn can be pure reasoning, with no visible text and no tool call."""
+    handler = LiteLLMResponsesTransformationHandler()
+    messages = [
+        {"role": "user", "content": "What is the weather in Denver?"},
+        {
+            "role": "assistant",
+            "content": None,
+            "thinking_blocks": [
+                {"type": "thinking", "thinking": "August in Denver is dry.", "signature": "sig1"}
+            ],
+        },
+        {"role": "user", "content": "Why?"},
+    ]
+
+    input_items, _ = handler.convert_chat_completion_messages_to_responses_api(messages)
+
+    reasoning_items = [item for item in input_items if item.get("type") == "reasoning"]
+    assert len(reasoning_items) == 1
+    assert reasoning_items[0]["summary"] == [{"type": "summary_text", "text": "August in Denver is dry."}]
+
+
 def test_stored_reasoning_items_win_over_thinking_blocks():
     """A minted reasoning id beats a re-derived one, so the two must not both be sent."""
     handler = LiteLLMResponsesTransformationHandler()
