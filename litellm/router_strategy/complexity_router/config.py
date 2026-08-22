@@ -1115,10 +1115,11 @@ class ComplexityRouterConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate_tier_boundaries_ascend(self) -> "ComplexityRouterConfig":
-        # The score-to-tier mapping is a sequential comparison chain, so a boundary that sits below the one
-        # under it makes the tier between them unreachable and silently sends its traffic to a costlier tier.
-        # Resolved, not raw: omitting a key is the common way to arrive here, since the omitted key is filled
-        # from a shipped default that knows nothing about the boundary the operator did set.
+        # The score-to-tier mapping is a sequential comparison chain, so a boundary below the one under it
+        # asks for a tier starting above the tier above it, which no score satisfies, and the stranded tier's
+        # traffic silently lands on a costlier one. Equal boundaries pass: an empty band is coherent.
+        # Resolved, not raw, because filling an omitted key from a shipped default is the usual way an
+        # operator arrives here without having written anything out of order.
         resolved: Final = resolve_tier_boundaries(self.tier_boundaries)
         simple_medium, medium_complex, complex_reasoning = (
             resolved["simple_medium"],

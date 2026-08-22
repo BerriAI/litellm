@@ -661,8 +661,15 @@ class TestEffectiveTierBoundaries:
                 },
             )
 
-    def test_equal_boundaries_are_allowed(self, mock_router_instance):
-        """Collapsing a tier to an empty band is a deliberate way to take it out of rotation."""
+    def test_equal_boundaries_are_accepted_and_close_the_band(self, mock_router_instance):
+        """Equal boundaries are accepted, and they leave the tier between them unreachable.
+
+        With simple_medium == medium_complex, MEDIUM's band is zero width: the strict `<` below it
+        already claims every lower score for SIMPLE, and every score from that value up falls
+        through to COMPLEX. The validator still allows it because a non-decreasing set is coherent,
+        it just describes an empty band, where a decreasing pair asks for a tier that starts above
+        the tier above it and no score can satisfy that.
+        """
         router = ComplexityRouter(
             model_name="test-complexity-router",
             litellm_router_instance=mock_router_instance,
@@ -671,7 +678,11 @@ class TestEffectiveTierBoundaries:
                 "tier_boundaries": {"simple_medium": 0.25, "medium_complex": 0.25, "complex_reasoning": 0.50},
             },
         )
-        assert router._effective_tier_boundaries()["medium_complex"] == 0.25
+        assert dict(router._effective_tier_boundaries()) == {
+            "simple_medium": 0.25,
+            "medium_complex": 0.25,
+            "complex_reasoning": 0.50,
+        }
 
     def test_defaults_stay_ordered_and_within_the_scoring_range(self):
         """The tiers only all remain reachable while the boundaries ascend."""
