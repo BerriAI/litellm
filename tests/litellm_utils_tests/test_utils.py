@@ -447,6 +447,20 @@ def test_validate_environment_ollama_failed():
         assert kv["missing_keys"] == ["OLLAMA_API_BASE"]
 
 
+@mock.patch.dict(os.environ, {}, clear=True)
+def test_validate_environment_zai_failed():
+    kv = validate_environment(model="zai/glm-5.1")
+    assert not kv["keys_in_environment"]
+    assert kv["missing_keys"] == ["ZAI_API_KEY"]
+
+
+@mock.patch.dict(os.environ, {"ZAI_API_KEY": "sk-my-test-key"}, clear=True)
+def test_validate_environment_zai():
+    kv = validate_environment(model="zai/glm-5.1")
+    assert kv["keys_in_environment"]
+    assert kv["missing_keys"] == []
+
+
 def test_function_to_dict():
     print("testing function to dict for get current weather")
 
