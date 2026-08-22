@@ -42,7 +42,6 @@ def setup_and_teardown():
         0, os.path.abspath("../..")
     )  # Adds the project directory to the system path
 
-    import litellm
 
     importlib.reload(litellm)
 

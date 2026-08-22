@@ -44,6 +44,7 @@ from litellm.caching.caching import (
     RedisClusterCache,
 )
 from litellm.constants import (
+    AUTO_ROUTED_REQUEST_METADATA_KEY,
     CONSUMED_REQUEST_TAGS_METADATA_KEY,
     DEFAULT_AUTO_ROUTER_MAX_INPUT_CHARS,
     DEFAULT_HEALTH_CHECK_INTERVAL,
@@ -67,6 +68,8 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.ptu_pricing import (
     is_ptu_cost_attribution_enabled,
     ptu_config_error,
+    ptu_identity_error,
+    ptu_terms,
     zeroed_ptu_pricing,
 )
 from litellm.litellm_core_utils.request_timeout_resolver import (
@@ -7724,6 +7727,9 @@ class Router:
         _model_name: str,
         _litellm_params: dict,
         _model_info: dict,
+        *,
+        declared_id: str | None = None,
+        duplicate_ids: frozenset[str] = frozenset(),
     ) -> Deployment | None:
         """
         Create a deployment object and add it to the model list
@@ -7736,7 +7742,19 @@ class Router:
         """
         try:
             config_sourced: Final = _model_info.get("db_model") is not True
-            ptu_error: Final = ptu_config_error(_model_info, model_name=_model_name) if config_sourced else None
+            identity_error: Final = (
+                ptu_identity_error(
+                    declared_id=declared_id,
+                    taken=declared_id in duplicate_ids,
+                    current_id=_model_info.get("id"),
+                    model_name=_model_name,
+                )
+                if config_sourced and ptu_terms(_model_info) is not None
+                else None
+            )
+            ptu_error: Final = (
+                (ptu_config_error(_model_info, model_name=_model_name) or identity_error) if config_sourced else None
+            )
             if ptu_error is not None and is_ptu_cost_attribution_enabled():
                 raise ValueError(ptu_error)
             zeroed_pricing: Final = zeroed_ptu_pricing(_model_info, _litellm_params) if config_sourced else None
@@ -8240,6 +8258,13 @@ class Router:
         self._invalidate_access_groups_cache()
         # we add api_base/api_key each model so load balancing between azure/gpt on api_base1 and api_base2 works
 
+        declared_ids: Final = tuple(
+            str(entry["model_info"]["id"])
+            for entry in original_model_list
+            if isinstance(entry.get("model_info"), dict) and entry["model_info"].get("id") is not None
+        )
+        duplicate_ids: Final = frozenset(model_id for model_id in declared_ids if declared_ids.count(model_id) > 1)
+
         for model in original_model_list:
             _model_name = model.pop("model_name")
             _litellm_params = model.pop("litellm_params")
@@ -8250,6 +8275,8 @@ class Router:
                         _litellm_params[k] = get_secret(v)
 
             _model_info: dict = model.pop("model_info", {})
+
+            declared_id = None if _model_info.get("id") is None else str(_model_info["id"])
 
             # check if model info has id
             if "id" not in _model_info:
@@ -8266,6 +8293,8 @@ class Router:
                         _model_name=_model_name,
                         _litellm_params=_litellm_params,
                         _model_info=_model_info,
+                        declared_id=declared_id,
+                        duplicate_ids=duplicate_ids,
                     )
             else:
                 self._create_deployment(
@@ -8273,6 +8302,8 @@ class Router:
                     _model_name=_model_name,
                     _litellm_params=_litellm_params,
                     _model_info=_model_info,
+                    declared_id=declared_id,
+                    duplicate_ids=duplicate_ids,
                 )
 
         verbose_router_logger.debug("\nInitialized Model List %s", self.get_model_names())
@@ -9190,10 +9221,27 @@ class Router:
 
         ## SET MODEL TO 'model=' - if base_model is None + not azure
         if custom_llm_provider == "azure" and base_model is None:
-            verbose_router_logger.error(
-                "Could not identify azure model '%s'. Set azure 'base_model' for accurate max tokens, cost tracking, etc.- https://docs.litellm.ai/docs/proxy/cost_tracking#spend-tracking-for-azure-openai-models",
-                _model,
+            # Router init auto-registers every deployment name into
+            # litellm.model_cost as a zeroed stub, so membership alone can't
+            # tell a resolvable name apart; require usable limits/costs.
+            _azure_fallback_key = _model if _model.startswith("azure/") else f"azure/{_model}"
+            _fallback_entry = litellm.model_cost.get(_azure_fallback_key)
+            _fallback_resolves = _fallback_entry is not None and (
+                (_fallback_entry.get("max_input_tokens") or 0) > 0
+                or (_fallback_entry.get("max_tokens") or 0) > 0
+                or (_fallback_entry.get("input_cost_per_token") or 0) > 0
             )
+            if _fallback_resolves:
+                verbose_router_logger.debug(
+                    "Azure deployment '%s' has no base_model set; using '%s' from the model cost map for max tokens, cost tracking, etc.",
+                    _model,
+                    _azure_fallback_key,
+                )
+            else:
+                verbose_router_logger.error(
+                    "Could not identify azure model '%s'. Set azure 'base_model' for accurate max tokens, cost tracking, etc.- https://docs.litellm.ai/docs/proxy/cost_tracking#spend-tracking-for-azure-openai-models",
+                    _model,
+                )
         elif custom_llm_provider != "azure":
             model = _model
 
@@ -11684,6 +11732,9 @@ class Router:
             self._stamp_or_clear_metadata_key(
                 request_kwargs=request_kwargs, key=CONSUMED_REQUEST_TAGS_METADATA_KEY, value=None
             )
+            self._stamp_or_clear_metadata_key(
+                request_kwargs=request_kwargs, key=AUTO_ROUTED_REQUEST_METADATA_KEY, value=None
+            )
             return None
 
         pre_routing_hook_response: Final = await selected_strategy.strategy.async_pre_routing_hook(
@@ -11710,6 +11761,13 @@ class Router:
                 pre_routing_hook_response=pre_routing_hook_response,
                 request_tags=_get_tags_from_request_kwargs(request_kwargs),
             ),
+        )
+        # Gates the proxy's `router_model_name` response field; the body `model` is
+        # always restamped back to the alias the client sent.
+        self._stamp_or_clear_metadata_key(
+            request_kwargs=request_kwargs,
+            key=AUTO_ROUTED_REQUEST_METADATA_KEY,
+            value=(True if pre_routing_hook_response is not None else None),
         )
 
         # `model` (the alias, e.g. "smart-router") is never the deployment actually

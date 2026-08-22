@@ -8549,3 +8549,175 @@ def test_get_router_model_info_keeps_explicit_pricing_overrides():
 
     assert merged["input_cost_per_token"] == 1e-08
     assert litellm.get_model_info(model="anthropic/claude-sonnet-4-5")["input_cost_per_token"] != 1e-08
+
+
+class TestAutoRoutedRequestMarker:
+    """The proxy exposes the routed model group in the response body only when an
+    auto-routing strategy actually picked it. The marker is what separates that from
+    ordinary model-group routing, so it must clear on any re-entry (fallbacks reuse the
+    same request_kwargs) that routes plainly."""
+
+    class _RewriteStrategy:
+        async def async_pre_routing_hook(
+            self, model, request_kwargs, messages=None, input=None, specific_deployment=False
+        ):
+            from litellm.types.router import PreRoutingHookResponse
+
+            return PreRoutingHookResponse(model="gemini-flash", messages=messages)
+
+    class _AbstainStrategy:
+        async def async_pre_routing_hook(
+            self, model, request_kwargs, messages=None, input=None, specific_deployment=False
+        ):
+            return None
+
+    @classmethod
+    def _router(cls, strategy) -> "litellm.Router":
+        from litellm.types.router import TaggedPreRoutingStrategy
+
+        router = litellm.Router(
+            model_list=[
+                {"model_name": "smart-route", "litellm_params": {"model": "openai/gpt-4o"}},
+                {"model_name": "gemini-flash", "litellm_params": {"model": "gemini/gemini-3.6-flash"}},
+            ],
+        )
+        router.auto_routers = {"smart-route": [TaggedPreRoutingStrategy(tags=(), strategy=strategy)]}
+        return router
+
+    @pytest.mark.asyncio
+    async def test_marks_the_request_when_an_auto_routing_strategy_picked_the_group(self):
+        from litellm.constants import AUTO_ROUTED_REQUEST_METADATA_KEY
+
+        router = self._router(self._RewriteStrategy())
+        request_kwargs = {"metadata": {}}
+
+        await router.async_pre_routing_hook(model="smart-route", request_kwargs=request_kwargs)
+
+        assert request_kwargs["metadata"][AUTO_ROUTED_REQUEST_METADATA_KEY] is True
+
+    @pytest.mark.asyncio
+    async def test_marks_into_litellm_metadata_when_the_request_uses_that_bucket(self):
+        from litellm.constants import AUTO_ROUTED_REQUEST_METADATA_KEY
+
+        router = self._router(self._RewriteStrategy())
+        request_kwargs = {"litellm_metadata": {}}
+
+        await router.async_pre_routing_hook(model="smart-route", request_kwargs=request_kwargs)
+
+        assert request_kwargs["litellm_metadata"][AUTO_ROUTED_REQUEST_METADATA_KEY] is True
+
+    @pytest.mark.asyncio
+    async def test_no_marker_when_the_group_has_no_auto_routing_strategy(self):
+        from litellm.constants import AUTO_ROUTED_REQUEST_METADATA_KEY
+
+        router = self._router(self._RewriteStrategy())
+        request_kwargs = {"metadata": {}}
+
+        await router.async_pre_routing_hook(model="gemini-flash", request_kwargs=request_kwargs)
+
+        assert AUTO_ROUTED_REQUEST_METADATA_KEY not in request_kwargs["metadata"]
+
+    @pytest.mark.asyncio
+    async def test_no_marker_when_the_strategy_declined_to_route(self):
+        from litellm.constants import AUTO_ROUTED_REQUEST_METADATA_KEY
+
+        router = self._router(self._AbstainStrategy())
+        request_kwargs = {"metadata": {}}
+
+        await router.async_pre_routing_hook(model="smart-route", request_kwargs=request_kwargs)
+
+        assert AUTO_ROUTED_REQUEST_METADATA_KEY not in request_kwargs["metadata"]
+
+    @pytest.mark.asyncio
+    async def test_fallback_reentry_with_a_plain_group_clears_the_stale_marker(self):
+        from litellm.constants import AUTO_ROUTED_REQUEST_METADATA_KEY
+
+        router = self._router(self._RewriteStrategy())
+        request_kwargs = {"metadata": {}}
+
+        await router.async_pre_routing_hook(model="smart-route", request_kwargs=request_kwargs)
+        await router.async_pre_routing_hook(model="gemini-flash", request_kwargs=request_kwargs)
+
+        assert AUTO_ROUTED_REQUEST_METADATA_KEY not in request_kwargs["metadata"]
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+class TestAzureBaseModelFallbackLogging:
+    """When an azure deployment has no base_model but its model name is a known
+    azure key in the cost map, get_router_model_info resolves it via the
+    fallback, so it must not log the per-request 'Could not identify azure
+    model' ERROR. The ERROR must remain for genuinely unmappable deployment
+    names. Issue #33172."""
+
+    def _router_with_azure_deployment(self, deployment_model: str):
+        return litellm.Router(
+            model_list=[
+                {
+                    "model_name": "my-group",
+                    "litellm_params": {
+                        "model": deployment_model,
+                        "api_key": "fake-key",
+                        "api_base": "https://fake.openai.azure.com",
+                    },
+                    "model_info": {"id": "azure-base-model-test-id"},
+                }
+            ]
+        )
+
+    def test_map_known_deployment_name_resolves_without_error_log(self):
+        router = self._router_with_azure_deployment("azure/gpt-4o")
+
+        with patch(
+            "litellm.router.verbose_router_logger.error"
+        ) as mock_error:
+            model_info = router.get_router_model_info(
+                deployment=None, received_model_name="my-group", id="azure-base-model-test-id"
+            )
+
+        assert not any(
+            "Could not identify azure model" in str(call)
+            for call in mock_error.call_args_list
+        ), f"unexpected error log: {mock_error.call_args_list}"
+        # the fallback resolution must actually surface the map values
+        assert model_info["max_input_tokens"] == litellm.model_cost["azure/gpt-4o"]["max_input_tokens"]
+        assert model_info["input_cost_per_token"] == litellm.model_cost["azure/gpt-4o"]["input_cost_per_token"]
+
+    def test_unmappable_deployment_name_still_logs_error(self):
+        router = self._router_with_azure_deployment("azure/my-custom-deployment-name")
+
+        with patch(
+            "litellm.router.verbose_router_logger.error"
+        ) as mock_error:
+            model_info = router.get_router_model_info(
+                deployment=None, received_model_name="my-group", id="azure-base-model-test-id"
+            )
+
+        assert any(
+            "Could not identify azure model" in str(call)
+            for call in mock_error.call_args_list
+        ), "expected the error log for an unmappable azure deployment name"
+        # unmappable names resolve to a zeroed stub — unchanged behavior
+        assert model_info.get("max_input_tokens") is None
+
+    def test_explicit_base_model_still_wins(self):
+        router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "my-group",
+                    "litellm_params": {
+                        "model": "azure/some-deployment",
+                        "api_key": "fake-key",
+                        "api_base": "https://fake.openai.azure.com",
+                    },
+                    "model_info": {
+                        "id": "azure-base-model-test-id",
+                        "base_model": "azure/gpt-4o-mini",
+                    },
+                }
+            ]
+        )
+
+        model_info = router.get_router_model_info(
+            deployment=None, received_model_name="my-group", id="azure-base-model-test-id"
+        )
+        assert model_info["max_input_tokens"] == litellm.model_cost["azure/gpt-4o-mini"]["max_input_tokens"]

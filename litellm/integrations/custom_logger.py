@@ -60,6 +60,25 @@ _BASE64_INLINE_PATTERN: Final = re.compile(
 
 class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callback#callback-class
     # Class variables or attributes
+
+    enforces_request_content: bool = False
+    """
+    Whether this hook's ``async_pre_call_hook`` judges the request payload itself.
+
+    False for the accounting hooks, which count a request rather than read it: rate limits,
+    parallel slots, budgets, cache lookups. Those must run once per request and never once per
+    record of a batch upload, which would charge a caller once for every line of their file.
+
+    Set it to True on a hook that inspects or rejects content, so that scanning a payload which
+    is not itself a request, such as one record of a batch input file, still reaches it. A
+    ``CustomGuardrail`` does not need it; guardrails are dispatched by their own branch.
+
+    Judging content is necessary but not sufficient. A hook that also rewrites the payload for
+    routing, as the managed-files and managed-vector-store hooks do, stays False: a per-record
+    rewrite would read as a redaction and ship embedded in the record. Only the leaf class is
+    consulted, so a subclass that does not override ``async_pre_call_hook`` inherits nothing.
+    """
+
     def __init__(
         self,
         turn_off_message_logging: bool = False,

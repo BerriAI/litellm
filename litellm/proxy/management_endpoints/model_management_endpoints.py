@@ -313,6 +313,10 @@ def _validate_ptu_model_info(model_info: Mapping[str, object]) -> None:
     The rules live in litellm_core_utils.ptu_pricing so that config.yaml registration
     refuses the same deployments this endpoint does, for the same reason. Per-field bounds
     (positive count, non-negative rate) are enforced by ModelInfo itself.
+
+    Registration additionally requires an operator-declared ``model_info.id``, which this
+    endpoint does not: a stored deployment already holds a stable primary key, where a
+    config-declared one is otherwise keyed by a hash of its own parameters.
     """
     error: Final = ptu_config_error(model_info)
     if error is not None:

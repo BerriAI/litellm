@@ -11,13 +11,12 @@ sys.path.insert(
 
 import httpx
 import pytest
-from unittest.mock import patch, MagicMock, AsyncMock
+from unittest.mock import patch, MagicMock
 
 import litellm
 from litellm import Choices, Message, ModelResponse, EmbeddingResponse, Usage
 from litellm import completion
 from base_rerank_unit_tests import BaseLLMRerankTest
-import litellm
 
 
 def test_completion_nvidia_nim():
