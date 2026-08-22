@@ -17,7 +17,7 @@ from openai import (
 import litellm
 from litellm.constants import AZURE_OPERATION_POLLING_TIMEOUT, DEFAULT_MAX_RETRIES
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
+from litellm.litellm_core_utils.logging_utils import speech_request_body, track_llm_api_timing
 from litellm.litellm_core_utils.url_utils import SSRFError, assert_same_origin
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -1393,11 +1393,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
             input=input,
             api_key=api_key,
             additional_args={  # mutable-ok: loggers isinstance-check this payload as a dict
-                "complete_input_dict": {  # mutable-ok: logged as the raw request body
-                    "model": model,
-                    "voice": voice,
-                    **optional_params,
-                },
+                "complete_input_dict": speech_request_body(model, voice, optional_params),
                 "api_base": str(azure_client.base_url),
             },
         )
@@ -1441,11 +1437,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
             input=input,
             api_key=api_key,
             additional_args={  # mutable-ok: loggers isinstance-check this payload as a dict
-                "complete_input_dict": {  # mutable-ok: logged as the raw request body
-                    "model": model,
-                    "voice": voice,
-                    **optional_params,
-                },
+                "complete_input_dict": speech_request_body(model, voice, optional_params),
                 "api_base": str(azure_client.base_url),
             },
         )

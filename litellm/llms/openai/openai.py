@@ -22,7 +22,7 @@ from litellm._logging import verbose_logger
 from litellm.constants import DEFAULT_MAX_RETRIES
 from litellm.files.types import FileContentStreamingResult
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
+from litellm.litellm_core_utils.logging_utils import speech_request_body, track_llm_api_timing
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.bedrock.chat.invoke_handler import MockResponseIterator
@@ -1551,11 +1551,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             input=input,
             api_key=api_key,
             additional_args={  # mutable-ok: loggers isinstance-check this payload as a dict
-                "complete_input_dict": {  # mutable-ok: logged as the raw request body
-                    "model": model,
-                    "voice": voice,
-                    **optional_params,
-                },
+                "complete_input_dict": speech_request_body(model, voice, optional_params),
                 "api_base": str(sync_client.base_url),
             },
         )
@@ -1601,11 +1597,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             input=input,
             api_key=api_key,
             additional_args={  # mutable-ok: loggers isinstance-check this payload as a dict
-                "complete_input_dict": {  # mutable-ok: logged as the raw request body
-                    "model": model,
-                    "voice": voice,
-                    **optional_params,
-                },
+                "complete_input_dict": speech_request_body(model, voice, optional_params),
                 "api_base": str(openai_client.base_url),
             },
         )

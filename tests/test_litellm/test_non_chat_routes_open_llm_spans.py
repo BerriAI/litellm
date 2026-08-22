@@ -24,14 +24,20 @@ class _PreCallRecorder(CustomLogger):
         super().__init__()
         self.call_types: list[str] = []  # mutable-ok: test recorder of hook calls
         self.api_bases: list[str] = []  # mutable-ok: test recorder of hook calls
+        self.request_bodies: list[Any] = []  # mutable-ok: test recorder of hook calls
 
     def log_pre_api_call(self, model, messages, kwargs) -> None:
         self.call_types.append(str(kwargs.get("call_type")))
         self.api_bases.append(str(kwargs.get("litellm_params", {}).get("api_base")))
+        self.request_bodies.append(kwargs.get("additional_args", {}).get("complete_input_dict"))
 
 
 class _FakeSpeech:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []  # mutable-ok: test recorder of SDK calls
+
     async def create(self, **kwargs: Any) -> Any:
+        self.calls.append(kwargs)
         request: Final = httpx.Request("POST", "https://api.openai.com/v1/audio/speech")
         return type(
             "_Speech",
@@ -82,7 +88,8 @@ class _FakeAsyncOpenAI(AsyncOpenAI):
 
     def __init__(self, base_url: str = "https://api.openai.com/v1") -> None:
         super().__init__(api_key="sk-test", base_url=base_url)
-        self.audio = type("_Audio", (), {"speech": _FakeSpeech()})()
+        self.speech = _FakeSpeech()
+        self.audio = type("_Audio", (), {"speech": self.speech})()
         self.images = _FakeImages()
         self.moderations = _FakeModerations()
 
@@ -97,7 +104,8 @@ class _FakeAsyncAzureOpenAI(AsyncAzureOpenAI):
             api_version="2024-02-01",
             azure_endpoint="https://unit-test.openai.azure.com",
         )
-        self.audio = type("_Audio", (), {"speech": _FakeSpeech()})()
+        self.speech = _FakeSpeech()
+        self.audio = type("_Audio", (), {"speech": self.speech})()
 
 
 @pytest.fixture
@@ -135,6 +143,26 @@ def test_azure_async_speech_opens_an_llm_span_without_api_base(recorder, monkeyp
     )
     assert recorder.call_types == ["aspeech"]
     assert recorder.api_bases == ["https://unit-test.openai.azure.com/openai/"]
+
+
+def test_azure_async_speech_keeps_caller_headers_out_of_the_logged_body(recorder):
+    """The Azure entrypoint carries caller headers in ``optional_params``, so they reach
+    the provider as a request kwarg; telemetry reads the logged body, which must stay
+    free of them."""
+    headers: Final = {"authorization": "Bearer caller-secret"}
+    client: Final = _FakeAsyncAzureOpenAI()
+    asyncio.run(
+        litellm.aspeech(
+            model="azure/tts-deployment",
+            input="hello",
+            voice="alloy",
+            extra_headers=headers,
+            client=client,
+        )
+    )
+    assert recorder.call_types == ["aspeech"]
+    assert "extra_headers" not in recorder.request_bodies[0]
+    assert client.speech.calls[0]["extra_headers"] == headers
 
 
 def test_async_image_generation_opens_an_llm_span(recorder):
