@@ -276,6 +276,7 @@ OpenAIFilesPurpose = Literal[
     "fine-tune-results",
     "vision",
     "user_data",
+    "evals",
     "messages",
 ]
 

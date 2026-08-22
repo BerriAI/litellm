@@ -1395,8 +1395,11 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         ``data`` non-empty while matches remain and its last id usable as the
         next cursor. A first chunk that fills the page costs one query; once a
         scan has to continue past it, the chunk widens to
-        ``FILE_LIST_CONTINUATION_CHUNK_SIZE`` so a page whose matches sit far
-        behind the newest rows cannot degenerate into thousands of queries.
+        ``FILE_LIST_CONTINUATION_CHUNK_SIZE``, so the walk costs one query per
+        that many rows instead of one per page. That bound is per query, not
+        per request: the work is still linear in the rows the caller owns, and
+        a filter matching nothing reads every one of them, with no index
+        covering either the owner filter or the sort.
         """
         validate_file_list_limit(limit)
         validate_file_list_purpose(purpose)

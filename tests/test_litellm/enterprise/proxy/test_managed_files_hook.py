@@ -14,7 +14,7 @@ import pytest
 from typing import Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+from litellm.proxy._types import LitellmUserRoles, ProxyException, UserAPIKeyAuth
 from litellm.types.llms.openai import FileListPage, OpenAIFileObject
 from litellm.types.utils import LiteLLMBatch
 
@@ -66,10 +66,38 @@ def _make_user_api_key_dict() -> UserAPIKeyAuth:
     )
 
 
+def _make_team_member_api_key_dict() -> UserAPIKeyAuth:
+    """The shape most real virtual keys carry: a user_id and a team_id."""
+    return UserAPIKeyAuth(
+        api_key="sk-test",
+        user_id="test-user",
+        team_id="test-team",
+        parent_otel_span=None,
+    )
+
+
+def _make_service_account_api_key_dict() -> UserAPIKeyAuth:
+    return UserAPIKeyAuth(
+        api_key="sk-service",
+        team_id="test-team",
+        parent_otel_span=None,
+    )
+
+
+def _make_admin_api_key_dict() -> UserAPIKeyAuth:
+    return UserAPIKeyAuth(
+        api_key="sk-admin",
+        user_id="admin-user",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        parent_otel_span=None,
+    )
+
+
 def _make_managed_file_row(
     unified_file_id: str,
     purpose: str = "batch_output",
     created_by: str = "test-user",
+    team_id: Optional[str] = None,
 ) -> MagicMock:
     file_object = _make_file_object(f"file-provider-{unified_file_id}").model_copy(
         update={"purpose": purpose}
@@ -78,15 +106,35 @@ def _make_managed_file_row(
         unified_file_id=unified_file_id,
         file_object=file_object.model_dump(),
         created_by=created_by,
+        team_id=team_id,
     )
 
 
 def _make_unparseable_managed_file_row(
     unified_file_id: str,
     created_by: str = "test-user",
+    team_id: Optional[str] = None,
 ) -> MagicMock:
     """A row whose stored blob cannot be parsed back into a file object."""
-    return MagicMock(unified_file_id=unified_file_id, file_object=None, created_by=created_by)
+    return MagicMock(
+        unified_file_id=unified_file_id,
+        file_object=None,
+        created_by=created_by,
+        team_id=team_id,
+    )
+
+
+def _row_matches_where(row, where) -> bool:
+    """Apply the Prisma ``where`` shapes build_owner_filter actually emits:
+    ``{}``, a single equality, and the ``OR`` of equalities a key carrying
+    both a user_id and a team_id produces."""
+    for field, expected in where.items():
+        if field == "OR":
+            if not any(_row_matches_where(row, clause) for clause in expected):
+                return False
+        elif getattr(row, field) != expected:
+            return False
+    return True
 
 
 class _FakeManagedFileTable:
@@ -98,15 +146,11 @@ class _FakeManagedFileTable:
         self.find_first_calls = []
 
     def _owned_rows(self, where):
-        created_by = where.get("created_by")
-        return [row for row in self.rows if created_by is None or row.created_by == created_by]
+        return [row for row in self.rows if _row_matches_where(row, where)]
 
     async def find_first(self, where):
         self.find_first_calls.append(where)
-        return next(
-            (row for row in self._owned_rows(where) if row.unified_file_id == where.get("unified_file_id")),
-            None,
-        )
+        return next(iter(self._owned_rows(where)), None)
 
     async def find_many(self, where, take=None, order=None, cursor=None, skip=0):
         self.find_many_calls.append(
@@ -336,7 +380,7 @@ async def test_afile_list_rejects_a_purpose_the_files_api_never_accepts(purpose)
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("purpose", ["batch", "assistants", "fine-tune", None])
+@pytest.mark.parametrize("purpose", ["batch", "assistants", "fine-tune", "evals", None])
 async def test_afile_list_accepts_every_documented_purpose(purpose):
     managed_files, _ = _make_managed_files_over_rows([_make_managed_file_row("unified-file-id")])
 
@@ -367,6 +411,119 @@ async def test_afile_list_does_not_leak_another_callers_files():
 
     assert [file.id for file in response.data] == ["unified-mine-2", "unified-mine-1"]
     assert table.find_many_calls[0]["where"] == {"created_by": "test-user"}
+
+
+@pytest.mark.asyncio
+async def test_afile_list_returns_own_and_team_files_for_a_key_carrying_both_ids():
+    managed_files, table = _make_managed_files_over_rows(
+        [
+            _make_managed_file_row("unified-mine"),
+            _make_managed_file_row("unified-teammates", created_by="other-user", team_id="test-team"),
+            _make_managed_file_row("unified-outsiders", created_by="outsider", team_id="other-team"),
+        ]
+    )
+
+    response = await managed_files.afile_list(
+        purpose=None,
+        litellm_parent_otel_span=None,
+        user_api_key_dict=_make_team_member_api_key_dict(),
+    )
+
+    assert [file.id for file in response.data] == ["unified-mine", "unified-teammates"]
+    assert table.find_many_calls[0]["where"] == {
+        "OR": [{"created_by": "test-user"}, {"team_id": "test-team"}]
+    }
+
+
+@pytest.mark.asyncio
+async def test_afile_list_scopes_a_service_account_key_to_its_team():
+    managed_files, table = _make_managed_files_over_rows(
+        [
+            _make_managed_file_row("unified-teams", created_by="other-user", team_id="test-team"),
+            _make_managed_file_row("unified-outsiders", created_by="outsider", team_id="other-team"),
+        ]
+    )
+
+    response = await managed_files.afile_list(
+        purpose=None,
+        litellm_parent_otel_span=None,
+        user_api_key_dict=_make_service_account_api_key_dict(),
+    )
+
+    assert [file.id for file in response.data] == ["unified-teams"]
+    assert table.find_many_calls[0]["where"] == {"team_id": "test-team"}
+
+
+@pytest.mark.asyncio
+async def test_afile_list_returns_every_callers_files_for_a_proxy_admin():
+    managed_files, table = _make_managed_files_over_rows(
+        [
+            _make_managed_file_row("unified-mine"),
+            _make_managed_file_row("unified-theirs", created_by="other-user", team_id="other-team"),
+        ]
+    )
+
+    response = await managed_files.afile_list(
+        purpose=None,
+        litellm_parent_otel_span=None,
+        user_api_key_dict=_make_admin_api_key_dict(),
+    )
+
+    assert [file.id for file in response.data] == ["unified-mine", "unified-theirs"]
+    assert table.find_many_calls[0]["where"] == {}
+
+
+@pytest.mark.asyncio
+async def test_afile_list_pages_a_team_key_across_both_halves_of_its_filter():
+    """Keyset pagination has to walk an OR filter as one ordered set, without
+    repeating a row across pages or dropping one between them."""
+    managed_files, table = _make_managed_files_over_rows(
+        [
+            _make_managed_file_row("unified-0"),
+            _make_managed_file_row("unified-1", created_by="other-user", team_id="test-team"),
+            _make_managed_file_row("unified-2"),
+            _make_managed_file_row("unified-3", created_by="outsider", team_id="other-team"),
+            _make_managed_file_row("unified-4", created_by="other-user", team_id="test-team"),
+        ]
+    )
+    user_api_key_dict = _make_team_member_api_key_dict()
+
+    seen = []
+    cursor = None
+    for _ in range(4):
+        response = await managed_files.afile_list(
+            purpose=None,
+            litellm_parent_otel_span=None,
+            user_api_key_dict=user_api_key_dict,
+            limit=2,
+            after=cursor,
+        )
+        seen.extend(file.id for file in response.data)
+        if not response.has_more:
+            break
+        cursor = response.last_id
+
+    assert seen == ["unified-0", "unified-1", "unified-2", "unified-4"]
+    assert all(
+        call["where"] == {"OR": [{"created_by": "test-user"}, {"team_id": "test-team"}]}
+        for call in table.find_many_calls
+    )
+
+
+@pytest.mark.asyncio
+async def test_afile_list_orders_newest_first_and_breaks_ties_on_the_cursor_column():
+    managed_files, table = _make_managed_files_over_rows([_make_managed_file_row("unified-mine")])
+
+    await managed_files.afile_list(
+        purpose=None,
+        litellm_parent_otel_span=None,
+        user_api_key_dict=_make_user_api_key_dict(),
+    )
+
+    assert table.find_many_calls[0]["order"] == [
+        {"created_at": "desc"},
+        {"unified_file_id": "desc"},
+    ]
 
 
 @pytest.mark.asyncio

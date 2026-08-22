@@ -48,12 +48,14 @@ def validate_file_list_limit(limit: int | None) -> None:
 
 
 def validate_file_list_purpose(purpose: str | None) -> None:
-    """Reject a ``purpose`` filter the Files API never accepts.
+    """Reject a ``purpose`` filter no upload to this proxy could have stored.
 
     An unknown purpose matches no file, so filtering on it would report an
     empty page for what is really a bad request. Rejecting it keeps a managed
-    listing consistent with the upload route and with the provider-backed
-    listings, which both refuse the same values.
+    listing consistent with the upload route, which refuses the same values
+    against this same set. The provider-backed listings do not: they pass
+    ``purpose`` upstream, so a purpose OpenAI accepts before it is added here
+    is rejected on the managed path while still working on those.
     """
     valid_purposes: Final = get_args(OpenAIFilesPurpose)
     if purpose is None or purpose in valid_purposes:
