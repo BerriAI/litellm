@@ -375,6 +375,11 @@ class TestEscapeHatch:
         assert _keywords(tmp_path, sql) == ("UPDATE",)
         assert _scan(tmp_path, sql)[0].line == 1
 
+    def test_a_marker_a_blank_line_above_a_statement_does_not_exempt_it(self, tmp_path):
+        sql = '-- data-migration-ok: one row\n\nUPDATE "Foo" SET "a" = 1;'
+        assert _keywords(tmp_path, sql) == ("UPDATE",)
+        assert _scan(tmp_path, sql)[0].line == 3
+
     def test_a_trailing_marker_exempts_only_the_statement_it_follows(self, tmp_path):
         sql = 'DELETE FROM "Foo" WHERE "a" = 1; UPDATE "Bar" SET "b" = 2; -- data-migration-ok: one row'
         assert _keywords(tmp_path, sql) == ("DELETE",)
@@ -409,6 +414,11 @@ class TestEscapeHatch:
         )
         assert _keywords(tmp_path, sql) == ("UPDATE",)
         assert _scan(tmp_path, sql)[0].line == 5
+
+    def test_marker_directly_above_a_one_line_do_block_does_not_exempt_its_body(self, tmp_path):
+        sql = '-- data-migration-ok: seeding one default row\nDO $$ BEGIN UPDATE "Foo" SET "a" = 1; END $$;'
+        assert _keywords(tmp_path, sql) == ("UPDATE",)
+        assert _scan(tmp_path, sql)[0].line == 2
 
     def test_marker_on_the_do_line_does_not_exempt_its_body(self, tmp_path):
         sql = (
