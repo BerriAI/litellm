@@ -6,7 +6,7 @@ lint.extend-select = ["T20", "PGH004", "RUF008", "RUF009", "RUF100"]
 # litellm's own ruff config both rely on suppressions this config can't see.
 lint.external = [
     # Enforced by the strict-rule gate (scripts/ruff_strict_gate.py + ruff-strict.toml)
-    "C901",
+    "ANN003", "C901",
     # Enforced by upstream litellm's ruff config, but not run in this repo's CI
     "PLC0415", "E402", "BLE001", "ARG002", "S102", "S324", "S606", "D401", "F403", "F405",
 ]
