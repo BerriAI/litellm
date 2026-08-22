@@ -34,6 +34,8 @@ The weighted sum is mapped to tiers using configurable boundaries:
 | COMPLEX | 0.25 - 0.50 | `medium_complex` | Technical, multi-part requests |
 | REASONING | > 0.50 | `complex_reasoning` | Chain-of-thought, analysis |
 
+The three boundaries must ascend, and any key you leave out is filled from the shipped default, so setting one boundary without the others can put them out of order. A set that decreases would strand the tier between the inverted pair and silently route its traffic to a costlier one, so it is rejected at config load with a message naming the resolved values. Set every boundary you need to move, not just one.
+
 Tier names are defaults you can rename with [`tier_labels`](#renaming-the-tiers). The three `tier_boundaries` keys are named after those defaults but they are scorer knobs, not tiers: each one names the gap between two rungs and is persisted by name on every routing decision, so they stay `simple_medium` / `medium_complex` / `complex_reasoning` no matter what you call the tiers. The column above tells a renamed deployment which knob it is turning.
 
 ## Configuration

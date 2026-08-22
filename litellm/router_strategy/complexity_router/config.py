@@ -372,6 +372,15 @@ DEFAULT_TIER_BOUNDARIES: Final[dict[str, float]] = {
 }
 
 
+def resolve_tier_boundaries(boundaries: Mapping[str, float]) -> Mapping[str, float]:
+    """The three boundaries in effect, with the shipped default filling in each key the config omits.
+
+    The single place omitted keys are filled, so a validator and the scorer cannot disagree about
+    what a partially specified tier_boundaries actually means.
+    """
+    return MappingProxyType({key: boundaries.get(key, default) for key, default in DEFAULT_TIER_BOUNDARIES.items()})
+
+
 # ─── Default Token Thresholds ───
 
 DEFAULT_TOKEN_THRESHOLDS: Final[dict[str, int]] = {
@@ -1103,6 +1112,35 @@ class ComplexityRouterConfig(BaseModel):
             raise ValueError(f"adaptive=True tier pools must be non-empty; empty tiers: {empty}")
         self.tiers = normalized
         return self
+
+    @model_validator(mode="after")
+    def _validate_tier_boundaries_ascend(self) -> "ComplexityRouterConfig":
+        # The score-to-tier mapping is a sequential comparison chain, so a boundary that sits below the one
+        # under it makes the tier between them unreachable and silently sends its traffic to a costlier tier.
+        # Resolved, not raw: omitting a key is the common way to arrive here, since the omitted key is filled
+        # from a shipped default that knows nothing about the boundary the operator did set.
+        resolved: Final = resolve_tier_boundaries(self.tier_boundaries)
+        simple_medium, medium_complex, complex_reasoning = (
+            resolved["simple_medium"],
+            resolved["medium_complex"],
+            resolved["complex_reasoning"],
+        )
+        if simple_medium <= medium_complex <= complex_reasoning:
+            return self
+        stranded: Final = tuple(
+            tier
+            for tier, inverted in (
+                ("MEDIUM", simple_medium > medium_complex),
+                ("COMPLEX", medium_complex > complex_reasoning),
+            )
+            if inverted
+        )
+        raise ValueError(
+            f"tier_boundaries must ascend, but resolve to simple_medium={simple_medium}, "
+            f"medium_complex={medium_complex}, complex_reasoning={complex_reasoning}, leaving "
+            f"{' and '.join(stranded)} unreachable. Boundaries you omit are filled from the shipped "
+            f"defaults {DEFAULT_TIER_BOUNDARIES}, so set every boundary you need to move, not just one."
+        )
 
     @model_validator(mode="after")
     def _validate_semantic_matching(self) -> "ComplexityRouterConfig":

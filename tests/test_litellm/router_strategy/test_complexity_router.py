@@ -309,7 +309,10 @@ class TestReasoningMarkerScoring:
         high = ComplexityRouter(
             model_name="test-complexity-router",
             litellm_router_instance=mock_router_instance,
-            complexity_router_config={**basic_config, "tier_boundaries": {"simple_medium": 0.30}},
+            complexity_router_config={
+                **basic_config,
+                "tier_boundaries": {"simple_medium": 0.30, "medium_complex": 0.35, "complex_reasoning": 0.50},
+            },
         )
         assert low._effective_reasoning_override_min_score() == 0.20
         assert high._effective_reasoning_override_min_score() == 0.30
@@ -622,14 +625,50 @@ class TestEffectiveTierBoundaries:
             litellm_router_instance=mock_router_instance,
             complexity_router_config={
                 "tiers": {"SIMPLE": "a", "MEDIUM": "b", "COMPLEX": "c", "REASONING": "d"},
-                "tier_boundaries": {"simple_medium": 0.42},
+                "tier_boundaries": {"simple_medium": 0.2},
             },
         )
         assert dict(router._effective_tier_boundaries()) == {
-            "simple_medium": 0.42,
+            "simple_medium": 0.2,
             "medium_complex": DEFAULT_TIER_BOUNDARIES["medium_complex"],
             "complex_reasoning": DEFAULT_TIER_BOUNDARIES["complex_reasoning"],
         }
+
+    def test_omitting_a_boundary_below_one_that_is_set_is_rejected(self, mock_router_instance):
+        """The trap this guards: one boundary set high, the rest filled from lower shipped defaults."""
+        with pytest.raises(ValidationError, match="MEDIUM unreachable"):
+            ComplexityRouter(
+                model_name="test-complexity-router",
+                litellm_router_instance=mock_router_instance,
+                complexity_router_config={
+                    "tiers": {"SIMPLE": "a", "MEDIUM": "b", "COMPLEX": "c", "REASONING": "d"},
+                    "tier_boundaries": {"simple_medium": 0.30},
+                },
+            )
+
+    def test_fully_specified_decreasing_boundaries_are_rejected(self, mock_router_instance):
+        """An operator can also strand a tier without omitting anything."""
+        with pytest.raises(ValidationError, match="COMPLEX unreachable"):
+            ComplexityRouter(
+                model_name="test-complexity-router",
+                litellm_router_instance=mock_router_instance,
+                complexity_router_config={
+                    "tiers": {"SIMPLE": "a", "MEDIUM": "b", "COMPLEX": "c", "REASONING": "d"},
+                    "tier_boundaries": {"simple_medium": 0.10, "medium_complex": 0.60, "complex_reasoning": 0.50},
+                },
+            )
+
+    def test_equal_boundaries_are_allowed(self, mock_router_instance):
+        """Collapsing a tier to an empty band is a deliberate way to take it out of rotation."""
+        router = ComplexityRouter(
+            model_name="test-complexity-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                "tiers": {"SIMPLE": "a", "MEDIUM": "b", "COMPLEX": "c", "REASONING": "d"},
+                "tier_boundaries": {"simple_medium": 0.25, "medium_complex": 0.25, "complex_reasoning": 0.50},
+            },
+        )
+        assert router._effective_tier_boundaries()["medium_complex"] == 0.25
 
     def test_defaults_stay_ordered_and_within_the_scoring_range(self):
         """The tiers only all remain reachable while the boundaries ascend."""
