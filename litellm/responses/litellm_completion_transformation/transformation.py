@@ -2039,7 +2039,6 @@ class LiteLLMCompletionResponsesConfig:
 
     @staticmethod
     def _extract_image_generation_output_items(
-        chat_completion_response: ModelResponse,
         choice: Choices,
     ) -> list[OutputImageGenerationCall]:
         """
@@ -2142,7 +2141,6 @@ class LiteLLMCompletionResponsesConfig:
             if hasattr(choice.message, "images") and choice.message.images:
                 # Extract image generation output
                 image_generation_items = LiteLLMCompletionResponsesConfig._extract_image_generation_output_items(
-                    chat_completion_response=chat_completion_response,
                     choice=choice,
                 )
                 message_output_items.extend(image_generation_items)

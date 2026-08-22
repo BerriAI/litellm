@@ -57,9 +57,6 @@ class TestExtractImageGenerationOutputItems:
 
     def test_extracts_images_correctly(self):
         """Should extract OutputImageGenerationCall objects from images"""
-        mock_response = Mock(spec=ModelResponse)
-        mock_response.id = "test_123"
-
         mock_message = Mock(spec=Message)
         mock_message.images = [
             {
@@ -80,7 +77,6 @@ class TestExtractImageGenerationOutputItems:
 
         result = (
             LiteLLMCompletionResponsesConfig._extract_image_generation_output_items(
-                chat_completion_response=mock_response,
                 choice=mock_choice,
             )
         )
@@ -96,7 +92,6 @@ class TestExtractImageGenerationOutputItems:
 
     def test_returns_empty_for_no_images(self):
         """Should return empty list if no images"""
-        mock_response = Mock(spec=ModelResponse)
         mock_message = Mock(spec=Message)
         mock_message.images = []
 
@@ -106,7 +101,6 @@ class TestExtractImageGenerationOutputItems:
 
         result = (
             LiteLLMCompletionResponsesConfig._extract_image_generation_output_items(
-                chat_completion_response=mock_response,
                 choice=mock_choice,
             )
         )
@@ -115,9 +109,6 @@ class TestExtractImageGenerationOutputItems:
 
     def test_maps_finish_reason_to_status(self):
         """Should correctly map finish_reason to status"""
-        mock_response = Mock(spec=ModelResponse)
-        mock_response.id = "test_finish"
-
         mock_message = Mock(spec=Message)
         mock_message.images = [
             {
@@ -133,7 +124,6 @@ class TestExtractImageGenerationOutputItems:
 
         result = (
             LiteLLMCompletionResponsesConfig._extract_image_generation_output_items(
-                chat_completion_response=mock_response,
                 choice=mock_choice,
             )
         )
@@ -219,14 +209,8 @@ class TestImageGenerationOutputItemIds:
         mock_choice.finish_reason = "stop"
         return mock_choice
 
-    def _chat_completion_response(self):
-        mock_response = Mock(spec=ModelResponse)
-        mock_response.id = "chatcmpl-dfa2da3a-1586-4ff7-b64e-f59c692a5d11"
-        return mock_response
-
     def test_image_generation_item_id_uses_ig_prefix(self):
         result = LiteLLMCompletionResponsesConfig._extract_image_generation_output_items(
-            chat_completion_response=self._chat_completion_response(),
             choice=self._choice_with_images(2),
         )
 
@@ -238,7 +222,6 @@ class TestImageGenerationOutputItemIds:
 
     def test_image_generation_item_ids_are_unique(self):
         result = LiteLLMCompletionResponsesConfig._extract_image_generation_output_items(
-            chat_completion_response=self._chat_completion_response(),
             choice=self._choice_with_images(3),
         )
 
