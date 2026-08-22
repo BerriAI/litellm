@@ -334,7 +334,10 @@ def _get_token_base_cost(
             continue
 
         threshold_key_tier = match.group("tier")
-        if threshold_key_tier is not None and threshold_key_tier != service_tier:
+        active_pricing_tier = (
+            None if service_tier is None else _SERVICE_TIER_TO_COST_KEY_SUFFIX.get(service_tier.lower())
+        )
+        if threshold_key_tier is not None and threshold_key_tier != active_pricing_tier:
             continue
 
         try:

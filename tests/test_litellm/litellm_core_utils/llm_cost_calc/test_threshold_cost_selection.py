@@ -204,6 +204,152 @@ def test_unequal_threshold_highest_standard_still_wins():
         ("cache_read_input_token_cost_above_200k_tokens_priority", 4e-7, 4),
     ],
 )
+def test_fast_service_tier_uses_priority_qualified_threshold(tier_field, tier_value, rate_index):
+    """fast aliases to priority pricing, so a priority-qualified threshold with no standard
+    sibling must apply to a fast request too."""
+    model_info = {
+        "input_cost_per_token": 1e-6,
+        "output_cost_per_token": 1e-6,
+        "cache_read_input_token_cost": 2e-7,
+        tier_field: tier_value,
+    }
+    usage = Usage(
+        prompt_tokens=250_000,
+        completion_tokens=1_000,
+        total_tokens=251_000,
+    )
+
+    rates = _get_token_base_cost(
+        model_info=model_info,
+        usage=usage,
+        service_tier="fast",
+    )
+
+    assert rates[rate_index] == pytest.approx(tier_value)
+
+
+@pytest.mark.parametrize(
+    ("service_tier", "expected"),
+    [
+        ("priority", 1.5e-6),
+        ("flex", 1e-6),
+        (None, 1e-6),
+    ],
+    ids=["priority-guard", "flex-guard", "default-guard"],
+)
+def test_fast_alias_guard_tiers_for_priority_only_output_threshold(service_tier, expected):
+    """priority must keep working under the alias; flex and default must not pick up the
+    priority rate."""
+    model_info = {
+        "input_cost_per_token": 1e-6,
+        "output_cost_per_token": 1e-6,
+        "output_cost_per_token_above_200k_tokens_priority": 1.5e-6,
+    }
+    usage = Usage(
+        prompt_tokens=250_000,
+        completion_tokens=1_000,
+        total_tokens=251_000,
+    )
+
+    rates = _get_token_base_cost(
+        model_info=model_info,
+        usage=usage,
+        service_tier=service_tier,
+    )
+
+    assert rates[1] == pytest.approx(expected)
+
+
+@pytest.mark.parametrize("service_tier", ["priority", "fast"], ids=["priority", "fast"])
+def test_fast_builtin_standard_plus_priority_threshold_resolves_priority(service_tier):
+    """The builtin shape (standard sibling present) keeps resolving the priority variant via
+    the existing standard-key alias lookup."""
+    model_info = {
+        "input_cost_per_token": 1e-6,
+        "output_cost_per_token": 1e-6,
+        "output_cost_per_token_above_200k_tokens": 1e-6,
+        "output_cost_per_token_above_200k_tokens_priority": 1.5e-6,
+    }
+    usage = Usage(
+        prompt_tokens=250_000,
+        completion_tokens=1_000,
+        total_tokens=251_000,
+    )
+
+    rates = _get_token_base_cost(
+        model_info=model_info,
+        usage=usage,
+        service_tier=service_tier,
+    )
+
+    assert rates[1] == pytest.approx(1.5e-6)
+
+
+@pytest.mark.parametrize(
+    "model_info",
+    [
+        {
+            "input_cost_per_token": 1e-6,
+            "output_cost_per_token": 1e-6,
+            "output_cost_per_token_above_200k_tokens": 1e-6,
+            "output_cost_per_token_above_200k_tokens_priority": 1.5e-6,
+        },
+        {
+            "input_cost_per_token": 1e-6,
+            "output_cost_per_token": 1e-6,
+            "output_cost_per_token_above_200k_tokens_priority": 1.5e-6,
+            "output_cost_per_token_above_200k_tokens": 1e-6,
+        },
+    ],
+    ids=["standard-first", "priority-first"],
+)
+def test_fast_equal_threshold_matching_tier_wins_both_orders(model_info):
+    """The Phase D equal-threshold tie-break must hold under the fast alias, independent of
+    insertion order."""
+    usage = Usage(
+        prompt_tokens=250_000,
+        completion_tokens=1_000,
+        total_tokens=251_000,
+    )
+
+    rates = _get_token_base_cost(
+        model_info=model_info,
+        usage=usage,
+        service_tier="fast",
+    )
+
+    assert rates[1] == pytest.approx(1.5e-6)
+
+
+def test_fast_service_tier_uppercase_uses_priority_qualified_threshold():
+    """The scanner must be as case-insensitive as the lookup path."""
+    model_info = {
+        "input_cost_per_token": 1e-6,
+        "output_cost_per_token": 1e-6,
+        "output_cost_per_token_above_200k_tokens_priority": 1.5e-6,
+    }
+    usage = Usage(
+        prompt_tokens=250_000,
+        completion_tokens=1_000,
+        total_tokens=251_000,
+    )
+
+    rates = _get_token_base_cost(
+        model_info=model_info,
+        usage=usage,
+        service_tier="FAST",
+    )
+
+    assert rates[1] == pytest.approx(1.5e-6)
+
+
+@pytest.mark.parametrize(
+    ("tier_field", "tier_value", "rate_index"),
+    [
+        ("output_cost_per_token_above_200k_tokens_priority", 1.5e-6, 1),
+        ("cache_read_input_token_cost_above_200k_tokens_priority", 4e-7, 4),
+    ],
+)
 def test_tier_qualified_threshold_field_selects_tier_for_matching_service_tier(
     tier_field: str, tier_value: float, rate_index: int
 ) -> None:
