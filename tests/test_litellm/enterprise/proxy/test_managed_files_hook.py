@@ -335,6 +335,40 @@ async def test_afile_list_filters_by_purpose():
 
 
 @pytest.mark.asyncio
+async def test_afile_list_keeps_a_usable_cursor_when_a_page_filters_everything_out():
+    managed_files, _ = _make_managed_files_over_rows(
+        [
+            _make_managed_file_row("unified-0"),
+            _make_managed_file_row("unified-1"),
+            _make_managed_file_row("unified-2", purpose="batch"),
+        ]
+    )
+    user_api_key_dict = _make_user_api_key_dict()
+
+    first_page = await managed_files.afile_list(
+        purpose="batch",
+        litellm_parent_otel_span=None,
+        user_api_key_dict=user_api_key_dict,
+        limit=2,
+    )
+
+    assert first_page["data"] == []
+    assert first_page["has_more"] is True
+    assert first_page["last_id"] == "unified-1"
+
+    second_page = await managed_files.afile_list(
+        purpose="batch",
+        litellm_parent_otel_span=None,
+        user_api_key_dict=user_api_key_dict,
+        limit=2,
+        after=first_page["last_id"],
+    )
+
+    assert [file.id for file in second_page["data"]] == ["unified-2"]
+    assert second_page["has_more"] is False
+
+
+@pytest.mark.asyncio
 async def test_afile_list_honors_limit_and_reports_more_pages():
     managed_files, table = _make_managed_files_over_rows(
         [_make_managed_file_row(f"unified-{index}") for index in range(5)]

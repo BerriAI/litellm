@@ -67,7 +67,6 @@ from litellm.types.llms.openai import (  # pyright: ignore[reportAttributeAccess
     CreateFileRequest,
     FileObject,
     OpenAIFileObject,
-    OpenAIFilesPurpose,
     ResponsesAPIResponse,
 )
 from litellm.types.utils import (
@@ -1386,7 +1385,10 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         Pagination is keyset based on ``unified_file_id`` so a key that owns
         every file on the proxy still reads one bounded page at a time.
         ``purpose`` is applied after parsing because the managed file table
-        keeps it inside the ``file_object`` blob instead of a column.
+        keeps it inside the ``file_object`` blob instead of a column, so a
+        narrowed page can hold fewer files than ``limit``. ``last_id`` then
+        falls back to the last row the page read, which keeps the cursor
+        usable even when every file on the page was filtered out.
         """
         validate_file_list_limit(limit)
         if limit == 0:
@@ -1416,14 +1418,19 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             **cursor_args,
         )
         has_more: Final = len(rows) > page_size
+        page_rows: Final = rows[:page_size]
 
         files: Final = [
             parsed_file_object.model_copy(update={"id": row.unified_file_id})
-            for row in rows[:page_size]
+            for row in page_rows
             if (parsed_file_object := _parse_managed_file_object(row.file_object, row.unified_file_id)) is not None
             and (purpose is None or parsed_file_object.purpose == purpose)
         ]
-        return build_list_page(files, has_more=has_more)
+        return build_list_page(
+            files,
+            has_more=has_more,
+            next_cursor_id=page_rows[-1].unified_file_id if page_rows else None,
+        )
 
     def _is_batch_polling_enabled(self) -> bool:
         """
