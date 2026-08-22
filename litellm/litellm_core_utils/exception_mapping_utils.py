@@ -28,6 +28,36 @@ from ..exceptions import (
 )
 
 
+def _build_client_error_message(base_message: str) -> str:
+    """
+    Build the client-facing message for an unmapped / connection error.
+
+    Python tracebacks include absolute file paths, line numbers, and the
+    proxy's internal call stack. Returning them in the API error response
+    (surfaced to clients via ProxyException.message) is an
+    information-disclosure leak (CWE-209) -
+    see https://github.com/BerriAI/litellm/issues/30948.
+
+    By default the (secret-redacted) traceback is written to the server-side
+    logs only and kept out of the response, while the human-useful error
+    message is preserved for the client. Set
+    ``litellm.expose_traceback_in_errors = True`` to restore the legacy
+    behavior of appending the traceback to the message
+    (https://github.com/BerriAI/litellm/issues/4201).
+    """
+    redacted_traceback = _redact_string(traceback.format_exc())
+    if litellm.expose_traceback_in_errors:
+        return "{}\n{}".format(base_message, redacted_traceback)
+
+    # Keep full debugging detail server-side without leaking it to the client.
+    # Surfaces in logs when `litellm._turn_on_debug()` is enabled.
+    verbose_logger.debug(
+        "litellm.exception_type: suppressed traceback in client response:\n%s",
+        redacted_traceback,
+    )
+    return base_message
+
+
 class ExceptionCheckers:
     """
     Helper class for checking various error conditions in exception strings.
@@ -2045,7 +2075,7 @@ def _map_azure_exception(
     else:
         # if no status code then it is an APIConnectionError: https://github.com/openai/openai-python#handling-errors
         raise APIConnectionError(
-            message=f"{exception_provider} APIConnectionError - {message}\n{_redact_string(traceback.format_exc())}",
+            message=_build_client_error_message(f"{exception_provider} APIConnectionError - {message}"),
             llm_provider="azure",
             model=model,
             litellm_debug_info=extra_information,
@@ -2469,10 +2499,7 @@ def exception_type(  # type: ignore
                 )
             else:
                 raise APIConnectionError(
-                    message="{}\n{}".format(
-                        str(original_exception),
-                        _redact_string(traceback.format_exc()),
-                    ),
+                    message=_build_client_error_message(str(original_exception)),
                     llm_provider=custom_llm_provider,
                     model=model,
                     request=httpx.Request(method="POST", url="https://api.openai.com/v1/"),  # stub the request
@@ -2498,10 +2525,7 @@ def exception_type(  # type: ignore
                     setattr(e, "litellm_response_headers", litellm_response_headers)
                     raise e  # it's already mapped
             raised_exc = APIConnectionError(
-                message="{}\n{}".format(
-                    original_exception,
-                    _redact_string(traceback.format_exc()),
-                ),
+                message=_build_client_error_message(str(original_exception)),
                 llm_provider="",
                 model="",
             )
