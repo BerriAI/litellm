@@ -386,7 +386,10 @@ def row_source_keyword(statement: str) -> str | None:
     so the scalar subqueries and helper CTEs nested within that list do not make the insert
     a rewrite. Failing all three, the rows come from a parenthesised group, which Postgres
     accepts and which reading only the unparenthesised text would let through:
-    `INSERT INTO "t" ("a") (SELECT ...)` copies a whole table."""
+    `INSERT INTO "t" ("a") (SELECT ...)` copies a whole table. Each group at that level is
+    read on its own terms and the first to name a row source is the answer, since the ones
+    around it are the column list, the conflict target and the rest of the clauses an insert
+    is allowed to carry, and any of those can be the last group written."""
     outer = strip_parens(statement)
     joined = row_source_in(outer)
     if joined is not None:
@@ -396,8 +399,11 @@ def row_source_keyword(statement: str) -> str | None:
         return next((source for source in sources if source is not None), None)
     if contains(outer, "VALUES"):
         return None
-    wrapped = parenthesised_row_source(statement)
-    return row_source_in(statement) if wrapped is None else row_source_keyword(wrapped)
+    groups = list(parenthesised_groups(statement))
+    if not groups:
+        return row_source_in(statement)
+    sources = (row_source_keyword(group) for group in groups)
+    return next((source for source in sources if source is not None), None)
 
 
 def set_operation_terms(statement: str, outer: str) -> Iterator[str]:
@@ -417,15 +423,14 @@ def set_operation_terms(statement: str, outer: str) -> Iterator[str]:
         yield statement[opens:closes]
 
 
-def parenthesised_row_source(statement: str) -> str | None:
-    """What the last group of parentheses closed at the statement's outermost level holds,
-    which is where an `INSERT` keeps a row source it has wrapped, the column list before it
-    being a group of its own. Postgres takes `INSERT INTO "t" ("a") (SELECT ...)` and
-    `... (VALUES (1))` alike, so reading the wrapped text on its own terms is what stops a
-    scalar subquery nested inside a wrapped `VALUES` list standing in for the rows."""
+def parenthesised_groups(statement: str) -> Iterator[str]:
+    """What each group of parentheses closed at the statement's outermost level holds, in the
+    order they are written. One of them is where an `INSERT` keeps a row source it has
+    wrapped, since Postgres takes `INSERT INTO "t" ("a") (SELECT ...)` and `... (VALUES (1))`
+    alike, and reading a group on its own terms is what stops a scalar subquery nested inside
+    a wrapped `VALUES` list standing in for the rows."""
     depth = 0
     opens = None
-    wrapped = None
 
     for index, character in enumerate(statement):
         if character == "(":
@@ -435,9 +440,7 @@ def parenthesised_row_source(statement: str) -> str | None:
         elif character == ")":
             depth = max(depth - 1, 0)
             if depth == 0 and opens is not None:
-                wrapped = statement[opens + 1 : index]
-
-    return wrapped
+                yield statement[opens + 1 : index]
 
 
 def row_source_in(text: str) -> str | None:

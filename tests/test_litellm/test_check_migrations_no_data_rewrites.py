@@ -186,6 +186,24 @@ class TestInsert:
         )
         assert _keywords(tmp_path, sql) == ()
 
+    def test_a_conflict_target_after_a_parenthesised_row_source_does_not_hide_it(self, tmp_path):
+        sql = (
+            'INSERT INTO "Foo" ("id") (SELECT "id" FROM "Bar")'
+            ' ON CONFLICT ("id") DO NOTHING;'
+        )
+        assert _keywords(tmp_path, sql) == ("INSERT ... SELECT",)
+
+    def test_a_returning_list_after_a_parenthesised_row_source_does_not_hide_it(self, tmp_path):
+        sql = 'INSERT INTO "Foo" ("id") (SELECT "id" FROM "Bar") RETURNING ("id");'
+        assert _keywords(tmp_path, sql) == ("INSERT ... SELECT",)
+
+    def test_a_conflict_target_beside_a_bounded_values_list_stays_bounded(self, tmp_path):
+        sql = (
+            'INSERT INTO "Foo" ("id") (VALUES ((SELECT max("id") FROM "Bar")))'
+            ' ON CONFLICT ("id") DO NOTHING;'
+        )
+        assert _keywords(tmp_path, sql) == ()
+
     def test_a_query_term_written_before_a_values_term_is_still_the_row_source(self, tmp_path):
         sql = 'INSERT INTO "Foo" ("id") (SELECT "id" FROM "Bar") UNION ALL (VALUES (2));'
         assert _keywords(tmp_path, sql) == ("INSERT ... SELECT",)
