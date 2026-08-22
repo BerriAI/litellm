@@ -2056,7 +2056,7 @@ class BaseLLMHTTPHandler:
         # Prepare headers
         kwargs = kwargs or {}
         provider_specific_header: Final = cast(
-            litellm.types.utils.ProviderSpecificHeader | None,
+            litellm.types.utils.ProviderSpecificHeader | Sequence[litellm.types.utils.ProviderSpecificHeader] | None,
             kwargs.get("provider_specific_header", None),
         )
         provider_specific_headers: Final = ProviderSpecificHeaderUtils.get_provider_specific_headers(
