@@ -1337,3 +1337,54 @@ def test_calculate_usage_fills_unknown_split_from_reasoning_estimate(
     assert usage.completion_tokens == 100
     assert usage.completion_tokens_details.reasoning_tokens == expected_reasoning_tokens
     assert usage.completion_tokens_details.text_tokens == expected_text_tokens
+
+
+class TestRawSSEFramesInACollectedStream:
+    """A collected stream can carry raw SSE frames next to parsed chunks.
+
+    The guardrail post-call hooks append whatever the response iterator yields, so
+    `stream_chunk_builder` receives bytes/str entries it cannot index. Reaching one
+    used to raise, and the caller turned a completion the client had already
+    received into a 500 (issue #37873). Only two of the nine guardrails that
+    reassemble a stream carry the `is_raw_sse_stream` guard that avoids this call.
+    """
+
+    @staticmethod
+    def _chunk(content):
+        return ModelResponseStream(
+            id="chatcmpl-a83572f7",
+            created=1,
+            model="nvidia_nim/meta/llama-3.1-8b-instruct",
+            object="chat.completion.chunk",
+            choices=[
+                StreamingChoices(
+                    finish_reason=None,
+                    index=0,
+                    delta=Delta(role="assistant", content=content),
+                )
+            ],
+        )
+
+    @pytest.mark.parametrize(
+        "frame",
+        [b'data: {"id":"x"}\n\n', 'data: {"id":"x"}\n\n', bytearray(b"data: x\n\n")],
+    )
+    def test_a_raw_frame_does_not_raise(self, frame):
+        chunks = [self._chunk("Hello"), frame, self._chunk(" world")]
+
+        # Must not raise: an APIError here becomes a 500 for an already-delivered completion.
+        assert stream_chunk_builder(chunks=chunks) is None
+
+    def test_an_all_raw_stream_does_not_raise(self):
+        assert stream_chunk_builder(chunks=[b"data: a\n\n", b"data: b\n\n"]) is None
+
+    def test_a_stream_of_real_chunks_is_still_assembled(self):
+        """Control: the ordinary path is untouched, so this passes with or without the fix."""
+        built = stream_chunk_builder(chunks=[self._chunk("Hello"), self._chunk(" world")])
+
+        assert built is not None
+        assert built.choices[0].message.content == "Hello world"
+
+    def test_empty_and_none_contracts_are_unchanged(self):
+        """Control: the existing empty-case contract still holds."""
+        assert stream_chunk_builder(chunks=[]) is None

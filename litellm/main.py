@@ -8548,6 +8548,19 @@ def stream_chunk_builder(
         if not chunks:
             return None
 
+        # A collected stream can carry raw SSE frames (bytes/str) alongside parsed
+        # chunks, because the guardrail post-call hooks append whatever the response
+        # iterator yields. Those have no chunk shape, so the first one reached raises
+        # and the caller turns a completion the client already received into a 500.
+        # Assembling only the parsed remainder would instead hand back a response that
+        # silently omits content, so treat the whole stream as unassemblable, matching
+        # the `any(...)` stance `is_raw_sse_stream` already takes for this shape.
+        # Returning None meets the empty-case contract just above, which every caller
+        # handles by passing the stream through unscanned.
+        if any(isinstance(chunk, (str, bytes, bytearray)) for chunk in chunks):
+            verbose_logger.debug("stream_chunk_builder: raw SSE frames in the collected stream, not assembling")
+            return None
+
         processor: Final = ChunkProcessor(chunks, messages)
         chunks = processor.chunks
 
