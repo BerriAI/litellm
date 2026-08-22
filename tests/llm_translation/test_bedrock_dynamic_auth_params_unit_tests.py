@@ -15,13 +15,7 @@ from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from unittest.mock import Mock
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 
-import json
-import pytest
-from unittest.mock import patch, Mock
 
-import litellm
-from litellm.llms.custom_httpx.http_handler import HTTPHandler
-from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 
 
 def test_bedrock_completion_with_region_name():

@@ -8,7 +8,6 @@ import litellm.types
 
 load_dotenv()
 import io
-import os
 import json
 
 sys.path.insert(
@@ -67,7 +66,7 @@ async def test_bedrock_agents_with_streaming():
 
 def test_bedrock_agents_with_custom_params():
     litellm._turn_on_debug()
-    from unittest.mock import MagicMock, patch
+    from unittest.mock import MagicMock
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
     client = HTTPHandler()
