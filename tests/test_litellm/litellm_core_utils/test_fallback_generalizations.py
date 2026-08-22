@@ -381,7 +381,7 @@ def test_shipped_rules_flag_unmapped_fable_as_always_on_thinking(shipped_cost_ma
     "model,provider",
     [
         ("claude-opus-4-9@20260101", "vertex_ai"),
-        ("databricks-claude-opus-5-1", "databricks"),
+        ("databricks-claude-opus-9-1", "databricks"),
     ],
 )
 def test_shipped_rules_are_provider_neutral_for_unmapped_ids(shipped_cost_map, model, provider):
