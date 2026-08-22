@@ -28,8 +28,6 @@ from passthrough_client import (
 )
 
 EMBEDDING_MODEL = "text-embedding-3-small"
-# Relayed to OpenAI untranslated, so this is OpenAI's own realtime model name
-# rather than a gateway deployment alias.
 REALTIME_MODEL = "gpt-realtime-2"
 
 pytestmark = pytest.mark.e2e
