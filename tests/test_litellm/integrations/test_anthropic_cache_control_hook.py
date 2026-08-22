@@ -1599,7 +1599,7 @@ class TestEnableAnthropicPromptCaching:
         assert supports_prompt_caching(model=model, custom_llm_provider=provider) is True
         assert self._points(model=model, provider=provider) == []
 
-    def test_databricks_claude_not_injected_despite_caching_support(self, monkeypatch):
+    def test_databricks_claude_not_injected_despite_caching_support(self, monkeypatch, local_model_cost_map):
         from litellm.utils import supports_prompt_caching
 
         monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
