@@ -1830,8 +1830,10 @@ class TestOpenAIPassthroughResponsesStreamingSpendLog:
     def setup_method(self):
         self.start_time = datetime.now()
         self.end_time = datetime.now()
+
+    def _expected_spend(self) -> float:
         rates = litellm.model_cost[self.MODEL_MAP_KEY]
-        self.expected_spend = (
+        return (
             self.INPUT_TOKENS * rates["input_cost_per_token"]
             + self.OUTPUT_TOKENS * rates["output_cost_per_token"]
         )
@@ -1912,7 +1914,7 @@ class TestOpenAIPassthroughResponsesStreamingSpendLog:
         logging_obj.model_call_details["custom_llm_provider"] = "openai"
         return logging_obj
 
-    def test_streamed_responses_passthrough_spend_log_is_priced(self):
+    def test_streamed_responses_passthrough_spend_log_is_priced(self, local_model_cost_map):
         """The spend row books the same tokens, spend and `resp_` id as the buffered call."""
         result = OpenAIPassthroughLoggingHandler._handle_logging_openai_collected_chunks(
             litellm_logging_obj=self._logging_obj(),
@@ -1940,7 +1942,7 @@ class TestOpenAIPassthroughResponsesStreamingSpendLog:
         assert spend_log_row["prompt_tokens"] == self.INPUT_TOKENS
         assert spend_log_row["completion_tokens"] == self.OUTPUT_TOKENS
         assert spend_log_row["total_tokens"] == self.INPUT_TOKENS + self.OUTPUT_TOKENS
-        assert spend_log_row["spend"] == self.expected_spend
+        assert spend_log_row["spend"] == pytest.approx(self._expected_spend())
         assert spend_log_row["request_id"] == self.RESPONSE_ID
         assert spend_log_row["model"] == "gpt-4o-mini"
 
@@ -1965,7 +1967,6 @@ class TestOpenAIPassthroughEmbeddingsSpendLog:
     def setup_method(self):
         self.start_time = datetime.now()
         self.end_time = datetime.now()
-        self.expected_spend = self.PROMPT_TOKENS * litellm.model_cost[self.MODEL]["input_cost_per_token"]
         self.response_body = {
             "object": "list",
             "data": [{"object": "embedding", "index": 0, "embedding": [0.0, 1.0]}],
@@ -1973,6 +1974,9 @@ class TestOpenAIPassthroughEmbeddingsSpendLog:
             "usage": {"prompt_tokens": self.PROMPT_TOKENS, "total_tokens": self.PROMPT_TOKENS},
         }
         self.request_body = {"model": self.MODEL, "input": "hello"}
+
+    def _expected_spend(self) -> float:
+        return self.PROMPT_TOKENS * litellm.model_cost[self.MODEL]["input_cost_per_token"]
 
     def _create_mock_httpx_response(self) -> httpx.Response:
         mock_response = MagicMock(spec=httpx.Response)
@@ -1999,7 +2003,7 @@ class TestOpenAIPassthroughEmbeddingsSpendLog:
         )
         return logging_obj
 
-    def test_embeddings_passthrough_spend_log_is_priced(self):
+    def test_embeddings_passthrough_spend_log_is_priced(self, local_model_cost_map):
         """The dispatched call books prompt tokens and cost onto the spend row."""
         dispatched = PassThroughEndpointLogging().normalize_llm_passthrough_logging_payload(
             httpx_response=self._create_mock_httpx_response(),
@@ -2018,7 +2022,7 @@ class TestOpenAIPassthroughEmbeddingsSpendLog:
         )
 
         assert dispatched["standard_logging_response_object"] is not None
-        assert dispatched["kwargs"]["response_cost"] == self.expected_spend
+        assert dispatched["kwargs"]["response_cost"] == pytest.approx(self._expected_spend())
 
         spend_log_row = get_logging_payload(
             kwargs=dispatched["kwargs"],
@@ -2029,7 +2033,7 @@ class TestOpenAIPassthroughEmbeddingsSpendLog:
 
         assert spend_log_row["prompt_tokens"] == self.PROMPT_TOKENS
         assert spend_log_row["total_tokens"] == self.PROMPT_TOKENS
-        assert spend_log_row["spend"] == self.expected_spend
+        assert spend_log_row["spend"] == pytest.approx(self._expected_spend())
         assert spend_log_row["model"] == self.MODEL
         assert spend_log_row["custom_llm_provider"] == "openai"
         assert spend_log_row["request_id"] == self.CALL_ID

@@ -1187,7 +1187,7 @@ async def _flush_logging_worker(capture: "_SuccessPayloadCapture") -> None:
     await asyncio.sleep(0)
     try:
         await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10.0)
-    except (asyncio.TimeoutError, RuntimeError):
+    except asyncio.TimeoutError:
         pass
     deadline = asyncio.get_running_loop().time() + 10.0
     while not capture.payloads and asyncio.get_running_loop().time() < deadline:

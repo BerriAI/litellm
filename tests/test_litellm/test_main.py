@@ -850,15 +850,25 @@ def test_responses_api_bridge_check_gpt_5_4_tools_with_default_reasoning_routes_
     assert model_info.get("mode") == "responses"
 
 
-@pytest.mark.parametrize("model_name", ["gpt-5.6-sol", "gpt-5.6-luna", "gpt-5.6-terra"])
+@pytest.mark.parametrize(
+    "model_name, expected_mode",
+    [
+        pytest.param("gpt-5.6-sol", "responses", id="above-boundary-bridges"),
+        pytest.param("gpt-5.1", None, id="below-boundary-stays-chat"),
+    ],
+)
 def test_responses_api_bridge_check_gpt_5_6_tools_with_default_reasoning_routes_to_responses(
-    monkeypatch, model_name
+    monkeypatch, model_name, expected_mode
 ):
     """
-    The whole gpt-5.6 family must bridge on function tools alone. The bridge used to
-    require an explicit reasoning_effort, so a gpt-5.6 call carrying tools and no effort
-    was rejected with "Function tools with reasoning_effort are not supported for
-    gpt-5.6-sol in /v1/chat/completions".
+    gpt-5.6 must bridge on function tools alone. The bridge used to require an explicit
+    reasoning_effort, so a gpt-5.6 call carrying tools and no effort was rejected with
+    "Function tools with reasoning_effort are not supported for gpt-5.6-sol in
+    /v1/chat/completions".
+
+    Paired with a model below the gpt-5.4 boundary, which must still stay on chat. The
+    gate parses the version and drops any suffix, so the family members bridge
+    identically and only the boundary distinguishes behaviour.
     """
     import litellm
     from litellm.main import responses_api_bridge_check
@@ -877,7 +887,7 @@ def test_responses_api_bridge_check_gpt_5_6_tools_with_default_reasoning_routes_
         )
 
     assert model == model_name
-    assert model_info.get("mode") == "responses"
+    assert model_info.get("mode") == expected_mode
 
 
 def test_responses_api_bridge_check_gpt_5_4_tools_with_reasoning_none_stays_chat():
@@ -2865,15 +2875,19 @@ def local_cost_map(monkeypatch):
     """The prices these tests assert are the checked-in ones. Setting the environment
     variable alone does not reload the map, so pin the map itself.
 
-    ``get_model_info`` is lru_cached, so pinning ``model_cost`` is not enough on its
-    own: a cached entry warmed against the network-fetched map keeps its old prices
-    and ``completion_cost`` bills at those while the assertions read the pinned map.
-    Clear on the way in and out so entries never leak across tests in either direction."""
+    Prices are read through two separate lru_caches, so pinning ``model_cost`` is not
+    enough on its own: an entry warmed against the network-fetched map keeps its old
+    prices and billing reads those while the assertions read the pinned map.
+    ``_invalidate_model_cost_lowercase_map`` clears both caches, where
+    ``get_model_info.cache_clear`` reaches only one. Invalidate on the way in and out
+    so entries never leak across tests in either direction."""
+    from litellm.utils import _invalidate_model_cost_lowercase_map
+
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
-    litellm.get_model_info.cache_clear()
+    _invalidate_model_cost_lowercase_map()
     yield
-    litellm.get_model_info.cache_clear()
+    _invalidate_model_cost_lowercase_map()
 
 
 def test_a_streamed_response_bills_the_usage_the_provider_reported(local_cost_map):
