@@ -73,6 +73,7 @@ export async function makeOpenAIChatCompletionRequest(
     const startTime = Date.now();
     let firstTokenReceived = false;
     let timeToFirstToken: number | undefined = undefined;
+    let servedFromResponseCache = false;
 
     // Track MCP metadata cumulatively across chunks
     let mcpMetadata: {
@@ -143,7 +144,13 @@ export async function makeOpenAIChatCompletionRequest(
           { ...requestBody, stream: true, stream_options: { include_usage: true } },
           { signal },
         )
-      : [completionAsSingleChunk(await client.chat.completions.create({ ...requestBody, stream: false }, { signal }))];
+      : await (async () => {
+          const nonStreamingResponse = await client.chat.completions
+            .create({ ...requestBody, stream: false }, { signal })
+            .withResponse();
+          servedFromResponseCache = nonStreamingResponse.response.headers.get("x-litellm-cache-key") !== null;
+          return [completionAsSingleChunk(nonStreamingResponse.data)];
+        })();
 
     for await (const chunk of response) {
       // Process content and measure time to first token
@@ -228,6 +235,7 @@ export async function makeOpenAIChatCompletionRequest(
           promptTokens: chunkWithUsage.usage.prompt_tokens,
           totalTokens: chunkWithUsage.usage.total_tokens,
           ...extractPromptCacheTokens(chunkWithUsage.usage),
+          ...(servedFromResponseCache ? { servedFromResponseCache: true } : {}),
         };
 
         // Check for reasoning tokens
