@@ -38,7 +38,11 @@ from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
     AnthropicUsage,
 )
-from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
+from litellm.types.llms.openai import (
+    ChatCompletionThinkingBlock,
+    ResponseAPIUsage,
+    ResponsesAPIResponse,
+)
 
 
 class LiteLLMAnthropicToResponsesAPIAdapter:
@@ -112,19 +116,18 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
     @classmethod
     def _thinking_blocks_from_reasoning_item(
         cls,
-        item_id: str | None,
         summary: Iterable[object],
     ) -> tuple[dict[str, Any], ...]:  # mutable-ok: API message payload
         """Anthropic thinking blocks for one Responses reasoning item.
 
-        The reasoning item id rides along as the signature so that a follow-up turn can
-        regroup the summary parts into the single reasoning item they came from.
+        The signature stays empty: only Anthropic can sign a thinking block, and a stand-in
+        value would be replayed as a real one and rejected by every backend that verifies it.
         """
         return tuple(
             AnthropicResponseContentBlockThinking(
                 type="thinking",
                 thinking=text,
-                signature=item_id or None,
+                signature=None,
             ).model_dump()
             for part in summary
             if (text := cls._summary_part_text(part))
@@ -132,10 +135,9 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
 
     @staticmethod
     def _assistant_block_group_key(indexed_block: tuple[int, Mapping[str, Any]]) -> str:
-        """Group consecutive thinking blocks sharing a signature; keep every other block alone."""
+        """Group a run of consecutive thinking blocks together; keep every other block alone."""
         index, block = indexed_block
-        signature: Final = block.get("signature") or ""
-        return f"thinking:{signature}" if block.get("type") == "thinking" else f"block:{index}"
+        return "thinking" if block.get("type") == "thinking" else f"block:{index}"
 
     @classmethod
     def _assistant_group_to_input_item(
@@ -144,7 +146,9 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         first: Final = group[0]
         btype: Final = first.get("type")
         if btype == "thinking":
-            return responses_reasoning_item_from_thinking_blocks(group)
+            blocks: Final = cast(tuple[ChatCompletionThinkingBlock, ...], group)  # cast-ok: untrusted client payload
+            reasoning_item: Final = responses_reasoning_item_from_thinking_blocks(blocks)
+            return None if reasoning_item is None else dict(reasoning_item)
         if btype == "tool_use":
             return {  # mutable-ok: API message payload
                 "type": "function_call",
@@ -559,7 +563,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
 
         for item in response.output:
             if isinstance(item, ResponseReasoningItem):
-                content.extend(self._thinking_blocks_from_reasoning_item(item.id, item.summary))
+                content.extend(self._thinking_blocks_from_reasoning_item(item.summary))
 
             elif isinstance(item, ResponseOutputMessage):
                 for part in item.content:
@@ -594,7 +598,6 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                 elif item_type == "reasoning":
                     content.extend(
                         self._thinking_blocks_from_reasoning_item(
-                            item.get("id"),
                             cast(Iterable[object], item.get("summary") or ()),  # cast-ok: untyped provider json
                         )
                     )
