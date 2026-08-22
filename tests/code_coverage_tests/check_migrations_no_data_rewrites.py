@@ -11,9 +11,10 @@ Flagged, per statement, by its leading keyword:
   UPDATE      rewrites every matching row, and `WHERE` does not bound the scan
   DELETE      same scan, and the dead tuples outlive the migration
   MERGE       both of the above in one statement
-  INSERT      only when it draws rows from a `SELECT`; `INSERT ... VALUES` is bounded
-              by the literal row list and passes, scalar subqueries in that list
-              included
+  INSERT      only when it draws rows from a `SELECT`; an insert whose row source is
+              a leading `VALUES` is bounded by the rows spelled out there and passes,
+              scalar subqueries in that list included, while a `VALUES` reached
+              through a subquery or a set operation bounds nothing
   WITH        a CTE-led statement containing any of the above
 
 Referential actions (`ON DELETE CASCADE`, `ON UPDATE CASCADE`) are schema, never a
@@ -22,7 +23,9 @@ statement's leading keyword, so they pass.
 Statements inside dollar-quoted bodies are scanned too. `DO $$ ... $$` is this
 repo's idiom for conditional DDL, so a body is where an `UPDATE` would otherwise
 hide. The SQL an `EXECUTE` runs is scanned the same way, since a rewrite reads the
-same to Postgres whether it is spelled out or handed over as a string.
+same to Postgres whether it is spelled out or handed over as a string, and so is a
+literal assigned to a variable with `:=`, which is where an `EXECUTE` further down
+the body gets its statement from.
 
 Line numbers always count against the whole migration file, however deeply the
 statement is nested, so a reported line points at the statement and the markers
@@ -248,11 +251,17 @@ def offending_keyword(statement: str) -> str | None:
 
 
 def draws_rows_from_a_select(statement: str) -> bool:
-    """Whether an `INSERT` takes its rows from a query rather than a literal list. A
-    top-level `VALUES` bounds the insert to the rows written out there, so the scalar
-    subqueries and helper CTEs that sit in parentheses around it do not make it a
-    rewrite."""
-    return contains(statement, "SELECT") and not contains(strip_parens(statement), "VALUES")
+    """Whether an `INSERT` takes its rows from a query rather than a literal list. Only a
+    `SELECT` the insert is built on counts, so the scalar subqueries and helper CTEs that
+    sit in parentheses around a `VALUES` list do not make it a rewrite, while one reached
+    through a set operation does."""
+    return contains(strip_parens(statement), "SELECT")
+
+
+def hands_off_sql(statement: str) -> bool:
+    """Whether a statement gives the server a string literal to run as SQL. `EXECUTE` runs
+    one outright, and an assignment parks one in a variable for an `EXECUTE` further down."""
+    return leads_with(statement, "EXECUTE") or ":=" in statement
 
 
 def leads_with(statement: str, keyword: str) -> bool:
@@ -281,11 +290,10 @@ def scan_region(
     masked, bodies, literals = mask(region)
 
     for match in STATEMENT.finditer(masked):
-        if leads_with(match.group(), "EXECUTE"):
+        if hands_off_sql(match.group()):
             for start, end in literals:
                 if match.start() <= start and end <= match.end():
                     yield from scan_region(document, region[start:end], migration, exempt, offset + start)
-            continue
         keyword = offending_keyword(match.group())
         if keyword is None:
             continue
