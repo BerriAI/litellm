@@ -47,7 +47,7 @@ class TestGPT56Registry:
     def test_context_window(self):
         for model in MODELS:
             entry = self.primary[model]
-            assert entry["max_input_tokens"] == 1050000
+            assert entry["max_input_tokens"] == 922000
             assert entry["max_output_tokens"] == 128000
 
     def test_sol_tool_choice(self):
