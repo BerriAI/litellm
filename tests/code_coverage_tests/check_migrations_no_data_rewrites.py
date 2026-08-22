@@ -53,8 +53,12 @@ the migration, put `-- data-migration-ok: <reason>` on the statement or on the l
 above it, naming what bounds it. The reason is required. A marker sharing a line
 with the statement it follows exempts that statement alone, so the next statement
 down is still checked rather than picking the marker up as its own. A marker on an
-`EXECUTE` or on the assignment feeding one covers the SQL that statement hands off,
-so it goes where the migration reads rather than inside the string.
+`EXECUTE` or on the assignment feeding one covers the single-quoted SQL that
+statement hands off, so it goes where the migration reads rather than inside the
+string. A dollar-quoted payload is not a string to this check but a region read like
+any other body, so a rewrite inside one takes its marker on the rewrite itself. That
+placement is deliberate rather than an oversight: a marker covering a whole body
+would let one written for a `DO` block silence a rewrite added to that block later.
 
 `GRANDFATHERED` freezes the violations that predate this check. Prisma records a
 checksum for every applied migration and this repo treats applied files as
@@ -86,7 +90,6 @@ FIRST_WORD = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 STATEMENT = re.compile(r"[^;]+")
 RUN_BY_NAME = re.compile(r"\bEXECUTE[ \t]+([A-Za-z_][A-Za-z0-9_]*)", re.IGNORECASE)
 EXPLAIN_OPTIONS = re.compile(r"\bEXPLAIN\b(?:\s+(?:ANALYZE|ANALYSE|VERBOSE)\b)+", re.IGNORECASE)
-NOT_A_NEWLINE = re.compile(r"[^\n]")
 
 REWRITES_ROWS = frozenset({"UPDATE", "DELETE", "MERGE"})
 
@@ -261,7 +264,7 @@ def strip_explain(statement: str) -> str:
     the one worth reading: `EXPLAIN ANALYZE` runs it rather than only planning it, so a
     rewrite underneath rewrites the table for real. The parenthesised option list needs
     nothing here, already being blanked as a group."""
-    return EXPLAIN_OPTIONS.sub(lambda match: NOT_A_NEWLINE.sub(" ", match.group()), statement)
+    return EXPLAIN_OPTIONS.sub(lambda match: blank(match.group()), statement)
 
 
 def leading_keyword(statement: str) -> re.Match[str] | None:

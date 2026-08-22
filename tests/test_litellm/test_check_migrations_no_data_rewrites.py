@@ -335,6 +335,42 @@ class TestEscapeHatch:
         assert _keywords(tmp_path, sql) == ("UPDATE",)
         assert _scan(tmp_path, sql)[0].line == 4
 
+    def test_marker_directly_above_a_do_block_does_not_exempt_its_body(self, tmp_path):
+        sql = (
+            "-- data-migration-ok: seeding two default rows\n"
+            "DO $$\n"
+            "BEGIN\n"
+            '    INSERT INTO "Foo" ("a") VALUES (1);\n'
+            '    UPDATE "Foo" SET "a" = 1;\n'
+            "END $$;"
+        )
+        assert _keywords(tmp_path, sql) == ("UPDATE",)
+        assert _scan(tmp_path, sql)[0].line == 5
+
+    def test_marker_on_the_do_line_does_not_exempt_its_body(self, tmp_path):
+        sql = (
+            "DO $$  -- data-migration-ok: bounded to one row\n"
+            "BEGIN\n"
+            '    IF EXISTS (SELECT 1 FROM "Foo") THEN\n'
+            '        UPDATE "Foo" SET "a" = 1;\n'
+            "    END IF;\n"
+            "END $$;"
+        )
+        assert _keywords(tmp_path, sql) == ("UPDATE",)
+        assert _scan(tmp_path, sql)[0].line == 4
+
+    def test_a_marked_rewrite_does_not_exempt_a_later_one_in_the_same_block(self, tmp_path):
+        sql = (
+            "DO $$\n"
+            "BEGIN\n"
+            "    -- data-migration-ok: bounded to one row\n"
+            '    UPDATE "Foo" SET "a" = 1;\n'
+            '    UPDATE "Bar" SET "b" = 2;\n'
+            "END $$;"
+        )
+        assert _keywords(tmp_path, sql) == ("UPDATE",)
+        assert _scan(tmp_path, sql)[0].line == 5
+
 
 class TestDynamicSql:
     def test_execute_of_a_quoted_update_is_flagged(self, tmp_path):
@@ -514,6 +550,41 @@ class TestDynamicSql:
         )
         assert _keywords(tmp_path, sql) == ("DELETE",)
         assert _scan(tmp_path, sql)[0].line == 4
+
+    def test_a_marker_on_an_execute_covers_its_single_quoted_payload(self, tmp_path):
+        sql = (
+            "DO $$\n"
+            "BEGIN\n"
+            "    EXECUTE '  -- data-migration-ok: bounded to one row\n"
+            '        UPDATE "Foo" SET "a" = 1;\n'
+            "    ';\n"
+            "END $$;"
+        )
+        assert _keywords(tmp_path, sql) == ()
+
+    def test_a_marker_on_an_execute_does_not_reach_into_a_dollar_quoted_payload(self, tmp_path):
+        sql = (
+            "DO $$\n"
+            "BEGIN\n"
+            "    EXECUTE $x$  -- data-migration-ok: bounded to one row\n"
+            '        UPDATE "Foo" SET "a" = 1;\n'
+            "    $x$;\n"
+            "END $$;"
+        )
+        assert _keywords(tmp_path, sql) == ("UPDATE",)
+        assert _scan(tmp_path, sql)[0].line == 4
+
+    def test_a_marker_inside_a_dollar_quoted_payload_exempts_its_rewrite(self, tmp_path):
+        sql = (
+            "DO $$\n"
+            "BEGIN\n"
+            "    EXECUTE $x$\n"
+            "        -- data-migration-ok: bounded to one row\n"
+            '        UPDATE "Foo" SET "a" = 1;\n'
+            "    $x$;\n"
+            "END $$;"
+        )
+        assert _keywords(tmp_path, sql) == ()
 
 
 class TestExplain:
