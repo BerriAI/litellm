@@ -12,6 +12,17 @@ resource "google_compute_subnetwork" "this" {
   private_ip_google_access = true
 }
 
+resource "google_compute_subnetwork" "managed_proxy" {
+  count = local.is_internal ? 1 : 0
+
+  name          = "${local.name}-${var.region}-managed-proxy"
+  region        = var.region
+  network       = google_compute_network.this.id
+  ip_cidr_range = var.lb_proxy_only_subnet_cidr
+  purpose       = "GLOBAL_MANAGED_PROXY"
+  role          = "ACTIVE"
+}
+
 # Private Services Access (PSA) range for Cloud SQL + Memorystore. Both
 # managed services peer with the VPC over the connection below using
 # addresses from this range.

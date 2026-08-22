@@ -93,6 +93,12 @@ variable "vpc_connector_cidr" {
   default     = "10.41.0.0/28"
 }
 
+variable "lb_proxy_only_subnet_cidr" {
+  description = "CIDR for the regional proxy-only subnet used by INTERNAL_MANAGED load balancing."
+  type        = string
+  default     = "10.42.0.0/23"
+}
+
 # ---------- Component images ----------
 #
 # Cloud Run only pulls from Artifact Registry, [region.]gcr.io, or
@@ -313,6 +319,21 @@ variable "lb_domains" {
   EOT
   type        = list(string)
   default     = []
+}
+
+variable "load_balancing_scheme" {
+  description = <<-EOT
+    Load balancer scheme for the GCP HTTP(S) load balancer resources.
+    Allowed values match the provider/API values directly:
+    `EXTERNAL_MANAGED` (public) and `INTERNAL_MANAGED` (private).
+  EOT
+  type        = string
+  default     = "EXTERNAL_MANAGED"
+
+  validation {
+    condition     = contains(["EXTERNAL_MANAGED", "INTERNAL_MANAGED"], var.load_balancing_scheme)
+    error_message = "load_balancing_scheme must be EXTERNAL_MANAGED or INTERNAL_MANAGED."
+  }
 }
 
 variable "allow_plaintext_lb" {

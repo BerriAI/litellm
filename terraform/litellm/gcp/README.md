@@ -16,8 +16,10 @@ Deploys the componentized LiteLLM proxy on GCP:
 - **Cloud Run v2** services for `gateway` (port 4000), `backend` (port 4001),
   and `ui` (port 3000), all using a shared runtime service account
 - **Cloud Run Job** (`litellm-migrations`) that runs `prisma migrate deploy` from the dedicated `ghcr.io/berriai/litellm-migrations` image
-- **External global HTTP(S) load balancer** with serverless NEGs and a URL
-  map mirroring the helm-chart ingress path routing:
+- **HTTP(S) load balancer** with serverless NEGs and a URL map mirroring the
+  helm-chart ingress path routing. `load_balancing_scheme` controls mode:
+  - `EXTERNAL_MANAGED`: global external LB
+  - `INTERNAL_MANAGED`: global internal managed LB (private IP)
   - LLM data-plane prefixes → `gateway`
   - UI asset paths → `ui`
   - Everything else → `backend`
@@ -316,6 +318,9 @@ required APIs must be enabled (run, sqladmin, redis, secretmanager,
 vpcaccess, compute, servicenetworking, storage, artifactregistry).
 
 ## TLS
+
+TLS and `lb_domains` apply only when `load_balancing_scheme = "EXTERNAL_MANAGED"`.
+For `INTERNAL_MANAGED`, set `lb_domains = []` (or leave it unset) and `allow_plaintext_lb = true`.
 
 `terraform plan` refuses to provision an HTTP-only LB by default — TLS
 is the supported posture. Two paths:

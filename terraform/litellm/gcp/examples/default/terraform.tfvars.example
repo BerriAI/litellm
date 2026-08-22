@@ -19,7 +19,9 @@ env    = "stage"
 
 # TLS: provide DNS names already pointing at the LB IP for a Google-managed
 # cert. Without one, plan fails unless allow_plaintext_lb = true is set
-# explicitly (trial/dev only).
+# explicitly (trial/dev only). INTERNAL_MANAGED is private-IP only and
+# should keep lb_domains empty.
+# load_balancing_scheme = "EXTERNAL_MANAGED" # or "INTERNAL_MANAGED"
 # lb_domains         = ["proxy.example.com"]
 # allow_plaintext_lb = true
 

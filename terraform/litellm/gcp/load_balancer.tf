@@ -1,5 +1,7 @@
-# External global HTTP(S) load balancer fronting all three Cloud Run
-# services. URL map mirrors the helm-chart ingress path routing:
+# HTTP(S) load balancer fronting all three Cloud Run services.
+# EXTERNAL_MANAGED uses the global external path, INTERNAL_MANAGED uses
+# the global (cross-region) internal managed path. URL map mirrors the helm-chart
+# ingress path routing:
 #   - LLM data-plane paths → gateway
 #   - UI asset paths → ui
 #   - Everything else → backend (management API: /key/*, /user/*, …)
@@ -11,9 +13,12 @@
 
 locals {
   tls_enabled = length(var.lb_domains) > 0
+  is_external = var.load_balancing_scheme == "EXTERNAL_MANAGED"
+  is_internal = var.load_balancing_scheme == "INTERNAL_MANAGED"
 }
 
 resource "google_compute_global_address" "lb" {
+  count  = local.is_external ? 1 : 0
   name   = "${local.name}-lb-ip"
   labels = local.labels
 }
@@ -49,11 +54,12 @@ resource "google_compute_region_network_endpoint_group" "ui" {
   }
 }
 
-# Backend services wrap each NEG.
+# Backend services wrap each NEG. The selected load_balancing_scheme controls
+# whether these serve EXTERNAL_MANAGED or INTERNAL_MANAGED.
 resource "google_compute_backend_service" "gateway" {
   name                  = "${local.name}-gateway-bs"
   protocol              = "HTTP"
-  load_balancing_scheme = "EXTERNAL_MANAGED"
+  load_balancing_scheme = var.load_balancing_scheme
 
   backend {
     group = google_compute_region_network_endpoint_group.gateway.id
@@ -63,7 +69,7 @@ resource "google_compute_backend_service" "gateway" {
 resource "google_compute_backend_service" "backend" {
   name                  = "${local.name}-backend-bs"
   protocol              = "HTTP"
-  load_balancing_scheme = "EXTERNAL_MANAGED"
+  load_balancing_scheme = var.load_balancing_scheme
 
   backend {
     group = google_compute_region_network_endpoint_group.backend.id
@@ -73,7 +79,7 @@ resource "google_compute_backend_service" "backend" {
 resource "google_compute_backend_service" "ui" {
   name                  = "${local.name}-ui-bs"
   protocol              = "HTTP"
-  load_balancing_scheme = "EXTERNAL_MANAGED"
+  load_balancing_scheme = var.load_balancing_scheme
 
   backend {
     group = google_compute_region_network_endpoint_group.ui.id
@@ -118,7 +124,7 @@ resource "google_compute_url_map" "this" {
 # target proxy when TLS is enabled; otherwise the regular path-routing
 # URL map is attached to the HTTP proxy and everything stays plaintext.
 resource "google_compute_url_map" "https_redirect" {
-  count = local.tls_enabled ? 1 : 0
+  count = local.is_external && local.tls_enabled ? 1 : 0
   name  = "${local.name}-redirect"
 
   default_url_redirect {
@@ -136,6 +142,11 @@ resource "google_compute_target_http_proxy" "this" {
   # Operators must either supply DNS names or explicitly opt in.
   lifecycle {
     precondition {
+      condition     = var.load_balancing_scheme != "INTERNAL_MANAGED" || length(var.lb_domains) == 0
+      error_message = "INTERNAL_MANAGED does not support lb_domains/TLS in this module. Set load_balancing_scheme = \"EXTERNAL_MANAGED\" to use lb_domains, or leave lb_domains empty for INTERNAL_MANAGED."
+    }
+
+    precondition {
       condition     = local.tls_enabled || var.allow_plaintext_lb
       error_message = "LB has no HTTPS forwarding rule. Either set `lb_domains` to a list of DNS names you want a Google-managed cert for, or set `allow_plaintext_lb = true` to opt into HTTP-only (trial / dev only)."
     }
@@ -143,13 +154,28 @@ resource "google_compute_target_http_proxy" "this" {
 }
 
 resource "google_compute_global_forwarding_rule" "http" {
+  count                 = local.is_external ? 1 : 0
   name                  = "${local.name}-http"
   ip_protocol           = "TCP"
   port_range            = "80"
-  load_balancing_scheme = "EXTERNAL_MANAGED"
-  ip_address            = google_compute_global_address.lb.address
+  load_balancing_scheme = var.load_balancing_scheme
+  ip_address            = google_compute_global_address.lb[0].address
   target                = google_compute_target_http_proxy.this.id
   labels                = local.labels
+}
+
+resource "google_compute_global_forwarding_rule" "http_internal" {
+  count                 = local.is_internal ? 1 : 0
+  name                  = "${local.name}-http"
+  network               = google_compute_network.this.id
+  subnetwork            = google_compute_subnetwork.this.id
+  ip_protocol           = "TCP"
+  port_range            = "80"
+  load_balancing_scheme = var.load_balancing_scheme
+  target                = google_compute_target_http_proxy.this.id
+  labels                = local.labels
+
+  depends_on = [google_compute_subnetwork.managed_proxy]
 }
 
 # ---------- HTTPS (gated on var.lb_domains) ----------
@@ -161,7 +187,7 @@ resource "google_compute_global_forwarding_rule" "http" {
 # transitions to ACTIVE.
 
 resource "google_compute_managed_ssl_certificate" "this" {
-  count = local.tls_enabled ? 1 : 0
+  count = local.is_external && local.tls_enabled ? 1 : 0
 
   # A managed cert's `domains` is immutable, so changing var.lb_domains
   # forces replacement, and the cert is referenced by the HTTPS target
@@ -181,19 +207,19 @@ resource "google_compute_managed_ssl_certificate" "this" {
 }
 
 resource "google_compute_target_https_proxy" "this" {
-  count            = local.tls_enabled ? 1 : 0
+  count            = local.is_external && local.tls_enabled ? 1 : 0
   name             = "${local.name}-https"
   url_map          = google_compute_url_map.this.id
   ssl_certificates = [google_compute_managed_ssl_certificate.this[0].id]
 }
 
 resource "google_compute_global_forwarding_rule" "https" {
-  count                 = local.tls_enabled ? 1 : 0
+  count                 = local.is_external && local.tls_enabled ? 1 : 0
   name                  = "${local.name}-https"
   ip_protocol           = "TCP"
   port_range            = "443"
-  load_balancing_scheme = "EXTERNAL_MANAGED"
-  ip_address            = google_compute_global_address.lb.address
+  load_balancing_scheme = var.load_balancing_scheme
+  ip_address            = google_compute_global_address.lb[0].address
   target                = google_compute_target_https_proxy.this[0].id
   labels                = local.labels
 }
