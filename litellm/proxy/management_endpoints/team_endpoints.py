@@ -346,6 +346,21 @@ class _TeamCreateTx(AccessGroupSyncTx, Protocol):
     def litellm_teamtable(self) -> "_PrismaTableActions[LiteLLM_TeamTable]": ...
 
 
+class _MemberDeleteTx(Protocol):
+    """The tables `/team/member_delete` reads while it holds the team's advisory lock.
+
+    Reading them off the transaction keeps the whole endpoint on the one pooled connection
+    it already checked out: a request that has the lock but still needs another connection
+    can be starved by the lock waiters, which is a deadlock rather than a wait when enough
+    of them hold the rest of the pool."""
+
+    @property
+    def litellm_usertable(self) -> "_PrismaTableActions[LiteLLM_UserTable]": ...
+
+    @property
+    def litellm_verificationtoken(self) -> "_PrismaTableActions[LiteLLM_VerificationToken]": ...
+
+
 class _TeamDeleteTx(AccessGroupSyncTx, Protocol):
     async def execute_raw(self, query: str, *args: object) -> int: ...
 
@@ -3313,7 +3328,10 @@ async def team_member_delete(
         key_val: Final[Mapping[str, object]] = (
             {"user_id": {"in": sorted(removed_user_ids)}} if removed_user_ids else {"user_email": data.user_email}
         )
-        existing_user_rows: Final[Sequence[LiteLLM_UserTable]] = await _user_db(prisma_client).find_many(where=key_val)
+        member_tx: Final[_MemberDeleteTx] = tx
+        existing_user_rows: Final[Sequence[LiteLLM_UserTable]] = await member_tx.litellm_usertable.find_many(
+            where=key_val
+        )
 
         # Also clean up any existing team membership rows for this user and team
         user_ids_to_delete: Final = removed_user_ids.union(
@@ -3324,7 +3342,7 @@ async def team_member_delete(
         ## DELETE KEYS CREATED BY USER FOR THIS TEAM
         # Fetch keys before deletion so their audit records can be persisted alongside the delete.
         # An empty user_ids_to_delete still resolves cleanly: prisma's "in": [] matches no rows.
-        keys_to_delete: Final[list[LiteLLM_VerificationToken]] = await _tokens_db(prisma_client).find_many(
+        keys_to_delete: Final[list[LiteLLM_VerificationToken]] = await member_tx.litellm_verificationtoken.find_many(
             where={
                 "user_id": {"in": sorted(user_ids_to_delete)},
                 "team_id": data.team_id,

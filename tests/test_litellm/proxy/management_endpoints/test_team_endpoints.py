@@ -130,14 +130,13 @@ def _wire_member_delete_tx(prisma_client):
                 return [{"members_with_roles": team_row.model_dump()["members_with_roles"]}]
         return []
 
-    tx = SimpleNamespace(
-        litellm_teamtable=prisma_client.db.litellm_teamtable,
-        litellm_usertable=prisma_client.db.litellm_usertable,
-        litellm_teammembership=prisma_client.db.litellm_teammembership,
-        litellm_verificationtoken=prisma_client.db.litellm_verificationtoken,
-        litellm_deletedverificationtoken=prisma_client.db.litellm_deletedverificationtoken,
-        query_raw=_query_raw,
-    )
+    class _Tx:
+        query_raw = staticmethod(_query_raw)
+
+        def __getattr__(self, table_name):
+            return getattr(prisma_client.db, table_name)
+
+    tx = _Tx()
     tx_cm = MagicMock()
     tx_cm.__aenter__ = AsyncMock(return_value=tx)
     tx_cm.__aexit__ = AsyncMock(return_value=None)
@@ -4363,6 +4362,86 @@ async def test_team_member_delete_cleans_verification_tokens(
             "user_id": {"in": [test_user_id]},
             "team_id": test_team_id,
         }
+    )
+
+
+@pytest.mark.asyncio
+async def test_team_member_delete_reads_on_the_lock_holding_transaction(
+    mock_db_client, mock_admin_auth
+):
+    """
+    Regression pin against exhausting the connection pool with advisory-lock waiters.
+
+    Every concurrent removal for one team holds a pooled connection while it waits on the
+    team's advisory lock, and /team/delete fans its per-member removals out concurrently.
+    A holder whose reads went to the regular client would need a second connection to
+    finish, so enough waiters fill the pool and the holder can never release the lock.
+    Both reads therefore have to run on the transaction that already owns the connection.
+    """
+    from litellm.proxy._types import TeamMemberDeleteRequest
+    from litellm.proxy.management_endpoints.team_endpoints import team_member_delete
+
+    test_team_id = "team-del-pool-123"
+    test_user_id = "user-del-pool-123"
+    roster_entry = {"user_id": test_user_id, "user_email": None, "role": "user"}
+
+    mock_team_row = MagicMock()
+    mock_team_row.model_dump.return_value = {
+        "team_id": test_team_id,
+        "members_with_roles": [roster_entry],
+        "team_member_permissions": [],
+        "metadata": {},
+        "models": [],
+        "spend": 0.0,
+    }
+    mock_db_client.db.litellm_teamtable.find_unique = AsyncMock(
+        return_value=mock_team_row
+    )
+
+    user_row = MagicMock()
+    user_row.user_id = test_user_id
+    user_row.teams = [test_team_id]
+
+    # Both are wired to answer, so the endpoint completes either way and the awaits below
+    # are what tells which connection it read on.
+    pooled_user_read = AsyncMock(return_value=[user_row])
+    pooled_token_read = AsyncMock(return_value=[])
+    mock_db_client.db.litellm_usertable.find_many = pooled_user_read
+    mock_db_client.db.litellm_verificationtoken.find_many = pooled_token_read
+
+    tx = MagicMock()
+    tx.query_raw = AsyncMock(return_value=[{"members_with_roles": [roster_entry]}])
+    tx.litellm_teamtable.update = AsyncMock(return_value=mock_team_row)
+    tx.litellm_usertable.find_many = AsyncMock(return_value=[user_row])
+    tx.litellm_usertable.update = AsyncMock()
+    tx.litellm_teammembership.delete_many = AsyncMock()
+    tx.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+    tx.litellm_verificationtoken.delete_many = AsyncMock()
+
+    tx_cm = MagicMock()
+    tx_cm.__aenter__ = AsyncMock(return_value=tx)
+    tx_cm.__aexit__ = AsyncMock(return_value=None)
+    mock_db_client.tx = MagicMock(return_value=tx_cm)
+
+    await team_member_delete(
+        data=TeamMemberDeleteRequest(team_id=test_team_id, user_id=test_user_id),
+        user_api_key_dict=mock_admin_auth,
+    )
+
+    tx.litellm_usertable.find_many.assert_awaited_once_with(
+        where={"user_id": {"in": [test_user_id]}}
+    )
+    tx.litellm_verificationtoken.find_many.assert_awaited_once_with(
+        where={"user_id": {"in": [test_user_id]}, "team_id": test_team_id}
+    )
+    pooled_user_read.assert_not_awaited()
+    pooled_token_read.assert_not_awaited()
+
+    tx.litellm_usertable.update.assert_awaited_once_with(
+        where={"user_id": test_user_id}, data={"teams": {"set": []}}
+    )
+    tx.litellm_teammembership.delete_many.assert_awaited_once_with(
+        where={"team_id": test_team_id, "user_id": test_user_id}
     )
 
 
