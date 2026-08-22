@@ -434,6 +434,8 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                         "content": self._convert_content_to_responses_format(content, cast(str, role)),
                     }
                 )
+            elif role == "assistant":
+                input_items.extend(_reasoning_input_items(msg))
 
         return input_items, instructions
 
