@@ -3762,3 +3762,90 @@ def test_response_incomplete_stream_event_without_details_defaults_to_length():
     result = iterator.chunk_parser(chunk)
 
     assert result.choices[0].finish_reason == "length"
+
+
+def test_assistant_message_with_tool_calls_keeps_its_content():
+    """Regression for https://github.com/BerriAI/litellm/issues/24985.
+
+    An assistant turn that both answered and called a tool used to lose its whole message:
+    the branch handling tool_calls emitted the calls and dropped the text.
+    """
+    handler = LiteLLMResponsesTransformationHandler()
+    messages = [
+        {"role": "user", "content": "What is the weather in Denver?"},
+        {
+            "role": "assistant",
+            "content": "Let me look that up.",
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "get_weather", "arguments": '{"city": "Denver"}'},
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call_1", "content": "88F"},
+    ]
+
+    input_items, _ = handler.convert_chat_completion_messages_to_responses_api(messages)
+
+    assistant_message = next(
+        item for item in input_items if item.get("type") == "message" and item.get("role") == "assistant"
+    )
+    assert assistant_message["content"] == [{"type": "output_text", "text": "Let me look that up."}]
+    assert [item.get("type") for item in input_items] == [
+        "message",
+        "message",
+        "function_call",
+        "function_call_output",
+    ]
+
+
+def test_assistant_thinking_blocks_become_a_reasoning_input_item():
+    """Thinking blocks are how an Anthropic-shaped turn carries reasoning into this bridge."""
+    handler = LiteLLMResponsesTransformationHandler()
+    messages = [
+        {"role": "user", "content": "What is the weather in Denver?"},
+        {
+            "role": "assistant",
+            "content": "Denver is sunny.",
+            "thinking_blocks": [
+                {"type": "thinking", "thinking": "August in Denver is dry.", "signature": "sig1"},
+                {"type": "redacted_thinking", "data": "REDACTED"},
+            ],
+        },
+        {"role": "user", "content": "Why?"},
+    ]
+
+    input_items, _ = handler.convert_chat_completion_messages_to_responses_api(messages)
+
+    reasoning_item = next(item for item in input_items if item.get("type") == "reasoning")
+    assert reasoning_item["summary"] == [{"type": "summary_text", "text": "August in Denver is dry."}]
+    assert "id" not in reasoning_item
+
+
+def test_stored_reasoning_items_win_over_thinking_blocks():
+    """A minted reasoning id beats a re-derived one, so the two must not both be sent."""
+    handler = LiteLLMResponsesTransformationHandler()
+    messages = [
+        {
+            "role": "assistant",
+            "content": "Denver is sunny.",
+            "reasoning_items": [
+                {
+                    "type": "reasoning",
+                    "id": "rs_real",
+                    "summary": [{"type": "summary_text", "text": "August in Denver is dry."}],
+                }
+            ],
+            "thinking_blocks": [
+                {"type": "thinking", "thinking": "August in Denver is dry.", "signature": "rs_real"}
+            ],
+        },
+    ]
+
+    input_items, _ = handler.convert_chat_completion_messages_to_responses_api(messages)
+
+    reasoning_items = [item for item in input_items if item.get("type") == "reasoning"]
+    assert len(reasoning_items) == 1
+    assert reasoning_items[0]["id"] == "rs_real"
