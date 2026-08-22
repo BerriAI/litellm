@@ -45,6 +45,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.openai_files_endpoints.common_utils import (
+    FILE_LIST_CONTINUATION_CHUNK_SIZE,
     MAX_FILE_LIST_LIMIT,
     _is_base64_encoded_unified_file_id,
     apply_unified_file_ids,
@@ -1390,7 +1391,10 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         yield fewer matches than the page holds. Successive chunks are read
         until the page is full or the caller's rows run out, which keeps
         ``data`` non-empty while matches remain and its last id usable as the
-        next cursor.
+        next cursor. A first chunk that fills the page costs one query; once a
+        scan has to continue past it, the chunk widens to
+        ``FILE_LIST_CONTINUATION_CHUNK_SIZE`` so a page whose matches sit far
+        behind the newest rows cannot degenerate into thousands of queries.
         """
         validate_file_list_limit(limit)
 
@@ -1412,9 +1416,9 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 )
 
         page_size: Final = min(limit or MAX_FILE_LIST_LIMIT, MAX_FILE_LIST_LIMIT)
-        chunk_size: Final = page_size + 1
         matches: Final[List[OpenAIFileObject]] = []
         cursor_id = after
+        chunk_size = page_size + 1
 
         while len(matches) <= page_size:
             cursor_args: _CursorPageArgs = {"cursor": {"unified_file_id": cursor_id}, "skip": 1} if cursor_id else {}
@@ -1433,6 +1437,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             if len(chunk) < chunk_size:
                 break
             cursor_id = chunk[-1].unified_file_id
+            chunk_size = max(chunk_size, FILE_LIST_CONTINUATION_CHUNK_SIZE)
 
         return build_list_page(matches[:page_size], has_more=len(matches) > page_size)
 

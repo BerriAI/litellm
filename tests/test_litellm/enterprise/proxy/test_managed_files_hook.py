@@ -441,6 +441,69 @@ async def test_afile_list_fills_a_page_past_rows_that_do_not_parse():
     assert page["has_more"] is False
 
 
+_DEEP_SCAN_ROW_COUNT = 2000
+_DEEP_SCAN_QUERY_BUDGET = 10
+
+
+@pytest.mark.asyncio
+async def test_afile_list_bounds_the_queries_a_deep_purpose_match_costs():
+    """A tiny limit over rows the filter drops must not turn one request into thousands of queries."""
+    managed_files, table = _make_managed_files_over_rows(
+        [_make_managed_file_row(f"unified-{index:05d}") for index in range(_DEEP_SCAN_ROW_COUNT)]
+        + [_make_managed_file_row("unified-match", purpose="batch")]
+    )
+
+    page = await managed_files.afile_list(
+        purpose="batch",
+        litellm_parent_otel_span=None,
+        user_api_key_dict=_make_user_api_key_dict(),
+        limit=1,
+    )
+
+    assert [file.id for file in page["data"]] == ["unified-match"]
+    assert page["has_more"] is False
+    assert len(table.find_many_calls) <= _DEEP_SCAN_QUERY_BUDGET
+
+
+@pytest.mark.asyncio
+async def test_afile_list_bounds_the_queries_a_deep_unparseable_run_costs():
+    """Rows that will not parse drop out like a filter does, so they get the same bound."""
+    managed_files, table = _make_managed_files_over_rows(
+        [_make_unparseable_managed_file_row(f"unified-{index:05d}") for index in range(_DEEP_SCAN_ROW_COUNT)]
+        + [_make_managed_file_row("unified-parses")]
+    )
+
+    page = await managed_files.afile_list(
+        purpose=None,
+        litellm_parent_otel_span=None,
+        user_api_key_dict=_make_user_api_key_dict(),
+        limit=1,
+    )
+
+    assert [file.id for file in page["data"]] == ["unified-parses"]
+    assert page["has_more"] is False
+    assert len(table.find_many_calls) <= _DEEP_SCAN_QUERY_BUDGET
+
+
+@pytest.mark.asyncio
+async def test_afile_list_reads_one_chunk_when_the_first_one_fills_the_page():
+    """The widened chunk must stay off the common path, where the newest rows already fill the page."""
+    managed_files, table = _make_managed_files_over_rows(
+        [_make_managed_file_row(f"unified-{index:05d}") for index in range(_DEEP_SCAN_ROW_COUNT)]
+    )
+
+    page = await managed_files.afile_list(
+        purpose=None,
+        litellm_parent_otel_span=None,
+        user_api_key_dict=_make_user_api_key_dict(),
+        limit=2,
+    )
+
+    assert [file.id for file in page["data"]] == ["unified-00000", "unified-00001"]
+    assert page["has_more"] is True
+    assert [call["take"] for call in table.find_many_calls] == [3]
+
+
 @pytest.mark.asyncio
 async def test_afile_list_reports_no_more_pages_when_nothing_matches():
     managed_files, _ = _make_managed_files_over_rows(
