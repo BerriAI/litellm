@@ -26,7 +26,7 @@ from typing import Any, Final
 import litellm
 from litellm._logging import verbose_router_logger
 from litellm.caching.caching import DualCache
-from litellm.caching.redis_cache import RedisPipelineIncrementOperation
+from litellm.caching.redis_cache import RedisCache, RedisPipelineIncrementOperation
 from litellm.integrations.custom_logger import CustomLogger, Span
 from litellm.litellm_core_utils.core_helpers import (
     get_metadata_variable_name_from_kwargs,
@@ -101,6 +101,8 @@ class RouterBudgetLimiting(CustomLogger):
         self.dual_cache = dual_cache
         self.redis_increment_operation_queue: list[RedisPipelineIncrementOperation] = []
         self._redis_increment_queue_lock = asyncio.Lock()
+        self._redis_increment_flush_lock = asyncio.Lock()
+        self._detached_increment_operations: tuple[RedisPipelineIncrementOperation, ...] | None = None
         asyncio.create_task(self.periodic_sync_in_memory_spend_with_redis())
         self.provider_budget_config: GenericBudgetConfigType | None = provider_budget_config
         self.deployment_budget_config: GenericBudgetConfigType | None = None
@@ -400,6 +402,73 @@ class RouterBudgetLimiting(CustomLogger):
     def _get_redis_increment_queue_lock(self) -> asyncio.Lock:
         return self._redis_increment_queue_lock
 
+    async def _detach_queued_increment_operations(self) -> tuple[RedisPipelineIncrementOperation, ...]:
+        async with self._get_redis_increment_queue_lock():
+            if self._detached_increment_operations is not None:
+                return self._detached_increment_operations
+            increment_operations_to_flush: Final = tuple(self.redis_increment_operation_queue)
+            self.redis_increment_operation_queue = []  # mutable-ok: emptied queue must stay appendable
+            self._detached_increment_operations = increment_operations_to_flush
+            return increment_operations_to_flush
+
+    async def _clear_detached_increment_operations(self) -> None:
+        async with self._get_redis_increment_queue_lock():
+            self._detached_increment_operations = None
+
+    async def _requeue_detached_increment_operations(self) -> None:
+        async with self._get_redis_increment_queue_lock():
+            detached_increment_operations: Final = self._detached_increment_operations
+            if detached_increment_operations is None:
+                return
+            self.redis_increment_operation_queue = (
+                list(  # mutable-ok: restored flush batch must stay appendable
+                    detached_increment_operations
+                )
+                + self.redis_increment_operation_queue
+            )
+            self._detached_increment_operations = None
+
+    async def _finish_increment_pipeline_after_cancellation(
+        self,
+        pipeline_task: asyncio.Task[object],
+    ) -> None:
+        try:
+            await pipeline_task
+        except Exception:
+            await self._requeue_detached_increment_operations()
+            verbose_router_logger.exception("Error pushing queued Redis increment operations to Redis")
+            return
+        await self._clear_detached_increment_operations()
+
+    async def _flush_queued_increment_operations(self, redis_cache: RedisCache) -> bool:
+        increment_operations_to_flush: Final = await self._detach_queued_increment_operations()
+        if len(increment_operations_to_flush) == 0:
+            return True
+
+        verbose_router_logger.debug(
+            "Pushing Redis Increment Pipeline for queue: %s",
+            increment_operations_to_flush,
+        )
+        increment_list: Final = list(  # mutable-ok: Redis pipeline contract requires a list
+            increment_operations_to_flush
+        )
+        pipeline_task: Final = asyncio.create_task(
+            redis_cache.async_increment_pipeline(
+                increment_list=increment_list,
+            )
+        )
+        try:
+            await asyncio.shield(pipeline_task)
+        except Exception:
+            await asyncio.shield(self._requeue_detached_increment_operations())
+            verbose_router_logger.exception("Error pushing queued Redis increment operations to Redis")
+            return False
+        except asyncio.CancelledError:
+            await asyncio.shield(self._finish_increment_pipeline_after_cancellation(pipeline_task))
+            raise
+        await self._clear_detached_increment_operations()
+        return True
+
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         """Original method now uses helper functions"""
         verbose_router_logger.debug("in RouterBudgetLimiting.async_log_success_event")
@@ -524,43 +593,25 @@ class RouterBudgetLimiting(CustomLogger):
                     DEFAULT_REDIS_SYNC_INTERVAL
                 )  # Still wait DEFAULT_REDIS_SYNC_INTERVAL seconds on error before retrying
 
-    async def _push_in_memory_increments_to_redis(self):
+    async def _push_in_memory_increments_to_redis(self) -> bool:
         """
         How this works:
         - async_log_success_event collects all provider spend increments in `redis_increment_operation_queue`
         - This function pushes all increments to Redis in a batched pipeline to optimize performance
 
-        Only runs if Redis is initialized
+        Only runs if Redis is initialized. Returns False when the detached batch could not be
+        written, so callers must not treat Redis as up to date.
         """
-        increment_operations_to_flush: list[  # mutable-ok: Redis pipeline contract requires a concrete mutable batch
-            RedisPipelineIncrementOperation
-        ] = (  # mutable-ok: Redis pipeline contract requires a list batch
-            []  # mutable-ok: Redis pipeline batches are lists
-        )
-        try:
-            if not self.dual_cache.redis_cache:
-                return  # Redis is not initialized
+        redis_cache: Final = self.dual_cache.redis_cache
+        if redis_cache is None:
+            return True
 
-            async with self._get_redis_increment_queue_lock():
-                increment_operations_to_flush = self.redis_increment_operation_queue
-                self.redis_increment_operation_queue = []  # mutable-ok: the emptied queue must remain appendable by logging callbacks
-
-            verbose_router_logger.debug(
-                "Pushing Redis Increment Pipeline for queue: %s",
-                increment_operations_to_flush,
-            )
-            if len(increment_operations_to_flush) > 0:
-                await self.dual_cache.redis_cache.async_increment_pipeline(
-                    increment_list=increment_operations_to_flush,
-                )
-
-        except Exception:
-            if len(increment_operations_to_flush) > 0:
-                async with self._get_redis_increment_queue_lock():
-                    self.redis_increment_operation_queue = (
-                        increment_operations_to_flush + self.redis_increment_operation_queue
-                    )
-            verbose_router_logger.exception("Error pushing queued Redis increment operations to Redis")
+        async with self._redis_increment_flush_lock:
+            try:
+                return await self._flush_queued_increment_operations(redis_cache)
+            except asyncio.CancelledError:
+                await asyncio.shield(self._requeue_detached_increment_operations())
+                raise
 
     async def _sync_in_memory_spend_with_redis(self):
         """
@@ -581,7 +632,9 @@ class RouterBudgetLimiting(CustomLogger):
                 return
 
             # 1. Push all provider spend increments to Redis
-            await self._push_in_memory_increments_to_redis()
+            flush_succeeded: Final = await self._push_in_memory_increments_to_redis()
+            if not flush_succeeded:
+                return
 
             # 2. Fetch all current provider spend from Redis to update in-memory cache
             cache_keys: Final = []
