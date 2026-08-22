@@ -3825,7 +3825,10 @@ def get_optional_params(
                     unsupported_params[k] = non_default_params[k]
 
         if unsupported_params:
-            if litellm.drop_params is True or (drop_params is not None and drop_params is True):
+            if litellm.passthrough_unknown_openai_params:
+                # Preserve unknown params in non_default_params for provider-specific handling.
+                return
+            elif litellm.drop_params is True or (drop_params is not None and drop_params is True):
                 for k in unsupported_params.keys():
                     non_default_params.pop(k, None)
             else:
