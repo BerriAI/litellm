@@ -24,8 +24,9 @@ Statements inside dollar-quoted bodies are scanned too. `DO $$ ... $$` is this
 repo's idiom for conditional DDL, so a body is where an `UPDATE` would otherwise
 hide. The SQL an `EXECUTE` runs is scanned the same way, since a rewrite reads the
 same to Postgres whether it is spelled out or handed over as a string, and so is a
-literal assigned to a variable with `:=`, which is where an `EXECUTE` further down
-the body gets its statement from.
+literal assigned with `:=` to a variable some `EXECUTE` in the same body then runs
+by name. A literal nothing runs is text, however much it reads like a statement,
+so an error message naming a `DELETE` the application handles stays a message.
 
 Line numbers always count against the whole migration file, however deeply the
 statement is nested, so a reported line points at the statement and the markers
@@ -36,7 +37,9 @@ batched job outside boot. When a rewrite is genuinely bounded and must ship insi
 the migration, put `-- data-migration-ok: <reason>` on the statement or on the line
 above it, naming what bounds it. The reason is required. A marker sharing a line
 with the statement it follows exempts that statement alone, so the next statement
-down is still checked rather than picking the marker up as its own.
+down is still checked rather than picking the marker up as its own. A marker on an
+`EXECUTE` or on the assignment feeding one covers the SQL that statement hands off,
+so it goes where the migration reads rather than inside the string.
 
 `GRANDFATHERED` freezes the violations that predate this check. Prisma records a
 checksum for every applied migration and this repo treats applied files as
@@ -66,6 +69,7 @@ MARKER = re.compile(r"--[ \t]*data-migration-ok:[ \t]*(\S.*?)[ \t]*$", re.MULTIL
 DOLLAR_TAG = re.compile(r"\$(?:[A-Za-z_][A-Za-z0-9_]*)?\$")
 FIRST_WORD = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 STATEMENT = re.compile(r"[^;]+")
+RUN_BY_NAME = re.compile(r"\bEXECUTE[ \t]+([A-Za-z_][A-Za-z0-9_]*)", re.IGNORECASE)
 
 REWRITES_ROWS = frozenset({"UPDATE", "DELETE", "MERGE"})
 
@@ -273,10 +277,27 @@ def draws_rows_from_a_select(statement: str) -> bool:
     return contains(strip_parens(statement), "SELECT")
 
 
-def hands_off_sql(statement: str) -> bool:
-    """Whether a statement gives the server a string literal to run as SQL. `EXECUTE` runs
-    one outright, and an assignment parks one in a variable for an `EXECUTE` further down."""
-    return leads_with(statement, "EXECUTE") or ":=" in statement
+def hands_off_sql(statement: str, executed: frozenset[str]) -> bool:
+    """Whether a statement gives the server a string literal to run as SQL. `EXECUTE` runs one
+    outright. An assignment parks one in a variable, which counts only when something further
+    down runs that variable by name, since a string the migration never executes is text."""
+    return leads_with(statement, "EXECUTE") or bool(assigned_names(statement) & executed)
+
+
+def assigned_names(statement: str) -> frozenset[str]:
+    """The candidate variable names an assignment writes to, taken as every word ahead of the
+    `:=`. A declaration carries its type and sometimes a leading `DECLARE` alongside the name,
+    and none of that is worth parsing when the only question is which name is executed."""
+    head, separator, _ = statement.partition(":=")
+    if not separator:
+        return frozenset()
+    return frozenset(word.group().lower() for word in FIRST_WORD.finditer(head))
+
+
+def executed_names(masked: str) -> frozenset[str]:
+    """The variables handed to an `EXECUTE` by name. Reading these off the masked text keeps
+    an `EXECUTE` written inside a comment or a string from counting."""
+    return frozenset(match.group(1).lower() for match in RUN_BY_NAME.finditer(masked))
 
 
 def leads_with(statement: str, keyword: str) -> bool:
@@ -312,18 +333,20 @@ def scan_region(
     always counted against the whole document, so a statement nested in a dollar-quoted
     body reports its real file line and lines up with the markers read from that file."""
     masked, bodies, literals = mask(region)
+    executed = executed_names(masked)
 
     for match in STATEMENT.finditer(masked):
-        if hands_off_sql(match.group()):
+        first = line_of(document, offset + keyword_start(match))
+        last = line_of(document, offset + match.end())
+        exempt = markers.exempt(first, last)
+
+        if hands_off_sql(match.group(), executed) and not exempt:
             for start, end in literals:
                 if match.start() <= start and end <= match.end():
                     yield from scan_region(document, region[start:end], migration, markers, offset + start)
+
         keyword = offending_keyword(match.group())
-        if keyword is None:
-            continue
-        first = line_of(document, offset + keyword_start(match))
-        last = line_of(document, offset + match.end())
-        if markers.exempt(first, last):
+        if keyword is None or exempt:
             continue
         yield Violation(migration, first, keyword)
 

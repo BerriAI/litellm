@@ -415,6 +415,77 @@ class TestDynamicSql:
         )
         assert _keywords(tmp_path, sql) == ()
 
+    def test_a_marker_exempts_an_execute_whose_sql_starts_on_a_later_line(self, tmp_path):
+        sql = (
+            "DO $$\n"
+            "BEGIN\n"
+            "    -- data-migration-ok: one config row, keyed by its primary key\n"
+            "    EXECUTE '\n"
+            "        UPDATE \"Config\" SET \"v\" = 1 WHERE \"k\" = ''rev''';\n"
+            "END $$;"
+        )
+        assert _keywords(tmp_path, sql) == ()
+
+    def test_a_marker_exempts_an_assignment_whose_sql_starts_on_a_later_line(self, tmp_path):
+        sql = (
+            "DO $$\n"
+            "DECLARE\n"
+            "    -- data-migration-ok: one config row, keyed by its primary key\n"
+            "    stmt text := '\n"
+            "        UPDATE \"Config\" SET \"v\" = 1 WHERE \"k\" = ''rev''';\n"
+            "BEGIN\n"
+            "    EXECUTE stmt;\n"
+            "END $$;"
+        )
+        assert _keywords(tmp_path, sql) == ()
+
+    def test_an_unmarked_execute_whose_sql_starts_on_a_later_line_is_flagged(self, tmp_path):
+        sql = (
+            "DO $$\n"
+            "BEGIN\n"
+            "    EXECUTE '\n"
+            "        UPDATE \"Foo\" SET \"a\" = 1';\n"
+            "END $$;"
+        )
+        assert _keywords(tmp_path, sql) == ("UPDATE",)
+        assert _scan(tmp_path, sql)[0].line == 4
+
+    def test_a_message_assigned_but_never_executed_passes(self, tmp_path):
+        sql = (
+            "DO $$\n"
+            "DECLARE\n"
+            "    msg text := 'UPDATE of legacy rows skipped, the application backfills them';\n"
+            "BEGIN\n"
+            "    RAISE NOTICE '%', msg;\n"
+            "END $$;"
+        )
+        assert _keywords(tmp_path, sql) == ()
+
+    def test_a_notice_naming_a_delete_it_never_runs_passes(self, tmp_path):
+        sql = (
+            "DO $$\n"
+            "DECLARE\n"
+            "    note text := 'DELETE FROM legacy rows is handled by the application';\n"
+            "BEGIN\n"
+            "    RAISE NOTICE '%', note;\n"
+            "END $$;"
+        )
+        assert _keywords(tmp_path, sql) == ()
+
+    def test_only_the_variable_that_is_executed_is_read_as_sql(self, tmp_path):
+        sql = (
+            "DO $$\n"
+            "DECLARE\n"
+            "    msg text := 'UPDATE of legacy rows skipped';\n"
+            "    stmt text := 'DELETE FROM \"Foo\" WHERE \"a\" = 1';\n"
+            "BEGIN\n"
+            "    RAISE NOTICE '%', msg;\n"
+            "    EXECUTE stmt;\n"
+            "END $$;"
+        )
+        assert _keywords(tmp_path, sql) == ("DELETE",)
+        assert _scan(tmp_path, sql)[0].line == 4
+
 
 class TestReporting:
     def test_line_number_points_at_the_statement_keyword(self, tmp_path):
