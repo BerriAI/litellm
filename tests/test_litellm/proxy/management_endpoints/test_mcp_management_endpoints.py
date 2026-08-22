@@ -6481,7 +6481,6 @@ def test_bundled_openapi_registry_parses_and_entries_are_well_formed():
     authorization_url would recreate the exact 400 ("authorization url is not set") the catalog
     exists to prevent for spec-only servers, which never run OAuth endpoint discovery."""
     import json
-    import os
 
     registry_path = os.path.join(
         os.path.dirname(os.path.abspath(__file__)),

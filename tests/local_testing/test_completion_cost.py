@@ -4,7 +4,6 @@ import traceback
 import litellm.cost_calculator
 
 import asyncio
-import os
 import time
 from typing import Optional
 from unittest.mock import AsyncMock, MagicMock, patch

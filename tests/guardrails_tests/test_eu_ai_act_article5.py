@@ -160,7 +160,6 @@ def content_filter_guardrail():
     """Initialize content filter guardrail with EU AI Act Article 5 template."""
 
     # Get absolute path to the policy template
-    import os
 
     content_filter_dir = os.path.join(
         os.path.dirname(__file__),

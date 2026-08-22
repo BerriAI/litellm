@@ -21,7 +21,6 @@ logging.basicConfig(
 # test /chat/completion request to the proxy
 from fastapi.testclient import TestClient
 from fastapi import FastAPI
-import os
 from litellm.proxy.proxy_server import (
     router,
     save_worker_config,

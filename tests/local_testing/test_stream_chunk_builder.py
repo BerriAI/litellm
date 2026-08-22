@@ -17,7 +17,6 @@ def check_non_streaming_response(response):
     assert len(completion.choices[0].message.audio.data) > 0, "Audio data is empty"
 
 
-import os
 
 import dotenv
 from openai import OpenAI

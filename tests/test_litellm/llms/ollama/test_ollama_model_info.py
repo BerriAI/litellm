@@ -8,7 +8,6 @@ import pytest
 Unit tests for OllamaModelInfo.get_models functionality.
 """
 # Ensure a dummy httpx module is available for import in tests
-import sys
 import types
 
 # Provide a dummy httpx module for import in get_models

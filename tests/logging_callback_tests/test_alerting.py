@@ -17,7 +17,6 @@ from litellm.types.integrations.slack_alerting import AlertType
 
 # import logging
 # logging.basicConfig(level=logging.DEBUG)
-import os
 import unittest.mock
 from unittest.mock import AsyncMock, MagicMock, patch
 

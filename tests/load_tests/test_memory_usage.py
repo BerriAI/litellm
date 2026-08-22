@@ -18,7 +18,6 @@ from typing import Optional
 from unittest.mock import MagicMock, patch
 
 import pytest
-import os
 import litellm
 from typing import Callable, Any
 

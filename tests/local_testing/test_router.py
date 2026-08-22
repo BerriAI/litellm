@@ -12,7 +12,6 @@ import pytest
 import litellm.types
 import litellm.types.router
 
-import os
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import AsyncMock, MagicMock, patch

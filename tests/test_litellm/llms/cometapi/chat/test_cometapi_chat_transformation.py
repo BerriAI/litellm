@@ -183,7 +183,6 @@ def test_cometapi_integration():
     Integration test - requires real API key
     Run with: pytest -k test_cometapi_integration -s
     """
-    import os
     from litellm import completion
 
     # Try to get API key from multiple environment variables
@@ -217,7 +216,6 @@ def test_cometapi_streaming_integration():
     Integration test for streaming - requires real API key
     Run with: pytest -k test_cometapi_streaming_integration -s
     """
-    import os
     from litellm import completion
 
     # Try to get API key from multiple environment variables
@@ -281,7 +279,6 @@ def test_cometapi_with_custom_base_url():
     """
     Test CometAPI with custom base URL
     """
-    import os
     from litellm import completion
 
     api_key = (

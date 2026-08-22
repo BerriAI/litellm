@@ -141,7 +141,6 @@ class BaseSkillsAPITest(ABC):
         """
         Test listing skills.
         """
-        import os
 
         custom_llm_provider = self.get_custom_llm_provider()
         api_key = self.get_api_key()

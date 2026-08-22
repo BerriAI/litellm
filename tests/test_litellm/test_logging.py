@@ -9,7 +9,6 @@ from typing import List
 import pytest
 
 import logging
-import sys
 
 import litellm
 from litellm._logging import (

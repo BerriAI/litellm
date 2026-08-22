@@ -10,7 +10,6 @@ import pytest
 
 
 from unittest.mock import patch, MagicMock, AsyncMock
-import os
 
 from dotenv import load_dotenv
 

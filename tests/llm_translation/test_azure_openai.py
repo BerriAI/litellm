@@ -99,7 +99,6 @@ from unittest.mock import MagicMock, patch
 from openai import AzureOpenAI
 import litellm
 from litellm import completion
-import os
 
 
 @pytest.mark.parametrize(

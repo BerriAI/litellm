@@ -72,7 +72,6 @@ def test_hyperbolic_in_provider_lists():
 def test_hyperbolic_models_configuration():
     """Test that Hyperbolic models are properly configured"""
     import json
-    import os
 
     # Load model configuration directly from the JSON file
     json_path = os.path.join(

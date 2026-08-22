@@ -238,7 +238,6 @@ class TestVideoGeneration:
     def test_video_generation_cost_calculation(self):
         """Test video generation cost calculation."""
         import json
-        import os
 
         # Try to load the local model cost map, skip if not found
         cost_map_path = "model_prices_and_context_window.json"

@@ -50,7 +50,6 @@ async def test_get_credentials_from_env():
     assert credentials["LANGSMITH_TENANT_ID"] == "test-tenant-id"
 
     # Test tenant_id from environment variable
-    import os
 
     os.environ["LANGSMITH_TENANT_ID"] = "env-tenant-id"
     credentials = logger.get_credentials_from_env()

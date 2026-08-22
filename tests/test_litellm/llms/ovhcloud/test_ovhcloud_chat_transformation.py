@@ -175,7 +175,6 @@ class TestOVHCloudConfig:
 
 
 def test_ovhcloud_integration():
-    import os
     from litellm import completion
 
     api_key = os.getenv("OVHCLOUD_API_KEY")
@@ -203,7 +202,6 @@ def test_OVHCloud_streaming_integration():
     Integration test for streaming - requires real API key
     Run with: pytest -k test_OVHCloud_streaming_integration -s
     """
-    import os
     from litellm import completion
 
     api_key = os.getenv("OVHCLOUD_API_KEY")
@@ -258,7 +256,6 @@ def test_ovhcloud_with_custom_base_url():
     """
     Test OVHCloud with custom base URL
     """
-    import os
     from litellm import completion
 
     api_key = os.getenv("OVHCLOUD_API_KEY")

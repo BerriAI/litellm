@@ -10,7 +10,6 @@ import io
 from test_streaming import streaming_format_tests
 
 
-import os
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest

@@ -331,7 +331,6 @@ def test_is_database_service_unavailable_error_asyncpg(monkeypatch):
     """asyncpg connection/interface errors map to service-unavailable. asyncpg
     is not a hard dependency, so inject a stand-in module to exercise the
     branch deterministically regardless of the install environment."""
-    import sys
     import types
 
     fake_asyncpg = types.ModuleType("asyncpg")

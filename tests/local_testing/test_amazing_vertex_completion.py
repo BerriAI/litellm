@@ -10,7 +10,6 @@ from test_streaming import streaming_format_tests
 
 import asyncio
 import json
-import os
 import tempfile
 from unittest.mock import AsyncMock, MagicMock, patch, ANY
 from respx import MockRouter

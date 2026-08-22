@@ -15,7 +15,6 @@ from litellm.caching import InMemoryCache
 logging.basicConfig(level=logging.DEBUG)
 load_dotenv()
 import asyncio
-import os
 import pytest
 
 import litellm

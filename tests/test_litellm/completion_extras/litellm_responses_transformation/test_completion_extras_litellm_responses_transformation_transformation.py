@@ -1514,7 +1514,6 @@ def test_map_reasoning_effort_adds_summary_detailed(monkeypatch):
 
     When flag is enabled (flag=True or env var), summary="detailed" is added.
     """
-    import os
 
     import litellm
     from litellm.completion_extras.litellm_responses_transformation.transformation import (
