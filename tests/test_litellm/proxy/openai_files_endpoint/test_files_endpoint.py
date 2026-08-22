@@ -329,7 +329,15 @@ def test_mock_create_audio_file(mocker: MockerFixture, monkeypatch, llm_router: 
         async def afile_retrieve(self, file_id, litellm_parent_otel_span, llm_router):
             raise NotImplementedError("Not implemented for test")
 
-        async def afile_list(self, purpose, litellm_parent_otel_span):
+        async def afile_list(
+            self,
+            purpose,
+            litellm_parent_otel_span,
+            user_api_key_dict,
+            limit=None,
+            after=None,
+            **data,
+        ):
             raise NotImplementedError("Not implemented for test")
 
         async def afile_delete(
@@ -903,7 +911,15 @@ def test_create_file_with_expires_after(
         async def afile_retrieve(self, file_id, litellm_parent_otel_span, llm_router):
             raise NotImplementedError("Not implemented for test")
 
-        async def afile_list(self, purpose, litellm_parent_otel_span):
+        async def afile_list(
+            self,
+            purpose,
+            litellm_parent_otel_span,
+            user_api_key_dict,
+            limit=None,
+            after=None,
+            **data,
+        ):
             raise NotImplementedError("Not implemented for test")
 
         async def afile_delete(
@@ -1066,7 +1082,15 @@ def test_create_file_with_expires_after_valid_values(
         async def afile_retrieve(self, file_id, litellm_parent_otel_span, llm_router):
             raise NotImplementedError("Not implemented for test")
 
-        async def afile_list(self, purpose, litellm_parent_otel_span):
+        async def afile_list(
+            self,
+            purpose,
+            litellm_parent_otel_span,
+            user_api_key_dict,
+            limit=None,
+            after=None,
+            **data,
+        ):
             raise NotImplementedError("Not implemented for test")
 
         async def afile_delete(
@@ -1154,7 +1178,15 @@ def test_create_file_without_expires_after(
         async def afile_retrieve(self, file_id, litellm_parent_otel_span, llm_router):
             raise NotImplementedError("Not implemented for test")
 
-        async def afile_list(self, purpose, litellm_parent_otel_span):
+        async def afile_list(
+            self,
+            purpose,
+            litellm_parent_otel_span,
+            user_api_key_dict,
+            limit=None,
+            after=None,
+            **data,
+        ):
             raise NotImplementedError("Not implemented for test")
 
         async def afile_delete(
@@ -1251,7 +1283,15 @@ def test_managed_files_with_loadbalancing(
         async def afile_retrieve(self, file_id, litellm_parent_otel_span, llm_router):
             raise NotImplementedError("Not implemented for test")
 
-        async def afile_list(self, purpose, litellm_parent_otel_span):
+        async def afile_list(
+            self,
+            purpose,
+            litellm_parent_otel_span,
+            user_api_key_dict,
+            limit=None,
+            after=None,
+            **data,
+        ):
             raise NotImplementedError("Not implemented for test")
 
         async def afile_delete(
@@ -1368,7 +1408,15 @@ def test_create_file_with_nested_litellm_metadata(
         async def afile_retrieve(self, file_id, litellm_parent_otel_span, llm_router):
             raise NotImplementedError("Not implemented for test")
 
-        async def afile_list(self, purpose, litellm_parent_otel_span):
+        async def afile_list(
+            self,
+            purpose,
+            litellm_parent_otel_span,
+            user_api_key_dict,
+            limit=None,
+            after=None,
+            **data,
+        ):
             raise NotImplementedError("Not implemented for test")
 
         async def afile_delete(
@@ -1472,7 +1520,15 @@ def test_create_file_with_deep_nested_litellm_metadata(
         async def afile_retrieve(self, file_id, litellm_parent_otel_span, llm_router):
             raise NotImplementedError("Not implemented for test")
 
-        async def afile_list(self, purpose, litellm_parent_otel_span):
+        async def afile_list(
+            self,
+            purpose,
+            litellm_parent_otel_span,
+            user_api_key_dict,
+            limit=None,
+            after=None,
+            **data,
+        ):
             raise NotImplementedError("Not implemented for test")
 
         async def afile_delete(
@@ -1568,7 +1624,15 @@ def _make_capturing_managed_files():
         async def afile_retrieve(self, file_id, litellm_parent_otel_span, llm_router):
             raise NotImplementedError
 
-        async def afile_list(self, purpose, litellm_parent_otel_span):
+        async def afile_list(
+            self,
+            purpose,
+            litellm_parent_otel_span,
+            user_api_key_dict,
+            limit=None,
+            after=None,
+            **data,
+        ):
             raise NotImplementedError
 
         async def afile_delete(
@@ -2051,7 +2115,15 @@ def test_require_managed_files_allows_managed_file_upload(
         async def afile_retrieve(self, file_id, litellm_parent_otel_span, llm_router):
             raise NotImplementedError
 
-        async def afile_list(self, purpose, litellm_parent_otel_span):
+        async def afile_list(
+            self,
+            purpose,
+            litellm_parent_otel_span,
+            user_api_key_dict,
+            limit=None,
+            after=None,
+            **data,
+        ):
             raise NotImplementedError
 
         async def afile_delete(
@@ -2175,7 +2247,15 @@ def test_require_managed_files_accepts_target_model_names_bracket_form(
         async def afile_retrieve(self, file_id, litellm_parent_otel_span, llm_router):
             raise NotImplementedError
 
-        async def afile_list(self, purpose, litellm_parent_otel_span):
+        async def afile_list(
+            self,
+            purpose,
+            litellm_parent_otel_span,
+            user_api_key_dict,
+            limit=None,
+            after=None,
+            **data,
+        ):
             raise NotImplementedError
 
         async def afile_delete(
@@ -2255,7 +2335,15 @@ def test_require_managed_files_accepts_repeated_target_model_names_bracket_form(
         async def afile_retrieve(self, file_id, litellm_parent_otel_span, llm_router):
             raise NotImplementedError
 
-        async def afile_list(self, purpose, litellm_parent_otel_span):
+        async def afile_list(
+            self,
+            purpose,
+            litellm_parent_otel_span,
+            user_api_key_dict,
+            limit=None,
+            after=None,
+            **data,
+        ):
             raise NotImplementedError
 
         async def afile_delete(
