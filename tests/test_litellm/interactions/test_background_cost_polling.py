@@ -1,11 +1,13 @@
 import asyncio
 import time
+from itertools import islice
 from typing import Optional
 
 import pytest
 
 from litellm.interactions.background_cost_polling import (
     _SETTLED_KEY,
+    _poll_intervals,
     BackgroundInteractionPollContext,
     maybe_schedule_background_interaction_cost_polling,
     maybe_settle_background_interaction_before_delete,
@@ -90,6 +92,17 @@ def _fetch_sequence(*responses):
         return item
 
     return fetch, calls
+
+
+@pytest.mark.parametrize(
+    "initial, maximum",
+    [(0.0, 0.002), (0.001, 0.0), (-1.0, 0.002), (0.0, 0.0)],
+)
+def test_poll_intervals_stops_instead_of_looping_on_a_non_positive_interval(initial, maximum):
+    intervals = list(islice(_poll_intervals(initial=initial, maximum=maximum, timeout=3600.0), 10))
+
+    assert len(intervals) < 10
+    assert all(interval > 0 for interval in intervals)
 
 
 @pytest.mark.asyncio

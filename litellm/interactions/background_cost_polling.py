@@ -74,7 +74,7 @@ async def _fetch_interaction(context: BackgroundInteractionPollContext) -> Inter
 def _poll_intervals(initial: float, maximum: float, timeout: float) -> Iterator[float]:
     elapsed = 0.0
     interval = initial
-    while elapsed + interval <= timeout:
+    while interval > 0 and elapsed + interval <= timeout:
         yield interval
         elapsed += interval
         interval = min(interval * 2, maximum)
