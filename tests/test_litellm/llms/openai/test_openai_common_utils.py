@@ -375,20 +375,26 @@ async def test_async_streaming_output_limit_400_maps_to_length_truncated_stream(
 @pytest.mark.parametrize("provider", ["openai", "azure"])
 @pytest.mark.parametrize("stream", [False, True])
 def test_sync_genuine_bad_request_still_raises(provider, stream):
-    with pytest.raises(litellm.BadRequestError):
+    def _call_and_drain():
         result = litellm.completion(
             **_completion_kwargs(provider, _sync_client_raising(provider, GENUINE_400_MESSAGE), stream=stream)
         )
         list(result)
+
+    with pytest.raises(litellm.BadRequestError):
+        _call_and_drain()
 
 
 @pytest.mark.parametrize("provider", ["openai", "azure"])
 @pytest.mark.parametrize("stream", [False, True])
 @pytest.mark.asyncio
 async def test_async_genuine_bad_request_still_raises(provider, stream):
-    with pytest.raises(litellm.BadRequestError):
+    async def _call_and_drain():
         result = await litellm.acompletion(
             **_completion_kwargs(provider, _async_client_raising(provider, GENUINE_400_MESSAGE), stream=stream)
         )
         async for _ in result:
             pass
+
+    with pytest.raises(litellm.BadRequestError):
+        await _call_and_drain()

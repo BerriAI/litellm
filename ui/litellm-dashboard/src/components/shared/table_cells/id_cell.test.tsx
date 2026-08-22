@@ -26,7 +26,7 @@ describe("IdCell", () => {
     render(<IdCell value="sk-1234567890abcdef" />);
     const el = screen.getByText("sk-1234567890abcdef");
     expect(el.tagName).toBe("SPAN");
-    expect(el).toHaveClass("bg-blue-50");
+    expect(el).toHaveClass("bg-info/10");
     expect(el).toHaveClass("font-mono");
     expect(el).toHaveClass("max-w-[15ch]");
     expect(el).toHaveClass("truncate");
@@ -36,7 +36,7 @@ describe("IdCell", () => {
     render(<IdCell value="req-123" variant="plain" />);
     const el = screen.getByText("req-123");
     expect(el).toHaveClass("font-mono");
-    expect(el).not.toHaveClass("bg-blue-50");
+    expect(el).not.toHaveClass("bg-info/10");
   });
 
   it("does not truncate when truncate is false", () => {

@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
-from fastapi import HTTPException, Request, status
+from fastapi import HTTPException, Request
 from prisma import errors as prisma_errors
 from prisma.errors import (
     ClientNotConnectedError,
@@ -117,6 +117,8 @@ def test_is_database_connection_generic_errors():
         TimeoutError("timed out"),
         OSError("network is unreachable"),
         asyncio.TimeoutError(),
+        httpx.ConnectError("connection refused"),
+        httpx.ConnectTimeout("connect timed out"),
         HTTPClientClosedError(),
         ClientNotConnectedError(),
         PrismaError("can't reach database server"),
@@ -264,10 +266,10 @@ def test_is_prisma_engine_internal_error_excludes_data_layer_prisma_error():
     data_layer_error = UniqueViolationError(
         data={"user_facing_error": {"meta": {"table": "t"}}}
     )
-    try:
+    with pytest.raises(UniqueViolationError) as exc_info:
         raise data_layer_error
-    except UniqueViolationError as e:
-        assert PrismaDBExceptionHandler.is_prisma_engine_internal_error(e) is False
+    e = exc_info.value
+    assert PrismaDBExceptionHandler.is_prisma_engine_internal_error(e) is False
 
 
 @pytest.mark.parametrize(

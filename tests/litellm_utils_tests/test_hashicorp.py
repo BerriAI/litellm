@@ -4,7 +4,6 @@ import pytest
 from dotenv import load_dotenv
 
 load_dotenv()
-import os
 import httpx
 
 sys.path.insert(
@@ -432,7 +431,7 @@ def test_hashicorp_get_url_rejects_path_traversal(monkeypatch, malicious_secret_
     monkeypatch.setenv("HCP_VAULT_TOKEN", "test-token-for-get-url-only")
     manager = HashicorpSecretManager()
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match='Invalid secret_name'):
         manager.get_url(malicious_secret_name)
 
 

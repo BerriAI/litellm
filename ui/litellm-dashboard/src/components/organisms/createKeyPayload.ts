@@ -2,6 +2,7 @@ import { mapDisplayToInternalNames } from "../callback_info_helpers";
 import { NEVER_RESETS_BUDGET_DURATION } from "../common_components/budget_duration_dropdown";
 import type { RouterSettingsAccordionValue } from "../common_components/RouterSettingsAccordion";
 import type { BudgetWindowEntry } from "../key_team_helpers/BudgetWindowsEditor";
+import type { ModelMaxBudget } from "../key_team_helpers/ModelMaxBudgetEditor";
 import { tagRowsToLimits, type TagRateLimitEntry } from "../key_team_helpers/TagRateLimitEditor";
 
 export interface KeyLoggingSetting {
@@ -28,6 +29,7 @@ export interface KeyCreateInput {
   readonly budgetLimits: BudgetWindowEntry[];
   readonly tagRateLimits: TagRateLimitEntry[];
   readonly budgetFallbacks: Record<string, string[]>;
+  readonly modelMaxBudget: ModelMaxBudget;
 }
 
 export type KeyPayloadResult =
@@ -206,6 +208,7 @@ export const buildKeyCreatePayload = (input: KeyCreateInput): KeyPayloadResult =
       ...(validWindows.length > 0 && { budget_limits: validWindows }),
       ...(Object.keys(tag_rpm_limit).length > 0 && { tag_rpm_limit }),
       ...(Object.keys(input.budgetFallbacks).length > 0 && { budget_fallbacks: input.budgetFallbacks }),
+      ...(Object.keys(input.modelMaxBudget).length > 0 && { model_max_budget: input.modelMaxBudget }),
       ...(values.budget_duration === NEVER_RESETS_BUDGET_DURATION && { budget_duration: null }),
     },
   };

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Callable
@@ -62,7 +63,7 @@ from e2e_http import (
     unwrap,
 )
 from lifecycle import ResourceManager
-from models import KeyGenerateBody, LiteLLMParamsBody, SpendLogRow
+from models import KeyGenerateBody, KeyMetadata, LiteLLMParamsBody, SpendLogRow
 
 pytestmark = pytest.mark.e2e
 
@@ -646,6 +647,41 @@ class TestOpenAIFiles:
         )
 
     @pytest.mark.covers(
+        "llm.files.openai.list_isolation.nonstream.works",
+        exercised_on=["files"],
+    )
+    def test_list_page_cursors_address_only_the_callers_own_files(
+        self, client: BatchClient, resources: ResourceManager
+    ) -> None:
+        """Pins GitHub issue #36087: a list page's pagination cursors must address
+        rows in that page.
+
+        The proxy fronts one shared provider account, so the upstream page is the
+        whole organization's. The gateway narrows `data` to the files the caller
+        owns, and `first_id` / `last_id` have to be narrowed with it: left as the
+        upstream org's, they hand any caller raw provider file ids belonging to
+        other tenants, which is the handle the file routes accept.
+        """
+        key = resources.key(user_id=f"e2e-file-list-{unique_marker()}")
+
+        listed = unwrap(client.list_files(key=key))
+
+        expected_first = listed.data[0].id if listed.data else None
+        expected_last = listed.data[-1].id if listed.data else None
+        assert listed.first_id == expected_first, (
+            f"first_id {listed.first_id!r} is not the first row this caller can see "
+            f"({expected_first!r}); the page leaked another caller's file id"
+        )
+        assert listed.last_id == expected_last, (
+            f"last_id {listed.last_id!r} is not the last row this caller can see "
+            f"({expected_last!r}); the page leaked another caller's file id"
+        )
+        assert listed.has_more is not True, (
+            "the page advertises another page, but the proxy never forwards a cursor "
+            "upstream, so following it re-serves this same page forever"
+        )
+
+    @pytest.mark.covers(
         "llm.files.openai.retrieve.nonstream.works",
         exercised_on=["files"],
     )
@@ -757,6 +793,149 @@ class TestBatchRateLimitErrorMapping:
             assert retry_after.isdigit() and int(retry_after) > 0, (
                 f"retry-after must be a positive integer when present, got {retry_after!r}"
             )
+
+
+BATCH_ENQUEUED_HEADROOM_TOKENS = 100_000
+_BATCH_REQUIRES_TOKENS = re.compile(r"Batch requires (\d+) tokens")
+
+
+class TestBatchEnqueuedTokenLimit:
+    """Opt-in enqueued-token allowance governs batch submission instead of RPM/TPM.
+
+    A key whose metadata carries batch_enqueued_token_limit reserves the batch's
+    token estimate against that allowance at create time: per-minute limits no
+    longer gate batch submission, exhausting the allowance rejects the create
+    before it reaches the provider, and cancelling a running batch refunds its
+    reservation so blocked submissions go through again (LIT-5273).
+    """
+
+    def _upload_batch_file(
+        self, client: BatchClient, resources: ResourceManager, key: str
+    ) -> FileObject:
+        file = unwrap(
+            client.upload_file(
+                content=_multi_request_jsonl("gpt-4o-mini", BATCH_RL_REQUEST_LINES),
+                form=FileUploadForm(purpose="batch"),
+                model=OPENAI_BATCH_MODEL,
+                key=key,
+            )
+        )
+        resources.defer(quietly(lambda: client.delete_file(file.id, key=key)))
+        return file
+
+    def _generate_enqueued_key(
+        self,
+        client: BatchClient,
+        resources: ResourceManager,
+        *,
+        limit: int,
+        marker: str,
+        rpm_limit: int | None = None,
+    ) -> str:
+        key = client.proxy.generate_key(
+            KeyGenerateBody(
+                models=[],
+                rpm_limit=rpm_limit,
+                user_id=f"e2e-batch-enq-{marker}-{unique_marker()}",
+                metadata=KeyMetadata(batch_enqueued_token_limit=limit),
+            )
+        )
+        resources.defer(lambda: client.proxy.delete_key(key))
+        return key
+
+    @pytest.mark.covers(
+        "quota_management.ratelimit.batch_enqueued_tokens.accepts_over_rpm",
+        exercised_on=["batches"],
+    )
+    def test_enqueued_allowance_accepts_batch_over_key_rpm(
+        self, client: BatchClient, resources: ResourceManager, batch_deployments: None
+    ) -> None:
+        key = self._generate_enqueued_key(
+            client,
+            resources,
+            limit=BATCH_ENQUEUED_HEADROOM_TOKENS,
+            marker="rpm",
+            rpm_limit=BATCH_RL_RPM_LIMIT,
+        )
+        file = self._upload_batch_file(client, resources, key)
+
+        created = client.create_batch(body=BatchCreateBody(input_file_id=file.id), key=key)
+
+        assert created.status_code != 429, (
+            f"enqueued-token allowance must govern batch submission instead of the "
+            f"key RPM ({BATCH_RL_RPM_LIMIT} < {BATCH_RL_REQUEST_LINES} rows); "
+            f"got 429: {created.body[:400]}"
+        )
+        require_successful_call(created)
+        batch = BatchObject.model_validate_json(created.body)
+        resources.defer(quietly(lambda: client.cancel_batch(batch.id, key=key)))
+
+    @pytest.mark.covers(
+        "quota_management.ratelimit.batch_enqueued_tokens.blocks_when_exhausted",
+        exercised_on=["batches"],
+    )
+    @pytest.mark.covers(
+        "quota_management.ratelimit.batch_enqueued_tokens.refunds_on_cancel",
+        exercised_on=["batches"],
+    )
+    def test_exhausted_allowance_blocks_until_cancel_refunds(
+        self, client: BatchClient, resources: ResourceManager, batch_deployments: None
+    ) -> None:
+        sizing_key = self._generate_enqueued_key(
+            client, resources, limit=1, marker="size"
+        )
+        sizing_file = self._upload_batch_file(client, resources, sizing_key)
+        sized = client.create_batch(
+            body=BatchCreateBody(input_file_id=sizing_file.id), key=sizing_key
+        )
+        assert sized.status_code == 429, (
+            f"a 1-token allowance must reject any batch before it reaches the "
+            f"provider, got {sized.status_code}: {sized.body[:400]}"
+        )
+        assert "batch enqueued token limit exceeded" in sized.body.lower(), (
+            f"429 body must name the enqueued token limit, got: {sized.body[:400]}"
+        )
+        requires = _BATCH_REQUIRES_TOKENS.search(sized.body)
+        assert requires is not None, (
+            f"429 body must report the batch token requirement so callers can size "
+            f"allowances, got: {sized.body[:400]}"
+        )
+        batch_tokens = int(requires.group(1))
+        assert batch_tokens > 1
+
+        key = self._generate_enqueued_key(
+            client, resources, limit=batch_tokens + batch_tokens // 2, marker="refund"
+        )
+        file = self._upload_batch_file(client, resources, key)
+
+        first = client.create_batch(body=BatchCreateBody(input_file_id=file.id), key=key)
+        require_successful_call(first)
+        first_batch = BatchObject.model_validate_json(first.body)
+        resources.defer(quietly(lambda: client.cancel_batch(first_batch.id, key=key)))
+
+        blocked = client.create_batch(body=BatchCreateBody(input_file_id=file.id), key=key)
+        assert blocked.status_code == 429, (
+            f"second batch must not fit the remaining allowance while the first is "
+            f"enqueued, got {blocked.status_code}: {blocked.body[:400]}"
+        )
+        assert "batch enqueued token limit exceeded" in blocked.body.lower(), (
+            f"429 body must name the enqueued token limit, got: {blocked.body[:400]}"
+        )
+
+        cancelled = cancel_batch(client, first_batch.id, key=key, provider=None)
+        assert cancelled.status in {"cancelling", "cancelled"}, (
+            f"cancel must reach a cancel state for the refund to fire, "
+            f"got {cancelled.status}"
+        )
+
+        retried = client.create_batch(body=BatchCreateBody(input_file_id=file.id), key=key)
+        assert retried.status_code != 429, (
+            f"cancelling the first batch must refund its reservation so the retry "
+            f"fits the allowance, got 429: {retried.body[:400]}"
+        )
+        require_successful_call(retried)
+        retry_batch = BatchObject.model_validate_json(retried.body)
+        resources.defer(quietly(lambda: client.cancel_batch(retry_batch.id, key=key)))
 
 
 ASSUME_ROLE_RAW_MODEL = "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"

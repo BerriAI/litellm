@@ -60,7 +60,7 @@ export function BudgetFallbacksEditor({ value, onChange, availableModels }: Budg
   if (entries.length === 0) {
     return (
       <div>
-        <div className="text-xs text-gray-500 mb-2">
+        <div className="text-xs text-muted-foreground mb-2">
           When a model exceeds its per-model budget, requests automatically reroute to fallback models
         </div>
         <Button variant="outline" size="sm" onClick={addEntry}>
@@ -73,7 +73,7 @@ export function BudgetFallbacksEditor({ value, onChange, availableModels }: Budg
 
   return (
     <div className="space-y-4">
-      <div className="text-xs text-gray-500">
+      <div className="text-xs text-muted-foreground">
         When a model exceeds its per-model budget, requests automatically reroute to fallback models
       </div>
       {entries.map((entry) => {
@@ -83,17 +83,17 @@ export function BudgetFallbacksEditor({ value, onChange, availableModels }: Budg
         const availableFallbackOptions = availableModels.filter((m) => m !== entry.primaryModel);
 
         return (
-          <div key={entry.id} className="relative rounded-lg border border-gray-200 bg-gray-50 p-4">
+          <div key={entry.id} className="relative rounded-lg border border-border bg-muted p-4">
             <button
               type="button"
               onClick={() => removeEntry(entry.id)}
-              className="absolute top-2 right-2 text-gray-400 hover:text-red-500 transition-colors p-1"
+              className="absolute top-2 right-2 text-muted-foreground hover:text-destructive transition-colors p-1"
             >
               <X className="w-4 h-4" />
             </button>
 
             <div className="mb-3">
-              <label className="block text-xs font-medium text-gray-600 mb-1">Primary Model</label>
+              <label className="block text-xs font-medium text-muted-foreground mb-1">Primary Model</label>
               <SearchSelect
                 options={availablePrimaryOptions.map((m) => ({ label: m, value: m }))}
                 value={entry.primaryModel ?? ""}
@@ -107,14 +107,14 @@ export function BudgetFallbacksEditor({ value, onChange, availableModels }: Budg
             </div>
 
             <div className="flex items-center justify-center -my-1 mb-2">
-              <div className="bg-amber-50 text-amber-600 px-3 py-0.5 rounded-full text-[10px] font-bold border border-amber-100 flex items-center gap-1">
+              <div className="bg-warning/10 text-warning px-3 py-0.5 rounded-full text-[10px] font-bold border border-warning/15 flex items-center gap-1">
                 <ArrowDown className="w-3 h-3" />
                 IF BUDGET EXCEEDED, TRY
               </div>
             </div>
 
             <div>
-              <label className="block text-xs font-medium text-gray-600 mb-1">Fallback Models</label>
+              <label className="block text-xs font-medium text-muted-foreground mb-1">Fallback Models</label>
               <MultiSelect
                 options={availableFallbackOptions.map((m) => ({ label: m, value: m }))}
                 value={entry.fallbackModels}
@@ -125,7 +125,7 @@ export function BudgetFallbacksEditor({ value, onChange, availableModels }: Budg
                 className="w-full"
               />
               {entry.fallbackModels.length > 1 && (
-                <div className="text-[10px] text-gray-400 mt-1 ml-1">
+                <div className="text-[10px] text-muted-foreground mt-1 ml-1">
                   Tried in order; first model still within its own budget is used
                 </div>
               )}

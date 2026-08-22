@@ -90,7 +90,7 @@ def test_routing_strategy_init_invalid_strategy(model_list):
     router = Router(model_list=model_list)
 
     # Test common mistake: "simple" instead of "simple-shuffle"
-    with pytest.raises(ValueError) as exc_info:
+    with pytest.raises(ValueError, match="usage-based-routing', 'provider-budget-routing'\\]\\. Check") as exc_info:
         router.routing_strategy_init(
             routing_strategy="simple", routing_strategy_args={}
         )
@@ -106,7 +106,7 @@ def test_routing_strategy_init_invalid_strategy(model_list):
     assert "Router SDK" in error_msg
 
     # Test completely invalid strategy
-    with pytest.raises(ValueError) as exc_info:
+    with pytest.raises(ValueError, match="usage-based-routing', 'provider-budget-routing'\\]\\. Check") as exc_info:
         router.routing_strategy_init(
             routing_strategy="not-a-real-strategy", routing_strategy_args={}
         )
@@ -423,10 +423,11 @@ def test_get_timeout(model_list):
 def test_handle_mock_testing_fallbacks(model_list, fallback_kwarg, expected_error):
     """Test if the '_handle_mock_testing_fallbacks' function is working correctly"""
     router = Router(model_list=model_list)
+    data = {
+        fallback_kwarg: True,
+    }
+
     with pytest.raises(expected_error):
-        data = {
-            fallback_kwarg: True,
-        }
         router._handle_mock_testing_fallbacks(
             kwargs=data,
         )
@@ -435,10 +436,11 @@ def test_handle_mock_testing_fallbacks(model_list, fallback_kwarg, expected_erro
 def test_handle_mock_testing_rate_limit_error(model_list):
     """Test if the '_handle_mock_testing_rate_limit_error' function is working correctly"""
     router = Router(model_list=model_list)
+    data = {
+        "mock_testing_rate_limit_error": True,
+    }
+
     with pytest.raises(litellm.RateLimitError):
-        data = {
-            "mock_testing_rate_limit_error": True,
-        }
         router._handle_mock_testing_rate_limit_error(
             kwargs=data,
         )
@@ -754,25 +756,19 @@ async def test_routing_strategy_pre_call_checks(model_list, sync_mode):
                 )
             ),
         ):
-            try:
+            with pytest.raises(litellm.RateLimitError):
                 await router.async_routing_strategy_pre_call_checks(
                     deployment, litellm_logging_obj
                 )
-                pytest.fail("Exception was not raised")
-            except Exception as e:
-                assert isinstance(e, litellm.RateLimitError)
 
         ## WITH EXCEPTION - generic error
         with patch.object(
             callback, "async_pre_call_check", AsyncMock(side_effect=Exception("Error"))
         ):
-            try:
+            with pytest.raises(Exception, match="Error"):
                 await router.async_routing_strategy_pre_call_checks(
                     deployment, litellm_logging_obj
                 )
-                pytest.fail("Exception was not raised")
-            except Exception as e:
-                assert isinstance(e, Exception)
 
 
 @pytest.mark.parametrize(
@@ -1864,21 +1860,14 @@ def testgenerate_model_id_with_deployment_model_name(model_list):
         pytest.fail(f"Failed with valid model_group: {e}")
 
     # Test case 2: Edge case with None model_group (this should fail as expected - our fix prevents this from happening)
-    try:
-        result = router.generate_model_id(
-            model_group=None, litellm_params=litellm_params
-        )
-        pytest.fail(
-            "Expected TypeError when model_group is None - this confirms our fix is needed"
-        )
-    except TypeError as e:
-        # After optimization, error message changed but still fails appropriately on None
-        assert "unsupported operand type(s) for +=" in str(
-            e
-        ) or "expected str instance, NoneType found" in str(e)
-        print(f"✓ Correctly failed with None model_group (as expected): {e}")
-    except Exception as e:
-        pytest.fail(f"Unexpected error with None model_group: {e}")
+    with pytest.raises(TypeError) as exc_info:
+        router.generate_model_id(model_group=None, litellm_params=litellm_params)
+    # After optimization, error message changed but still fails appropriately on None
+    error_str = str(exc_info.value)
+    assert (
+        "unsupported operand type(s) for +=" in error_str
+        or "expected str instance, NoneType found" in error_str
+    )
 
     # Test case 3: Edge case with None key in litellm_params
     litellm_params_with_none_key = {

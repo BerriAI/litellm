@@ -1,5 +1,4 @@
 import React, { useState, useEffect } from "react";
-import { Tag } from "antd";
 import { z } from "zod/v4";
 import { Policy, PolicyCreateRequest, PolicyUpdateRequest } from "@/components/policies/types";
 import { Guardrail } from "@/components/guardrails/types";
@@ -130,17 +129,13 @@ interface ModePickerProps {
 const modeCardClass = (isSelected: boolean) =>
   [
     "relative flex-1 cursor-pointer rounded-xl border-2 px-5 py-6 transition-all",
-    isSelected
-      ? "border-indigo-600 bg-indigo-50 dark:border-indigo-400 dark:bg-indigo-950"
-      : "border-border bg-background",
+    isSelected ? "border-info bg-info/10" : "border-border bg-background",
   ].join(" ");
 
 const modeIconClass = (isSelected: boolean) =>
   [
     "mb-4 flex size-10 items-center justify-center rounded-[10px]",
-    isSelected
-      ? "bg-indigo-100 text-indigo-600 dark:bg-indigo-900 dark:text-indigo-300"
-      : "bg-muted text-muted-foreground",
+    isSelected ? "bg-info/15 text-info" : "bg-muted text-muted-foreground",
   ].join(" ");
 
 const ModePicker: React.FC<ModePickerProps> = ({ selected, onSelect }) => (
@@ -345,10 +340,7 @@ const AddPolicyForm: React.FC<AddPolicyFormProps> = ({
           <ModePicker selected={selectedMode} onSelect={setSelectedMode} />
 
           {selectedMode === "flow_builder" && (
-            <Alert
-              variant="info"
-              className="mt-4 border border-indigo-200 bg-indigo-50 dark:border-indigo-800 dark:bg-indigo-950"
-            >
+            <Alert variant="info" className="mt-4 border border-info/20 bg-info/10">
               <AlertTitle>
                 You&apos;ll be redirected to the full-screen Flow Builder to design your policy logic visually.
               </AlertTitle>
@@ -474,9 +466,9 @@ const AddPolicyForm: React.FC<AddPolicyFormProps> = ({
                     </span>
                     <div className="flex flex-wrap gap-1">
                       {resolvedGuardrails.map((g) => (
-                        <Tag key={g} color="blue">
+                        <Badge key={g} variant="info">
                           {g}
-                        </Tag>
+                        </Badge>
                       ))}
                     </div>
                   </AlertDescription>

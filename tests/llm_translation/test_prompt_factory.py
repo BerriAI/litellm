@@ -1288,7 +1288,8 @@ def test_just_system_message():
             model="anthropic.claude-3-sonnet-20240229-v1:0",
             llm_provider="bedrock",
         )
-        assert "bedrock requires at least one non-system message" in str(e.value)
+
+    assert "bedrock requires at least one non-system message" in str(e.value)
 
 
 def test_convert_generic_image_chunk_to_openai_image_obj():
@@ -1844,7 +1845,7 @@ def test_parse_tool_call_arguments_malformed_json():
         parse_tool_call_arguments,
     )
 
-    with pytest.raises(ValueError) as exc_info:
+    with pytest.raises(ValueError, match="Failed to parse tool call arguments for tool 'load_skill") as exc_info:
         parse_tool_call_arguments(
             '{"skill_name": "pptx',
             tool_name="load_skill",
@@ -1876,7 +1877,7 @@ def test_convert_to_anthropic_tool_invoke_malformed_json():
         }
     ]
 
-    with pytest.raises(ValueError) as exc_info:
+    with pytest.raises(ValueError, match="Failed to parse tool call arguments for tool 'bad_tool") as exc_info:
         convert_to_anthropic_tool_invoke(tool_calls)
 
     error_msg = str(exc_info.value)
@@ -2022,7 +2023,7 @@ def test_parse_tool_call_arguments_still_raises_for_unrepairable():
         parse_tool_call_arguments,
     )
 
-    with pytest.raises(ValueError) as exc_info:
+    with pytest.raises(ValueError, match="Failed to parse tool call arguments for tool 'test_tool") as exc_info:
         parse_tool_call_arguments(
             '{"key": "unterminated',
             tool_name="test_tool",

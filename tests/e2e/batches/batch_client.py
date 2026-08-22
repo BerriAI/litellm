@@ -40,8 +40,15 @@ class FileObject(BaseModel):
 
 
 class FileList(BaseModel):
+    """GET /v1/files page. The cursors are modelled because they are part of the
+    page's isolation contract: they must address rows in `data`, never rows the
+    caller was not allowed to see."""
+
     object: str | None = None
     data: list[FileObject] = []
+    first_id: str | None = None
+    last_id: str | None = None
+    has_more: bool | None = None
 
 
 class BatchErrorItem(BaseModel):

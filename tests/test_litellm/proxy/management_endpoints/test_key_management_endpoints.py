@@ -10179,7 +10179,7 @@ async def test_update_key_creator_reassigned_key_blocked(monkeypatch):
     mock_request = MagicMock()
     mock_request.query_params = {}
 
-    with pytest.raises(Exception) as exc:
+    with pytest.raises(Exception, match='User can only create keys for themselves\\. Got') as exc:
         await update_key_fn(
             request=mock_request,
             data=UpdateKeyRequest(key=test_hashed_token, key_alias="hijacked"),
@@ -11037,8 +11037,7 @@ class TestKeyAliasSkipValidationOnUnchanged:
 
         assert new_alias != existing_alias
         with pytest.raises(ProxyException):
-            if new_alias != existing_alias:
-                _validate_key_alias_format(new_alias)
+            _validate_key_alias_format(new_alias)
 
     @pytest.mark.asyncio
     async def test_update_key_changed_to_valid_alias_passes(
@@ -13508,9 +13507,14 @@ async def test_info_key_fn_includes_model_max_budget_usage(monkeypatch):
     mock_prisma_client = AsyncMock()
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
     mock_user_api_key_cache = AsyncMock()
-    mock_user_api_key_cache.async_get_cache = AsyncMock(return_value=0.23)
     monkeypatch.setattr(
         "litellm.proxy.proxy_server.user_api_key_cache", mock_user_api_key_cache
+    )
+    # A real cache seeded at the real counter key: the spend only comes back if
+    # the endpoint computed virtual_key_spend:hashed_token_budget_test:gpt-4o:1d.
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.model_max_budget_limiter.dual_cache",
+        await _budget_cache({"virtual_key_spend:hashed_token_budget_test:gpt-4o:1d": 0.23}),
     )
 
     mock_key_info = MagicMock(spec=LiteLLM_VerificationToken)
@@ -13569,6 +13573,10 @@ async def test_info_key_fn_no_model_max_budget_skips_usage(monkeypatch):
     monkeypatch.setattr(
         "litellm.proxy.proxy_server.user_api_key_cache", mock_user_api_key_cache
     )
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.model_max_budget_limiter.dual_cache",
+        mock_user_api_key_cache,
+    )
 
     mock_key_info = MagicMock(spec=LiteLLM_VerificationToken)
     mock_key_info.token = test_key_token
@@ -13622,9 +13630,14 @@ async def test_info_key_fn_v2_includes_model_max_budget_usage(monkeypatch):
     mock_prisma_client = AsyncMock()
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
     mock_user_api_key_cache = AsyncMock()
-    mock_user_api_key_cache.async_get_cache = AsyncMock(return_value=0.55)
     monkeypatch.setattr(
         "litellm.proxy.proxy_server.user_api_key_cache", mock_user_api_key_cache
+    )
+    # A real cache seeded at the real counter key: the spend only comes back if
+    # the endpoint computed virtual_key_spend:hashed_token_v2_test:gpt-4o:7d.
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.model_max_budget_limiter.dual_cache",
+        await _budget_cache({"virtual_key_spend:hashed_token_v2_test:gpt-4o:7d": 0.55}),
     )
 
     mock_key = MagicMock(spec=LiteLLM_VerificationToken)
@@ -13681,9 +13694,14 @@ async def test_info_key_fn_budget_table_fallback(monkeypatch):
     mock_prisma_client = AsyncMock()
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
     mock_user_api_key_cache = AsyncMock()
-    mock_user_api_key_cache.async_get_cache = AsyncMock(return_value=1.20)
     monkeypatch.setattr(
         "litellm.proxy.proxy_server.user_api_key_cache", mock_user_api_key_cache
+    )
+    # A real cache seeded at the real counter key: the spend only comes back if
+    # the endpoint computed virtual_key_spend:hashed_token_budget_table_test:bedrock/anthropic.claude-opus-4:30d.
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.model_max_budget_limiter.dual_cache",
+        await _budget_cache({"virtual_key_spend:hashed_token_budget_table_test:bedrock/anthropic.claude-opus-4:30d": 1.20}),
     )
 
     mock_key_info = MagicMock(spec=LiteLLM_VerificationToken)
@@ -13749,9 +13767,14 @@ async def test_info_key_fn_v2_budget_table_fallback(monkeypatch):
     mock_prisma_client = AsyncMock()
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
     mock_user_api_key_cache = AsyncMock()
-    mock_user_api_key_cache.async_get_cache = AsyncMock(return_value=2.50)
     monkeypatch.setattr(
         "litellm.proxy.proxy_server.user_api_key_cache", mock_user_api_key_cache
+    )
+    # A real cache seeded at the real counter key: the spend only comes back if
+    # the endpoint computed virtual_key_spend:hashed_token_v2_bt_test:bedrock/anthropic.claude-opus-4:30d.
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.model_max_budget_limiter.dual_cache",
+        await _budget_cache({"virtual_key_spend:hashed_token_v2_bt_test:bedrock/anthropic.claude-opus-4:30d": 2.50}),
     )
 
     mock_key = MagicMock(spec=LiteLLM_VerificationToken)
@@ -13794,8 +13817,13 @@ async def test_info_key_fn_v2_budget_table_fallback(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_info_key_fn_provider_prefix_spend_fallback(monkeypatch):
-    """Cached spend for 'gpt-4o' matches budget key 'openai/gpt-4o' via suffix match."""
+async def test_info_key_fn_reads_the_configured_budget_model_key(monkeypatch):
+    """/key/info reads the one counter enforcement reads: the configured budget model.
+
+    It used to probe a second, provider-stripped key because the counter was
+    written under the request model instead, which is what let a key report zero
+    usage while being blocked at 429.
+    """
     from unittest.mock import AsyncMock, MagicMock
 
     from litellm.proxy._types import LiteLLM_VerificationToken
@@ -13809,9 +13837,14 @@ async def test_info_key_fn_provider_prefix_spend_fallback(monkeypatch):
     mock_prisma_client = AsyncMock()
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
     mock_user_api_key_cache = AsyncMock()
-    mock_user_api_key_cache.async_get_cache = AsyncMock(side_effect=[None, 0.75])
     monkeypatch.setattr(
         "litellm.proxy.proxy_server.user_api_key_cache", mock_user_api_key_cache
+    )
+    # A real cache seeded at the real counter key: the spend only comes back if
+    # the endpoint computed virtual_key_spend:hashed_token_prefix_test:openai/gpt-4o:7d.
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.model_max_budget_limiter.dual_cache",
+        await _budget_cache({"virtual_key_spend:hashed_token_prefix_test:openai/gpt-4o:7d": 0.75}),
     )
 
     mock_key_info = MagicMock(spec=LiteLLM_VerificationToken)
@@ -13848,7 +13881,22 @@ async def test_info_key_fn_provider_prefix_spend_fallback(monkeypatch):
     assert "model_max_budget_usage" in result["info"]
     usage = result["info"]["model_max_budget_usage"]
     assert usage["openai/gpt-4o"]["current_spend"] == 0.75
-    assert mock_user_api_key_cache.async_get_cache.await_count == 2
+
+
+async def _budget_cache(seeded):
+    """A real DualCache holding spend at the given LITERAL counter keys.
+
+    The keys are spelled out in full on purpose. Seeding via
+    model_budget_spend_cache_key would move the seed and the read together, so
+    any change to the key format would still match itself and these tests could
+    never fail, which is the exact bug they exist to catch.
+    """
+    from litellm.caching.caching import DualCache
+
+    cache = DualCache()
+    for key, spend in seeded.items():
+        await cache.async_set_cache(key, spend)
+    return cache
 
 
 @pytest.mark.asyncio
@@ -13873,19 +13921,16 @@ async def test_build_model_max_budget_usage_reads_current_cache_window():
         _build_model_max_budget_usage,
     )
 
-    mock_user_api_key_cache = AsyncMock()
-    mock_user_api_key_cache.async_get_cache = AsyncMock(return_value=0.30)
+    cache = await _budget_cache({"virtual_key_spend:some-hash:gpt-4o:30d": 0.30})
 
     result = await _build_model_max_budget_usage(
         api_key_hash="some-hash",
         model_max_budget={"gpt-4o": {"budget_limit": 1.0, "time_period": "30d"}},
-        user_api_key_cache=mock_user_api_key_cache,
+        user_api_key_cache=cache,
     )
 
+    # 0.30 comes back only if the key matched virtual_key_spend:some-hash:gpt-4o:30d.
     assert result["gpt-4o"]["current_spend"] == 0.30
-    mock_user_api_key_cache.async_get_cache.assert_awaited_once_with(
-        key="virtual_key_spend:some-hash:gpt-4o:30d"
-    )
 
 
 @pytest.mark.asyncio
@@ -13916,8 +13961,7 @@ async def test_build_model_max_budget_usage_skips_model_without_duration():
         _build_model_max_budget_usage,
     )
 
-    mock_user_api_key_cache = AsyncMock()
-    mock_user_api_key_cache.async_get_cache = AsyncMock(return_value=0.10)
+    cache = await _budget_cache({"virtual_key_spend:some-hash:gpt-4o:1d": 0.10})
 
     result = await _build_model_max_budget_usage(
         api_key_hash="some-hash",
@@ -13925,11 +13969,10 @@ async def test_build_model_max_budget_usage_skips_model_without_duration():
             "gpt-4o": {"budget_limit": 1.0, "time_period": "1d"},
             "gpt-3.5-turbo": {"budget_limit": 0.5},
         },
-        user_api_key_cache=mock_user_api_key_cache,
+        user_api_key_cache=cache,
     )
-    assert "gpt-4o" in result
+    assert result["gpt-4o"]["current_spend"] == 0.10
     assert "gpt-3.5-turbo" not in result
-    assert mock_user_api_key_cache.async_get_cache.await_count == 1
 
 
 @pytest.mark.asyncio
@@ -13962,8 +14005,7 @@ async def test_build_model_max_budget_usage_invalid_budget_config_skipped():
         _build_model_max_budget_usage,
     )
 
-    mock_user_api_key_cache = AsyncMock()
-    mock_user_api_key_cache.async_get_cache = AsyncMock(return_value=0.20)
+    cache = await _budget_cache({"virtual_key_spend:some-hash:gpt-3.5-turbo:7d": 0.20})
 
     result = await _build_model_max_budget_usage(
         api_key_hash="some-hash",
@@ -13971,32 +14013,35 @@ async def test_build_model_max_budget_usage_invalid_budget_config_skipped():
             "gpt-4o": {"max_budget": "not-a-number", "budget_duration": "1d"},
             "gpt-3.5-turbo": {"budget_limit": 0.5, "time_period": "7d"},
         },
-        user_api_key_cache=mock_user_api_key_cache,
+        user_api_key_cache=cache,
     )
     assert "gpt-4o" not in result
-    assert "gpt-3.5-turbo" in result
-    assert mock_user_api_key_cache.async_get_cache.await_count == 1
+    assert result["gpt-3.5-turbo"]["current_spend"] == 0.20
 
 
 @pytest.mark.asyncio
-async def test_build_model_max_budget_usage_provider_prefix_cache_fallback():
+async def test_build_model_max_budget_usage_reads_only_the_configured_model_key():
+    """One lookup, at the configured budget model.
+
+    The counter is written under the name the operator configured, so probing a
+    provider-stripped variant would read a key nothing writes.
+    """
     from unittest.mock import AsyncMock
 
     from litellm.proxy.management_endpoints.key_management_endpoints import (
         _build_model_max_budget_usage,
     )
 
-    mock_user_api_key_cache = AsyncMock()
-    mock_user_api_key_cache.async_get_cache = AsyncMock(side_effect=[None, 0.55])
+    cache = await _budget_cache({"virtual_key_spend:test-hash:openai/gpt-4o:7d": 0.55})
 
     result = await _build_model_max_budget_usage(
         api_key_hash="test-hash",
         model_max_budget={"openai/gpt-4o": {"budget_limit": 2.0, "time_period": "7d"}},
-        user_api_key_cache=mock_user_api_key_cache,
+        user_api_key_cache=cache,
     )
 
+    # Seeded only under the configured name, so a provider-stripped probe reads 0.0.
     assert result["openai/gpt-4o"]["current_spend"] == 0.55
-    assert mock_user_api_key_cache.async_get_cache.await_count == 2
 
 
 def test_list_keys_substring_matching_param_defaults_to_false():
@@ -15513,6 +15558,207 @@ async def test_regenerate_key_output_token_estimate_lowered_rejected_for_non_adm
             litellm_changed_by=None,
             user_api_key_cache=MagicMock(),
             proxy_logging_obj=MagicMock(),
+        )
+
+    assert exc.value.status_code == 403
+    assert "Only proxy admins can set" in str(exc.value.detail)
+
+
+_BATCH_LIMIT = "batch_enqueued_token_limit"
+
+
+@pytest.mark.parametrize(
+    "label, request_body, existing_metadata, allowed",
+    [
+        ("set on a key with none stored", {"metadata": {_BATCH_LIMIT: 50000}}, None, False),
+        ("raised above the stored limit", {"metadata": {_BATCH_LIMIT: 200000}}, {_BATCH_LIMIT: 100000}, False),
+        ("cleared by replacing the blob", {"metadata": {}}, {_BATCH_LIMIT: 100000}, False),
+        ("resent unchanged", {"metadata": {_BATCH_LIMIT: 100000}}, {_BATCH_LIMIT: 100000}, True),
+        ("left untouched", {}, {_BATCH_LIMIT: 100000}, True),
+    ],
+)
+def test_batch_enqueued_token_limit_admin_gate_matrix(label, request_body, existing_metadata, allowed):
+    """A non-admin may only leave a key's stored batch enqueued-token limit as it is.
+
+    When set, the limit replaces the standard RPM/TPM checks for batch
+    submissions, so a key holder writing it would pick their own batch quota.
+    Resending the stored value is what the edit form produces on every save
+    and has to stay allowed.
+    """
+    from litellm.proxy.auth.auth_utils import (
+        enforce_batch_enqueued_token_limit_is_admin_only,
+    )
+
+    def _call(caller):
+        enforce_batch_enqueued_token_limit_is_admin_only(
+            data=UpdateKeyRequest(key="sk-1", **request_body),
+            existing_metadata=existing_metadata,
+            user_api_key_dict=caller,
+            entity="key",
+        )
+
+    non_admin = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        api_key="sk-non-admin",
+        user_id="alice",
+    )
+    if allowed:
+        _call(non_admin)
+    else:
+        with pytest.raises(HTTPException) as exc:
+            _call(non_admin)
+        assert exc.value.status_code == 403
+        assert "Only proxy admins can set" in str(exc.value.detail)
+
+    _call(
+        UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            api_key="sk-admin",
+            user_id="admin",
+        )
+    )
+
+
+@pytest.mark.asyncio
+async def test_generate_key_batch_enqueued_token_limit_rejected_for_non_admin():
+    """A non-admin self-minting a key with the limit would replace the standard
+    batch RPM/TPM checks with a cap of their own choosing."""
+    with patch("litellm.proxy.proxy_server.prisma_client", AsyncMock()):
+        with pytest.raises(HTTPException) as exc:
+            await _common_key_generation_helper(
+                data=GenerateKeyRequest(metadata={_BATCH_LIMIT: 100000}, rpm_limit=2),
+                user_api_key_dict=UserAPIKeyAuth(
+                    user_role=LitellmUserRoles.INTERNAL_USER,
+                    api_key="sk-alice",
+                    user_id="alice",
+                ),
+                litellm_changed_by=None,
+                team_table=None,
+            )
+    assert int(getattr(exc.value, "status_code", 0)) == 403
+    assert "Only proxy admins can set" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_update_key_batch_enqueued_token_limit_raised_rejected_for_non_admin(monkeypatch):
+    """/key/update is reachable by the key's own holder, so the gate has to
+    fire inside the update path itself rather than only at generation."""
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        update_key_fn,
+    )
+
+    token = "d1b2c3d4e5f6789012345678901234567890123456789012345678901234abcd"
+    _wire_update_key_fn(monkeypatch, _estimate_key_row(token, {_BATCH_LIMIT: 100000}))
+
+    mock_request = MagicMock()
+    mock_request.query_params = {}
+
+    with pytest.raises(ProxyException) as exc:
+        await update_key_fn(
+            request=mock_request,
+            data=UpdateKeyRequest(key=token, metadata={_BATCH_LIMIT: 10**12}),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.INTERNAL_USER,
+                api_key="sk-internal",
+                user_id="internal_user",
+            ),
+            litellm_changed_by=None,
+        )
+
+    assert str(exc.value.code) == "403"
+    assert "Only proxy admins can set" in str(exc.value.message)
+
+
+@pytest.mark.asyncio
+async def test_update_key_batch_enqueued_token_limit_unchanged_allows_non_admin_edit(monkeypatch):
+    """The edit form resends every field it renders, so gating on presence
+    would 403 a key owner renaming a key that carries an admin-set limit."""
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        update_key_fn,
+    )
+
+    token = "e1b2c3d4e5f6789012345678901234567890123456789012345678901234abcd"
+    _wire_update_key_fn(monkeypatch, _estimate_key_row(token, {_BATCH_LIMIT: 100000}))
+
+    mock_request = MagicMock()
+    mock_request.query_params = {}
+
+    result = await update_key_fn(
+        request=mock_request,
+        data=UpdateKeyRequest(key=token, key_alias="my-alias", metadata={_BATCH_LIMIT: 100000}),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.INTERNAL_USER,
+            api_key="sk-internal",
+            user_id="internal_user",
+        ),
+        litellm_changed_by=None,
+    )
+
+    assert result is not None
+
+
+@pytest.mark.asyncio
+async def test_regenerate_key_batch_enqueued_token_limit_rejected_for_non_admin():
+    """/key/regenerate runs the request body through prepare_key_update_data
+    exactly as an update does, so it is a third write path into the field."""
+    from litellm.proxy._types import RegenerateKeyRequest
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _execute_virtual_key_regeneration,
+    )
+
+    token = "f1b2c3d4e5f6789012345678901234567890123456789012345678901234abcd"
+    key_in_db = LiteLLM_VerificationToken(
+        token=token,
+        user_id="internal_user",
+        metadata={_BATCH_LIMIT: 100000},
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await _execute_virtual_key_regeneration(
+            prisma_client=AsyncMock(),
+            key_in_db=key_in_db,
+            hashed_api_key=token,
+            key="sk-original",
+            data=RegenerateKeyRequest(key="sk-original", metadata={_BATCH_LIMIT: 10**12}),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.INTERNAL_USER,
+                api_key="sk-internal",
+                user_id="internal_user",
+            ),
+            litellm_changed_by=None,
+            user_api_key_cache=MagicMock(),
+            proxy_logging_obj=MagicMock(),
+        )
+
+    assert exc.value.status_code == 403
+    assert "Only proxy admins can set" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_bulk_key_update_batch_enqueued_token_limit_rejected_for_non_admin():
+    """Bulk team-key updates run through _process_single_key_update, not
+    /key/update's validator, so the gate must also live on that path."""
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _process_single_key_update,
+    )
+
+    token = "a2b2c3d4e5f6789012345678901234567890123456789012345678901234abcd"
+    existing = _estimate_key_row(token, {_BATCH_LIMIT: 100000})
+
+    with pytest.raises(HTTPException) as exc:
+        await _process_single_key_update(
+            update_key_request=UpdateKeyRequest(key=token, metadata={_BATCH_LIMIT: 10**12}),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.INTERNAL_USER,
+                api_key="sk-internal",
+                user_id="internal_user",
+            ),
+            litellm_changed_by=None,
+            prisma_client=None,
+            user_api_key_cache=MagicMock(),
+            proxy_logging_obj=MagicMock(),
+            llm_router=None,
+            existing_key_row=existing,
         )
 
     assert exc.value.status_code == 403

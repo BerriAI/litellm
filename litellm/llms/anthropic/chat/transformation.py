@@ -1827,6 +1827,12 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             custom_llm_provider=self.custom_llm_provider,
         )
 
+        AnthropicModelInfo.maybe_drop_disabled_thinking(
+            model=model,
+            optional_params=optional_params,
+            custom_llm_provider=self._resolved_provider,
+        )
+
         headers = self.update_headers_with_optional_anthropic_beta(headers=headers, optional_params=optional_params)
 
         # === Tool-name sanitization (single chokepoint) ===
@@ -2216,7 +2222,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
     def calculate_usage(
         self,
-        usage_object: dict,
+        usage_object: Mapping[str, Any],
         reasoning_content: str | None,
         completion_response: dict | None = None,
         speed: str | None = None,
