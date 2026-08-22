@@ -189,17 +189,6 @@ class AnthropicResponsesStreamWrapper:
             block_idx = self._item_id_to_block_index.get(item_id, -1) if item_id else self._current_block_index
             if block_idx < 0:
                 return
-            done_item_type: Final = (
-                getattr(item, "type", None) or (item.get("type") if isinstance(item, dict) else None) if item else None
-            )
-            if done_item_type == "reasoning" and item_id:
-                self._chunk_queue.append(
-                    {
-                        "type": "content_block_delta",
-                        "index": block_idx,
-                        "delta": {"type": "signature_delta", "signature": item_id},
-                    }
-                )
             self._chunk_queue.append(
                 {
                     "type": "content_block_stop",

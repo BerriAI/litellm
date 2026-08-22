@@ -97,10 +97,10 @@ def _reasoning_input_items(msg: "AllMessageValues") -> list[dict[str, object]]: 
     stored: Final = [_reasoning_item_to_response_input(r_item) for r_item in _get_reasoning_items(msg)]
     if stored:
         return stored
-    from_thinking: Final = responses_reasoning_item_from_thinking_blocks(
-        cast(Iterable[Mapping[str, Any]], msg.get("thinking_blocks") or ())  # cast-ok: untyped client thinking blocks
-    )
-    return [from_thinking] if from_thinking is not None else []
+    raw_blocks: Final = msg.get("thinking_blocks") or ()
+    blocks: Final = cast("Iterable[ChatCompletionThinkingBlock]", raw_blocks)  # cast-ok: untyped client json
+    from_thinking: Final = responses_reasoning_item_from_thinking_blocks(blocks)
+    return [] if from_thinking is None else [dict(from_thinking)]
 
 
 def _build_reasoning_item(

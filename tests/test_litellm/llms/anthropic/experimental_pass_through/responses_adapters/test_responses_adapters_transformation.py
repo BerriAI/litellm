@@ -513,15 +513,14 @@ class TestTranslateMessagesToResponsesInput:
         result = _translate_messages(messages)
         assert "id" not in result[0]
 
-    def test_thinking_blocks_sharing_a_signature_become_one_reasoning_item(self):
-        """Summary parts of one upstream reasoning item are regrouped by their signature."""
+    def test_consecutive_thinking_blocks_become_one_reasoning_item(self):
+        """Summary parts of one upstream reasoning item are regrouped into that item."""
         messages = [
             {
                 "role": "assistant",
                 "content": [
-                    {"type": "thinking", "thinking": "First part.", "signature": "rs_abc123"},
-                    {"type": "thinking", "thinking": "Second part.", "signature": "rs_abc123"},
-                    {"type": "thinking", "thinking": "A later item.", "signature": "rs_def456"},
+                    {"type": "thinking", "thinking": "First part."},
+                    {"type": "thinking", "thinking": "Second part."},
                 ],
             }
         ]
@@ -533,12 +532,25 @@ class TestTranslateMessagesToResponsesInput:
                     {"type": "summary_text", "text": "First part."},
                     {"type": "summary_text", "text": "Second part."},
                 ],
-            },
-            {
-                "type": "reasoning",
-                "summary": [{"type": "summary_text", "text": "A later item."}],
-            },
+            }
         ]
+
+    def test_a_tool_call_splits_the_reasoning_items_around_it(self):
+        """Thinking on either side of a tool call belongs to two different reasoning items."""
+        messages = [
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": "Before the call."},
+                    {"type": "tool_use", "id": "call_1", "name": "get_weather", "input": {"city": "Denver"}},
+                    {"type": "thinking", "thinking": "After the call."},
+                ],
+            }
+        ]
+        result = _translate_messages(messages)
+        assert [item["type"] for item in result] == ["reasoning", "function_call", "reasoning"]
+        assert result[0]["summary"] == [{"type": "summary_text", "text": "Before the call."}]
+        assert result[2]["summary"] == [{"type": "summary_text", "text": "After the call."}]
 
     def test_thinking_and_text_stay_separate(self):
         """The visible answer stays the only thing in the assistant message."""
@@ -1237,12 +1249,12 @@ class TestTranslateResponse:
         result: Any = _ADAPTER.translate_response(response)
         assert result["content"] == []
 
-    def test_reasoning_item_id_becomes_thinking_signature(self):
-        """The reasoning item id rides back as the signature so the next turn can regroup it."""
+    def test_reasoning_item_id_never_becomes_a_thinking_signature(self):
+        """Only Anthropic can sign a thinking block, so a stand-in signature is never invented."""
         reasoning = _make_reasoning_item(["Part one.", "Part two."], item_id="rs_abc123")
         response = _make_mock_response(output=[reasoning])
         result: Any = _ADAPTER.translate_response(response)
-        assert [block["signature"] for block in result["content"]] == ["rs_abc123", "rs_abc123"]
+        assert [block["signature"] for block in result["content"]] == [None, None]
 
     def test_dict_reasoning_item_becomes_thinking_block(self):
         """A reasoning item arriving as a plain dict is kept, not dropped."""
@@ -1257,8 +1269,18 @@ class TestTranslateResponse:
         )
         result: Any = _ADAPTER.translate_response(response)
         assert result["content"] == [
-            {"type": "thinking", "thinking": "Weighing the options.", "signature": "rs_dict_1"}
+            {"type": "thinking", "thinking": "Weighing the options.", "signature": None}
         ]
+
+    def test_thinking_blocks_are_dropped_when_replayed_to_anthropic(self):
+        """Replaying this turn to an Anthropic model must not send a signature it cannot verify."""
+        from litellm.litellm_core_utils.prompt_templates.factory import (
+            _drop_unsignable_thinking_blocks,
+        )
+
+        response = _make_mock_response(output=[_make_reasoning_item(["Part one."], item_id="rs_abc123")])
+        result: Any = _ADAPTER.translate_response(response)
+        assert _drop_unsignable_thinking_blocks(result["content"]) == []
 
     def test_usage_mapped_correctly(self):
         """Input/output tokens from ResponseAPIUsage are mapped to AnthropicUsage."""
