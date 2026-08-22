@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from types import SimpleNamespace
 from typing import Any, Dict
 from unittest.mock import AsyncMock, MagicMock
@@ -303,7 +304,7 @@ def test_resolve_routing_plugins_rejects_non_routing_plugin(tmp_path):
     plugin_file = tmp_path / "bad_rs_plugin.py"
     plugin_file.write_text("not_a_plugin = object()\n")
 
-    with pytest.raises(ValueError, match="router_settings.plugins"):
+    with pytest.raises(ValueError, match=re.escape("router_settings.plugins")):
         resolve_routing_plugins(
             plugin_paths=["bad_rs_plugin.not_a_plugin"],
             config_file_path=str(tmp_path / "config.yaml"),
