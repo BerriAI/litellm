@@ -290,6 +290,9 @@ def get_llm_provider(
                     elif endpoint == litellm.NscaleConfig.API_BASE_URL:
                         custom_llm_provider = "nscale"
                         dynamic_api_key = litellm.NscaleConfig.get_api_key()
+                    elif endpoint == litellm.NebiusConfig.API_BASE_URL.removeprefix("https://"):
+                        custom_llm_provider = "nebius"  # rebind-ok: resolve the provider from its canonical endpoint
+                        dynamic_api_key = api_key or get_secret_str("NEBIUS_API_KEY")
                     elif endpoint == "dashscope-intl.aliyuncs.com/compatible-mode/v1":
                         custom_llm_provider = "dashscope"
                         dynamic_api_key = get_secret_str("DASHSCOPE_API_KEY")
@@ -608,7 +611,9 @@ def _get_openai_compatible_provider_info(
         api_base = api_base or get_secret("LLAMA_API_BASE") or "https://api.llama.com/compat/v1"
         dynamic_api_key = api_key or get_secret_str("LLAMA_API_KEY")
     elif custom_llm_provider == "nebius":
-        api_base = api_base or get_secret("NEBIUS_API_BASE") or "https://api.studio.nebius.ai/v1"
+        api_base = (  # rebind-ok: fill the provider default when the caller did not pass an endpoint
+            api_base or get_secret("NEBIUS_API_BASE") or litellm.NebiusConfig.API_BASE_URL
+        )
         dynamic_api_key = api_key or get_secret_str("NEBIUS_API_KEY")
     elif custom_llm_provider == "ollama":
         api_base = api_base or get_secret("OLLAMA_API_BASE") or "http://localhost:11434"

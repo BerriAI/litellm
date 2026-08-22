@@ -6222,7 +6222,7 @@ def embedding(
             or custom_llm_provider == "litellm_proxy"
             or (model in litellm.open_ai_embedding_models and custom_llm_provider is None)
         ):
-            api_base = (
+            api_base = (  # rebind-ok: fill the provider default for the embedding request
                 api_base
                 or litellm.api_base
                 or get_secret_str("OPENAI_BASE_URL")
@@ -6700,7 +6700,12 @@ def embedding(
             )
         elif custom_llm_provider == "nebius":
             api_key = api_key or litellm.api_key or get_secret_str("NEBIUS_API_KEY")
-            api_base = api_base or litellm.api_base or get_secret_str("NEBIUS_API_BASE") or "api.studio.nebius.ai/v1"
+            api_base = (
+                api_base
+                or litellm.api_base
+                or get_secret_str("NEBIUS_API_BASE")
+                or litellm.NebiusConfig.API_BASE_URL
+            )
 
             response = openai_chat_completions.embedding(
                 model=model,

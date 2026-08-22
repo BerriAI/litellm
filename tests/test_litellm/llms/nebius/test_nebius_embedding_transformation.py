@@ -1,41 +1,35 @@
-from unittest.mock import patch
+import json
+
+import pytest
 
 import litellm
 
-
-def mock_embedding_response(*args, **kwargs):
-    """Mock response mimicking litellm.embedding output."""
-
-    class MockResponse:
-        def __init__(self):
-            self.data = [{"embedding": [0.1, 0.2, 0.3]}]  # Example embedding vector
-            self.usage = litellm.Usage()  # Mock Usage object
-            self.model = kwargs.get("model", "nebius/BAAI/bge-en-icl")
-            self.object = "embedding"
-
-        def __getitem__(self, key):
-            return getattr(self, key)
-
-    return MockResponse()
+TOKEN_FACTORY_API_BASE = "https://api.tokenfactory.nebius.com/v1"
 
 
-def test_nebius_embeddings():
-    """Mocked test for Nebius embeddings using MagicMock."""
-    with patch("litellm.embedding", side_effect=mock_embedding_response) as mock_embed:
-        response = litellm.embedding(
-            model="nebius/BAAI/bge-en-icl",
-            input=["good morning from litellm"],
-        )
+@pytest.mark.respx()
+def test_nebius_embedding_targets_token_factory(respx_mock, monkeypatch):
+    monkeypatch.delenv("NEBIUS_API_BASE", raising=False)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    route = respx_mock.post(f"{TOKEN_FACTORY_API_BASE}/embeddings").respond(
+        json={
+            "object": "list",
+            "data": [{"object": "embedding", "embedding": [0.1, 0.2, 0.3], "index": 0}],
+            "model": "Qwen/Qwen3-Embedding-8B",
+            "usage": {"prompt_tokens": 3, "total_tokens": 3},
+        },
+        status_code=200,
+    )
 
-        # Assertions to verify that the mock was called correctly
-        mock_embed.assert_called_once_with(
-            model="nebius/BAAI/bge-en-icl",
-            input=["good morning from litellm"],
-        )
+    response = litellm.embedding(
+        model="nebius/Qwen/Qwen3-Embedding-8B",
+        input=["hello from LiteLLM"],
+        api_key="test-key",
+    )
 
-        # Assertions to check the structure of the mocked response
-        assert isinstance(response.data, list)
-        assert "embedding" in response.data[0]
-        assert isinstance(response.data[0]["embedding"], list)
-        assert response.model == "nebius/BAAI/bge-en-icl"
-        assert response.object == "embedding"
+    assert route.called
+    assert response.data[0]["embedding"] == [0.1, 0.2, 0.3]
+    assert route.calls[0].request.headers["authorization"] == "Bearer test-key"
+    assert (
+        json.loads(route.calls[0].request.content)["model"] == "Qwen/Qwen3-Embedding-8B"
+    )
