@@ -145,6 +145,22 @@ class TestInsert:
         sql = 'INSERT INTO "Foo" ("id") (SELECT 1) UNION (SELECT 2);'
         assert _keywords(tmp_path, sql) == ("INSERT ... SELECT",)
 
+    def test_a_values_list_joined_to_a_parenthesised_select_is_flagged(self, tmp_path):
+        sql = 'INSERT INTO "Foo" ("id") VALUES (1) UNION ALL (SELECT "id" FROM "Bar");'
+        assert _keywords(tmp_path, sql) == ("INSERT ... SELECT",)
+
+    def test_a_values_list_excepting_a_parenthesised_select_is_flagged(self, tmp_path):
+        sql = 'INSERT INTO "Foo" ("id") VALUES (1) EXCEPT (SELECT "id" FROM "Bar");'
+        assert _keywords(tmp_path, sql) == ("INSERT ... SELECT",)
+
+    def test_a_values_list_joined_to_a_parenthesised_table_is_flagged(self, tmp_path):
+        sql = 'INSERT INTO "Foo" ("id") VALUES (1) UNION ALL (TABLE "Bar");'
+        assert _keywords(tmp_path, sql) == ("INSERT ... TABLE",)
+
+    def test_a_set_operation_inside_a_values_list_does_not_flag_it(self, tmp_path):
+        sql = 'INSERT INTO "Foo" ("id") VALUES ((SELECT 1 UNION SELECT 2 LIMIT 1));'
+        assert _keywords(tmp_path, sql) == ()
+
     def test_a_table_row_source_is_flagged(self, tmp_path):
         assert _keywords(tmp_path, 'INSERT INTO "Foo" TABLE "Bar";') == ("INSERT ... TABLE",)
 
@@ -468,6 +484,92 @@ class TestDynamicSql:
         )
         assert _keywords(tmp_path, sql) == ("DELETE",)
         assert _scan(tmp_path, sql)[0].line == 5
+
+    def test_a_rewrite_selected_into_a_variable_is_flagged(self, tmp_path):
+        sql = (
+            "DO $$\n"
+            "DECLARE\n"
+            "    stmt text;\n"
+            "BEGIN\n"
+            "    SELECT 'UPDATE \"Foo\" SET \"a\" = 1' INTO stmt;\n"
+            "    EXECUTE stmt;\n"
+            "END $$;"
+        )
+        assert _keywords(tmp_path, sql) == ("UPDATE",)
+        assert _scan(tmp_path, sql)[0].line == 5
+
+    def test_a_rewrite_selected_into_a_strict_target_is_flagged(self, tmp_path):
+        sql = (
+            "DO $$\n"
+            "DECLARE\n"
+            "    stmt text;\n"
+            "BEGIN\n"
+            "    SELECT 'DELETE FROM \"Foo\"' INTO STRICT stmt;\n"
+            "    EXECUTE stmt;\n"
+            "END $$;"
+        )
+        assert _keywords(tmp_path, sql) == ("DELETE",)
+
+    def test_a_rewrite_assigned_with_a_bare_equals_is_flagged(self, tmp_path):
+        sql = (
+            "DO $$\n"
+            "DECLARE\n"
+            "    stmt text;\n"
+            "BEGIN\n"
+            "    stmt = 'UPDATE \"Foo\" SET \"a\" = 1';\n"
+            "    EXECUTE stmt;\n"
+            "END $$;"
+        )
+        assert _keywords(tmp_path, sql) == ("UPDATE",)
+        assert _scan(tmp_path, sql)[0].line == 5
+
+    def test_a_rewrite_assigned_with_a_bare_equals_after_then_is_flagged(self, tmp_path):
+        sql = (
+            "DO $$\n"
+            "DECLARE\n"
+            "    stmt text;\n"
+            "BEGIN\n"
+            "    IF true THEN stmt = 'DELETE FROM \"Foo\"'; END IF;\n"
+            "    EXECUTE stmt;\n"
+            "END $$;"
+        )
+        assert _keywords(tmp_path, sql) == ("DELETE",)
+        assert _scan(tmp_path, sql)[0].line == 5
+
+    def test_a_rewrite_declared_with_a_bare_equals_is_flagged(self, tmp_path):
+        sql = (
+            "DO $$\n"
+            "DECLARE\n"
+            "    stmt text = 'UPDATE \"Foo\" SET \"a\" = 1';\n"
+            "BEGIN\n"
+            "    EXECUTE stmt;\n"
+            "END $$;"
+        )
+        assert _keywords(tmp_path, sql) == ("UPDATE",)
+
+    def test_a_literal_selected_into_a_variable_nothing_runs_is_inert(self, tmp_path):
+        sql = (
+            "DO $$\n"
+            "DECLARE\n"
+            "    msg text;\n"
+            "BEGIN\n"
+            "    SELECT 'UPDATE of legacy rows is skipped' INTO msg;\n"
+            "    RAISE NOTICE '%', msg;\n"
+            "END $$;"
+        )
+        assert _keywords(tmp_path, sql) == ()
+
+    def test_comparing_an_executed_variable_does_not_flag_the_comparison(self, tmp_path):
+        sql = (
+            "DO $$\n"
+            "DECLARE\n"
+            "    stmt text := 'ALTER TABLE \"Foo\" ADD COLUMN \"b\" TEXT';\n"
+            "BEGIN\n"
+            "    IF stmt = 'DELETE FROM \"Foo\"' THEN RAISE NOTICE 'never'; END IF;\n"
+            "    EXECUTE stmt;\n"
+            "END $$;"
+        )
+        assert _keywords(tmp_path, sql) == ()
 
     def test_ddl_assigned_to_a_variable_passes(self, tmp_path):
         sql = "DO $$\nDECLARE\n    stmt text := 'ALTER TABLE \"Foo\" ADD COLUMN \"b\" TEXT';\nBEGIN\n    EXECUTE stmt;\nEND $$;"
