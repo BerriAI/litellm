@@ -1,7 +1,6 @@
 import asyncio
 import os
 import subprocess
-import sys
 import traceback
 from typing import Any
 
@@ -10,9 +9,6 @@ from openai import AsyncOpenAI, AuthenticationError, BadRequestError, OpenAIErro
 
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import MagicMock, patch
 

@@ -2,15 +2,12 @@
 ## Unit tests for the max_parallel_requests feature on Router
 import asyncio
 import inspect
-import os
-import sys
 import time
 import traceback
 from datetime import datetime
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))
 from typing import Optional
 
 import litellm

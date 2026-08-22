@@ -1,12 +1,9 @@
-import os
-import sys
 from typing import Any, cast
 
 import pytest
 
 import litellm
 
-sys.path.insert(0, os.path.abspath("../../../../.."))
 
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import (

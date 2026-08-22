@@ -2,12 +2,9 @@
 Tests for OpenAI GPT transformation (litellm/llms/openai/chat/gpt_transformation.py)
 """
 
-import os
-import sys
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../../.."))
 
 import litellm
 from litellm.litellm_core_utils.prompt_templates.common_utils import TOOL_RESULT_IMAGE_BOUNDARY

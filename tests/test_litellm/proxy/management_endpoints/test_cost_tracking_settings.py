@@ -4,14 +4,11 @@ Tests for cost tracking settings management endpoints.
 Tests the GET and PATCH endpoints for managing cost discount configuration.
 """
 
-import os
-import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
 
-sys.path.insert(0, os.path.abspath("../../../.."))
 
 import litellm
 from litellm.proxy.management_endpoints.cost_tracking_settings import router

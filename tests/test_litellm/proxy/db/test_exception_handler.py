@@ -1,6 +1,5 @@
 import asyncio
 import json
-import os
 import sys
 from unittest.mock import MagicMock, patch
 
@@ -21,9 +20,6 @@ from prisma.errors import (
     UniqueViolationError,
 )
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -335,7 +331,6 @@ def test_is_database_service_unavailable_error_asyncpg(monkeypatch):
     """asyncpg connection/interface errors map to service-unavailable. asyncpg
     is not a hard dependency, so inject a stand-in module to exercise the
     branch deterministically regardless of the install environment."""
-    import sys
     import types
 
     fake_asyncpg = types.ModuleType("asyncpg")

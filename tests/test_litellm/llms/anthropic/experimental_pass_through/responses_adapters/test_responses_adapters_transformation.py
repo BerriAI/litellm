@@ -5,13 +5,11 @@ Tests for LiteLLMAnthropicToResponsesAPIAdapter
 
 import json
 import os
-import sys
 from typing import Any, Dict, List
 from unittest.mock import MagicMock
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../../../../.."))
 
 from litellm.constants import (
     DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,

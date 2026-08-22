@@ -1,7 +1,5 @@
 import base64
 import json
-import os
-import sys
 
 from dotenv import load_dotenv
 
@@ -12,9 +10,6 @@ import litellm.litellm_core_utils.prompt_templates.factory
 load_dotenv()
 from unittest.mock import MagicMock
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 import pytest
 
 import litellm

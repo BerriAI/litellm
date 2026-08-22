@@ -2,7 +2,6 @@ import asyncio
 import copy
 import json
 import os
-import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -40,9 +39,6 @@ from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.types.utils import CredentialItem
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 
 def test_check_if_token_is_service_account():

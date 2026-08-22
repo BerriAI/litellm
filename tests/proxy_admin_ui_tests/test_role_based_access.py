@@ -4,7 +4,6 @@ RBAC tests
 
 import os
 import re
-import sys
 import traceback
 from litellm._uuid import uuid
 from datetime import datetime
@@ -19,9 +18,6 @@ import time
 
 # this file is to test litellm/proxy
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 import asyncio
 import logging
 from unittest.mock import MagicMock

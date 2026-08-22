@@ -6,15 +6,10 @@ forward_client_headers_to_llm_api were not being passed to Bedrock rerank provid
 """
 
 import json
-import os
-import sys
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
 import litellm
 from litellm.llms.bedrock.base_aws_llm import Boto3CredentialsInfo
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
