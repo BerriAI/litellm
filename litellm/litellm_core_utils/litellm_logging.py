@@ -2752,18 +2752,34 @@ class Logging(LiteLLMLoggingBaseClass):
 
     def failure_handler(self, exception, traceback_exception, start_time=None, end_time=None):
         verbose_logger.debug(f"Logging Details LiteLLM-Failure Call: {litellm.failure_callback}")
-        if not self.should_run_logging(event_type="sync_failure"):  # prevent double logging
-            return
-        litellm_params = self.model_call_details.get("litellm_params", {})
-        is_sync_request = self._is_sync_litellm_request(litellm_params)
-
         try:
+            # Always refresh failure context so the current deployment's exception
+            # is available even when observability callbacks are deduplicated.
             start_time, end_time = self._failure_handler_helper_fn(
                 exception=exception,
                 traceback_exception=traceback_exception,
                 start_time=start_time,
                 end_time=end_time,
             )
+
+            # Router cooldown is routing infrastructure, not observability.
+            # It must run once per failed deployment attempt even when the shared
+            # Logging object reuses has_logged_sync_failure across retries/fallbacks.
+            for callback in litellm.failure_callback or []:
+                if self._get_callback_name(callback) == "deployment_callback_on_failure" and callable(callback):
+                    callback(
+                        self.model_call_details,
+                        None,
+                        start_time,
+                        end_time,
+                    )
+
+            if not self.should_run_logging(event_type="sync_failure"):  # prevent double logging
+                return
+
+            litellm_params = self.model_call_details.get("litellm_params", {})
+            is_sync_request = self._is_sync_litellm_request(litellm_params)
+
             callbacks = self.get_combined_callback_list(
                 dynamic_success_callbacks=self.dynamic_failure_callbacks,
                 global_callbacks=litellm.failure_callback,
@@ -2778,6 +2794,9 @@ class Logging(LiteLLMLoggingBaseClass):
             self.has_run_logging(event_type="sync_failure")
             for callback in callbacks:
                 try:
+                    # Already invoked above so cooldown is not double-counted.
+                    if self._get_callback_name(callback) == "deployment_callback_on_failure":
+                        continue
                     should_run = self.should_run_callback(
                         callback=callback,
                         litellm_params=litellm_params,
