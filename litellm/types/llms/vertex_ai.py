@@ -1,7 +1,9 @@
+from collections.abc import Sequence
 from enum import Enum
 from typing import Any, Final, Literal, Protocol
 
 from typing_extensions import (
+    ReadOnly,
     Required,
     TypedDict,
 )
@@ -318,6 +320,21 @@ class TokenCountDetailsResponse(TypedDict):
 
     totalTokens: int
     promptTokensDetails: list[PromptTokensDetails]
+
+
+class CountTokensAPIResponse(TypedDict, total=False):
+    """
+    countTokens response, plus the tokenizer_used marker litellm's own counters add.
+
+    Example:
+        {'totalTokens': 15, 'totalBillableCharacters': 47,
+         'promptTokensDetails': [{'modality': 'TEXT', 'tokenCount': 15}]}
+    """
+
+    totalTokens: ReadOnly[int]
+    totalBillableCharacters: ReadOnly[int]
+    promptTokensDetails: ReadOnly[Sequence[PromptTokensDetails]]
+    tokenizer_used: ReadOnly[str]
 
 
 class CachedContent(TypedDict, total=False):
