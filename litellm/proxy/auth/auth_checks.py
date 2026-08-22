@@ -2465,13 +2465,44 @@ async def _delete_cache_key_object(
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging | None,
 ):
+    """
+    Evict a cached key object after its row has been written.
+
+    Eviction is best-effort, matching `delete_cache_team_object`. Most callers run this after a
+    committed write (`/key/update`, `/key/bulk_update`, `/key/regenerate`, `/key/{block,unblock}`,
+    the SCIM deactivation sweep), so raising here turned an unreachable Redis into a 400 for an
+    update that had already landed, which reads to the caller as "nothing was written". The one
+    read-path caller, the expired-key branch of `user_api_key_auth`, wants the same treatment for
+    the same reason: an unreachable Redis must not replace that request's 401 with a 400.
+
+    The two caches are separate `DualCache` instances, so each is evicted under its own guard: a
+    backend that is down for one must not skip the other. Retrying in-request would not help, since
+    `RedisCache`'s circuit breaker fails fast for as long as it stays open. An entry that survives
+    keeps the key authenticating with its previous settings until its TTL expires, so failures are
+    logged at error level rather than swallowed.
+    """
     key: Final = hashed_token
 
-    user_api_key_cache.delete_cache(key=key)
+    def _log_eviction_failure(cache_name: str, exc: Exception) -> None:
+        verbose_proxy_logger.error(
+            "Failed to evict cached key entry %s from the %s cache; the key keeps authenticating "
+            "with its previous settings until the entry's TTL expires: %s",
+            key,
+            cache_name,
+            exc,
+        )
+
+    try:
+        user_api_key_cache.delete_cache(key=key)
+    except Exception as e:  # noqa: BLE001  # best-effort invalidation: the write this follows has already committed
+        _log_eviction_failure("auth", e)
 
     ## UPDATE REDIS CACHE ##
     if proxy_logging_obj is not None:
-        await proxy_logging_obj.internal_usage_cache.dual_cache.async_delete_cache(key=key)
+        try:
+            await proxy_logging_obj.internal_usage_cache.dual_cache.async_delete_cache(key=key)
+        except Exception as e:  # noqa: BLE001  # best-effort invalidation: the write this follows has already committed
+            _log_eviction_failure("internal usage", e)
 
 
 async def delete_cache_key_objects(
@@ -2487,10 +2518,11 @@ async def delete_cache_key_objects(
     Evicting locally only reaches this worker, so each token is also broadcast: a deleted key left
     in a peer worker's in-memory cache still authenticates there until its TTL expires.
 
-    Best-effort per key: the rows are already deleted by the time this runs, so an unreachable
-    cache backend must not abort the caller partway through its own cascade.
+    `_delete_cache_key_object` is best-effort per key and logs what it could not clear: the rows are
+    already deleted by the time this runs, so an unreachable cache backend must not abort the caller
+    partway through its own cascade.
     """
-    results: Final = await asyncio.gather(
+    await asyncio.gather(
         *(
             _delete_cache_key_object(
                 hashed_token=hashed_token,
@@ -2498,17 +2530,10 @@ async def delete_cache_key_objects(
                 proxy_logging_obj=proxy_logging_obj,
             )
             for hashed_token in hashed_tokens
-        ),
-        return_exceptions=True,
+        )
     )
 
-    for hashed_token, result in zip(hashed_tokens, results):
-        if isinstance(result, BaseException):
-            verbose_proxy_logger.warning(
-                "Failed to evict cached key entry for %s; a deleted key may authenticate until its TTL expires: %s",
-                hashed_token,
-                result,
-            )
+    for hashed_token in hashed_tokens:
         await publish_auth_cache_invalidation(cache_key=hashed_token)
 
 
