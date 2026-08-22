@@ -2231,6 +2231,22 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                     value=optional_params.get("user"),
                 )
 
+            # ``response_obj`` is normally a dict-like ModelResponse, but some
+            # call types pass a non-dict object that has no ``.get`` -- e.g. an
+            # MCP tool call, where it is a Pydantic ``CallToolResult``. Without
+            # coalescing, the first ``.get`` below raises AttributeError, which
+            # is swallowed and silently drops every response attribute (model,
+            # usage, messages, tool output) from the span.
+            # See https://github.com/BerriAI/litellm/issues/30651
+            mcp_tool_result: Optional[Any] = None
+            if response_obj is not None and not hasattr(response_obj, "get"):
+                # Keep the original result so its content can be recorded later,
+                # only when message-content capture is enabled (see below).
+                mcp_tool_result = response_obj
+                # Reuse the file's canonical normalizer (handles pydantic
+                # model_dump); falls back to {} so the .get() accessors are safe.
+                response_obj = self._to_dict(response_obj) or {}
+
             # The unique identifier for the LLM call.
             # Completions have a provider response ID (e.g. "chatcmpl-xxx"),
             # but Embeddings and Image-gen responses do not.  Fall back to
@@ -2288,6 +2304,18 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
 
             if not self._capture_in_span():
                 return
+
+            # Record the tool-call result content (e.g. an MCP CallToolResult)
+            # so tool output is not missing from the span. Extraction runs here,
+            # inside the content-capture gate, not before it. See issue #30651.
+            if mcp_tool_result is not None:
+                tool_output = self._extract_tool_result_output(mcp_tool_result)
+                if tool_output is not None:
+                    self.safe_set_attribute(
+                        span=span,
+                        key="gen_ai.tool.output",
+                        value=tool_output,
+                    )
 
             if optional_params.get("tools"):
                 tools = optional_params["tools"]
@@ -2459,6 +2487,20 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             return str(value)
         except Exception:
             return ""
+
+    @staticmethod
+    def _extract_tool_result_output(response_obj: Any) -> Optional[str]:
+        """Extract text from a tool-call result (e.g. an MCP ``CallToolResult``).
+
+        ``CallToolResult.content`` is a list of content blocks; join the text of
+        any text blocks so the tool output can be recorded on the span. Returns
+        ``None`` when there is no text content.
+        """
+        content = getattr(response_obj, "content", None)
+        if not isinstance(content, list):
+            return None
+        texts = [item.text for item in content if isinstance(getattr(item, "text", None), str)]
+        return "\n".join(texts) if texts else None
 
     def safe_set_attribute(self, span: Span, key: str, value: Any):
         """
