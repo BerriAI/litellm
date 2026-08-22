@@ -177,6 +177,26 @@ class LangGraphSSEStreamIterator:
 
         return chunk
 
+    def close(self) -> None:
+        """Release the underlying streaming response so the connection is
+        returned to the pool when the stream ends or is abandoned (sync)."""
+        if self.response is not None:
+            response = self.response
+            self.response = None
+            response.close()
+
+    async def aclose(self) -> None:
+        """Release the underlying streaming response so the connection is
+        returned to the pool when the stream ends or is abandoned (async).
+
+        ``CustomStreamWrapper.aclose()`` dispatches to this on client
+        disconnect / early stream abandonment; without it the httpx
+        connection is never released and the pool leaks."""
+        if self.response is not None:
+            response = self.response
+            self.response = None
+            await response.aclose()
+
     def __next__(self) -> ModelResponseStream:
         """Sync iteration - parse SSE events and yield ModelResponse chunks."""
         try:
@@ -196,6 +216,7 @@ class LangGraphSSEStreamIterator:
             raise StopIteration
 
         except StopIteration:
+            self.close()
             raise
         except httpx.StreamConsumed:
             raise StopIteration
@@ -203,6 +224,7 @@ class LangGraphSSEStreamIterator:
             raise StopIteration
         except Exception as e:
             verbose_logger.error(f"Error in LangGraph SSE stream: {str(e)}")
+            self.close()
             raise StopIteration
 
     async def __anext__(self) -> ModelResponseStream:
@@ -224,6 +246,7 @@ class LangGraphSSEStreamIterator:
             raise StopAsyncIteration
 
         except StopAsyncIteration:
+            await self.aclose()
             raise
         except httpx.StreamConsumed:
             raise StopAsyncIteration
@@ -231,4 +254,5 @@ class LangGraphSSEStreamIterator:
             raise StopAsyncIteration
         except Exception as e:
             verbose_logger.error(f"Error in LangGraph SSE stream: {str(e)}")
+            await self.aclose()
             raise StopAsyncIteration

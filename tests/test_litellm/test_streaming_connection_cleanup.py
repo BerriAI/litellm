@@ -58,9 +58,7 @@ async def test_aiohttp_transport_response_uses_stream_not_content():
             return Resp()
 
     transport = LiteLLMAiohttpTransport(client=lambda: FakeSession())  # type: ignore
-    response = await transport.handle_async_request(
-        httpx.Request("GET", "http://example.com")
-    )
+    response = await transport.handle_async_request(httpx.Request("GET", "http://example.com"))
 
     assert isinstance(response.stream, AiohttpResponseStream)
 
@@ -140,6 +138,124 @@ async def test_aclose_prefers_aclose_over_close():
     await wrapper.aclose()
     assert aclose_called
     assert not close_called
+
+
+@pytest.mark.asyncio
+async def test_langgraph_sse_iterator_aclose_releases_response():
+    """LangGraphSSEStreamIterator must expose aclose() so CustomStreamWrapper.aclose()
+    releases the underlying httpx response; otherwise the connection leaks on a client
+    disconnect / abandoned stream."""
+    from litellm.llms.langgraph.chat.sse_iterator import LangGraphSSEStreamIterator
+
+    response_released = False
+
+    class FakeResponse:
+        async def aclose(self):
+            nonlocal response_released
+            response_released = True
+
+    iterator = LangGraphSSEStreamIterator(response=FakeResponse(), model="x")  # type: ignore
+    wrapper = CustomStreamWrapper(
+        completion_stream=iterator,
+        model=None,
+        logging_obj=MagicMock(),
+        custom_llm_provider=None,
+    )
+
+    await wrapper.aclose()
+    assert response_released, (
+        "LangGraph streaming response was not released by CustomStreamWrapper.aclose() — the httpx connection leaks"
+    )
+
+
+_LANGGRAPH_AI_LINE = 'data: ["messages", [[{"type": "ai", "content": "hi"}]]]'
+
+
+def test_langgraph_iterator_close_on_sync_completion():
+    """Sync iteration to completion releases the underlying response."""
+    from litellm.llms.langgraph.chat.sse_iterator import LangGraphSSEStreamIterator
+
+    closed = False
+
+    class FakeResponse:
+        def iter_lines(self):
+            return iter([_LANGGRAPH_AI_LINE])
+
+        def close(self):
+            nonlocal closed
+            closed = True
+
+    list(LangGraphSSEStreamIterator(response=FakeResponse(), model="x"))  # type: ignore
+    assert closed
+
+
+def test_langgraph_iterator_close_on_sync_error():
+    """A mid-stream error releases the underlying response (sync)."""
+    from litellm.llms.langgraph.chat.sse_iterator import LangGraphSSEStreamIterator
+
+    closed = False
+
+    class FakeResponse:
+        def iter_lines(self):
+            def gen():
+                raise RuntimeError("boom")
+                yield  # pragma: no cover
+
+            return gen()
+
+        def close(self):
+            nonlocal closed
+            closed = True
+
+    list(LangGraphSSEStreamIterator(response=FakeResponse(), model="x"))  # type: ignore
+    assert closed
+
+
+@pytest.mark.asyncio
+async def test_langgraph_iterator_aclose_on_async_completion():
+    """Async iteration to completion releases the underlying response."""
+    from litellm.llms.langgraph.chat.sse_iterator import LangGraphSSEStreamIterator
+
+    closed = False
+
+    class FakeResponse:
+        def aiter_lines(self):
+            async def gen():
+                yield _LANGGRAPH_AI_LINE
+
+            return gen()
+
+        async def aclose(self):
+            nonlocal closed
+            closed = True
+
+    async for _ in LangGraphSSEStreamIterator(response=FakeResponse(), model="x"):  # type: ignore
+        pass
+    assert closed
+
+
+@pytest.mark.asyncio
+async def test_langgraph_iterator_aclose_on_async_error():
+    """A mid-stream error releases the underlying response (async)."""
+    from litellm.llms.langgraph.chat.sse_iterator import LangGraphSSEStreamIterator
+
+    closed = False
+
+    class FakeResponse:
+        def aiter_lines(self):
+            async def gen():
+                raise RuntimeError("boom")
+                yield  # pragma: no cover
+
+            return gen()
+
+        async def aclose(self):
+            nonlocal closed
+            closed = True
+
+    async for _ in LangGraphSSEStreamIterator(response=FakeResponse(), model="x"):  # type: ignore
+        pass
+    assert closed
 
 
 @pytest.mark.asyncio
@@ -230,9 +346,7 @@ async def test_stream_with_fallbacks_closes_stream_on_generator_close():
         break
     await result.aclose()
 
-    assert (
-        stream_closed
-    ), "model_response stream was not closed by stream_with_fallbacks finally block"
+    assert stream_closed, "model_response stream was not closed by stream_with_fallbacks finally block"
 
 
 @pytest.mark.asyncio
