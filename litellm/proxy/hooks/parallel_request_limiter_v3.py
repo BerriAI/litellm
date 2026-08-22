@@ -12,6 +12,7 @@ from collections.abc import Callable, Mapping, Sequence, Set
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import datetime
+from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -2020,7 +2021,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
     async def reserve_tpm_tokens(
         self,
-        descriptors: list[RateLimitDescriptor],
+        descriptors: Sequence[RateLimitDescriptor],
         estimated_tokens: int,
         parent_otel_span: Span | None = None,
     ) -> RateLimitResponse:
@@ -2806,6 +2807,21 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
         return descriptors
 
+    @staticmethod
+    def _deduplicate_descriptors(
+        descriptors: Sequence[RateLimitDescriptor],
+    ) -> tuple[RateLimitDescriptor, ...]:
+        """
+        Collapse descriptors repeating a (key, value) pair into one entry.
+
+        A descriptor identifies one counter, and every consumer below charges
+        the request once per descriptor it is given. A repeat therefore
+        increments the sliding window twice and reserves TPM tokens twice
+        against that same counter, halving the limit the operator configured.
+        """
+        by_identity: Final = MappingProxyType({(d["key"], d["value"]): d for d in descriptors})
+        return tuple(by_identity.values())
+
     async def _check_model_has_recent_failures(
         self,
         model: str,
@@ -3000,7 +3016,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
     def _handle_rate_limit_error(
         self,
         response: RateLimitResponse,
-        descriptors: list[RateLimitDescriptor],
+        descriptors: Sequence[RateLimitDescriptor],
         requested_model: str | None = None,
     ) -> None:
         """Handle rate limit exceeded by raising :class:`ProxyRateLimitError` (a 429)."""
@@ -3427,7 +3443,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             )
 
         # Create rate limit descriptors
-        descriptors: Final = self._create_rate_limit_descriptors(
+        assembled_descriptors: Final = self._create_rate_limit_descriptors(
             user_api_key_dict=user_api_key_dict,
             data=data,
             rpm_limit_type=rpm_limit_type,
@@ -3440,23 +3456,25 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         self._add_team_model_rate_limit_descriptor_from_metadata(
             user_api_key_dict=user_api_key_dict,
             requested_model=requested_model,
-            descriptors=descriptors,
+            descriptors=assembled_descriptors,
         )
 
         # Project Level Rate Limits
         self._add_project_model_rate_limit_descriptor_from_metadata(
             user_api_key_dict=user_api_key_dict,
             requested_model=requested_model,
-            descriptors=descriptors,
+            descriptors=assembled_descriptors,
         )
         self.add_project_io_token_rate_limit_descriptors_from_metadata(
             user_api_key_dict=user_api_key_dict,
             requested_model=requested_model,
-            descriptors=descriptors,
+            descriptors=assembled_descriptors,
         )
 
         # Org Level Rate Limits
-        descriptors.extend(self.create_organization_rate_limit_descriptor(user_api_key_dict, requested_model))
+        assembled_descriptors.extend(self.create_organization_rate_limit_descriptor(user_api_key_dict, requested_model))
+
+        descriptors: Final = self._deduplicate_descriptors(assembled_descriptors)
 
         # Only check rate limits if we have descriptors with actual limits
         if descriptors:
