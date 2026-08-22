@@ -56,8 +56,8 @@ def test_bedrock_guardrail_cost_no_pricing_entry(monkeypatch):
     assert bedrock_guardrail_cost(usage_units={"contentPolicyUnits": 1}, aws_region_name="us-east-1") == 0.0
 
 
-def test_shipped_bedrock_guardrail_prices_match_aws_pricing_page():
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+def test_shipped_bedrock_guardrail_prices_match_aws_pricing_page(monkeypatch):
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
     assert litellm.model_cost["bedrock/guardrails"]["guardrail_cost_per_unit"] == {
         "automatedReasoningPolicyUnits": 0.00017,
