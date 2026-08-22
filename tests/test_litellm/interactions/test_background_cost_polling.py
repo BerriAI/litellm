@@ -59,6 +59,10 @@ def _logging_obj_with_reservation(reservation: dict) -> LitellmLogging:
     return _logging_obj(litellm_params={"metadata": {"user_api_key_budget_reservation": reservation}})
 
 
+async def _raise_on_billing(result: InteractionsAPIResponse) -> None:
+    raise RuntimeError("cost calculation failed for a settled background interaction")
+
+
 def _context(logging_obj: LitellmLogging, timeout_seconds: float = 1.0) -> BackgroundInteractionPollContext:
     return BackgroundInteractionPollContext(
         interaction_id="interactions/bg-abc",
@@ -121,6 +125,33 @@ async def test_poller_bills_once_when_interaction_completes():
 
 
 @pytest.mark.asyncio
+async def test_poller_bills_an_interaction_paused_for_a_tool_result():
+    logging_obj = _logging_obj()
+    fetch, calls = _fetch_sequence(
+        _response("in_progress", with_usage=False),
+        _response("requires_action", with_usage=True),
+    )
+
+    await poll_and_log_background_interaction_cost(_context(logging_obj), fetch_interaction=fetch)
+
+    assert len(calls) == 2
+    assert logging_obj.model_call_details["response_cost"] > 0
+    assert logging_obj.model_call_details["standard_logging_object"]["total_tokens"] == 175
+
+
+@pytest.mark.asyncio
+async def test_poller_does_not_pin_the_budget_for_an_interaction_paused_for_a_tool_result():
+    reservation = _reservation()
+    logging_obj = _logging_obj_with_reservation(reservation)
+    fetch, _ = _fetch_sequence(_response("requires_action", with_usage=True))
+
+    await poll_and_log_background_interaction_cost(_context(logging_obj), fetch_interaction=fetch)
+
+    assert logging_obj.model_call_details["response_cost"] > 0
+    assert reservation["finalized"] is False
+
+
+@pytest.mark.asyncio
 async def test_poller_stops_without_billing_on_terminal_status_without_usage():
     logging_obj = _logging_obj()
     fetch, calls = _fetch_sequence(_response("failed", with_usage=False))
@@ -166,6 +197,19 @@ async def test_poller_releases_budget_reservation_on_timeout_give_up():
         _context(logging_obj, timeout_seconds=0.01),
         fetch_interaction=fetch,
     )
+
+    assert reservation["finalized"] is True
+
+
+@pytest.mark.asyncio
+async def test_poller_releases_budget_reservation_when_billing_raises():
+    reservation = _reservation()
+    logging_obj = _logging_obj_with_reservation(reservation)
+    fetch, _ = _fetch_sequence(_response("completed", with_usage=True))
+    logging_obj.async_log_background_interaction_completion = _raise_on_billing
+
+    with pytest.raises(RuntimeError):
+        await poll_and_log_background_interaction_cost(_context(logging_obj), fetch_interaction=fetch)
 
     assert reservation["finalized"] is True
 
@@ -249,6 +293,22 @@ def _register_poll(logging_obj: LitellmLogging, poll_fetch=None) -> asyncio.Task
 
 
 @pytest.mark.asyncio
+async def test_delete_settlement_bills_an_interaction_paused_for_a_tool_result():
+    logging_obj = _logging_obj()
+    task = _register_poll(logging_obj)
+    fetch, calls = _fetch_sequence(_response("requires_action", with_usage=True))
+
+    await maybe_settle_background_interaction_before_delete(
+        interaction_id="interactions/bg-abc",
+        fetch_interaction=fetch,
+    )
+
+    assert len(calls) == 1
+    assert logging_obj.model_call_details["response_cost"] > 0
+    await asyncio.wait_for(task, timeout=5)
+
+
+@pytest.mark.asyncio
 async def test_delete_settlement_bills_pending_background_interaction():
     logging_obj = _logging_obj()
     task = _register_poll(logging_obj)
@@ -296,6 +356,24 @@ async def test_delete_settlement_releases_reservation_when_prefetch_fails():
 
     assert reservation["finalized"] is True
     assert logging_obj.model_call_details.get("response_cost") is None
+    await asyncio.wait_for(task, timeout=5)
+
+
+@pytest.mark.asyncio
+async def test_delete_settlement_releases_reservation_when_billing_raises():
+    reservation = _reservation()
+    logging_obj = _logging_obj_with_reservation(reservation)
+    task = _register_poll(logging_obj)
+    fetch, _ = _fetch_sequence(_response("completed", with_usage=True))
+    logging_obj.async_log_background_interaction_completion = _raise_on_billing
+
+    with pytest.raises(RuntimeError):
+        await maybe_settle_background_interaction_before_delete(
+            interaction_id="interactions/bg-abc",
+            fetch_interaction=fetch,
+        )
+
+    assert reservation["finalized"] is True
     await asyncio.wait_for(task, timeout=5)
 
 
