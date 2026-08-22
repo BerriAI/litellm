@@ -20,6 +20,12 @@ Flagged, per statement, by its leading keyword:
 Referential actions (`ON DELETE CASCADE`, `ON UPDATE CASCADE`) are schema, never a
 statement's leading keyword, so they pass.
 
+A statement wrapped in `EXPLAIN` is judged on the statement itself, because the
+`ANALYZE` form runs it rather than only planning it, and a rewrite left under one
+rewrites the table on the way to printing its timings. Explaining a rewrite without
+`ANALYZE` is flagged too: nothing here needs the plan of a statement it is being
+told not to run at boot, and a marker is a cheap answer if one ever does.
+
 Statements inside dollar-quoted bodies are scanned too. `DO $$ ... $$` is this
 repo's idiom for conditional DDL, so a body is where an `UPDATE` would otherwise
 hide. The SQL an `EXECUTE` runs is scanned the same way, since a rewrite reads the
@@ -79,6 +85,8 @@ DOLLAR_TAG = re.compile(r"\$(?:[A-Za-z_][A-Za-z0-9_]*)?\$")
 FIRST_WORD = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 STATEMENT = re.compile(r"[^;]+")
 RUN_BY_NAME = re.compile(r"\bEXECUTE[ \t]+([A-Za-z_][A-Za-z0-9_]*)", re.IGNORECASE)
+EXPLAIN_OPTIONS = re.compile(r"\bEXPLAIN\b(?:\s+(?:ANALYZE|ANALYSE|VERBOSE)\b)+", re.IGNORECASE)
+NOT_A_NEWLINE = re.compile(r"[^\n]")
 
 REWRITES_ROWS = frozenset({"UPDATE", "DELETE", "MERGE"})
 
@@ -247,17 +255,31 @@ def strip_parens(statement: str) -> str:
     return "".join(chunks)
 
 
+def strip_explain(statement: str) -> str:
+    """Blank an `EXPLAIN` written with bare options, since the `ANALYZE` among them would
+    otherwise stand in for the keyword of the statement being explained. That statement is
+    the one worth reading: `EXPLAIN ANALYZE` runs it rather than only planning it, so a
+    rewrite underneath rewrites the table for real. The parenthesised option list needs
+    nothing here, already being blanked as a group."""
+    return EXPLAIN_OPTIONS.sub(lambda match: NOT_A_NEWLINE.sub(" ", match.group()), statement)
+
+
 def leading_keyword(statement: str) -> re.Match[str] | None:
-    """The statement's own keyword, looking past PL/pgSQL block syntax such as
-    `BEGIN`, `IF ... THEN` and `END`."""
+    """The statement's own keyword, looking past what wraps it: a parenthesised guard,
+    PL/pgSQL block syntax such as `BEGIN`, `IF ... THEN` and `END`, and an `EXPLAIN`.
+    Offsets survive both strips, so the match still points into `statement` itself."""
     return next(
-        (word for word in FIRST_WORD.finditer(statement) if word.group().upper() in STATEMENT_KEYWORDS),
+        (
+            word
+            for word in FIRST_WORD.finditer(strip_explain(strip_parens(statement)))
+            if word.group().upper() in STATEMENT_KEYWORDS
+        ),
         None,
     )
 
 
 def offending_keyword(statement: str) -> str | None:
-    word = leading_keyword(strip_parens(statement))
+    word = leading_keyword(statement)
     if word is None:
         return None
 
@@ -314,7 +336,7 @@ def executed_names(masked: str) -> frozenset[str]:
 
 
 def leads_with(statement: str, keyword: str) -> bool:
-    word = leading_keyword(strip_parens(statement))
+    word = leading_keyword(statement)
     return word is not None and word.group().upper() == keyword
 
 
@@ -368,7 +390,7 @@ def scan_region(
 
 
 def keyword_start(statement: re.Match[str]) -> int:
-    word = leading_keyword(strip_parens(statement.group()))
+    word = leading_keyword(statement.group())
     return statement.start() + (0 if word is None else word.start())
 
 
