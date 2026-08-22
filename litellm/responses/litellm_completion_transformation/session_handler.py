@@ -1,4 +1,5 @@
 import json
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import litellm
@@ -104,10 +105,10 @@ class ResponsesSessionHandler:
         if proxy_server_request_dict:
             _response_input_param: Final = proxy_server_request_dict.get("input", None)
             _messages = proxy_server_request_dict.get("messages", None)
-            if isinstance(_response_input_param, str):
+            if isinstance(_response_input_param, (str, list)):
                 response_input_param = _response_input_param
             elif isinstance(_response_input_param, dict):
-                response_input_param = cast(ResponseInputParam, _response_input_param)
+                response_input_param = cast(ResponseInputParam, [_response_input_param])
 
         if response_input_param:
             chat_completion_messages = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
@@ -131,14 +132,31 @@ class ResponsesSessionHandler:
         ############################################################
         # Add Output messages for this Spend Log
         ############################################################
-        _response_output: Final = spend_log.get("response", "{}")
-        if isinstance(_response_output, dict) and _response_output and _response_output != {}:
+        _response_output: Final = ResponsesSessionHandler._get_response_dict_from_spend_log(spend_log)
+        if _response_output:
             # transform `ChatCompletion Response` to `ResponsesAPIResponse`
             model_response: Final = ModelResponse(**_response_output)
             for choice in model_response.choices:
                 if hasattr(choice, "message"):
                     chat_completion_message_history.append(getattr(choice, "message"))
         return chat_completion_message_history
+
+    @staticmethod
+    def _get_response_dict_from_spend_log(spend_log: SpendLogsPayload) -> Mapping[str, Any] | None:
+        """
+        Spend logs read from the DB hold `response` as a dict, ones still queued in memory
+        hold it as a JSON string.
+        """
+        _response_output: Final = spend_log.get("response")
+        if isinstance(_response_output, dict):
+            return _response_output or None
+        if isinstance(_response_output, str):
+            try:
+                parsed: Final = json.loads(_response_output)
+            except json.JSONDecodeError:
+                return None
+            return parsed if isinstance(parsed, dict) and parsed else None
+        return None
 
     @staticmethod
     async def get_proxy_server_request_from_spend_log(
@@ -256,11 +274,12 @@ class ResponsesSessionHandler:
         SELECT session_id FROM spend_logs WHERE response_id = previous_response_id, SELECT * FROM spend_logs WHERE session_id = session_id
         """
         from litellm.proxy.proxy_server import prisma_client
+        from litellm.proxy.utils import peek_spend_logs
 
         verbose_proxy_logger.debug("decoding response id=%s", previous_response_id)
 
         decoded_response_id: Final = ResponsesAPIRequestUtils._decode_responses_api_response_id(previous_response_id)
-        previous_response_id = decoded_response_id.get("response_id", previous_response_id)
+        response_id: Final = decoded_response_id.get("response_id", previous_response_id)
         if prisma_client is None:
             return []
 
@@ -276,12 +295,46 @@ class ResponsesSessionHandler:
             ORDER BY "endTime" ASC;
         """
 
-        spend_logs: Final = await prisma_client.db.query_raw(query, previous_response_id)
+        written_spend_logs: Final = await prisma_client.db.query_raw(query, response_id)
+        queued_spend_logs: Final = await peek_spend_logs(prisma_client)
+        spend_logs: Final = list(
+            ResponsesSessionHandler._merge_queued_spend_logs(
+                response_id=response_id,
+                written_spend_logs=written_spend_logs,
+                queued_spend_logs=queued_spend_logs,
+            )
+        )
 
         verbose_proxy_logger.debug(
             "Found the following spend logs for previous response id %s: %s",
-            previous_response_id,
+            response_id,
             json.dumps(spend_logs, indent=4, default=str),
         )
 
         return spend_logs
+
+    @staticmethod
+    def _merge_queued_spend_logs(
+        response_id: str,
+        written_spend_logs: Sequence[SpendLogsPayload],
+        queued_spend_logs: Sequence[SpendLogsPayload],
+    ) -> tuple[SpendLogsPayload, ...]:
+        """
+        Append the session's spend logs that the batch writer has not flushed to the DB yet.
+
+        Without this a follow-up sent inside the ``PROXY_BATCH_WRITE_AT`` window sees an
+        empty session and silently drops the conversation. The queue is FIFO, so anything
+        still on it is newer than every row already written.
+        """
+        session_ids: Final = frozenset(
+            session_id
+            for spend_log in (*written_spend_logs, *queued_spend_logs)
+            if spend_log.get("request_id") == response_id and (session_id := spend_log.get("session_id"))
+        ) | frozenset(session_id for spend_log in written_spend_logs if (session_id := spend_log.get("session_id")))
+        written_request_ids: Final = frozenset(spend_log.get("request_id") for spend_log in written_spend_logs)
+        unflushed: Final = tuple(
+            spend_log
+            for spend_log in queued_spend_logs
+            if spend_log.get("session_id") in session_ids and spend_log.get("request_id") not in written_request_ids
+        )
+        return (*written_spend_logs, *unflushed)

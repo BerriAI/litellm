@@ -6005,6 +6005,16 @@ async def enqueue_spend_logs(
         )
 
 
+async def peek_spend_logs(prisma_client: PrismaClient) -> tuple[SpendLogsPayload, ...]:
+    """Snapshot the spend logs still waiting for the next flush, leaving the queue intact.
+
+    Reads that need a just-finished request use this, since the batch writer only
+    reaches the DB every ``PROXY_BATCH_WRITE_AT`` seconds.
+    """
+    async with prisma_client._spend_log_transactions_lock:
+        return tuple(prisma_client.spend_log_transactions)
+
+
 async def dequeue_spend_logs(prisma_client: PrismaClient, limit: int) -> list[dict[str, object]]:
     """Take up to ``limit`` of the oldest queued spend logs off the queue.
 
