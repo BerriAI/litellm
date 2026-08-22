@@ -247,6 +247,13 @@ describe("isModelCompatibleWithEndpoint / filterModelsForEndpoint", () => {
     expect(isModelCompatibleWithEndpoint(batchModel, EndpointType.REALTIME)).toBe(false);
   });
 
+  it("keeps completion-mode models for the chat endpoint", () => {
+    const completionModel: ModelGroup = { model_group: "davinci-002", mode: "completion" };
+    expect(isModelCompatibleWithEndpoint(completionModel, EndpointType.CHAT)).toBe(true);
+    expect(isModelCompatibleWithEndpoint(completionModel, EndpointType.RESPONSES)).toBe(true);
+    expect(isModelCompatibleWithEndpoint(completionModel, EndpointType.SPEECH)).toBe(false);
+  });
+
   it("keeps image-edit models for the image-edits endpoint using the mode the backend sends", () => {
     const imageEditModel: ModelGroup = { model_group: "gpt-image-1", mode: "image_edit" };
     const imageModel: ModelGroup = { model_group: "dall-e-3", mode: "image_generation" };
