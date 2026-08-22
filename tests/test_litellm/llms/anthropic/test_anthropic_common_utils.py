@@ -13,14 +13,13 @@ Verifies that:
 import json
 import os
 import sys
+import threading
 from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../.."))
-)
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../..")))
 
 # Fake tokens for testing (not real secrets)
 FAKE_OAUTH_TOKEN = "sk-ant-oat01-fake-token-for-testing-123456789abcdef"
@@ -38,9 +37,7 @@ class TestOptionallyHandleAnthropicOAuth:
         )
 
         headers = {"authorization": f"Bearer {FAKE_OAUTH_TOKEN}"}
-        updated_headers, extracted_api_key = optionally_handle_anthropic_oauth(
-            headers, None
-        )
+        updated_headers, extracted_api_key = optionally_handle_anthropic_oauth(headers, None)
 
         assert extracted_api_key == FAKE_OAUTH_TOKEN
         assert updated_headers["anthropic-beta"] == "oauth-2025-04-20"
@@ -54,9 +51,7 @@ class TestOptionallyHandleAnthropicOAuth:
         )
 
         headers = {}
-        updated_headers, returned_api_key = optionally_handle_anthropic_oauth(
-            headers, FAKE_OAUTH_TOKEN
-        )
+        updated_headers, returned_api_key = optionally_handle_anthropic_oauth(headers, FAKE_OAUTH_TOKEN)
 
         assert returned_api_key == FAKE_OAUTH_TOKEN
         assert updated_headers["authorization"] == f"Bearer {FAKE_OAUTH_TOKEN}"
@@ -71,9 +66,7 @@ class TestOptionallyHandleAnthropicOAuth:
         )
 
         headers = {"x-api-key": FAKE_OAUTH_TOKEN}
-        updated_headers, _ = optionally_handle_anthropic_oauth(
-            headers, FAKE_OAUTH_TOKEN
-        )
+        updated_headers, _ = optionally_handle_anthropic_oauth(headers, FAKE_OAUTH_TOKEN)
 
         assert "x-api-key" not in updated_headers
         assert updated_headers["authorization"] == f"Bearer {FAKE_OAUTH_TOKEN}"
@@ -85,9 +78,7 @@ class TestOptionallyHandleAnthropicOAuth:
         )
 
         headers = {}
-        updated_headers, returned_api_key = optionally_handle_anthropic_oauth(
-            headers, FAKE_REGULAR_KEY
-        )
+        updated_headers, returned_api_key = optionally_handle_anthropic_oauth(headers, FAKE_REGULAR_KEY)
 
         assert returned_api_key == FAKE_REGULAR_KEY
         assert "authorization" not in updated_headers
@@ -101,9 +92,7 @@ class TestOptionallyHandleAnthropicOAuth:
         )
 
         headers = {"authorization": f"Bearer {FAKE_REGULAR_KEY}"}
-        updated_headers, returned_api_key = optionally_handle_anthropic_oauth(
-            headers, FAKE_REGULAR_KEY
-        )
+        updated_headers, returned_api_key = optionally_handle_anthropic_oauth(headers, FAKE_REGULAR_KEY)
 
         assert returned_api_key == FAKE_REGULAR_KEY
         assert "anthropic-dangerous-direct-browser-access" not in updated_headers
@@ -115,9 +104,7 @@ class TestOptionallyHandleAnthropicOAuth:
         )
 
         headers = {}
-        updated_headers, returned_api_key = optionally_handle_anthropic_oauth(
-            headers, None
-        )
+        updated_headers, returned_api_key = optionally_handle_anthropic_oauth(headers, None)
 
         assert returned_api_key is None
         assert "authorization" not in updated_headers
@@ -539,16 +526,12 @@ class TestProxyOAuthHeaderForwarding:
         )
 
         # Should preserve OAuth even with flag=False
-        cleaned_without_flag = clean_headers(
-            raw_headers, forward_llm_provider_auth_headers=False
-        )
+        cleaned_without_flag = clean_headers(raw_headers, forward_llm_provider_auth_headers=False)
         assert "authorization" in cleaned_without_flag
         assert cleaned_without_flag["authorization"] == f"Bearer {FAKE_OAUTH_TOKEN}"
 
         # Should also preserve OAuth with flag=True
-        cleaned_with_flag = clean_headers(
-            raw_headers, forward_llm_provider_auth_headers=True
-        )
+        cleaned_with_flag = clean_headers(raw_headers, forward_llm_provider_auth_headers=True)
         assert "authorization" in cleaned_with_flag
         assert cleaned_with_flag["authorization"] == f"Bearer {FAKE_OAUTH_TOKEN}"
 
@@ -980,9 +963,7 @@ class TestGetAuthToken:
 
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
-        with mock_patch.dict(
-            "os.environ", {"ANTHROPIC_AUTH_TOKEN": FAKE_AUTH_TOKEN}, clear=True
-        ):
+        with mock_patch.dict("os.environ", {"ANTHROPIC_AUTH_TOKEN": FAKE_AUTH_TOKEN}, clear=True):
             assert AnthropicModelInfo.get_auth_token() == FAKE_AUTH_TOKEN
 
     def test_returns_none_when_not_set(self):
@@ -1082,14 +1063,19 @@ class TestGetAuthHeader:
             assert result is None
 
     def test_oauth_token_uses_bearer_not_x_api_key(self):
-        """OAuth token (sk-ant-oat*) should return Authorization: Bearer, not x-api-key."""
+        """OAuth token (sk-ant-oat*) should return Authorization: Bearer with the
+        mandatory oauth beta, not x-api-key."""
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
         result = AnthropicModelInfo.get_auth_header(api_key=FAKE_OAUTH_TOKEN)
-        assert result == {"authorization": f"Bearer {FAKE_OAUTH_TOKEN}"}
+        assert result == {
+            "authorization": f"Bearer {FAKE_OAUTH_TOKEN}",
+            "anthropic-beta": "oauth-2025-04-20",
+        }
 
     def test_oauth_token_from_env_uses_bearer(self):
-        """OAuth token in ANTHROPIC_API_KEY env var should return Authorization: Bearer."""
+        """OAuth token in ANTHROPIC_API_KEY env var should return Authorization: Bearer
+        with the mandatory oauth beta."""
         from unittest.mock import patch as mock_patch
 
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
@@ -1100,13 +1086,18 @@ class TestGetAuthHeader:
             clear=True,
         ):
             result = AnthropicModelInfo.get_auth_header()
-            assert result == {"authorization": f"Bearer {FAKE_OAUTH_TOKEN}"}
+            assert result == {
+                "authorization": f"Bearer {FAKE_OAUTH_TOKEN}",
+                "anthropic-beta": "oauth-2025-04-20",
+            }
 
     def test_custom_api_base_get_auth_header_uses_bearer(self):
         """Non-standard API key and custom api_base returns Bearer when use_bearer_for_custom_base=True."""
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
-        result = AnthropicModelInfo.get_auth_header(api_key="my-custom-key", api_base="https://custom-gateway.com", use_bearer_for_custom_base=True)
+        result = AnthropicModelInfo.get_auth_header(
+            api_key="my-custom-key", api_base="https://custom-gateway.com", use_bearer_for_custom_base=True
+        )
         assert result == {"authorization": "Bearer my-custom-key"}
 
     def test_custom_api_base_get_auth_header_uses_x_api_key_when_standard(self):
@@ -1124,10 +1115,7 @@ class TestGetApiBaseFallbackChain:
         """Explicit api_base param takes precedence over all env vars."""
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
-        assert (
-            AnthropicModelInfo.get_api_base("https://explicit.example.com")
-            == "https://explicit.example.com"
-        )
+        assert AnthropicModelInfo.get_api_base("https://explicit.example.com") == "https://explicit.example.com"
 
     def test_defaults_to_anthropic_api(self):
         """get_api_base returns the default Anthropic API base when no env vars are set."""
@@ -1180,9 +1168,7 @@ class TestPassthroughAuthToken:
         )
 
         config = AnthropicMessagesConfig()
-        with mock_patch.dict(
-            "os.environ", {"ANTHROPIC_AUTH_TOKEN": FAKE_AUTH_TOKEN}, clear=True
-        ):
+        with mock_patch.dict("os.environ", {"ANTHROPIC_AUTH_TOKEN": FAKE_AUTH_TOKEN}, clear=True):
             updated_headers, _ = config.validate_anthropic_messages_environment(
                 headers={},
                 model="claude-sonnet-4-5-20250929",
@@ -1290,14 +1276,8 @@ class TestAnthropicThinkingSignatureSelfHeal:
         )
 
         assert is_anthropic_invalid_thinking_signature_error("") is False
-        assert (
-            is_anthropic_invalid_thinking_signature_error("rate limit exceeded")
-            is False
-        )
-        assert (
-            is_anthropic_invalid_thinking_signature_error("invalid_request_error: model not found")
-            is False
-        )
+        assert is_anthropic_invalid_thinking_signature_error("rate limit exceeded") is False
+        assert is_anthropic_invalid_thinking_signature_error("invalid_request_error: model not found") is False
         assert is_anthropic_invalid_thinking_signature_error("thinking signature is malformed") is False
 
     def test_strip_thinking_blocks_from_anthropic_messages(self):
@@ -1688,10 +1668,7 @@ class TestAnthropicThinkingSignatureSelfHeal:
 
         base = "call_abc123"
         sig = "CiIBDDnWx+/a=="
-        assert (
-            normalize_anthropic_tool_use_id(f"{base}{THOUGHT_SIGNATURE_SEPARATOR}{sig}")
-            == base
-        )
+        assert normalize_anthropic_tool_use_id(f"{base}{THOUGHT_SIGNATURE_SEPARATOR}{sig}") == base
 
     def test_anthropic_messages_config_http_retry_helpers(self):
         import httpx
@@ -1715,15 +1692,11 @@ class TestAnthropicThinkingSignatureSelfHeal:
 
         resp_bad = httpx.Response(400, request=req, text="rate limit exceeded")
         err_bad = httpx.HTTPStatusError("bad", request=req, response=resp_bad)
-        assert (
-            config.should_retry_anthropic_messages_on_http_error(err_bad, {}) is False
-        )
+        assert config.should_retry_anthropic_messages_on_http_error(err_bad, {}) is False
 
         resp_500 = httpx.Response(500, request=req, text=err_text)
         err_500 = httpx.HTTPStatusError("bad", request=req, response=resp_500)
-        assert (
-            config.should_retry_anthropic_messages_on_http_error(err_500, {}) is False
-        )
+        assert config.should_retry_anthropic_messages_on_http_error(err_500, {}) is False
 
         data = {
             "model": "claude-sonnet-4-20250514",
@@ -1744,7 +1717,6 @@ class TestAnthropicThinkingSignatureSelfHeal:
         config.transform_anthropic_messages_request_on_http_error(err, data)
         assert "thinking" not in data
         assert data["messages"] == []
-
 
 
 class TestClaudeOpus48AdaptiveThinking:
@@ -1776,9 +1748,7 @@ class TestClaudeOpus48AdaptiveThinking:
 
         assert AnthropicModelInfo._is_adaptive_thinking_model(model, "anthropic") is True
 
-    def test_resolver_reads_flag_through_bedrock_invoke_prefix(
-        self, local_model_cost_map
-    ):
+    def test_resolver_reads_flag_through_bedrock_invoke_prefix(self, local_model_cost_map):
         """The resolver fix: ``bedrock/invoke/...`` resolves to the flagged
         Bedrock entry. Pure ``_supports_factory`` without prefix-stripping
         returns False here, which is why the data-only fix alone was not enough."""
@@ -1828,9 +1798,7 @@ class TestClaudeOpus48AdaptiveThinking:
             "claude-sonnet-4.6",
         ],
     )
-    def test_adaptive_thinking_detected_for_opus_4_6_4_7_and_sonnet_4_6(
-        self, local_model_cost_map, model
-    ):
+    def test_adaptive_thinking_detected_for_opus_4_6_4_7_and_sonnet_4_6(self, local_model_cost_map, model):
         """Opus 4.6/4.7 and Sonnet 4.6 carry the ``supports_adaptive_thinking`` flag,
         so detection holds purely from the cost map with no version-rule
         fallback. Each alias form the Bedrock/anthropic paths see resolves to a flagged
@@ -1850,9 +1818,7 @@ class TestClaudeOpus48AdaptiveThinking:
             "claude-fable-preview",
         ],
     )
-    def test_unmapped_aliases_without_parseable_version_stay_non_adaptive(
-        self, local_model_cost_map, model
-    ):
+    def test_unmapped_aliases_without_parseable_version_stay_non_adaptive(self, local_model_cost_map, model):
         """An alias absent from the map, not matched by any ``fallback_generalizations``
         rule, and without any parseable family version stays non-adaptive. ``fable``
         without a major version matches neither the core-family 4.6+ gate nor the
@@ -1878,9 +1844,7 @@ class TestClaudeOpus48AdaptiveThinking:
             "us.anthropic.claude-fable-5-preview",
         ],
     )
-    def test_adaptive_thinking_version_fallback_for_unmapped_high_versions(
-        self, local_model_cost_map, model
-    ):
+    def test_adaptive_thinking_version_fallback_for_unmapped_high_versions(self, local_model_cost_map, model):
         """Provider-prefixed or suffixed Claude names that resolve to no mapped entry
         still resolve to adaptive when the id carries claude-<family>- at version 4.6
         or higher, bare 5+ majors included. The version gate is the declarative
@@ -1901,9 +1865,7 @@ class TestClaudeOpus48AdaptiveThinking:
             "us.anthropic.claude-opus-4-20250514",
         ],
     )
-    def test_adaptive_thinking_not_detected_for_unmapped_low_versions(
-        self, local_model_cost_map, model
-    ):
+    def test_adaptive_thinking_not_detected_for_unmapped_low_versions(self, local_model_cost_map, model):
         """Unmapped Claude names below 4.6 stay non-adaptive through the declarative path.
         The eight-digit dated Opus 4.0 id (``...-4-20250514``) is the date-safety case: the
         version rule caps the minor at two digits, so the date is not misread as a >= 4.6
@@ -1942,14 +1904,11 @@ class TestDefaultSuffixAdaptiveThinking:
             "vertex_ai/claude-fable-5@default",
         ],
     )
-    def test_default_suffix_models_are_adaptive_thinking(
-        self, local_model_cost_map, model: str
-    ) -> None:
+    def test_default_suffix_models_are_adaptive_thinking(self, local_model_cost_map, model: str) -> None:
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
         assert AnthropicModelInfo._is_adaptive_thinking_model(model, "anthropic") is True, (
-            f"{model} not classified as adaptive thinking. "
-            "Check _model_map_lookup_candidates strips @default suffix."
+            f"{model} not classified as adaptive thinking. Check _model_map_lookup_candidates strips @default suffix."
         )
 
     @pytest.mark.parametrize(
@@ -1959,15 +1918,11 @@ class TestDefaultSuffixAdaptiveThinking:
             ("vertex_ai/claude-sonnet-4-6@default", "claude-sonnet-4-6"),
         ],
     )
-    def test_lookup_candidates_include_bare_name(
-        self, model: str, expected_bare: str
-    ) -> None:
+    def test_lookup_candidates_include_bare_name(self, model: str, expected_bare: str) -> None:
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
         candidates = AnthropicModelInfo._model_map_lookup_candidates(model)
-        assert expected_bare in candidates, (
-            f"Expected '{expected_bare}' in candidates for '{model}', got: {candidates}"
-        )
+        assert expected_bare in candidates, f"Expected '{expected_bare}' in candidates for '{model}', got: {candidates}"
 
 
 class TestCapabilityProbeUsesCallerProvider:
@@ -1980,42 +1935,27 @@ class TestCapabilityProbeUsesCallerProvider:
 
     BEDROCK_MODEL = "global.anthropic.claude-opus-4-8"
 
-    def test_exact_bedrock_entry_flag_is_authoritative_for_bedrock_caller(
-        self, local_model_cost_map, monkeypatch
-    ):
+    def test_exact_bedrock_entry_flag_is_authoritative_for_bedrock_caller(self, local_model_cost_map, monkeypatch):
         import litellm
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
-        assert (
-            AnthropicModelInfo._is_adaptive_thinking_model(self.BEDROCK_MODEL, "bedrock")
-            is True
-        )
+        assert AnthropicModelInfo._is_adaptive_thinking_model(self.BEDROCK_MODEL, "bedrock") is True
 
-        monkeypatch.setitem(
-            litellm.model_cost[self.BEDROCK_MODEL], "supports_adaptive_thinking", False
-        )
+        monkeypatch.setitem(litellm.model_cost[self.BEDROCK_MODEL], "supports_adaptive_thinking", False)
         litellm.get_model_info.cache_clear()
 
-        assert (
-            AnthropicModelInfo._is_adaptive_thinking_model(self.BEDROCK_MODEL, "bedrock")
-            is False
-        )
+        assert AnthropicModelInfo._is_adaptive_thinking_model(self.BEDROCK_MODEL, "bedrock") is False
 
-    def test_native_anthropic_probe_still_reads_anthropic_entry(
-        self, local_model_cost_map, monkeypatch
-    ):
+    def test_native_anthropic_probe_still_reads_anthropic_entry(self, local_model_cost_map, monkeypatch):
         import litellm
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
-        monkeypatch.setitem(
-            litellm.model_cost[self.BEDROCK_MODEL], "supports_adaptive_thinking", False
-        )
+        monkeypatch.setitem(litellm.model_cost[self.BEDROCK_MODEL], "supports_adaptive_thinking", False)
         litellm.get_model_info.cache_clear()
 
-        assert (
-            AnthropicModelInfo._is_adaptive_thinking_model("claude-opus-4-8", "anthropic")
-            is True
-        )
+        assert AnthropicModelInfo._is_adaptive_thinking_model("claude-opus-4-8", "anthropic") is True
+
+
 def test_create_anthropic_model_list_response_shape():
     from litellm.llms.anthropic.common_utils import (
         create_anthropic_model_list_response,
@@ -2101,3 +2041,818 @@ def test_create_anthropic_model_list_response_empty():
     assert response["has_more"] is False
     assert response["first_id"] is None
     assert response["last_id"] is None
+
+
+# --------------------------------------------------------------------------- #
+# Workload identity federation wiring (issue #28607)
+# --------------------------------------------------------------------------- #
+
+FAKE_MINTED_TOKEN = "sk-ant-oat01-wif-minted-token-for-testing-abc123"
+
+ANTHROPIC_ENV_VARS = (
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "ANTHROPIC_API_BASE",
+    "ANTHROPIC_BASE_URL",
+    "ANTHROPIC_FEDERATION_RULE_ID",
+    "ANTHROPIC_ORGANIZATION_ID",
+    "ANTHROPIC_SERVICE_ACCOUNT_ID",
+    "ANTHROPIC_WORKSPACE_ID",
+    "ANTHROPIC_IDENTITY_TOKEN_FILE",
+    "ANTHROPIC_IDENTITY_TOKEN",
+    "LITELLM_OIDC_ALLOWED_CREDENTIAL_DIRS",
+)
+
+WIF_ENV = {
+    "ANTHROPIC_FEDERATION_RULE_ID": "fdrl_wire1",
+    "ANTHROPIC_ORGANIZATION_ID": "org-wire-1",
+    "ANTHROPIC_IDENTITY_TOKEN": "inline-wire-jwt",
+}
+
+
+class RecordingPoster:
+    def __init__(self, response):
+        self.requests = []
+        self.thread_ids = []
+        self._response = response
+
+    def post(self, url, *, content, headers, timeout):
+        self.requests.append((url, content, dict(headers)))
+        self.thread_ids.append(threading.get_ident())
+        return self._response
+
+
+@pytest.fixture
+def clean_anthropic_env(monkeypatch):
+    for name in ANTHROPIC_ENV_VARS:
+        monkeypatch.delenv(name, raising=False)
+
+
+@pytest.fixture
+def wif_engine(monkeypatch, clean_anthropic_env):
+    """Route the wiring's WIF tier through a fresh engine (never the module
+    singleton, to avoid cross-test cache pollution) and count its consultations."""
+    import httpx
+
+    from litellm.llms.anthropic import common_utils as anthropic_common_utils
+    from litellm.llms.anthropic.wif import get_anthropic_wif_token
+    from litellm.llms.base_llm.auth.token_exchange import JwtBearerTokenExchangeEngine
+
+    poster = RecordingPoster(
+        httpx.Response(
+            200,
+            json={"access_token": FAKE_MINTED_TOKEN, "token_type": "Bearer", "expires_in": 3600},
+        )
+    )
+    engine = JwtBearerTokenExchangeEngine(poster=poster)
+    calls = []
+
+    def with_injected_engine(litellm_params, api_base, model):
+        calls.append(model)
+        return get_anthropic_wif_token(litellm_params, api_base, model, engine)
+
+    monkeypatch.setattr(anthropic_common_utils, "get_anthropic_wif_token", with_injected_engine)
+    return poster, calls
+
+
+@pytest.fixture
+def wif_async_engine(monkeypatch, clean_anthropic_env):
+    """Route both WIF facades through one fresh engine; the poster records the
+    thread each exchange ran on and sync-facade consultations are counted so
+    async tests can prove the mint went through the async seam, off the loop."""
+    import httpx
+
+    from litellm.llms.anthropic import common_utils as anthropic_common_utils
+    from litellm.llms.anthropic.wif import aget_anthropic_wif_token, get_anthropic_wif_token
+    from litellm.llms.base_llm.auth.token_exchange import JwtBearerTokenExchangeEngine
+
+    poster = RecordingPoster(
+        httpx.Response(
+            200,
+            json={"access_token": FAKE_MINTED_TOKEN, "token_type": "Bearer", "expires_in": 3600},
+        )
+    )
+    engine = JwtBearerTokenExchangeEngine(poster=poster)
+    sync_calls = []
+
+    def sync_shim(litellm_params, api_base, model):
+        sync_calls.append(model)
+        return get_anthropic_wif_token(litellm_params, api_base, model, engine)
+
+    async def async_shim(litellm_params, api_base, model):
+        return await aget_anthropic_wif_token(litellm_params, api_base, model, engine)
+
+    monkeypatch.setattr(anthropic_common_utils, "get_anthropic_wif_token", sync_shim)
+    monkeypatch.setattr(anthropic_common_utils, "aget_anthropic_wif_token", async_shim)
+    return poster, sync_calls
+
+
+def _validate_chat_environment(api_key=None):
+    from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+    return AnthropicModelInfo().validate_environment(
+        headers={},
+        model="claude-sonnet-4-5",
+        messages=[{"role": "user", "content": "Hello"}],
+        optional_params={},
+        litellm_params={},
+        api_key=api_key,
+        api_base=None,
+    )
+
+
+class TestWifTierPrecedence:
+    """WIF is the LOWEST credential tier: any api_key / auth_token source must
+    win without the engine ever being consulted."""
+
+    def _set_wif_env(self, monkeypatch):
+        for name, value in WIF_ENV.items():
+            monkeypatch.setenv(name, value)
+
+    def test_explicit_api_key_beats_wif(self, monkeypatch, wif_engine):
+        poster, calls = wif_engine
+        self._set_wif_env(monkeypatch)
+
+        headers = _validate_chat_environment(api_key=FAKE_REGULAR_KEY)
+
+        assert headers["x-api-key"] == FAKE_REGULAR_KEY
+        assert calls == []
+        assert poster.requests == []
+
+    def test_api_key_env_beats_wif(self, monkeypatch, wif_engine):
+        poster, calls = wif_engine
+        self._set_wif_env(monkeypatch)
+        monkeypatch.setenv("ANTHROPIC_API_KEY", FAKE_REGULAR_KEY)
+
+        headers = _validate_chat_environment()
+
+        assert headers["x-api-key"] == FAKE_REGULAR_KEY
+        assert calls == []
+        assert poster.requests == []
+
+    def test_auth_token_env_beats_wif(self, monkeypatch, wif_engine):
+        poster, calls = wif_engine
+        self._set_wif_env(monkeypatch)
+        monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", FAKE_AUTH_TOKEN)
+
+        headers = _validate_chat_environment()
+
+        assert headers["authorization"] == f"Bearer {FAKE_AUTH_TOKEN}"
+        assert calls == []
+        assert poster.requests == []
+
+    def test_wif_alone_mints_once(self, monkeypatch, wif_engine):
+        poster, calls = wif_engine
+        self._set_wif_env(monkeypatch)
+
+        headers = _validate_chat_environment()
+
+        assert headers["authorization"] == f"Bearer {FAKE_MINTED_TOKEN}"
+        assert calls == ["claude-sonnet-4-5"]
+        assert len(poster.requests) == 1
+        assert poster.requests[0][0] == "https://api.anthropic.com/v1/oauth/token"
+
+
+class TestWifZeroBehaviorChange:
+    def test_unconfigured_raises_same_authentication_error(self, clean_anthropic_env):
+        """No WIF config and no keys: same AuthenticationError as today (message
+        extended, type and provider identical)."""
+        import litellm
+
+        with pytest.raises(litellm.AuthenticationError) as exc_info:
+            _validate_chat_environment()
+
+        assert exc_info.value.llm_provider == "anthropic"
+        assert "ANTHROPIC_API_KEY" in exc_info.value.message
+        assert "ANTHROPIC_AUTH_TOKEN" in exc_info.value.message
+        assert "ANTHROPIC_FEDERATION_RULE_ID" in exc_info.value.message
+        assert "ANTHROPIC_ORGANIZATION_ID" in exc_info.value.message
+        assert "ANTHROPIC_SERVICE_ACCOUNT_ID" in exc_info.value.message
+        assert "ANTHROPIC_IDENTITY_TOKEN_FILE" in exc_info.value.message
+
+
+class TestWifHeaderContract:
+    def test_minted_token_headers(self, monkeypatch, wif_engine):
+        for name, value in WIF_ENV.items():
+            monkeypatch.setenv(name, value)
+
+        headers = _validate_chat_environment()
+
+        assert headers["authorization"] == f"Bearer {FAKE_MINTED_TOKEN}"
+        assert "oauth-2025-04-20" in headers["anthropic-beta"]
+        assert "x-api-key" not in headers
+        assert "anthropic-dangerous-direct-browser-access" not in headers
+
+    def test_consumer_oat_key_keeps_dangerous_header(self, clean_anthropic_env):
+        """Regression: user-supplied consumer sk-ant-oat keys keep today's behavior."""
+        headers = _validate_chat_environment(api_key=FAKE_OAUTH_TOKEN)
+
+        assert headers["authorization"] == f"Bearer {FAKE_OAUTH_TOKEN}"
+        assert headers["anthropic-dangerous-direct-browser-access"] == "true"
+        assert "oauth-2025-04-20" in headers["anthropic-beta"]
+
+
+class TestWifServerOwnedAuthHeaderStrip:
+    """A WIF-minted token must never ride alongside a caller-supplied credential
+    header, but that stripping must fire only when a mint actually happened."""
+
+    def test_mint_strips_caller_supplied_x_api_key(self, monkeypatch, wif_engine):
+        """Security regression: without the strip, a caller-forwarded x-api-key
+        would sit next to the server-minted Authorization on the outgoing request."""
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        poster, _ = wif_engine
+        for name, value in WIF_ENV.items():
+            monkeypatch.setenv(name, value)
+        caller_key = "sk-ant-CALLER-SUPPLIED"
+
+        headers = AnthropicModelInfo().validate_environment(
+            headers={"x-api-key": caller_key},
+            model="claude-sonnet-4-5",
+            messages=[{"role": "user", "content": "Hello"}],
+            optional_params={},
+            litellm_params={},
+            api_key=None,
+            api_base=None,
+        )
+
+        assert headers["authorization"] == f"Bearer {FAKE_MINTED_TOKEN}"
+        assert "x-api-key" not in headers
+        assert caller_key not in headers.values()
+        assert len(poster.requests) == 1
+
+    def test_no_mint_preserves_caller_supplied_authorization(self, monkeypatch, clean_anthropic_env):
+        """No-regression: LiteLLM deliberately lets a caller-forwarded credential
+        header ride alongside a statically configured ANTHROPIC_API_KEY, because the
+        two occupy different header slots (x-api-key vs authorization) when the key
+        isn't OAuth-shaped. The strip must stay conditional on an actual WIF mint."""
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        monkeypatch.setenv("ANTHROPIC_API_KEY", FAKE_REGULAR_KEY)
+        caller_authorization = "Bearer caller-forwarded-downstream-token"
+
+        headers = AnthropicModelInfo().validate_environment(
+            headers={"authorization": caller_authorization},
+            model="claude-sonnet-4-5",
+            messages=[{"role": "user", "content": "Hello"}],
+            optional_params={},
+            litellm_params={},
+            api_key=None,
+            api_base=None,
+        )
+
+        assert headers["x-api-key"] == FAKE_REGULAR_KEY
+        assert headers["authorization"] == caller_authorization
+
+
+class TestWifResolvedApiKeyThreading:
+    """Regression for the resolved_api_key local (formerly a rebind of the api_key
+    parameter): a minted token must reach the outgoing headers on both the sync
+    validate_environment path and the async aget_auth_header path, never a stale
+    None left over from the original unresolved parameter."""
+
+    def test_validate_environment_carries_minted_token(self, monkeypatch, wif_engine):
+        for name, value in WIF_ENV.items():
+            monkeypatch.setenv(name, value)
+
+        headers = _validate_chat_environment()
+
+        assert "authorization" in headers
+        assert headers["authorization"] not in (None, "Bearer None")
+        assert headers["authorization"] == f"Bearer {FAKE_MINTED_TOKEN}"
+
+    @pytest.mark.asyncio
+    async def test_aget_auth_header_carries_minted_token(self, monkeypatch, wif_async_engine):
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        for name, value in WIF_ENV.items():
+            monkeypatch.setenv(name, value)
+
+        result = await AnthropicModelInfo.aget_auth_header()
+
+        assert result is not None
+        assert result["authorization"] not in (None, "Bearer None")
+        assert result["authorization"] == f"Bearer {FAKE_MINTED_TOKEN}"
+
+
+class TestGetAuthHeaderBetas:
+    def test_oat_branch_carries_oauth_beta(self, clean_anthropic_env):
+        """The pre-existing bug: the oat branch returned a bare Bearer without the
+        mandatory oauth beta."""
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        result = AnthropicModelInfo.get_auth_header(api_key=FAKE_OAUTH_TOKEN)
+
+        assert result == {
+            "authorization": f"Bearer {FAKE_OAUTH_TOKEN}",
+            "anthropic-beta": "oauth-2025-04-20",
+        }
+
+    def test_wif_fallback_returns_bearer_and_beta(self, monkeypatch, wif_engine):
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        poster, calls = wif_engine
+        for name, value in WIF_ENV.items():
+            monkeypatch.setenv(name, value)
+
+        result = AnthropicModelInfo.get_auth_header()
+
+        assert result == {
+            "authorization": f"Bearer {FAKE_MINTED_TOKEN}",
+            "anthropic-beta": "oauth-2025-04-20",
+        }
+        assert len(poster.requests) == 1
+
+    def test_no_credentials_still_returns_none(self, clean_anthropic_env):
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        assert AnthropicModelInfo.get_auth_header() is None
+
+
+class TestFilesBatchesBetaMerge:
+    """Regression for the anthropic-beta clobber (files) and drop (batches):
+    a Bearer oat auth header must keep the oauth beta AND gain the surface beta."""
+
+    def test_files_merges_oauth_and_files_betas(self, clean_anthropic_env):
+        from litellm.llms.anthropic.files.transformation import AnthropicFilesConfig
+
+        headers = AnthropicFilesConfig().validate_environment(
+            headers={},
+            model="",
+            messages=[],
+            optional_params={},
+            litellm_params={},
+            api_key=FAKE_OAUTH_TOKEN,
+        )
+
+        assert headers["authorization"] == f"Bearer {FAKE_OAUTH_TOKEN}"
+        betas = set(headers["anthropic-beta"].split(","))
+        assert {"oauth-2025-04-20", "files-api-2025-04-14"} <= betas
+
+    def test_batches_merges_oauth_and_batches_betas(self, clean_anthropic_env):
+        from litellm.llms.anthropic.batches.transformation import AnthropicBatchesConfig
+
+        headers = AnthropicBatchesConfig().validate_environment(
+            headers={},
+            model="",
+            messages=[],
+            optional_params={},
+            litellm_params={},
+            api_key=FAKE_OAUTH_TOKEN,
+        )
+
+        assert headers["authorization"] == f"Bearer {FAKE_OAUTH_TOKEN}"
+        betas = set(headers["anthropic-beta"].split(","))
+        assert {"oauth-2025-04-20", "message-batches-2024-09-24"} <= betas
+
+    def test_files_preserves_caller_supplied_beta(self, clean_anthropic_env):
+        """Regression: files did a two-way merge that dropped the client's own
+        anthropic-beta; it must three-way merge exactly like batches."""
+        from litellm.llms.anthropic.files.transformation import AnthropicFilesConfig
+
+        headers = AnthropicFilesConfig().validate_environment(
+            headers={"anthropic-beta": "context-1m-2025-08-07"},
+            model="",
+            messages=[],
+            optional_params={},
+            litellm_params={},
+            api_key=FAKE_OAUTH_TOKEN,
+        )
+
+        betas = set(headers["anthropic-beta"].split(","))
+        assert {"context-1m-2025-08-07", "oauth-2025-04-20", "files-api-2025-04-14"} <= betas
+
+
+class TestMessagesEnvAuthBetaMerge:
+    def test_client_beta_survives_env_auth_injection(self, monkeypatch, clean_anthropic_env):
+        """Regression: headers.update(auth_header) silently clobbered the client's
+        anthropic-beta on the native /v1/messages route."""
+        from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
+            AnthropicMessagesConfig,
+        )
+
+        monkeypatch.setenv("ANTHROPIC_API_KEY", FAKE_OAUTH_TOKEN)
+
+        headers, _ = AnthropicMessagesConfig().validate_anthropic_messages_environment(
+            headers={"anthropic-beta": "context-1m-2025-08-07"},
+            model="claude-sonnet-4-5",
+            messages=[{"role": "user", "content": "Hello"}],
+            optional_params={},
+            litellm_params={},
+        )
+
+        assert headers["authorization"] == f"Bearer {FAKE_OAUTH_TOKEN}"
+        betas = set(headers["anthropic-beta"].split(","))
+        assert {"context-1m-2025-08-07", "oauth-2025-04-20"} <= betas
+
+
+WIF_PARAMS_ONLY = {
+    "anthropic_federation_rule_id": "fdrl_params",
+    "anthropic_organization_id": "org-params",
+    "anthropic_identity_token": "oidc/env/WIF_PARAMS_TEST_TOKEN",
+}
+
+
+class TestWifLitellmParamsPlumbing:
+    """Per-deployment anthropic_* litellm_params must reach the WIF tier on every
+    surface that has them, not only chat."""
+
+    @pytest.fixture(autouse=True)
+    def _inline_identity_token(self, monkeypatch):
+        monkeypatch.setenv("WIF_PARAMS_TEST_TOKEN", "params-jwt")
+
+    def test_files_mints_from_litellm_params(self, wif_engine):
+        from litellm.llms.anthropic.files.transformation import AnthropicFilesConfig
+
+        poster, _ = wif_engine
+        headers = AnthropicFilesConfig().validate_environment(
+            headers={},
+            model="",
+            messages=[],
+            optional_params={},
+            litellm_params=dict(WIF_PARAMS_ONLY),
+        )
+
+        assert headers["authorization"] == f"Bearer {FAKE_MINTED_TOKEN}"
+        assert len(poster.requests) == 1
+
+    def test_batches_mints_from_litellm_params(self, wif_engine):
+        from litellm.llms.anthropic.batches.transformation import AnthropicBatchesConfig
+
+        poster, _ = wif_engine
+        headers = AnthropicBatchesConfig().validate_environment(
+            headers={},
+            model="",
+            messages=[],
+            optional_params={},
+            litellm_params=dict(WIF_PARAMS_ONLY),
+        )
+
+        assert headers["authorization"] == f"Bearer {FAKE_MINTED_TOKEN}"
+        assert len(poster.requests) == 1
+
+    def test_skills_mints_from_litellm_params(self, wif_engine):
+        from litellm.llms.anthropic.skills.transformation import AnthropicSkillsConfig
+        from litellm.types.router import GenericLiteLLMParams
+
+        poster, _ = wif_engine
+        headers = AnthropicSkillsConfig().validate_environment(
+            headers={},
+            litellm_params=GenericLiteLLMParams(**WIF_PARAMS_ONLY),
+        )
+
+        assert headers["authorization"] == f"Bearer {FAKE_MINTED_TOKEN}"
+        assert len(poster.requests) == 1
+
+    def test_messages_mints_from_litellm_params(self, wif_engine):
+        from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
+            AnthropicMessagesConfig,
+        )
+
+        poster, _ = wif_engine
+        headers, _ = AnthropicMessagesConfig().validate_anthropic_messages_environment(
+            headers={},
+            model="claude-sonnet-4-5",
+            messages=[{"role": "user", "content": "Hello"}],
+            optional_params={},
+            litellm_params=dict(WIF_PARAMS_ONLY),
+        )
+
+        assert headers["authorization"] == f"Bearer {FAKE_MINTED_TOKEN}"
+        assert len(poster.requests) == 1
+
+
+class TestWifTokenUrlParity:
+    """Both credential tiers must derive the SAME clean token URL from any form of
+    the deployment base; a mismatch also duplicates mints because token_url is in
+    the engine cache key."""
+
+    @pytest.mark.parametrize(
+        "configured_base",
+        [
+            "https://gw.example.com",
+            "https://gw.example.com/",
+            "https://gw.example.com/v1/messages",
+            "https://gw.example.com/v1/messages/",
+        ],
+    )
+    def test_both_tiers_share_one_clean_token_url(self, monkeypatch, wif_engine, configured_base):
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        poster, _ = wif_engine
+        for name, value in WIF_ENV.items():
+            monkeypatch.setenv(name, value)
+
+        AnthropicModelInfo().validate_environment(
+            headers={},
+            model="claude-sonnet-4-5",
+            messages=[{"role": "user", "content": "Hello"}],
+            optional_params={},
+            litellm_params={"api_base": configured_base},
+            api_key=None,
+            api_base=None,
+        )
+        AnthropicModelInfo.get_auth_header(api_base=configured_base)
+
+        assert [url for (url, _, _) in poster.requests] == ["https://gw.example.com/v1/oauth/token"]
+
+
+class TestWifAsyncSeam:
+    """Async callers must resolve the WIF tier through the async facade so a cold
+    mint never blocks the event loop."""
+
+    @pytest.mark.asyncio
+    async def test_aget_auth_header_runs_exchange_off_event_loop(self, monkeypatch, wif_async_engine):
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        poster, sync_calls = wif_async_engine
+        for name, value in WIF_ENV.items():
+            monkeypatch.setenv(name, value)
+
+        result = await AnthropicModelInfo.aget_auth_header()
+
+        assert result == {
+            "authorization": f"Bearer {FAKE_MINTED_TOKEN}",
+            "anthropic-beta": "oauth-2025-04-20",
+        }
+        assert sync_calls == []
+        assert poster.thread_ids == [poster.thread_ids[0]]
+        assert poster.thread_ids[0] != threading.get_ident()
+
+    @pytest.mark.asyncio
+    async def test_avalidate_messages_environment_mints_off_loop(self, wif_async_engine, monkeypatch):
+        from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
+            AnthropicMessagesConfig,
+        )
+
+        poster, sync_calls = wif_async_engine
+        monkeypatch.setenv("WIF_PARAMS_TEST_TOKEN", "params-jwt")
+
+        headers, _ = await AnthropicMessagesConfig().avalidate_anthropic_messages_environment(
+            headers={},
+            model="claude-sonnet-4-5",
+            messages=[{"role": "user", "content": "Hello"}],
+            optional_params={},
+            litellm_params=dict(WIF_PARAMS_ONLY),
+        )
+
+        assert headers["authorization"] == f"Bearer {FAKE_MINTED_TOKEN}"
+        assert sync_calls == []
+        assert poster.thread_ids[0] != threading.get_ident()
+
+    @pytest.mark.asyncio
+    async def test_avalidate_delegates_to_subclass_sync_override(self):
+        """A provider subclass that only overrides the sync method must keep its
+        behavior when the handler goes through the async variant."""
+        from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
+            AnthropicMessagesConfig,
+        )
+
+        class MarkerConfig(AnthropicMessagesConfig):
+            def validate_anthropic_messages_environment(
+                self,
+                headers,
+                model,
+                messages,
+                optional_params,
+                litellm_params,
+                api_key=None,
+                api_base=None,
+            ):
+                return {"x-marker": "sync"}, api_base
+
+        headers, api_base = await MarkerConfig().avalidate_anthropic_messages_environment(
+            headers={},
+            model="claude-sonnet-4-5",
+            messages=[],
+            optional_params={},
+            litellm_params={},
+            api_base="https://marker.example.com",
+        )
+
+        assert headers == {"x-marker": "sync"}
+        assert api_base == "https://marker.example.com"
+
+    @pytest.mark.asyncio
+    async def test_base_default_avalidate_delegates_to_sync(self):
+        from litellm.llms.base_llm.anthropic_messages.transformation import (
+            BaseAnthropicMessagesConfig,
+        )
+
+        class SyncOnlyConfig(BaseAnthropicMessagesConfig):
+            def validate_anthropic_messages_environment(
+                self,
+                headers,
+                model,
+                messages,
+                optional_params,
+                litellm_params,
+                api_key=None,
+                api_base=None,
+            ):
+                return {"x-sync-only": "1"}, api_base
+
+            def get_complete_url(self, api_base, api_key, model, optional_params, litellm_params, stream=None):
+                return api_base or ""
+
+            def get_supported_anthropic_messages_params(self, model):
+                return []
+
+            def transform_anthropic_messages_request(
+                self, model, messages, anthropic_messages_optional_request_params, litellm_params, headers
+            ):
+                return {}
+
+            def transform_anthropic_messages_response(self, model, raw_response, logging_obj):
+                raise NotImplementedError
+
+        headers, _ = await SyncOnlyConfig().avalidate_anthropic_messages_environment(
+            headers={},
+            model="m",
+            messages=[],
+            optional_params={},
+            litellm_params={},
+        )
+
+        assert headers == {"x-sync-only": "1"}
+
+
+class TestWifRespxEndToEnd:
+    def test_completion_mints_and_never_leaks_config(self, monkeypatch, tmp_path, clean_anthropic_env):
+        """Drives the REAL kwargs funnel through litellm.completion: the mint hits
+        /v1/oauth/token, the data plane carries the minted Bearer + oauth beta, and
+        NONE of the six anthropic_* keys leak into the /v1/messages body."""
+        import httpx
+        import respx
+
+        import litellm
+        from litellm.llms.anthropic import common_utils as anthropic_common_utils
+        from litellm.llms.anthropic.wif import get_anthropic_wif_token
+        from litellm.llms.base_llm.auth.token_exchange import JwtBearerTokenExchangeEngine
+
+        monkeypatch.setattr(litellm, "api_key", None)
+        monkeypatch.setattr(litellm, "anthropic_key", None)
+        monkeypatch.setenv("LITELLM_OIDC_ALLOWED_CREDENTIAL_DIRS", str(tmp_path))
+        token_file = tmp_path / "identity-token"
+        token_file.write_text("e2e-oidc-assertion", encoding="utf-8")
+
+        engine = JwtBearerTokenExchangeEngine()
+        monkeypatch.setattr(
+            anthropic_common_utils,
+            "get_anthropic_wif_token",
+            lambda litellm_params, api_base, model: get_anthropic_wif_token(litellm_params, api_base, model, engine),
+        )
+
+        wif_kwargs = {
+            "anthropic_federation_rule_id": "fdrl_e2e",
+            "anthropic_organization_id": "org-e2e",
+            "anthropic_service_account_id": "svcacct_e2e",
+            "anthropic_workspace_id": "wrkspc_e2e",
+            "anthropic_identity_token_file": str(token_file),
+            "anthropic_identity_token": "oidc/env/UNUSED_FALLBACK",
+        }
+        anthropic_response = {
+            "id": "msg_01",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-sonnet-4-5",
+            "content": [{"type": "text", "text": "Hello from WIF"}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 5, "output_tokens": 4},
+        }
+
+        with respx.mock:
+            token_route = respx.post("https://api.anthropic.com/v1/oauth/token").mock(
+                return_value=httpx.Response(
+                    200,
+                    json={"access_token": FAKE_MINTED_TOKEN, "token_type": "Bearer", "expires_in": 3600},
+                )
+            )
+            messages_route = respx.post("https://api.anthropic.com/v1/messages").mock(
+                return_value=httpx.Response(200, json=anthropic_response)
+            )
+            response = litellm.completion(
+                model="anthropic/claude-sonnet-4-5",
+                messages=[{"role": "user", "content": "hi"}],
+                **wif_kwargs,
+            )
+
+        assert response.choices[0].message.content == "Hello from WIF"
+        assert token_route.call_count == 1
+        exchange_body = json.loads(token_route.calls[0].request.content)
+        assert exchange_body["assertion"] == "e2e-oidc-assertion"
+        assert exchange_body["federation_rule_id"] == "fdrl_e2e"
+
+        data_request = messages_route.calls[0].request
+        assert data_request.headers["authorization"] == f"Bearer {FAKE_MINTED_TOKEN}"
+        assert "oauth-2025-04-20" in data_request.headers["anthropic-beta"]
+        assert "x-api-key" not in data_request.headers
+        assert "anthropic-dangerous-direct-browser-access" not in data_request.headers
+        data_body = json.loads(data_request.content)
+        for key in wif_kwargs:
+            assert key not in data_body
+
+    def test_completion_with_trailing_slash_api_base_mints_at_clean_token_url(
+        self, monkeypatch, tmp_path, clean_anthropic_env
+    ):
+        """Regression: a trailing-slash api_base defeated the endswith check in
+        main.py AND the removesuffix surgery, sending the exchange POST to
+        .../v1/messages/v1/oauth/token (404)."""
+        import httpx
+        import respx
+
+        import litellm
+        from litellm.llms.anthropic import common_utils as anthropic_common_utils
+        from litellm.llms.anthropic.wif import get_anthropic_wif_token
+        from litellm.llms.base_llm.auth.token_exchange import JwtBearerTokenExchangeEngine
+
+        monkeypatch.setattr(litellm, "api_key", None)
+        monkeypatch.setattr(litellm, "anthropic_key", None)
+        monkeypatch.setenv("LITELLM_OIDC_ALLOWED_CREDENTIAL_DIRS", str(tmp_path))
+        token_file = tmp_path / "identity-token"
+        token_file.write_text("e2e-oidc-assertion", encoding="utf-8")
+
+        engine = JwtBearerTokenExchangeEngine()
+        monkeypatch.setattr(
+            anthropic_common_utils,
+            "get_anthropic_wif_token",
+            lambda litellm_params, api_base, model: get_anthropic_wif_token(litellm_params, api_base, model, engine),
+        )
+
+        anthropic_response = {
+            "id": "msg_02",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-sonnet-4-5",
+            "content": [{"type": "text", "text": "Hello from WIF"}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 5, "output_tokens": 4},
+        }
+
+        with respx.mock:
+            token_route = respx.post("https://api.anthropic.com/v1/oauth/token").mock(
+                return_value=httpx.Response(
+                    200,
+                    json={"access_token": FAKE_MINTED_TOKEN, "token_type": "Bearer", "expires_in": 3600},
+                )
+            )
+            messages_route = respx.post(url__regex=r"https://api\.anthropic\.com/v1/messages.*").mock(
+                return_value=httpx.Response(200, json=anthropic_response)
+            )
+            response = litellm.completion(
+                model="anthropic/claude-sonnet-4-5",
+                messages=[{"role": "user", "content": "hi"}],
+                api_base="https://api.anthropic.com/v1/messages/",
+                anthropic_federation_rule_id="fdrl_e2e",
+                anthropic_organization_id="org-e2e",
+                anthropic_identity_token_file=str(token_file),
+            )
+
+        assert response.choices[0].message.content == "Hello from WIF"
+        assert token_route.call_count == 1
+        assert messages_route.calls[0].request.headers["authorization"] == f"Bearer {FAKE_MINTED_TOKEN}"
+
+    def test_get_auth_header_with_litellm_params_mints_via_real_engine(
+        self, monkeypatch, tmp_path, clean_anthropic_env
+    ):
+        import httpx
+        import respx
+
+        from litellm.llms.anthropic import common_utils as anthropic_common_utils
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+        from litellm.llms.anthropic.wif import get_anthropic_wif_token
+        from litellm.llms.base_llm.auth.token_exchange import JwtBearerTokenExchangeEngine
+
+        monkeypatch.setenv("LITELLM_OIDC_ALLOWED_CREDENTIAL_DIRS", str(tmp_path))
+        token_file = tmp_path / "identity-token"
+        token_file.write_text("e2e-oidc-assertion", encoding="utf-8")
+
+        engine = JwtBearerTokenExchangeEngine()
+        monkeypatch.setattr(
+            anthropic_common_utils,
+            "get_anthropic_wif_token",
+            lambda litellm_params, api_base, model: get_anthropic_wif_token(litellm_params, api_base, model, engine),
+        )
+
+        with respx.mock:
+            token_route = respx.post("https://api.anthropic.com/v1/oauth/token").mock(
+                return_value=httpx.Response(
+                    200,
+                    json={"access_token": FAKE_MINTED_TOKEN, "token_type": "Bearer", "expires_in": 3600},
+                )
+            )
+            result = AnthropicModelInfo.get_auth_header(
+                litellm_params={
+                    "anthropic_federation_rule_id": "fdrl_e2e",
+                    "anthropic_organization_id": "org-e2e",
+                    "anthropic_identity_token_file": str(token_file),
+                }
+            )
+
+        assert result == {
+            "authorization": f"Bearer {FAKE_MINTED_TOKEN}",
+            "anthropic-beta": "oauth-2025-04-20",
+        }
+        assert token_route.call_count == 1
+        exchange_body = json.loads(token_route.calls[0].request.content)
+        assert exchange_body["federation_rule_id"] == "fdrl_e2e"

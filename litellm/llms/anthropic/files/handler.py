@@ -85,7 +85,7 @@ class AnthropicFilesHandler:
 
         # Get Anthropic API credentials
         api_base = self.anthropic_model_info.get_api_base(api_base)
-        auth_header: Final = self.anthropic_model_info.get_auth_header(api_key, api_base)
+        auth_header: Final = await self.anthropic_model_info.aget_auth_header(api_key, api_base)
 
         if auth_header is None:
             raise ValueError("Missing Anthropic API Key")

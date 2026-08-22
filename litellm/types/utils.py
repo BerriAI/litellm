@@ -3476,9 +3476,21 @@ bedrock_batch_litellm_params: Final = (
     "bedrock_tags",
 )
 
+# Anthropic workload identity federation config, read from litellm_params by the
+# Anthropic auth tier. Listed for the same reason as the fields above: an
+# unrecognized top-level key is swept into extra_body and sent to /v1/messages.
+anthropic_wif_litellm_params: Final = (
+    "anthropic_federation_rule_id",
+    "anthropic_organization_id",
+    "anthropic_service_account_id",
+    "anthropic_workspace_id",
+    "anthropic_identity_token_file",
+    "anthropic_identity_token",
+)
+
 all_litellm_params = (
     agentic_loop_internal_litellm_params
-    + [TRUSTED_CALLBACK_VARS_FIELD, *bedrock_batch_litellm_params]
+    + [TRUSTED_CALLBACK_VARS_FIELD, *bedrock_batch_litellm_params, *anthropic_wif_litellm_params]
     + [
         "metadata",
         "litellm_metadata",

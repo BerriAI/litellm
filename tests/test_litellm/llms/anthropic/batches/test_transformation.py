@@ -80,8 +80,11 @@ def test_validate_environment_preserves_existing_beta_header(config):
         litellm_params={},
         api_key="sk-ant-test",
     )
-    # Existing beta header must NOT be overwritten.
-    assert headers["anthropic-beta"] == "custom-beta-value"
+    # Existing beta values are preserved and the batches beta is merged in.
+    assert set(headers["anthropic-beta"].split(",")) == {
+        "custom-beta-value",
+        "message-batches-2024-09-24",
+    }
 
 
 def test_validate_environment_oauth_key_uses_bearer(config):

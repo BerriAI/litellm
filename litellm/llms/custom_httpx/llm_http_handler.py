@@ -2082,7 +2082,7 @@ class BaseLLMHTTPHandler:
         (
             headers,
             api_base,
-        ) = anthropic_messages_provider_config.validate_anthropic_messages_environment(
+        ) = await anthropic_messages_provider_config.avalidate_anthropic_messages_environment(
             headers=merged_headers or {},
             model=model,
             messages=messages,

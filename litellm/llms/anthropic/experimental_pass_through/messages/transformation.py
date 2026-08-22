@@ -27,6 +27,7 @@ from litellm.types.router import GenericLiteLLMParams
 from ...common_utils import (
     AnthropicError,
     AnthropicModelInfo,
+    merge_anthropic_beta_headers,
     optionally_handle_anthropic_oauth,
     strip_advisor_blocks_from_messages,
 )
@@ -308,20 +309,79 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         headers, api_key = optionally_handle_anthropic_oauth(headers=headers, api_key=api_key)
 
         if "x-api-key" not in headers and "authorization" not in headers:
-            auth_header: Final = AnthropicModelInfo.get_auth_header(api_key)
-            if auth_header is not None:
-                headers.update(auth_header)
+            self._apply_env_auth_header(
+                headers,
+                AnthropicModelInfo.get_auth_header(
+                    api_key,
+                    api_base=api_base,
+                    litellm_params=self._wif_litellm_params(litellm_params),
+                ),
+            )
+        return self._finalize_messages_headers(headers, optional_params), api_base
+
+    async def avalidate_anthropic_messages_environment(
+        self,
+        headers: dict,  # mutable-ok: mirrors the sync validate_anthropic_messages_environment contract
+        model: str,
+        messages: list[Any],  # mutable-ok: mirrors the sync validate_anthropic_messages_environment contract
+        optional_params: dict,  # mutable-ok: mirrors the sync validate_anthropic_messages_environment contract
+        litellm_params: dict,  # mutable-ok: mirrors the sync validate_anthropic_messages_environment contract
+        api_key: str | None = None,
+        api_base: str | None = None,
+    ) -> tuple[dict, str | None]:  # mutable-ok: mirrors the sync validate_anthropic_messages_environment contract
+        if type(self).validate_anthropic_messages_environment is not (
+            AnthropicMessagesConfig.validate_anthropic_messages_environment
+        ):
+            # a subclass sync override must keep winning on the async path
+            return self.validate_anthropic_messages_environment(
+                headers=headers,
+                model=model,
+                messages=messages,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                api_key=api_key,
+                api_base=api_base,
+            )
+        oauth_headers, oauth_api_key = optionally_handle_anthropic_oauth(headers=headers, api_key=api_key)
+
+        if "x-api-key" not in oauth_headers and "authorization" not in oauth_headers:
+            self._apply_env_auth_header(
+                oauth_headers,
+                await AnthropicModelInfo.aget_auth_header(
+                    oauth_api_key,
+                    api_base=api_base,
+                    litellm_params=self._wif_litellm_params(litellm_params),
+                ),
+            )
+        return self._finalize_messages_headers(oauth_headers, optional_params), api_base
+
+    @staticmethod
+    def _apply_env_auth_header(headers: dict, auth_header: Mapping[str, str] | None) -> None:  # mutable-ok: out-param
+        if auth_header is None:
+            return
+        merged_beta: Final = merge_anthropic_beta_headers(
+            headers.get("anthropic-beta"), auth_header.get("anthropic-beta")
+        )
+        headers.update(auth_header)
+        if merged_beta:
+            headers["anthropic-beta"] = merged_beta
+
+    def _wif_litellm_params(self, litellm_params: dict) -> Mapping[str, object] | None:  # mutable-ok: sync-contract mirror
+        """Subclasses reuse this validate step for their own /v1/messages-compatible providers,
+        so an Anthropic federation token is only ever minted for Anthropic itself."""
+        if self._resolved_provider != "anthropic":
+            return None
+        return litellm_params if isinstance(litellm_params, dict) else None
+
+    def _finalize_messages_headers(self, headers: dict, optional_params: dict) -> dict:  # mutable-ok: out-param
         if "anthropic-version" not in headers:
             headers["anthropic-version"] = DEFAULT_ANTHROPIC_API_VERSION
         if "content-type" not in headers:
             headers["content-type"] = "application/json"
-
-        headers = self._update_headers_with_anthropic_beta(
+        return self._update_headers_with_anthropic_beta(
             headers=headers,
             optional_params=optional_params,
         )
-
-        return headers, api_base
 
     @staticmethod
     def _translate_reasoning_effort_to_anthropic(model: str, optional_params: dict, custom_llm_provider: str) -> None:

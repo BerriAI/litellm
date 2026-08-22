@@ -244,3 +244,40 @@ class TestRustOptIn:
         from litellm.types.utils import all_litellm_params
 
         assert "rust" in all_litellm_params
+
+
+class TestAnthropicWifKeys:
+    """The six anthropic_* WIF keys need the same dual registration as `rust`:
+    carried by the kwargs funnel into litellm_params (where the Anthropic auth
+    tier reads them) AND listed in all_litellm_params (so the extra_body sweep
+    never sends them to /v1/messages)."""
+
+    SIX_KEYS = {
+        "anthropic_federation_rule_id": "fdrl_1",
+        "anthropic_organization_id": "org-1",
+        "anthropic_service_account_id": "svcacct_1",
+        "anthropic_workspace_id": "wrkspc_1",
+        "anthropic_identity_token_file": "/var/run/secrets/tok",
+        "anthropic_identity_token": "oidc/env/TOK",
+    }
+
+    def test_keys_survive_into_litellm_params(self):
+        params = get_litellm_params(**self.SIX_KEYS)
+        for key, value in self.SIX_KEYS.items():
+            assert params[key] == value
+
+    def test_keys_are_forwarded_from_completion_kwargs(self):
+        from litellm.litellm_core_utils.get_litellm_params import FORWARDED_KWARGS_KEYS
+
+        assert set(self.SIX_KEYS) <= FORWARDED_KWARGS_KEYS
+
+    def test_keys_stay_out_of_the_provider_body(self):
+        from litellm.types.utils import all_litellm_params
+
+        for key in self.SIX_KEYS:
+            assert key in all_litellm_params
+
+    def test_keys_absent_when_not_configured(self):
+        params = get_litellm_params()
+        for key in self.SIX_KEYS:
+            assert key not in params

@@ -24,10 +24,24 @@ AWS_CREDENTIAL_KWARGS_KEYS: Final = frozenset(
 # The per-deployment Rust opt-in.
 RUST_KWARG_KEY: Final = "rust"
 
+# Anthropic workload identity federation config, read from litellm_params by the
+# Anthropic auth tier. Registered like `rust`: here so the kwargs funnel carries
+# them, and in `all_litellm_params` so they never leak into the provider body.
+ANTHROPIC_WIF_KWARGS_KEYS: Final = frozenset(
+    {
+        "anthropic_federation_rule_id",
+        "anthropic_organization_id",
+        "anthropic_service_account_id",
+        "anthropic_workspace_id",
+        "anthropic_identity_token_file",
+        "anthropic_identity_token",
+    }
+)
+
 # Keys `completion()` forwards from its own kwargs into `get_litellm_params`,
 # which are otherwise invisible to it because that call site passes explicit
 # named arguments rather than `**kwargs`.
-FORWARDED_KWARGS_KEYS: Final = AWS_CREDENTIAL_KWARGS_KEYS | frozenset({RUST_KWARG_KEY})
+FORWARDED_KWARGS_KEYS: Final = AWS_CREDENTIAL_KWARGS_KEYS | ANTHROPIC_WIF_KWARGS_KEYS | frozenset({RUST_KWARG_KEY})
 
 # Pre-define optional kwargs keys as frozenset for O(1) lookups
 # These are extracted from kwargs only if present, avoiding unnecessary .get() calls
@@ -62,6 +76,7 @@ OPTIONAL_KWARGS_KEYS: Final = (
         }
     )
     | AWS_CREDENTIAL_KWARGS_KEYS
+    | ANTHROPIC_WIF_KWARGS_KEYS
 )
 
 # Backward-compatible alias for existing imports/tests.

@@ -11,6 +11,8 @@ from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.openai import AllMessageValues, CreateBatchRequest
 from litellm.types.utils import LiteLLMBatch, LlmProviders, ModelResponse
 
+from ..common_utils import merge_anthropic_beta_headers
+
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
@@ -43,23 +45,26 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
         api_base: str | None = None,
     ) -> dict:
         """Validate and prepare environment-specific headers and parameters."""
-        if api_base is None and isinstance(litellm_params, dict):
-            api_base = litellm_params.get("api_base")
-        auth_header: Final = self.anthropic_model_info.get_auth_header(api_key, api_base)
+        params_mapping: Final = litellm_params if isinstance(litellm_params, dict) else None
+        if api_base is None and params_mapping is not None:
+            api_base = params_mapping.get("api_base")
+        auth_header: Final = self.anthropic_model_info.get_auth_header(api_key, api_base, litellm_params=params_mapping)
         if auth_header is None:
             raise ValueError(
                 "Missing Anthropic API Key - A call is being made to anthropic but no key is set either in the environment variables or via params"
             )
+        merged_beta: Final = merge_anthropic_beta_headers(
+            merge_anthropic_beta_headers(headers.get("anthropic-beta"), auth_header.get("anthropic-beta")),
+            "message-batches-2024-09-24",
+        )
         _headers: Final = {
             "accept": "application/json",
             "anthropic-version": "2023-06-01",
             "content-type": "application/json",
         }
         _headers.update(auth_header)
-        # Add beta header for message batches
-        if "anthropic-beta" not in headers:
-            headers["anthropic-beta"] = "message-batches-2024-09-24"
         headers.update(_headers)
+        headers["anthropic-beta"] = merged_beta
         return headers
 
     def get_complete_batch_url(

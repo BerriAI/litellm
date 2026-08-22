@@ -35,7 +35,7 @@ from litellm.types.llms.openai import (
 )
 from litellm.types.utils import LlmProviders
 
-from ..common_utils import AnthropicError, AnthropicModelInfo
+from ..common_utils import AnthropicError, AnthropicModelInfo, merge_anthropic_beta_headers
 
 ANTHROPIC_FILES_API_BASE: Final = "https://api.anthropic.com"
 ANTHROPIC_FILES_BETA_HEADER: Final = "files-api-2025-04-14"
@@ -94,18 +94,23 @@ class AnthropicFilesConfig(BaseFilesConfig):
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:
-        if api_base is None and isinstance(litellm_params, dict):
-            api_base = litellm_params.get("api_base")
-        auth_header: Final = AnthropicModelInfo.get_auth_header(api_key, api_base)
+        params_mapping: Final = litellm_params if isinstance(litellm_params, dict) else None
+        if api_base is None and params_mapping is not None:
+            api_base = params_mapping.get("api_base")
+        auth_header: Final = AnthropicModelInfo.get_auth_header(api_key, api_base, litellm_params=params_mapping)
         if auth_header is None:
             raise ValueError(
                 "Anthropic API key is required. Set ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN environment variable or pass api_key parameter."
             )
+        merged_beta: Final = merge_anthropic_beta_headers(
+            merge_anthropic_beta_headers(headers.get("anthropic-beta"), auth_header.get("anthropic-beta")),
+            ANTHROPIC_FILES_BETA_HEADER,
+        )
         headers.update(
             {
                 **auth_header,
                 "anthropic-version": "2023-06-01",
-                "anthropic-beta": ANTHROPIC_FILES_BETA_HEADER,
+                "anthropic-beta": merged_beta,
             }
         )
         return headers

@@ -9,7 +9,7 @@ Use litellm with Anthropic SDK, Vertex AI SDK, Cohere SDK, etc.
 import json
 import os
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Any, Final, cast
 
@@ -25,7 +25,7 @@ from litellm.constants import (
     ALLOWED_VERTEX_AI_PASSTHROUGH_HEADERS,
     BEDROCK_AGENT_RUNTIME_PASS_THROUGH_ROUTES,
 )
-from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+from litellm.llms.anthropic.common_utils import AnthropicModelInfo, merge_anthropic_beta_headers
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.proxy._types import *
 from litellm.proxy.auth.route_checks import RouteChecks
@@ -568,6 +568,17 @@ async def is_streaming_request_fn(request: Request) -> bool:
     return False
 
 
+def _anthropic_passthrough_headers(auth_header: Mapping[str, str] | None, client_beta: str | None) -> Mapping[str, str]:
+    """Custom headers take priority over forwarded client headers, so merge the
+    client's anthropic-beta into the auth header's instead of clobbering it."""
+    if auth_header is None:
+        return MappingProxyType({})
+    auth_beta: Final = auth_header.get("anthropic-beta")
+    if auth_beta is None or client_beta is None:
+        return auth_header
+    return MappingProxyType({**auth_header, "anthropic-beta": merge_anthropic_beta_headers(client_beta, auth_beta)})
+
+
 @router.api_route(
     "/anthropic/{endpoint:path}",
     methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
@@ -606,11 +617,11 @@ async def anthropic_proxy_route(
     is_streaming_request: Final = await is_streaming_request_fn(request)
 
     ## CREATE PASS-THROUGH
-    auth_header: Final = AnthropicModelInfo.get_auth_header(anthropic_api_key or None)
+    auth_header: Final = await AnthropicModelInfo.aget_auth_header(anthropic_api_key or None)
     endpoint_func: Final = create_pass_through_route(
         endpoint=endpoint,
         target=str(updated_url),
-        custom_headers=auth_header if auth_header is not None else {},
+        custom_headers=_anthropic_passthrough_headers(auth_header, request.headers.get("anthropic-beta")),
         _forward_headers=True,
         is_streaming_request=is_streaming_request,
     )  # dynamically construct pass-through endpoint based on incoming path

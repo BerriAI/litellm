@@ -20,6 +20,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 from litellm.litellm_core_utils.prompt_templates.factory import (
     THOUGHT_SIGNATURE_SEPARATOR,
 )
+from litellm.llms.anthropic.wif import aget_anthropic_wif_token, get_anthropic_wif_token
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.anthropic import (
@@ -56,6 +57,9 @@ def _strip_bedrock_id_suffixes(model: str) -> str:
     )
 
 
+_SERVER_OWNED_AUTH_HEADERS: Final = frozenset({"x-api-key", "authorization"})
+
+
 def is_anthropic_oauth_key(value: str | None) -> bool:
     """Check if a value contains an Anthropic OAuth token (sk-ant-oat*)."""
     if value is None:
@@ -65,12 +69,9 @@ def is_anthropic_oauth_key(value: str | None) -> bool:
     return value.startswith(ANTHROPIC_OAUTH_TOKEN_PREFIX)
 
 
-def _merge_beta_headers(existing: str | None, new_beta: str) -> str:
-    """Merge a new beta value into an existing comma-separated anthropic-beta header."""
-    if not existing:
-        return new_beta
-    betas: Final = {b.strip() for b in existing.split(",") if b.strip()}
-    betas.add(new_beta)
+def merge_anthropic_beta_headers(existing: str | None, new_beta: str | None) -> str:
+    """Merge comma-separated anthropic-beta header values, deduplicated and sorted."""
+    betas: Final = {b.strip() for value in (existing, new_beta) if value for b in value.split(",") if b.strip()}
     return ",".join(sorted(betas))
 
 
@@ -93,14 +94,18 @@ def optionally_handle_anthropic_oauth(headers: dict, api_key: str | None) -> tup
     if auth_header and auth_header.startswith(f"Bearer {ANTHROPIC_OAUTH_TOKEN_PREFIX}"):
         api_key = auth_header.replace("Bearer ", "")
         headers.pop("x-api-key", None)
-        headers["anthropic-beta"] = _merge_beta_headers(headers.get("anthropic-beta"), ANTHROPIC_OAUTH_BETA_HEADER)
+        headers["anthropic-beta"] = merge_anthropic_beta_headers(
+            headers.get("anthropic-beta"), ANTHROPIC_OAUTH_BETA_HEADER
+        )
         headers["anthropic-dangerous-direct-browser-access"] = "true"
         return headers, api_key
     # Check api_key directly (standard chat/completion flow)
     if api_key and api_key.startswith(ANTHROPIC_OAUTH_TOKEN_PREFIX):
         headers.pop("x-api-key", None)
         headers["authorization"] = f"Bearer {api_key}"
-        headers["anthropic-beta"] = _merge_beta_headers(headers.get("anthropic-beta"), ANTHROPIC_OAUTH_BETA_HEADER)
+        headers["anthropic-beta"] = merge_anthropic_beta_headers(
+            headers.get("anthropic-beta"), ANTHROPIC_OAUTH_BETA_HEADER
+        )
         headers["anthropic-dangerous-direct-browser-access"] = "true"
     return headers, api_key
 
@@ -596,7 +601,9 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         return list(set(betas))
 
     @staticmethod
-    def _make_api_key_auth_header(api_key: str, api_base: str | None, use_bearer_for_custom_base: bool = False) -> dict:
+    def _make_api_key_auth_header(
+        api_key: str, api_base: str | None, use_bearer_for_custom_base: bool = False
+    ) -> Mapping[str, str]:
         if use_bearer_for_custom_base and (
             api_base and "api.anthropic.com" not in api_base and not api_key.startswith("sk-ant-")
         ):
@@ -625,6 +632,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         container_with_skills_used: bool = False,
         api_base: str | None = None,
         use_bearer_for_custom_base: bool = False,
+        wif_minted: bool = False,
     ) -> dict:
         betas: Final = set()
         # Anthropic no longer requires the prompt-caching beta header
@@ -668,7 +676,8 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         }
         if _is_oauth:
             headers["authorization"] = f"Bearer {api_key}"
-            headers["anthropic-dangerous-direct-browser-access"] = "true"
+            if not wif_minted:
+                headers["anthropic-dangerous-direct-browser-access"] = "true"
             betas.add(ANTHROPIC_OAUTH_BETA_HEADER)
         elif auth_token and not api_key:
             headers["authorization"] = f"Bearer {auth_token}"
@@ -700,10 +709,11 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:
-        if api_base is None and isinstance(litellm_params, dict):
-            api_base = litellm_params.get("api_base")
+        params_mapping: Final = litellm_params if isinstance(litellm_params, dict) else None
+        if api_base is None and params_mapping is not None:
+            api_base = params_mapping.get("api_base")
         use_bearer_for_custom_base: Final[bool] = bool(
-            isinstance(litellm_params, dict) and litellm_params.get("use_bearer_for_custom_base", False)
+            params_mapping is not None and params_mapping.get("use_bearer_for_custom_base", False)
         )
         # Check for Anthropic OAuth token in headers
         headers, api_key = optionally_handle_anthropic_oauth(headers=headers, api_key=api_key)
@@ -712,9 +722,21 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         auth_token: str | None = None
         if api_key is None:
             auth_token = AnthropicModelInfo.get_auth_token()
-        if api_key is None and auth_token is None:
+        wif_token: Final = (
+            get_anthropic_wif_token(params_mapping, api_base, model) if api_key is None and auth_token is None else None
+        )
+        wif_minted: Final = wif_token is not None
+        resolved_api_key: Final = wif_token if wif_token is not None else api_key
+        if resolved_api_key is None and auth_token is None:
             raise litellm.AuthenticationError(
-                message="Missing Anthropic API Key - A call is being made to anthropic but no key is set either in the environment variables or via params. Please set `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN` in your environment vars",
+                message=(
+                    "Missing Anthropic API Key - A call is being made to anthropic but no key is set either in the "
+                    "environment variables or via params. Please set `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN` "
+                    "in your environment vars, or configure workload identity federation via "
+                    "`ANTHROPIC_FEDERATION_RULE_ID`, `ANTHROPIC_ORGANIZATION_ID`, "
+                    "`ANTHROPIC_SERVICE_ACCOUNT_ID` and "
+                    "`ANTHROPIC_IDENTITY_TOKEN_FILE` (or `ANTHROPIC_IDENTITY_TOKEN`)"
+                ),
                 llm_provider="anthropic",
                 model=model,
             )
@@ -739,7 +761,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             computer_tool_used=computer_tool_used,
             prompt_caching_set=prompt_caching_set,
             pdf_used=pdf_used,
-            api_key=api_key,
+            api_key=resolved_api_key,
             auth_token=auth_token,
             file_id_used=file_id_used,
             web_search_tool_used=web_search_tool_used,
@@ -754,11 +776,16 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             container_with_skills_used=container_with_skills_used,
             api_base=api_base,
             use_bearer_for_custom_base=use_bearer_for_custom_base,
+            wif_minted=wif_minted,
         )
 
-        headers = {**headers, **anthropic_headers}
+        caller_headers: Final = (
+            {name: value for name, value in headers.items() if name.lower() not in _SERVER_OWNED_AUTH_HEADERS}
+            if wif_minted
+            else headers
+        )
 
-        return headers
+        return {**caller_headers, **anthropic_headers}
 
     @staticmethod
     def get_api_base(api_base: str | None = None) -> str | None:
@@ -793,22 +820,61 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         api_key: str | None = None,
         api_base: str | None = None,
         use_bearer_for_custom_base: bool = False,
-    ) -> dict | None:
+        litellm_params: Mapping[str, object] | None = None,
+    ) -> Mapping[str, str] | None:
         """Resolve Anthropic credentials and return the appropriate auth header dict.
 
         Checks ANTHROPIC_API_KEY first (-> x-api-key or Bearer depending on
-        use_bearer_for_custom_base), then ANTHROPIC_AUTH_TOKEN (-> Authorization: Bearer).
-        Returns None if neither is available.
+        use_bearer_for_custom_base), then ANTHROPIC_AUTH_TOKEN (-> Authorization: Bearer),
+        then workload identity federation (-> Authorization: Bearer with a minted
+        sk-ant-oat01 token, honoring anthropic_* litellm_params when provided). Every
+        Bearer built from an sk-ant-oat token carries the mandatory oauth anthropic-beta.
+        Returns None if no credential source is available.
         """
+        static_header: Final = AnthropicModelInfo._static_auth_header(api_key, api_base, use_bearer_for_custom_base)
+        if static_header is not None:
+            return static_header
+        wif_token: Final = get_anthropic_wif_token(litellm_params, api_base, "")
+        if wif_token is not None:
+            return AnthropicModelInfo._oauth_bearer_header(wif_token)
+        return None
+
+    @staticmethod
+    async def aget_auth_header(
+        api_key: str | None = None,
+        api_base: str | None = None,
+        use_bearer_for_custom_base: bool = False,
+        litellm_params: Mapping[str, object] | None = None,
+    ) -> Mapping[str, str] | None:
+        """Async counterpart of get_auth_header: the WIF tier can block on a token
+        exchange POST, so async callers await it off the event loop."""
+        static_header: Final = AnthropicModelInfo._static_auth_header(api_key, api_base, use_bearer_for_custom_base)
+        if static_header is not None:
+            return static_header
+        wif_token: Final = await aget_anthropic_wif_token(litellm_params, api_base, "")
+        if wif_token is not None:
+            return AnthropicModelInfo._oauth_bearer_header(wif_token)
+        return None
+
+    @staticmethod
+    def _static_auth_header(
+        api_key: str | None,
+        api_base: str | None,
+        use_bearer_for_custom_base: bool,
+    ) -> Mapping[str, str] | None:
         resolved_key: Final = AnthropicModelInfo.get_api_key(api_key)
         if resolved_key is not None:
             if is_anthropic_oauth_key(resolved_key):
-                return {"authorization": f"Bearer {resolved_key}"}
+                return AnthropicModelInfo._oauth_bearer_header(resolved_key)
             return AnthropicModelInfo._make_api_key_auth_header(resolved_key, api_base, use_bearer_for_custom_base)
         auth_token: Final = AnthropicModelInfo.get_auth_token()
         if auth_token is not None:
             return {"authorization": f"Bearer {auth_token}"}
         return None
+
+    @staticmethod
+    def _oauth_bearer_header(token: str) -> Mapping[str, str]:
+        return {"authorization": f"Bearer {token}", "anthropic-beta": ANTHROPIC_OAUTH_BETA_HEADER}
 
     @staticmethod
     def get_base_model(model: str | None = None) -> str | None:
@@ -819,7 +885,10 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         auth_header: Final = AnthropicModelInfo.get_auth_header(api_key, api_base)
         if api_base is None or auth_header is None:
             raise ValueError(
-                "ANTHROPIC_API_BASE/ANTHROPIC_BASE_URL or ANTHROPIC_API_KEY/ANTHROPIC_AUTH_TOKEN is not set. Please set the environment variable, to query Anthropic's `/models` endpoint."
+                "ANTHROPIC_API_BASE/ANTHROPIC_BASE_URL or ANTHROPIC_API_KEY/ANTHROPIC_AUTH_TOKEN (or workload "
+                "identity federation via ANTHROPIC_FEDERATION_RULE_ID/ANTHROPIC_ORGANIZATION_ID/"
+                "ANTHROPIC_IDENTITY_TOKEN_FILE) is not set. Please set the environment variable, to query "
+                "Anthropic's `/models` endpoint."
             )
         headers: Final = {"anthropic-version": "2023-06-01"}
         headers.update(auth_header)
