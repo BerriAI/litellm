@@ -453,3 +453,45 @@ def test_openai_file_object_accepts_pending_status():
         status="pending",
     )
     assert file_obj.status == "pending"
+
+
+def test_typed_dicts_have_no_resolvable_quoted_forward_refs():
+    """A quoted ref inside a TypedDict is resolved against the namespace of the
+    pydantic model embedding it, not this module, so it breaks model building on
+    python < 3.12 (issue #36384)."""
+    from typing import ForwardRef, get_args
+
+    from typing_extensions import is_typeddict
+
+    import litellm.types.llms.openai as openai_types
+
+    def string_refs(annotation: object) -> tuple[str, ...]:
+        return tuple(
+            ref
+            for arg in get_args(annotation)
+            for ref in (
+                (arg,)
+                if isinstance(arg, str)
+                else (arg.__forward_arg__,)
+                if isinstance(arg, ForwardRef)
+                else string_refs(arg)
+            )
+        )
+
+    stale = tuple(
+        f"{cls.__name__}.{field} -> {ref!r}"
+        for cls in vars(openai_types).values()
+        if is_typeddict(cls) and cls.__module__ == openai_types.__name__
+        for field, annotation in cls.__annotations__.items()
+        for ref in string_refs(annotation)
+        if ref != cls.__name__ and getattr(openai_types, ref, None) is not None
+    )
+    assert not stale, f"unquote these forward refs: {stale}"
+
+
+def test_model_response_constructs_with_reasoning_items_annotation():
+    from litellm.types.utils import ModelResponse
+
+    ModelResponse().choices[0].message.reasoning_items = [
+        {"type": "reasoning", "id": "rs_1", "summary": [{"type": "summary_text", "text": "hi"}]}
+    ]

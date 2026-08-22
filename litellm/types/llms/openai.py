@@ -584,7 +584,7 @@ class ChatCompletionReasoningItem(TypedDict, total=False):
     type: Required[Literal["reasoning"]]
     id: str
     encrypted_content: str | None
-    summary: list["ChatCompletionReasoningSummaryTextBlock"]
+    summary: list[ChatCompletionReasoningSummaryTextBlock]
 
 
 class WebSearchOptionsUserLocationApproximate(TypedDict, total=False):
@@ -1187,7 +1187,7 @@ class ResponsesAPIOptionalRequestParams(TypedDict, total=False):
     background: bool | None
     stream: bool | None
     temperature: float | None
-    text: Optional["ResponseText"]
+    text: ResponseText | None
     tool_choice: ToolChoice | None
     tools: list[ALL_RESPONSES_API_TOOL_PARAMS] | None
     top_p: float | None
@@ -1296,7 +1296,7 @@ class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
     previous_response_id: str | None = None
     reasoning: dict[str, Any] | None = None
     status: str | None = None
-    text: Union["ResponseText", dict[str, Any]] | None = None
+    text: ResponseText | dict[str, Any] | None = None
     truncation: Literal["auto", "disabled"] | None = None
     usage: ResponseAPIUsage | None = None
     user: str | None = None
