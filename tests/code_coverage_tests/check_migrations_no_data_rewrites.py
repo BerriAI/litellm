@@ -12,7 +12,8 @@ Flagged, per statement, by its leading keyword:
   DELETE      same scan, and the dead tuples outlive the migration
   MERGE       both of the above in one statement
   INSERT      only when it draws rows from a `SELECT`; `INSERT ... VALUES` is bounded
-              by the literal row list and passes
+              by the literal row list and passes, scalar subqueries in that list
+              included
   WITH        a CTE-led statement containing any of the above
 
 Referential actions (`ON DELETE CASCADE`, `ON UPDATE CASCADE`) are schema, never a
@@ -20,7 +21,12 @@ statement's leading keyword, so they pass.
 
 Statements inside dollar-quoted bodies are scanned too. `DO $$ ... $$` is this
 repo's idiom for conditional DDL, so a body is where an `UPDATE` would otherwise
-hide.
+hide. The SQL an `EXECUTE` runs is scanned the same way, since a rewrite reads the
+same to Postgres whether it is spelled out or handed over as a string.
+
+Line numbers always count against the whole migration file, however deeply the
+statement is nested, so a reported line points at the statement and the markers
+below line up with the statements they exempt.
 
 Add a column and let the application populate it, or run the rewrite as an opt-in
 batched job outside boot. When a rewrite is genuinely bounded and must ship inside
@@ -112,10 +118,12 @@ def blank(text: str) -> str:
     return "".join(character if character == "\n" else " " for character in text)
 
 
-def mask(sql: str) -> tuple[str, tuple[tuple[int, int], ...]]:
-    """Blank comments and quoted text, keeping offsets, and locate dollar-quoted bodies."""
+def mask(sql: str) -> tuple[str, tuple[tuple[int, int], ...], tuple[tuple[int, int], ...]]:
+    """Blank comments and quoted text, keeping offsets, and locate the spans that can still
+    hold SQL: dollar-quoted bodies, and the single-quoted literals `EXECUTE` runs."""
     chunks: list[str] = []
     bodies: list[tuple[int, int]] = []
+    literals: list[tuple[int, int]] = []
     index = 0
     length = len(sql)
 
@@ -139,6 +147,9 @@ def mask(sql: str) -> tuple[str, tuple[tuple[int, int], ...]]:
 
         if character in "'\"":
             stop = skip_quoted(sql, index, character)
+            if character == "'":
+                closed = sql[stop - 1 : stop] == character
+                literals.append((index + 1, max(index + 1, stop - 1 if closed else stop)))
             chunks.append(blank(sql[index:stop]))
             index = stop
             continue
@@ -157,7 +168,7 @@ def mask(sql: str) -> tuple[str, tuple[tuple[int, int], ...]]:
         chunks.append(character)
         index += 1
 
-    return "".join(chunks), tuple(bodies)
+    return "".join(chunks), tuple(bodies), tuple(literals)
 
 
 def skip_block_comment(sql: str, start: int) -> int:
@@ -224,16 +235,29 @@ def offending_keyword(statement: str) -> str | None:
         return keyword
 
     if keyword == "INSERT":
-        return "INSERT ... SELECT" if contains(statement, "SELECT") else None
+        return "INSERT ... SELECT" if draws_rows_from_a_select(statement) else None
 
     if keyword == "WITH":
         nested = next((name for name in sorted(REWRITES_ROWS) if contains(statement, name)), None)
         if nested is not None:
             return f"WITH ... {nested}"
-        if contains(statement, "INSERT") and contains(statement, "SELECT"):
+        if contains(statement, "INSERT") and draws_rows_from_a_select(statement):
             return "WITH ... INSERT ... SELECT"
 
     return None
+
+
+def draws_rows_from_a_select(statement: str) -> bool:
+    """Whether an `INSERT` takes its rows from a query rather than a literal list. A
+    top-level `VALUES` bounds the insert to the rows written out there, so the scalar
+    subqueries and helper CTEs that sit in parentheses around it do not make it a
+    rewrite."""
+    return contains(statement, "SELECT") and not contains(strip_parens(statement), "VALUES")
+
+
+def leads_with(statement: str, keyword: str) -> bool:
+    word = leading_keyword(strip_parens(statement))
+    return word is not None and word.group().upper() == keyword
 
 
 def contains(statement: str, keyword: str) -> bool:
@@ -244,21 +268,35 @@ def exempt_lines(sql: str) -> frozenset[int]:
     return frozenset(sql.count("\n", 0, match.start()) + 1 for match in MARKER.finditer(sql))
 
 
-def scan(sql: str, migration: str, exempt: frozenset[int], offset: int = 0) -> Iterator[Violation]:
-    masked, bodies = mask(sql)
+def scan(sql: str, migration: str, exempt: frozenset[int]) -> Iterator[Violation]:
+    yield from scan_region(sql, sql, migration, exempt, 0)
+
+
+def scan_region(
+    document: str, region: str, migration: str, exempt: frozenset[int], offset: int
+) -> Iterator[Violation]:
+    """Violations in one region of `document`, whose text begins at `offset`. Lines are
+    always counted against the whole document, so a statement nested in a dollar-quoted
+    body reports its real file line and lines up with the markers read from that file."""
+    masked, bodies, literals = mask(region)
 
     for match in STATEMENT.finditer(masked):
+        if leads_with(match.group(), "EXECUTE"):
+            for start, end in literals:
+                if match.start() <= start and end <= match.end():
+                    yield from scan_region(document, region[start:end], migration, exempt, offset + start)
+            continue
         keyword = offending_keyword(match.group())
         if keyword is None:
             continue
-        first = line_of(sql, offset + keyword_start(match))
-        last = line_of(sql, offset + match.end())
+        first = line_of(document, offset + keyword_start(match))
+        last = line_of(document, offset + match.end())
         if any(line in exempt for line in range(first - 1, last + 1)):
             continue
         yield Violation(migration, first, keyword)
 
     for start, end in bodies:
-        yield from scan(sql[start:end], migration, exempt, offset + start)
+        yield from scan_region(document, region[start:end], migration, exempt, offset + start)
 
 
 def keyword_start(statement: re.Match[str]) -> int:
