@@ -48,6 +48,22 @@ from litellm.types.utils import (
 )
 
 
+def _output_items_with_id(items: tuple[Any, ...], item_type: str, item_id: str | None) -> tuple[Any, ...]:
+    if item_id is None:
+        return items
+
+    target_index: Final = next(
+        (index for index, item in enumerate(items) if getattr(item, "type", None) == item_type),
+        None,
+    )
+    if target_index is None:
+        return items
+
+    return tuple(
+        item.model_copy(update={"id": item_id}) if index == target_index else item for index, item in enumerate(items)
+    )
+
+
 class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
     """
     Async iterator for processing streaming responses from the Responses API.
@@ -1059,34 +1075,18 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         chat_completion_delta: Final[ChatCompletionDelta] = choice.delta
         return chat_completion_delta.content or ""
 
-    def _align_output_item_ids_with_streamed_ids(self, responses_api_response: ResponsesAPIResponse) -> None:
+    def _output_with_streamed_item_ids(self, responses_api_response: ResponsesAPIResponse) -> tuple[Any, ...]:
         """
         Reuse the item IDs already emitted by the incremental streaming events in the
         ``response.completed`` snapshot, so a streaming client that replays the snapshot
         sends back the same IDs it observed mid-stream.
         """
-        self._set_first_output_item_id(responses_api_response, "message", self._cached_item_id)
-        self._set_first_output_item_id(responses_api_response, "reasoning", self._cached_reasoning_item_id)
-
-    @staticmethod
-    def _set_first_output_item_id(
-        responses_api_response: ResponsesAPIResponse,
-        item_type: str,
-        cached_id: str | None,
-    ) -> None:
-        if cached_id is None:
-            return
-
-        for item in getattr(responses_api_response, "output", None) or []:
-            current_type = item.get("type") if isinstance(item, dict) else getattr(item, "type", None)
-            if current_type != item_type:
-                continue
-
-            if isinstance(item, dict):
-                item["id"] = cached_id
-            else:
-                item.id = cached_id
-            return
+        message_aligned: Final = _output_items_with_id(
+            tuple(responses_api_response.output or ()),
+            "message",
+            self._cached_item_id,
+        )
+        return _output_items_with_id(message_aligned, "reasoning", self._cached_reasoning_item_id)
 
     def _emit_response_completed_event(self, litellm_model_response: ModelResponse) -> ResponseCompletedEvent | None:
         if litellm_model_response:
@@ -1113,7 +1113,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             if self._cached_response_id:
                 responses_api_response.id = self._cached_response_id
 
-            self._align_output_item_ids_with_streamed_ids(responses_api_response)
+            responses_api_response.output = list(self._output_with_streamed_item_ids(responses_api_response))
 
             # Encode the response ID to match non-streaming behavior
             encoded_response: Final = ResponsesAPIRequestUtils._update_responses_api_response_id_with_model_id(
