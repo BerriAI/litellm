@@ -41,8 +41,9 @@ hide. The SQL an `EXECUTE` runs is scanned the same way, since a rewrite reads t
 same to Postgres whether it is spelled out or handed over as a string, and so is a
 literal parked in a variable some `EXECUTE` in the same body then runs by name,
 however it got there: an assignment with `:=`, the bare `=` PL/pgSQL takes as the
-same operator, or a query returning it through `INTO`. So is the body of a `DO`
-written in single quotes rather than dollar quotes. A literal nothing runs is text, however much it reads like a statement, so
+same operator, a query returning it through `INTO`, or a loop walking the query it
+came out of. So is the body of a `DO` written in single quotes rather than dollar
+quotes. A literal nothing runs is text, however much it reads like a statement, so
 an error message naming a `DELETE` the application handles stays a message.
 
 Each literal is read on its own, so a keyword built by concatenating fragments that
@@ -104,7 +105,8 @@ INTO_TARGETS = re.compile(
     r"([A-Za-z_][A-Za-z0-9_]*(?:\s*,\s*[A-Za-z_][A-Za-z0-9_]*)*)",
     re.IGNORECASE,
 )
-ASSIGNS = re.compile(r":=|(?<![<>!:=])=(?!=)")
+LOOP_TARGET = re.compile(r"\bFOR(?:EACH)?\s+([A-Za-z_][A-Za-z0-9_]*)\s+IN\b", re.IGNORECASE)
+WORD_OR_ASSIGN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*|:=|(?<![<>!:=])=(?![=>])")
 PRECEDING_WORD = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)[^A-Za-z0-9_]*$")
 EXPLAIN_OPTIONS = re.compile(r"\bEXPLAIN\b(?:\s+(?:ANALYZE|ANALYSE|VERBOSE)\b)+", re.IGNORECASE)
 
@@ -142,6 +144,8 @@ STATEMENT_KEYWORDS = REWRITES_ROWS | frozenset(
 GUARDS_A_CONDITION = frozenset({"IF", "ELSIF", "ELSEIF", "CASE", "WHEN", "WHILE", "EXIT", "ASSERT"})
 
 OPENS_A_BLOCK = frozenset({"BEGIN", "THEN", "ELSE", "LOOP"})
+
+NEVER_A_VARIABLE = frozenset({"INTO", "USING"})
 
 GUIDANCE = """
 Migrations apply at proxy boot, before it serves traffic, so a statement whose cost
@@ -364,27 +368,20 @@ def hands_off_sql(statement: str, executed: frozenset[str]) -> bool:
 
 
 def assigned_names(statement: str) -> frozenset[str]:
-    """The candidate variable names a statement writes to, taken as every word ahead of the
-    assignment operator. A declaration carries its type and sometimes a leading `DECLARE`
-    alongside the name, and none of that is worth parsing when the only question is which
-    name is executed. PL/pgSQL spells that operator `:=` and takes a bare `=` as the same
-    thing, so both count, the second only where `assigns_rather_than_compares` reads it as
-    an assignment. Every operator in the statement is read rather than only the first, since
-    a comparison earlier on the line would otherwise claim the one slot and hide the
-    assignment after it: `IF n = 1 THEN stmt = '...'` writes `stmt` at its second `=`. A
-    query assigns through the target list after its `INTO` instead, which is how a rewrite
-    reaches a variable with neither operator appearing at all."""
-    names: set[str] = set()
-
-    for operator in ASSIGNS.finditer(statement):
-        reached = reached_words(statement[: operator.start()])
-        if operator.group() == ":=" or assigns_rather_than_compares(reached):
-            names.update(word.lower() for word in reached)
+    """The candidate variable names a statement writes to. An assignment is read as every
+    word ahead of its operator, since a declaration carries its type and sometimes a leading
+    `DECLARE` alongside the name, and none of that is worth parsing when the only question
+    is which name is executed. A query assigns through the target list after its `INTO`
+    instead, and a loop through the variable it walks its query with, which is how a rewrite
+    reaches a variable with no operator appearing at all."""
+    names = {word.lower() for word in assignment_reach(statement)}
 
     for targets in INTO_TARGETS.finditer(statement):
         if names_a_table(statement[: targets.start()]):
             continue
         names.update(word.group().lower() for word in FIRST_WORD.finditer(targets.group(1)))
+
+    names.update(loop.group(1).lower() for loop in LOOP_TARGET.finditer(statement))
 
     return frozenset(names)
 
@@ -399,33 +396,61 @@ def names_a_table(before: str) -> bool:
     return word is not None and word.group(1).upper() == "INSERT"
 
 
-def reached_words(head: str) -> tuple[str, ...]:
-    """The words an assignment operator is reached through, which is everything since the last
-    word to open a block. A `THEN` ends the condition its `IF` began, so nothing ahead of it
-    describes what follows, and neither the name being written nor the keywords that would
-    mark a comparison ever sit further back than that."""
-    words = [word.group().upper() for word in FIRST_WORD.finditer(head)]
-    opened = max((index for index, word in enumerate(words) if word in OPENS_A_BLOCK), default=-1)
-    return tuple(words[opened + 1 :])
+def assignment_reach(statement: str) -> tuple[str, ...]:
+    """The words the statement's assignment is reached through, empty where it holds none.
+    PL/pgSQL spells the operator `:=` and takes a bare `=` as the same thing, so both count,
+    the second only where none of the words reached so far `marks_a_comparison`. The search
+    stops at the first operator that reads as an assignment, because a statement holds one
+    at most and everything after it is the expression being assigned, where an `=` only ever
+    compares: that is what keeps `ok := stmt = '<sql>'` from reading as a write to `stmt`.
+    What comes before can still be a comparison the assignment sits behind, as in
+    `IF n = 1 THEN stmt = '<sql>'`, and a word opening a block ends what it is reached
+    through, since nothing ahead of the `THEN` describes what follows it."""
+    reached: list[str] = []
+    compares = False
+
+    for token in WORD_OR_ASSIGN.finditer(statement):
+        word = token.group().upper()
+
+        if word == ":=":
+            return tuple(reached)
+
+        if word == "=":
+            if not compares:
+                return tuple(reached)
+            continue
+
+        if word in OPENS_A_BLOCK:
+            reached.clear()
+            compares = False
+            continue
+
+        reached.append(word)
+        compares = compares or marks_a_comparison(word)
+
+    return ()
 
 
-def assigns_rather_than_compares(reached: tuple[str, ...]) -> bool:
-    """Whether a bare `=` reached through these words writes a variable or tests one. They are
-    all that tells the two apart: an assignment is reached with a name and perhaps a type,
-    while a comparison is reached either through a statement carrying its own keyword or
-    through a word that guards a condition."""
-    words = set(reached)
-    return not (words & STATEMENT_KEYWORDS) and not (words & GUARDS_A_CONDITION)
+def marks_a_comparison(word: str) -> bool:
+    """Whether reaching a bare `=` through this word means the operator tests a variable
+    rather than writing one. These are all that tell the two apart: an assignment is reached
+    with a name and perhaps a type, while a comparison is reached either through a statement
+    carrying its own keyword or through a word that guards a condition."""
+    return word in STATEMENT_KEYWORDS or word in GUARDS_A_CONDITION
 
 
 def executed_names(masked: str) -> frozenset[str]:
     """The variables handed to an `EXECUTE` by name. Reading these off the masked text keeps
     an `EXECUTE` written inside a comment or a string from counting. Masking blanks a literal
-    in place rather than removing it, so `EXECUTE '...'` can leave the word after it looking
-    like the name being run. Reaching that word means crossing no semicolon, which leaves only
-    the syntax `INTO`, `USING` and `END`, and no assignment ever writes one of those, so the
-    stray name has nothing to match."""
-    return frozenset(match.group(1).lower() for match in RUN_BY_NAME.finditer(masked))
+    in place rather than removing it, so `EXECUTE '...'` leaves whatever follows the literal
+    looking like the name being run. Only `INTO` and `USING` can sit there, since the syntax
+    allows nothing else between an `EXECUTE` and the semicolon ending it, and neither is ever
+    a variable, so both are dropped rather than left to collide with a query reaching one."""
+    return frozenset(
+        match.group(1).lower()
+        for match in RUN_BY_NAME.finditer(masked)
+        if match.group(1).upper() not in NEVER_A_VARIABLE
+    )
 
 
 def leads_with(statement: str, keyword: str) -> bool:
