@@ -635,6 +635,27 @@ class TestDynamicSql:
         )
         assert _keywords(tmp_path, sql) == ("DELETE",)
 
+    def test_a_join_using_in_a_subquery_building_the_command_does_not_end_it(self, tmp_path):
+        sql = (
+            "DO $$\nDECLARE v text;\nBEGIN\n    EXECUTE (SELECT v FROM \"A\" x JOIN \"A\" y"
+            " USING (\"id\")) || 'UPDATE \"Foo\" SET \"a\" = 1';\nEND $$;"
+        )
+        assert _keywords(tmp_path, sql) == ("UPDATE",)
+
+    def test_a_join_using_does_not_take_the_place_of_the_real_bind_values(self, tmp_path):
+        sql = (
+            "DO $$\nDECLARE v text;\nBEGIN\n    EXECUTE (SELECT v FROM \"A\" x JOIN \"A\" y"
+            " USING (\"id\")) || 'UPDATE \"Foo\" SET \"a\" = $1' USING 2;\nEND $$;"
+        )
+        assert _keywords(tmp_path, sql) == ("UPDATE",)
+
+    def test_a_bind_value_naming_a_rewrite_after_a_subquery_join_is_not_run(self, tmp_path):
+        sql = (
+            "DO $$\nDECLARE v text;\nBEGIN\n    EXECUTE (SELECT v FROM \"A\" x JOIN \"A\" y"
+            " USING (\"id\")) USING 'UPDATE \"Foo\" SET \"a\" = 1';\nEND $$;"
+        )
+        assert _keywords(tmp_path, sql) == ()
+
     def test_execute_of_ddl_passes(self, tmp_path):
         sql = "DO $$\nBEGIN\n    EXECUTE 'ALTER TABLE \"Foo\" ADD COLUMN \"b\" TEXT';\nEND $$;"
         assert _keywords(tmp_path, sql) == ()
