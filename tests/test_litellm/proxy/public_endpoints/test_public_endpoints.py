@@ -834,6 +834,16 @@ def test_get_supported_endpoints_chat_completions_present(reset_endpoints_cache)
     assert len(chat["providers"]) > 0
 
 
+def test_get_supported_endpoints_includes_minirouter(reset_endpoints_cache):
+    endpoints = _make_client().get("/public/endpoints").json()["endpoints"]
+    chat = next(item for item in endpoints if item["key"] == "chat_completions")
+
+    minirouter = next(
+        provider for provider in chat["providers"] if provider["slug"] == "minirouter"
+    )
+    assert minirouter["display_name"] == "minirouter"
+
+
 def test_get_supported_endpoints_display_names_have_no_slug_suffix(
     reset_endpoints_cache,
 ):
