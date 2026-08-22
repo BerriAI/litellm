@@ -7,11 +7,8 @@ transformations for the Responses API.
 Source: litellm/llms/github_copilot/responses/transformation.py
 """
 
-import sys
-import os
 from unittest.mock import patch, MagicMock
 
-sys.path.insert(0, os.path.abspath("../../../../.."))
 
 import pytest
 import litellm

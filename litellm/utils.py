@@ -5245,7 +5245,7 @@ def _check_provider_match(model_info: dict, custom_llm_provider: str | None) -> 
     return True
 
 
-from typing_extensions import TypedDict
+from typing_extensions import ReadOnly, TypedDict
 
 
 class PotentialModelNamesAndCustomLLMProvider(TypedDict):
@@ -5253,6 +5253,7 @@ class PotentialModelNamesAndCustomLLMProvider(TypedDict):
     combined_model_name: str
     stripped_model_name: str
     combined_stripped_model_name: str
+    provider_prefixed_model_name: ReadOnly[str]
     custom_llm_provider: str
 
 
@@ -5280,6 +5281,7 @@ def _get_model_info_from_generalization(
         potential_model_names["split_model"],
         potential_model_names["combined_stripped_model_name"],
         potential_model_names["stripped_model_name"],
+        potential_model_names["provider_prefixed_model_name"],
     )
     if any(_get_model_cost_key(candidate) is not None for candidate in candidates):
         return None
@@ -5304,6 +5306,7 @@ def _get_potential_model_names(model: str, custom_llm_provider: str | None) -> P
         combined_model_name = model
         stripped_model_name = _strip_model_name(model=model, custom_llm_provider=custom_llm_provider)
         combined_stripped_model_name = stripped_model_name
+        provider_prefixed_model_name = model
     elif custom_llm_provider and model.startswith(
         custom_llm_provider + "/"
     ):  # handle case where custom_llm_provider is provided and model starts with custom_llm_provider
@@ -5311,11 +5314,13 @@ def _get_potential_model_names(model: str, custom_llm_provider: str | None) -> P
         combined_model_name = model
         stripped_model_name = _strip_model_name(model=split_model, custom_llm_provider=custom_llm_provider)
         combined_stripped_model_name = f"{custom_llm_provider}/{stripped_model_name}"
+        provider_prefixed_model_name = f"{custom_llm_provider}/{model}"
     else:
         split_model = model
         combined_model_name = f"{custom_llm_provider}/{model}"
         stripped_model_name = _strip_model_name(model=model, custom_llm_provider=custom_llm_provider)
         combined_stripped_model_name = f"{custom_llm_provider}/{stripped_model_name}"
+        provider_prefixed_model_name = combined_model_name
 
     if custom_llm_provider in ("bedrock", "bedrock_converse"):
         from litellm.llms.bedrock.common_utils import strip_bedrock_routing_prefix
@@ -5327,6 +5332,7 @@ def _get_potential_model_names(model: str, custom_llm_provider: str | None) -> P
         combined_model_name=combined_model_name,
         stripped_model_name=stripped_model_name,
         combined_stripped_model_name=combined_stripped_model_name,
+        provider_prefixed_model_name=provider_prefixed_model_name,
         custom_llm_provider=cast(str, custom_llm_provider),
     )
 
@@ -5435,6 +5441,7 @@ def _get_model_info_helper(
         combined_model_name: Final = potential_model_names["combined_model_name"]
         stripped_model_name: Final = potential_model_names["stripped_model_name"]
         combined_stripped_model_name: Final = potential_model_names["combined_stripped_model_name"]
+        provider_prefixed_model_name: Final = potential_model_names["provider_prefixed_model_name"]
         split_model: Final = potential_model_names["split_model"]
         custom_llm_provider = potential_model_names["custom_llm_provider"]
         model_cost_custom_llm_provider: Final = custom_llm_provider
@@ -5493,6 +5500,10 @@ def _get_model_info_helper(
             3. 'split_model' in litellm.model_cost. Checks "au.anthropic.claude-opus-4-8" in litellm.model_cost if model="bedrock/au.anthropic.claude-opus-4-8"
             4. 'combined_stripped_model_name' in litellm.model_cost. Checks if 'gemini/gemini-1.5-flash' in model map, if 'gemini/gemini-1.5-flash-001' given.
             5. 'stripped_model_name' in litellm.model_cost. Checks if 'ft:gpt-3.5-turbo' in model map, if 'ft:gpt-3.5-turbo:my-org:custom_suffix:id' given.
+            6. 'provider_prefixed_model_name' in litellm.model_cost, for providers whose own model ids repeat the
+               litellm provider name. Checks "perplexity/perplexity/glm-5.2" if model="perplexity/glm-5.2" and
+               custom_llm_provider="perplexity", where 1-5 all read the leading "perplexity/" as the litellm prefix
+               and strip it. Tried last so no model that already resolves through 1-5 can change.
             """
 
             _model_info: dict[str, Any] | None = None
@@ -5540,6 +5551,16 @@ def _get_model_info_helper(
                         _model_info = None
             if _model_info is None:
                 _matched_key = _get_model_cost_key(stripped_model_name)
+                if _matched_key is not None:
+                    key = _matched_key
+                    _model_info = _get_model_info_from_model_cost(key=cast(str, key))
+                    if not _check_provider_match(
+                        model_info=_model_info,
+                        custom_llm_provider=model_cost_custom_llm_provider,
+                    ):
+                        _model_info = None
+            if _model_info is None:
+                _matched_key = _get_model_cost_key(provider_prefixed_model_name)
                 if _matched_key is not None:
                     key = _matched_key
                     _model_info = _get_model_info_from_model_cost(key=cast(str, key))
@@ -5732,6 +5753,7 @@ def _get_model_info_helper(
                 supports_url_context=_model_info.get("supports_url_context", None),
                 supports_reasoning=_model_info.get("supports_reasoning", None),
                 supports_adaptive_thinking=_model_info.get("supports_adaptive_thinking", None),
+                thinking_always_on=_model_info.get("thinking_always_on", None),
                 supports_tool_search=_model_info.get("supports_tool_search", None),
                 supports_mid_conversation_system=_model_info.get("supports_mid_conversation_system", None),
                 supports_none_reasoning_effort=_model_info.get("supports_none_reasoning_effort", None),

@@ -6,15 +6,10 @@ with guardrail transformations, including tool calls.
 """
 
 import json
-import os
-import sys
 from typing import Any, Literal, Optional
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../../../../..")
-)  # Adds the parent directory to the system path
 
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.llms.openai.chat.guardrail_translation.handler import (

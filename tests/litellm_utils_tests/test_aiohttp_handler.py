@@ -1,6 +1,5 @@
 import asyncio
 import copy
-import sys
 import time
 from datetime import datetime
 from unittest import mock
@@ -10,11 +9,7 @@ from dotenv import load_dotenv
 from litellm.types.utils import StandardCallbackDynamicParams
 
 load_dotenv()
-import os
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system-path
 import pytest
 
 import litellm

@@ -1,5 +1,3 @@
-import os
-import sys
 
 import pytest
 from dotenv import load_dotenv
@@ -13,9 +11,6 @@ from litellm.router import Router
 
 # this file is to test litellm/proxy
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 
 
 @pytest.mark.asyncio

@@ -8,13 +8,10 @@ Source: litellm/llms/perplexity/responses/transformation.py
 """
 
 import json
-import os
-import sys
 
 import httpx
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../../.."))
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
