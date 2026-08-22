@@ -5,10 +5,7 @@ import pytest
 from pydantic import BaseModel, field_validator
 
 import litellm
-from litellm.llms.base_llm.base_utils import (
-    _pydantic_model_json_schema,
-    type_to_response_format_param,
-)
+from litellm.llms.base_llm.base_utils import type_to_response_format_param
 from litellm.types.utils import LlmProviders, ModelResponse
 from litellm.utils import (
     ProviderConfigManager,
@@ -16,6 +13,7 @@ from litellm.utils import (
     _apply_response_format_validation,
     _is_basemodel_class,
     _is_pydantic_basemodel_type,
+    _pydantic_model_json_schema,
     _should_preserve_pydantic_response_format,
     normalize_completion_response_format,
     post_call_processing,
