@@ -23,11 +23,13 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from typing import Final
 
 import pytest
 from pydantic import TypeAdapter
 
 from e2e_http import RawResponse, forward
+from fixture_canonical import canonicalize
 from fixture_bundle import (
     BundleRecorder,
     Interaction,
@@ -46,6 +48,7 @@ from provider_edge import (
     RecordEdge,
     ReplayEdge,
     ReplaySource,
+    edge_request,
     handle_edge_request,
     provider_edge_api_base,
     replay_leftover_error,
@@ -412,7 +415,9 @@ class TestMultipartIdentity:
         raw = this_tests_files(root)[0].read_text(encoding="utf-8")
         interaction = Interaction.model_validate_json(raw)
         assert interaction.request.form == {"purpose": "batch"}
-        assert interaction.request.file_name == "file:batch.jsonl"
+        assert interaction.request.file_name == json.dumps(
+            [["file", "batch.jsonl", "application/octet-stream"]], separators=(",", ":")
+        )
         assert interaction.request.file_bytes == len(BATCH_JSONL)
         stored = interaction.request.model_dump_json()
         assert boundary not in stored
@@ -526,6 +531,187 @@ class TestMultipartIdentity:
         assert interaction.request.file_bytes == len(opaque)
         assert "custom_id" not in interaction.request.model_dump_json()
         assert replay_upload(root, opaque, absent).status_code == 200
+
+
+def raw_multipart(boundary: str, *parts: tuple[str, bytes]) -> bytes:
+    """A body assembled from literal part headers, so a test can send the shapes a
+    well-formed helper cannot: a file part with no filename, a declared per-part content
+    type, a repeated or bracketed field name, or a non-UTF-8 value."""
+    return (
+        b"".join(
+            f"--{boundary}\r\n{head}\r\n\r\n".encode() + content + b"\r\n"
+            for head, content in parts
+        )
+        + f"--{boundary}--\r\n".encode()
+    )
+
+
+def upload_key(body: bytes, boundary: str) -> str:
+    content_type: Final = f"multipart/form-data; boundary={boundary}"
+    return canonicalize(edge_request("POST", UPLOAD_PATH, "", body, content_type)).key
+
+
+DISPOSITION = 'Content-Disposition: form-data; name="{name}"'
+FILE_DISPOSITION = DISPOSITION + '; filename="{filename}"'
+
+
+class TestMultipartIdentityEdges:
+    """The identity a multipart upload keys on, pinned against the ways two materially
+    different uploads could otherwise collapse onto one key. A collision here is the
+    dangerous failure: replay would answer one request with another's response."""
+
+    def test_a_declared_part_content_type_separates_otherwise_identical_uploads(self) -> None:
+        boundary = "0123456789abcdef0123456789abcdef"
+        as_json = raw_multipart(
+            boundary,
+            (FILE_DISPOSITION.format(name="file", filename="a") + "\r\nContent-Type: application/json", b"xy"),
+        )
+        as_csv = raw_multipart(
+            boundary,
+            (FILE_DISPOSITION.format(name="file", filename="a") + "\r\nContent-Type: text/csv", b"xy"),
+        )
+
+        assert upload_key(as_json, boundary) != upload_key(as_csv, boundary)
+
+    def test_a_file_part_without_a_filename_is_not_mistaken_for_a_plain_field(self) -> None:
+        boundary = "0123456789abcdef0123456789abcdef"
+        upload = raw_multipart(
+            boundary,
+            (DISPOSITION.format(name="file") + "\r\nContent-Type: application/octet-stream", b"CONTENT"),
+        )
+        plain_field = raw_multipart(boundary, (DISPOSITION.format(name="file"), b"CONTENT"))
+
+        request = edge_request(
+            "POST", UPLOAD_PATH, "", upload, f"multipart/form-data; boundary={boundary}"
+        )
+
+        assert upload_key(upload, boundary) != upload_key(plain_field, boundary)
+        assert request.form == {}
+        assert b"CONTENT".decode() not in request.model_dump_json()
+
+    def test_a_filename_carrying_a_per_run_marker_keys_the_same_next_run(self) -> None:
+        boundary = "0123456789abcdef0123456789abcdef"
+
+        def upload(marker: str) -> str:
+            body = raw_multipart(
+                boundary,
+                (FILE_DISPOSITION.format(name="one", filename=f"{marker}.jsonl"), b"first"),
+                (FILE_DISPOSITION.format(name="two", filename="steady.jsonl"), b"second"),
+            )
+            return upload_key(body, boundary)
+
+        assert upload("a1b2c3d4e5f6") == upload("0f9e8d7c6b5a")
+
+    def test_a_separator_inside_a_filename_cannot_forge_a_different_split(self) -> None:
+        boundary = "0123456789abcdef0123456789abcdef"
+        colon_in_filename = raw_multipart(
+            boundary, (FILE_DISPOSITION.format(name="file", filename="a:b.jsonl"), b"same")
+        )
+        colon_in_field = raw_multipart(
+            boundary, (FILE_DISPOSITION.format(name="file:a", filename="b.jsonl"), b"same")
+        )
+
+        assert upload_key(colon_in_filename, boundary) != upload_key(colon_in_field, boundary)
+
+    def test_a_repeated_field_cannot_collide_with_a_literal_indexed_name(self) -> None:
+        boundary = "0123456789abcdef0123456789abcdef"
+        repeated = raw_multipart(
+            boundary,
+            (DISPOSITION.format(name="purpose"), b"x"),
+            (DISPOSITION.format(name="purpose"), b"y"),
+        )
+        literal_index = raw_multipart(
+            boundary,
+            (DISPOSITION.format(name="purpose"), b"x"),
+            (DISPOSITION.format(name="purpose[1]"), b"y"),
+        )
+
+        assert upload_key(repeated, boundary) != upload_key(literal_index, boundary)
+
+    def test_two_binary_field_values_of_one_length_stay_apart(self) -> None:
+        boundary = "0123456789abcdef0123456789abcdef"
+        first = raw_multipart(boundary, (DISPOSITION.format(name="blob"), b"\xff\xfe\xfd"))
+        second = raw_multipart(boundary, (DISPOSITION.format(name="blob"), b"\xf0\xf1\xf2"))
+
+        assert upload_key(first, boundary) != upload_key(second, boundary)
+
+    def test_a_secret_named_field_never_reaches_the_stored_request(self) -> None:
+        boundary = "0123456789abcdef0123456789abcdef"
+        body = raw_multipart(
+            boundary,
+            (DISPOSITION.format(name="openai_api_key"), b"sk-live-DEADBEEF-0123456789abcd"),
+            (DISPOSITION.format(name="purpose"), b"batch"),
+        )
+
+        request = edge_request(
+            "POST", UPLOAD_PATH, "", body, f"multipart/form-data; boundary={boundary}"
+        )
+
+        assert "sk-live-DEADBEEF-0123456789abcd" not in request.model_dump_json()
+        assert request.form == {"openai_api_key": "<secret>", "purpose": "batch"}
+
+    def test_a_redacted_field_still_matches_the_live_request_that_carried_the_secret(
+        self,
+    ) -> None:
+        boundary = "0123456789abcdef0123456789abcdef"
+
+        def upload(secret: str) -> str:
+            body = raw_multipart(
+                boundary,
+                (DISPOSITION.format(name="openai_api_key"), secret.encode()),
+                (DISPOSITION.format(name="purpose"), b"batch"),
+            )
+            return upload_key(body, boundary)
+
+        assert upload("sk-live-DEADBEEF-0123456789abcd") == upload("<secret>")
+
+    def test_a_length_change_the_canonicalizer_absorbs_does_not_move_the_key(self) -> None:
+        boundary = "0123456789abcdef0123456789abcdef"
+
+        def upload(created: str) -> str:
+            body = raw_multipart(
+                boundary,
+                (
+                    FILE_DISPOSITION.format(name="file", filename="batch.jsonl"),
+                    b'{"created_at":"' + created.encode() + b'"}',
+                ),
+            )
+            return upload_key(body, boundary)
+
+        assert upload("2026-08-21T02:08:19Z") == upload("2026-08-21T02:08:19.123456Z")
+
+    @pytest.mark.parametrize(
+        "content_type",
+        [
+            pytest.param("multipart/form-data; myboundary=zzz; boundary={boundary}", id="lookalike-parameter"),
+            pytest.param("multipart/form-data; BOUNDARY={boundary}", id="uppercase-parameter"),
+        ],
+    )
+    def test_the_boundary_parameter_is_read_the_way_the_client_meant_it(
+        self, content_type: str
+    ) -> None:
+        boundary = "0123456789abcdef0123456789abcdef"
+        body = raw_multipart(
+            boundary, (FILE_DISPOSITION.format(name="file", filename="batch.jsonl"), BATCH_JSONL)
+        )
+
+        request = edge_request(
+            "POST", UPLOAD_PATH, "", body, content_type.format(boundary=boundary)
+        )
+
+        assert request.form == {}
+        assert request.file_name is not None
+        assert "batch.jsonl" in request.file_name
+
+    def test_an_empty_declared_boundary_falls_back_instead_of_splitting_on_dashes(self) -> None:
+        body = b'--\r\nContent-Disposition: form-data; name="a"\r\n\r\nvalue\r\n----\r\n'
+
+        request = edge_request(
+            "POST", UPLOAD_PATH, "", body, 'multipart/form-data; boundary=""'
+        )
+
+        assert request.form is None
+        assert request.file_sha256 is not None
 
 
 class TestReplayLeftover:

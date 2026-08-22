@@ -59,7 +59,13 @@ from fixture_bundle import (
     prepare_bundle,
     slug_for_test,
 )
-from fixture_canonical import CanonicalRequest, canonical_string, canonicalize
+from fixture_canonical import (
+    SECRET_PLACEHOLDER,
+    CanonicalRequest,
+    canonical_string,
+    canonicalize,
+    is_secret_field,
+)
 from fixture_mode import (
     FIXTURE_MODES,
     InvalidFixtureMode,
@@ -104,12 +110,15 @@ _JSON: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
 
 
 _BOUNDARY_PATTERN: Final = re.compile(
-    r'boundary=(?:"([^"]*)"|([^;,\s]+))', re.IGNORECASE
+    r'(?:^|;)\s*boundary\s*=\s*(?:"([^"]*)"|([^;,\s]+))', re.IGNORECASE
 )
-_DISPOSITION_NAME_PATTERN: Final = re.compile(r'(?:^|;)\s*name="([^"]*)"')
-_DISPOSITION_FILENAME_PATTERN: Final = re.compile(r'(?:^|;)\s*filename="([^"]*)"')
+_DISPOSITION_NAME_PATTERN: Final = re.compile(r'(?:^|;)\s*name="([^"]*)"', re.IGNORECASE)
+_DISPOSITION_FILENAME_PATTERN: Final = re.compile(
+    r'(?:^|;)\s*filename="([^"]*)"', re.IGNORECASE
+)
 _UNPARSED_MULTIPART: Final = "<unparsed-multipart>"
 _BOUNDARY_PLACEHOLDER: Final = b"--<boundary>"
+_BINARY_FIELD_PREFIX: Final = "<binary:sha256:"
 
 
 @dataclass(frozen=True)
@@ -117,6 +126,7 @@ class _MultipartPart:
     field_name: str
     filename: str | None
     content: bytes
+    content_type: str = ""
 
 
 def _header_value(headers: Mapping[str, str], name: str) -> str:
@@ -125,22 +135,34 @@ def _header_value(headers: Mapping[str, str], name: str) -> str:
 
 
 def _multipart_boundary(content_type: str) -> str | None:
+    """The declared boundary, or None when the envelope is not multipart or names no
+    usable boundary. ``boundary`` is matched only as a parameter in its own right, so a
+    longer name ending in it (``myboundary=``) is not mistaken for one, and an empty
+    boundary is refused rather than splitting the body on a bare ``--``."""
     if "multipart/form-data" not in content_type.lower():
         return None
     match: Final = _BOUNDARY_PATTERN.search(content_type)
-    return None if match is None else match.group(1) or match.group(2)
+    if match is None:
+        return None
+    quoted, bare = match.group(1), match.group(2)
+    return (quoted if quoted is not None else bare) or None
+
+
+def _part_headers(head: bytes) -> dict[str, str]:
+    return {
+        name.strip().lower(): value.strip()
+        for line in head.decode("utf-8", errors="replace").split("\r\n")
+        for name, separator, value in [line.partition(":")]
+        if separator
+    }
 
 
 def _parse_multipart_part(segment: bytes) -> _MultipartPart | None:
     head, separator, content = segment.partition(b"\r\n\r\n")
     if not separator:
         return None
-    disposition: Final = "".join(
-        value
-        for line in head.decode("utf-8", errors="replace").split("\r\n")
-        for name, _, value in [line.partition(":")]
-        if name.strip().lower() == "content-disposition"
-    )
+    headers: Final = _part_headers(head)
+    disposition: Final = headers.get("content-disposition", "")
     name_match: Final = _DISPOSITION_NAME_PATTERN.search(disposition)
     if name_match is None:
         return None
@@ -149,6 +171,7 @@ def _parse_multipart_part(segment: bytes) -> _MultipartPart | None:
         field_name=name_match.group(1),
         filename=None if filename_match is None else filename_match.group(1),
         content=content,
+        content_type=headers.get("content-type", ""),
     )
 
 
@@ -178,39 +201,72 @@ def _content_digest(content: bytes) -> str:
     return hashlib.sha256(canonical_string(text).encode()).hexdigest()
 
 
+def _is_file_part(part: _MultipartPart) -> bool:
+    """Whether a part is an upload rather than an ordinary field. A filename says so
+    outright, and so does a declared content type: clients attach one per part only for
+    a file, and a client that omits the filename (httpx drops the parameter when it is
+    empty) would otherwise have the file's bytes stored inline as a field value and key
+    identically to a plain field of the same name."""
+    return part.filename is not None or bool(part.content_type)
+
+
+def _field_value(part: _MultipartPart) -> str:
+    """What a field part contributes to the stored form. A secret-named field never has
+    its value written out, since the bundle is a file on disk and the key redacts that
+    field to the same placeholder either way, so replay still matches. A value that is
+    not UTF-8 is carried as a digest rather than decoded lossily, because a replacing
+    decode collapses every binary value of one length onto one string. That digest is
+    base64 rather than hex, since the canonicalizer rewrites any long hex run to a
+    ``<sha256>`` placeholder and would collapse the values right back together."""
+    if is_secret_field(part.field_name):
+        return SECRET_PLACEHOLDER
+    try:
+        return part.content.decode("utf-8")
+    except UnicodeDecodeError:
+        digest: Final = base64.b64encode(hashlib.sha256(part.content).digest()).decode()
+        return f"{_BINARY_FIELD_PREFIX}{digest}>"
+
+
 def _form_fields(fields: tuple[_MultipartPart, ...]) -> dict[str, str]:
     """The ordinary field parts, flattened into the mapping the bundle format stores. A
-    name sent more than once takes an index instead of overwriting the earlier value, so
-    nothing an upload said is dropped from its key."""
+    name sent more than once takes an occurrence suffix instead of overwriting the
+    earlier value, so nothing an upload said is dropped from its key. The suffix is
+    escaped so a field literally named ``x[1]`` cannot collide with a second ``x``."""
     form: dict[str, str] = {}
     for part in fields:
-        name = part.field_name
+        name = part.field_name.replace("[", "[[")
         occurrence = 1
         while name in form:
-            name = f"{part.field_name}[{occurrence}]"
+            name = f"{part.field_name.replace('[', '[[')}[{occurrence}]"
             occurrence += 1
-        form[name] = part.content.decode("utf-8", errors="replace")
+        form[name] = _field_value(part)
     return form
 
 
 def _file_identity(files: tuple[_MultipartPart, ...]) -> tuple[str | None, str | None, int | None]:
-    """Name, content digest, and total length for the uploaded file parts. The name
-    carries each part's field name as well as its filename, so two uploads sending the
-    same bytes under different field names stay apart. A lone file keeps its own content
-    digest; several fold into one digest over the per-part identities, which is ordered,
-    so parts arriving in a different order key differently."""
+    """Name, content digest, and total length for the uploaded file parts.
+
+    The name is a structured list of every part's field name, filename, and declared
+    content type rather than a joined string, so a filename containing the separator
+    cannot be confused for a different split, and two parts that differ only in the type
+    they declare stay apart. It goes through the canonicalizer as one string, which is
+    why per-run markers inside a filename do not move the key in the multi-file case any
+    more than they do in the single-file one.
+
+    The digest covers content only. A lone file keeps its own canonicalized digest;
+    several fold into one ordered digest, so parts arriving in a different order key
+    differently. Total length is recorded for a reader but deliberately kept out of the
+    key: it is the raw byte count, and keying on it would undo exactly the drift the
+    canonicalized digest exists to absorb."""
     if not files:
         return None, None, None
-    names: Final = ", ".join(f"{part.field_name}:{part.filename}" for part in files)
+    names: Final = _JSON.dump_json(
+        [[part.field_name, part.filename, part.content_type] for part in files]
+    ).decode()
     total: Final = sum(len(part.content) for part in files)
     if len(files) == 1:
         return names, _content_digest(files[0].content), total
-    folded: Final = _JSON.dump_json(
-        [
-            [part.field_name, part.filename, _content_digest(part.content), len(part.content)]
-            for part in files
-        ]
-    )
+    folded: Final = _JSON.dump_json([_content_digest(part.content) for part in files])
     return names, hashlib.sha256(folded).hexdigest(), total
 
 
@@ -220,9 +276,9 @@ def _multipart_request(
     """A multipart upload keyed by what it says rather than by its wire bytes: every
     ordinary field, plus the identity of the uploaded file. The random per-request
     boundary is envelope, never content, so it never reaches the digest."""
-    form: Final = _form_fields(tuple(part for part in parts if part.filename is None))
+    form: Final = _form_fields(tuple(part for part in parts if not _is_file_part(part)))
     file_name, file_sha256, file_bytes = _file_identity(
-        tuple(part for part in parts if part.filename is not None)
+        tuple(part for part in parts if _is_file_part(part))
     )
     return RecordedRequest(
         method=method,
@@ -258,7 +314,7 @@ def _opaque_request(
     )
 
 
-def _edge_request(
+def edge_request(
     method: str, path: str, query: str, body: bytes | None, content_type: str = ""
 ) -> RecordedRequest:
     """The identity replay matches on: the edge path (mount included), the query as
@@ -519,7 +575,7 @@ def handle_edge_request(
         return _text_reply(
             404, f"unknown provider mount {mount!r}; known mounts: {', '.join(sorted(mounts))}"
         )
-    request: Final = _edge_request(
+    request: Final = edge_request(
         method, split.path, split.query, body, _header_value(headers, "content-type")
     )
     match backend:
