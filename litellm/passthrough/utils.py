@@ -6,22 +6,43 @@ import httpx
 from litellm._logging import verbose_logger
 from litellm.constants import PASS_THROUGH_HEADER_PREFIX
 
-# Headers that must not be overwritten via the x-pass- forwarding mechanism.
-# Includes standard credential/auth headers and protocol-level headers that
-# affect routing or message framing.
-_PASS_THROUGH_PROTECTED_HEADERS: frozenset = frozenset(
+# Headers that must never be forwarded from the raw client request.
+# A configured general_settings.litellm_key_header_name is added at runtime.
+_RAW_FORWARD_EXCLUDED_HEADERS: frozenset = frozenset(
     {
-        "authorization",
         "api-key",
+        "authorization",
+        "content-length",
+        "host",
+        "ocp-apim-subscription-key",
         "x-api-key",
         "x-goog-api-key",
-        "host",
-        "content-length",
+        "x-litellm-api-key",
     }
 )
 
+# Headers that must never be injected via the x-pass- forwarding mechanism
+# because they affect routing or message framing.
+_PASS_THROUGH_BLOCKED_HEADERS: frozenset = frozenset({"host", "content-length"})
+
 # Header name prefix used to block AWS SigV4 signing headers from being overridden.
 _PASS_THROUGH_PROTECTED_HEADER_PREFIXES: tuple = ("x-amz-",)
+
+
+def _configured_litellm_key_header_names() -> frozenset[str]:
+    try:
+        from litellm.proxy import proxy_server
+    except ImportError:
+        return frozenset()
+
+    general_settings = getattr(proxy_server, "general_settings", None)
+    if not isinstance(general_settings, dict):
+        return frozenset()
+
+    name = general_settings.get("litellm_key_header_name")
+    if not isinstance(name, str) or not name:
+        return frozenset()
+    return frozenset({name.lower()})
 
 
 class BasePassthroughUtils:
@@ -56,6 +77,7 @@ class BasePassthroughUtils:
         request_headers: dict,
         headers: dict,
         forward_headers: Optional[bool] = False,
+        forward_raw_authorization: Optional[bool] = False,
     ):
         """
         Helper to forward headers from original request.
@@ -64,34 +86,56 @@ class BasePassthroughUtils:
         with the prefix stripped, regardless of forward_headers setting.
         e.g., 'x-pass-anthropic-beta: value' becomes 'anthropic-beta: value'
         """
-        if forward_headers is True:
-            # Header We Should NOT forward
-            request_headers.pop("content-length", None)
-            request_headers.pop("host", None)
+        configured_header_names = {header_name.lower() for header_name in headers}
+        x_pass_header_names = set()
+        for header_name in request_headers:
+            normalized_header_name = header_name.lower()
+            if normalized_header_name.startswith(PASS_THROUGH_HEADER_PREFIX):
+                actual_header_name = normalized_header_name[len(PASS_THROUGH_HEADER_PREFIX) :]
+                if actual_header_name in _PASS_THROUGH_BLOCKED_HEADERS or any(
+                    actual_header_name.startswith(p) for p in _PASS_THROUGH_PROTECTED_HEADER_PREFIXES
+                ):
+                    continue
+                x_pass_header_names.add(actual_header_name)
 
-            custom_header_names = {header_name.lower() for header_name in headers}
-            for header_name in list(request_headers.keys()):
-                if header_name.lower() in custom_header_names:
-                    request_headers.pop(header_name, None)
+        if forward_headers is True:
+            raw_forward_excluded_headers = _RAW_FORWARD_EXCLUDED_HEADERS | _configured_litellm_key_header_names()
+            forwardable_request_headers = {}
+            for header_name, header_value in request_headers.items():
+                normalized_header_name = header_name.lower()
+                if (
+                    (
+                        normalized_header_name in raw_forward_excluded_headers
+                        and not (normalized_header_name == "authorization" and forward_raw_authorization is True)
+                    )
+                    or normalized_header_name.startswith(PASS_THROUGH_HEADER_PREFIX)
+                    or normalized_header_name in configured_header_names
+                    or normalized_header_name in x_pass_header_names
+                ):
+                    continue
+                forwardable_request_headers[header_name] = header_value
 
             # Combine request headers with custom headers
-            headers = {**request_headers, **headers}
+            headers = {**forwardable_request_headers, **headers}
 
         # Process x-pass- prefixed headers (strip prefix and forward)
-        # Credential and protocol-level headers are excluded from this mechanism.
+        existing_header_names = set(configured_header_names)
         for header_name, header_value in request_headers.items():
             if header_name.lower().startswith(PASS_THROUGH_HEADER_PREFIX):
                 # Strip the 'x-pass-' prefix and normalize to lowercase
                 actual_header_name = header_name[len(PASS_THROUGH_HEADER_PREFIX) :].lower()
-                if actual_header_name in _PASS_THROUGH_PROTECTED_HEADERS or any(
-                    actual_header_name.startswith(p) for p in _PASS_THROUGH_PROTECTED_HEADER_PREFIXES
+                if (
+                    actual_header_name in _PASS_THROUGH_BLOCKED_HEADERS
+                    or actual_header_name in existing_header_names
+                    or any(actual_header_name.startswith(p) for p in _PASS_THROUGH_PROTECTED_HEADER_PREFIXES)
                 ):
                     verbose_logger.debug(
-                        "x-pass- header %s maps to a protected header name; skipping",
+                        "x-pass- header %s maps to a blocked or existing header name; skipping",
                         header_name,
                     )
                     continue
                 headers[actual_header_name] = header_value
+                existing_header_names.add(actual_header_name)
 
         return headers
 
