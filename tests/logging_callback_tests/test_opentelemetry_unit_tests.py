@@ -223,7 +223,6 @@ class TestOpentelemetryUnitTests(BaseLoggingCallbackTest):
         mock_histogram = MagicMock()
         otel_integration._operation_duration_histogram = mock_histogram
 
-        # Case 1: Default legacy mode
         kwargs = {
             "litellm_params": {"custom_llm_provider": "anthropic"},
             "model": "claude-3-5-sonnet",
@@ -234,7 +233,6 @@ class TestOpentelemetryUnitTests(BaseLoggingCallbackTest):
         call_attrs = mock_histogram.record.call_args[1]["attributes"]
         assert call_attrs.get("gen_ai.system") == "anthropic"
 
-        # Case 2: Semconv experimental mode
         otel_integration.config.semconv_stability_opt_in = {
             OTELSemconvCategory.GEN_AI_LATEST_EXPERIMENTAL
         }
