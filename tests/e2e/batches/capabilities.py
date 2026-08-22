@@ -7,7 +7,7 @@ import os
 from dataclasses import dataclass
 from typing import Literal
 
-from e2e_config import unique_marker
+from e2e_config import provider_edge_base, unique_marker
 from models import LiteLLMParamsBody
 
 _BATCH_RUN = unique_marker()
@@ -15,6 +15,18 @@ _BATCH_RUN = unique_marker()
 
 def batch_model_name(base: str) -> str:
     return f"{base}-{_BATCH_RUN}"
+
+
+def openai_batch_params() -> LiteLLMParamsBody:
+    """The OpenAI batch deployment, wired through the record/replay edge when a fixture
+    mode is active and straight at OpenAI otherwise (LIT-5974). Azure, Vertex, and
+    Bedrock stay live: none of them has an edge mount."""
+    base = provider_edge_base("openai")
+    return LiteLLMParamsBody(
+        model="openai/gpt-4o-mini",
+        api_key="os.environ/OPENAI_API_KEY",
+        api_base=None if base is None else f"{base}/v1",
+    )
 
 
 def _env_ref(*names: str) -> str:
@@ -47,10 +59,7 @@ class Provider:
     def litellm_params(self) -> LiteLLMParamsBody:
         match self.name:
             case "openai":
-                return LiteLLMParamsBody(
-                    model="openai/gpt-4o-mini",
-                    api_key="os.environ/OPENAI_API_KEY",
-                )
+                return openai_batch_params()
             case "azure":
                 return LiteLLMParamsBody(
                     model="azure/gpt-5.4-mini-batch",

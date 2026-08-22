@@ -53,8 +53,10 @@ from provider_edge import (
 )
 
 CHAT_PATH = "/openai/v1/chat/completions"
+UPLOAD_PATH = "/openai/v1/files"
 REPLAY_MOUNTS = {"openai": "https://replay.invalid"}
 JSON_OBJECT = TypeAdapter(dict[str, object])
+BATCH_JSONL = b'{"custom_id":"one"}\n{"custom_id":"two"}\n'
 
 
 def json_object(body: bytes) -> dict[str, object]:
@@ -162,6 +164,46 @@ def this_tests_files(root: Path) -> list[Path]:
 
 def chat_body(prompt: str) -> bytes:
     return json.dumps({"model": "gpt", "messages": [{"role": "user", "content": prompt}]}).encode()
+
+
+def multipart_body(
+    boundary: str,
+    fields: tuple[tuple[str, str], ...] = (),
+    files: tuple[tuple[str, str, bytes], ...] = (),
+) -> bytes:
+    """One multipart/form-data body on the wire, exactly as ``requests`` writes it, with
+    the boundary under the caller's control instead of randomly generated."""
+    parts = [
+        f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"\r\n\r\n'.encode()
+        + value.encode()
+        for name, value in fields
+    ] + [
+        (
+            f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"; '
+            f'filename="{filename}"\r\nContent-Type: application/octet-stream\r\n\r\n'
+        ).encode()
+        + content
+        for name, filename, content in files
+    ]
+    return b"\r\n".join(parts) + f"\r\n--{boundary}--\r\n".encode()
+
+
+def upload_headers(boundary: str) -> dict[str, str]:
+    return {
+        "content-type": f"multipart/form-data; boundary={boundary}",
+        "authorization": "Bearer sk-upload-secret",
+    }
+
+
+def record_upload(root: Path, body: bytes, boundary: str) -> None:
+    with fake_provider() as provider:
+        with running_edge(record_backend(root), {"openai": provider_url(provider)}) as edge:
+            call_edge(edge, "POST", UPLOAD_PATH, body=body, headers=upload_headers(boundary))
+
+
+def replay_upload(root: Path, body: bytes, boundary: str) -> RawResponse:
+    with running_edge(ReplayEdge(source=replay_source(root)), REPLAY_MOUNTS) as edge:
+        return call_edge(edge, "POST", UPLOAD_PATH, body=body, headers=upload_headers(boundary))
 
 
 class TestRecordMode:
@@ -326,6 +368,164 @@ class TestReplayMode:
         with running_edge(ReplayEdge(source=replay_source(root)), REPLAY_MOUNTS) as edge:
             replayed = call_edge(edge, "POST", "/openai/v1/files", body=opaque)
         assert replayed.status_code == 200
+
+
+class TestMultipartIdentity:
+    """LIT-5974: a multipart upload is keyed by its parsed fields and file identity.
+    ``requests`` picks a fresh random boundary per request, so hashing the wire body
+    made every upload miss on replay; parsing the envelope keys the upload on what it
+    actually says, which is stable across runs and still separates real drift."""
+
+    def test_a_fresh_boundary_replays_the_same_upload(self, tmp_path: Path) -> None:
+        root = tmp_path / "bundle"
+        recorded = multipart_body(
+            "d0a1b2c3d4e5f60718293a4b5c6d7e8f",
+            fields=(("purpose", "batch"),),
+            files=(("file", "batch.jsonl", BATCH_JSONL),),
+        )
+        record_upload(root, recorded, "d0a1b2c3d4e5f60718293a4b5c6d7e8f")
+
+        rerun = multipart_body(
+            "ffffeeeeddddccccbbbbaaaa99998888",
+            fields=(("purpose", "batch"),),
+            files=(("file", "batch.jsonl", BATCH_JSONL),),
+        )
+        assert rerun != recorded
+        replayed = replay_upload(root, rerun, "ffffeeeeddddccccbbbbaaaa99998888")
+        assert replayed.status_code == 200, replayed.body[:400]
+
+    def test_the_stored_request_carries_fields_and_file_identity_but_no_secrets(
+        self, tmp_path: Path
+    ) -> None:
+        root = tmp_path / "bundle"
+        boundary = "0123456789abcdef0123456789abcdef"
+        record_upload(
+            root,
+            multipart_body(
+                boundary,
+                fields=(("purpose", "batch"),),
+                files=(("file", "batch.jsonl", BATCH_JSONL),),
+            ),
+            boundary,
+        )
+
+        raw = this_tests_files(root)[0].read_text(encoding="utf-8")
+        interaction = Interaction.model_validate_json(raw)
+        assert interaction.request.form == {"purpose": "batch"}
+        assert interaction.request.file_name == "file:batch.jsonl"
+        assert interaction.request.file_bytes == len(BATCH_JSONL)
+        stored = interaction.request.model_dump_json()
+        assert boundary not in stored
+        assert "sk-upload-secret" not in stored
+        assert "custom_id" not in stored
+
+    @pytest.mark.parametrize(
+        ("fields", "files"),
+        [
+            pytest.param(
+                (("purpose", "batch"),),
+                (("file", "batch.jsonl", b'{"custom_id":"three"}\n'),),
+                id="file-content",
+            ),
+            pytest.param(
+                (("purpose", "batch"),),
+                (("file", "other.jsonl", BATCH_JSONL),),
+                id="file-name",
+            ),
+            pytest.param(
+                (("purpose", "fine-tune"),),
+                (("file", "batch.jsonl", BATCH_JSONL),),
+                id="form-field",
+            ),
+            pytest.param(
+                (("purpose", "batch"), ("purpose", "batch")),
+                (("file", "batch.jsonl", BATCH_JSONL),),
+                id="repeated-form-field",
+            ),
+            pytest.param(
+                (("purpose", "batch"),),
+                (
+                    ("file", "batch.jsonl", BATCH_JSONL),
+                    ("mask", "mask.jsonl", BATCH_JSONL),
+                ),
+                id="extra-file-part",
+            ),
+        ],
+    )
+    def test_a_structurally_different_upload_misses(
+        self,
+        tmp_path: Path,
+        fields: tuple[tuple[str, str], ...],
+        files: tuple[tuple[str, str, bytes], ...],
+    ) -> None:
+        root = tmp_path / "bundle"
+        record_upload(
+            root,
+            multipart_body(
+                "aaaaaaaabbbbbbbbccccccccdddddddd",
+                fields=(("purpose", "batch"),),
+                files=(("file", "batch.jsonl", BATCH_JSONL),),
+            ),
+            "aaaaaaaabbbbbbbbccccccccdddddddd",
+        )
+
+        drifted = replay_upload(
+            root,
+            multipart_body("11112222333344445555666677778888", fields=fields, files=files),
+            "11112222333344445555666677778888",
+        )
+        assert drifted.status_code == REPLAY_MISS_STATUS
+
+    def test_several_file_parts_separate_when_their_contents_swap(self, tmp_path: Path) -> None:
+        root = tmp_path / "bundle"
+        image, mask = b"image-bytes", b"mask-bytes"
+        record_upload(
+            root,
+            multipart_body(
+                "1a1a1a1a2b2b2b2b3c3c3c3c4d4d4d4d",
+                fields=(("prompt", "a cat"),),
+                files=(("image", "a.png", image), ("mask", "b.png", mask)),
+            ),
+            "1a1a1a1a2b2b2b2b3c3c3c3c4d4d4d4d",
+        )
+
+        swapped = replay_upload(
+            root,
+            multipart_body(
+                "5e5e5e5e6f6f6f6f7070707081818181",
+                fields=(("prompt", "a cat"),),
+                files=(("image", "a.png", mask), ("mask", "b.png", image)),
+            ),
+            "5e5e5e5e6f6f6f6f7070707081818181",
+        )
+        assert swapped.status_code == REPLAY_MISS_STATUS
+
+        same = replay_upload(
+            root,
+            multipart_body(
+                "9292929203030303a4a4a4a4b5b5b5b5",
+                fields=(("prompt", "a cat"),),
+                files=(("image", "a.png", image), ("mask", "b.png", mask)),
+            ),
+            "9292929203030303a4a4a4a4b5b5b5b5",
+        )
+        assert same.status_code == 200, same.body[:400]
+
+    def test_a_body_that_does_not_match_its_declared_boundary_stays_opaque(
+        self, tmp_path: Path
+    ) -> None:
+        root = tmp_path / "bundle"
+        opaque = b"custom_id one\ncustom_id two\n"
+        absent = "boundary-that-is-absent-from-the-body"
+        record_upload(root, opaque, absent)
+
+        raw = this_tests_files(root)[0].read_text(encoding="utf-8")
+        interaction = Interaction.model_validate_json(raw)
+        assert interaction.request.form is None
+        assert interaction.request.file_name == "<unparsed-multipart>"
+        assert interaction.request.file_bytes == len(opaque)
+        assert "custom_id" not in interaction.request.model_dump_json()
+        assert replay_upload(root, opaque, absent).status_code == 200
 
 
 class TestReplayLeftover:
