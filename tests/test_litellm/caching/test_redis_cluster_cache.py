@@ -1,7 +1,7 @@
 import json
 import os
 import sys
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -179,3 +179,53 @@ def test_router_create_redis_cache_cluster_detection(
     with patch.object(RedisCache, "__init__", _mock_redis_cache_init):
         redis_cache = Router._create_redis_cache(cache_config)
         assert isinstance(redis_cache, expected_cache_type)
+
+
+@pytest.mark.asyncio
+@patch("litellm._redis.init_redis_cluster")
+async def test_redis_cluster_disconnect_without_connection_pool(mock_init_redis_cluster):
+    """
+    Cluster mode has no shared connection pool, so disconnect must not dereference it.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/37137
+    """
+    mock_init_redis_cluster.return_value = MagicMock()
+
+    cache = RedisClusterCache(
+        startup_nodes=[{"host": "localhost", "port": 6379}],
+        password="hello",
+    )
+
+    assert cache.async_redis_conn_pool is None
+
+    await cache.disconnect()
+
+
+@pytest.mark.asyncio
+@patch("litellm._redis.init_redis_cluster")
+async def test_redis_cluster_disconnect_closes_cluster_client(mock_init_redis_cluster):
+    """
+    The cluster client owns its per-node pools, so disconnect has to close it explicitly.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/37137
+    """
+    from redis.asyncio import RedisCluster
+
+    mock_init_redis_cluster.return_value = MagicMock()
+
+    cache = RedisClusterCache(
+        startup_nodes=[{"host": "localhost", "port": 6379}],
+        password="hello",
+    )
+
+    mock_cluster_client = MagicMock(spec=RedisCluster)
+    mock_cluster_client.aclose = AsyncMock()
+    with patch("litellm._redis.get_redis_async_client", return_value=mock_cluster_client):
+        cache.init_async_client()
+
+    assert cache.redis_async_redis_cluster_client is mock_cluster_client
+
+    await cache.disconnect()
+
+    mock_cluster_client.aclose.assert_awaited_once()
+    assert cache.redis_async_redis_cluster_client is None

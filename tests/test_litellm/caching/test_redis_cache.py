@@ -613,3 +613,34 @@ async def test_only_connectivity_failures_open_the_breaker(error, opens_breaker)
         await _run_under_circuit_breaker(breaker, "op", failing_call)
 
     assert breaker.is_open() is opens_breaker
+
+
+@pytest.mark.asyncio
+async def test_disconnect_skips_absent_connection_pool(redis_no_ping):
+    """
+    `get_redis_connection_pool` returns None in cluster mode, so disconnect must guard it.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/37137
+    """
+    with patch("litellm._redis.get_redis_connection_pool", return_value=None):
+        cache = RedisCache(host="localhost", port=6379, password="hello")
+
+    assert cache.async_redis_conn_pool is None
+
+    await cache.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_disconnect_closes_connection_pool_when_present(redis_no_ping):
+    """A non-cluster cache still tears its shared pool down."""
+    mock_pool = MagicMock()
+    mock_pool.disconnect = AsyncMock()
+
+    with patch("litellm._redis.get_redis_connection_pool", return_value=mock_pool):
+        cache = RedisCache(host="localhost", port=6379, password="hello")
+
+    assert cache.async_redis_conn_pool is mock_pool
+
+    await cache.disconnect()
+
+    mock_pool.disconnect.assert_awaited_once_with(inuse_connections=True)
