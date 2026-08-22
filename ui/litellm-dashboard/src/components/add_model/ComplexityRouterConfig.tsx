@@ -226,20 +226,6 @@ export const effectiveTierLabel = (tier: keyof ComplexityTiers, tierLabels: Comp
 export const planModeEligibleTiers = (tiers: ComplexityTiers): Array<keyof ComplexityTiers> =>
   TIER_KEYS.filter((tier) => (tiers[tier] ?? []).length > 0);
 
-/**
- * The backend list is the per-group intersection of accepted effort levels. An empty intersection
- * carries no more information than a proxy that does not send the field yet (one deployment absent
- * from the model map empties it), so both fall back to the coarse supports_reasoning gate with every
- * level offered, which is what this dropdown showed before the field existed.
- */
-const effortOptionsForModel = (model: ModelGroup): string[] => {
-  const advertised = model.supported_reasoning_efforts ?? [];
-  if (advertised.length > 0) {
-    return [...advertised];
-  }
-  return model.supports_reasoning ? [...REASONING_EFFORT_OPTIONS] : [];
-};
-
 const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
   modelInfo,
   value,
@@ -265,8 +251,13 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
   const derivedDefaultModel = resolveComplexityDefaultModel(value.tiers);
   const defaultModel = resolveComplexityDefaultModel(value.tiers, value.default_model);
 
+  // An absent list means the proxy does not send the field yet, so every level is offered as before.
+  // An empty list is the group's own answer that its deployments share no level, and is left empty.
   const effortOptionsByModel: Record<string, string[]> = Object.fromEntries(
-    modelInfo.map((model) => [model.model_group, effortOptionsForModel(model)]),
+    modelInfo.map((model) => [
+      model.model_group,
+      model.supported_reasoning_efforts ?? (model.supports_reasoning ? [...REASONING_EFFORT_OPTIONS] : []),
+    ]),
   );
 
   // Embedding models can't serve a chat-completion role, so they're excluded here.
