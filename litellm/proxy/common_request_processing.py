@@ -239,11 +239,27 @@ async def _parse_event_data_for_error(event_line: Union[str, bytes]) -> Optional
                         # Not a valid integer string, treat as if no valid code was found for this check
                         pass
 
-                # Ensure error_code is a valid HTTP status code
+                # Return valid HTTP status codes as-is.
+                # Vendor-specific codes outside 100-599 (e.g. ZAI 1302, DashScope 4-digit
+                # throttle codes, or small integers like {"code": 2}) are mapped to
+                # 502 Bad Gateway so that create_streaming_response() can detect the error
+                # and the router failure/cooldown/fallback paths fire correctly. Without
+                # this mapping the error-bearing SSE chunk would be forwarded as normal
+                # content (200 OK) and the router would never know the deployment failed.
                 if error_code is not None and 100 <= error_code <= 599:
                     return error_code
-                elif error_code_raw is not None:  # Log if original code was present but not valid
-                    verbose_proxy_logger.warning(f"Error has invalid or non-convertible code: {error_code_raw}")
+                elif error_code is not None:
+                    verbose_proxy_logger.warning(
+                        f"Vendor SSE error code {error_code} is outside HTTP range; "
+                        f"mapping to 502 Bad Gateway for router error handling."
+                    )
+                    return 502
+                elif (
+                    error_code_raw is not None
+                ):  # Log if original code was present but not valid
+                    verbose_proxy_logger.warning(
+                        f"Error has invalid or non-convertible code: {error_code_raw}"
+                    )
         except (orjson.JSONDecodeError, json.JSONDecodeError):
             # not a known error chunk
             pass
