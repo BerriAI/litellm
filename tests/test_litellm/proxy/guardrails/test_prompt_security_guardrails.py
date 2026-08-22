@@ -19,14 +19,14 @@ import litellm
 from litellm.proxy.guardrails.init_guardrails import init_guardrails_v2
 
 
-def test_prompt_security_guard_config():
+def test_prompt_security_guard_config(monkeypatch):
     """Test guardrail initialization with proper configuration"""
     litellm.set_verbose = True
     litellm.guardrail_name_config_map = {}
 
     # Set environment variables for testing
-    os.environ["PROMPT_SECURITY_API_KEY"] = "test-key"
-    os.environ["PROMPT_SECURITY_API_BASE"] = "https://test.prompt.security"
+    monkeypatch.setenv("PROMPT_SECURITY_API_KEY", "test-key")
+    monkeypatch.setenv("PROMPT_SECURITY_API_BASE", "https://test.prompt.security")
 
     init_guardrails_v2(
         all_guardrails=[
@@ -78,10 +78,10 @@ def test_prompt_security_guard_config_no_api_key():
 
 
 @pytest.mark.asyncio
-async def test_apply_guardrail_block_request():
+async def test_apply_guardrail_block_request(monkeypatch):
     """Test that apply_guardrail blocks malicious prompts"""
-    os.environ["PROMPT_SECURITY_API_KEY"] = "test-key"
-    os.environ["PROMPT_SECURITY_API_BASE"] = "https://test.prompt.security"
+    monkeypatch.setenv("PROMPT_SECURITY_API_KEY", "test-key")
+    monkeypatch.setenv("PROMPT_SECURITY_API_BASE", "https://test.prompt.security")
 
     guardrail = PromptSecurityGuardrail(
         guardrail_name="test-guard", event_hook="pre_call", default_on=True
@@ -132,10 +132,10 @@ async def test_apply_guardrail_block_request():
 
 
 @pytest.mark.asyncio
-async def test_apply_guardrail_modify_request():
+async def test_apply_guardrail_modify_request(monkeypatch):
     """Test that apply_guardrail modifies prompts when needed"""
-    os.environ["PROMPT_SECURITY_API_KEY"] = "test-key"
-    os.environ["PROMPT_SECURITY_API_BASE"] = "https://test.prompt.security"
+    monkeypatch.setenv("PROMPT_SECURITY_API_KEY", "test-key")
+    monkeypatch.setenv("PROMPT_SECURITY_API_BASE", "https://test.prompt.security")
 
     guardrail = PromptSecurityGuardrail(
         guardrail_name="test-guard", event_hook="pre_call", default_on=True
@@ -183,10 +183,10 @@ async def test_apply_guardrail_modify_request():
 
 
 @pytest.mark.asyncio
-async def test_apply_guardrail_allow_request():
+async def test_apply_guardrail_allow_request(monkeypatch):
     """Test that apply_guardrail allows safe prompts"""
-    os.environ["PROMPT_SECURITY_API_KEY"] = "test-key"
-    os.environ["PROMPT_SECURITY_API_BASE"] = "https://test.prompt.security"
+    monkeypatch.setenv("PROMPT_SECURITY_API_KEY", "test-key")
+    monkeypatch.setenv("PROMPT_SECURITY_API_BASE", "https://test.prompt.security")
 
     guardrail = PromptSecurityGuardrail(
         guardrail_name="test-guard", event_hook="pre_call", default_on=True
@@ -226,10 +226,10 @@ async def test_apply_guardrail_allow_request():
 
 
 @pytest.mark.asyncio
-async def test_apply_guardrail_block_response():
+async def test_apply_guardrail_block_response(monkeypatch):
     """Test that apply_guardrail blocks malicious responses"""
-    os.environ["PROMPT_SECURITY_API_KEY"] = "test-key"
-    os.environ["PROMPT_SECURITY_API_BASE"] = "https://test.prompt.security"
+    monkeypatch.setenv("PROMPT_SECURITY_API_KEY", "test-key")
+    monkeypatch.setenv("PROMPT_SECURITY_API_BASE", "https://test.prompt.security")
 
     guardrail = PromptSecurityGuardrail(
         guardrail_name="test-guard", event_hook="post_call", default_on=True
@@ -273,10 +273,10 @@ async def test_apply_guardrail_block_response():
 
 
 @pytest.mark.asyncio
-async def test_apply_guardrail_modify_response():
+async def test_apply_guardrail_modify_response(monkeypatch):
     """Test that apply_guardrail modifies responses when needed"""
-    os.environ["PROMPT_SECURITY_API_KEY"] = "test-key"
-    os.environ["PROMPT_SECURITY_API_BASE"] = "https://test.prompt.security"
+    monkeypatch.setenv("PROMPT_SECURITY_API_KEY", "test-key")
+    monkeypatch.setenv("PROMPT_SECURITY_API_BASE", "https://test.prompt.security")
 
     guardrail = PromptSecurityGuardrail(
         guardrail_name="test-guard", event_hook="post_call", default_on=True
@@ -317,10 +317,10 @@ async def test_apply_guardrail_modify_response():
 
 
 @pytest.mark.asyncio
-async def test_file_sanitization():
+async def test_file_sanitization(monkeypatch):
     """Test file sanitization for images"""
-    os.environ["PROMPT_SECURITY_API_KEY"] = "test-key"
-    os.environ["PROMPT_SECURITY_API_BASE"] = "https://test.prompt.security"
+    monkeypatch.setenv("PROMPT_SECURITY_API_KEY", "test-key")
+    monkeypatch.setenv("PROMPT_SECURITY_API_BASE", "https://test.prompt.security")
 
     guardrail = PromptSecurityGuardrail(
         guardrail_name="test-guard", event_hook="pre_call", default_on=True
@@ -407,10 +407,10 @@ async def test_file_sanitization():
 
 
 @pytest.mark.asyncio
-async def test_file_sanitization_block():
+async def test_file_sanitization_block(monkeypatch):
     """Test that file sanitization blocks malicious files"""
-    os.environ["PROMPT_SECURITY_API_KEY"] = "test-key"
-    os.environ["PROMPT_SECURITY_API_BASE"] = "https://test.prompt.security"
+    monkeypatch.setenv("PROMPT_SECURITY_API_KEY", "test-key")
+    monkeypatch.setenv("PROMPT_SECURITY_API_BASE", "https://test.prompt.security")
 
     guardrail = PromptSecurityGuardrail(
         guardrail_name="test-guard", event_hook="pre_call", default_on=True
@@ -491,10 +491,10 @@ async def test_file_sanitization_block():
 
 
 @pytest.mark.asyncio
-async def test_user_api_key_alias_forwarding():
+async def test_user_api_key_alias_forwarding(monkeypatch):
     """Test that user API key alias is properly sent via headers and payload"""
-    os.environ["PROMPT_SECURITY_API_KEY"] = "test-key"
-    os.environ["PROMPT_SECURITY_API_BASE"] = "https://test.prompt.security"
+    monkeypatch.setenv("PROMPT_SECURITY_API_KEY", "test-key")
+    monkeypatch.setenv("PROMPT_SECURITY_API_BASE", "https://test.prompt.security")
 
     guardrail = PromptSecurityGuardrail(
         guardrail_name="test-guard", event_hook="pre_call", default_on=True
@@ -535,10 +535,10 @@ async def test_user_api_key_alias_forwarding():
 
 
 @pytest.mark.asyncio
-async def test_role_filtering():
+async def test_role_filtering(monkeypatch):
     """Test that tool/function messages are filtered out by default"""
-    os.environ["PROMPT_SECURITY_API_KEY"] = "test-key"
-    os.environ["PROMPT_SECURITY_API_BASE"] = "https://test.prompt.security"
+    monkeypatch.setenv("PROMPT_SECURITY_API_KEY", "test-key")
+    monkeypatch.setenv("PROMPT_SECURITY_API_BASE", "https://test.prompt.security")
 
     guardrail = PromptSecurityGuardrail(
         guardrail_name="test-guard", event_hook="pre_call", default_on=True
@@ -600,11 +600,11 @@ async def test_role_filtering():
 
 
 @pytest.mark.asyncio
-async def test_check_tool_results_enabled():
+async def test_check_tool_results_enabled(monkeypatch):
     """Test with check_tool_results=True: transforms tool/function to 'other' role"""
-    os.environ["PROMPT_SECURITY_API_KEY"] = "test-key"
-    os.environ["PROMPT_SECURITY_API_BASE"] = "https://test.prompt.security"
-    os.environ["PROMPT_SECURITY_CHECK_TOOL_RESULTS"] = "true"
+    monkeypatch.setenv("PROMPT_SECURITY_API_KEY", "test-key")
+    monkeypatch.setenv("PROMPT_SECURITY_API_BASE", "https://test.prompt.security")
+    monkeypatch.setenv("PROMPT_SECURITY_CHECK_TOOL_RESULTS", "true")
 
     guardrail = PromptSecurityGuardrail(
         guardrail_name="test-guard", event_hook="pre_call", default_on=True
