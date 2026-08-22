@@ -181,7 +181,10 @@ class TestVertexAIFilesHandler:
             # Should raise ValueError for failed download
             with pytest.raises(
                 ValueError,
-                match=re.escape("Failed to download file from GCS: gs://test-bucket/litellm-vertex-files/uploads/abc-test-file.txt"),
+                match=re.escape(
+                    "Failed to download file from GCS: "
+                    "gs://test-bucket/litellm-vertex-files/uploads/abc-test-file.txt"
+                ),
             ):
                 await self.handler.afile_content(
                     file_content_request=file_content_request,
