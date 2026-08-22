@@ -833,6 +833,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
             "type": "object",
             "properties": {
                 "supports_computer_use": {"type": "boolean"},
+                "supports_code_execution": {"type": "boolean"},
                 "cache_creation_input_audio_token_cost": {"type": "number"},
                 "cache_creation_input_token_cost": {"type": "number"},
                 "cache_creation_input_token_cost_above_1hr": {"type": "number"},
@@ -854,6 +855,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                     "type": "number"
                 },
                 "cache_read_input_audio_token_cost": {"type": "number"},
+                "cache_read_input_token_cost_per_audio_token": {"type": "number"},
                 "audio_transcription_config": {"type": "string"},
                 "deprecation_date": {"type": "string"},
                 "input_cost_per_audio_per_second": {"type": "number"},
@@ -914,8 +916,12 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "inference_geo": {"type": "string"},
                 "litellm_provider": {"type": "string"},
                 "max_input_tokens": {"type": "number"},
+                "max_audio_length_hours": {"type": "number"},
+                "max_audio_per_prompt": {"type": "number"},
+                "max_images_per_prompt": {"type": "number"},
                 "max_output_tokens": {"type": "number"},
                 "max_tokens": {"type": "number"},
+                "max_videos_per_prompt": {"type": "number"},
                 "metadata": {"type": "object"},
                 "provider_specific_entry": {"type": "object"},
                 "mode": {
@@ -945,6 +951,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "output_cost_per_character_above_128k_tokens": {"type": "number"},
                 "output_cost_per_image": {"type": "number"},
                 "output_cost_per_image_token": {"type": "number"},
+                "output_cost_per_image_token_batches": {"type": "number"},
                 "output_cost_per_video_token": {"type": "number"},
                 "output_cost_per_pixel": {"type": "number"},
                 "output_cost_per_second": {"type": "number"},
@@ -972,6 +979,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "gemini_audio_only_live": {"type": "boolean"},
                 "supports_embedding_image_input": {"type": "boolean"},
                 "supports_function_calling": {"type": "boolean"},
+                "supports_file_search": {"type": "boolean"},
                 "supports_image_input": {"type": "boolean"},
                 "supports_nova_canvas_image_edit": {"type": "boolean"},
                 "supports_parallel_function_calling": {"type": "boolean"},
@@ -1000,6 +1008,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "thinking_always_on": {"type": "boolean"},
                 "supports_mid_conversation_system": {"type": "boolean"},
                 "supports_sampling_params": {"type": "boolean"},
+                "supports_service_tier": {"type": "boolean"},
                 "supports_output_config": {"type": "boolean"},
                 "supports_speed": {"type": "boolean"},
                 "bedrock_output_config_effort_ceiling": {
@@ -3936,7 +3945,7 @@ _FIREWORKS_MODELS = [
         1.4e-06,
         4.4e-06,
         1.4e-07,
-        1048576,
+        1040000,
         131072,
         False,
         True,
@@ -4434,14 +4443,22 @@ def test_get_prompt_cache_min_tokens_resolves_per_model(
     assert get_prompt_cache_min_tokens(model=model) == expected_min_tokens
 
 
-def test_get_prompt_cache_min_tokens_differs_per_platform_for_same_model(local_model_cost_map: None) -> None:
-    """The same model can carry a different minimum per platform, so the threshold must come from
-    the platform's own cost-map entry rather than being derived from the model family name."""
-    assert get_prompt_cache_min_tokens(model="claude-fable-5") == 512
-    assert get_prompt_cache_min_tokens(model="anthropic.claude-fable-5") == 1024
-    assert get_prompt_cache_min_tokens(model="claude-fable-5") != get_prompt_cache_min_tokens(
-        model="anthropic.claude-fable-5"
-    )
+@pytest.mark.parametrize(
+    "model",
+    [
+        "claude-fable-5",
+        "anthropic.claude-fable-5",
+        "global.anthropic.claude-fable-5",
+        "us.anthropic.claude-fable-5",
+        "eu.anthropic.claude-fable-5",
+        "azure_ai/claude-fable-5",
+        "databricks/databricks-claude-fable-5",
+        "vertex_ai/claude-fable-5",
+        "vertex_ai/claude-fable-5@default",
+    ],
+)
+def test_get_prompt_cache_min_tokens_for_fable_5_variants(model: str, local_model_cost_map: None) -> None:
+    assert get_prompt_cache_min_tokens(model=model) == 512
 
 
 GEMINI_4096_CACHE_MIN_MODELS: Final = tuple(

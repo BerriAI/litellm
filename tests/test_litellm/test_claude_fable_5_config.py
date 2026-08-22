@@ -218,13 +218,13 @@ def test_adaptive_thinking_detected_for_fable_5(local_model_cost_map, model):
 def test_sampling_params_flag_on_all_models_that_removed_them(cost_map):
     """Fable 5 and Opus 4.7/4.8 reject ``top_p``/``top_k``/``temperature != 1``;
     the drop/raise gating is cost-map driven, so every variant must carry an
-    explicit ``supports_sampling_params: false``. The perplexity route is
-    exempt: it is OpenAI-compatible and maps sampling params upstream."""
+    explicit ``supports_sampling_params: false``. The perplexity and OpenRouter
+    routes are exempt because they map sampling params upstream."""
     variants = [
         k
         for k in cost_map
         if any(v in k for v in ("claude-fable-5", "claude-opus-4-7", "claude-opus-4-8"))
-        and not k.startswith("perplexity/")
+        and not k.startswith(("perplexity/", "openrouter/"))
     ]
     assert variants, "no matching entries found in cost map"
     missing = [

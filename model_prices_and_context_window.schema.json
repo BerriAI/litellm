@@ -158,6 +158,10 @@
           "minimum": 0,
           "description": "Flex service-tier rate for the same-named base field."
         },
+        "cache_read_input_token_cost_per_audio_token": {
+          "type": "number",
+          "minimum": 0
+        },
         "cache_read_input_token_cost_priority": {
           "type": "number",
           "minimum": 0,
@@ -341,6 +345,21 @@
           "type": "string",
           "description": "LiteLLM provider slug; one of https://docs.litellm.ai/docs/providers."
         },
+        "max_audio_length_hours": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Maximum combined audio duration accepted in one prompt, in hours."
+        },
+        "max_audio_per_prompt": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Maximum number of audio files accepted in one prompt."
+        },
+        "max_images_per_prompt": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Maximum number of images accepted in one prompt."
+        },
         "max_input_tokens": {
           "type": "integer",
           "minimum": 0,
@@ -355,6 +374,11 @@
           "type": "integer",
           "minimum": 0,
           "description": "Legacy field: max output tokens if the provider specifies it, else max input tokens."
+        },
+        "max_videos_per_prompt": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Maximum number of videos accepted in one prompt."
         },
         "metadata": {
           "type": "object",
@@ -408,6 +432,10 @@
           "minimum": 0
         },
         "output_cost_per_image_token": {
+          "type": "number",
+          "minimum": 0
+        },
+        "output_cost_per_image_token_batches": {
           "type": "number",
           "minimum": 0
         },
@@ -610,10 +638,16 @@
         "supports_audio_output": {
           "type": "boolean"
         },
+        "supports_code_execution": {
+          "type": "boolean"
+        },
         "supports_computer_use": {
           "type": "boolean"
         },
         "supports_embedding_image_input": {
+          "type": "boolean"
+        },
+        "supports_file_search": {
           "type": "boolean"
         },
         "supports_function_calling": {
@@ -677,6 +711,9 @@
           "type": "boolean"
         },
         "supports_sampling_params": {
+          "type": "boolean"
+        },
+        "supports_service_tier": {
           "type": "boolean"
         },
         "supports_speed": {

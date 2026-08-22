@@ -123,6 +123,18 @@ INTEGER_KEYS: dict[str, JsonSchema] = {
         **NONNEG_INTEGER,
         "description": "Maximum tokens the model can generate in one response.",
     },
+    "max_audio_per_prompt": {
+        **NONNEG_INTEGER,
+        "description": "Maximum number of audio files accepted in one prompt.",
+    },
+    "max_images_per_prompt": {
+        **NONNEG_INTEGER,
+        "description": "Maximum number of images accepted in one prompt.",
+    },
+    "max_videos_per_prompt": {
+        **NONNEG_INTEGER,
+        "description": "Maximum number of videos accepted in one prompt.",
+    },
     "output_vector_size": {
         **NONNEG_INTEGER,
         "description": "Embedding dimension for embedding models.",
@@ -136,6 +148,10 @@ INTEGER_KEYS: dict[str, JsonSchema] = {
 }
 
 NUMBER_KEYS: dict[str, JsonSchema] = {
+    "max_audio_length_hours": {
+        **NONNEG_NUMBER,
+        "description": "Maximum combined audio duration accepted in one prompt, in hours.",
+    },
     "regional_processing_uplift_multiplier_eu": {
         "type": "number",
         "minimum": 1,
