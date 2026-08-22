@@ -933,7 +933,7 @@ class TestValidateEnvironmentAuthToken:
         config = AnthropicModelInfo()
         with mock_patch.dict("os.environ", {}, clear=True):
             with pytest.raises(
-                Exception, match="ANTHROPIC_API_KEY.*ANTHROPIC_AUTH_TOKEN"
+                Exception, match=r"ANTHROPIC_API_KEY.*ANTHROPIC_AUTH_TOKEN"
             ):
                 config.validate_environment(
                     headers={},

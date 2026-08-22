@@ -3025,7 +3025,7 @@ def test_request_metadata_key_constraints():
     long_key = "a" * 257
     invalid_metadata = {long_key: "value"}
 
-    with pytest.raises(Exception, match="(?i)key length|256 characters"):
+    with pytest.raises(Exception, match=r"(?i)key length|256 characters"):
         config.transform_request(
             model="anthropic.claude-haiku-4-5-20251001-v1:0",
             messages=messages,
@@ -3037,7 +3037,7 @@ def test_request_metadata_key_constraints():
     # Test empty key
     invalid_metadata = {"": "value"}
 
-    with pytest.raises(Exception, match="(?i)key length|empty"):
+    with pytest.raises(Exception, match=r"(?i)key length|empty"):
         config.transform_request(
             model="anthropic.claude-haiku-4-5-20251001-v1:0",
             messages=messages,
@@ -3057,7 +3057,7 @@ def test_request_metadata_value_constraints():
     long_value = "a" * 257
     invalid_metadata = {"key": long_value}
 
-    with pytest.raises(Exception, match="(?i)value length|256 characters"):
+    with pytest.raises(Exception, match=r"(?i)value length|256 characters"):
         config.transform_request(
             model="anthropic.claude-haiku-4-5-20251001-v1:0",
             messages=messages,
