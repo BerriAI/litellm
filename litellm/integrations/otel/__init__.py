@@ -49,6 +49,7 @@ from litellm.integrations.otel.model.semconv import (
     Error,
     GenAI,
     GenAIOperation,
+    GenAIOutputType,
     GenAIProvider,
     JsonRpc,
     LiteLLM,
@@ -60,6 +61,7 @@ from litellm.integrations.otel.model.semconv import (
     RpcSystem,
     Server,
     resolve_operation,
+    resolve_output_type,
     resolve_provider,
 )
 from litellm.integrations.otel.model.spans import (
@@ -84,6 +86,7 @@ __all__ = [
     "Error",
     "GenAI",
     "GenAIOperation",
+    "GenAIOutputType",
     "GenAIProvider",
     "GuardrailSpanData",
     "JsonRpc",
@@ -116,6 +119,7 @@ __all__ = [
     "is_otel_v2_enabled",
     "promoted_baggage",
     "resolve_operation",
+    "resolve_output_type",
     "resolve_provider",
     "span_role_for_service",
     "validate_registry",

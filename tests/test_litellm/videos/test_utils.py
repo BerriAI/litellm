@@ -9,12 +9,9 @@ runs for real, so the "litellm-internal params get stripped" assertions reflect
 production. Every test asserts the exact resulting dict, never "ran without error".
 """
 
-import os
-import sys
 from unittest.mock import MagicMock
 
 
-sys.path.insert(0, os.path.abspath("../../.."))
 
 import litellm
 from litellm.videos.utils import VideoGenerationRequestUtils

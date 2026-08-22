@@ -30,8 +30,6 @@ helper runs for real against genuinely-encoded ids, so the provider assertions
 reflect production.
 """
 
-import os
-import sys
 from contextlib import ExitStack
 from dataclasses import dataclass
 from typing import Any, Dict
@@ -39,7 +37,6 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../.."))
 
 import litellm
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler

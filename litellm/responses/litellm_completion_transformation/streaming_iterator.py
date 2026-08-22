@@ -48,6 +48,22 @@ from litellm.types.utils import (
 )
 
 
+def _output_items_with_id(items: tuple[Any, ...], item_type: str, item_id: str | None) -> tuple[Any, ...]:
+    if item_id is None:
+        return items
+
+    target_index: Final = next(
+        (index for index, item in enumerate(items) if getattr(item, "type", None) == item_type),
+        None,
+    )
+    if target_index is None:
+        return items
+
+    return tuple(
+        item.model_copy(update={"id": item_id}) if index == target_index else item for index, item in enumerate(items)
+    )
+
+
 class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
     """
     Async iterator for processing streaming responses from the Responses API.
@@ -851,9 +867,10 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                                 reasoning_content = "".join(self._accumulated_reasoning_content_parts)
 
                                 # Ensure we have a valid reasoning_item_id
-                                reasoning_item_id = (
+                                self._cached_reasoning_item_id = (
                                     self._reasoning_item_id or self._cached_reasoning_item_id or f"rs_{uuid.uuid4()}"
                                 )
+                                reasoning_item_id = self._cached_reasoning_item_id
 
                                 # Create text.done event first with its own sequence number
                                 self._sequence_number += 1
@@ -966,9 +983,9 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         and the ReasoningSummaryTextDeltaEvent, which is used by the responses API to emit reasoning content.
         It also handles emitting annotation.added events when annotations are detected in the chunk.
         """
-        if self._cached_item_id is None and chunk.id:
-            self._cached_item_id = chunk.id
-        item_id: Final = self._cached_item_id or chunk.id
+        if self._cached_item_id is None:
+            self._cached_item_id = f"msg_{uuid.uuid4()}"
+        item_id: Final = self._cached_item_id
 
         # Check if this chunk has annotations first (before processing text/reasoning)
         # This ensures we detect and queue annotation events from the annotation chunk
@@ -1003,9 +1020,12 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         ):
             reasoning_content: Final = chunk.choices[0].delta.reasoning_content
 
+            if self._cached_reasoning_item_id is None:
+                self._cached_reasoning_item_id = f"rs_{uuid.uuid4()}"
+
             return ReasoningSummaryTextDeltaEvent(
                 type=ResponsesAPIStreamEvents.REASONING_SUMMARY_TEXT_DELTA,
-                item_id=f"rs_{hash(str(reasoning_content))}",
+                item_id=self._cached_reasoning_item_id,
                 output_index=0,
                 delta=reasoning_content,
             )
@@ -1056,6 +1076,19 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         chat_completion_delta: Final[ChatCompletionDelta] = choice.delta
         return chat_completion_delta.content or ""
 
+    def _output_with_streamed_item_ids(self, responses_api_response: ResponsesAPIResponse) -> tuple[Any, ...]:
+        """
+        Reuse the item IDs already emitted by the incremental streaming events in the
+        ``response.completed`` snapshot, so a streaming client that replays the snapshot
+        sends back the same IDs it observed mid-stream.
+        """
+        message_aligned: Final = _output_items_with_id(
+            tuple(responses_api_response.output or ()),
+            "message",
+            self._cached_item_id,
+        )
+        return _output_items_with_id(message_aligned, "reasoning", self._cached_reasoning_item_id)
+
     def _emit_response_completed_event(self, litellm_model_response: ModelResponse) -> ResponseCompletedEvent | None:
         if litellm_model_response:
             # Add cost to usage object if include_cost_in_streaming_usage is True
@@ -1080,6 +1113,8 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             # Use the cached response ID to ensure consistency across all events
             if self._cached_response_id:
                 responses_api_response.id = self._cached_response_id
+
+            responses_api_response.output = list(self._output_with_streamed_item_ids(responses_api_response))
 
             # Encode the response ID to match non-streaming behavior
             encoded_response: Final = ResponsesAPIRequestUtils._update_responses_api_response_id_with_model_id(

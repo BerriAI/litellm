@@ -5621,6 +5621,37 @@ def _extract_response_obj_and_hidden_params(
     return response_obj, hidden_params
 
 
+def _autorouter_savings_for_payload(
+    request_metadata: Mapping[str, object],
+    model: str | None,
+    custom_llm_provider: str | None,
+    model_id: str | None,
+    usage_object: Mapping[str, object] | None,
+    cost_breakdown: Mapping[str, object] | None,
+) -> float | None:
+    """The auto-router savings figure for the payload, or ``None`` when there is none.
+
+    Lazy proxy import: the savings module lives with the spend trackers that own the
+    math, and SDK-only installs have no proxy package to import.
+    """
+    try:
+        from litellm.proxy.spend_tracking.savings import autorouter_savings_for_logging_payload
+    except Exception:  # noqa: BLE001  # SDK-only install: no savings driver to run
+        return None
+    try:
+        return autorouter_savings_for_logging_payload(
+            request_metadata=request_metadata,
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            model_id=model_id,
+            usage_object=usage_object,
+            cost_breakdown=cost_breakdown,
+        )
+    except Exception as e:  # noqa: BLE001  # a savings figure must never fail request logging
+        verbose_logger.debug("autorouter savings skipped on logging payload: %s", e)
+        return None
+
+
 def get_standard_logging_object_payload(
     kwargs: dict | None,
     init_response_obj: Any | BaseModel | dict,
@@ -5778,6 +5809,16 @@ def get_standard_logging_object_payload(
         ):
             model_name = response_model_name
 
+        request_cost_breakdown: Final = cost_breakdown_with_guardrail(logging_obj.cost_breakdown, guardrail_cost)
+        autorouter_savings: Final = _autorouter_savings_for_payload(
+            request_metadata=metadata,
+            model=model_name,
+            custom_llm_provider=custom_llm_provider,
+            model_id=_model_id,
+            usage_object=usage_dict,
+            cost_breakdown=request_cost_breakdown,
+        )
+
         payload: Final[StandardLoggingPayload] = StandardLoggingPayload(
             id=str(id),
             litellm_call_id=kwargs.get("litellm_call_id") or litellm_params.get("litellm_call_id"),
@@ -5808,7 +5849,8 @@ def get_standard_logging_object_payload(
             metadata=clean_metadata,
             cache_key=clean_hidden_params["cache_key"],
             response_cost=response_cost,
-            cost_breakdown=cost_breakdown_with_guardrail(logging_obj.cost_breakdown, guardrail_cost),
+            cost_breakdown=request_cost_breakdown,
+            autorouter_savings=autorouter_savings,
             total_tokens=usage_dict.get("total_tokens", 0),
             prompt_tokens=usage_dict.get("prompt_tokens", 0),
             completion_tokens=usage_dict.get("completion_tokens", 0),
@@ -6004,6 +6046,7 @@ def create_dummy_standard_logging_payload() -> StandardLoggingPayload:
         call_type="completion",
         stream=False,
         response_cost=response_cost,
+        autorouter_savings=None,
         response_cost_failure_debug_info=None,
         status="success",
         total_tokens=int(DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT + DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT),

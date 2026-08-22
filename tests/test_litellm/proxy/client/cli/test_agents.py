@@ -8,9 +8,6 @@ import pytest
 import requests
 from click.testing import CliRunner
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 
 from litellm.proxy.client.cli.commands.agents import (
@@ -255,7 +252,7 @@ class TestRunAgent:
         assert calls["args"] == ("claude", "--resume")
 
     def test_missing_binary_raises_with_install_hint(self):
-        with pytest.raises(AgentRunError, match="claude.*Install it first"):
+        with pytest.raises(AgentRunError, match=r"claude.*Install it first"):
             run_agent(
                 "http://localhost:4000",
                 "sk-key",

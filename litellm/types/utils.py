@@ -154,6 +154,7 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_web_search: bool | None
     supports_reasoning: bool | None
     supports_adaptive_thinking: bool | None
+    thinking_always_on: ReadOnly[bool | None]
     supports_tool_search: bool | None
     supports_mid_conversation_system: bool | None
     supports_url_context: bool | None
@@ -2851,7 +2852,7 @@ class StandardLoggingRoutingDecision(TypedDict, total=False):
     classifier_cost: float
     escalated: bool
     tier_boundaries: StandardLoggingRoutingDecisionTierBoundaries
-    reasoning_override_min_score: ReadOnly[float]
+    reasoning_override_min_score: float  # writable-ok: Pydantic warns on ReadOnly TypedDict fields
     conversation_continuing: bool
     savings_baseline_model: str
     savings_baseline_deployment_id: str
@@ -3198,6 +3199,7 @@ class StandardLoggingPayload(TypedDict):
     stream: bool | None
     response_cost: float
     cost_breakdown: CostBreakdown | None  # Detailed cost breakdown
+    autorouter_savings: ReadOnly[float | None]  # None = not an auto-routed caller request; 0.0 is a real figure
     response_cost_failure_debug_info: StandardLoggingModelCostFailureDebugInformation | None
     status: StandardLoggingPayloadStatus
     status_fields: StandardLoggingPayloadStatusFields
@@ -3794,6 +3796,7 @@ class LlmProviders(str, Enum):
     LIBERTAI = "libertai"
     PINSTRIPES = "pinstripes"
     COGNITION = "cognition"
+    SCX_AI = "scx-ai"
     DARKBLOOM = "darkbloom"
     META = "meta"
     LITELLM_AGENT = "litellm_agent"
