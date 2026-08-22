@@ -1,7 +1,7 @@
 import json
 import os
 import sys
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -65,6 +65,40 @@ async def test_redis_cluster_async_batch_get(mock_init_redis_cluster):
     # Verify mget_nonatomic was called instead of mget
     mock_redis.mget_nonatomic.assert_called_once()
     assert not mock_redis.mget.called
+
+
+@pytest.mark.asyncio
+@patch("litellm._redis.get_redis_connection_pool")
+@patch("litellm._redis.get_redis_client")
+@patch("litellm.caching.redis_cache.RedisCache._setup_health_pings")
+async def test_redis_cluster_disconnect_does_not_raise(
+    mock_health, mock_get_client, mock_get_pool
+):
+    """
+    Regression test for https://github.com/BerriAI/litellm/issues/37137
+
+    Proxy shutdown crashed with `AttributeError: 'NoneType' object has no
+    attribute 'disconnect'` whenever Redis cluster mode was enabled, because
+    `get_redis_connection_pool` returns None for cluster configs
+    (`startup_nodes`) but `RedisCache.disconnect` unconditionally called
+    `.disconnect()` on it.
+    """
+    mock_get_client.return_value = MagicMock()
+    mock_get_pool.return_value = None
+
+    cache = RedisClusterCache(
+        startup_nodes=[{"host": "localhost", "port": 6379}],
+        password="hello",
+    )
+    assert cache.async_redis_conn_pool is None
+
+    mock_cluster_client = MagicMock()
+    mock_cluster_client.aclose = AsyncMock()
+    cache.redis_async_redis_cluster_client = mock_cluster_client
+
+    await cache.disconnect()
+
+    mock_cluster_client.aclose.assert_awaited_once()
 
 
 @patch("litellm._redis.get_redis_connection_pool")
