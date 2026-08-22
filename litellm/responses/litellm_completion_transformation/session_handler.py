@@ -114,6 +114,7 @@ class ResponsesSessionHandler:
             chat_completion_messages = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
                 input=response_input_param,
                 responses_api_request=proxy_server_request_dict or {},
+                replay_reasoning=True,
             )
             chat_completion_message_history.extend(chat_completion_messages)
 
@@ -126,6 +127,7 @@ class ResponsesSessionHandler:
             chat_completion_messages = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
                 input=_messages,
                 responses_api_request=proxy_server_request_dict or {},
+                replay_reasoning=True,
             )
             chat_completion_message_history.extend(chat_completion_messages)
 

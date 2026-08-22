@@ -65,6 +65,7 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
     get_credentials_for_model,
     handle_model_based_routing,
     prepare_data_with_credentials,
+    validate_file_list_limit,
     validate_managed_files_requirement,
     validate_managed_id_requirement,
 )
@@ -1410,6 +1411,8 @@ async def list_files(
     provider: str | None = None,
     target_model_names: str | None = None,
     purpose: str | None = None,
+    limit: int | None = None,
+    after: str | None = None,
 ):
     """
     Returns information about a specific file. that can be used across - Assistants API, Batch API 
@@ -1434,6 +1437,8 @@ async def list_files(
 
     data: dict = {}
     try:
+        validate_file_list_limit(limit)
+
         # Include original request and headers in the data
         base_llm_response_processor: Final = ProxyBaseLLMRequestProcessing(data=data)
         (
@@ -1500,24 +1505,30 @@ async def list_files(
                 or get_custom_llm_provider_from_request_headers(request=request)
                 or get_custom_llm_provider_from_request_query(request=request)
                 or await get_custom_llm_provider_from_request_body(request=request)
-                or "openai"
             )
+            managed_files_obj: Final = proxy_logging_obj.get_proxy_hook("managed_files")
+            if custom_llm_provider is None and isinstance(managed_files_obj, BaseFileEndpoints):
+                response = await managed_files_obj.afile_list(
+                    purpose=purpose,
+                    litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
+                    user_api_key_dict=user_api_key_dict,
+                    limit=limit,
+                    after=after,
+                )
+            else:
+                resolved_custom_llm_provider: Final = custom_llm_provider or "openai"
+                apply_team_provider_credentials(
+                    data=data,
+                    llm_router=llm_router,
+                    user_api_key_dict=user_api_key_dict,
+                    custom_llm_provider=resolved_custom_llm_provider,
+                )
 
-            # No model/target_model_names pinned: resolve upstream credentials from
-            # the team's deployment for this provider so the call is authenticated
-            # against the team's own account (e.g. the team's openai deployment).
-            apply_team_provider_credentials(
-                data=data,
-                llm_router=llm_router,
-                user_api_key_dict=user_api_key_dict,
-                custom_llm_provider=custom_llm_provider,
-            )
-
-            response = await litellm.afile_list(
-                custom_llm_provider=custom_llm_provider,
-                purpose=purpose,
-                **data,
-            )
+                response = await litellm.afile_list(
+                    custom_llm_provider=resolved_custom_llm_provider,
+                    purpose=purpose,
+                    **data,
+                )
 
         if response is None:
             raise HTTPException(
@@ -1561,6 +1572,8 @@ async def list_files(
         )
         verbose_proxy_logger.error("litellm.proxy.proxy_server.list_files(): Exception occured - %s", e)
         verbose_proxy_logger.debug(traceback.format_exc())
+        if isinstance(e, ProxyException):
+            raise
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "message", str(e.detail)),
