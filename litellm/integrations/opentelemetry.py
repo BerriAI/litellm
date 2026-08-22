@@ -1612,13 +1612,13 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
     def _record_metrics(self, kwargs, response_obj, start_time, end_time):
         duration_s: Final = (end_time - start_time).total_seconds()
         params: Final = kwargs.get("litellm_params") or {}
-        provider: Final = params.get("custom_llm_provider", "Unknown")
+        provider: Final = params.get("custom_llm_provider") or kwargs.get("custom_llm_provider") or "Unknown"
 
         common_attrs = {
             "gen_ai.operation.name": (
                 self._gen_ai_operation_name(kwargs) if self._gen_ai_semconv_latest_experimental else "chat"
             ),
-            "gen_ai.system": provider,
+            ("gen_ai.provider.name" if self._gen_ai_semconv_latest_experimental else "gen_ai.system"): provider,
             "gen_ai.request.model": kwargs.get("model"),
             "gen_ai.framework": "litellm",
         }
