@@ -1962,3 +1962,35 @@ class TestCallTypesOCR:
 
         call_type = CallTypes("aocr")
         assert call_type == CallTypes.aocr
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["deepinfra", "custom_openai"])
+def test_embedding_routes_openai_compatible_providers(custom_llm_provider):
+    """OpenAI-compatible providers should reach the OpenAI embedding handler.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/31894:
+    ``embedding()`` raised ``LiteLLMUnknownProvider`` for ``deepinfra`` and
+    ``custom_openai`` because those providers were missing from the
+    OpenAI-compatible embedding branch, even though ``completion()`` already
+    routes them through the OpenAI-compatible handler. They should instead be
+    dispatched to the OpenAI embedding handler with the user-supplied
+    ``api_base``/``api_key``.
+    """
+    with patch.object(
+        litellm_main.openai_chat_completions, "embedding"
+    ) as mock_embedding:
+        mock_embedding.return_value = litellm.EmbeddingResponse()
+
+        litellm.embedding(
+            model="Qwen/Qwen3-Embedding-8B",
+            input=["hello world"],
+            custom_llm_provider=custom_llm_provider,
+            api_base="https://api.deepinfra.com/v1/openai",
+            api_key="fake-key",
+        )
+
+        mock_embedding.assert_called_once()
+        assert mock_embedding.call_args.kwargs["model"] == "Qwen/Qwen3-Embedding-8B"
+        assert mock_embedding.call_args.kwargs["api_base"] == (
+            "https://api.deepinfra.com/v1/openai"
+        )
