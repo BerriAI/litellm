@@ -258,13 +258,14 @@ class ResponsesSessionHandler:
 
         A just-finished turn gets a short second chance: the worker that served it may
         still be writing its spend log when the follow-up arrives, and an empty result
-        drops the whole conversation instead of erroring.
+        drops the whole conversation instead of erroring. Deployments that write no spend
+        logs at all have nothing to wait for, so they keep the single original query.
         """
         from litellm.constants import (
             RESPONSES_SESSION_LOOKUP_MAX_ATTEMPTS,
             RESPONSES_SESSION_LOOKUP_RETRY_INTERVAL,
         )
-        from litellm.proxy.proxy_server import prisma_client
+        from litellm.proxy.proxy_server import disable_spend_logs, prisma_client
 
         verbose_proxy_logger.debug("decoding response id=%s", previous_response_id)
 
@@ -285,7 +286,8 @@ class ResponsesSessionHandler:
             ORDER BY "endTime" ASC;
         """
 
-        for attempt in range(RESPONSES_SESSION_LOOKUP_MAX_ATTEMPTS):
+        max_attempts: Final = 1 if disable_spend_logs else RESPONSES_SESSION_LOOKUP_MAX_ATTEMPTS
+        for attempt in range(max_attempts):
             if attempt:
                 await asyncio.sleep(RESPONSES_SESSION_LOOKUP_RETRY_INTERVAL)
             if spend_logs := await prisma_client.db.query_raw(query, response_id):
