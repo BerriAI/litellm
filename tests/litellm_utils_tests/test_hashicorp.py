@@ -4,7 +4,6 @@ import pytest
 from dotenv import load_dotenv
 
 load_dotenv()
-import os
 import httpx
 
 sys.path.insert(
