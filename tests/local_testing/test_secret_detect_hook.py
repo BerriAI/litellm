@@ -15,7 +15,6 @@ from datetime import datetime
 from dotenv import load_dotenv
 
 load_dotenv()
-import os
 
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -34,7 +33,6 @@ from litellm_enterprise.enterprise_callbacks.secret_detection import (
 )
 from litellm.proxy.proxy_server import chat_completion
 from litellm.proxy.utils import ProxyLogging, hash_token
-from litellm.router import Router
 
 from tests.fake_openai_endpoint import FAKE_OPENAI_API_BASE
 
@@ -137,7 +135,7 @@ async def test_basic_secret_detection_text_completion():
         call_type="completion",
     )
 
-    test_data == {
+    assert test_data == {
         "prompt": "Hey, how's it going, API_KEY = '[REDACTED]', my OPENAI_API_KEY = '[REDACTED]' and i want to know what is the weather",
         "model": "gpt-3.5-turbo",
     }

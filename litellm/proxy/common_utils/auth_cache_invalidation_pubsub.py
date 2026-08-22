@@ -1,5 +1,6 @@
 import asyncio
 import json
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING, Final
 
@@ -70,6 +71,27 @@ async def publish_auth_cache_invalidation(cache_key: str) -> None:
         await client.publish(auth_cache_invalidation_channel(redis_cache), _cache_invalidation_message_json(cache_key))
     except Exception as e:  # noqa: BLE001  # best-effort publish; mutations must never fail on redis errors
         verbose_proxy_logger.warning("auth cache invalidation publish for %s failed: %s", cache_key, e)
+
+
+async def evict_and_broadcast(cache_keys: Sequence[str], user_api_key_cache: "UserApiKeyCache") -> None:
+    """
+    Drop cached management objects here and on every other worker.
+
+    Every endpoint that mutates a cached object must call this: auth serves those objects
+    cache-first with no freshness check, so a mutation that leaves the entry in place keeps the
+    stale object enforced until its TTL expires (LIT-3803). Best-effort on both steps: the DB write
+    has already committed, so a cache backend error must not fail the endpoint.
+    """
+    for cache_key in cache_keys:
+        try:
+            await user_api_key_cache.async_delete_cache(key=cache_key)
+        except Exception as e:  # noqa: BLE001  # best-effort eviction: any cache backend error must not fail the mutation
+            verbose_proxy_logger.warning(
+                "Failed to evict cached entry %s; a stale object may be served until its TTL expires: %s",
+                cache_key,
+                e,
+            )
+        await publish_auth_cache_invalidation(cache_key=cache_key)
 
 
 class AuthCacheInvalidationSubscriber:

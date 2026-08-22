@@ -16,7 +16,7 @@ class TestAzureAIRerankConfigGetCompleteUrl:
         self.model = "azure_ai/cohere-rerank-v3-english"
 
     def test_api_base_required(self):
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(ValueError, match='Azure AI API Base is required\\. api_base=None\\. Set in') as exc_info:
             self.config.get_complete_url(api_base=None, model=self.model)
 
         assert "api_base=None" in str(exc_info.value)
@@ -31,7 +31,7 @@ class TestAzureAIRerankConfigGetCompleteUrl:
         ],
     )
     def test_api_base_requires_scheme(self, api_base):
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(ValueError, match='Azure AI API Base must be an absolute URL including scheme') as exc_info:
             self.config.get_complete_url(api_base=api_base, model=self.model)
 
         error_message = str(exc_info.value).lower()

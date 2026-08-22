@@ -465,6 +465,31 @@ def apply_team_provider_credentials(
     prepare_data_with_credentials(data=data, credentials=credentials)
 
 
+def add_internal_model_credentials(
+    data: dict,
+    llm_router: "Router",
+    model_id: str | None,
+) -> None:
+    """
+    Attach the deployment's immutable server-side credential snapshot to a router-routed
+    batch call (in-place).
+
+    Cost accounting for a completed batch reads the batch's output file, and the Bedrock
+    file config resolves its bucket only from this snapshot, never from a request param,
+    because the bucket is what managed file ids are validated against. Without it that
+    read fails and the batch's cost is never recorded.
+    """
+    if model_id is None:
+        return
+    try:
+        credentials: Final = llm_router.get_deployment_credentials_with_provider(model_id=model_id)
+    except Exception:  # noqa: BLE001  # the snapshot only enables cost accounting; a batch whose deployment no longer resolves must still be retrievable
+        return
+    if credentials is None:
+        return
+    data["_litellm_internal_model_credentials"] = MappingProxyType(dict(credentials))
+
+
 def prepare_data_with_credentials(
     data: dict,
     credentials: dict,
@@ -1231,6 +1256,38 @@ async def get_batch_from_database(
         return None, None
 
 
+def batch_cost_poller_is_active() -> bool:
+    """
+    Whether the CheckBatchCost poller will account for a managed batch's cost itself.
+
+    False whenever the poller cannot be relied on: polling disabled by config, the job
+    absent from the scheduler because the enterprise import failed, or the poller not
+    yet having confirmed that the batch_processed column exists. That last condition
+    matters because the poller needs the column both to find outstanding batches and to
+    mark them accounted; without it the poller falls back to a query that excludes
+    terminal statuses, so a batch the retrieve path has already marked complete becomes
+    invisible to it. Defaulting to False until the poller confirms support keeps the
+    retrieve path accounting in exactly the cases the poller would drop the batch.
+    """
+    from litellm.constants import PROXY_BATCH_POLLING_ENABLED
+
+    if not PROXY_BATCH_POLLING_ENABLED:
+        return False
+    try:
+        import litellm.proxy.proxy_server as proxy_server_module
+
+        scheduler = getattr(proxy_server_module, "scheduler", None)
+        if scheduler is None:
+            return False
+        job = scheduler.get_job("check_batch_cost_job")
+        if job is None:
+            return False
+        poller = getattr(getattr(job, "func", None), "__self__", None)
+        return getattr(poller, "batch_processed_support_confirmed", False) is True
+    except Exception:  # noqa: BLE001  # scheduler backends raise varied types from get_job; an unreadable scheduler means the poller cannot be relied on
+        return False
+
+
 async def update_batch_in_database(
     batch_id: str,
     unified_batch_id: str | Literal[False],
@@ -1241,6 +1298,7 @@ async def update_batch_in_database(
     db_batch_object=None,
     operation: str = "update",
     user_api_key_dict=None,
+    poller_owns_accounting: bool | None = None,
 ):
     """
     Update batch status and object in ManagedObjectTable.
@@ -1255,6 +1313,12 @@ async def update_batch_in_database(
         db_batch_object: Optional existing database object; fetched by unified_object_id when omitted
         operation: Description of operation ("update", "cancel", etc.)
         user_api_key_dict: Optional auth context for creating managed file IDs
+        poller_owns_accounting: Whether the caller already decided that the cost poller
+            owns this batch's accounting. Callers that suppress their own inline
+            accounting must pass the same decision they acted on, because re-deciding
+            here can observe a poller that became usable in between and leave the batch
+            unmarked after it was already accounted for, billing it twice. Left None by
+            callers that record no cost themselves.
     """
     import litellm.utils
 
@@ -1304,15 +1368,8 @@ async def update_batch_in_database(
             "updated_at": litellm.utils.get_utc_datetime(),
         }
 
-        # When a batch reaches completion, also mark batch_processed=True.
-        # The cost callback is enqueued asynchronously during the
-        # aretrieve_batch call that detected completion (via the @client
-        # decorator).  It is not awaited, so there is a theoretical window
-        # where the callback hasn't executed yet.  In practice the callback
-        # completes reliably.  Setting the flag here unblocks file deletion
-        # which queries batch_processed=False.  CheckBatchCost acts as a
-        # safety net for the rare case where the callback fails.
-        if db_status == "complete":
+        poller_owns: Final = batch_cost_poller_is_active() if poller_owns_accounting is None else poller_owns_accounting
+        if db_status == "complete" and not poller_owns:
             update_data["batch_processed"] = True
 
         try:

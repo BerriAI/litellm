@@ -24,7 +24,6 @@ from litellm.types.llms.openai import (
     ResponseAPIUsage,
     IncompleteDetails,
 )
-import litellm
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from base_responses_api import BaseResponsesAPITest
 from openai.types.responses.function_tool import FunctionTool

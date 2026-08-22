@@ -15,9 +15,7 @@ sys.path.insert(
 import pytest
 import litellm
 
-import pytest
 from litellm.llms.triton.embedding.transformation import TritonEmbeddingConfig
-import litellm
 
 from tests.fake_openai_endpoint import FAKE_OPENAI_API_BASE
 
@@ -45,7 +43,7 @@ def test_split_embedding_by_shape_fails_with_shape_value_error():
             "data": [1, 2, 3, 4, 5, 6],
         }
     ]
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match='Shape must be of length'):
         TritonEmbeddingConfig.split_embedding_by_shape(
             data[0]["data"], data[0]["shape"]
         )

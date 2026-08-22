@@ -5,6 +5,7 @@ Covers the proxy flow where headers arrive in litellm_params["metadata"]["header
 but litellm_params["litellm_metadata"] is None.
 """
 
+import threading
 from types import SimpleNamespace
 
 import pytest
@@ -681,6 +682,50 @@ class TestPerformRedaction:
         perform_redaction(model_call_details, result=None, redact_streaming_responses=False)
 
         assert response_obj.choices[0].message.content == "secret content"
+
+    def test_unredactable_result_is_not_deepcopied(self):
+        """A result shape no branch can redact must not be deepcopied.
+
+        Binary/HTTP response bodies (batch output, file content, audio) hold an
+        unpicklable ``_thread.lock``. Copying one raises TypeError inside
+        ``Logging.success_handler``, which aborts the handler body at the redaction call so
+        everything after it is skipped. The copy is also pointless: an unrecognized shape
+        returns the placeholder and the copy is discarded.
+
+        The lock is the assertion. If a deepcopy is ever reintroduced ahead of the type
+        check, this raises instead of returning.
+        """
+
+        class _BinaryResponseBody:
+            def __init__(self) -> None:
+                self.text = "batch output bytes"
+                self._client_lock = threading.Lock()
+
+        body = _BinaryResponseBody()
+
+        redacted = perform_redaction({"litellm_params": {}}, body)
+
+        assert redacted == {"text": "redacted-by-litellm"}
+
+    def test_recognized_shapes_still_redact_a_copy(self):
+        """The type gate must not change behaviour for shapes that were already handled."""
+        original = litellm.ModelResponse(
+            choices=[litellm.Choices(message=litellm.Message(content="secret content", role="assistant"))]
+        )
+
+        redacted = perform_redaction({"litellm_params": {}}, original)
+
+        assert redacted.choices[0].message.content == "redacted-by-litellm"
+        assert original.choices[0].message.content == "secret content"
+
+        embedding = litellm.EmbeddingResponse(data=[{"embedding": [1.0, 2.0]}])
+        assert perform_redaction({"litellm_params": {}}, embedding).data == []
+
+        as_dict = {"choices": [{"message": {"role": "assistant", "content": "secret content"}}]}
+        assert (
+            perform_redaction({"litellm_params": {}}, as_dict)["choices"][0]["message"]["content"]
+            == "redacted-by-litellm"
+        )
 
 
 class TestRedactStreamingResponsesForCustomLogger:

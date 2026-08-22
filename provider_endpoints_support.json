@@ -563,6 +563,23 @@
         "interactions": true
       }
     },
+    "cognition": {
+      "display_name": "Cognition (`cognition`)",
+      "url": "https://docs.litellm.ai/docs/providers/cognition",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false
+      }
+    },
     "cohere": {
       "display_name": "Cohere (`cohere`)",
       "url": "https://docs.litellm.ai/docs/providers/cohere",
@@ -2423,6 +2440,13 @@
         "search": true
       }
     },
+    "nimble": {
+      "display_name": "Nimble (`nimble`)",
+      "url": "https://docs.nimbleway.com/api-reference/search/search",
+      "endpoints": {
+        "search": true
+      }
+    },
     "triton": {
       "display_name": "Triton (`triton`)",
       "url": "https://docs.litellm.ai/docs/providers/triton-inference-server",
@@ -2798,6 +2822,13 @@
     "pg_vector": {
       "display_name": "PG Vector (`pg_vector`)",
       "url": "https://docs.litellm.ai/docs/providers/pg_vector",
+      "endpoints": {
+        "vector_stores_search": true
+      }
+    },
+    "valkey": {
+      "display_name": "Valkey (`valkey`)",
+      "url": "https://docs.litellm.ai/docs/providers/valkey_vector_stores",
       "endpoints": {
         "vector_stores_search": true
       }

@@ -44,7 +44,6 @@ load_dotenv()
 sys.path.insert(
     0, os.path.abspath("../")
 )  # Adds the parent directory to the system path
-import litellm
 from litellm import Router
 
 
@@ -146,7 +145,6 @@ async def test_whisper_log_pre_call():
     from litellm.litellm_core_utils.litellm_logging import Logging
     from datetime import datetime
     from unittest.mock import patch, MagicMock
-    from litellm.integrations.custom_logger import CustomLogger
 
     custom_logger = CustomLogger()
 

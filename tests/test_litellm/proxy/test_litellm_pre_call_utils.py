@@ -11,7 +11,7 @@ from pydantic import ValidationError as PydanticValidationError
 from starlette.datastructures import Headers
 
 import litellm
-from litellm.proxy._types import AddTeamCallback, TeamCallbackMetadata, UserAPIKeyAuth
+from litellm.proxy._types import AddTeamCallback, ProxyException, TeamCallbackMetadata, UserAPIKeyAuth
 from litellm.proxy.litellm_pre_call_utils import (
     KeyAndTeamLoggingSettings,
     LiteLLMProxyRequestSetup,
@@ -230,6 +230,43 @@ async def test_add_litellm_data_to_request_parses_string_metadata():
 
 
 @pytest.mark.asyncio
+async def test_stamped_auth_object_reflects_header_derived_identity():
+    """
+    Regression (LIT-5487): the stamped object is a copy taken partway through request setup,
+    so it only carries header-derived identity if the stamp still runs after those fields are
+    resolved. Moving the stamp earlier would silently misattribute spend.
+    """
+    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+
+    request_mock = MagicMock(spec=Request)
+    request_mock.url = MagicMock()
+    request_mock.url.path = "/v1/chat/completions"
+    request_mock.url.__str__.return_value = "http://localhost/v1/chat/completions"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {"Content-Type": "application/json", "user": "end-user-from-header"}
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+
+    user_api_key_dict = UserAPIKeyAuth(api_key="hashed-key", metadata={}, team_metadata={})
+
+    updated_data = await add_litellm_data_to_request(
+        data={"model": "gpt-3.5-turbo"},
+        request=request_mock,
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=MagicMock(),
+        general_settings={"user_header_name": "user"},
+        version="test-version",
+    )
+
+    # precondition: the header was actually resolved onto the live object
+    assert user_api_key_dict.end_user_id == "end-user-from-header"
+
+    stamped = updated_data["metadata"]["user_api_key_auth"]
+    assert stamped.end_user_id == "end-user-from-header"
+
+
+@pytest.mark.asyncio
 async def test_add_litellm_data_to_request_strips_admin_injection_slots():
     """User-supplied user_api_key_metadata / user_api_key_team_metadata /
     _pipeline_managed_guardrails must be stripped from both metadata keys
@@ -415,6 +452,91 @@ async def test_add_litellm_data_to_request_string_metadata_does_not_crash():
     # from a raw string snapshot).
     assert isinstance(updated["metadata"], dict)
     assert updated["metadata"].get("generation_name") == "test"
+
+
+def _batches_request_mock() -> MagicMock:
+    request_mock = MagicMock(spec=Request)
+    request_mock.url = MagicMock()
+    request_mock.url.__str__.return_value = "http://localhost/v1/batches"
+    request_mock.url.path = "/v1/batches"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {"Content-Type": "application/json"}
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+    return request_mock
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "field,value,received_type",
+    [
+        ("metadata", "abc", "a string"),
+        ("litellm_metadata", "abc", "a string"),
+        ("metadata", 42, "an integer"),
+        ("litellm_metadata", [1, 2], "an array"),
+        ("metadata", True, "a boolean"),
+    ],
+)
+async def test_add_litellm_data_to_request_rejects_non_object_metadata(field, value, received_type):
+    """Regression for https://github.com/BerriAI/litellm/issues/37147: a
+    non-object metadata was silently dropped with a 200, and a non-object
+    litellm_metadata crashed later with a 500 ('str' object has no attribute
+    'update'). Both must be a 400 naming the field, like OpenAI returns."""
+    data = {"input_file_id": "file-abc", "endpoint": "/v1/chat/completions", field: value}
+
+    with pytest.raises(ProxyException) as exc_info:
+        await add_litellm_data_to_request(
+            data=data,
+            request=_batches_request_mock(),
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+            proxy_config=MagicMock(),
+            general_settings={},
+            version="test-version",
+        )
+
+    assert exc_info.value.code == "400"
+    assert exc_info.value.param == field
+    assert exc_info.value.message == f"Invalid type for '{field}': expected an object, but got {received_type} instead."
+    assert field not in data
+
+
+@pytest.mark.asyncio
+async def test_add_litellm_data_to_request_removes_every_invalid_metadata_field_before_raising():
+    """When both fields are invalid, the raise for the first must not leave the
+    second invalid value in data, or failure-logging hooks that inspect the body
+    can crash on it and mask the 400 as a 500."""
+    data = {"input_file_id": "file-abc", "metadata": "abc", "litellm_metadata": "xyz"}
+
+    with pytest.raises(ProxyException) as exc_info:
+        await add_litellm_data_to_request(
+            data=data,
+            request=_batches_request_mock(),
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+            proxy_config=MagicMock(),
+            general_settings={},
+            version="test-version",
+        )
+
+    assert exc_info.value.param == "metadata"
+    assert "metadata" not in data
+    assert "litellm_metadata" not in data
+
+
+@pytest.mark.asyncio
+async def test_add_litellm_data_to_request_parses_json_object_string_litellm_metadata():
+    data = {"input_file_id": "file-abc", "litellm_metadata": json.dumps({"cost_centre": "research"})}
+
+    updated = await add_litellm_data_to_request(
+        data=data,
+        request=_batches_request_mock(),
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    assert updated["litellm_metadata"]["cost_centre"] == "research"
 
 
 @pytest.mark.asyncio
@@ -913,6 +1035,65 @@ async def test_add_litellm_data_to_request_ignores_forged_client_side_timeout():
     )
 
     assert not updated.get("client_side_timeout")
+
+
+@pytest.mark.asyncio
+async def test_client_side_timeout_marker_never_reaches_the_provider():
+    """A proxy request with a caller-supplied timeout gets kwargs["client_side_timeout"]
+    stamped for the router's cooldown logic. That router-only marker must not ride
+    into the provider payload: unregistered kwargs are swept into extra_body /
+    additionalModelRequestFields, so Bedrock rejects the whole call with
+    `client_side_timeout: Extra inputs are not permitted`."""
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+
+    request_mock = MagicMock(spec=Request)
+    request_mock.url.path = "/v1/chat/completions"
+    request_mock.url = MagicMock()
+    request_mock.url.__str__.return_value = "http://localhost/v1/chat/completions"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {"Content-Type": "application/json"}
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+
+    updated = await add_litellm_data_to_request(
+        data={
+            "model": "bedrock/us.anthropic.claude-sonnet-5",
+            "messages": [{"role": "user", "content": "hi"}],
+            "max_tokens": 10,
+            "timeout": 30,
+        },
+        request=request_mock,
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+    assert updated["client_side_timeout"] is True
+
+    converse_response = MagicMock()
+    converse_response.status_code = 200
+    converse_response.headers = {}
+    converse_response.json.return_value = {
+        "output": {"message": {"role": "assistant", "content": [{"text": "ok"}]}},
+        "stopReason": "end_turn",
+        "usage": {"inputTokens": 10, "outputTokens": 5, "totalTokens": 15},
+    }
+    converse_response.text = json.dumps(converse_response.json.return_value)
+    client = AsyncHTTPHandler()
+    with patch.object(client, "post", return_value=converse_response) as mock_post:
+        await litellm.acompletion(
+            **updated,
+            aws_access_key_id="fake-access-key",
+            aws_secret_access_key="fake-secret-key",
+            aws_region_name="us-east-1",
+            client=client,
+        )
+
+    mock_post.assert_called_once()
+    assert mock_post.call_args.kwargs["url"].endswith("/converse")
+    provider_body = json.loads(mock_post.call_args.kwargs["data"])
+    assert "client_side_timeout" not in json.dumps(provider_body), provider_body
 
 
 @pytest.mark.asyncio
@@ -2098,12 +2279,12 @@ def test_get_num_retries_from_request():
 
     # Test case 7: Header present with invalid value (should raise ValueError when int() is called)
     headers_with_invalid = {"x-litellm-num-retries": "invalid"}
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match='invalid literal for int\\(\\) with base'):
         LiteLLMProxyRequestSetup._get_num_retries_from_request(headers_with_invalid)
 
     # Test case 8: Header present with float string (should raise ValueError when int() is called)
     headers_with_float = {"x-litellm-num-retries": "3.5"}
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match='invalid literal for int\\(\\) with base'):
         LiteLLMProxyRequestSetup._get_num_retries_from_request(headers_with_float)
 
     # Test case 9: Header present with negative number
@@ -2143,7 +2324,7 @@ def test_get_keepalive_seconds_from_request():
 
     # Header present with invalid value raises ValueError, matching the other
     # x-litellm-* numeric header helpers (_get_timeout_from_request, etc.)
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="could not convert string to float: 'not-a-number"):
         LiteLLMProxyRequestSetup._get_keepalive_seconds_from_request(
             {"x-litellm-keepalive-seconds": "not-a-number"}
         )
@@ -2219,6 +2400,129 @@ def test_add_user_api_key_auth_to_request_metadata():
     # Verify original data is preserved
     assert result["model"] == "gpt-3.5-turbo"
     assert result["messages"] == [{"role": "user", "content": "Hello"}]
+
+
+def _auth_with_callback_credentials() -> UserAPIKeyAuth:
+    return UserAPIKeyAuth(
+        api_key="hashed-test-key-123",
+        key_alias="test-key-alias",
+        team_id="test-team-789",
+        team_alias="test-team-alias",
+        metadata={
+            "logging": [{"callback_name": "langfuse", "callback_vars": {"langfuse_secret_key": "sk-KEY-CANARY"}}],
+            "rpm_limit_type": "guaranteed_throughput",
+        },
+        team_metadata={
+            "callback_settings": {"langfuse": {"callback_vars": {"langfuse_secret_key": "sk-TEAM-CANARY"}}},
+            "secret_manager_settings": {"vault_token": "vt-TEAM-CANARY"},
+            "model_rpm_limit": {"gpt-4": 10},
+        },
+        project_metadata={
+            "logging": [{"callback_vars": {"langfuse_secret_key": "sk-PROJECT-CANARY"}}],
+            "project_tier": "gold",
+        },
+        organization_metadata={
+            "secret_manager_settings": {"vault_token": "vt-ORG-CANARY"},
+            "org_tier": "platinum",
+        },
+    )
+
+
+def test_stamped_auth_object_carries_no_callback_credentials():
+    """
+    Regression (LIT-5487): the UserAPIKeyAuth stamped into request metadata reaches every
+    raw-metadata logging integration, so it must not carry team/key callback credentials.
+    """
+    user_api_key_dict = _auth_with_callback_credentials()
+    otel_span = object()
+    user_api_key_dict.parent_otel_span = otel_span
+    user_api_key_dict.budget_reservation = {"amount": 1.0}
+    user_api_key_dict.via_virtual_key = True
+    data = {"litellm_metadata": {}}
+
+    result = LiteLLMProxyRequestSetup.add_user_api_key_auth_to_request_metadata(
+        data=data,
+        user_api_key_dict=user_api_key_dict,
+        _metadata_variable_name="litellm_metadata",
+    )
+
+    stamped = result["litellm_metadata"]["user_api_key_auth"]
+    emitted = json.dumps(
+        {
+            "metadata": stamped.metadata,
+            "team_metadata": stamped.team_metadata,
+            "project_metadata": stamped.project_metadata,
+            "organization_metadata": stamped.organization_metadata,
+        },
+        default=str,
+    )
+    assert "sk-KEY-CANARY" not in emitted
+    assert "sk-TEAM-CANARY" not in emitted
+    assert "vt-TEAM-CANARY" not in emitted
+    assert "sk-PROJECT-CANARY" not in emitted
+    assert "vt-ORG-CANARY" not in emitted
+
+    # consumers keep the type and the non-credential slots they read
+    assert isinstance(stamped, UserAPIKeyAuth)
+    assert stamped.key_alias == "test-key-alias"
+    assert stamped.team_id == "test-team-789"
+    assert stamped.team_alias == "test-team-alias"
+    assert stamped.api_key == "hashed-test-key-123"
+    assert stamped.metadata["rpm_limit_type"] == "guaranteed_throughput"
+    assert stamped.team_metadata["model_rpm_limit"] == {"gpt-4": 10}
+    assert stamped.project_metadata["project_tier"] == "gold"
+    assert stamped.organization_metadata["org_tier"] == "platinum"
+
+    # server-only markers are excluded from model_dump, so rebuilding the object
+    # instead of copying it would silently drop them
+    assert stamped.via_virtual_key is True
+    assert stamped.budget_reservation == {"amount": 1.0}
+    assert stamped.parent_otel_span is otel_span
+
+
+def test_stamping_does_not_mutate_the_cached_auth_object():
+    """
+    Regression (LIT-5487): UserAPIKeyAuth is cached and model_copy is shallow, so stripping
+    in place would poison the shared dicts and silently kill team callbacks fleet-wide.
+    """
+    user_api_key_dict = _auth_with_callback_credentials()
+    metadata_before = copy.deepcopy(user_api_key_dict.metadata)
+    team_metadata_before = copy.deepcopy(user_api_key_dict.team_metadata)
+
+    LiteLLMProxyRequestSetup.add_user_api_key_auth_to_request_metadata(
+        data={"litellm_metadata": {}},
+        user_api_key_dict=user_api_key_dict,
+        _metadata_variable_name="litellm_metadata",
+    )
+
+    assert user_api_key_dict.metadata == metadata_before
+    assert user_api_key_dict.team_metadata == team_metadata_before
+
+
+def test_management_endpoint_metadata_drops_callback_credentials():
+    """
+    Regression (LIT-5487): user_api_key_auth_metadata is part of StandardLoggingPayload, so a
+    callback_settings-shaped team must not push credentials into it.
+    """
+    data = {"litellm_metadata": {}}
+
+    result = LiteLLMProxyRequestSetup.add_management_endpoint_metadata_to_request_metadata(
+        data=data,
+        management_endpoint_metadata={
+            "callback_settings": {"langfuse": {"callback_vars": {"langfuse_secret_key": "sk-TEAM-CANARY"}}},
+            "secret_manager_settings": {"vault_token": "vt-TEAM-CANARY"},
+            "logging": [{"callback_vars": {"langfuse_secret_key": "sk-LOGGING-CANARY"}}],
+            "other_field": "value",
+        },
+        _metadata_variable_name="litellm_metadata",
+    )
+
+    auth_metadata = result["litellm_metadata"]["user_api_key_auth_metadata"]
+    emitted = json.dumps(auth_metadata, default=str)
+    assert "sk-TEAM-CANARY" not in emitted
+    assert "vt-TEAM-CANARY" not in emitted
+    assert "sk-LOGGING-CANARY" not in emitted
+    assert auth_metadata["other_field"] == "value"
 
 
 @pytest.mark.parametrize(
@@ -2432,10 +2736,8 @@ def test_add_headers_to_llm_call_by_model_group_existing_headers_in_data():
         litellm.model_group_settings = original_model_group_settings
 
 
-import json
 import time
 from typing import Optional
-from unittest.mock import AsyncMock
 
 from fastapi.responses import Response
 
@@ -2863,6 +3165,129 @@ def test_get_chain_id_from_headers_generic_vendor_session_id():
         )
         == "explicit-id-value"
     )
+
+
+CODEX_USER_AGENT = "codex_cli_rs/0.62.0 (Mac OS 25.5.0; arm64) Apple_Terminal"
+CODEX_SESSION_UUID = "0199f0c2-8b41-7c3e-9a52-6d1f4b8e2a77"
+
+
+@pytest.mark.parametrize(
+    "user_agent",
+    [
+        "codex-tui",
+        "codex-tui/0.149.0 (Mac OS 26.5.1; arm64) ghostty/1.3.1 (codex-tui; 0.149.0)",
+        "codex_cli_rs/0.62.0 (Mac OS 25.5.0; arm64) Apple_Terminal",
+        "codex_exec/0.62.0 (Linux 6.1; x86_64) unknown",
+        "codex_vscode/0.62.0 (Mac OS 26.5.1; arm64) vscode/1.99.0",
+        "Codex CLI/1.0",
+    ],
+)
+def test_is_codex_user_agent_accepts_every_first_party_originator(user_agent: str):
+    """Codex ships several originators sharing only the `codex` stem, and the TUI
+    sends a bare `codex-tui` with no version, so matching one spelling misses real clients."""
+    from litellm.proxy.litellm_pre_call_utils import is_codex_user_agent
+
+    assert is_codex_user_agent(user_agent) is True
+
+
+@pytest.mark.parametrize(
+    "user_agent",
+    ["codexify/1.0", "mycodex-tui/1.0", "curl/8.7.1", "claude-cli/2.1.0 (external, cli)", ""],
+)
+def test_is_codex_user_agent_rejects_non_codex_clients(user_agent: str):
+    from litellm.proxy.litellm_pre_call_utils import is_codex_user_agent
+
+    assert is_codex_user_agent(user_agent) is False
+
+
+def test_get_chain_id_from_headers_codex_tui_user_agent():
+    """The real Codex TUI user agent must group turns, not just the codex_cli_rs spelling."""
+    from litellm.proxy.litellm_pre_call_utils import get_chain_id_from_headers
+
+    ua = "codex-tui/0.149.0 (Mac OS 26.5.1; arm64) ghostty/1.3.1 (codex-tui; 0.149.0)"
+    assert get_chain_id_from_headers({"user-agent": ua, "session-id": CODEX_SESSION_UUID}) == CODEX_SESSION_UUID
+    assert (
+        get_chain_id_from_headers({"user-agent": "codex-tui", "session-id": CODEX_SESSION_UUID}) == CODEX_SESSION_UUID
+    )
+
+
+@pytest.mark.parametrize(
+    "header",
+    ["session-id", "session_id", "thread-id", "conversation_id", "Session-Id"],
+)
+def test_get_chain_id_from_headers_codex_unprefixed_session_id(header: str):
+    """Codex sends its conversation uuid unprefixed, so the x-<vendor>-session-id regex misses it."""
+    from litellm.proxy.litellm_pre_call_utils import get_chain_id_from_headers
+
+    assert get_chain_id_from_headers({"user-agent": CODEX_USER_AGENT, header: CODEX_SESSION_UUID}) == CODEX_SESSION_UUID
+
+
+@pytest.mark.parametrize(
+    "user_agent",
+    ["curl/8.7.1", "claude-cli/2.1.0 (external, cli)", "OpenAI/Python 1.0.0"],
+)
+def test_get_chain_id_from_headers_unprefixed_session_id_requires_codex(user_agent: str):
+    """An unprefixed session-id from a non-Codex caller must not group traces.
+
+    The name is generic enough that two unrelated callers could collide on a value
+    and have their sessions merged, so the bare-header path is Codex-only.
+    """
+    from litellm.proxy.litellm_pre_call_utils import get_chain_id_from_headers
+
+    assert get_chain_id_from_headers({"user-agent": user_agent, "session-id": CODEX_SESSION_UUID}) is None
+    assert get_chain_id_from_headers({"session-id": CODEX_SESSION_UUID}) is None
+
+
+def test_get_chain_id_from_headers_codex_prefers_session_over_thread():
+    from litellm.proxy.litellm_pre_call_utils import get_chain_id_from_headers
+
+    assert (
+        get_chain_id_from_headers(
+            {
+                "user-agent": CODEX_USER_AGENT,
+                "thread-id": "e96634a3-fa28-4083-b354-55542e2dca01",
+                "session-id": CODEX_SESSION_UUID,
+            }
+        )
+        == CODEX_SESSION_UUID
+    )
+
+
+def test_get_chain_id_from_headers_codex_ignores_implausible_value():
+    from litellm.proxy.litellm_pre_call_utils import get_chain_id_from_headers
+
+    assert get_chain_id_from_headers({"user-agent": CODEX_USER_AGENT, "session-id": "short"}) is None
+    assert get_chain_id_from_headers({"user-agent": CODEX_USER_AGENT, "session-id": "has spaces!!"}) is None
+
+
+def test_get_chain_id_from_headers_explicit_beats_codex_header():
+    from litellm.proxy.litellm_pre_call_utils import get_chain_id_from_headers
+
+    assert (
+        get_chain_id_from_headers(
+            {
+                "user-agent": CODEX_USER_AGENT,
+                "x-litellm-trace-id": "explicit-id-value",
+                "session-id": CODEX_SESSION_UUID,
+            }
+        )
+        == "explicit-id-value"
+    )
+
+
+def test_add_litellm_metadata_groups_codex_turns_into_one_session():
+    """Every turn of a Codex session must log under one session id, not a fresh per-call trace id."""
+    headers = {"user-agent": CODEX_USER_AGENT, "session-id": CODEX_SESSION_UUID}
+    turns = [{"litellm_metadata": {}}, {"litellm_metadata": {}}]
+    for turn in turns:
+        LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+            headers=headers, data=turn, _metadata_variable_name="litellm_metadata"
+        )
+
+    for turn in turns:
+        assert turn["litellm_session_id"] == CODEX_SESSION_UUID
+        assert turn["litellm_trace_id"] == CODEX_SESSION_UUID
+        assert turn["litellm_metadata"]["session_id"] == CODEX_SESSION_UUID
 
 
 def test_trace_id_from_traceparent_valid():

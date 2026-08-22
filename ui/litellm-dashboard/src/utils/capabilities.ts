@@ -19,7 +19,10 @@ const CAPABILITY_ROLES = {
 
 export type Capability = keyof typeof CAPABILITY_ROLES;
 
-const ORG_ADMIN_CAPABILITIES: ReadonlySet<Capability> = new Set<Capability>(["viewDeletedTeams"]);
+const ORG_ADMIN_CAPABILITIES: ReadonlySet<Capability> = new Set<Capability>([
+  "viewDeletedTeams",
+  "viewOrganizationUsage",
+]);
 
 export const hasCapability = (
   userRole: string | null | undefined,

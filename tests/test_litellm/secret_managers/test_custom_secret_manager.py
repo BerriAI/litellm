@@ -243,17 +243,17 @@ def test_minimal_custom_secret_manager():
     assert value == "sync-TEST_KEY-value"
 
     # Write should raise NotImplementedError
-    with pytest.raises(NotImplementedError) as exc_info:
-        import asyncio
+    import asyncio
 
+    with pytest.raises(NotImplementedError) as exc_info:
         asyncio.run(secret_manager.async_write_secret("KEY", "value"))
 
     assert "Write operations are not implemented" in str(exc_info.value)
 
     # Delete should raise NotImplementedError
-    with pytest.raises(NotImplementedError) as exc_info:
-        import asyncio
+    import asyncio
 
+    with pytest.raises(NotImplementedError) as exc_info:
         asyncio.run(secret_manager.async_delete_secret("KEY"))
 
     assert "Delete operations are not implemented" in str(exc_info.value)

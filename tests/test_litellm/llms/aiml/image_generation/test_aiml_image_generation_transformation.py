@@ -113,7 +113,7 @@ def test_flux_style_request_still_remaps_to_legacy_fields():
 
 
 def test_openai_style_unsupported_param_raises_without_drop_params():
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match='Supported parameters are'):
         AimlImageGenerationConfig().map_openai_params(
             non_default_params={"image_size": {"width": 1024, "height": 1024}},
             optional_params={},

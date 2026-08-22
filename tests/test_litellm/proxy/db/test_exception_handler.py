@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
-from fastapi import HTTPException, Request, status
+from fastapi import HTTPException, Request
 from prisma import errors as prisma_errors
 from prisma.errors import (
     ClientNotConnectedError,
@@ -117,6 +117,8 @@ def test_is_database_connection_generic_errors():
         TimeoutError("timed out"),
         OSError("network is unreachable"),
         asyncio.TimeoutError(),
+        httpx.ConnectError("connection refused"),
+        httpx.ConnectTimeout("connect timed out"),
         HTTPClientClosedError(),
         ClientNotConnectedError(),
         PrismaError("can't reach database server"),
@@ -264,10 +266,10 @@ def test_is_prisma_engine_internal_error_excludes_data_layer_prisma_error():
     data_layer_error = UniqueViolationError(
         data={"user_facing_error": {"meta": {"table": "t"}}}
     )
-    try:
+    with pytest.raises(UniqueViolationError) as exc_info:
         raise data_layer_error
-    except UniqueViolationError as e:
-        assert PrismaDBExceptionHandler.is_prisma_engine_internal_error(e) is False
+    e = exc_info.value
+    assert PrismaDBExceptionHandler.is_prisma_engine_internal_error(e) is False
 
 
 @pytest.mark.parametrize(
@@ -549,3 +551,36 @@ def test_handle_db_exception_surfaces_a_permanent_fault_even_when_degraded_mode_
 
     with pytest.raises(BinaryNotFoundError):
         PrismaDBExceptionHandler.handle_db_exception(BinaryNotFoundError("query engine binary not found"))
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        RawQueryError(data={"user_facing_error": {"error_code": "P2034", "meta": {"table": "t"}}}),
+        PrismaError("Transaction failed due to a write conflict or a deadlock. Please retry your transaction"),
+        RawQueryError(data={"user_facing_error": {"message": "deadlock detected", "meta": {"table": "t"}}}),
+        RawQueryError(
+            data={"user_facing_error": {"message": "ERROR: 40P01: deadlock detected", "meta": {"table": "t"}}}
+        ),
+    ],
+)
+def test_is_deadlock_error_matches_postgres_deadlock(error):
+    """A Postgres deadlock surfaced through prisma (P2034 or 40P01 / "deadlock detected" text) is recognized."""
+    assert PrismaDBExceptionHandler.is_deadlock_error(error) is True
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        UniqueViolationError(data={"user_facing_error": {"error_code": "P2002", "meta": {"table": "t"}}}),
+        RecordNotFoundError(data={"user_facing_error": {"meta": {"table": "t"}}}),
+        PrismaError("validation failed on query"),
+        PrismaError("can't reach database server"),
+        httpx.ConnectError("connection refused"),
+        RuntimeError("deadlock detected"),
+        ValueError("40P01"),
+    ],
+)
+def test_is_deadlock_error_excludes_non_deadlocks(error):
+    """Non-deadlock prisma errors, connectivity failures, and non-prisma exceptions are not treated as deadlocks."""
+    assert PrismaDBExceptionHandler.is_deadlock_error(error) is False

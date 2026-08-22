@@ -316,6 +316,9 @@ class LiteLLMCompletionResponsesConfig:
             "custom_llm_provider": custom_llm_provider,
             "extra_headers": extra_headers,
         }
+        if not tools:
+            litellm_completion_request.pop("tool_choice", None)
+            litellm_completion_request.pop("tools", None)
 
         # Responses API `Completed` events require usage, we pass `stream_options` to litellm.completion to include usage
         if stream is True:
@@ -1994,6 +1997,12 @@ class LiteLLMCompletionResponsesConfig:
         return output_items
 
     @staticmethod
+    def _encode_thinking_blocks(message: Message) -> str | None:
+        thinking_blocks: Final[Sequence[Mapping[str, object]]] = getattr(message, "thinking_blocks", None) or ()
+        preserved: Final = tuple(block for block in thinking_blocks if block.get("signature") or block.get("data"))
+        return json.dumps(preserved, separators=(",", ":")) if preserved else None
+
+    @staticmethod
     def _extract_reasoning_output_items(
         chat_completion_response: ModelResponse,
         choices: list[Choices],
@@ -2001,12 +2010,14 @@ class LiteLLMCompletionResponsesConfig:
         for choice in choices:
             if hasattr(choice, "message") and choice.message:
                 message = choice.message
-                if hasattr(message, "reasoning_content") and message.reasoning_content:
+                reasoning_content = getattr(message, "reasoning_content", None) or ""
+                encrypted_content = LiteLLMCompletionResponsesConfig._encode_thinking_blocks(message)
+                if reasoning_content or encrypted_content:
                     # Only check the first choice for reasoning content
                     return [
                         GenericResponseOutputItem(
                             type="reasoning",
-                            id=f"rs_{hash(str(message.reasoning_content))}",
+                            id=f"rs_{hash(reasoning_content or encrypted_content)}",
                             status=LiteLLMCompletionResponsesConfig._map_chat_completion_finish_reason_to_responses_status(
                                 choice.finish_reason
                             ),
@@ -2014,10 +2025,13 @@ class LiteLLMCompletionResponsesConfig:
                             content=[
                                 OutputText(
                                     type="output_text",
-                                    text=message.reasoning_content,
+                                    text=text,
                                     annotations=[],
                                 )
+                                for text in (reasoning_content,)
+                                if text
                             ],
+                            encrypted_content=encrypted_content,
                         )
                     ]
         return []
@@ -2289,18 +2303,19 @@ class LiteLLMCompletionResponsesConfig:
         # Translate completion_tokens_details to output_tokens_details
         if hasattr(usage, "completion_tokens_details") and usage.completion_tokens_details is not None:
             completion_details: Final = usage.completion_tokens_details
-            output_details_dict: Final[dict[str, int]] = {}
-            if hasattr(completion_details, "reasoning_tokens") and completion_details.reasoning_tokens is not None:
-                output_details_dict["reasoning_tokens"] = completion_details.reasoning_tokens
-
-            if hasattr(completion_details, "text_tokens") and completion_details.text_tokens is not None:
-                output_details_dict["text_tokens"] = completion_details.text_tokens
-
-            if hasattr(completion_details, "image_tokens") and completion_details.image_tokens is not None:
-                output_details_dict["image_tokens"] = completion_details.image_tokens
-
-            if output_details_dict:
-                response_usage.output_tokens_details = OutputTokensDetails(**output_details_dict)
+            reasoning_token_count: Final = getattr(completion_details, "reasoning_tokens", None)
+            optional_output_details: Final[dict[str, int]] = {
+                field: value
+                for field, value in (
+                    ("text_tokens", getattr(completion_details, "text_tokens", None)),
+                    ("image_tokens", getattr(completion_details, "image_tokens", None)),
+                )
+                if value is not None
+            }
+            response_usage.output_tokens_details = OutputTokensDetails(
+                reasoning_tokens=reasoning_token_count if reasoning_token_count is not None else 0,
+                **optional_output_details,
+            )
 
         return response_usage
 
