@@ -160,3 +160,168 @@ def test_agentops_endpoint_points_at_live_host():
     # so a typo or stale domain can never ship again.
     assert _AGENTOPS_ENDPOINT == "https://otlp.agentops.ai/v1/traces"
     assert "agentops.cloud" not in _AGENTOPS_ENDPOINT
+
+
+OPENLAYER_ENV = (
+    "OPENLAYER_API_KEY",
+    "OPENLAYER_INFERENCE_PIPELINE_ID",
+    "OPENLAYER_OTEL_ENDPOINT",
+)
+
+
+def _openlayer_spec(monkeypatch, **env):
+    from litellm.integrations.otel.model.config import ExporterOwner
+    from litellm.integrations.otel.presets.openlayer import openlayer_preset
+
+    for name in OPENLAYER_ENV:
+        monkeypatch.delenv(name, raising=False)
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+    cfg = openlayer_preset()
+    return next(e for e in cfg.exporters if e.owner == ExporterOwner.OPENLAYER)
+
+
+def test_openlayer_preset_sends_key_and_pipeline_as_headers(monkeypatch):
+    from litellm.integrations.openlayer.openlayer import OPENLAYER_DEFAULT_ENDPOINT
+
+    spec = _openlayer_spec(
+        monkeypatch,
+        OPENLAYER_API_KEY="sk-ol-123",
+        OPENLAYER_INFERENCE_PIPELINE_ID="cb47e4f7-15a0-4e70-bd6e-7b1b4b54e434",
+    )
+    assert spec.kind == "otlp_http"
+    assert spec.endpoint == OPENLAYER_DEFAULT_ENDPOINT
+    assert spec.headers == "Authorization=Bearer sk-ol-123,x-bt-parent=pipeline_id:cb47e4f7-15a0-4e70-bd6e-7b1b4b54e434"
+
+
+def test_openlayer_pipeline_id_survives_header_parsing(monkeypatch):
+    """The colon in ``pipeline_id:<uuid>`` must survive parse_headers."""
+    spec = _openlayer_spec(
+        monkeypatch,
+        OPENLAYER_API_KEY="sk-ol-123",
+        OPENLAYER_INFERENCE_PIPELINE_ID="cb47e4f7-15a0-4e70-bd6e-7b1b4b54e434",
+    )
+    headers = providers.parse_headers(spec.headers)
+    assert headers["x-bt-parent"] == "pipeline_id:cb47e4f7-15a0-4e70-bd6e-7b1b4b54e434"
+    assert headers["authorization"] == "Bearer sk-ol-123"
+
+
+def test_openlayer_endpoint_resolves_to_the_traces_signal_path():
+    """The signal path is appended once, whichever spelling is configured."""
+    from litellm.integrations.openlayer.openlayer import OPENLAYER_DEFAULT_ENDPOINT
+
+    resolved = "https://api.openlayer.com/v1/otel/v1/traces"
+    assert providers._otlp_traces_endpoint(OPENLAYER_DEFAULT_ENDPOINT) == resolved
+    assert providers._otlp_traces_endpoint(resolved) == resolved
+
+
+def test_openlayer_self_hosted_endpoint_override(monkeypatch):
+    spec = _openlayer_spec(
+        monkeypatch,
+        OPENLAYER_API_KEY="sk-ol-123",
+        OPENLAYER_INFERENCE_PIPELINE_ID="p-1",
+        OPENLAYER_OTEL_ENDPOINT="https://openlayer.internal/v1/otel",
+    )
+    assert spec.endpoint == "https://openlayer.internal/v1/otel"
+
+
+@pytest.mark.parametrize(
+    "env, missing",
+    [
+        ({}, "OPENLAYER_API_KEY"),
+        ({"OPENLAYER_API_KEY": "sk-ol-123"}, "OPENLAYER_INFERENCE_PIPELINE_ID"),
+        ({"OPENLAYER_INFERENCE_PIPELINE_ID": "p-1"}, "OPENLAYER_API_KEY"),
+    ],
+)
+def test_openlayer_names_the_missing_credential(monkeypatch, env, missing):
+    from litellm.integrations.otel.presets.openlayer import openlayer_preset
+
+    for name in OPENLAYER_ENV:
+        monkeypatch.delenv(name, raising=False)
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+    with pytest.raises(ValueError, match=missing):
+        openlayer_preset()
+
+
+def test_openlayer_adds_no_mapper_vocabulary(monkeypatch):
+    from litellm.integrations.otel.model.config import OpenTelemetryV2Config
+    from litellm.integrations.otel.presets.openlayer import openlayer_preset
+
+    monkeypatch.setenv("OPENLAYER_API_KEY", "sk-ol-123")
+    monkeypatch.setenv("OPENLAYER_INFERENCE_PIPELINE_ID", "p-1")
+    assert openlayer_preset().mapper_names == OpenTelemetryV2Config().mapper_names
+
+
+def test_openlayer_is_registered_as_a_callback_name():
+    import litellm
+    from litellm.integrations.otel.model.config import ExporterOwner
+    from litellm.integrations.otel.presets import PRESET_BY_CALLBACK
+    from litellm.integrations.otel.presets.openlayer import openlayer_preset
+
+    assert "openlayer" in litellm._known_custom_logger_compatible_callbacks
+    assert PRESET_BY_CALLBACK["openlayer"] is openlayer_preset
+    assert ExporterOwner("openlayer") is ExporterOwner.OPENLAYER
+
+
+def test_openlayer_v1_config_matches_the_preset(monkeypatch):
+    from litellm.integrations.openlayer.openlayer import OpenlayerLogger
+
+    monkeypatch.setenv("OPENLAYER_API_KEY", "sk-ol-123")
+    monkeypatch.setenv("OPENLAYER_INFERENCE_PIPELINE_ID", "p-1")
+    monkeypatch.delenv("OPENLAYER_OTEL_ENDPOINT", raising=False)
+
+    v1 = OpenlayerLogger.get_openlayer_config()
+    spec = _openlayer_spec(monkeypatch, OPENLAYER_API_KEY="sk-ol-123", OPENLAYER_INFERENCE_PIPELINE_ID="p-1")
+    assert (v1.endpoint, v1.protocol, v1.otlp_auth_headers) == (
+        spec.endpoint,
+        spec.kind,
+        spec.headers,
+    )
+
+
+def test_openlayer_health_check_reports_configured(monkeypatch):
+    import asyncio
+
+    from litellm.integrations.openlayer.openlayer import OpenlayerLogger
+
+    monkeypatch.setenv("OPENLAYER_API_KEY", "sk-ol-123")
+    monkeypatch.setenv("OPENLAYER_INFERENCE_PIPELINE_ID", "p-1")
+    result = asyncio.run(OpenlayerLogger.async_health_check(OpenlayerLogger))
+    assert result["status"] == "healthy"
+
+
+def test_openlayer_health_check_names_the_missing_credential(monkeypatch):
+    import asyncio
+
+    from litellm.integrations.openlayer.openlayer import OpenlayerLogger
+
+    for name in OPENLAYER_ENV:
+        monkeypatch.delenv(name, raising=False)
+    result = asyncio.run(OpenlayerLogger.async_health_check(OpenlayerLogger))
+    assert result["status"] == "unhealthy"
+    assert "OPENLAYER_API_KEY" in result["error_message"]
+
+
+def test_openlayer_callback_builds_the_v1_logger_when_v2_is_off(monkeypatch):
+    """Without LITELLM_OTEL_V2 the callback resolves to the v1 logger."""
+    from litellm.integrations.openlayer.openlayer import OpenlayerLogger
+    from litellm.integrations.otel.model.config import is_otel_v2_enabled
+    from litellm.litellm_core_utils.litellm_logging import (
+        _init_custom_logger_compatible_class,
+    )
+
+    monkeypatch.delenv("LITELLM_OTEL_V2", raising=False)
+    is_otel_v2_enabled.cache_clear()
+    monkeypatch.setenv("OPENLAYER_API_KEY", "sk-ol-123")
+    monkeypatch.setenv("OPENLAYER_INFERENCE_PIPELINE_ID", "p-1")
+    monkeypatch.delenv("OPENLAYER_OTEL_ENDPOINT", raising=False)
+    try:
+        logger = _init_custom_logger_compatible_class("openlayer", internal_usage_cache=None, llm_router=None)
+        assert isinstance(logger, OpenlayerLogger)
+        assert logger.callback_name == "openlayer"
+        expected = OpenlayerLogger.get_openlayer_config()
+        assert logger.OTEL_ENDPOINT == expected.endpoint
+        assert logger.OTEL_HEADERS == expected.otlp_auth_headers
+    finally:
+        is_otel_v2_enabled.cache_clear()
