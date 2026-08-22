@@ -332,7 +332,6 @@ def test_bedrock_get_document_format_fallback_mimes():
     This tests the fallback mechanism when mimetypes.guess_all_extensions returns empty results,
     which can happen in Docker containers where mimetypes depends on OS-installed MIME types.
     """
-    from unittest.mock import patch
 
     # Test DOCX fallback
     docx_mime = (
