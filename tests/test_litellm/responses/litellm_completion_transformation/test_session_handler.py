@@ -1,3 +1,4 @@
+import asyncio
 import json
 from unittest.mock import AsyncMock, patch
 
@@ -10,6 +11,7 @@ from litellm.responses.litellm_completion_transformation import session_handler
 from litellm.responses.litellm_completion_transformation.session_handler import (
     ResponsesSessionHandler,
 )
+from litellm.responses.utils import ResponsesAPIRequestUtils
 
 
 @pytest.mark.asyncio
@@ -430,3 +432,236 @@ async def test_get_chat_completion_message_history_empty_response_dict():
 
         # Verify the session was still created correctly
         assert result["litellm_session_id"] == "test-session"
+
+
+def _chat_completion_response(request_id: str, content: str) -> dict:
+    return {
+        "id": request_id,
+        "object": "chat.completion",
+        "created": 1748575031,
+        "model": "claude-haiku-4-5",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": content},
+                "finish_reason": "stop",
+            }
+        ],
+    }
+
+
+class _FakePrismaDB:
+    def __init__(self, rows):
+        self._rows = rows
+        self.calls = []
+
+    async def query_raw(self, query, *args):
+        self.calls.append(args)
+        return list(self._rows)
+
+
+class _FakePrismaClient:
+    def __init__(self, written_rows, queued_rows):
+        self.db = _FakePrismaDB(written_rows)
+        self.spend_log_transactions = list(queued_rows)
+        self._spend_log_transactions_lock = asyncio.Lock()
+
+
+@pytest.mark.asyncio
+async def test_message_history_reconstructs_list_shaped_input():
+    """
+    The Responses API sends `input` as a list of items, which is what lands in the stored
+    proxy_server_request. The user turns have to survive session reconstruction.
+    """
+    request_id = "chatcmpl-935b8dad-fdc2-466e-a8ca-e26e5a8a21bb"
+    mock_spend_logs = [
+        {
+            "request_id": request_id,
+            "call_type": "aresponses",
+            "session_id": "a96757c4-c6dc-4c76-b37e-e7dfa526b701",
+            "proxy_server_request": {
+                "input": [
+                    {
+                        "role": "user",
+                        "content": "Remember this: my favorite color is chartreuse.",
+                    }
+                ],
+                "model": "claude-bridge",
+            },
+            "response": _chat_completion_response(request_id, "OK"),
+        }
+    ]
+
+    with patch.object(
+        ResponsesSessionHandler,
+        "get_all_spend_logs_for_previous_response_id",
+        new_callable=AsyncMock,
+    ) as mock_get_spend_logs:
+        mock_get_spend_logs.return_value = mock_spend_logs
+
+        result = await ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id(
+            request_id
+        )
+
+    messages = result["messages"]
+    assert [(message.get("role"), message.get("content")) for message in messages] == [
+        ("user", "Remember this: my favorite color is chartreuse."),
+        ("assistant", "OK"),
+    ]
+    assert result["litellm_session_id"] == "a96757c4-c6dc-4c76-b37e-e7dfa526b701"
+
+
+@pytest.mark.asyncio
+async def test_message_history_includes_spend_logs_still_waiting_on_the_batch_writer():
+    """
+    A follow-up sent right after the previous turn arrives before the batch writer has
+    flushed that turn's spend log, so the row is only in memory. The history has to
+    include it anyway.
+    """
+    request_id = "chatcmpl-6c1f5f6c-6a2b-4c62-8d1f-0d9d4ce0a1b2"
+    queued_spend_log = {
+        "request_id": request_id,
+        "call_type": "aresponses",
+        "session_id": "b7d0a5b0-6d20-4a68-9d24-6ba0f6d1f1a3",
+        "proxy_server_request": json.dumps(
+            {
+                "input": [
+                    {
+                        "role": "user",
+                        "content": "Remember this: my favorite color is chartreuse.",
+                    }
+                ],
+                "model": "claude-bridge",
+            }
+        ),
+        "response": json.dumps(_chat_completion_response(request_id, "OK")),
+    }
+    fake_prisma_client = _FakePrismaClient(written_rows=[], queued_rows=[queued_spend_log])
+
+    with patch("litellm.proxy.proxy_server.prisma_client", fake_prisma_client):
+        result = await ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id(
+            request_id
+        )
+
+    messages = result["messages"]
+    assert [(message.get("role"), message.get("content")) for message in messages] == [
+        ("user", "Remember this: my favorite color is chartreuse."),
+        ("assistant", "OK"),
+    ]
+    assert result["litellm_session_id"] == "b7d0a5b0-6d20-4a68-9d24-6ba0f6d1f1a3"
+    assert fake_prisma_client.spend_log_transactions == [queued_spend_log]
+
+
+@pytest.mark.asyncio
+async def test_message_history_merges_written_and_queued_turns_in_order():
+    """
+    Turn 1 already flushed to the DB, turn 2 still queued: the follow-up sees the whole
+    conversation, in order, with no row counted twice.
+    """
+    session_id = "5c5f9a3e-1c86-4c0e-9d7c-0a54b8a0f2f1"
+    first_request_id = "chatcmpl-1111"
+    second_request_id = "chatcmpl-2222"
+    written_spend_log = {
+        "request_id": first_request_id,
+        "call_type": "aresponses",
+        "session_id": session_id,
+        "proxy_server_request": {
+            "input": [{"role": "user", "content": "My favorite color is chartreuse."}],
+            "model": "claude-bridge",
+        },
+        "response": _chat_completion_response(first_request_id, "Got it."),
+    }
+    queued_spend_log = {
+        "request_id": second_request_id,
+        "call_type": "aresponses",
+        "session_id": session_id,
+        "proxy_server_request": json.dumps(
+            {
+                "input": [{"role": "user", "content": "And my favorite city is Lisbon."}],
+                "model": "claude-bridge",
+            }
+        ),
+        "response": json.dumps(_chat_completion_response(second_request_id, "Noted.")),
+    }
+    fake_prisma_client = _FakePrismaClient(
+        written_rows=[written_spend_log],
+        queued_rows=[written_spend_log, queued_spend_log],
+    )
+
+    with patch("litellm.proxy.proxy_server.prisma_client", fake_prisma_client):
+        result = await ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id(
+            second_request_id
+        )
+
+    messages = result["messages"]
+    assert [(message.get("role"), message.get("content")) for message in messages] == [
+        ("user", "My favorite color is chartreuse."),
+        ("assistant", "Got it."),
+        ("user", "And my favorite city is Lisbon."),
+        ("assistant", "Noted."),
+    ]
+    assert result["litellm_session_id"] == session_id
+
+
+@pytest.mark.asyncio
+async def test_message_history_ignores_queued_spend_logs_from_other_sessions():
+    request_id = "chatcmpl-3333"
+    written_spend_log = {
+        "request_id": request_id,
+        "call_type": "aresponses",
+        "session_id": "session-a",
+        "proxy_server_request": {
+            "input": [{"role": "user", "content": "Hello from session a."}],
+            "model": "claude-bridge",
+        },
+        "response": _chat_completion_response(request_id, "Hi."),
+    }
+    other_session_spend_log = {
+        "request_id": "chatcmpl-4444",
+        "call_type": "aresponses",
+        "session_id": "session-b",
+        "proxy_server_request": json.dumps(
+            {
+                "input": [{"role": "user", "content": "Hello from session b."}],
+                "model": "claude-bridge",
+            }
+        ),
+        "response": json.dumps(_chat_completion_response("chatcmpl-4444", "Hi there.")),
+    }
+    fake_prisma_client = _FakePrismaClient(
+        written_rows=[written_spend_log],
+        queued_rows=[other_session_spend_log],
+    )
+
+    with patch("litellm.proxy.proxy_server.prisma_client", fake_prisma_client):
+        result = await ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id(
+            request_id
+        )
+
+    messages = result["messages"]
+    assert [(message.get("role"), message.get("content")) for message in messages] == [
+        ("user", "Hello from session a."),
+        ("assistant", "Hi."),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_message_history_looks_up_the_decoded_chat_completion_id():
+    """
+    A `previous_response_id` handed back by the proxy is base64 encoded; spend logs store
+    the bare chat completion id, so that is what the lookup has to query on.
+    """
+    request_id = "chatcmpl-935b8dad-fdc2-466e-a8ca-e26e5a8a21bb"
+    encoded_response_id = ResponsesAPIRequestUtils._build_responses_api_response_id(
+        custom_llm_provider="anthropic",
+        model_id="e0f302a1412e78470ebb28cbed01fff5f88c0d331c667e9f2ba4b413c6fbd282",
+        response_id=request_id,
+    )
+    fake_prisma_client = _FakePrismaClient(written_rows=[], queued_rows=[])
+
+    with patch("litellm.proxy.proxy_server.prisma_client", fake_prisma_client):
+        await ResponsesSessionHandler.get_all_spend_logs_for_previous_response_id(
+            encoded_response_id
+        )
+
+    assert fake_prisma_client.db.calls == [(request_id,)]
