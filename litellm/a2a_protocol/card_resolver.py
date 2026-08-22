@@ -4,6 +4,7 @@ Custom A2A Card Resolver for LiteLLM.
 Extends the A2A SDK's card resolver to support multiple well-known paths.
 """
 
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
 from litellm._logging import verbose_logger
@@ -46,6 +47,33 @@ def is_localhost_or_internal_url(url: str | None) -> bool:
     url_lower: Final = url.lower()
 
     return any(pattern in url_lower for pattern in LOCALHOST_URL_PATTERNS)
+
+
+_CANONICAL_PROTOCOL_BINDINGS: Final = MappingProxyType(
+    {
+        "jsonrpc": "JSONRPC",
+        "http+json": "HTTP+JSON",
+        "grpc": "GRPC",
+    }
+)
+
+
+def normalize_agent_card_protocol_bindings(agent_card: "AgentCard") -> "AgentCard":
+    """
+    Canonicalize protocolBinding casing on the card's supported interfaces.
+
+    Some A2A servers (e.g. LangGraph Platform) serve agent cards with lowercase
+    bindings like "jsonrpc", but a2a-sdk's ClientFactory matches bindings
+    case-sensitively against its uppercase TransportProtocol constants and fails
+    with "no compatible transports found." for spec-adjacent casings.
+    """
+    interfaces: Final = getattr(agent_card, "supported_interfaces", None) or ()
+    for interface in interfaces:
+        binding: str = getattr(interface, "protocol_binding", "") or ""
+        canonical = _CANONICAL_PROTOCOL_BINDINGS.get(binding.lower())
+        if canonical is not None and binding != canonical:
+            interface.protocol_binding = canonical
+    return agent_card
 
 
 def get_agent_card_url(agent_card: "AgentCard") -> str | None:
