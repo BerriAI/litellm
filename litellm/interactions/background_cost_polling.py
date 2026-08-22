@@ -162,6 +162,17 @@ async def _release_open_budget_reservation(logging_obj: "LiteLLMLoggingObj") -> 
         verbose_logger.exception("Failed to release budget reservation for an unbilled background interaction")
 
 
+def is_pollable_background_interaction(response: InteractionsAPIResponse) -> bool:
+    """
+    The single gate deciding whether a create's response gets a poll task.
+    The proxy's success callback defers releasing the budget reservation for
+    exactly these responses, on the promise that a poll task will settle them,
+    so a response one site accepts and the other refuses strands its
+    reservation on the spend counters with nothing left to reconcile it.
+    """
+    return response.status == "in_progress" and bool(response.id)
+
+
 @dataclass(frozen=True, slots=True)
 class _ActiveBackgroundPoll:
     task: "asyncio.Task[None]"
@@ -188,7 +199,7 @@ def maybe_schedule_background_interaction_cost_polling(
         return None
     if not isinstance(response, InteractionsAPIResponse):
         return None
-    if response.status != "in_progress" or not response.id:
+    if not is_pollable_background_interaction(response):
         return None
     logging_obj = create_kwargs.get("litellm_logging_obj")
     if not isinstance(logging_obj, Logging):

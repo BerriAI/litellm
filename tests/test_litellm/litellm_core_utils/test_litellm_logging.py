@@ -4644,6 +4644,44 @@ async def test_background_interaction_completion_rebills_after_in_progress_succe
     assert logging_obj.model_call_details["standard_logging_object"]["total_tokens"] == 175
 
 
+@pytest.mark.asyncio
+async def test_background_interaction_completion_lets_otel_emit_the_cost_span():
+    """
+    OTEL, and every integration that derives from it, dedupes span emission on
+    a marker kept in the request's own metadata. The in-progress create claims
+    that marker, so without clearing it the settled completion, the only event
+    carrying usage and cost, is discarded as a duplicate and every
+    OTEL-family backend shows the interaction as a span with no cost at all.
+    """
+    import datetime as dt
+
+    from litellm.integrations.opentelemetry import OpenTelemetry, OpenTelemetryConfig
+    from litellm.types.interactions import InteractionsAPIResponse
+
+    otel = OpenTelemetry(config=OpenTelemetryConfig(exporter="console"))
+    logging_obj = _interactions_logging_obj(stream=False)
+    in_progress = InteractionsAPIResponse(id="interactions/abc", model="gemini-2.5-flash", status="in_progress")
+    await logging_obj.async_success_handler(
+        result=in_progress,
+        start_time=dt.datetime.now(),
+        end_time=dt.datetime.now(),
+    )
+
+    assert otel._emit_once(logging_obj.model_call_details, "success") is True
+    assert otel._emit_once(logging_obj.model_call_details, "success") is False
+
+    completed = InteractionsAPIResponse(
+        id="interactions/abc",
+        model="gemini-2.5-flash",
+        status="completed",
+        steps=[],
+        usage=dict(INTERACTIONS_USAGE_BLOCK),
+    )
+    await logging_obj.async_log_background_interaction_completion(result=completed)
+
+    assert otel._emit_once(logging_obj.model_call_details, "success") is True
+
+
 @pytest.mark.parametrize(
     "call_type",
     ["aget", "get", "aget_interaction", "adelete_interaction", "acancel_interaction"],

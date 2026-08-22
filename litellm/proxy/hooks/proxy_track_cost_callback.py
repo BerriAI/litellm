@@ -478,9 +478,12 @@ def _write_spend_metadata_to_kwargs(kwargs: dict, metadata: dict) -> None:
 
 
 def _is_unbilled_in_progress_interaction(completion_response: object) -> bool:
+    from litellm.interactions.background_cost_polling import is_pollable_background_interaction
     from litellm.types.interactions import InteractionsAPIResponse
 
-    return isinstance(completion_response, InteractionsAPIResponse) and completion_response.usage is None
+    if not isinstance(completion_response, InteractionsAPIResponse):
+        return False
+    return completion_response.usage is None and is_pollable_background_interaction(completion_response)
 
 
 def _should_track_cost_callback(

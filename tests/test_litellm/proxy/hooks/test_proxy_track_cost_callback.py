@@ -860,6 +860,105 @@ async def test_track_cost_callback_releases_reservation_for_in_progress_interact
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "status",
+    ["completed", "failed", "cancelled", "incomplete", "requires_action", "budget_exceeded"],
+)
+async def test_track_cost_callback_releases_reservation_for_unpollable_interaction(status):
+    """
+    Only an in-progress create gets a poll task, so a create that comes back
+    terminal with no usage has nobody left to reconcile its reservation. The
+    callback must release it there and then, or the pre-call estimate stays
+    added to the key, user, team and org spend counters and starts refusing
+    traffic against budget that was never actually spent.
+    """
+    from litellm.types.interactions import InteractionsAPIResponse
+
+    logger = _ProxyDBLogger()
+    reservation = {"reserved_cost": 0.05, "entries": [], "finalized": False}
+    terminal_response = InteractionsAPIResponse(
+        id="interactions/bg-abc",
+        model="gemini-3-flash-preview",
+        status=status,
+    )
+
+    with patch(
+        "litellm.proxy.proxy_server.proxy_logging_obj",
+    ) as mock_proxy_logging:
+        mock_proxy_logging.failed_tracking_alert = AsyncMock()
+        mock_proxy_logging.db_spend_update_writer = MagicMock()
+        mock_proxy_logging.db_spend_update_writer.update_database = AsyncMock()
+
+        await logger._PROXY_track_cost_callback(
+            kwargs=_in_progress_interaction_kwargs(reservation),
+            completion_response=terminal_response,
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+        )
+
+        assert reservation["finalized"] is True
+
+
+@pytest.mark.asyncio
+async def test_track_cost_callback_releases_reservation_for_interaction_without_an_id():
+    """
+    The scheduler also refuses a response with no id, since it has nothing to
+    poll for, so the callback must not defer to a poll task that will never
+    exist.
+    """
+    from litellm.types.interactions import InteractionsAPIResponse
+
+    logger = _ProxyDBLogger()
+    reservation = {"reserved_cost": 0.05, "entries": [], "finalized": False}
+    idless_response = InteractionsAPIResponse(
+        id="",
+        model="gemini-3-flash-preview",
+        status="in_progress",
+    )
+
+    with patch(
+        "litellm.proxy.proxy_server.proxy_logging_obj",
+    ) as mock_proxy_logging:
+        mock_proxy_logging.failed_tracking_alert = AsyncMock()
+        mock_proxy_logging.db_spend_update_writer = MagicMock()
+        mock_proxy_logging.db_spend_update_writer.update_database = AsyncMock()
+
+        await logger._PROXY_track_cost_callback(
+            kwargs=_in_progress_interaction_kwargs(reservation),
+            completion_response=idless_response,
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+        )
+
+        assert reservation["finalized"] is True
+
+
+@pytest.mark.parametrize(
+    "status",
+    ["in_progress", "completed", "failed", "cancelled", "incomplete", "requires_action"],
+)
+@pytest.mark.parametrize("interaction_id", ["interactions/bg-abc", ""])
+def test_callback_defers_exactly_the_interactions_the_scheduler_polls(status, interaction_id):
+    """
+    Pins the invariant the two modules share: the callback may only hold a
+    budget reservation open for a response the scheduler will actually poll.
+    Any drift between the two gates leaks reservations onto live spend
+    counters, so assert they agree rather than restating either condition.
+    """
+    from litellm.interactions.background_cost_polling import is_pollable_background_interaction
+    from litellm.proxy.hooks.proxy_track_cost_callback import _is_unbilled_in_progress_interaction
+    from litellm.types.interactions import InteractionsAPIResponse
+
+    response = InteractionsAPIResponse(
+        id=interaction_id,
+        model="gemini-3-flash-preview",
+        status=status,
+    )
+
+    assert _is_unbilled_in_progress_interaction(response) is is_pollable_background_interaction(response)
+
+
+@pytest.mark.asyncio
 async def test_async_post_call_failure_hook_propagates_trace_id_from_logging_obj():
     """
     When an LLM call fails, the proxy calls post_call_failure_hook with
