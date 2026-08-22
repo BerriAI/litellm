@@ -71,6 +71,13 @@ class FakeCLISessionTable:
         gt = where["expires_at"]["gt"]
         return len([r for r in self.rows.values() if r["expires_at"] > gt])
 
+    async def delete_many(self, where):
+        lte = where["expires_at"]["lte"]
+        doomed = [sid for sid, r in self.rows.items() if r["expires_at"] <= lte]
+        for sid in doomed:
+            del self.rows[sid]
+        return len(doomed)
+
 
 class FakeDB:
     def __init__(self, table):
@@ -319,6 +326,29 @@ async def test_db_outage_follows_the_proxy_wide_posture(monkeypatch):
     monkeypatch.setattr(proxy_server, "general_settings", {"allow_requests_on_db_unavailable": False}, raising=False)
     with pytest.raises(EngineConnectionError):
         await is_cli_session_revoked(session_token=SESSION_TOKEN, prisma_client=prisma, user_api_key_cache=_cache())
+
+
+@pytest.mark.asyncio
+async def test_recording_drops_expired_sessions_but_keeps_live_ones():
+    """An authenticated user can log in over and over. Without a retention path every
+    login would leave a row behind forever, so registration must clear the rows that
+    can no longer be revoked while leaving every live session listable."""
+    table = FakeCLISessionTable(
+        {
+            "dead-1": _session_row(session_id="dead-1", expires_in_hours=-5),
+            "dead-2": _session_row(session_id="dead-2", expires_in_hours=-1),
+            "live": _session_row(session_id="live", expires_in_hours=1),
+        }
+    )
+
+    await record_cli_session(
+        prisma_client=FakePrismaClient(table),
+        session_token=SESSION_TOKEN,
+        user_id="u-1",
+        team_id="t-1",
+    )
+
+    assert sorted(table.rows) == sorted(["live", hash_token(SESSION_TOKEN)])
 
 
 @pytest.mark.asyncio

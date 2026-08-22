@@ -2528,6 +2528,7 @@ def _cli_session_registry_prisma() -> MagicMock:
     the credential out, so the poll needs a DB whose CLI-session table accepts the write."""
     prisma = MagicMock()
     now = datetime.now(timezone.utc)
+    prisma.db.litellm_clisessiontable.delete_many = AsyncMock(return_value=0)
     prisma.db.litellm_clisessiontable.create = AsyncMock(
         return_value=SimpleNamespace(
             model_dump=lambda: {
