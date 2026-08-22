@@ -4901,6 +4901,8 @@
         "supports_prompt_caching": false,
         "supports_reasoning": false,
         "supports_response_schema": false,
+        "supports_audio_input": true,
+        "supports_audio_output": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_vision": false
@@ -5124,7 +5126,7 @@
         "cache_creation_input_audio_token_cost": 3e-07,
         "cache_read_input_token_cost": 6e-08,
         "input_cost_per_audio_token": 1e-05,
-        "input_cost_per_image": 8e-07,
+        "input_cost_per_image_token": 8e-07,
         "input_cost_per_token": 6e-07,
         "litellm_provider": "azure",
         "max_input_tokens": 32000,
@@ -19889,7 +19891,7 @@
         "output_cost_per_image_token": 3e-05,
         "output_cost_per_token": 1.5e-06,
         "output_cost_per_token_batches": 7.5e-07,
-        "source": "https://ai.google.dev/gemini-api/docs/pricing#gemini-3.1-flash-lite-image",
+        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/completions",
@@ -19897,7 +19899,8 @@
         ],
         "supported_modalities": [
             "text",
-            "image"
+            "image",
+            "video"
         ],
         "supported_output_modalities": [
             "text",
