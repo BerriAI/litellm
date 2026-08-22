@@ -2591,6 +2591,127 @@ def test_unscoped_list_files_forwards_limit_and_after_to_the_managed_file_store(
     proxy_logging_obj.post_call_failure_hook.assert_not_called()
 
 
+def _setup_unscoped_list_files_route(mocker, monkeypatch, llm_router: Router, afile_list):
+    """Wire GET /v1/files to the managed file store, with afile_list as the store."""
+    import litellm.proxy.proxy_server as ps
+    from litellm.llms.base_llm.files.transformation import BaseFileEndpoints
+    from litellm.proxy._types import LitellmUserRoles
+
+    proxy_logging_obj = setup_proxy_logging_object(monkeypatch, llm_router)
+    managed_files = mocker.MagicMock(spec=BaseFileEndpoints)
+    managed_files.afile_list = mocker.AsyncMock(side_effect=afile_list)
+    proxy_logging_obj.proxy_hook_mapping["managed_files"] = managed_files
+    proxy_logging_obj.update_request_status = mocker.AsyncMock()
+    proxy_logging_obj.post_call_success_hook = mocker.AsyncMock(return_value=None)
+    proxy_logging_obj.post_call_failure_hook = mocker.AsyncMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", llm_router)
+    mocker.patch.object(litellm, "afile_list", new=mocker.AsyncMock())
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        api_key="test-key",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="test-user",
+    )
+    return managed_files
+
+
+def _get_unscoped_list_files(query: str):
+    try:
+        return client.get(f"/v1/files{query}", headers={"Authorization": "Bearer test-key"})
+    finally:
+        import litellm.proxy.proxy_server as ps
+
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+async def _validating_afile_list(**kwargs):
+    """Stand in for the managed file store, applying the real limit validation."""
+    from litellm.proxy.openai_files_endpoints.common_utils import validate_file_list_limit
+
+    validate_file_list_limit(kwargs.get("limit"))
+    return {
+        "object": "list",
+        "data": [],
+        "first_id": None,
+        "last_id": None,
+        "has_more": False,
+    }
+
+
+@pytest.mark.parametrize(
+    "limit, bound, expected_range",
+    [
+        (0, "below minimum", ">= 1"),
+        (-1, "below minimum", ">= 1"),
+        (10001, "above maximum", "<= 10000"),
+    ],
+)
+def test_unscoped_list_files_returns_400_for_a_limit_outside_the_openai_range(
+    mocker: MockerFixture, monkeypatch, llm_router: Router, limit, bound, expected_range
+):
+    """An out-of-range limit is the caller's mistake, so it must not read as a 500 the SDK retries."""
+    _setup_unscoped_list_files_route(mocker, monkeypatch, llm_router, _validating_afile_list)
+
+    response = _get_unscoped_list_files(f"?limit={limit}")
+
+    assert response.status_code == 400, response.text
+    assert response.json() == {
+        "error": {
+            "message": (
+                f"Invalid 'limit': integer {bound} value. "
+                f"Expected a value {expected_range}, but got {limit} instead."
+            ),
+            "type": "invalid_request_error",
+            "param": "limit",
+            "code": "400",
+        }
+    }
+
+
+@pytest.mark.parametrize("limit", [1, 10000])
+def test_unscoped_list_files_accepts_the_ends_of_the_openai_limit_range(
+    mocker: MockerFixture, monkeypatch, llm_router: Router, limit
+):
+    managed_files = _setup_unscoped_list_files_route(mocker, monkeypatch, llm_router, _validating_afile_list)
+
+    response = _get_unscoped_list_files(f"?limit={limit}")
+
+    assert response.status_code == 200, response.text
+    assert response.json()["data"] == []
+    assert managed_files.afile_list.await_args.kwargs["limit"] == limit
+
+
+def test_unscoped_list_files_returns_400_for_an_unknown_after_cursor(
+    mocker: MockerFixture, monkeypatch, llm_router: Router
+):
+    from litellm.proxy._types import ProxyException
+
+    async def _unknown_cursor(**kwargs):
+        raise ProxyException(
+            message=f"Invalid 'after' cursor: no file found with id '{kwargs['after']}'.",
+            type="invalid_request_error",
+            param="after",
+            code=400,
+            openai_code="invalid_value",
+        )
+
+    _setup_unscoped_list_files_route(mocker, monkeypatch, llm_router, _unknown_cursor)
+
+    response = _get_unscoped_list_files("?after=file-does-not-exist-xyz")
+
+    assert response.status_code == 400, response.text
+    assert response.json() == {
+        "error": {
+            "message": "Invalid 'after' cursor: no file found with id 'file-does-not-exist-xyz'.",
+            "type": "invalid_request_error",
+            "param": "after",
+            "code": "400",
+        }
+    }
+
+
 def test_list_files_restricted_team_does_not_leak_global_openai_credentials(
     mocker: MockerFixture, monkeypatch
 ):

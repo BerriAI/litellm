@@ -28,11 +28,11 @@ MAX_FILE_LIST_LIMIT: Final = 10000
 
 def validate_file_list_limit(limit: int | None) -> None:
     """Reject a ``limit`` outside the range OpenAI documents for GET /v1/files."""
-    if limit is None or 0 <= limit <= MAX_FILE_LIST_LIMIT:
+    if limit is None or 1 <= limit <= MAX_FILE_LIST_LIMIT:
         return
     bound, expected, openai_code = (
-        ("below minimum", ">= 0", "integer_below_min_value")
-        if limit < 0
+        ("below minimum", ">= 1", "integer_below_min_value")
+        if limit < 1
         else ("above maximum", f"<= {MAX_FILE_LIST_LIMIT}", "integer_above_max_value")
     )
     raise ProxyException(

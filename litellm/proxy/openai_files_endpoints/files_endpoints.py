@@ -68,7 +68,7 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
     validate_managed_files_requirement,
     validate_managed_id_requirement,
 )
-from litellm.proxy.utils import ProxyLogging, is_known_model
+from litellm.proxy.utils import ProxyLogging, handle_exception_on_proxy, is_known_model
 from litellm.repositories.table_repositories import ManagedFileRepository
 from litellm.router import Router
 from litellm.types.llms.openai import (
@@ -1569,18 +1569,4 @@ async def list_files(
         )
         verbose_proxy_logger.error("litellm.proxy.proxy_server.list_files(): Exception occured - %s", e)
         verbose_proxy_logger.debug(traceback.format_exc())
-        if isinstance(e, HTTPException):
-            raise ProxyException(
-                message=getattr(e, "message", str(e.detail)),
-                type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
-            )
-        else:
-            error_msg: Final = f"{e}"
-            raise ProxyException(
-                message=getattr(e, "message", error_msg),
-                type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", 500),
-            )
+        raise handle_exception_on_proxy(e)
