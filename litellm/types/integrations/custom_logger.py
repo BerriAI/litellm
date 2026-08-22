@@ -23,6 +23,21 @@ def is_interception_internal_key(
     return any(key.startswith(prefix) for prefix in prefixes)
 
 
+class AgenticLoopSafetyError(ValueError):
+    """
+    Raised when an agentic-loop safety rail refuses a rerun.
+
+    Covers both rails: the bounded-loop cap (``max_agentic_loops``) and the
+    repeated tool-call fingerprint cycle break. Subclasses ``ValueError`` so
+    callers that already catch the broader type keep working.
+
+    Only the anthropic messages loop raises this today. The chat completions
+    loop in ``litellm_core_utils/chat_completion_agentic_loop.py`` still raises
+    a plain ``ValueError`` from its own copy of the same rails, so catching
+    this type alone will not cover that surface until it is moved over.
+    """
+
+
 class StandardCustomLoggerInitParams(BaseModel):
     """
     Params for initializing a CustomLogger.
