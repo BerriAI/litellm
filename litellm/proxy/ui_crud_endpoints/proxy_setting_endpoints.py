@@ -171,6 +171,17 @@ class UIThemeConfig(BaseModel):
         description="URL to custom favicon image. Must be an HTTP/HTTPS URL to a .ico, .png, or .svg file",
     )
 
+    # Custom theme CSS (overrides CSS variables for light and/or dark mode)
+    custom_theme_css: str | None = Field(
+        default=None,
+        description=(
+            "Raw CSS to inject into the dashboard. Use :root and .dark selectors "
+            "to override theme CSS variables (e.g. --background, --primary, --radius). "
+            "Maximum 64KB."
+        ),
+        max_length=65536,
+    )
+
 
 class SettingsResponse(BaseModel):
     """Base response model for settings with values and schema information"""

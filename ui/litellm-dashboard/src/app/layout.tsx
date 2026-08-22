@@ -27,7 +27,7 @@ export default function RootLayout({
     // cannot predict; suppressHydrationWarning confines that mismatch to this element.
     <html lang="en" suppressHydrationWarning>
       <body className={inter.className}>
-        <ThemeProvider attribute="class" defaultTheme="light" enableSystem disableTransitionOnChange>
+        <ThemeProvider attribute="class" defaultTheme="dark" enableSystem disableTransitionOnChange>
           <NuqsAdapter>
             <ReactQueryProvider>
               <AuthProvider>{children}</AuthProvider>

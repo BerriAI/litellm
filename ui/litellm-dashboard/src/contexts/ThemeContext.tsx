@@ -8,6 +8,8 @@ interface ThemeContextType {
   setLogoUrlDark: (url: string | null) => void;
   faviconUrl: string | null;
   setFaviconUrl: (url: string | null) => void;
+  customThemeCss: string | null;
+  setCustomThemeCss: (css: string | null) => void;
 }
 
 const ThemeContext = createContext<ThemeContextType | undefined>(undefined);
@@ -29,6 +31,7 @@ export const ThemeProvider: React.FC<ThemeProviderProps> = ({ children, accessTo
   const [logoUrl, setLogoUrl] = useState<string | null>(null);
   const [logoUrlDark, setLogoUrlDark] = useState<string | null>(null);
   const [faviconUrl, setFaviconUrl] = useState<string | null>(null);
+  const [customThemeCss, setCustomThemeCss] = useState<string | null>(null);
 
   useEffect(() => {
     const loadThemeSettings = async () => {
@@ -50,6 +53,9 @@ export const ThemeProvider: React.FC<ThemeProviderProps> = ({ children, accessTo
           }
           if (data.values?.favicon_url) {
             setFaviconUrl(data.values.favicon_url);
+          }
+          if (data.values?.custom_theme_css) {
+            setCustomThemeCss(data.values.custom_theme_css);
           }
         }
       } catch (error) {
@@ -76,8 +82,26 @@ export const ThemeProvider: React.FC<ThemeProviderProps> = ({ children, accessTo
     }
   }, [faviconUrl]);
 
+  useEffect(() => {
+    const existing = document.getElementById("litellm-custom-theme");
+    if (customThemeCss) {
+      if (existing) {
+        existing.textContent = customThemeCss;
+      } else {
+        const style = document.createElement("style");
+        style.id = "litellm-custom-theme";
+        style.textContent = customThemeCss;
+        document.head.appendChild(style);
+      }
+    } else {
+      existing?.remove();
+    }
+  }, [customThemeCss]);
+
   return (
-    <ThemeContext.Provider value={{ logoUrl, setLogoUrl, logoUrlDark, setLogoUrlDark, faviconUrl, setFaviconUrl }}>
+    <ThemeContext.Provider
+      value={{ logoUrl, setLogoUrl, logoUrlDark, setLogoUrlDark, faviconUrl, setFaviconUrl, customThemeCss, setCustomThemeCss }}
+    >
       {children}
     </ThemeContext.Provider>
   );

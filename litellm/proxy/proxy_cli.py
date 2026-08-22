@@ -18,6 +18,7 @@ from pydantic import BaseModel, ConfigDict
 
 import litellm
 from litellm.constants import DEFAULT_NUM_WORKERS_LITELLM_PROXY
+from litellm.proxy.cli_theme import accent, info, success, warning
 from litellm.proxy.db.query_engine_reaper import start_query_engine_reaper
 
 if TYPE_CHECKING:
@@ -274,10 +275,10 @@ class ProxyInitializationHelpers:
             if "timeout_worker_healthcheck" in inspect.signature(uvicorn.Config.__init__).parameters:
                 uvicorn_args["timeout_worker_healthcheck"] = timeout_worker_healthcheck
             else:
-                print(
-                    f"\033[1;33mLiteLLM Proxy: --timeout_worker_healthcheck "
+                warning(
+                    f"LiteLLM Proxy: --timeout_worker_healthcheck "
                     f"requires uvicorn>=0.37.0, but installed uvicorn=={uvicorn.__version__}. "
-                    f"Ignoring the flag.\033[0m"
+                    f"Ignoring the flag."
                 )
         return uvicorn_args
 
@@ -295,18 +296,15 @@ class ProxyInitializationHelpers:
         import uvicorn
 
         if max_requests_before_restart is None:
-            print(
-                "\033[1;33mLiteLLM Proxy: --max_requests_before_restart_jitter "
-                "has no effect without --max_requests_before_restart\033[0m\n"
-            )
+            warning("LiteLLM Proxy: --max_requests_before_restart_jitter has no effect without --max_requests_before_restart")
             return
         if "limit_max_requests_jitter" in inspect.signature(uvicorn.Config.__init__).parameters:
             uvicorn_args["limit_max_requests_jitter"] = jitter
         else:
-            print(
-                f"\033[1;33mLiteLLM Proxy: --max_requests_before_restart_jitter "
+            warning(
+                f"LiteLLM Proxy: --max_requests_before_restart_jitter "
                 f"requires uvicorn>=0.41.0, but installed uvicorn=={uvicorn.__version__}. "
-                f"Ignoring the flag.\033[0m"
+                f"Ignoring the flag."
             )
 
     @staticmethod
@@ -406,14 +404,12 @@ class ProxyInitializationHelpers:
         from hypercorn.asyncio import serve
         from hypercorn.config import Config
 
-        print(f"\033[1;32mLiteLLM Proxy: Starting server on {host}:{port} using Hypercorn\033[0m\n")
+        success(f"LiteLLM Proxy: Starting server on {host}:{port} using Hypercorn\n")
         config: Final = Config()
         config.bind = [f"{host}:{port}"]
 
         if ssl_certfile_path is not None and ssl_keyfile_path is not None:
-            print(
-                f"\033[1;32mLiteLLM Proxy: Using SSL with certfile: {ssl_certfile_path} and keyfile: {ssl_keyfile_path}\033[0m\n"
-            )
+            success(f"LiteLLM Proxy: Using SSL with certfile: {ssl_certfile_path} and keyfile: {ssl_keyfile_path}\n")
             config.certfile = ssl_certfile_path
             config.keyfile = ssl_keyfile_path
             if ciphers is not None:
@@ -442,14 +438,11 @@ class ProxyInitializationHelpers:
         from granian import Granian
         from granian.constants import Interfaces
 
-        print(f"\033[1;32mLiteLLM Proxy: Starting server on {host}:{port} using Granian\033[0m\n")
+        success(f"LiteLLM Proxy: Starting server on {host}:{port} using Granian\n")
         if max_requests_before_restart is not None:
-            print(
-                "\033[1;33mLiteLLM: --max_requests_before_restart is not supported by Granian "
-                "(Granian uses workers_lifetime in seconds, not a per-request limit).\033[0m\n"
-            )
+            warning("LiteLLM: --max_requests_before_restart is not supported by Granian (Granian uses workers_lifetime in seconds, not a per-request limit).\n")
         if ciphers is not None:
-            print("\033[1;33mLiteLLM: --ciphers is not applied when using --run_granian.\033[0m\n")
+            warning("LiteLLM: --ciphers is not applied when using --run_granian.\n")
 
         kwargs: Final[dict[str, Any]] = {
             "target": "litellm.proxy.proxy_server:app",
@@ -462,9 +455,7 @@ class ProxyInitializationHelpers:
         if granian_runtime_threads is not None:
             kwargs["runtime_threads"] = granian_runtime_threads
         if ssl_certfile_path is not None and ssl_keyfile_path is not None:
-            print(
-                f"\033[1;32mLiteLLM Proxy: Using SSL with certfile: {ssl_certfile_path} and keyfile: {ssl_keyfile_path}\033[0m\n"
-            )
+            success(f"LiteLLM Proxy: Using SSL with certfile: {ssl_certfile_path} and keyfile: {ssl_keyfile_path}\n")
             kwargs["ssl_cert"] = Path(ssl_certfile_path)
             kwargs["ssl_key"] = Path(ssl_keyfile_path)
         elif ssl_certfile_path is not None or ssl_keyfile_path is not None:
@@ -516,12 +507,10 @@ class ProxyInitializationHelpers:
                 """
                 )
                 print()
-                print(
-                    '\033[1;34mLiteLLM: Test your local proxy with: "litellm --test" This runs an openai.ChatCompletion request to your proxy [In a new terminal tab]\033[0m\n'
-                )
-                print(f"\033[1;34mLiteLLM: Curl Command Test for your local proxy\n {curl_command} \033[0m\n")
-                print("\033[1;34mDocs: https://docs.litellm.ai/docs/simple_proxy\033[0m\n")
-                print(f"\033[1;34mSee all Router/Swagger docs on http://0.0.0.0:{port} \033[0m\n")
+                info('LiteLLM: Test your local proxy with: "litellm --test" This runs an openai.ChatCompletion request to your proxy [In a new terminal tab]\n')
+                info(f"LiteLLM: Curl Command Test for your local proxy\n {curl_command} \n")
+                info("Docs: https://docs.litellm.ai/docs/simple_proxy\n")
+                info(f"See all Router/Swagger docs on http://0.0.0.0:{port} \n")
 
             def load_config(self):
                 # note: This Loads the gunicorn config - has nothing to do with LiteLLM Proxy config
@@ -541,7 +530,7 @@ class ProxyInitializationHelpers:
                 # gunicorn app function
                 return self.application
 
-        print(f"\033[1;32mLiteLLM Proxy: Starting server on {host}:{port} with {num_workers} workers\033[0m\n")
+        success(f"LiteLLM Proxy: Starting server on {host}:{port} with {num_workers} workers\n")
         gunicorn_options: Final = {
             "bind": f"{host}:{port}",
             "workers": num_workers,  # default is 1
@@ -557,10 +546,7 @@ class ProxyInitializationHelpers:
             gunicorn_options["max_requests"] = max_requests_before_restart
         if max_requests_before_restart_jitter is not None:
             if max_requests_before_restart is None:
-                print(
-                    "\033[1;33mLiteLLM Proxy: --max_requests_before_restart_jitter "
-                    "has no effect without --max_requests_before_restart\033[0m\n"
-                )
+                warning("LiteLLM Proxy: --max_requests_before_restart_jitter has no effect without --max_requests_before_restart\n")
             else:
                 gunicorn_options["max_requests_jitter"] = max_requests_before_restart_jitter
 
@@ -574,9 +560,7 @@ class ProxyInitializationHelpers:
             gunicorn_options["child_exit"] = child_exit
 
         if ssl_certfile_path is not None and ssl_keyfile_path is not None:
-            print(
-                f"\033[1;32mLiteLLM Proxy: Using SSL with certfile: {ssl_certfile_path} and keyfile: {ssl_keyfile_path}\033[0m\n"
-            )
+            success(f"LiteLLM Proxy: Using SSL with certfile: {ssl_certfile_path} and keyfile: {ssl_keyfile_path}\n")
             gunicorn_options["certfile"] = ssl_certfile_path
             gunicorn_options["keyfile"] = ssl_keyfile_path
 

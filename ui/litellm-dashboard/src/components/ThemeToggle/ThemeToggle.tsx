@@ -15,9 +15,9 @@ import {
 } from "@/components/ui/dropdown-menu";
 
 const THEMES = [
-  { value: "system", label: "System", Icon: Monitor, beta: false },
+  { value: "dark", label: "Dark", Icon: Moon, beta: false },
   { value: "light", label: "Light", Icon: Sun, beta: false },
-  { value: "dark", label: "Dark", Icon: Moon, beta: true },
+  { value: "system", label: "System", Icon: Monitor, beta: false },
 ] as const;
 
 const ThemeToggle: React.FC = () => {
