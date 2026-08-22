@@ -6639,8 +6639,7 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": true,
         "supports_xhigh_reasoning_effort": true,
-        "supports_minimal_reasoning_effort": false,
-        "supports_max_reasoning_effort": true
+        "supports_minimal_reasoning_effort": false
     },
     "azure/gpt-5.6-sol": {
         "cache_read_input_token_cost": 5e-07,
@@ -6691,8 +6690,7 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": true,
         "supports_xhigh_reasoning_effort": true,
-        "supports_minimal_reasoning_effort": false,
-        "supports_max_reasoning_effort": true
+        "supports_minimal_reasoning_effort": false
     },
     "azure/gpt-5.6-terra": {
         "cache_read_input_token_cost": 2e-07,
@@ -6743,8 +6741,7 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": true,
         "supports_xhigh_reasoning_effort": true,
-        "supports_minimal_reasoning_effort": false,
-        "supports_max_reasoning_effort": true
+        "supports_minimal_reasoning_effort": false
     },
     "azure/gpt-5.6-luna": {
         "cache_read_input_token_cost": 2e-08,
@@ -6795,8 +6792,7 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": true,
         "supports_xhigh_reasoning_effort": true,
-        "supports_minimal_reasoning_effort": false,
-        "supports_max_reasoning_effort": true
+        "supports_minimal_reasoning_effort": false
     },
     "azure/us/gpt-5.6": {
         "cache_read_input_token_cost": 5.5e-07,
@@ -6843,8 +6839,7 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": true,
         "supports_xhigh_reasoning_effort": true,
-        "supports_minimal_reasoning_effort": false,
-        "supports_max_reasoning_effort": true
+        "supports_minimal_reasoning_effort": false
     },
     "azure/us/gpt-5.6-sol": {
         "cache_read_input_token_cost": 5.5e-07,
@@ -6892,8 +6887,7 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": true,
         "supports_xhigh_reasoning_effort": true,
-        "supports_minimal_reasoning_effort": false,
-        "supports_max_reasoning_effort": true
+        "supports_minimal_reasoning_effort": false
     },
     "azure/us/gpt-5.6-terra": {
         "cache_read_input_token_cost": 2.2e-07,
@@ -6941,8 +6935,7 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": true,
         "supports_xhigh_reasoning_effort": true,
-        "supports_minimal_reasoning_effort": false,
-        "supports_max_reasoning_effort": true
+        "supports_minimal_reasoning_effort": false
     },
     "azure/us/gpt-5.6-luna": {
         "cache_read_input_token_cost": 2.2e-08,
@@ -6990,8 +6983,7 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": true,
         "supports_xhigh_reasoning_effort": true,
-        "supports_minimal_reasoning_effort": false,
-        "supports_max_reasoning_effort": true
+        "supports_minimal_reasoning_effort": false
     },
     "azure/eu/gpt-5.6": {
         "cache_read_input_token_cost": 5.5e-07,
@@ -7038,8 +7030,7 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": true,
         "supports_xhigh_reasoning_effort": true,
-        "supports_minimal_reasoning_effort": false,
-        "supports_max_reasoning_effort": true
+        "supports_minimal_reasoning_effort": false
     },
     "azure/eu/gpt-5.6-sol": {
         "cache_read_input_token_cost": 5.5e-07,
@@ -7087,8 +7078,7 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": true,
         "supports_xhigh_reasoning_effort": true,
-        "supports_minimal_reasoning_effort": false,
-        "supports_max_reasoning_effort": true
+        "supports_minimal_reasoning_effort": false
     },
     "azure/eu/gpt-5.6-terra": {
         "cache_read_input_token_cost": 2.2e-07,
@@ -7136,8 +7126,7 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": true,
         "supports_xhigh_reasoning_effort": true,
-        "supports_minimal_reasoning_effort": false,
-        "supports_max_reasoning_effort": true
+        "supports_minimal_reasoning_effort": false
     },
     "azure/eu/gpt-5.6-luna": {
         "cache_read_input_token_cost": 2.2e-08,
@@ -7185,8 +7174,7 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": true,
         "supports_xhigh_reasoning_effort": true,
-        "supports_minimal_reasoning_effort": false,
-        "supports_max_reasoning_effort": true
+        "supports_minimal_reasoning_effort": false
     },
     "azure/gpt-5.5": {
         "deprecation_date": "2027-10-26",
@@ -26417,8 +26405,7 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_web_search": true,
-        "supports_xhigh_reasoning_effort": true,
-        "supports_max_reasoning_effort": true
+        "supports_xhigh_reasoning_effort": true
     },
     "gpt-5.6-sol": {
         "cache_creation_input_token_cost": 5e-06,
@@ -26482,8 +26469,7 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_web_search": true,
-        "supports_xhigh_reasoning_effort": true,
-        "supports_max_reasoning_effort": true
+        "supports_xhigh_reasoning_effort": true
     },
     "gpt-5.6-terra": {
         "cache_creation_input_token_cost": 2.5e-06,
@@ -26546,8 +26532,7 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_web_search": true,
-        "supports_xhigh_reasoning_effort": true,
-        "supports_max_reasoning_effort": true
+        "supports_xhigh_reasoning_effort": true
     },
     "gpt-5.6-luna": {
         "cache_creation_input_token_cost": 2.5e-07,
@@ -26610,8 +26595,7 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_web_search": true,
-        "supports_xhigh_reasoning_effort": true,
-        "supports_max_reasoning_effort": true
+        "supports_xhigh_reasoning_effort": true
     },
     "gpt-5.6-cyber": {
         "cache_creation_input_token_cost": 1.5625e-05,
