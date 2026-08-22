@@ -406,12 +406,27 @@ def filter_exceptions_from_params(data: Any, max_depth: int = 20) -> Any:
         return data
 
 
+# MCP handler plumbing — internal params that must never be forwarded as
+# provider kwargs. Also registered in `all_litellm_params` (the repo-wide param
+# registry, per review), but the filter is scoped to this subset: callers like
+# fallback_utils pass the result straight back into `litellm.acompletion`, so
+# filtering the full `all_litellm_params` (api_key/num_retries/...) would break
+# the call, and knobs like stream_chunk_size are read downstream (converse
+# streaming) so they are not internal. See #30301.
+MCP_INTERNAL_REQUEST_KEYS: set = {
+    "skip_mcp_handler",
+    "mcp_handler_context",
+    "_skip_mcp_handler",
+}
+
+
 def filter_internal_params(data: dict, additional_internal_params: Optional[set] = None) -> dict:
     """
     Filter out LiteLLM internal parameters that shouldn't be sent to provider APIs.
 
-    This removes internal/MCP-related parameters that are used by LiteLLM internally
-    but should not be included in API requests to providers.
+    The base set is `MCP_INTERNAL_REQUEST_KEYS` (pure plumbing, also registered in
+    `all_litellm_params`); callers may pass extra names via
+    `additional_internal_params` for provider-specific knobs.
 
     Args:
         data: Dictionary of parameters to filter
@@ -423,18 +438,10 @@ def filter_internal_params(data: dict, additional_internal_params: Optional[set]
     if not isinstance(data, dict):
         return data
 
-    # Known internal parameters that should never be sent to provider APIs
-    internal_params = {
-        "skip_mcp_handler",
-        "mcp_handler_context",
-        "_skip_mcp_handler",
-    }
-
-    # Add any additional internal params if provided
+    internal_params = set(MCP_INTERNAL_REQUEST_KEYS)
     if additional_internal_params:
         internal_params.update(additional_internal_params)
 
-    # Filter out internal parameters
     return {k: v for k, v in data.items() if k not in internal_params}
 
 

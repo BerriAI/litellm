@@ -3179,6 +3179,10 @@ all_litellm_params = (
         "_litellm_tpm_reserved_model",
         "_litellm_tpm_reserved_scopes",
         "_litellm_tpm_reservation_released",
+        # MCP handler plumbing — internal, must never leak into a provider body (#30301)
+        "skip_mcp_handler",
+        "mcp_handler_context",
+        "_skip_mcp_handler",
     ]
     + list(StandardCallbackDynamicParams.__annotations__.keys())
     + list(CustomPricingLiteLLMParams.model_fields.keys())
