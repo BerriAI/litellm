@@ -1055,6 +1055,8 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
 
         It's unclear how users expect litellm to translate multiple-choices-per-chunk to the responses API output.
         """
+        if not choices:
+            return ""
         choice = choices[0]
         chat_completion_delta: ChatCompletionDelta = choice.delta
         return chat_completion_delta.content or ""
