@@ -907,6 +907,65 @@ async def test_update_key_non_admin_cannot_raise_temp_budget_increase_above_ceil
 
 
 @pytest.mark.asyncio
+async def test_update_key_persisted_temp_increase_blocks_max_budget_raise():
+    """A key with a persisted (non-expired) temp_budget_increase of 60 in its
+    metadata must not be raised from 30 to 80 by a caller capped at 100,
+    because the effective budget (80 + 60 = 140) exceeds the ceiling."""
+    from datetime import datetime, timedelta, timezone
+
+    from litellm.proxy._types import UpdateKeyRequest
+
+    row = _update_key_ceiling_existing_row(30)
+    row.metadata = {
+        "temp_budget_increase": 60,
+        "temp_budget_expiry": (
+            datetime.now(timezone.utc) + timedelta(days=1)
+        ).isoformat(),
+    }
+    data = UpdateKeyRequest(key="sk-alice-personal", max_budget=80)
+    with pytest.raises(HTTPException) as exc:
+        await _validate_update_key_data(
+            data=data,
+            existing_key_row=row,
+            user_api_key_dict=_update_key_ceiling_caller(100),
+            llm_router=None,
+            premium_user=True,
+            prisma_client=None,
+            user_api_key_cache=MagicMock(),
+        )
+    assert exc.value.status_code == 400
+    assert "cannot exceed the caller's own max_budget" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_update_key_nan_temp_budget_increase_rejected():
+    """NaN temp_budget_increase must be rejected: any comparison with NaN
+    is False, so the ceiling check would silently pass."""
+    from datetime import datetime, timedelta, timezone
+
+    from litellm.proxy._types import UpdateKeyRequest
+
+    data = UpdateKeyRequest(
+        key="sk-alice-personal",
+        max_budget=50,
+        temp_budget_increase=float("nan"),
+        temp_budget_expiry=datetime.now(timezone.utc) + timedelta(days=1),
+    )
+    with pytest.raises(HTTPException) as exc:
+        await _validate_update_key_data(
+            data=data,
+            existing_key_row=_update_key_ceiling_existing_row(50),
+            user_api_key_dict=_update_key_ceiling_caller(100),
+            llm_router=None,
+            premium_user=True,
+            prisma_client=None,
+            user_api_key_cache=MagicMock(),
+        )
+    assert exc.value.status_code == 400
+    assert "finite" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
 async def test_update_key_proxy_admin_can_raise_max_budget_above_ceiling():
     """PROXY_ADMIN is not bound by the delegation ceiling."""
     from litellm.proxy._types import UpdateKeyRequest

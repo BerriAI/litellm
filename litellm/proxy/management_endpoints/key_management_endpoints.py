@@ -2557,7 +2557,39 @@ async def _validate_update_key_data(
                     )
                 },
             )
-        if data.temp_budget_increase is not None and _delegation_ceiling is not None:
+        # Determine the effective temp_budget_increase after this update.
+        # Either the caller is setting a new one, or a previously persisted
+        # one in the key's metadata still applies (it is added on top of
+        # max_budget at request time by _update_key_budget_with_temp_budget_increase).
+        _effective_temp_increase: float | None = data.temp_budget_increase
+        if (
+            _effective_temp_increase is None
+            and existing_key_row.metadata is not None
+        ):
+            _persisted_increase: Final = existing_key_row.metadata.get(
+                "temp_budget_increase"
+            )
+            if _persisted_increase is not None:
+                try:
+                    _persisted_expiry: Final = datetime.fromisoformat(
+                        existing_key_row.metadata.get("temp_budget_expiry", "")
+                    )
+                    if _persisted_expiry > datetime.now(timezone.utc):
+                        _effective_temp_increase = float(_persisted_increase)
+                except (ValueError, TypeError):
+                    pass
+
+        if _effective_temp_increase is not None and _delegation_ceiling is not None:
+            if not math.isfinite(_effective_temp_increase):
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": (
+                            f"temp_budget_increase must be a finite number. "
+                            f"Received: {_effective_temp_increase}"
+                        )
+                    },
+                )
             # temp_budget_increase is applied on top of the key's max_budget at
             # request time (user_api_key_auth._update_key_budget_with_temp_budget_increase),
             # so the effective budget must stay under the caller's ceiling too.
@@ -2566,15 +2598,15 @@ async def _validate_update_key_data(
             )
             if (
                 _effective_max_budget is not None
-                and _effective_max_budget + data.temp_budget_increase > _delegation_ceiling
+                and _effective_max_budget + _effective_temp_increase > _delegation_ceiling
             ):
                 raise HTTPException(
                     status_code=400,
                     detail={
                         "error": (
                             f"max_budget plus temp_budget_increase "
-                            f"({_effective_max_budget} + {data.temp_budget_increase} = "
-                            f"{_effective_max_budget + data.temp_budget_increase}) cannot exceed "
+                            f"({_effective_max_budget} + {_effective_temp_increase} = "
+                            f"{_effective_max_budget + _effective_temp_increase}) cannot exceed "
                             f"the caller's own max_budget ({_delegation_ceiling})."
                         )
                     },
