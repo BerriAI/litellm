@@ -67,8 +67,10 @@ from pydantic import (
     Discriminator,
     Field,
     PrivateAttr,
+    SerializerFunctionWrapHandler,
     field_serializer,
     field_validator,
+    model_serializer,
 )
 from typing_extensions import (
     NotRequired,
@@ -315,6 +317,9 @@ class BatchGuardrailReport(BaseModel):
     """Every record that was redacted or dropped, in file order."""
 
 
+BATCH_GUARDRAIL_RESPONSE_FIELD: Final = "litellm_batch_guardrail"
+
+
 class OpenAIFileObject(BaseModel):
     id: str
     """The file identifier, which can be referenced in the API endpoints."""
@@ -362,6 +367,17 @@ class OpenAIFileObject(BaseModel):
     """
 
     _hidden_params: dict = {"response_cost": 0.0}  # no cost for writing a file
+
+    @model_serializer(mode="wrap")
+    def _omit_absent_batch_guardrail(  # noqa: ANN202  # annotating it replaces the model's serialization schema
+        self, handler: SerializerFunctionWrapHandler
+    ):
+        serialized: Final[Mapping[str, object]] = handler(self)
+        if self.litellm_batch_guardrail is not None:
+            return serialized
+        return {  # mutable-ok: pydantic's json serializer rejects a mapping that is not a dict
+            key: value for key, value in serialized.items() if key != BATCH_GUARDRAIL_RESPONSE_FIELD
+        }
 
     def __contains__(self, key) -> bool:
         # Define custom behavior for the 'in' operator
