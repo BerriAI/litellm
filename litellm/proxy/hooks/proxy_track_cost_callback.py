@@ -480,9 +480,12 @@ def _write_spend_metadata_to_kwargs(kwargs: dict, metadata: dict) -> None:
 
 
 def _is_unbilled_interaction_response(completion_response: object) -> bool:
+    from litellm.interactions.background_cost_polling import missing_usage_is_expected
     from litellm.types.interactions import InteractionsAPIResponse
 
-    return isinstance(completion_response, InteractionsAPIResponse) and completion_response.usage is None
+    if not isinstance(completion_response, InteractionsAPIResponse):
+        return False
+    return completion_response.usage is None and missing_usage_is_expected(completion_response)
 
 
 def _is_unbilled_in_progress_interaction(completion_response: object) -> bool:

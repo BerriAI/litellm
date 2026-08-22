@@ -49,6 +49,8 @@ if TYPE_CHECKING:
 
 _TERMINAL_STATUSES = frozenset({"completed", "failed", "cancelled", "incomplete", "budget_exceeded", "requires_action"})
 
+_STATUSES_THAT_PRODUCED_OUTPUT = frozenset({"completed", "requires_action"})
+
 
 @dataclass(frozen=True, slots=True)
 class BackgroundInteractionPollContext:
@@ -193,6 +195,21 @@ def is_pollable_background_interaction(response: InteractionsAPIResponse) -> boo
     reservation on the spend counters with nothing left to reconcile it.
     """
     return response.status == "in_progress" and bool(response.id)
+
+
+def missing_usage_is_expected(response: InteractionsAPIResponse) -> bool:
+    """
+    Whether a response arriving with no usage block is a normal outcome rather
+    than lost billing data. An interaction that is still running, or that
+    stopped at ``failed``, ``cancelled``, ``incomplete`` or ``budget_exceeded``,
+    has nothing to charge for and should not raise a cost-tracking alarm.
+
+    ``completed`` and ``requires_action`` both mean the model produced output,
+    so a usage block is always expected with them. If one arrives without it
+    the charge for real work has been lost, which is precisely what the
+    proxy's cost-tracking alert exists to surface.
+    """
+    return response.status not in _STATUSES_THAT_PRODUCED_OUTPUT
 
 
 @dataclass(frozen=True, slots=True)

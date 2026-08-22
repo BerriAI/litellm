@@ -862,7 +862,7 @@ async def test_track_cost_callback_releases_reservation_for_in_progress_interact
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "status",
-    ["completed", "failed", "cancelled", "incomplete", "requires_action", "budget_exceeded"],
+    ["failed", "cancelled", "incomplete", "budget_exceeded"],
 )
 async def test_track_cost_callback_releases_reservation_for_unpollable_interaction(status):
     """
@@ -872,9 +872,10 @@ async def test_track_cost_callback_releases_reservation_for_unpollable_interacti
     added to the key, user, team and org spend counters and starts refusing
     traffic against budget that was never actually spent.
 
-    A no-usage terminal create is also not a cost-tracking failure, so the
-    callback must not fire ``failed_tracking_alert``: doing so would flood
-    operators with false alerts and mask real cost-tracking failures.
+    None of these statuses produced output, so their missing usage is a normal
+    outcome rather than a cost-tracking failure, and the callback must not fire
+    ``failed_tracking_alert``: doing so would flood operators with false alerts
+    and mask real cost-tracking failures.
     """
     from litellm.types.interactions import InteractionsAPIResponse
 
@@ -902,6 +903,47 @@ async def test_track_cost_callback_releases_reservation_for_unpollable_interacti
 
         assert reservation["finalized"] is True
         mock_proxy_logging.failed_tracking_alert.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["completed", "requires_action"])
+async def test_track_cost_callback_alerts_when_an_interaction_that_produced_output_has_no_usage(status):
+    """
+    ``completed`` and ``requires_action`` both mean the model produced output,
+    so a usage block is always expected with them. One arriving without it
+    means the charge for real work was lost, which is exactly what the
+    cost-tracking alert is for: silencing it here would let an operator's
+    interactions bill nothing with no signal that anything went wrong.
+
+    The reservation still has to be released, since suppressing the alert was
+    never what freed it.
+    """
+    from litellm.types.interactions import InteractionsAPIResponse
+
+    logger = _ProxyDBLogger()
+    reservation = {"reserved_cost": 0.05, "entries": [], "finalized": False}
+    usageless_response = InteractionsAPIResponse(
+        id="interactions/bg-abc",
+        model="gemini-3-flash-preview",
+        status=status,
+    )
+
+    with patch(
+        "litellm.proxy.proxy_server.proxy_logging_obj",
+    ) as mock_proxy_logging:
+        mock_proxy_logging.failed_tracking_alert = AsyncMock()
+        mock_proxy_logging.db_spend_update_writer = MagicMock()
+        mock_proxy_logging.db_spend_update_writer.update_database = AsyncMock()
+
+        await logger._PROXY_track_cost_callback(
+            kwargs=_in_progress_interaction_kwargs(reservation),
+            completion_response=usageless_response,
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+        )
+
+        assert reservation["finalized"] is True
+        mock_proxy_logging.failed_tracking_alert.assert_called_once()
 
 
 @pytest.mark.asyncio
