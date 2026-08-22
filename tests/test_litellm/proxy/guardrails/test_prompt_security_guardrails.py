@@ -1,5 +1,3 @@
-import os
-import sys
 from fastapi.exceptions import HTTPException
 from unittest.mock import patch, AsyncMock
 from httpx import Response, Request
@@ -12,19 +10,15 @@ from litellm.proxy.guardrails.guardrail_hooks.prompt_security.prompt_security im
     PromptSecurityGuardrail,
 )
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 import litellm
 from litellm.proxy.guardrails.init_guardrails import init_guardrails_v2
 
 
-def test_prompt_security_guard_config(monkeypatch):
+def test_prompt_security_guard_config(monkeypatch: pytest.MonkeyPatch):
     """Test guardrail initialization with proper configuration"""
-    litellm.set_verbose = True
-    litellm.guardrail_name_config_map = {}
+    monkeypatch.setattr(litellm, "guardrail_name_config_map", {})
+    monkeypatch.setattr(litellm, "callbacks", [])
 
-    # Set environment variables for testing
     monkeypatch.setenv("PROMPT_SECURITY_API_KEY", "test-key")
     monkeypatch.setenv("PROMPT_SECURITY_API_BASE", "https://test.prompt.security")
 
@@ -42,21 +36,19 @@ def test_prompt_security_guard_config(monkeypatch):
         config_file_path="",
     )
 
-    # Clean up
-    del os.environ["PROMPT_SECURITY_API_KEY"]
-    del os.environ["PROMPT_SECURITY_API_BASE"]
+    registered = [c for c in litellm.callbacks if isinstance(c, PromptSecurityGuardrail)]
+    assert len(registered) == 1
+    assert registered[0].guardrail_name == "prompt_security"
+    assert registered[0].default_on is True
+    assert registered[0].event_hook == "during_call"
 
 
-def test_prompt_security_guard_config_no_api_key():
+def test_prompt_security_guard_config_no_api_key(monkeypatch: pytest.MonkeyPatch):
     """Test that initialization fails when API key is missing"""
-    litellm.set_verbose = True
-    litellm.guardrail_name_config_map = {}
+    monkeypatch.setattr(litellm, "guardrail_name_config_map", {})
 
-    # Ensure API key is not in environment
-    if "PROMPT_SECURITY_API_KEY" in os.environ:
-        del os.environ["PROMPT_SECURITY_API_KEY"]
-    if "PROMPT_SECURITY_API_BASE" in os.environ:
-        del os.environ["PROMPT_SECURITY_API_BASE"]
+    monkeypatch.delenv("PROMPT_SECURITY_API_KEY", raising=False)
+    monkeypatch.delenv("PROMPT_SECURITY_API_BASE", raising=False)
 
     with pytest.raises(
         PromptSecurityGuardrailMissingSecrets,
@@ -78,7 +70,7 @@ def test_prompt_security_guard_config_no_api_key():
 
 
 @pytest.mark.asyncio
-async def test_apply_guardrail_block_request(monkeypatch):
+async def test_apply_guardrail_block_request(monkeypatch: pytest.MonkeyPatch):
     """Test that apply_guardrail blocks malicious prompts"""
     monkeypatch.setenv("PROMPT_SECURITY_API_KEY", "test-key")
     monkeypatch.setenv("PROMPT_SECURITY_API_BASE", "https://test.prompt.security")
@@ -126,13 +118,9 @@ async def test_apply_guardrail_block_request(monkeypatch):
     assert "prompt_injection" in str(excinfo.value.detail)
     assert "jailbreak" in str(excinfo.value.detail)
 
-    # Clean up
-    del os.environ["PROMPT_SECURITY_API_KEY"]
-    del os.environ["PROMPT_SECURITY_API_BASE"]
-
 
 @pytest.mark.asyncio
-async def test_apply_guardrail_modify_request(monkeypatch):
+async def test_apply_guardrail_modify_request(monkeypatch: pytest.MonkeyPatch):
     """Test that apply_guardrail modifies prompts when needed"""
     monkeypatch.setenv("PROMPT_SECURITY_API_KEY", "test-key")
     monkeypatch.setenv("PROMPT_SECURITY_API_BASE", "https://test.prompt.security")
@@ -177,13 +165,9 @@ async def test_apply_guardrail_modify_request(monkeypatch):
 
     assert result["texts"] == ["User prompt with PII: SSN [REDACTED]"]
 
-    # Clean up
-    del os.environ["PROMPT_SECURITY_API_KEY"]
-    del os.environ["PROMPT_SECURITY_API_BASE"]
-
 
 @pytest.mark.asyncio
-async def test_apply_guardrail_allow_request(monkeypatch):
+async def test_apply_guardrail_allow_request(monkeypatch: pytest.MonkeyPatch):
     """Test that apply_guardrail allows safe prompts"""
     monkeypatch.setenv("PROMPT_SECURITY_API_KEY", "test-key")
     monkeypatch.setenv("PROMPT_SECURITY_API_BASE", "https://test.prompt.security")
@@ -220,13 +204,9 @@ async def test_apply_guardrail_allow_request(monkeypatch):
 
     assert result == inputs
 
-    # Clean up
-    del os.environ["PROMPT_SECURITY_API_KEY"]
-    del os.environ["PROMPT_SECURITY_API_BASE"]
-
 
 @pytest.mark.asyncio
-async def test_apply_guardrail_block_response(monkeypatch):
+async def test_apply_guardrail_block_response(monkeypatch: pytest.MonkeyPatch):
     """Test that apply_guardrail blocks malicious responses"""
     monkeypatch.setenv("PROMPT_SECURITY_API_KEY", "test-key")
     monkeypatch.setenv("PROMPT_SECURITY_API_BASE", "https://test.prompt.security")
@@ -267,13 +247,9 @@ async def test_apply_guardrail_block_response(monkeypatch):
     assert "Blocked by Prompt Security" in str(excinfo.value.detail)
     assert "pii_exposure" in str(excinfo.value.detail)
 
-    # Clean up
-    del os.environ["PROMPT_SECURITY_API_KEY"]
-    del os.environ["PROMPT_SECURITY_API_BASE"]
-
 
 @pytest.mark.asyncio
-async def test_apply_guardrail_modify_response(monkeypatch):
+async def test_apply_guardrail_modify_response(monkeypatch: pytest.MonkeyPatch):
     """Test that apply_guardrail modifies responses when needed"""
     monkeypatch.setenv("PROMPT_SECURITY_API_KEY", "test-key")
     monkeypatch.setenv("PROMPT_SECURITY_API_BASE", "https://test.prompt.security")
@@ -311,13 +287,9 @@ async def test_apply_guardrail_modify_response(monkeypatch):
 
     assert result["texts"] == ["Your SSN is [REDACTED]"]
 
-    # Clean up
-    del os.environ["PROMPT_SECURITY_API_KEY"]
-    del os.environ["PROMPT_SECURITY_API_BASE"]
-
 
 @pytest.mark.asyncio
-async def test_file_sanitization(monkeypatch):
+async def test_file_sanitization(monkeypatch: pytest.MonkeyPatch):
     """Test file sanitization for images"""
     monkeypatch.setenv("PROMPT_SECURITY_API_KEY", "test-key")
     monkeypatch.setenv("PROMPT_SECURITY_API_BASE", "https://test.prompt.security")
@@ -401,13 +373,9 @@ async def test_file_sanitization(monkeypatch):
     # Should complete without errors and return the data
     assert result is not None
 
-    # Clean up
-    del os.environ["PROMPT_SECURITY_API_KEY"]
-    del os.environ["PROMPT_SECURITY_API_BASE"]
-
 
 @pytest.mark.asyncio
-async def test_file_sanitization_block(monkeypatch):
+async def test_file_sanitization_block(monkeypatch: pytest.MonkeyPatch):
     """Test that file sanitization blocks malicious files"""
     monkeypatch.setenv("PROMPT_SECURITY_API_KEY", "test-key")
     monkeypatch.setenv("PROMPT_SECURITY_API_BASE", "https://test.prompt.security")
@@ -485,13 +453,9 @@ async def test_file_sanitization_block(monkeypatch):
     assert "File blocked by Prompt Security" in str(excinfo.value.detail)
     assert "malware_detected" in str(excinfo.value.detail)
 
-    # Clean up
-    del os.environ["PROMPT_SECURITY_API_KEY"]
-    del os.environ["PROMPT_SECURITY_API_BASE"]
-
 
 @pytest.mark.asyncio
-async def test_user_api_key_alias_forwarding(monkeypatch):
+async def test_user_api_key_alias_forwarding(monkeypatch: pytest.MonkeyPatch):
     """Test that user API key alias is properly sent via headers and payload"""
     monkeypatch.setenv("PROMPT_SECURITY_API_KEY", "test-key")
     monkeypatch.setenv("PROMPT_SECURITY_API_BASE", "https://test.prompt.security")
@@ -530,12 +494,9 @@ async def test_user_api_key_alias_forwarding(monkeypatch):
     payload = call_kwargs["json"]
     assert payload["user"] == "vk-alias"
 
-    del os.environ["PROMPT_SECURITY_API_KEY"]
-    del os.environ["PROMPT_SECURITY_API_BASE"]
-
 
 @pytest.mark.asyncio
-async def test_role_filtering(monkeypatch):
+async def test_role_filtering(monkeypatch: pytest.MonkeyPatch):
     """Test that tool/function messages are filtered out by default"""
     monkeypatch.setenv("PROMPT_SECURITY_API_KEY", "test-key")
     monkeypatch.setenv("PROMPT_SECURITY_API_BASE", "https://test.prompt.security")
@@ -594,13 +555,9 @@ async def test_role_filtering(monkeypatch):
     assert len(sent_messages) == 3
     assert all(msg["role"] in ["system", "user", "assistant"] for msg in sent_messages)
 
-    # Clean up
-    del os.environ["PROMPT_SECURITY_API_KEY"]
-    del os.environ["PROMPT_SECURITY_API_BASE"]
-
 
 @pytest.mark.asyncio
-async def test_check_tool_results_enabled(monkeypatch):
+async def test_check_tool_results_enabled(monkeypatch: pytest.MonkeyPatch):
     """Test with check_tool_results=True: transforms tool/function to 'other' role"""
     monkeypatch.setenv("PROMPT_SECURITY_API_KEY", "test-key")
     monkeypatch.setenv("PROMPT_SECURITY_API_BASE", "https://test.prompt.security")
@@ -680,7 +637,3 @@ async def test_check_tool_results_enabled(monkeypatch):
 
     assert "indirect_prompt_injection" in str(excinfo.value.detail)
 
-    # Clean up
-    del os.environ["PROMPT_SECURITY_API_KEY"]
-    del os.environ["PROMPT_SECURITY_API_BASE"]
-    del os.environ["PROMPT_SECURITY_CHECK_TOOL_RESULTS"]

@@ -1,10 +1,8 @@
 import os
-import sys
 import pytest
 from unittest.mock import patch, MagicMock, AsyncMock
 from httpx import Response, Request
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 import litellm
 from litellm.proxy.guardrails.guardrail_hooks.deepkeep.deepkeep import (
@@ -17,10 +15,9 @@ from litellm.proxy.guardrails.init_guardrails import init_guardrails_v2
 from litellm.exceptions import GuardrailRaisedException
 
 
-def test_deepkeep_guard_config(monkeypatch):
+def test_deepkeep_guard_config(monkeypatch: pytest.MonkeyPatch):
     """Test DeepKeep guard configuration with init_guardrails_v2."""
-    litellm.set_verbose = True
-    litellm.guardrail_name_config_map = {}
+    monkeypatch.setattr(litellm, "guardrail_name_config_map", {})
 
     monkeypatch.setenv("DEEPKEEP_API_KEY", "test-key")
     monkeypatch.setenv("DEEPKEEP_API_BASE", "https://test.deepkeep.ai")
@@ -42,9 +39,6 @@ def test_deepkeep_guard_config(monkeypatch):
     )
 
     # Clean up
-    del os.environ["DEEPKEEP_API_KEY"]
-    del os.environ["DEEPKEEP_API_BASE"]
-    del os.environ["DEEPKEEP_FIREWALL_ID"]
 
 
 class TestDeepKeepGuardrail:
@@ -108,7 +102,7 @@ class TestDeepKeepGuardrail:
             == "https://test.deepkeep.ai/v3/openai/beta/litellm_basic_guardrail_api"
         )
 
-    def test_initialization_with_env_vars(self, monkeypatch):
+    def test_initialization_with_env_vars(self, monkeypatch: pytest.MonkeyPatch):
         """should initialize successfully using environment variables."""
         monkeypatch.setenv("DEEPKEEP_API_KEY", "env-key")
         monkeypatch.setenv("DEEPKEEP_API_BASE", "https://env.deepkeep.ai")
