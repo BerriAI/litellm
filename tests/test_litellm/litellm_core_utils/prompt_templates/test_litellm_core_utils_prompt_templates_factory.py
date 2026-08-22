@@ -1,5 +1,6 @@
 import base64
 import json
+from copy import deepcopy
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -17,6 +18,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     anthropic_messages_pt,
     convert_to_gemini_tool_call_result,
     make_valid_bedrock_tool_name,
+    map_system_message_pt,
     ollama_pt,
     sanitize_messages_for_tool_calling,
 )
@@ -3054,3 +3056,329 @@ def test_bedrock_converse_messages_pt_document_rejects_url_source():
         _bedrock_converse_messages_pt(
             messages, "anthropic.claude-sonnet-4-6", "bedrock"
         )
+
+
+def test_map_system_message_pt_plain_string_merge():
+    """System string is merged into the following user message (existing behavior)."""
+    messages = [
+        {"role": "system", "content": "You are helpful."},
+        {"role": "user", "content": "Hi"},
+    ]
+
+    result = map_system_message_pt(messages)
+
+    assert result == [{"role": "user", "content": "You are helpful. Hi"}]
+
+
+def test_map_system_message_pt_structured_system_content():
+    """System message with list content must not raise and remains structured.
+
+    Regression test: previously `m["content"] + " " + next_m["content"]` raised a
+    TypeError when either side was a list of content parts.
+    """
+    messages = [
+        {
+            "role": "system",
+            "content": [{"type": "text", "text": "You are helpful."}],
+        },
+        {"role": "user", "content": "Hi"},
+    ]
+
+    result = map_system_message_pt(messages)
+
+    assert result == [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "You are helpful. "},
+                {"type": "text", "text": "Hi"},
+            ],
+        }
+    ]
+
+
+def test_map_system_message_pt_structured_content_preserves_non_text_parts():
+    """Merging into a structured user message must preserve non-text parts (e.g. images)."""
+    messages = [
+        {"role": "system", "content": [{"type": "text", "text": "Sys"}]},
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "look"},
+                {"type": "image_url", "image_url": {"url": "http://x/y.png"}},
+            ],
+        },
+    ]
+
+    result = map_system_message_pt(messages)
+
+    assert result == [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Sys "},
+                {"type": "text", "text": "look"},
+                {"type": "image_url", "image_url": {"url": "http://x/y.png"}},
+            ],
+        }
+    ]
+
+
+def test_map_system_message_pt_trailing_structured_system():
+    """A trailing structured system message becomes a structured user message."""
+    messages = [{"role": "system", "content": [{"type": "text", "text": "only sys"}]}]
+
+    result = map_system_message_pt(messages)
+
+    assert result == [
+        {
+            "role": "user",
+            "content": [{"type": "text", "text": "only sys"}],
+        }
+    ]
+
+
+def test_map_system_message_pt_consecutive_structured_system_messages():
+    """A system message followed by another system message is appended as a user message."""
+    messages = [
+        {"role": "system", "content": [{"type": "text", "text": "first"}]},
+        {"role": "system", "content": "second"},
+        {"role": "user", "content": "Hi"},
+    ]
+
+    result = map_system_message_pt(messages)
+
+    assert result == [
+        {"role": "user", "content": [{"type": "text", "text": "first"}]},
+        {"role": "user", "content": "second Hi"},
+    ]
+
+
+@pytest.mark.parametrize(
+    ("system_content", "user_content"),
+    [
+        ("Follow the instructions.", [{"type": "text", "text": "Write code."}]),
+        ([{"type": "text", "text": "Follow the instructions."}], "Write code."),
+    ],
+)
+def test_map_system_message_pt_mixed_content_types(system_content, user_content):
+    messages = [
+        {"role": "system", "content": system_content},
+        {"role": "user", "content": user_content},
+    ]
+
+    result = map_system_message_pt(messages)
+
+    assert result == [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Follow the instructions. "},
+                {"type": "text", "text": "Write code."},
+            ],
+        }
+    ]
+
+
+def test_map_system_message_pt_does_not_mutate_input():
+    messages = [
+        {"role": "system", "content": [{"type": "text", "text": "System"}]},
+        {"role": "user", "content": [{"type": "text", "text": "User"}]},
+    ]
+    original_messages = deepcopy(messages)
+
+    map_system_message_pt(messages)
+
+    assert messages == original_messages
+
+
+@pytest.mark.parametrize("next_role", ["tool", "function", "developer", "custom"])
+def test_map_system_message_pt_preserves_system_before_incompatible_role(next_role):
+    messages = [
+        {"role": "system", "content": "System"},
+        {"role": next_role, "content": "Next"},
+    ]
+
+    result = map_system_message_pt(messages)
+
+    assert result == [
+        {"role": "user", "content": "System"},
+        {"role": next_role, "content": "Next"},
+    ]
+
+
+@pytest.mark.parametrize(
+    "assistant_message",
+    [
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "lookup", "arguments": "{}"},
+                }
+            ],
+        },
+        {
+            "role": "assistant",
+            "content": None,
+            "function_call": {"name": "lookup", "arguments": "{}"},
+        },
+    ],
+)
+def test_map_system_message_pt_does_not_merge_into_tool_call_assistant(
+    assistant_message,
+):
+    messages = [
+        {"role": "system", "content": "System"},
+        assistant_message,
+    ]
+
+    result = map_system_message_pt(messages)
+
+    assert result == [{"role": "user", "content": "System"}, assistant_message]
+
+
+def test_map_system_message_pt_metadata_keeps_existing_merge_shape():
+    messages = [
+        {
+            "role": "system",
+            "content": [{"type": "text", "text": "System"}],
+            "name": "policy",
+            "cache_control": {"type": "ephemeral"},
+            "provider_extension": {"value": 1},
+        },
+        {"role": "user", "content": "User"},
+    ]
+
+    result = map_system_message_pt(messages)
+
+    assert result == [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "System "},
+                {"type": "text", "text": "User"},
+            ],
+        }
+    ]
+
+
+def test_map_system_message_pt_preserves_block_metadata_without_mutation():
+    system_block = {
+        "type": "text",
+        "text": "System",
+        "cache_control": {"type": "ephemeral"},
+    }
+    messages = [
+        {"role": "system", "content": [system_block]},
+        {"role": "user", "content": [{"type": "text", "text": "User"}]},
+    ]
+
+    result = map_system_message_pt(messages)
+
+    assert result[0]["content"] == [
+        {
+            "type": "text",
+            "text": "System ",
+            "cache_control": {"type": "ephemeral"},
+        },
+        {"type": "text", "text": "User"},
+    ]
+    assert system_block["text"] == "System"
+
+
+def test_map_system_message_pt_supports_tuple_content():
+    messages = [
+        {"role": "system", "content": ({"type": "text", "text": "System"},)},
+        {"role": "user", "content": ({"type": "text", "text": "User"},)},
+    ]
+
+    result = map_system_message_pt(messages)
+
+    assert result == [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "System "},
+                {"type": "text", "text": "User"},
+            ],
+        }
+    ]
+
+
+def test_map_system_message_pt_empty_structured_system_content():
+    messages = [
+        {"role": "system", "content": []},
+        {"role": "user", "content": [{"type": "text", "text": "User"}]},
+    ]
+
+    result = map_system_message_pt(messages)
+
+    assert result == [
+        {"role": "user", "content": [{"type": "text", "text": "User"}]}
+    ]
+
+
+def test_map_system_message_pt_keeps_unmodified_message_identity():
+    unaffected = {"role": "tool", "content": "result", "tool_call_id": "call_1"}
+    messages = [{"role": "system", "content": "System"}, unaffected]
+
+    result = map_system_message_pt(messages)
+
+    assert result[1] is unaffected
+
+
+def test_map_system_message_pt_unsupported_content_uses_standalone_fallback():
+    unsupported_content = {"type": "custom", "value": "System"}
+    messages = [
+        {"role": "system", "content": unsupported_content},
+        {"role": "user", "content": "User"},
+    ]
+
+    result = map_system_message_pt(messages)
+
+    assert result == [
+        {"role": "user", "content": unsupported_content},
+        {"role": "user", "content": "User"},
+    ]
+
+
+def test_map_system_message_pt_none_content_uses_standalone_fallback():
+    messages = [
+        {"role": "system", "content": None},
+        {"role": "user", "content": "User"},
+    ]
+
+    result = map_system_message_pt(messages)
+
+    assert result == [
+        {"role": "user", "content": None},
+        {"role": "user", "content": "User"},
+    ]
+
+
+def test_map_system_message_pt_adds_separator_after_non_text_system_block():
+    image_block = {
+        "type": "image_url",
+        "image_url": {"url": "data:image/png;base64,abc"},
+    }
+    messages = [
+        {"role": "system", "content": [image_block]},
+        {"role": "user", "content": [{"type": "text", "text": "User"}]},
+    ]
+
+    result = map_system_message_pt(messages)
+
+    assert result == [
+        {
+            "role": "user",
+            "content": [
+                image_block,
+                {"type": "text", "text": " "},
+                {"type": "text", "text": "User"},
+            ],
+        }
+    ]
