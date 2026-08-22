@@ -98,12 +98,13 @@ MARKER = re.compile(r"--[ \t]*data-migration-ok:[ \t]*(\S.*?)[ \t]*$", re.MULTIL
 DOLLAR_TAG = re.compile(r"\$(?:[A-Za-z_][A-Za-z0-9_]*)?\$")
 FIRST_WORD = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 STATEMENT = re.compile(r"[^;]+")
-RUN_BY_NAME = re.compile(r"\bEXECUTE[ \t]+([A-Za-z_][A-Za-z0-9_]*)", re.IGNORECASE)
+RUN_BY_NAME = re.compile(r"\bEXECUTE\s+([A-Za-z_][A-Za-z0-9_]*)", re.IGNORECASE)
 INTO_TARGETS = re.compile(
-    r"\bINTO[ \t]+(?:STRICT[ \t]+)?"
-    r"([A-Za-z_][A-Za-z0-9_]*(?:[ \t]*,[ \t]*[A-Za-z_][A-Za-z0-9_]*)*)",
+    r"\bINTO\s+(?:STRICT\s+)?"
+    r"([A-Za-z_][A-Za-z0-9_]*(?:\s*,\s*[A-Za-z_][A-Za-z0-9_]*)*)",
     re.IGNORECASE,
 )
+ASSIGNS = re.compile(r":=|(?<![<>!:=])=(?!=)")
 PRECEDING_WORD = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)[^A-Za-z0-9_]*$")
 EXPLAIN_OPTIONS = re.compile(r"\bEXPLAIN\b(?:\s+(?:ANALYZE|ANALYSE|VERBOSE)\b)+", re.IGNORECASE)
 
@@ -368,17 +369,17 @@ def assigned_names(statement: str) -> frozenset[str]:
     alongside the name, and none of that is worth parsing when the only question is which
     name is executed. PL/pgSQL spells that operator `:=` and takes a bare `=` as the same
     thing, so both count, the second only where `assigns_rather_than_compares` reads it as
-    an assignment. A query assigns through the target list after its `INTO` instead, which
-    is how a rewrite reaches a variable with neither operator appearing at all."""
+    an assignment. Every operator in the statement is read rather than only the first, since
+    a comparison earlier on the line would otherwise claim the one slot and hide the
+    assignment after it: `IF n = 1 THEN stmt = '...'` writes `stmt` at its second `=`. A
+    query assigns through the target list after its `INTO` instead, which is how a rewrite
+    reaches a variable with neither operator appearing at all."""
     names: set[str] = set()
 
-    head, operator, _ = statement.partition(":=")
-    assigns = bool(operator)
-    if not assigns:
-        head, operator, _ = statement.partition("=")
-        assigns = bool(operator) and assigns_rather_than_compares(head)
-    if assigns:
-        names.update(word.group().lower() for word in FIRST_WORD.finditer(head))
+    for operator in ASSIGNS.finditer(statement):
+        reached = reached_words(statement[: operator.start()])
+        if operator.group() == ":=" or assigns_rather_than_compares(reached):
+            names.update(word.lower() for word in reached)
 
     for targets in INTO_TARGETS.finditer(statement):
         if names_a_table(statement[: targets.start()]):
@@ -398,22 +399,32 @@ def names_a_table(before: str) -> bool:
     return word is not None and word.group(1).upper() == "INSERT"
 
 
-def assigns_rather_than_compares(head: str) -> bool:
-    """Whether the bare `=` this text runs up to writes a variable or tests one. Only the
-    words ahead of it tell the two apart: an assignment is reached with a name and perhaps a
-    type, while a comparison is reached either through a statement carrying its own keyword
-    or through a word that guards a condition. Those words stop counting once something
-    opens a block after them, since a `THEN` ends the condition its `IF` began and the
-    assignment that follows on the same line is an assignment like any other."""
+def reached_words(head: str) -> tuple[str, ...]:
+    """The words an assignment operator is reached through, which is everything since the last
+    word to open a block. A `THEN` ends the condition its `IF` began, so nothing ahead of it
+    describes what follows, and neither the name being written nor the keywords that would
+    mark a comparison ever sit further back than that."""
     words = [word.group().upper() for word in FIRST_WORD.finditer(head)]
     opened = max((index for index, word in enumerate(words) if word in OPENS_A_BLOCK), default=-1)
-    reached = set(words[opened + 1 :])
-    return not (reached & STATEMENT_KEYWORDS) and not (reached & GUARDS_A_CONDITION)
+    return tuple(words[opened + 1 :])
+
+
+def assigns_rather_than_compares(reached: tuple[str, ...]) -> bool:
+    """Whether a bare `=` reached through these words writes a variable or tests one. They are
+    all that tells the two apart: an assignment is reached with a name and perhaps a type,
+    while a comparison is reached either through a statement carrying its own keyword or
+    through a word that guards a condition."""
+    words = set(reached)
+    return not (words & STATEMENT_KEYWORDS) and not (words & GUARDS_A_CONDITION)
 
 
 def executed_names(masked: str) -> frozenset[str]:
     """The variables handed to an `EXECUTE` by name. Reading these off the masked text keeps
-    an `EXECUTE` written inside a comment or a string from counting."""
+    an `EXECUTE` written inside a comment or a string from counting. Masking blanks a literal
+    in place rather than removing it, so `EXECUTE '...'` can leave the word after it looking
+    like the name being run. Reaching that word means crossing no semicolon, which leaves only
+    the syntax `INTO`, `USING` and `END`, and no assignment ever writes one of those, so the
+    stray name has nothing to match."""
     return frozenset(match.group(1).lower() for match in RUN_BY_NAME.finditer(masked))
 
 
