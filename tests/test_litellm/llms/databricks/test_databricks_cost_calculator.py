@@ -1,14 +1,15 @@
+from collections.abc import Iterator
 from typing import Final
 
 import pytest
 
 import litellm
 from litellm.llms.databricks.cost_calculator import cost_per_token
-from litellm.types.utils import Usage
+from litellm.types.utils import ModelInfo, Usage
 
 
 @pytest.fixture
-def local_model_cost_map(monkeypatch):
+def local_model_cost_map(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
     litellm.get_model_info.cache_clear()
@@ -16,7 +17,7 @@ def local_model_cost_map(monkeypatch):
     litellm.get_model_info.cache_clear()
 
 
-def _model_info(model: str) -> dict:
+def _model_info(model: str) -> ModelInfo:
     return litellm.get_model_info(model=model, custom_llm_provider="databricks")
 
 
@@ -28,7 +29,7 @@ def _model_info(model: str) -> dict:
         "databricks/databricks-claude-sonnet-5",
     ],
 )
-def test_cached_tokens_bill_at_cache_rates(local_model_cost_map, model):
+def test_cached_tokens_bill_at_cache_rates(local_model_cost_map: None, model: str) -> None:
     info: Final = _model_info(model)
     usage: Final = Usage(
         prompt_tokens=11000,
@@ -49,7 +50,7 @@ def test_cached_tokens_bill_at_cache_rates(local_model_cost_map, model):
     assert prompt_cost < 11000 * info["input_cost_per_token"]
 
 
-def test_uncached_request_bills_every_prompt_token_at_the_input_rate(local_model_cost_map):
+def test_uncached_request_bills_every_prompt_token_at_the_input_rate(local_model_cost_map: None) -> None:
     model: Final = "databricks/databricks-claude-sonnet-5"
     info: Final = _model_info(model)
     usage: Final = Usage(prompt_tokens=1000, completion_tokens=200, total_tokens=1200)
@@ -60,7 +61,7 @@ def test_uncached_request_bills_every_prompt_token_at_the_input_rate(local_model
     assert completion_cost == pytest.approx(200 * info["output_cost_per_token"])
 
 
-def test_legacy_endpoint_names_still_resolve(local_model_cost_map):
+def test_legacy_endpoint_names_still_resolve(local_model_cost_map: None) -> None:
     info: Final = _model_info("databricks/databricks-mixtral-8x7b-instruct")
     usage: Final = Usage(prompt_tokens=100, completion_tokens=100, total_tokens=200)
 
@@ -80,7 +81,7 @@ def test_legacy_endpoint_names_still_resolve(local_model_cost_map):
         "databricks/databricks-claude-fable-5",
     ],
 )
-def test_new_models_carry_cache_pricing(local_model_cost_map, model):
+def test_new_models_carry_cache_pricing(local_model_cost_map: None, model: str) -> None:
     info: Final = _model_info(model)
 
     assert info["input_cost_per_token"] > 0
@@ -88,3 +89,13 @@ def test_new_models_carry_cache_pricing(local_model_cost_map, model):
     assert info["cache_creation_input_token_cost"] == pytest.approx(1.25 * info["input_cost_per_token"], rel=1e-4)
     assert info["cache_read_input_token_cost"] == pytest.approx(0.1 * info["input_cost_per_token"], rel=1e-4)
     assert info["supports_prompt_caching"] is True
+
+
+def test_sonnet_5_ships_standard_rates_not_introductory(local_model_cost_map: None) -> None:
+    sonnet_5: Final = _model_info("databricks/databricks-claude-sonnet-5")
+    sonnet_4_6: Final = _model_info("databricks/databricks-claude-sonnet-4-6")
+
+    assert sonnet_5["input_cost_per_token"] == pytest.approx(sonnet_4_6["input_cost_per_token"])
+    assert sonnet_5["output_cost_per_token"] == pytest.approx(sonnet_4_6["output_cost_per_token"])
+    assert sonnet_5["cache_creation_input_token_cost"] == pytest.approx(sonnet_4_6["cache_creation_input_token_cost"])
+    assert sonnet_5["cache_read_input_token_cost"] == pytest.approx(sonnet_4_6["cache_read_input_token_cost"])
