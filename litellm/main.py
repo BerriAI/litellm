@@ -5974,7 +5974,7 @@ def embedding(
     # Optional params
     dimensions: int | None = None,
     encoding_format: str | None = None,
-    timeout=600,  # default to 10 minutes
+    timeout: float = 600,  # default to 10 minutes
     # set api_base, api_version, api_key
     api_base: str | None = None,
     api_version: str | None = None,
@@ -6000,7 +6000,7 @@ def embedding(
     # Optional params
     dimensions: int | None = None,
     encoding_format: str | None = None,
-    timeout=600,  # default to 10 minutes
+    timeout: float = 600,  # default to 10 minutes
     # set api_base, api_version, api_key
     api_base: str | None = None,
     api_version: str | None = None,
@@ -6027,7 +6027,7 @@ def embedding(
     # Optional params
     dimensions: int | None = None,
     encoding_format: str | None = None,
-    timeout=600,  # default to 10 minutes
+    timeout: float = 600,  # default to 10 minutes
     # set api_base, api_version, api_key
     api_base: str | None = None,
     api_version: str | None = None,

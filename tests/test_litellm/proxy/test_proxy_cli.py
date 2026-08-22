@@ -18,8 +18,9 @@ import types
 import urllib.parse as urlparse
 
 import uvicorn
+import yaml
 
-from litellm.proxy.proxy_cli import ProxyInitializationHelpers
+from litellm.proxy.proxy_cli import ProxyInitializationHelpers, run_server
 
 
 @pytest.mark.xdist_group("proxy_cli")
@@ -2242,7 +2243,7 @@ class TestPostgresStatementTimeoutOptions:
             yaml.dump({"model_list": [], "general_settings": {"database_statement_timeout": 60}})
         )
 
-        captured = self._run_server_and_capture_urls(
+        captured = _run_server_and_capture_urls(
             str(config_path), direct_url="postgresql://t:t@localhost:5432/t"
         )
 
@@ -2285,57 +2286,174 @@ class TestPostgresStatementTimeoutOptions:
         assert "-c search_path=app" in options
         assert "-c statement_timeout=60000" in options
 
-    @classmethod
+    @staticmethod
     def _run_server_and_capture_database_url(
-        cls,
         config_path: str,
         database_url: str = "postgresql://t:t@localhost:5432/t",
     ) -> str:
-        return cls._run_server_and_capture_urls(config_path, database_url=database_url)["DATABASE_URL"]
+        return _run_server_and_capture_urls(config_path, database_url=database_url)["DATABASE_URL"]
 
-    @staticmethod
-    def _run_server_and_capture_urls(
-        config_path: str,
-        database_url: str = "postgresql://t:t@localhost:5432/t",
-        direct_url: str | None = None,
-    ) -> dict:
-        from litellm.proxy.proxy_cli import run_server
 
+_CAPTURED_DB_ENV_VARS = ("DATABASE_URL", "DIRECT_URL", "DATABASE_URL_READ_REPLICA")
+
+
+def _run_server_and_capture_urls(
+    config_path: str,
+    database_url: str = "postgresql://t:t@localhost:5432/t",
+    direct_url: str | None = None,
+    read_replica_url: str | None = None,
+) -> dict:
+    loaded_config = yaml.safe_load(Path(config_path).read_text())
+    mock_proxy_config = MagicMock()
+    mock_proxy_config.return_value.get_config = AsyncMock(return_value=loaded_config)
+    mock_proxy_module = MagicMock(
+        app=MagicMock(),
+        ProxyConfig=mock_proxy_config,
+        KeyManagementSettings=MagicMock(),
+        save_worker_config=MagicMock(),
+    )
+    clean_env = {k: v for k, v in os.environ.items() if k not in _CAPTURED_DB_ENV_VARS}
+    clean_env["DATABASE_URL"] = database_url
+    if direct_url is not None:
+        clean_env["DIRECT_URL"] = direct_url
+    if read_replica_url is not None:
+        clean_env["DATABASE_URL_READ_REPLICA"] = read_replica_url
+
+    with (
+        patch.dict(os.environ, clean_env, clear=True),
+        patch.dict(
+            "sys.modules",
+            {
+                "proxy_server": mock_proxy_module,
+                "litellm.proxy.proxy_server": mock_proxy_module,
+            },
+        ),
+        patch("subprocess.run", return_value=MagicMock(returncode=0)),
+        patch("atexit.register"),
+        patch("litellm.proxy.db.prisma_client.should_update_prisma_schema", return_value=False),
+        patch("litellm.proxy.db.check_migration.check_prisma_schema_diff"),
+    ):
+        run_server.main(
+            ["--config", config_path, "--local", "--skip_server_startup"],
+            standalone_mode=False,
+        )
+        return {k: os.environ[k] for k in _CAPTURED_DB_ENV_VARS if k in os.environ}
+
+
+class TestReadReplicaConnectionParams:
+    """The reader is a second Prisma client with its own pool. Without the
+    configured params on DATABASE_URL_READ_REPLICA it sizes itself from Prisma's
+    `num_physical_cpus * 2 + 1` default, so an operator's cap is not the cap that
+    gets enforced.
+    """
+
+    def test_pool_settings_reach_the_read_replica_url(self, tmp_path):
         import yaml
 
-        loaded_config = yaml.safe_load(Path(config_path).read_text())
-        mock_proxy_config = MagicMock()
-        mock_proxy_config.return_value.get_config = AsyncMock(return_value=loaded_config)
-        mock_proxy_module = MagicMock(
-            app=MagicMock(),
-            ProxyConfig=mock_proxy_config,
-            KeyManagementSettings=MagicMock(),
-            save_worker_config=MagicMock(),
-        )
-        clean_env = {k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL")}
-        clean_env["DATABASE_URL"] = database_url
-        if direct_url is not None:
-            clean_env["DIRECT_URL"] = direct_url
-
-        with (
-            patch.dict(os.environ, clean_env, clear=True),
-            patch.dict(
-                "sys.modules",
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(
+            yaml.dump(
                 {
-                    "proxy_server": mock_proxy_module,
-                    "litellm.proxy.proxy_server": mock_proxy_module,
-                },
-            ),
-            patch("subprocess.run", return_value=MagicMock(returncode=0)),
-            patch("atexit.register"),
-            patch("litellm.proxy.db.prisma_client.should_update_prisma_schema", return_value=False),
-            patch("litellm.proxy.db.check_migration.check_prisma_schema_diff"),
-        ):
-            run_server.main(
-                ["--config", config_path, "--local", "--skip_server_startup"],
-                standalone_mode=False,
+                    "model_list": [],
+                    "general_settings": {
+                        "database_connection_pool_limit": 3,
+                        "database_connection_pool_timeout": 20,
+                        "database_connect_timeout": 15,
+                        "database_socket_timeout": 120,
+                        "database_disable_prepared_statements": True,
+                        "database_statement_timeout": 60,
+                    },
+                }
             )
-            return {k: os.environ[k] for k in ("DATABASE_URL", "DIRECT_URL") if k in os.environ}
+        )
+
+        captured = _run_server_and_capture_urls(
+            str(config_path),
+            read_replica_url="postgresql://t:t@reader:5432/t",
+        )
+
+        query = urlparse.parse_qs(urlparse.urlparse(captured["DATABASE_URL_READ_REPLICA"]).query)
+        assert query["connection_limit"] == ["3"]
+        assert query["pool_timeout"] == ["20"]
+        assert query["connect_timeout"] == ["15"]
+        assert query["socket_timeout"] == ["120"]
+        assert query["pgbouncer"] == ["true"]
+        assert "-c statement_timeout=60000" in query["options"][0]
+
+    def test_operator_pinned_replica_params_win(self, tmp_path):
+        """The documented workaround (params pinned on the replica URL) must keep
+        working, so an operator who tuned the reader separately is not overridden.
+        """
+        import yaml
+
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(
+            yaml.dump(
+                {
+                    "model_list": [],
+                    "general_settings": {
+                        "database_connection_pool_limit": 3,
+                        "database_connection_pool_timeout": 20,
+                    },
+                }
+            )
+        )
+
+        captured = _run_server_and_capture_urls(
+            str(config_path),
+            read_replica_url="postgresql://t:t@reader:5432/t?connection_limit=50",
+        )
+
+        query = urlparse.parse_qs(urlparse.urlparse(captured["DATABASE_URL_READ_REPLICA"]).query)
+        assert query["connection_limit"] == ["50"]
+        assert query["pool_timeout"] == ["20"]
+
+    def test_extra_connection_params_never_carry_a_schema_override_to_the_reader(self, tmp_path):
+        """database_extra_connection_params is an untyped passthrough, so it can carry a
+        search_path. The writer keeps it, the reader must not inherit it, or replica
+        queries resolve against the writer's schema.
+        """
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(
+            yaml.dump(
+                {
+                    "model_list": [],
+                    "general_settings": {
+                        "database_connection_pool_limit": 3,
+                        "database_extra_connection_params": {
+                            "options": "-c search_path=writer_schema",
+                            "schema": "writer_schema",
+                            "socket_timeout": 90,
+                        },
+                    },
+                }
+            )
+        )
+
+        captured = _run_server_and_capture_urls(
+            str(config_path),
+            read_replica_url="postgresql://t:t@reader:5432/t",
+        )
+
+        writer_query = urlparse.parse_qs(urlparse.urlparse(captured["DATABASE_URL"]).query)
+        assert writer_query["options"] == ["-c search_path=writer_schema"]
+        assert writer_query["schema"] == ["writer_schema"]
+
+        reader_query = urlparse.parse_qs(urlparse.urlparse(captured["DATABASE_URL_READ_REPLICA"]).query)
+        assert reader_query["connection_limit"] == ["3"]
+        assert reader_query["socket_timeout"] == ["90"]
+        assert "options" not in reader_query
+        assert "schema" not in reader_query
+
+    def test_replica_url_untouched_when_unset(self, tmp_path):
+        import yaml
+
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(yaml.dump({"model_list": [], "general_settings": {}}))
+
+        captured = _run_server_and_capture_urls(str(config_path))
+
+        assert "DATABASE_URL_READ_REPLICA" not in captured
 
 
 class TestTokenAuthCliFlags:

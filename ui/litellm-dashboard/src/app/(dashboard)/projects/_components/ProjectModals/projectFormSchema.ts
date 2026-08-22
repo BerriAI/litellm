@@ -5,6 +5,14 @@ export const ALL_TEAM_MODELS = "all-team-models";
 const repeatsEarlierValue = (values: readonly string[], index: number): boolean =>
   values[index] !== "" && values.indexOf(values[index]) !== index;
 
+const modelLimitSchema = z.object({
+  model: z.string().min(1, "Missing model"),
+  tpm: z.number().optional(),
+  rpm: z.number().optional(),
+  itpm: z.number().optional(),
+  otpm: z.number().optional(),
+});
+
 export const projectFormSchema = z
   .object({
     project_alias: z.string().min(1, "Please enter a project name"),
@@ -14,15 +22,7 @@ export const projectFormSchema = z
     max_budget: z.number().optional(),
     isBlocked: z.boolean(),
     guardrails: z.array(z.string()).optional(),
-    modelLimits: z
-      .array(
-        z.object({
-          model: z.string().min(1, "Missing model"),
-          tpm: z.number().optional(),
-          rpm: z.number().optional(),
-        }),
-      )
-      .optional(),
+    modelLimits: z.array(modelLimitSchema).optional(),
     metadata: z
       .array(
         z.object({

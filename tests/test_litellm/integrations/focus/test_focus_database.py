@@ -68,7 +68,7 @@ async def test_should_accept_string_timestamps(monkeypatch: pytest.MonkeyPatch):
 async def test_should_reject_invalid_limit(monkeypatch: pytest.MonkeyPatch):
     db, query_mock = _setup_db(monkeypatch, [])
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match='limit must be an integer'):
         await db.get_usage_data(limit="invalid")
 
     assert query_mock.await_count == 0

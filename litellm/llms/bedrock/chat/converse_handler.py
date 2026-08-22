@@ -35,7 +35,7 @@ def make_sync_call(
     json_mode: bool | None = False,
     fake_stream: bool = False,
     stream_chunk_size: int | None = None,
-):
+) -> tuple[Any, httpx.Headers]:
     if client is None:
         client = _get_httpx_client()  # Create a new client if none provided
 
@@ -76,7 +76,7 @@ def make_sync_call(
         additional_args={"complete_input_dict": data},
     )
 
-    return completion_stream
+    return completion_stream, response.headers
 
 
 class BedrockConverseLLM(BaseAWSLLM):
@@ -134,7 +134,7 @@ class BedrockConverseLLM(BaseAWSLLM):
             },
         )
 
-        completion_stream: Final = await make_call(
+        completion_stream, response_headers = await make_call(
             client=client,
             api_base=api_base,
             headers=dict(prepped.headers),
@@ -151,6 +151,7 @@ class BedrockConverseLLM(BaseAWSLLM):
             model=model,
             custom_llm_provider="bedrock",
             logging_obj=logging_obj,
+            _response_headers=response_headers,
         )
         return streaming_response
 
@@ -232,7 +233,7 @@ class BedrockConverseLLM(BaseAWSLLM):
         except httpx.TimeoutException:
             raise BedrockError(status_code=408, message="Timeout error occurred.")
 
-        return litellm.AmazonConverseConfig()._transform_response(
+        transformed_response: Final = litellm.AmazonConverseConfig()._transform_response(
             model=model,
             response=response,
             model_response=model_response,
@@ -244,6 +245,8 @@ class BedrockConverseLLM(BaseAWSLLM):
             optional_params=optional_params,
             encoding=encoding,
         )
+        transformed_response.set_provider_response_headers(response.headers)
+        return transformed_response
 
     def completion(
         self,
@@ -541,7 +544,7 @@ class BedrockConverseLLM(BaseAWSLLM):
             client = client
 
         if stream is not None and stream is True:
-            completion_stream: Final = make_sync_call(
+            completion_stream, response_headers = make_sync_call(
                 client=(client if client is not None and isinstance(client, HTTPHandler) else None),
                 api_base=proxy_endpoint_url,
                 headers=prepped.headers,
@@ -558,6 +561,7 @@ class BedrockConverseLLM(BaseAWSLLM):
                 model=model,
                 custom_llm_provider="bedrock",
                 logging_obj=logging_obj,
+                _response_headers=response_headers,
             )
 
             return streaming_response
@@ -578,7 +582,7 @@ class BedrockConverseLLM(BaseAWSLLM):
         except httpx.TimeoutException:
             raise BedrockError(status_code=408, message="Timeout error occurred.")
 
-        return litellm.AmazonConverseConfig()._transform_response(
+        sync_transformed_response: Final = litellm.AmazonConverseConfig()._transform_response(
             model=model,
             response=response,
             model_response=model_response,
@@ -590,3 +594,5 @@ class BedrockConverseLLM(BaseAWSLLM):
             optional_params=optional_params,
             encoding=encoding,
         )
+        sync_transformed_response.set_provider_response_headers(response.headers)
+        return sync_transformed_response

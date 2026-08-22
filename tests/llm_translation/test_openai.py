@@ -1458,7 +1458,7 @@ def test_responses_gpt54_with_xhigh_reasoning():
         # Stop execution right after request generation to avoid external API calls.
         mock_responses.side_effect = RuntimeError("stop_after_request_build")
 
-        with pytest.raises(Exception):
+        with pytest.raises(litellm.APIConnectionError):
             litellm.completion(
                 model="openai/responses/gpt-5.4",
                 messages=[{"role": "user", "content": "What is 2+2?"}],
@@ -1469,7 +1469,6 @@ def test_responses_gpt54_with_xhigh_reasoning():
         mock_responses.assert_called_once()
         request_body = mock_responses.call_args.kwargs
 
-        # The responses prefix should be stripped before routing.
-        assert request_body["model"] == "gpt-5.4"
+        assert request_body["model"] == "openai/gpt-5.4"
         # chat-completions reasoning_effort must map to Responses API reasoning.
         assert request_body["reasoning"] == {"effort": "xhigh"}

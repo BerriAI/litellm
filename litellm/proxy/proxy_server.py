@@ -247,6 +247,7 @@ from litellm.constants import (
     PROXY_BUDGET_RESCHEDULER_MAX_TIME,
     PROXY_BUDGET_RESCHEDULER_MIN_TIME,
     PROXY_CONFIG_RELOAD_INTERVAL_SECONDS,
+    ROUTER_MODEL_NAME_RESPONSE_FIELD,
     WEEKLY_SPEND_REPORT_JOB_ID,
 )
 from litellm.exceptions import RejectedRequestError
@@ -6840,6 +6841,20 @@ class ProxyConfig:
         if self._should_load_db_object(object_type="config_overrides"):
             await self._init_hashicorp_vault_config_override(prisma_client=prisma_client)
 
+        await self._apply_safe_litellm_settings_overrides_from_db(prisma_client=prisma_client)
+
+    async def _apply_safe_litellm_settings_overrides_from_db(self, prisma_client: PrismaClient) -> None:
+        config_record: Final = await get_config_param(prisma_client, "litellm_settings")
+        if config_record is None or config_record.param_value is None:
+            return
+        raw_settings: Final = config_record.param_value
+        litellm_settings: Final = json.loads(raw_settings) if isinstance(raw_settings, str) else raw_settings
+        if not isinstance(litellm_settings, dict):
+            return
+        for key, value in litellm_settings.items():
+            if key in LITELLM_SETTINGS_SAFE_DB_OVERRIDES:
+                setattr(litellm, key, value)
+
     async def _init_semantic_filter_settings_in_db(self, prisma_client: PrismaClient):
         """
         Initialize MCP semantic filter settings from database.
@@ -7899,6 +7914,10 @@ def _fast_serialize_simple_model_response_stream(
     for top_level_key in ("id", "object", "created"):
         if payload[top_level_key] is None:
             payload.pop(top_level_key)
+
+    router_model_name: Final = getattr(chunk, ROUTER_MODEL_NAME_RESPONSE_FIELD, None)
+    if router_model_name is not None:
+        payload[ROUTER_MODEL_NAME_RESPONSE_FIELD] = router_model_name
     return orjson.dumps(payload)
 
 
@@ -8196,6 +8215,9 @@ async def async_data_generator(
         model_mismatch_logged = False
         fallback_metadata_event_sent = False
         include_fallback_errors: Final = _should_include_fallback_errors(request_data)
+        # Fallbacks resolve on the first ``__anext__``, so the selected group is read
+        # per chunk off this object rather than snapshotted here.
+        router_logging_obj: Final = request_data.get("litellm_logging_obj")
         # Use a running string instead of list + join to avoid O(n^2) overhead.
         # Previously "".join(str_so_far_parts) was called every chunk, re-joining
         # the entire accumulated response. String += is O(n) amortized total.
@@ -8284,6 +8306,10 @@ async def async_data_generator(
                 model_mismatch_logged=model_mismatch_logged,
                 fallback_was_attempted=fallback_was_attempted,
                 fallback_model_from_metadata=fallback_model_from_metadata,
+            )
+            ProxyBaseLLMRequestProcessing.set_router_selected_model_field(
+                response_obj=chunk,
+                router_model_name=ProxyBaseLLMRequestProcessing.get_router_selected_model_name(router_logging_obj),
             )
 
             if strip_stream_usage and _is_injected_stream_usage_artifact(chunk):
@@ -8400,10 +8426,6 @@ async def async_data_generator(
         stream_completed = True
         yield f"data: {error_returned}\n\n"
     finally:
-        from litellm.proxy.common_request_processing import (
-            ProxyBaseLLMRequestProcessing,
-        )
-
         await ProxyBaseLLMRequestProcessing._finalize_streaming_generator_cleanup(
             request=request,
             request_data=request_data,
@@ -8875,6 +8897,7 @@ class ProxyStartupEvent:
                 proxy_logging_obj=proxy_logging_obj,
                 prisma_client=prisma_client,
                 reset_settings=get_budget_reset_settings(),
+                pod_lock_manager=proxy_logging_obj.db_spend_update_writer.pod_lock_manager,
             )
 
             scheduler.add_job(

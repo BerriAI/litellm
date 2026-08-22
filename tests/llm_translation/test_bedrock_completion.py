@@ -13,7 +13,6 @@ import litellm.types
 
 load_dotenv()
 import io
-import os
 import json
 
 sys.path.insert(
@@ -1890,7 +1889,7 @@ def test_bedrock_completion_test_4(modify_params):
         ]
         assert transformed_messages == expected_messages
     else:
-        with pytest.raises(Exception) as e:
+        with pytest.raises(Exception, match=r"litellm\.modify_params") as e:
             litellm.completion(**data)
         assert "litellm.modify_params" in str(e.value)
 

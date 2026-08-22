@@ -42,7 +42,7 @@ def test_non_admin_config_update_route_rejected():
     request.query_params = {}
 
     # Test that calling /config/update route raises HTTPException with 403 status
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(Exception, match='Only proxy admin can be used to generate, delete, update') as exc_info:
         RouteChecks.non_proxy_admin_allowed_routes_check(
             user_obj=user_obj,
             _user_role=LitellmUserRoles.INTERNAL_USER.value,
@@ -134,7 +134,7 @@ def test_user_banner_update_rejected_for_non_admin():
     request = MagicMock(spec=Request)
     request.query_params = {}
 
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(Exception, match='Only proxy admin can be used to generate, delete, update') as exc_info:
         RouteChecks.non_proxy_admin_allowed_routes_check(
             user_obj=user_obj,
             _user_role=LitellmUserRoles.INTERNAL_USER.value,
@@ -1791,7 +1791,6 @@ def test_proxy_admin_viewer_can_access_global_spend_tags():
 # Routes returning proxy-wide spend across every team / customer / api_key.
 # Sourced from `LiteLLMRoutes.global_spend_tracking_routes` so any future
 # additions to that list are exercised by these tests automatically.
-from litellm.proxy._types import LiteLLMRoutes
 
 GLOBAL_SPEND_ROUTES = LiteLLMRoutes.global_spend_tracking_routes.value
 
@@ -1814,7 +1813,7 @@ def test_internal_user_blocked_from_global_spend_routes(route):
     request = MagicMock(spec=Request)
     request.query_params = {}
 
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(Exception, match='Only proxy admin can be used to generate, delete, update') as exc_info:
         RouteChecks.non_proxy_admin_allowed_routes_check(
             user_obj=user_obj,
             _user_role=LitellmUserRoles.INTERNAL_USER.value,
@@ -1843,7 +1842,7 @@ def test_internal_user_view_only_blocked_from_global_spend_routes(route):
     request = MagicMock(spec=Request)
     request.query_params = {}
 
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(Exception, match='Only proxy admin can be used to generate, delete, update') as exc_info:
         RouteChecks.non_proxy_admin_allowed_routes_check(
             user_obj=user_obj,
             _user_role=LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value,
@@ -2046,7 +2045,7 @@ def test_internal_user_blocked_from_admin_viewer_logs_routes(route):
     if route not in INTERNAL_USER_BLOCKED_SUBSET:
         return
 
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(Exception, match='Only proxy admin can be used to generate, delete, update') as exc_info:
         RouteChecks.non_proxy_admin_allowed_routes_check(
             user_obj=user_obj,
             _user_role=LitellmUserRoles.INTERNAL_USER.value,
@@ -2530,7 +2529,7 @@ def test_non_admin_non_team_admin_cannot_access_config_update_but_can_attempt_re
     )
 
     # /config/update is still blocked
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(Exception, match='Only proxy admin can be used to generate, delete, update') as exc_info:
         RouteChecks.non_proxy_admin_allowed_routes_check(
             user_obj=user_obj,
             _user_role=LitellmUserRoles.INTERNAL_USER.value,
@@ -2617,10 +2616,7 @@ def test_available_roles_accessible_to_non_admin_users(user_role):
 
 # ── _user_is_org_admin tests ──────────────────────────────────────────────────
 
-from datetime import datetime
 
-from litellm.proxy._types import LiteLLM_OrganizationMembershipTable
-from litellm.proxy.auth.auth_checks_organization import _user_is_org_admin
 
 
 def _make_org_admin_user(org_id: str) -> LiteLLM_UserTable:
@@ -2809,7 +2805,7 @@ def test_team_update_gate_rejects_without_org_context():
     request.method = "POST"
     request.query_params = {}
 
-    with pytest.raises(Exception):
+    with pytest.raises(Exception, match="Only proxy admin can be used to generate"):
         RouteChecks.non_proxy_admin_allowed_routes_check(
             user_obj=user_obj,
             _user_role=LitellmUserRoles.INTERNAL_USER.value,
@@ -2829,7 +2825,7 @@ def test_team_update_gate_rejects_cross_org_admin_with_resolved_org():
     request.method = "POST"
     request.query_params = {}
 
-    with pytest.raises(Exception):
+    with pytest.raises(Exception, match="Only proxy admin can be used to generate"):
         RouteChecks.non_proxy_admin_allowed_routes_check(
             user_obj=user_obj,
             _user_role=LitellmUserRoles.INTERNAL_USER.value,
@@ -2951,7 +2947,7 @@ def test_patch_team_gate_rejects_regular_internal_user():
     )
     valid_token = UserAPIKeyAuth(user_id="regular-user", user_role=LitellmUserRoles.INTERNAL_USER.value)
 
-    with pytest.raises(Exception):
+    with pytest.raises(Exception, match="Only proxy admin can be used to generate"):
         RouteChecks.non_proxy_admin_allowed_routes_check(
             user_obj=user_obj,
             _user_role=LitellmUserRoles.INTERNAL_USER.value,
@@ -2967,7 +2963,7 @@ def test_patch_team_gate_rejects_cross_org_admin():
     user_obj = _make_org_admin_user("org-1")
     valid_token = UserAPIKeyAuth(user_id="org-admin-user", user_role=LitellmUserRoles.INTERNAL_USER.value)
 
-    with pytest.raises(Exception):
+    with pytest.raises(Exception, match="Only proxy admin can be used to generate"):
         RouteChecks.non_proxy_admin_allowed_routes_check(
             user_obj=user_obj,
             _user_role=LitellmUserRoles.INTERNAL_USER.value,
@@ -2987,7 +2983,7 @@ def test_patch_team_gate_rejects_view_only_admin():
     )
     valid_token = UserAPIKeyAuth(user_id="viewer", user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value)
 
-    with pytest.raises(Exception):
+    with pytest.raises(HTTPException):
         RouteChecks.non_proxy_admin_allowed_routes_check(
             user_obj=user_obj,
             _user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
@@ -3188,7 +3184,7 @@ def test_internal_user_blocked_from_search_tool_writes(route):
     request = MagicMock(spec=Request)
     request.query_params = {}
 
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(Exception, match='Only proxy admin can be used to generate, delete, update') as exc_info:
         RouteChecks.non_proxy_admin_allowed_routes_check(
             user_obj=user_obj,
             _user_role=LitellmUserRoles.INTERNAL_USER.value,

@@ -101,7 +101,7 @@ const CostOptimizationView: React.FC<CostOptimizationViewProps> = ({ accessToken
               <PromptCachingTab accessToken={accessToken} activity={activity} />
             </TabsContent>
             <TabsContent value="autorouter-usage" keepMounted={visitedTabs.includes("autorouter-usage")}>
-              <AutoRouterBenchmarksTab accessToken={accessToken} />
+              <AutoRouterBenchmarksTab accessToken={accessToken} activity={activity} />
             </TabsContent>
           </>
         )}

@@ -2405,9 +2405,6 @@ class TestMilvusProxyRoute:
         """
         Test successful Milvus proxy route with valid managed vector store index
         """
-        from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
-            milvus_proxy_route,
-        )
 
         collection_name = "dall-e-6"
         vector_store_name = "milvus-store-1"
@@ -2518,9 +2515,6 @@ class TestMilvusProxyRoute:
         """
         from fastapi import HTTPException
 
-        from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
-            milvus_proxy_route,
-        )
 
         mock_request = MagicMock(spec=Request)
         mock_response = MagicMock(spec=Response)
@@ -2555,9 +2549,6 @@ class TestMilvusProxyRoute:
         """
         from fastapi import HTTPException
 
-        from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
-            milvus_proxy_route,
-        )
 
         mock_request = MagicMock(spec=Request)
         mock_response = MagicMock(spec=Response)
@@ -2587,9 +2578,6 @@ class TestMilvusProxyRoute:
         """
         from fastapi import HTTPException
 
-        from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
-            milvus_proxy_route,
-        )
 
         collection_name = "test-collection"
 
@@ -2629,9 +2617,6 @@ class TestMilvusProxyRoute:
         """
         from fastapi import HTTPException
 
-        from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
-            milvus_proxy_route,
-        )
 
         collection_name = "unmanaged-collection"
 
@@ -2672,9 +2657,6 @@ class TestMilvusProxyRoute:
         """
         Test that missing vector store raises Exception
         """
-        from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
-            milvus_proxy_route,
-        )
 
         collection_name = "test-collection"
         vector_store_name = "missing-store"
@@ -2714,7 +2696,7 @@ class TestMilvusProxyRoute:
                 None
             )
 
-            with pytest.raises(Exception) as exc_info:
+            with pytest.raises(Exception, match='Vector store not found for missing-store') as exc_info:
                 await milvus_proxy_route(
                     endpoint="vectors/search",
                     request=mock_request,
@@ -2731,9 +2713,6 @@ class TestMilvusProxyRoute:
         """
         Test that missing api_base raises Exception
         """
-        from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
-            milvus_proxy_route,
-        )
 
         collection_name = "test-collection"
         vector_store_name = "milvus-store-1"
@@ -2779,7 +2758,7 @@ class TestMilvusProxyRoute:
                 mock_vector_store
             )
 
-            with pytest.raises(Exception) as exc_info:
+            with pytest.raises(Exception, match='api_base not found in vector store configuration for') as exc_info:
                 await milvus_proxy_route(
                     endpoint="vectors/search",
                     request=mock_request,
@@ -2797,9 +2776,6 @@ class TestMilvusProxyRoute:
         """
         Test that endpoint without leading slash is handled correctly
         """
-        from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
-            milvus_proxy_route,
-        )
 
         collection_name = "test-collection"
         vector_store_name = "milvus-store-1"
@@ -2877,9 +2853,6 @@ class TestOpenAIPassthroughRoute:
         This verifies the fix for issue #18865 where /openai/v1/responses was being
         routed to LiteLLM's native implementation instead of passthrough
         """
-        from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
-            openai_proxy_route,
-        )
 
         # Mock request for Responses API
         mock_request = MagicMock(spec=Request)
@@ -2931,9 +2904,6 @@ class TestOpenAIPassthroughRoute:
         """
         Test that /openai_passthrough works for chat completions
         """
-        from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
-            openai_proxy_route,
-        )
 
         mock_request = MagicMock(spec=Request)
         mock_request.method = "POST"
@@ -2976,9 +2946,6 @@ class TestOpenAIPassthroughRoute:
         """
         Test that missing OPENAI_API_KEY raises an exception
         """
-        from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
-            openai_proxy_route,
-        )
 
         mock_request = MagicMock(spec=Request)
         mock_response = MagicMock(spec=Response)
@@ -2988,7 +2955,7 @@ class TestOpenAIPassthroughRoute:
             "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router.get_credentials",
             return_value=None,
         ):
-            with pytest.raises(Exception) as exc_info:
+            with pytest.raises(Exception, match="Required 'OPENAI_API_KEY' in environment to make") as exc_info:
                 await openai_proxy_route(
                     endpoint="v1/chat/completions",
                     request=mock_request,
@@ -3003,9 +2970,6 @@ class TestOpenAIPassthroughRoute:
         """
         Test that /openai_passthrough works for Assistants API endpoints
         """
-        from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
-            openai_proxy_route,
-        )
 
         mock_request = MagicMock(spec=Request)
         mock_request.method = "POST"
@@ -3177,7 +3141,7 @@ class TestCursorProxyRoute:
                 [],
             ),
         ):
-            with pytest.raises(Exception) as exc_info:
+            with pytest.raises(Exception, match='Cursor API key not found\\. Add Cursor credentials via') as exc_info:
                 await cursor_proxy_route(
                     endpoint="v0/agents",
                     request=mock_request,

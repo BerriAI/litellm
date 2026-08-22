@@ -13,7 +13,11 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 import litellm
 from litellm._uuid import uuid
-from litellm.constants import RETURN_RAW_MODEL_NAME_METADATA_KEY
+from litellm.constants import (
+    AUTO_ROUTED_REQUEST_METADATA_KEY,
+    RETURN_RAW_MODEL_NAME_METADATA_KEY,
+    ROUTER_MODEL_NAME_RESPONSE_FIELD,
+)
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.opentelemetry import UserAPIKeyAuth
 from litellm.proxy.common_request_processing import (
@@ -28,7 +32,6 @@ from litellm.proxy.common_request_processing import (
     _get_cost_breakdown_from_logging_obj,
     _has_attribute_error_in_chain,
     _is_azure_model_router_request,
-    _UpstreamClosingStreamingResponse,
     open_sse_before_first_byte,
     ttft_keepalive_interval,
     _override_openai_response_model,
@@ -435,7 +438,7 @@ class TestProxyBaseLLMRequestProcessing:
 
         # Test with invalid header value (should raise ValueError when converting to float)
         headers_with_invalid = {"x-litellm-stream-timeout": "invalid"}
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="could not convert string to float: 'invalid"):
             LiteLLMProxyRequestSetup._get_stream_timeout_from_request(headers_with_invalid)
 
     @pytest.mark.asyncio
@@ -5519,6 +5522,196 @@ class TestStreamingClientDisconnectBilling:
 
         proxy_logging_obj._arelease_max_parallel_requests_on_disconnect.assert_awaited_once()
 
+    async def _bill_and_collect_success_event(self, prepare=None, request_data=None):
+        recorder = _RecordingSuccessLogger()
+        original_callbacks = litellm.callbacks
+        litellm.callbacks = [recorder]
+        try:
+            response = await self._start_partial_stream()
+            if prepare is not None:
+                prepare(response)
+            billed = await _bill_partial_streamed_spend_on_disconnect(
+                {"litellm_logging_obj": response.logging_obj, **(request_data or {})}, response
+            )
+            assert billed is True
+            for _ in range(50):
+                if recorder.success_events:
+                    break
+                await asyncio.sleep(0.1)
+        finally:
+            litellm.callbacks = original_callbacks
+        assert len(recorder.success_events) == 1
+        return recorder.success_events[0]
+
+    @pytest.mark.asyncio
+    async def test_disconnect_billing_prices_alias_restamped_chunks_at_real_model(self):
+        assert "openai/my-public-alias" not in litellm.model_cost
+
+        def restamp_chunks_to_alias(response):
+            for chunk in response.chunks:
+                chunk.model = "my-public-alias"
+
+        event = await self._bill_and_collect_success_event(restamp_chunks_to_alias)
+
+        assert event["response_obj"].model == "gpt-4o-mini"
+        standard_logging_object = event["kwargs"]["standard_logging_object"]
+        assert standard_logging_object["response_cost"] > 0.0
+
+    @pytest.mark.asyncio
+    async def test_disconnect_billing_prices_a_partly_restamped_chunk_list_at_real_model(self):
+        """
+        A chunk that carries usage is stored as a copy before the proxy restamps the
+        one it forwards, so an aliased stream can reach billing with its first chunk
+        still on the deployment model and the rest on the client's name.
+        """
+        assert "openai/my-public-alias" not in litellm.model_cost
+
+        def restamp_only_the_chunks_the_proxy_forwarded(response):
+            for chunk in response.chunks[1:]:
+                chunk.model = "my-public-alias"
+
+        event = await self._bill_and_collect_success_event(
+            restamp_only_the_chunks_the_proxy_forwarded,
+            request_data={"model": "my-public-alias"},
+        )
+
+        assert event["response_obj"].model == "gpt-4o-mini"
+        standard_logging_object = event["kwargs"]["standard_logging_object"]
+        assert standard_logging_object["response_cost"] > 0.0
+
+    @pytest.mark.asyncio
+    async def test_disconnect_billing_keeps_the_model_azure_model_router_picked(self):
+        def restamp_like_azure_model_router(response):
+            response.chunks[0].model = "azure-model-router"
+            for chunk in response.chunks[1:]:
+                chunk.model = "gpt-4.1-nano-2025-04-14"
+
+        event = await self._bill_and_collect_success_event(
+            restamp_like_azure_model_router,
+            request_data={"model": "azure-model-router"},
+        )
+
+        assert event["response_obj"].model == "gpt-4.1-nano-2025-04-14"
+        standard_logging_object = event["kwargs"]["standard_logging_object"]
+        assert standard_logging_object["response_cost"] > 0.0
+
+    @pytest.mark.asyncio
+    async def test_disconnect_billing_keeps_the_routed_model_when_request_data_model_was_rewritten(self):
+        """
+        Pre-call processing rewrites request_data["model"] for aliasing and routing, so the
+        routed model on the later chunks can end up matching it. Only the name the client
+        sent says whether the proxy restamped this stream.
+        """
+
+        def restamp_like_azure_model_router(response):
+            response.chunks[0].model = "azure-model-router"
+            for chunk in response.chunks[1:]:
+                chunk.model = "gpt-4.1-nano-2025-04-14"
+
+        event = await self._bill_and_collect_success_event(
+            restamp_like_azure_model_router,
+            request_data={
+                "model": "gpt-4.1-nano-2025-04-14",
+                "_litellm_client_requested_model": "azure-model-router",
+            },
+        )
+
+        assert event["response_obj"].model == "gpt-4.1-nano-2025-04-14"
+        standard_logging_object = event["kwargs"]["standard_logging_object"]
+        assert standard_logging_object["response_cost"] > 0.0
+
+    @pytest.mark.asyncio
+    async def test_disconnect_billing_backfills_missing_cache_fields(self):
+        event = await self._bill_and_collect_success_event()
+
+        usage = event["response_obj"].usage
+        assert getattr(usage, "cache_creation_input_tokens", None) == 0
+        assert getattr(usage, "cache_read_input_tokens", None) == 0
+        assert usage.prompt_tokens_details is not None
+        assert usage.prompt_tokens_details.cached_tokens == 0
+
+    @pytest.mark.asyncio
+    async def test_disconnect_billing_carries_up_openai_style_cached_tokens(self):
+        from litellm.types.utils import (
+            Delta,
+            ModelResponseStream,
+            PromptTokensDetailsWrapper,
+            StreamingChoices,
+            Usage,
+        )
+
+        def append_openai_style_cached_usage_chunk(response):
+            response.chunks.append(
+                ModelResponseStream(
+                    id=response.chunks[0].id,
+                    model="gpt-4o-mini",
+                    object="chat.completion.chunk",
+                    choices=[
+                        StreamingChoices(
+                            finish_reason=None,
+                            index=0,
+                            delta=Delta(content=" and more", role="assistant"),
+                        )
+                    ],
+                    usage=Usage(
+                        prompt_tokens=1000,
+                        completion_tokens=10,
+                        total_tokens=1010,
+                        prompt_tokens_details=PromptTokensDetailsWrapper(
+                            cached_tokens=500
+                        ),
+                    ),
+                )
+            )
+
+        event = await self._bill_and_collect_success_event(
+            append_openai_style_cached_usage_chunk
+        )
+
+        usage = event["response_obj"].usage
+        assert getattr(usage, "cache_read_input_tokens", None) == 500
+        assert getattr(usage, "cache_creation_input_tokens", None) == 0
+
+    @pytest.mark.asyncio
+    async def test_disconnect_billing_keeps_cache_values_recovered_from_chunks(self):
+        from litellm.types.utils import (
+            Delta,
+            ModelResponseStream,
+            StreamingChoices,
+            Usage,
+        )
+
+        def append_usage_chunk(response):
+            response.chunks.append(
+                ModelResponseStream(
+                    id=response.chunks[0].id,
+                    model="gpt-4o-mini",
+                    object="chat.completion.chunk",
+                    choices=[
+                        StreamingChoices(
+                            finish_reason=None,
+                            index=0,
+                            delta=Delta(content=" and more", role="assistant"),
+                        )
+                    ],
+                    usage=Usage(
+                        prompt_tokens=40,
+                        completion_tokens=5,
+                        total_tokens=45,
+                        cache_read_input_tokens=7,
+                        cache_creation_input_tokens=3,
+                    ),
+                )
+            )
+
+        event = await self._bill_and_collect_success_event(append_usage_chunk)
+
+        usage = event["response_obj"].usage
+        assert getattr(usage, "cache_read_input_tokens", None) == 7
+        assert getattr(usage, "cache_creation_input_tokens", None) == 3
+        assert usage.prompt_tokens_details is not None
+        assert usage.prompt_tokens_details.cached_tokens == 7
+
 
 def _apply_stream_usage_tracking(
     data: dict,
@@ -6082,6 +6275,254 @@ class TestInjectCostIntoUsageDict:
         injected = json.loads(result.split("\n")[0].split("data:", 1)[1].strip())
         assert injected["usage"]["cost"] == pytest.approx(self._expected_cost("gpt-4o-mini", 11, 4))
 
+    def test_message_delta_cost_charges_the_non_cached_input_tokens(self):
+        """Anthropic reports ``input_tokens`` excluding cache tokens, so reading it as the whole
+        prompt total drops the non-cached input from the bill on every cache hit."""
+        model = "claude-haiku-4-5"
+        pricing = litellm.model_cost[model]
+        event = {
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn"},
+            "usage": {
+                "input_tokens": 14,
+                "output_tokens": 8,
+                "cache_read_input_tokens": 3202,
+                "cache_creation_input_tokens": 0,
+            },
+        }
+
+        result = ProxyBaseLLMRequestProcessing._inject_cost_into_usage_dict(event, model)
+
+        assert result is not None
+        expected = (
+            14 * pricing["input_cost_per_token"]
+            + 3202 * pricing["cache_read_input_token_cost"]
+            + 8 * pricing["output_cost_per_token"]
+        )
+        dropped_input = expected - 14 * pricing["input_cost_per_token"]
+        assert result["usage"]["cost"] == pytest.approx(expected)
+        assert result["usage"]["cost"] > dropped_input
+
+    def test_message_delta_prices_1h_cache_creation_above_the_5m_rate(self):
+        """The ``cache_creation`` 5m/1h split has to survive into ``prompt_tokens_details``,
+        otherwise a 1h write is billed at the cheaper 5m rate."""
+        model = "claude-haiku-4-5"
+        pricing = litellm.model_cost[model]
+        event = {
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn"},
+            "usage": {
+                "input_tokens": 14,
+                "output_tokens": 8,
+                "cache_read_input_tokens": 0,
+                "cache_creation_input_tokens": 2000,
+                "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 2000},
+            },
+        }
+
+        result = ProxyBaseLLMRequestProcessing._inject_cost_into_usage_dict(event, model)
+
+        assert result is not None
+        base = 14 * pricing["input_cost_per_token"] + 8 * pricing["output_cost_per_token"]
+        expected_1h = base + 2000 * pricing["cache_creation_input_token_cost_above_1hr"]
+        flat_5m = base + 2000 * pricing["cache_creation_input_token_cost"]
+        assert expected_1h != pytest.approx(flat_5m)
+        assert result["usage"]["cost"] == pytest.approx(expected_1h)
+
+    def test_message_delta_prices_through_the_logging_obj_so_custom_pricing_applies(self):
+        """Costing by model name alone yields sticker price, so a deployment with a negotiated
+        discount streamed a ``usage.cost`` that disagreed with the callback's ``response_cost``."""
+
+        class _StubLoggingObj:
+            def __init__(self, cost):
+                self._cost = cost
+                self.captured_result = None
+
+            def _response_cost_calculator(self, result):
+                self.captured_result = result
+                return self._cost
+
+        model = "claude-haiku-4-5"
+        discounted_cost = 0.00099
+        stub = _StubLoggingObj(discounted_cost)
+        event = {
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn"},
+            "usage": {
+                "input_tokens": 14,
+                "output_tokens": 8,
+                "cache_read_input_tokens": 3202,
+                "cache_creation_input_tokens": 500,
+                "cache_creation": {"ephemeral_5m_input_tokens": 100, "ephemeral_1h_input_tokens": 400},
+            },
+        }
+
+        result = ProxyBaseLLMRequestProcessing._inject_cost_into_usage_dict(event, model, stub)
+
+        assert result is not None
+        assert result["usage"]["cost"] == discounted_cost
+        assert result["usage"]["cost"] != pytest.approx(self._expected_cost(model, 14 + 500 + 3202, 8))
+        usage = stub.captured_result.usage
+        assert usage.prompt_tokens == 14 + 500 + 3202
+        details = usage.prompt_tokens_details.cache_creation_token_details
+        assert details.ephemeral_5m_input_tokens == 100
+        assert details.ephemeral_1h_input_tokens == 400
+
+    def test_message_delta_falls_back_to_model_pricing_when_the_logging_obj_returns_no_cost(self):
+        class _StubLoggingObj:
+            def _response_cost_calculator(self, result):
+                return None
+
+        model = "claude-haiku-4-5"
+        pricing = litellm.model_cost[model]
+        event = {
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn"},
+            "usage": {"input_tokens": 14, "output_tokens": 8, "cache_read_input_tokens": 3202},
+        }
+
+        result = ProxyBaseLLMRequestProcessing._inject_cost_into_usage_dict(event, model, _StubLoggingObj())
+
+        assert result is not None
+        assert result["usage"]["cost"] == pytest.approx(
+            14 * pricing["input_cost_per_token"]
+            + 3202 * pricing["cache_read_input_token_cost"]
+            + 8 * pricing["output_cost_per_token"]
+        )
+
+    def test_message_delta_falls_back_to_model_pricing_when_the_logging_obj_raises(self):
+        """A pricing failure mid-stream must not break the frame, so the raise falls back to
+        model-name pricing rather than propagating into the response body."""
+
+        class _StubLoggingObj:
+            def _response_cost_calculator(self, result):
+                raise ValueError("no pricing for this deployment")
+
+        model = "claude-haiku-4-5"
+        pricing = litellm.model_cost[model]
+        event = {
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn"},
+            "usage": {"input_tokens": 14, "output_tokens": 8, "cache_read_input_tokens": 3202},
+        }
+
+        result = ProxyBaseLLMRequestProcessing._inject_cost_into_usage_dict(event, model, _StubLoggingObj())
+
+        assert result is not None
+        assert result["usage"]["cost"] == pytest.approx(
+            14 * pricing["input_cost_per_token"]
+            + 3202 * pricing["cache_read_input_token_cost"]
+            + 8 * pricing["output_cost_per_token"]
+        )
+
+    def test_pricing_a_frame_leaves_the_real_logging_obj_unchanged(self):
+        """Pricing runs against the live logging object, and the pass-through handlers never
+        recompute cost_breakdown, so a frame-derived breakdown would reach the spend log."""
+        from litellm.litellm_core_utils.litellm_logging import (
+            Logging as LiteLLMLoggingObj,
+        )
+        from litellm.types.utils import ModelResponse, Usage
+
+        logging_obj = LiteLLMLoggingObj(
+            model="claude-haiku-4-5",
+            messages=[{"role": "user", "content": "test"}],
+            stream=True,
+            call_type="completion",
+            start_time=None,
+            litellm_call_id="lit4902-breakdown-test",
+            function_id="lit4902-breakdown-test",
+        )
+        logging_obj.update_environment_variables(litellm_params={}, optional_params={})
+        logging_obj.model_call_details["custom_llm_provider"] = "anthropic"
+        assert logging_obj.cost_breakdown is None
+
+        model_response = ModelResponse(
+            usage=Usage(prompt_tokens=3216, completion_tokens=8, total_tokens=3224)
+        )
+        cost = ProxyBaseLLMRequestProcessing._logging_obj_cost_or_none(model_response, logging_obj)
+
+        assert cost is not None and cost > 0
+        assert logging_obj.cost_breakdown is None
+        assert "response_cost_failure_debug_information" not in logging_obj.model_call_details
+
+    def test_pricing_a_frame_restores_a_breakdown_the_request_already_had(self):
+        from litellm.litellm_core_utils.litellm_logging import (
+            Logging as LiteLLMLoggingObj,
+        )
+        from litellm.types.utils import ModelResponse, Usage
+
+        logging_obj = LiteLLMLoggingObj(
+            model="claude-haiku-4-5",
+            messages=[{"role": "user", "content": "test"}],
+            stream=True,
+            call_type="completion",
+            start_time=None,
+            litellm_call_id="lit4902-breakdown-restore",
+            function_id="lit4902-breakdown-restore",
+        )
+        logging_obj.update_environment_variables(litellm_params={}, optional_params={})
+        logging_obj.model_call_details["custom_llm_provider"] = "anthropic"
+        logging_obj.set_cost_breakdown(
+            input_cost=0.5, output_cost=0.25, total_cost=0.75, cost_for_built_in_tools_cost_usd_dollar=0.0
+        )
+        existing = logging_obj.cost_breakdown
+
+        model_response = ModelResponse(
+            usage=Usage(prompt_tokens=3216, completion_tokens=8, total_tokens=3224)
+        )
+        ProxyBaseLLMRequestProcessing._logging_obj_cost_or_none(model_response, logging_obj)
+
+        assert logging_obj.cost_breakdown is existing
+        assert logging_obj.cost_breakdown["total_cost"] == 0.75
+
+    def test_openai_chunk_prices_through_the_logging_obj_so_custom_pricing_applies(self):
+        """The chat.completion.chunk path rides the same pricer, so a discounted deployment
+        streaming /v1/chat/completions gets its negotiated price instead of sticker."""
+
+        class _StubLoggingObj:
+            def __init__(self, cost):
+                self._cost = cost
+                self.captured_result = None
+
+            def _response_cost_calculator(self, result):
+                self.captured_result = result
+                return self._cost
+
+        discounted_cost = 0.00031
+        stub = _StubLoggingObj(discounted_cost)
+        event = {
+            "id": "chatcmpl-1",
+            "object": "chat.completion.chunk",
+            "choices": [],
+            "usage": {"prompt_tokens": 1000, "completion_tokens": 100, "total_tokens": 1100},
+        }
+
+        result = ProxyBaseLLMRequestProcessing._inject_cost_into_usage_dict(event, "gpt-4o-mini", stub)
+
+        assert result is not None
+        assert result["usage"]["cost"] == discounted_cost
+        assert result["usage"]["cost"] != pytest.approx(self._expected_cost("gpt-4o-mini", 1000, 100))
+        usage = stub.captured_result.usage
+        assert usage.prompt_tokens == 1000
+        assert usage.completion_tokens == 100
+
+    def test_openai_chunk_falls_back_to_model_pricing_when_the_logging_obj_returns_no_cost(self):
+        class _StubLoggingObj:
+            def _response_cost_calculator(self, result):
+                return None
+
+        event = {
+            "id": "chatcmpl-1",
+            "object": "chat.completion.chunk",
+            "choices": [],
+            "usage": {"prompt_tokens": 11, "completion_tokens": 4, "total_tokens": 15},
+        }
+
+        result = ProxyBaseLLMRequestProcessing._inject_cost_into_usage_dict(event, "gpt-4o-mini", _StubLoggingObj())
+
+        assert result is not None
+        assert result["usage"]["cost"] == pytest.approx(self._expected_cost("gpt-4o-mini", 11, 4))
+
 
 class TestProcessChunkWithCostInjection:
     def test_complete_usage_frame_chunk_is_injected(self, monkeypatch):
@@ -6115,6 +6556,31 @@ class TestProcessChunkWithCostInjection:
         )
 
         assert ProxyBaseLLMRequestProcessing._process_chunk_with_cost_injection(chunk, "gpt-4o-mini") == chunk
+
+    def test_message_delta_frame_is_priced_with_the_logging_obj(self, monkeypatch):
+        """Pins that the logging object reaches the pricer through the byte-frame entry point,
+        which is how the proxy actually calls this on a streamed Messages API request."""
+        monkeypatch.setattr(litellm, "include_cost_in_streaming_usage", True)
+
+        class _StubLoggingObj:
+            def _response_cost_calculator(self, result):
+                return 0.00042
+
+        chunk = (
+            b"event: message_delta\n"
+            b'data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},'
+            b'"usage":{"input_tokens":14,"output_tokens":8,"cache_read_input_tokens":3202}}\n\n'
+        )
+
+        result = ProxyBaseLLMRequestProcessing._process_chunk_with_cost_injection(
+            chunk, "claude-haiku-4-5", _StubLoggingObj()
+        )
+
+        assert result != chunk
+        data_line = next(ln for ln in result.decode("utf-8").splitlines() if ln.startswith("data:"))
+        payload = json.loads(data_line.split("data:", 1)[1].strip())
+        assert payload["usage"]["cost"] == 0.00042
+        assert payload["usage"]["cache_read_input_tokens"] == 3202
 
 
 # ---------------------------------------------------------------------------
@@ -6637,3 +7103,125 @@ async def test_a_broken_hook_does_not_replace_the_real_error_with_its_own_bug():
     error_frame = json.loads(collected[-2].decode().removeprefix("data: ").strip())
     assert error_frame["error"]["message"] == "rate limited"
     assert "audit backend" not in collected[-2].decode()
+
+
+class TestRouterModelNameOnNonStreamingResponse:
+    """
+    The proxy restamps the response body `model` back to the client-requested
+    alias, so an auto-routed request (auto_router / complexity_router /
+    adaptive_router / quality_router) had no body-level surface naming the model
+    group that actually served it. `router_model_name` is now set on the response
+    whenever the router marked the request as auto-routed.
+    """
+
+    @staticmethod
+    def _logging_obj(*, metadata_bucket, bucket_name="metadata"):
+        logging_obj = MagicMock()
+        logging_obj.litellm_call_id = "call-auto-routed"
+        logging_obj.cost_breakdown = None
+        logging_obj.model_call_details = {}
+        logging_obj.litellm_params = {bucket_name: metadata_bucket}
+        logging_obj._enqueue_deferred_logging = None
+        logging_obj._on_deferred_stream_complete = None
+        return logging_obj
+
+    async def _drive(self, *, monkeypatch, logging_obj):
+        import litellm.proxy.common_request_processing as crp
+        from litellm.proxy._types import UserAPIKeyAuth as RealUserAPIKeyAuth
+        from litellm.types.utils import ModelResponse
+
+        response = ModelResponse(
+            model="deep-model",
+            choices=[{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+        )
+
+        async def fake_route_request(**kwargs):
+            async def _llm_call():
+                return response
+
+            return _llm_call()
+
+        monkeypatch.setattr(crp, "route_request", fake_route_request)
+
+        async def fake_post_call_success_hook(data, user_api_key_dict, response):
+            return response
+
+        proxy_logging_obj = MagicMock(spec=ProxyLogging)
+        proxy_logging_obj.during_call_hook = AsyncMock(return_value=None)
+        proxy_logging_obj.update_request_status = AsyncMock(return_value=None)
+        proxy_logging_obj.post_call_response_headers_hook = AsyncMock(return_value={})
+        proxy_logging_obj.post_call_success_hook = fake_post_call_success_hook
+
+        processing_obj = ProxyBaseLLMRequestProcessing(
+            data={"model": "smart-route", "litellm_logging_obj": logging_obj}
+        )
+
+        with patch.object(ProxyBaseLLMRequestProcessing, "_has_post_call_guardrails", return_value=False):
+            return await processing_obj.base_process_llm_request(
+                request=MagicMock(spec=Request, headers={}),
+                fastapi_response=Response(),
+                user_api_key_dict=RealUserAPIKeyAuth(api_key="sk-test"),
+                route_type="acompletion",
+                proxy_logging_obj=proxy_logging_obj,
+                general_settings={},
+                proxy_config=MagicMock(spec=ProxyConfig),
+                select_data_generator=None,
+                llm_router=None,
+                skip_pre_call_logic=True,
+            )
+
+    @pytest.mark.asyncio
+    async def test_auto_routed_request_carries_router_model_name(self, monkeypatch):
+        result = await self._drive(
+            monkeypatch=monkeypatch,
+            logging_obj=self._logging_obj(
+                metadata_bucket={
+                    AUTO_ROUTED_REQUEST_METADATA_KEY: True,
+                    "deployment_model_name": "deep-model",
+                }
+            ),
+        )
+
+        assert result.model == "smart-route"
+        assert result.model_dump(exclude_none=True, exclude_unset=True)[ROUTER_MODEL_NAME_RESPONSE_FIELD] == (
+            "deep-model"
+        )
+
+    @pytest.mark.asyncio
+    async def test_marker_and_model_name_in_different_buckets(self, monkeypatch):
+        logging_obj = self._logging_obj(metadata_bucket={AUTO_ROUTED_REQUEST_METADATA_KEY: True})
+        logging_obj.litellm_params["litellm_metadata"] = {"deployment_model_name": "deep-model"}
+
+        result = await self._drive(monkeypatch=monkeypatch, logging_obj=logging_obj)
+
+        assert result.model_dump(exclude_none=True, exclude_unset=True)[ROUTER_MODEL_NAME_RESPONSE_FIELD] == (
+            "deep-model"
+        )
+
+    @pytest.mark.asyncio
+    async def test_plain_model_group_request_has_no_router_model_name(self, monkeypatch):
+        result = await self._drive(
+            monkeypatch=monkeypatch,
+            logging_obj=self._logging_obj(metadata_bucket={"deployment_model_name": "deep-model"}),
+        )
+
+        assert ROUTER_MODEL_NAME_RESPONSE_FIELD not in result.model_dump(exclude_none=True, exclude_unset=True)
+
+    @pytest.mark.asyncio
+    async def test_typeddict_response_gets_router_model_name(self):
+        from litellm.types.utils import AnthropicMessagesResponse
+
+        response: AnthropicMessagesResponse = {"id": "msg_1", "model": "smart-route", "type": "message"}
+        ProxyBaseLLMRequestProcessing.set_router_selected_model_field(
+            response_obj=response,
+            router_model_name=ProxyBaseLLMRequestProcessing.get_router_selected_model_name(
+                self._logging_obj(
+                    metadata_bucket={
+                        AUTO_ROUTED_REQUEST_METADATA_KEY: True,
+                        "deployment_model_name": "deep-model",
+                    }
+                )
+            ),
+        )
+
+        assert response[ROUTER_MODEL_NAME_RESPONSE_FIELD] == "deep-model"
