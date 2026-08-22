@@ -965,14 +965,11 @@ def test_generic_cost_per_token_gpt56(
     assert round(completion_cost, 10) == round(output_cost * completion_tokens, 10)
 
 
-def test_gpt_5_6_alias_prices_match_sol():
+def test_gpt_5_6_alias_prices_match_sol(local_model_cost_map):
     """Regression: the bare gpt-5.6 alias routes to GPT-5.6 Sol, so every cost field on
     the two entries has to hold the same value. They drifted once before, when Sol took
     its promotional cut and gpt-5.6 was left on the pre-cut rates, overbilling callers
     who used the alias."""
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-    litellm.model_cost = litellm.get_model_cost_map(url="")
-
     alias = litellm.model_cost["gpt-5.6"]
     sol = litellm.model_cost["gpt-5.6-sol"]
 
