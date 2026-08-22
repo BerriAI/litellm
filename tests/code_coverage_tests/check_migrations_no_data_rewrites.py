@@ -25,8 +25,17 @@ repo's idiom for conditional DDL, so a body is where an `UPDATE` would otherwise
 hide. The SQL an `EXECUTE` runs is scanned the same way, since a rewrite reads the
 same to Postgres whether it is spelled out or handed over as a string, and so is a
 literal assigned with `:=` to a variable some `EXECUTE` in the same body then runs
-by name. A literal nothing runs is text, however much it reads like a statement,
-so an error message naming a `DELETE` the application handles stays a message.
+by name, and so is the body of a `DO` written in single quotes rather than dollar
+quotes. A literal nothing runs is text, however much it reads like a statement, so
+an error message naming a `DELETE` the application handles stays a message.
+
+Each literal is read on its own, so a keyword built by concatenating fragments that
+do not contain it (`'UPD' || 'ATE ...'`) is not caught. Every fragment is scanned,
+so a concatenation is caught wherever the keyword survives whole in one of them,
+which covers `'UPDATE ' || quote_ident(t)` and the rest of the readable shapes. The
+gap needs a keyword deliberately split down the middle, and this check is a guard
+against a rewrite reaching a boot unnoticed, not a defence against someone hiding
+one on purpose.
 
 Line numbers always count against the whole migration file, however deeply the
 statement is nested, so a reported line points at the statement and the markers
@@ -91,6 +100,7 @@ STATEMENT_KEYWORDS = REWRITES_ROWS | frozenset(
         "RAISE",
         "RETURN",
         "EXECUTE",
+        "DO",
         "CALL",
         "REINDEX",
         "REFRESH",
@@ -279,9 +289,12 @@ def draws_rows_from_a_select(statement: str) -> bool:
 
 def hands_off_sql(statement: str, executed: frozenset[str]) -> bool:
     """Whether a statement gives the server a string literal to run as SQL. `EXECUTE` runs one
-    outright. An assignment parks one in a variable, which counts only when something further
-    down runs that variable by name, since a string the migration never executes is text."""
-    return leads_with(statement, "EXECUTE") or bool(assigned_names(statement) & executed)
+    outright, and so does `DO`, whose body is a string wherever it is not dollar-quoted. An
+    assignment parks one in a variable, which counts only when something further down runs
+    that variable by name, since a string the migration never executes is text."""
+    if leads_with(statement, "EXECUTE") or leads_with(statement, "DO"):
+        return True
+    return bool(assigned_names(statement) & executed)
 
 
 def assigned_names(statement: str) -> frozenset[str]:

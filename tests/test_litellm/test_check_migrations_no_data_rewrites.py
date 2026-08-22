@@ -472,6 +472,35 @@ class TestDynamicSql:
         )
         assert _keywords(tmp_path, sql) == ()
 
+    def test_a_do_body_in_single_quotes_is_scanned(self, tmp_path):
+        sql = "DO 'BEGIN UPDATE \"Foo\" SET \"a\" = 1; END';"
+        assert _keywords(tmp_path, sql) == ("UPDATE",)
+        assert _scan(tmp_path, sql)[0].line == 1
+
+    def test_a_quoted_do_body_with_a_language_clause_is_scanned(self, tmp_path):
+        sql = "DO LANGUAGE plpgsql 'BEGIN DELETE FROM \"Foo\"; END';"
+        assert _keywords(tmp_path, sql) == ("DELETE",)
+
+    def test_a_quoted_do_body_holding_only_ddl_passes(self, tmp_path):
+        sql = "DO 'BEGIN ALTER TABLE \"Foo\" ADD COLUMN \"b\" TEXT; END';"
+        assert _keywords(tmp_path, sql) == ()
+
+    def test_a_marker_exempts_a_quoted_do_body(self, tmp_path):
+        sql = (
+            "-- data-migration-ok: one config row, keyed by its primary key\n"
+            "DO 'BEGIN UPDATE \"Config\" SET \"v\" = 1 WHERE \"k\" = ''rev''; END';"
+        )
+        assert _keywords(tmp_path, sql) == ()
+
+    def test_concatenated_sql_is_flagged_when_the_keyword_leads_a_fragment(self, tmp_path):
+        sql = "DO $$\nBEGIN\n    EXECUTE 'UPDATE ' || quote_ident('Foo') || ' SET \"a\" = 1';\nEND $$;"
+        assert _keywords(tmp_path, sql) == ("UPDATE",)
+        assert _scan(tmp_path, sql)[0].line == 3
+
+    def test_concatenated_sql_is_flagged_when_the_keyword_leads_a_later_fragment(self, tmp_path):
+        sql = "DO $$\nBEGIN\n    EXECUTE 'WITH x AS (SELECT 1) ' || 'UPDATE \"Foo\" SET \"a\" = 1';\nEND $$;"
+        assert _keywords(tmp_path, sql) == ("UPDATE",)
+
     def test_only_the_variable_that_is_executed_is_read_as_sql(self, tmp_path):
         sql = (
             "DO $$\n"
