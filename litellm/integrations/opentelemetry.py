@@ -1465,6 +1465,8 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         in ``standard_logging_object.metadata``; propagating that to every
         span only adds noise that makes traces look mis-instrumented.
         """
+        if litellm.redact_user_api_key_info is True:
+            return
         if team_id:
             self.safe_set_attribute(
                 span=span,
@@ -2328,7 +2330,9 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             #############################################
             ############ LLM CALL METADATA ##############
             #############################################
-            metadata: Final = standard_logging_payload["metadata"]
+            from litellm.litellm_core_utils.redact_messages import redact_user_api_key_info
+
+            metadata: Final = redact_user_api_key_info(metadata=dict(standard_logging_payload["metadata"]))
             for key, value in metadata.items():
                 self.safe_set_attribute(span=span, key=f"metadata.{key}", value=value)
 

@@ -4,20 +4,180 @@
 # What is this?
 ## Unit test for presidio pii masking
 import sys, os, asyncio, time, random
+from contextlib import contextmanager
 from datetime import datetime
 import traceback
 from dotenv import load_dotenv
 
 load_dotenv()
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import pytest
 import litellm
 from unittest.mock import patch, MagicMock, AsyncMock
 from base_test import BaseLoggingCallbackTest
 from litellm.types.utils import ModelResponse
+
+
+@contextmanager
+def temporary_litellm_redaction(enabled: bool):
+    original_flag = litellm.redact_user_api_key_info
+    litellm.redact_user_api_key_info = enabled  # test-quality-ok: redaction flag is tested here
+    try:
+        yield
+    finally:
+        litellm.redact_user_api_key_info = original_flag  # test-quality-ok: restore test global
+
+
+@contextmanager
+def temporary_litellm_callbacks(callbacks: list[str]):
+    original_callbacks = litellm.callbacks
+    litellm.callbacks = callbacks  # test-quality-ok: callback registration is tested here
+    try:
+        yield
+    finally:
+        litellm.logging_callback_manager._reset_all_callbacks()
+        litellm.callbacks = original_callbacks  # test-quality-ok: restore test global
+
+
+class TestOpentelemetryRedaction:
+    """Regression tests for user_api_key_info redaction in OTEL spans (#36758)."""
+
+    @pytest.mark.asyncio
+    async def test_otel_redacts_user_api_key_metadata_when_flag_enabled(self):
+        """When redact_user_api_key_info is True, metadata.user_api_key_* span
+        attributes must not be emitted."""
+        litellm.logging_callback_manager._reset_all_callbacks()
+
+        with temporary_litellm_redaction(True), temporary_litellm_callbacks(["otel"]):
+            await litellm.acompletion(
+                model="gpt-5-mini",
+                messages=[{"role": "user", "content": "test"}],
+                mock_response="ok",
+                metadata={
+                    "user_api_key_hash": "hashed-secret",
+                    "user_api_key_user_id": "uid-123",
+                    "user_api_key_user_email": "user@example.com",
+                    "user_api_key_team_id": "team-456",
+                    "generation_name": "test-gen",
+                },
+            )
+            await asyncio.sleep(1)
+
+            from litellm.integrations.opentelemetry import OpenTelemetry
+
+            assert any(isinstance(cb, OpenTelemetry) for cb in litellm._async_success_callback), (
+                "OpenTelemetry logger not found"
+            )
+
+            from litellm.litellm_core_utils.redact_messages import (
+                redact_user_api_key_info,
+            )
+
+            test_metadata = {
+                "user_api_key_hash": "hashed-secret",
+                "user_api_key_user_id": "uid-123",
+                "user_api_key_user_email": "user@example.com",
+                "user_api_key_team_id": "team-456",
+                "generation_name": "test-gen",
+            }
+            redacted = redact_user_api_key_info(metadata=test_metadata)
+            assert "user_api_key_hash" not in redacted
+            assert "user_api_key_user_id" not in redacted
+            assert "user_api_key_user_email" not in redacted
+            assert "user_api_key_team_id" not in redacted
+            assert "generation_name" in redacted
+
+    def test_redact_user_api_key_info_filters_correctly(self):
+        """Direct unit test for the redaction function used by the OTEL path."""
+        from litellm.litellm_core_utils.redact_messages import (
+            redact_user_api_key_info,
+        )
+
+        with temporary_litellm_redaction(True):
+            metadata = {
+                "user_api_key_hash": "secret-hash",
+                "user_api_key_user_id": "uid",
+                "user_api_key_user_email": "email@test.com",
+                "user_api_key_team_id": "team",
+                "user_api_key_org_id": "org",
+                "user_api_key_alias": "my-key",
+                "model": "gpt-5",
+                "generation_name": "test",
+            }
+            result = redact_user_api_key_info(metadata=metadata)
+            for key in list(metadata.keys()):
+                if key.startswith("user_api_key"):
+                    assert key not in result, f"{key} should be redacted"
+                else:
+                    assert key in result, f"{key} should be preserved"
+
+    def test_redact_user_api_key_info_noop_when_disabled(self):
+        """When the flag is off, metadata passes through unchanged."""
+        from litellm.litellm_core_utils.redact_messages import (
+            redact_user_api_key_info,
+        )
+
+        with temporary_litellm_redaction(False):
+            metadata = {
+                "user_api_key_hash": "secret-hash",
+                "model": "gpt-5",
+            }
+            result = redact_user_api_key_info(metadata=metadata)
+            assert result == metadata
+
+    def test_team_attributes_are_not_added_to_auxiliary_spans_when_redacted(self):
+        """Auxiliary spans must respect the same user_api_key redaction flag."""
+        from litellm.integrations.opentelemetry import OpenTelemetry
+
+        with temporary_litellm_redaction(True):
+            otel_logger = OpenTelemetry()
+            otel_logger.safe_set_attribute = MagicMock()
+
+            otel_logger._set_team_attributes_on_span(
+                span=MagicMock(),
+                team_id="team-456",
+                team_alias="team-alias",
+            )
+
+            otel_logger.safe_set_attribute.assert_not_called()
+
+    def test_set_attributes_redacts_user_api_key_metadata_before_span_export(self):
+        """The OTEL attribute path must filter user_api_key_* metadata."""
+        from litellm.integrations.opentelemetry import OpenTelemetry
+
+        with temporary_litellm_redaction(True):
+            otel_logger = OpenTelemetry()
+            otel_logger.safe_set_attribute = MagicMock()
+            otel_logger._set_inference_identity_attributes = MagicMock()
+            otel_logger._set_service_tier_attributes = MagicMock()
+            otel_logger._capture_in_span = MagicMock(return_value=False)
+
+            otel_logger.set_attributes(
+                span=MagicMock(),
+                kwargs={
+                    "litellm_params": {"custom_llm_provider": "openai"},
+                    "standard_logging_object": {
+                        "call_type": "completion",
+                        "metadata": {
+                            "user_api_key_hash": "hashed-secret",
+                            "user_api_key_user_id": "uid-123",
+                            "user_api_key_user_email": "user@example.com",
+                            "user_api_key_team_id": "team-456",
+                            "generation_name": "test-gen",
+                        },
+                    },
+                },
+                response_obj=None,
+            )
+
+            attribute_keys = [call.kwargs["key"] for call in otel_logger.safe_set_attribute.call_args_list]
+
+            assert "metadata.generation_name" in attribute_keys
+            assert "metadata.user_api_key_hash" not in attribute_keys
+            assert "metadata.user_api_key_user_id" not in attribute_keys
+            assert "metadata.user_api_key_user_email" not in attribute_keys
+            assert "metadata.user_api_key_team_id" not in attribute_keys
 
 
 class TestOpentelemetryUnitTests(BaseLoggingCallbackTest):
@@ -90,20 +250,16 @@ class TestOpentelemetryUnitTests(BaseLoggingCallbackTest):
             detected_context, detected_span = otel_integration._get_span_context(kwargs)
 
             # Assert: Should detect the active span
-            assert (
-                detected_span is not None
-            ), "Should detect active span from global context"
-            assert (
-                detected_span is parent_span
-            ), "Detected span should be the active parent span"
+            assert detected_span is not None, "Should detect active span from global context"
+            assert detected_span is parent_span, "Detected span should be the active parent span"
 
             detected_span_context = detected_span.get_span_context()
-            assert (
-                detected_span_context.trace_id == parent_span_context.trace_id
-            ), "Detected span should have same trace_id as parent"
-            assert (
-                detected_span_context.span_id == parent_span_context.span_id
-            ), "Detected span should have same span_id as parent"
+            assert detected_span_context.trace_id == parent_span_context.trace_id, (
+                "Detected span should have same trace_id as parent"
+            )
+            assert detected_span_context.span_id == parent_span_context.span_id, (
+                "Detected span should have same span_id as parent"
+            )
 
     def test_record_exception_on_span(self):
         """
@@ -165,9 +321,9 @@ class TestOpentelemetryUnitTests(BaseLoggingCallbackTest):
         actual_calls = [call.args for call in mock_span.set_attribute.call_args_list]
 
         for expected_call in expected_calls:
-            assert (
-                expected_call in actual_calls
-            ), f"Expected set_attribute call {expected_call} not found in actual calls: {actual_calls}"
+            assert expected_call in actual_calls, (
+                f"Expected set_attribute call {expected_call} not found in actual calls: {actual_calls}"
+            )
 
     def test_record_exception_on_span_with_fallback(self):
         """
@@ -208,6 +364,4 @@ class TestOpentelemetryUnitTests(BaseLoggingCallbackTest):
         mock_span.record_exception.assert_called_once_with(test_exception)
 
         # Assert: error.message should be set from error_str using ErrorAttributes constant
-        mock_span.set_attribute.assert_called_with(
-            ErrorAttributes.ERROR_MESSAGE, "Fallback error message"
-        )
+        mock_span.set_attribute.assert_called_with(ErrorAttributes.ERROR_MESSAGE, "Fallback error message")
