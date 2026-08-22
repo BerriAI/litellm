@@ -12,6 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
+from e2e_config import SLOW_PROVIDER_TIMEOUT_SECONDS
 from e2e_http import BinaryStream, Result, StreamingResponse
 from models import CacheControl, ChatMessage, LiteLLMParamsBody, RichMessage, TextBlock
 from proxy_client import ProxyClient
@@ -451,6 +452,7 @@ class EndpointsClient:
             file_content_type="image/png",
             file_field="image",
             response_type=ImagesResult,
+            timeout=SLOW_PROVIDER_TIMEOUT_SECONDS,
         )
 
     def generate_content(
