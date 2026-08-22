@@ -108,7 +108,10 @@ class ResponsesSessionHandler:
             if isinstance(_response_input_param, (str, list)):
                 response_input_param = _response_input_param
             elif isinstance(_response_input_param, dict):
-                response_input_param = cast(ResponseInputParam, [_response_input_param])
+                response_input_param = cast(
+                    ResponseInputParam,
+                    [_response_input_param],  # mutable-ok: a lone input item still has to arrive as a list
+                )
 
         if response_input_param:
             chat_completion_messages = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
@@ -301,4 +304,4 @@ class ResponsesSessionHandler:
                 return spend_logs
 
         verbose_proxy_logger.debug("Found no spend logs for previous response id %s", response_id)
-        return []
+        return []  # mutable-ok: an empty result the caller only reads
