@@ -8927,7 +8927,11 @@ def test_model_group_info_intersects_supported_reasoning_efforts():
     assert result.supported_reasoning_efforts == ("minimal", "low", "medium", "high")
 
 
-def test_model_group_info_reasoning_efforts_ignore_deployments_without_metadata():
+def test_model_group_info_reasoning_efforts_empty_when_a_deployment_is_off_the_map():
+    """The router fills every ModelInfo key, so a deployment absent from the model map arrives with
+    supports_reasoning None rather than with the key missing, and the group can no longer promise a
+    level on its behalf. The dashboard reads the empty result as "nothing known" and falls back to
+    the capability-blind picker, which is what it showed before this field existed."""
     router = litellm.Router(
         model_list=[
             {
@@ -8952,7 +8956,7 @@ def test_model_group_info_reasoning_efforts_ignore_deployments_without_metadata(
                 "supports_reasoning": True,
                 "supports_max_reasoning_effort": True,
             }
-        return {"key": model_name, "litellm_provider": "openai", "mode": "chat"}
+        return {"key": model_name, "litellm_provider": "openai", "mode": None, "supports_reasoning": None}
 
     with patch.object(router, "get_deployment_model_info", side_effect=_model_info):
         result = router._set_model_group_info(
@@ -8961,4 +8965,29 @@ def test_model_group_info_reasoning_efforts_ignore_deployments_without_metadata(
         )
 
     assert result is not None
-    assert result.supported_reasoning_efforts == ("none", "minimal", "low", "medium", "high", "max")
+    assert result.supported_reasoning_efforts == ()
+
+
+@pytest.mark.parametrize(
+    "configured, expected",
+    [
+        ("high", ("high",)),
+        (["low", "high"], ("low", "high")),
+        (17, None),
+        ({"effort": "high"}, None),
+        ([1, 2], None),
+    ],
+)
+def test_model_group_info_tolerates_any_configured_reasoning_efforts_shape(configured, expected):
+    """Deployment model_info is splatted into ModelGroupInfo, so this key arrives with whatever an
+    operator wrote in the config. A shape pydantic cannot validate used to fail the whole
+    /model_group/info response, not just the group carrying it."""
+    from litellm.types.router import ModelGroupInfo
+
+    info = ModelGroupInfo(
+        model_group="g",
+        providers=["openai"],
+        supported_reasoning_efforts=configured,
+    )
+
+    assert info.supported_reasoning_efforts == expected

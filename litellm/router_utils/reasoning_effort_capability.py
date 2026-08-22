@@ -54,8 +54,12 @@ def _supports_none_reasoning_effort(model_info: Mapping[str, object]) -> bool:
 
 
 def resolve_supported_reasoning_efforts(model_info: Mapping[str, object]) -> tuple[str, ...] | None:
-    """None = no capability metadata for this deployment (e.g. a model absent from the model map,
-    whose stub info carries no supports_reasoning key at all); () = reasoning unsupported."""
+    """None = the caller passed no supports_reasoning key at all; () = this deployment adds no
+    effort levels to its group. The router always supplies the key, so a deployment absent from the
+    model map arrives with supports_reasoning None and lands on (), the same answer a mapped
+    non-reasoning model gets: the group cannot promise a level on behalf of a model nothing is known
+    about. () therefore reads as "no usable answer" downstream, which is why the dashboard falls
+    back to the capability-blind level list on an empty group rather than hiding the control."""
     if "supports_reasoning" not in model_info:
         return None
     if model_info.get("supports_reasoning") is not True:
