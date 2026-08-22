@@ -989,3 +989,49 @@ async def test_openai_moderation_initialize_guardrail_forwards_streaming_flags()
             assert guardrail.streaming_sampling_rate == 2
     finally:
         litellm.logging_callback_manager._reset_all_callbacks()
+
+
+@pytest.mark.asyncio
+async def test_openai_moderation_response_scan_moderates_output_not_user_prompt():
+    """On response scans the conversation is available in structured_messages,
+    but moderation must still target the model output carried in texts."""
+    from unittest.mock import AsyncMock
+
+    from litellm.types.utils import GenericGuardrailAPIInputs
+
+    with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
+        guardrail = OpenAIModerationGuardrail(
+            guardrail_name="test-openai-moderation",
+        )
+
+        mock_response = OpenAIModerationResponse(
+            id="modr-123",
+            model="omni-moderation-latest",
+            results=[
+                OpenAIModerationResult(
+                    flagged=False,
+                    categories={},
+                    category_scores={},
+                    category_applied_input_types={},
+                )
+            ],
+        )
+
+        with patch.object(
+            guardrail, "async_make_request", new_callable=AsyncMock, return_value=mock_response
+        ) as mock_request:
+            inputs = GenericGuardrailAPIInputs(
+                texts=["the model's answer"],
+                structured_messages=[
+                    {"role": "user", "content": "the user's question"},
+                    {"role": "assistant", "content": "the model's answer"},
+                ],
+            )
+
+            await guardrail.apply_guardrail(
+                inputs=inputs,
+                request_data={},
+                input_type="response",
+            )
+
+            assert mock_request.call_args.kwargs["input_text"] == "the model's answer"

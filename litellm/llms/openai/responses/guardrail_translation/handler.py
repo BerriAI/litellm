@@ -248,6 +248,18 @@ class OpenAIResponsesHandler(BaseTranslation):
             ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(tools)
             tools_to_check.extend(cast(list[ChatCompletionToolParam], transformed_tools))
 
+    def request_tools_for_guardrail(
+        self,
+        request_data: dict,
+        guardrail_to_apply: "CustomGuardrail",
+    ) -> list[ChatCompletionToolParam] | None:
+        raw_tools: Final = request_data.get("tools")
+        if not raw_tools:
+            return None
+        tools_to_check: Final[list[ChatCompletionToolParam]] = []
+        self._extract_and_transform_tools(raw_tools, tools_to_check)
+        return tools_to_check or None
+
     def _remap_tools_to_responses_api_format(self, guardrailed_tools: list[Any]) -> list[dict[str, object]]:
         """
         Remap guardrail-returned tools (Chat Completion format) back to
@@ -455,6 +467,17 @@ class OpenAIResponsesHandler(BaseTranslation):
             if response_model:
                 inputs["model"] = response_model
 
+            structured_conversation: Final = self.response_scan_conversation(
+                request_data,
+                guardrail_to_apply,
+                self.assistant_turn_from_extraction(texts_to_check, tool_calls_to_check),
+            )
+            if structured_conversation:
+                inputs["structured_messages"] = structured_conversation
+                response_scan_tools: Final = self.request_tools_for_guardrail(request_data, guardrail_to_apply)
+                if response_scan_tools:
+                    inputs["tools"] = response_scan_tools
+
             guardrailed_inputs: Final = await guardrail_to_apply.apply_guardrail(
                 inputs=inputs,
                 request_data=request_data,
@@ -544,6 +567,17 @@ class OpenAIResponsesHandler(BaseTranslation):
                 response_model = response_obj.get("model")
                 if response_model:
                     inputs["model"] = response_model
+
+                structured_conversation: Final = self.response_scan_conversation(
+                    request_data,
+                    guardrail_to_apply,
+                    self.assistant_turn_from_extraction(texts_to_check, tool_calls_to_check),
+                )
+                if structured_conversation:
+                    inputs["structured_messages"] = structured_conversation
+                    response_scan_tools: Final = self.request_tools_for_guardrail(request_data, guardrail_to_apply)
+                    if response_scan_tools:
+                        inputs["tools"] = response_scan_tools
 
                 guardrailed_inputs: Final = await guardrail_to_apply.apply_guardrail(
                     inputs=inputs,

@@ -105,7 +105,11 @@ class PromptGuardGuardrail(CustomGuardrail):
         structured_messages: Final = inputs.get("structured_messages", [])
         model: Final = inputs.get("model")
 
-        if structured_messages:
+        # Response scans keep the texts path: the redact write-back extracts
+        # user-role texts, which would clobber the response texts if the
+        # conversation were sent instead.
+        use_structured: Final = input_type == "request" and bool(structured_messages)
+        if use_structured:
             messages = list(structured_messages)
         elif texts:
             messages = [{"role": "user", "content": text} for text in texts]
@@ -175,7 +179,7 @@ class PromptGuardGuardrail(CustomGuardrail):
         if decision == "redact":
             redacted: Final = result.get("redacted_messages")
             if redacted:
-                if structured_messages:
+                if use_structured:
                     inputs["structured_messages"] = redacted
                 if "texts" in inputs:
                     extracted: Final = self._extract_texts_from_messages(

@@ -815,3 +815,46 @@ class TestPromptGuardInitializer:
         from litellm.types.guardrails import SupportedGuardrailIntegrations
 
         assert SupportedGuardrailIntegrations.PROMPTGUARD.value == "promptguard"
+
+
+class TestPromptGuardResponseScanIgnoresConversation:
+    @pytest.mark.asyncio
+    async def test_response_scan_sends_texts_and_redacts_them(
+        self, promptguard_guardrail, mock_request_data
+    ):
+        """A response scan now carries the conversation in structured_messages,
+        but PromptGuard must keep scanning the response texts: sending the
+        conversation would make the user-role redact write-back clobber the
+        response texts with request content."""
+        resp = _make_response(
+            {
+                "decision": "redact",
+                "event_id": "evt-007",
+                "confidence": 0.99,
+                "threat_type": "pii_detected",
+                "redacted_messages": [
+                    {"role": "user", "content": "Your SSN is *********"}
+                ],
+                "threats": [],
+                "latency_ms": 50.0,
+            }
+        )
+        with patch.object(
+            promptguard_guardrail.async_handler, "post", return_value=resp
+        ) as mock_post:
+            result = await promptguard_guardrail.apply_guardrail(
+                inputs={
+                    "texts": ["Your SSN is 123-45-6789"],
+                    "structured_messages": [
+                        {"role": "user", "content": "what's my SSN?"},
+                        {"role": "assistant", "content": "Your SSN is 123-45-6789"},
+                    ],
+                },
+                request_data=mock_request_data,
+                input_type="response",
+            )
+            sent_messages = mock_post.call_args.kwargs["json"]["messages"]
+            assert sent_messages == [
+                {"role": "user", "content": "Your SSN is 123-45-6789"}
+            ]
+            assert result["texts"] == ["Your SSN is *********"]

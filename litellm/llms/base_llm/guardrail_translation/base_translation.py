@@ -1,6 +1,14 @@
 from abc import ABC, abstractmethod
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Final, Optional
+from typing import TYPE_CHECKING, Any, Final, Optional, cast
+
+from litellm.llms.base_llm.guardrail_translation.utils import (
+    effective_scan_only_tool_results_for_guardrail,
+    effective_skip_system_message_for_guardrail,
+    effective_skip_tool_message_for_guardrail,
+    scoped_structured_message_indices,
+)
 
 if TYPE_CHECKING:
     from litellm.integrations.custom_guardrail import (
@@ -9,7 +17,7 @@ if TYPE_CHECKING:
     )
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.proxy._types import UserAPIKeyAuth
-    from litellm.types.llms.openai import AllMessageValues
+    from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
 
 
 @dataclass(slots=True)
@@ -156,6 +164,82 @@ class BaseTranslation(ABC):
         Returns None if no convertible content is found.
         """
         return None
+
+    def scoped_request_conversation(
+        self,
+        request_data: dict,
+        guardrail_to_apply: "CustomGuardrail",
+    ) -> list["AllMessageValues"] | None:
+        """
+        The request conversation as the guardrail's request scan saw it: the
+        handler's structured messages with the operator scoping flags applied.
+
+        Override when the request scan scopes differently (e.g. Anthropic's
+        top-level system prompt hoisting).
+        """
+        structured_messages: Final = self.get_structured_messages(request_data)
+        if not structured_messages:
+            return None
+        scoped_indices: Final = scoped_structured_message_indices(
+            structured_messages,
+            scan_only_tool_results=effective_scan_only_tool_results_for_guardrail(guardrail_to_apply),
+            skip_system=effective_skip_system_message_for_guardrail(guardrail_to_apply),
+            skip_tool=effective_skip_tool_message_for_guardrail(guardrail_to_apply),
+        )
+        scoped: Final = [structured_messages[index] for index in scoped_indices]
+        return scoped or None
+
+    def response_scan_conversation(
+        self,
+        request_data: dict | None,
+        guardrail_to_apply: "CustomGuardrail",
+        response_turns: Sequence["AllMessageValues"],
+    ) -> list["AllMessageValues"] | None:
+        """
+        Full conversation for a response scan: the scoped request conversation
+        with the model's response turns appended.
+
+        Returns None when the request context is unavailable (SDK/direct-call
+        path fabricates request_data without messages); guardrails then fall
+        back to scanning the extracted texts.
+        """
+        if request_data is None:
+            return None
+        request_conversation: Final = self.scoped_request_conversation(request_data, guardrail_to_apply)
+        if request_conversation is None:
+            return None
+        return [*request_conversation, *response_turns]
+
+    def request_tools_for_guardrail(
+        self,
+        request_data: dict,
+        guardrail_to_apply: "CustomGuardrail",
+    ) -> list["ChatCompletionToolParam"] | None:
+        """
+        The request's tool definitions in the shape the request scan sends them.
+
+        Override in tool-capable handlers; default returns None.
+        """
+        return None
+
+    @staticmethod
+    def assistant_turn_from_extraction(
+        texts: Sequence[str],
+        tool_calls: Sequence[Mapping[str, object]] | None = None,
+    ) -> list["AllMessageValues"]:
+        """
+        One OpenAI-shape assistant turn built from the texts and tool calls a
+        handler's response extraction collected; empty when there is nothing.
+        """
+        tool_call_items: Final = tuple(tool_calls or ())
+        if not texts and not tool_call_items:
+            return []
+        turn: Final = {
+            "role": "assistant",
+            "content": "\n".join(texts),
+            **({"tool_calls": list(tool_call_items)} if tool_call_items else {}),
+        }
+        return [cast("AllMessageValues", turn)]
 
     def extract_request_tool_names(self, data: dict) -> list[str]:
         """

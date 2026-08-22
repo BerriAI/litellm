@@ -162,12 +162,19 @@ class AktoGuardrail(CustomGuardrail):
     def build_request_body(
         inputs: GenericGuardrailAPIInputs,
         request_data: dict | None = None,
+        *,
+        prefer_structured_messages: bool = True,
     ) -> dict[str, Any]:
-        """Build the LLM request body from guardrail inputs (messages, model, tools)."""
+        """Build the LLM request body from guardrail inputs (messages, model, tools).
+
+        ``prefer_structured_messages`` is False on response scans, where
+        ``structured_messages`` carries the response turns too and would
+        misrepresent the request in the ingested payload.
+        """
         model: Final = inputs.get("model", "") or ""
         body: Final[dict[str, Any]] = {"model": model}
 
-        structured: Final = inputs.get("structured_messages")
+        structured: Final = inputs.get("structured_messages") if prefer_structured_messages else None
         if structured:
             body["messages"] = structured
         elif request_data is not None and request_data.get("messages"):
@@ -232,7 +239,9 @@ class AktoGuardrail(CustomGuardrail):
         """
         request_path: Final = self.extract_request_path(request_data)
         request_headers: Final = self.build_request_headers(request_data)
-        request_body: Final = self.build_request_body(inputs, request_data)
+        request_body: Final = self.build_request_body(
+            inputs, request_data, prefer_structured_messages=not include_response
+        )
         tag: Final = self.build_tag_metadata(request_data)
 
         response_payload = json.dumps({})  # Empty body wrapper when no response yet

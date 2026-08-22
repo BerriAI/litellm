@@ -396,6 +396,15 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             if hasattr(response, "model") and response.model:
                 inputs["model"] = response.model
 
+            structured_conversation: Final = self.response_scan_conversation(
+                request_data, guardrail_to_apply, self._build_response_turns(response)
+            )
+            if structured_conversation:
+                inputs["structured_messages"] = structured_conversation
+                response_scan_tools: Final = self.request_tools_for_guardrail(request_data, guardrail_to_apply)
+                if response_scan_tools:
+                    inputs["tools"] = response_scan_tools
+
             guardrailed_inputs: Final = await guardrail_to_apply.apply_guardrail(
                 inputs=inputs,
                 request_data=request_data,
@@ -831,6 +840,42 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 if tool_call_dict:
                     tool_calls_to_check.append(tool_call_dict)
                     tool_call_task_mappings.append((choice_idx, int(tool_call_idx)))
+
+    def request_tools_for_guardrail(
+        self,
+        request_data: dict,
+        guardrail_to_apply: "CustomGuardrail",
+    ) -> list[ChatCompletionToolParam] | None:
+        if effective_scan_only_tool_results_for_guardrail(guardrail_to_apply):
+            return None
+        tools: Final = request_data.get("tools")
+        return cast(list[ChatCompletionToolParam], tools) if tools else None
+
+    def _build_response_turns(self, response: "ModelResponse") -> list[AllMessageValues]:
+        """Assistant turns for the response-scan conversation, one per choice."""
+        return [
+            turn
+            for choice in response.choices
+            if isinstance(choice, litellm.Choices) and (turn := self._choice_assistant_turn(choice)) is not None
+        ]
+
+    def _choice_assistant_turn(self, choice: Choices) -> AllMessageValues | None:
+        tool_call_dicts: Final = tuple(
+            converted
+            for tool_call in (choice.message.tool_calls or [])
+            if (converted := self._convert_tool_call_to_dict(tool_call)) is not None
+        )
+        content: Final = choice.message.content
+        if content is None and not tool_call_dicts:
+            return None
+        return cast(
+            AllMessageValues,
+            {
+                "role": "assistant",
+                "content": content,
+                **({"tool_calls": list(tool_call_dicts)} if tool_call_dicts else {}),
+            },
+        )
 
     def _convert_tool_call_to_dict(self, tool_call: dict[str, Any] | Any) -> dict[str, Any] | None:
         """

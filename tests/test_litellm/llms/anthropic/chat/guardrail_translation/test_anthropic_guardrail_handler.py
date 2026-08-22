@@ -1823,3 +1823,141 @@ class TestAnthropicMessagesScanOnlyToolResults:
 
         assert guardrail.captured_inputs is not None
         assert guardrail.captured_inputs.get("images") == ["TOOL_IMG"]
+
+
+class MockInputsRecordingGuardrail(CustomGuardrail):
+    """Records the inputs of every apply_guardrail call without modifying anything."""
+
+    def __init__(self):
+        super().__init__(guardrail_name="inputs-recording")
+        self.calls: list = []
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        import copy
+
+        self.calls.append((input_type, copy.deepcopy(dict(inputs))))
+        return inputs
+
+
+class TestAnthropicResponseScanConversation:
+    """Response scans receive the request conversation (with the top-level system
+    prompt hoisted, mirroring the request scan) plus the model's assistant turn,
+    and the request's tools translated to OpenAI shape."""
+
+    def _request_data(self, **overrides) -> dict:
+        data = {
+            "model": "claude-sonnet-4-5",
+            "system": "you are a helpful assistant",
+            "messages": [{"role": "user", "content": "what's the weather?"}],
+            **overrides,
+        }
+        return {key: value for key, value in data.items() if value is not None}
+
+    @pytest.mark.asyncio
+    async def test_response_scan_receives_hoisted_system_and_assistant_turn(self):
+        handler = AnthropicMessagesHandler()
+        guardrail = MockInputsRecordingGuardrail()
+        response = {
+            "id": "msg_1",
+            "model": "claude-sonnet-4-5",
+            "content": [{"type": "text", "text": "Sunny today."}],
+        }
+
+        await handler.process_output_response(
+            response=response,
+            guardrail_to_apply=guardrail,
+            request_data=self._request_data(),
+        )
+
+        input_type, inputs = guardrail.calls[-1]
+        assert input_type == "response"
+        conversation = inputs["structured_messages"]
+        assert conversation[0]["role"] == "system"
+        assert "helpful assistant" in str(conversation[0]["content"])
+        assert conversation[1] == {"role": "user", "content": "what's the weather?"}
+        assert conversation[-1] == {"role": "assistant", "content": "Sunny today."}
+
+    @pytest.mark.asyncio
+    async def test_skip_system_excludes_hoisted_prompt_from_response_scan(self):
+        handler = AnthropicMessagesHandler()
+        guardrail = MockInputsRecordingGuardrail()
+        guardrail.skip_system_message_in_guardrail = True
+        response = {
+            "id": "msg_1",
+            "model": "claude-sonnet-4-5",
+            "content": [{"type": "text", "text": "Sunny today."}],
+        }
+
+        await handler.process_output_response(
+            response=response,
+            guardrail_to_apply=guardrail,
+            request_data=self._request_data(),
+        )
+
+        _, inputs = guardrail.calls[-1]
+        conversation = inputs["structured_messages"]
+        assert all(message["role"] != "system" for message in conversation)
+        assert conversation[0] == {"role": "user", "content": "what's the weather?"}
+        assert conversation[-1] == {"role": "assistant", "content": "Sunny today."}
+
+    @pytest.mark.asyncio
+    async def test_response_scan_includes_translated_tools_and_tool_call_turn(self):
+        handler = AnthropicMessagesHandler()
+        guardrail = MockInputsRecordingGuardrail()
+        request_data = self._request_data(
+            system=None,
+            tools=[
+                {
+                    "name": "get_weather",
+                    "description": "look up weather",
+                    "input_schema": {"type": "object", "properties": {}},
+                }
+            ],
+        )
+        response = {
+            "id": "msg_1",
+            "model": "claude-sonnet-4-5",
+            "content": [
+                {"type": "text", "text": "Checking."},
+                {"type": "tool_use", "id": "toolu_1", "name": "get_weather", "input": {"city": "Paris"}},
+            ],
+        }
+
+        await handler.process_output_response(
+            response=response,
+            guardrail_to_apply=guardrail,
+            request_data=request_data,
+        )
+
+        _, inputs = guardrail.calls[-1]
+        assistant_turn = inputs["structured_messages"][-1]
+        assert assistant_turn["role"] == "assistant"
+        assert assistant_turn["content"] == "Checking."
+        assert assistant_turn["tool_calls"][0]["function"]["name"] == "get_weather"
+        assert inputs["tools"][0]["function"]["name"] == "get_weather"
+
+    @pytest.mark.asyncio
+    async def test_response_scan_without_request_messages_sends_no_conversation(self):
+        handler = AnthropicMessagesHandler()
+        guardrail = MockInputsRecordingGuardrail()
+        response = {
+            "id": "msg_1",
+            "model": "claude-sonnet-4-5",
+            "content": [{"type": "text", "text": "Hello."}],
+        }
+
+        await handler.process_output_response(
+            response=response,
+            guardrail_to_apply=guardrail,
+            request_data=None,
+        )
+
+        _, inputs = guardrail.calls[-1]
+        assert "structured_messages" not in inputs
+        assert inputs["texts"] == ["Hello."]
