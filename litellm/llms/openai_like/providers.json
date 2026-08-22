@@ -168,6 +168,11 @@
     },
     "supported_endpoints": ["/v1/chat/completions", "/v1/responses"]
   },
+  "minirouter": {
+    "base_url": "https://api.minirouter.sh/v1",
+    "api_key_env": "MINIROUTER_API_KEY",
+    "api_base_env": "MINIROUTER_API_BASE"
+  },
   "meta": {
     "base_url": "https://api.meta.ai/v1",
     "api_key_env": "META_API_KEY",
