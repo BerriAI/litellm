@@ -554,7 +554,7 @@ class TestProxyOAuthHeaderForwarding:
 
     def test_add_provider_specific_headers_forwards_oauth(self):
         """add_provider_specific_headers_to_request should forward OAuth Authorization
-        as a ProviderSpecificHeader scoped to Anthropic-compatible providers."""
+        as a ProviderSpecificHeader scoped to Anthropic and nothing else."""
         from litellm.proxy.litellm_pre_call_utils import (
             add_provider_specific_headers_to_request,
         )
@@ -569,9 +569,7 @@ class TestProxyOAuthHeaderForwarding:
 
         assert "provider_specific_header" in data
         psh = data["provider_specific_header"]
-        assert "anthropic" in psh["custom_llm_provider"]
-        assert "bedrock" in psh["custom_llm_provider"]
-        assert "vertex_ai" in psh["custom_llm_provider"]
+        assert psh["custom_llm_provider"] == "anthropic"
         assert psh["extra_headers"]["authorization"] == f"Bearer {FAKE_OAUTH_TOKEN}"
 
     def test_add_provider_specific_headers_ignores_non_oauth(self):
@@ -593,7 +591,10 @@ class TestProxyOAuthHeaderForwarding:
 
     def test_add_provider_specific_headers_combines_anthropic_and_oauth(self):
         """When both anthropic-beta and OAuth Authorization are present, both
-        should be included in the ProviderSpecificHeader."""
+        reach Anthropic."""
+        from litellm.litellm_core_utils.get_provider_specific_headers import (
+            ProviderSpecificHeaderUtils,
+        )
         from litellm.proxy.litellm_pre_call_utils import (
             add_provider_specific_headers_to_request,
         )
@@ -608,9 +609,12 @@ class TestProxyOAuthHeaderForwarding:
         add_provider_specific_headers_to_request(data=data, headers=headers)
 
         assert "provider_specific_header" in data
-        psh = data["provider_specific_header"]
-        assert psh["extra_headers"]["authorization"] == f"Bearer {FAKE_OAUTH_TOKEN}"
-        assert psh["extra_headers"]["anthropic-beta"] == "oauth-2025-04-20"
+        anthropic_headers = ProviderSpecificHeaderUtils.get_provider_specific_headers(
+            provider_specific_header=data["provider_specific_header"],
+            custom_llm_provider="anthropic",
+        )
+        assert anthropic_headers["authorization"] == f"Bearer {FAKE_OAUTH_TOKEN}"
+        assert anthropic_headers["anthropic-beta"] == "oauth-2025-04-20"
 
     def test_clean_headers_forwards_x_api_key_when_authenticated_with_litellm_key(self):
         """clean_headers should forward x-api-key when user authenticated with x-litellm-api-key and forward_llm_provider_auth_headers=True."""
@@ -929,7 +933,7 @@ class TestValidateEnvironmentAuthToken:
         config = AnthropicModelInfo()
         with mock_patch.dict("os.environ", {}, clear=True):
             with pytest.raises(
-                Exception, match="ANTHROPIC_API_KEY.*ANTHROPIC_AUTH_TOKEN"
+                Exception, match=r"ANTHROPIC_API_KEY.*ANTHROPIC_AUTH_TOKEN"
             ):
                 config.validate_environment(
                     headers={},

@@ -2,10 +2,10 @@ import asyncio
 import copy
 import json
 import os
-import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from botocore.credentials import Credentials
 from fastapi import Request
 from pydantic import ValidationError as PydanticValidationError
 from starlette.datastructures import Headers
@@ -26,17 +26,19 @@ from litellm.proxy.litellm_pre_call_utils import (
     _update_model_if_key_alias_exists,
     add_guardrails_from_policy_engine,
     add_litellm_data_to_request,
+    add_provider_specific_headers_to_request,
     check_if_token_is_service_account,
     clean_headers,
+)
+from litellm.litellm_core_utils.get_provider_specific_headers import (
+    ProviderSpecificHeaderUtils,
 )
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
     TRUSTED_CALLBACK_VARS_FIELD,
 )
+from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.types.utils import CredentialItem
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 
 def test_check_if_token_is_service_account():
@@ -3167,6 +3169,129 @@ def test_get_chain_id_from_headers_generic_vendor_session_id():
     )
 
 
+CODEX_USER_AGENT = "codex_cli_rs/0.62.0 (Mac OS 25.5.0; arm64) Apple_Terminal"
+CODEX_SESSION_UUID = "0199f0c2-8b41-7c3e-9a52-6d1f4b8e2a77"
+
+
+@pytest.mark.parametrize(
+    "user_agent",
+    [
+        "codex-tui",
+        "codex-tui/0.149.0 (Mac OS 26.5.1; arm64) ghostty/1.3.1 (codex-tui; 0.149.0)",
+        "codex_cli_rs/0.62.0 (Mac OS 25.5.0; arm64) Apple_Terminal",
+        "codex_exec/0.62.0 (Linux 6.1; x86_64) unknown",
+        "codex_vscode/0.62.0 (Mac OS 26.5.1; arm64) vscode/1.99.0",
+        "Codex CLI/1.0",
+    ],
+)
+def test_is_codex_user_agent_accepts_every_first_party_originator(user_agent: str):
+    """Codex ships several originators sharing only the `codex` stem, and the TUI
+    sends a bare `codex-tui` with no version, so matching one spelling misses real clients."""
+    from litellm.proxy.litellm_pre_call_utils import is_codex_user_agent
+
+    assert is_codex_user_agent(user_agent) is True
+
+
+@pytest.mark.parametrize(
+    "user_agent",
+    ["codexify/1.0", "mycodex-tui/1.0", "curl/8.7.1", "claude-cli/2.1.0 (external, cli)", ""],
+)
+def test_is_codex_user_agent_rejects_non_codex_clients(user_agent: str):
+    from litellm.proxy.litellm_pre_call_utils import is_codex_user_agent
+
+    assert is_codex_user_agent(user_agent) is False
+
+
+def test_get_chain_id_from_headers_codex_tui_user_agent():
+    """The real Codex TUI user agent must group turns, not just the codex_cli_rs spelling."""
+    from litellm.proxy.litellm_pre_call_utils import get_chain_id_from_headers
+
+    ua = "codex-tui/0.149.0 (Mac OS 26.5.1; arm64) ghostty/1.3.1 (codex-tui; 0.149.0)"
+    assert get_chain_id_from_headers({"user-agent": ua, "session-id": CODEX_SESSION_UUID}) == CODEX_SESSION_UUID
+    assert (
+        get_chain_id_from_headers({"user-agent": "codex-tui", "session-id": CODEX_SESSION_UUID}) == CODEX_SESSION_UUID
+    )
+
+
+@pytest.mark.parametrize(
+    "header",
+    ["session-id", "session_id", "thread-id", "conversation_id", "Session-Id"],
+)
+def test_get_chain_id_from_headers_codex_unprefixed_session_id(header: str):
+    """Codex sends its conversation uuid unprefixed, so the x-<vendor>-session-id regex misses it."""
+    from litellm.proxy.litellm_pre_call_utils import get_chain_id_from_headers
+
+    assert get_chain_id_from_headers({"user-agent": CODEX_USER_AGENT, header: CODEX_SESSION_UUID}) == CODEX_SESSION_UUID
+
+
+@pytest.mark.parametrize(
+    "user_agent",
+    ["curl/8.7.1", "claude-cli/2.1.0 (external, cli)", "OpenAI/Python 1.0.0"],
+)
+def test_get_chain_id_from_headers_unprefixed_session_id_requires_codex(user_agent: str):
+    """An unprefixed session-id from a non-Codex caller must not group traces.
+
+    The name is generic enough that two unrelated callers could collide on a value
+    and have their sessions merged, so the bare-header path is Codex-only.
+    """
+    from litellm.proxy.litellm_pre_call_utils import get_chain_id_from_headers
+
+    assert get_chain_id_from_headers({"user-agent": user_agent, "session-id": CODEX_SESSION_UUID}) is None
+    assert get_chain_id_from_headers({"session-id": CODEX_SESSION_UUID}) is None
+
+
+def test_get_chain_id_from_headers_codex_prefers_session_over_thread():
+    from litellm.proxy.litellm_pre_call_utils import get_chain_id_from_headers
+
+    assert (
+        get_chain_id_from_headers(
+            {
+                "user-agent": CODEX_USER_AGENT,
+                "thread-id": "e96634a3-fa28-4083-b354-55542e2dca01",
+                "session-id": CODEX_SESSION_UUID,
+            }
+        )
+        == CODEX_SESSION_UUID
+    )
+
+
+def test_get_chain_id_from_headers_codex_ignores_implausible_value():
+    from litellm.proxy.litellm_pre_call_utils import get_chain_id_from_headers
+
+    assert get_chain_id_from_headers({"user-agent": CODEX_USER_AGENT, "session-id": "short"}) is None
+    assert get_chain_id_from_headers({"user-agent": CODEX_USER_AGENT, "session-id": "has spaces!!"}) is None
+
+
+def test_get_chain_id_from_headers_explicit_beats_codex_header():
+    from litellm.proxy.litellm_pre_call_utils import get_chain_id_from_headers
+
+    assert (
+        get_chain_id_from_headers(
+            {
+                "user-agent": CODEX_USER_AGENT,
+                "x-litellm-trace-id": "explicit-id-value",
+                "session-id": CODEX_SESSION_UUID,
+            }
+        )
+        == "explicit-id-value"
+    )
+
+
+def test_add_litellm_metadata_groups_codex_turns_into_one_session():
+    """Every turn of a Codex session must log under one session id, not a fresh per-call trace id."""
+    headers = {"user-agent": CODEX_USER_AGENT, "session-id": CODEX_SESSION_UUID}
+    turns = [{"litellm_metadata": {}}, {"litellm_metadata": {}}]
+    for turn in turns:
+        LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+            headers=headers, data=turn, _metadata_variable_name="litellm_metadata"
+        )
+
+    for turn in turns:
+        assert turn["litellm_session_id"] == CODEX_SESSION_UUID
+        assert turn["litellm_trace_id"] == CODEX_SESSION_UUID
+        assert turn["litellm_metadata"]["session_id"] == CODEX_SESSION_UUID
+
+
 def test_trace_id_from_traceparent_valid():
     from litellm.proxy.litellm_pre_call_utils import _trace_id_from_traceparent
 
@@ -6211,7 +6336,17 @@ async def test_add_litellm_data_to_request_redacts_oauth_header_from_logging_cop
 
     assert updated["proxy_server_request"]["headers"] is updated[metadata_variable_name]["headers"]
 
-    assert updated["provider_specific_header"]["extra_headers"]["Authorization"] == _OAUTH_TOKEN
+    from litellm.litellm_core_utils.get_provider_specific_headers import (
+        ProviderSpecificHeaderUtils,
+    )
+
+    assert (
+        ProviderSpecificHeaderUtils.get_provider_specific_headers(
+            provider_specific_header=updated["provider_specific_header"],
+            custom_llm_provider="anthropic",
+        )["Authorization"]
+        == _OAUTH_TOKEN
+    )
 
 
 @pytest.mark.asyncio
@@ -6885,3 +7020,193 @@ async def test_add_litellm_data_to_request_caller_tags_empty_when_caller_sends_n
 
     assert updated["metadata"]["tags"] == ["key-supplied"]
     assert updated["metadata"]["caller_tags"] == ()
+
+
+OAUTH_TOKEN = "Bearer sk-ant-oat01-fake-subscription-token-for-testing-0123456789"
+GOOGLE_ACCESS_TOKEN = "Bearer ya29.fake-google-access-token-for-testing"
+BEDROCK_API_KEY = "ABSKQmVkcm9ja0FQSUtleUZvclRlc3Rpbmc="
+CROSS_ACCOUNT_AUTHORIZATION = "Bearer deliberately-configured-pass-through-token"
+
+SIGV4_PREFIX = "AWS4-HMAC-SHA256"
+AUTHORIZATION_HEADER_CASINGS = ["authorization", "Authorization", "AUTHORIZATION"]
+LEAK_TARGET_PROVIDERS = ["bedrock", "bedrock_converse", "vertex_ai"]
+
+BEDROCK_ENDPOINT = (
+    "https://bedrock-runtime.us-west-2.amazonaws.com"
+    "/model/us.anthropic.claude-sonnet-4-5-20250929-v1:0/invoke"
+)
+BEDROCK_REGION = "us-west-2"
+BEDROCK_REQUEST_DATA = {"messages": [{"role": "user", "content": "Say OK"}], "max_tokens": 32}
+SIGV4_OPTIONAL_PARAMS = {
+    "aws_access_key_id": "AKIAIOSFODNN7EXAMPLE",
+    "aws_secret_access_key": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+    "aws_region_name": BEDROCK_REGION,
+}
+
+
+def _client_headers(authorization_header_name: str | None = "authorization") -> dict:
+    headers = {
+        "content-type": "application/json",
+        "anthropic-version": "2023-06-01",
+        "user-agent": "claude-cli/2.1.239",
+    }
+    if authorization_header_name is not None:
+        headers[authorization_header_name] = OAUTH_TOKEN
+    return headers
+
+
+def _headers_forwarded_to(client_headers: dict, custom_llm_provider: str) -> dict:
+    data: dict = {}
+    add_provider_specific_headers_to_request(data=data, headers=client_headers)
+    return ProviderSpecificHeaderUtils.get_provider_specific_headers(
+        provider_specific_header=data.get("provider_specific_header"),
+        custom_llm_provider=custom_llm_provider,
+    )
+
+
+def _authorization_values(headers) -> list:
+    return [value for name, value in headers.items() if name.lower() == "authorization"]
+
+
+def _signed_headers_for_bedrock(request_headers: dict, api_key: str | None = None) -> dict:
+    with patch.dict(os.environ, {"AWS_BEARER_TOKEN_BEDROCK": ""}):
+        signed_headers, _ = BaseAWSLLM()._sign_request(
+            service_name="bedrock",
+            headers=request_headers,
+            optional_params=SIGV4_OPTIONAL_PARAMS,
+            request_data=BEDROCK_REQUEST_DATA,
+            api_base=BEDROCK_ENDPOINT,
+            api_key=api_key,
+        )
+    return signed_headers
+
+
+def _signed_headers_component(signature: str, component: str) -> str:
+    for part in signature.removeprefix(SIGV4_PREFIX).split(","):
+        name, _, value = part.strip().partition("=")
+        if name == component:
+            return value
+    raise AssertionError(f"{component} missing from {signature}")
+
+
+@pytest.mark.parametrize("authorization_header_name", AUTHORIZATION_HEADER_CASINGS)
+@pytest.mark.parametrize("custom_llm_provider", LEAK_TARGET_PROVIDERS)
+def test_oauth_credential_is_never_forwarded_to_bedrock_or_vertex(
+    authorization_header_name, custom_llm_provider
+):
+    """
+    A client's Anthropic OAuth credential is meaningless to AWS and Google, and sending it
+    there both breaks the request and hands a third-party cloud a credential it should
+    never hold. It must not survive the pre-call path for any non-Anthropic provider.
+    """
+    forwarded = _headers_forwarded_to(_client_headers(authorization_header_name), custom_llm_provider)
+
+    assert _authorization_values(forwarded) == []
+    assert OAUTH_TOKEN not in forwarded.values()
+
+
+@pytest.mark.parametrize("authorization_header_name", AUTHORIZATION_HEADER_CASINGS)
+def test_oauth_credential_still_reaches_anthropic_unchanged(authorization_header_name):
+    forwarded = _headers_forwarded_to(_client_headers(authorization_header_name), "anthropic")
+
+    assert forwarded[authorization_header_name] == OAUTH_TOKEN
+    assert _authorization_values(forwarded) == [OAUTH_TOKEN]
+
+
+def test_oauth_credential_entry_is_scoped_to_anthropic_alone():
+    data: dict = {}
+    add_provider_specific_headers_to_request(data=data, headers=_client_headers())
+
+    scoped_headers = data["provider_specific_header"]
+    if not isinstance(scoped_headers, list):
+        scoped_headers = [scoped_headers]
+
+    credential_entries = [
+        entry for entry in scoped_headers if OAUTH_TOKEN in entry["extra_headers"].values()
+    ]
+    assert [entry["custom_llm_provider"] for entry in credential_entries] == ["anthropic"]
+
+
+def test_no_provider_specific_header_when_client_sends_nothing_anthropic():
+    data: dict = {}
+    add_provider_specific_headers_to_request(
+        data=data, headers={"content-type": "application/json", "authorization": "Bearer sk-a-normal-key"}
+    )
+
+    assert "provider_specific_header" not in data
+
+
+def test_bedrock_sigv4_signature_survives_a_client_oauth_header():
+    forwarded = _headers_forwarded_to(_client_headers(), "bedrock")
+
+    signed = _signed_headers_for_bedrock({"Content-Type": "application/json", **forwarded})
+
+    authorizations = _authorization_values(signed)
+    assert len(authorizations) == 1
+    assert authorizations[0].startswith(SIGV4_PREFIX)
+    assert signed["X-Amz-Date"]
+
+
+def test_bedrock_sigv4_signing_is_unchanged_by_the_client_oauth_header():
+    without_oauth = _signed_headers_for_bedrock(
+        {"Content-Type": "application/json", **_headers_forwarded_to(_client_headers(None), "bedrock")}
+    )
+    with_oauth = _signed_headers_for_bedrock(
+        {"Content-Type": "application/json", **_headers_forwarded_to(_client_headers(), "bedrock")}
+    )
+
+    assert without_oauth["Authorization"].startswith(SIGV4_PREFIX)
+    assert _signed_headers_component(with_oauth["Authorization"], "SignedHeaders") == (
+        _signed_headers_component(without_oauth["Authorization"], "SignedHeaders")
+    )
+
+
+def test_bedrock_get_request_headers_keeps_the_sigv4_signature():
+    forwarded = _headers_forwarded_to(_client_headers(), "bedrock")
+
+    with patch.dict(os.environ, {"AWS_BEARER_TOKEN_BEDROCK": ""}):
+        prepped = BaseAWSLLM().get_request_headers(
+            credentials=Credentials(
+                SIGV4_OPTIONAL_PARAMS["aws_access_key_id"],
+                SIGV4_OPTIONAL_PARAMS["aws_secret_access_key"],
+            ),
+            aws_region_name=BEDROCK_REGION,
+            extra_headers=forwarded,
+            endpoint_url=BEDROCK_ENDPOINT,
+            data=json.dumps(BEDROCK_REQUEST_DATA),
+            headers={"Content-Type": "application/json", **forwarded},
+        )
+
+    authorizations = _authorization_values(prepped.headers)
+    assert len(authorizations) == 1
+    assert authorizations[0].startswith(SIGV4_PREFIX)
+
+
+def test_bedrock_api_key_deployment_keeps_its_own_bearer_token():
+    forwarded = _headers_forwarded_to(_client_headers(), "bedrock")
+
+    signed = _signed_headers_for_bedrock(
+        {"Content-Type": "application/json", **forwarded}, api_key=BEDROCK_API_KEY
+    )
+
+    assert _authorization_values(signed) == [f"Bearer {BEDROCK_API_KEY}"]
+
+
+def test_deliberately_configured_authorization_still_overrides_sigv4():
+    signed = _signed_headers_for_bedrock(
+        {"Content-Type": "application/json", "Authorization": CROSS_ACCOUNT_AUTHORIZATION}
+    )
+
+    assert _authorization_values(signed) == [CROSS_ACCOUNT_AUTHORIZATION]
+
+
+def test_vertex_sends_exactly_one_authorization_header():
+    forwarded = _headers_forwarded_to(_client_headers(), "vertex_ai")
+
+    vertex_request_headers = {
+        "content-type": "application/json",
+        "Authorization": GOOGLE_ACCESS_TOKEN,
+    }
+    vertex_request_headers.update(forwarded)
+
+    assert _authorization_values(vertex_request_headers) == [GOOGLE_ACCESS_TOKEN]

@@ -1,5 +1,4 @@
 import os
-import sys
 import traceback
 from litellm._uuid import uuid
 from unittest import mock
@@ -10,7 +9,6 @@ from fastapi import Request
 load_dotenv()
 import time
 
-sys.path.insert(0, os.path.abspath("../.."))
 import logging
 
 import pytest

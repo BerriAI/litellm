@@ -32,6 +32,14 @@
 # PT017   an `assert` on the caught error inside `except`. Nothing runs the handler when
 #         the call stops raising, so the test goes green on the exact regression it was
 #         written to catch. `pytest.raises` fails when the call succeeds
+# RUF043  a `match=` pattern carrying regex metacharacters in a plain string. `match=` is
+#         `re.search`, so a `.` copied out of an error message is a wildcard and the block
+#         accepts messages the author never meant to accept. Mark a real regex raw, wrap a
+#         literal message in `re.escape`, and the pattern says which one it is
+# F823    a module-level name read inside a function that also binds it lower down. The
+#         later binding makes the name local for the whole body, so the read raises
+#         UnboundLocalError, and in an autouse fixture that takes every test in the
+#         directory down with it
 #
 # No target-version here on purpose: it resolves from requires-python (>=3.10), so
 # 3.11-only builtins like BaseExceptionGroup are correctly flagged in a tree that
@@ -53,4 +61,6 @@ lint.select = [
     "PT017",
     "PLR0133",
     "PLW0127",
+    "RUF043",
+    "F823",
 ]

@@ -1,12 +1,9 @@
 import asyncio
 import copy
-import os
-import sys
 from typing import List, cast
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 import litellm
 from litellm.caching.dual_cache import DualCache

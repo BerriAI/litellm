@@ -24,8 +24,6 @@ real ``OpenTelemetry`` integration. No monkey patching of the integration
 under test — only the OTEL exporter is in-memory.
 """
 
-import os
-import sys
 import time
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -35,7 +33,6 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from opentelemetry.trace import StatusCode
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 from litellm.integrations.opentelemetry import (
     LITELLM_REQUEST_SPAN_NAME,

@@ -1,13 +1,9 @@
-import sys
 import os
 import traceback
 from dotenv import load_dotenv
 from fastapi import Request
 from datetime import datetime
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 from litellm import Router
 import pytest
 import litellm
@@ -1832,7 +1828,7 @@ def test_init_auto_router_deployment_duplicate_model_name(mock_auto_router, mode
     )
 
     with pytest.raises(
-        ValueError, match="Auto-router deployment test-auto-router with tags .* already exists"
+        ValueError, match=r"Auto-router deployment test-auto-router with tags .* already exists"
     ):
         router.init_auto_router_deployment(deployment)
 

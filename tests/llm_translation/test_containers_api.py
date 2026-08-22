@@ -5,12 +5,10 @@ Tests the container files endpoints using LiteLLM SDK methods.
 """
 
 import os
-import sys
 import time
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 from litellm.containers import (
     create_container,
@@ -63,7 +61,7 @@ def test_container_files_api():
 
         # 3. Try retrieve non-existent file metadata (should raise error)
         print("3. Testing retrieve_container_file (expect error)...")
-        with pytest.raises(Exception, match="(?i)not found|invalid"):
+        with pytest.raises(Exception, match=r"(?i)not found|invalid"):
             retrieve_container_file(
                 container_id=container.id,
                 file_id="cfile_nonexistent",

@@ -56,6 +56,9 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-uv-
 
+      - name: Cache the Rust build
+        uses: ./.github/actions/cache-cargo-build
+
       - name: Install dependencies
         run: uv sync --frozen --all-groups --all-extras
 
