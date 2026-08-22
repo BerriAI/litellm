@@ -48,7 +48,11 @@ const DARK_VARS: ColorVar[] = [
   { key: "border", label: "Border", description: "Borders & dividers" },
 ];
 
-function generateCss(lightColors: Record<string, string>, darkColors: Record<string, string>, advancedCss: string): string {
+function generateCss(
+  lightColors: Record<string, string>,
+  darkColors: Record<string, string>,
+  advancedCss: string
+): string {
   const parts: string[] = [];
   const lightRules = Object.entries(lightColors).filter(([, v]) => v);
   const darkRules = Object.entries(darkColors).filter(([, v]) => v);
@@ -83,7 +87,9 @@ const UIThemeSettings: React.FC<UIThemeSettingsProps> = ({ userID, userRole, acc
     }
   }, [accessToken]);
 
-  const parseCssToColors = (css: string): { light: Record<string, string>, dark: Record<string, string>, extra: string } => {
+  const parseCssToColors = (
+    css: string
+  ): { light: Record<string, string>, dark: Record<string, string>, extra: string } => {
     const light: Record<string, string> = {};
     const dark: Record<string, string> = {};
     const extraParts: string[] = [];
@@ -288,7 +294,10 @@ const UIThemeSettings: React.FC<UIThemeSettingsProps> = ({ userID, userRole, acc
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-5">
         {vars.map((v) => (
           <div key={v.key} className="group flex flex-col items-center gap-1.5 rounded-lg border p-2">
-            <div className="relative h-8 w-full overflow-hidden rounded-md border" style={{ backgroundColor: colors[v.key] || "transparent" }}>
+            <div
+              className="relative h-8 w-full overflow-hidden rounded-md border"
+              style={{ backgroundColor: colors[v.key] || "transparent" }}
+            >
               <input
                 type="color"
                 className="absolute inset-0 h-full w-full cursor-pointer opacity-0"

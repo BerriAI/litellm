@@ -1315,13 +1315,49 @@ class TestProxySettingEndpoints:
         assert values["logo_url"] is None
         assert values["favicon_url"] is None
 
+    def test_get_ui_theme_settings_does_not_500_on_invalid_stored_css(self, monkeypatch):
+        """A custom_theme_css saved before the write-path validator existed (or
+        hand-written into config.yaml) must not 500 the public read. The validator is
+        a PATCH-boundary gate; the unauthenticated GET constructs
+        UIThemeConfig(**stored), which would otherwise raise an uncaught
+        ValidationError. The invalid value is withheld and the rest of the theme loads.
+        """
+        from litellm.proxy.proxy_server import proxy_config
+
+        monkeypatch.delenv("UI_LOGO_PATH", raising=False)
+        monkeypatch.delenv("LITELLM_FAVICON_URL", raising=False)
+
+        stored_config = {
+            "litellm_settings": {
+                "ui_theme_config": {
+                    "custom_theme_css": ":root { --background: #000; } @import url(http://evil.com/x.css);",
+                    "logo_url": "https://db.example.com/logo.png",
+                }
+            }
+        }
+
+        async def mock_get_config():
+            return stored_config
+
+        monkeypatch.setattr(proxy_config, "get_config", mock_get_config)
+
+        response = client.get("/get/ui_theme_settings")
+
+        assert response.status_code == 200
+        values = response.json()["values"]
+        # the invalid CSS is withheld rather than surfaced as an unauthenticated 500
+        assert values["custom_theme_css"] is None
+        # the rest of the theme still loads
+        assert values["logo_url"] == "https://db.example.com/logo.png"
+
     def test_update_ui_theme_settings_accepts_valid_custom_css(self, mock_proxy_config, mock_auth, monkeypatch):
         monkeypatch.setenv("LITELLM_SALT_KEY", "test_salt_key")
         monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
 
+        valid_css = ":root { --background: #1a1a2e; --primary: #e94560; }\n.dark { --background: #0f0f1a; }"
         response = client.patch(
             "/update/ui_theme_settings",
-            json={"custom_theme_css": ":root { --background: #1a1a2e; --primary: #e94560; }\n.dark { --background: #0f0f1a; }"},
+            json={"custom_theme_css": valid_css},
         )
         assert response.status_code == 200
 

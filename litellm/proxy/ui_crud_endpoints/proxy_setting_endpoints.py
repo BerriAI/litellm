@@ -1204,6 +1204,35 @@ async def update_sso_settings(
     }
 
 
+def _stored_ui_theme_css_is_safe(css: object) -> bool:
+    """True when a stored custom_theme_css value will construct UIThemeConfig cleanly.
+
+    A value saved before the write-path allowlist existed (or hand-written into
+    config.yaml) may be rejected by _validate_theme_css; the public GET read path
+    must not turn that into an unauthenticated 500.
+    """
+    if not isinstance(css, str):
+        return False
+    try:
+        _validate_theme_css(css)
+    except ValueError:
+        return False
+    return True
+
+
+def _sanitize_stored_ui_theme_css_for_read(config: dict) -> dict:
+    """Return config unchanged when the stored custom_theme_css is absent or valid,
+    otherwise a shallow copy with that field blanked, so the read path can construct
+    UIThemeConfig(**stored) without raising on the public, unauthenticated GET."""
+    stored: Final = (config.get("litellm_settings") or {}).get("ui_theme_config") or {}
+    css: Final = stored.get("custom_theme_css")
+    if css is None or _stored_ui_theme_css_is_safe(css):
+        return config
+    ui_theme_config: Final = {**stored, "custom_theme_css": None}
+    litellm_settings: Final = {**(config.get("litellm_settings") or {}), "ui_theme_config": ui_theme_config}
+    return {**config, "litellm_settings": litellm_settings}
+
+
 @router.get(
     "/get/ui_theme_settings",
     tags=["UI Theme Settings"],
@@ -1225,7 +1254,7 @@ async def get_ui_theme_settings():
     result: Final = await _get_settings_with_schema(
         settings_key="ui_theme_config",
         settings_class=UIThemeConfig,
-        config=config,
+        config=_sanitize_stored_ui_theme_css_for_read(config),
     )
 
     stored_values: Final = result.get("values", {})

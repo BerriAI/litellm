@@ -18,7 +18,7 @@ from pydantic import BaseModel, ConfigDict
 
 import litellm
 from litellm.constants import DEFAULT_NUM_WORKERS_LITELLM_PROXY
-from litellm.proxy.cli_theme import accent, info, success, warning
+from litellm.proxy.cli_theme import info, success, warning
 from litellm.proxy.db.query_engine_reaper import start_query_engine_reaper
 
 if TYPE_CHECKING:
@@ -296,7 +296,10 @@ class ProxyInitializationHelpers:
         import uvicorn
 
         if max_requests_before_restart is None:
-            warning("LiteLLM Proxy: --max_requests_before_restart_jitter has no effect without --max_requests_before_restart")
+            warning(
+                "LiteLLM Proxy: --max_requests_before_restart_jitter "
+                "has no effect without --max_requests_before_restart"
+            )
             return
         if "limit_max_requests_jitter" in inspect.signature(uvicorn.Config.__init__).parameters:
             uvicorn_args["limit_max_requests_jitter"] = jitter
@@ -440,7 +443,10 @@ class ProxyInitializationHelpers:
 
         success(f"LiteLLM Proxy: Starting server on {host}:{port} using Granian\n")
         if max_requests_before_restart is not None:
-            warning("LiteLLM: --max_requests_before_restart is not supported by Granian (Granian uses workers_lifetime in seconds, not a per-request limit).\n")
+            warning(
+                "LiteLLM: --max_requests_before_restart is not supported by Granian "
+                "(Granian uses workers_lifetime in seconds, not a per-request limit).\n"
+            )
         if ciphers is not None:
             warning("LiteLLM: --ciphers is not applied when using --run_granian.\n")
 
@@ -507,7 +513,10 @@ class ProxyInitializationHelpers:
                 """
                 )
                 print()
-                info('LiteLLM: Test your local proxy with: "litellm --test" This runs an openai.ChatCompletion request to your proxy [In a new terminal tab]\n')
+                info(
+                    'LiteLLM: Test your local proxy with: "litellm --test" '
+                    "This runs an openai.ChatCompletion request to your proxy [In a new terminal tab]\n"
+                )
                 info(f"LiteLLM: Curl Command Test for your local proxy\n {curl_command} \n")
                 info("Docs: https://docs.litellm.ai/docs/simple_proxy\n")
                 info(f"See all Router/Swagger docs on http://0.0.0.0:{port} \n")
@@ -546,7 +555,10 @@ class ProxyInitializationHelpers:
             gunicorn_options["max_requests"] = max_requests_before_restart
         if max_requests_before_restart_jitter is not None:
             if max_requests_before_restart is None:
-                warning("LiteLLM Proxy: --max_requests_before_restart_jitter has no effect without --max_requests_before_restart\n")
+                warning(
+                    "LiteLLM Proxy: --max_requests_before_restart_jitter "
+                    "has no effect without --max_requests_before_restart\n"
+                )
             else:
                 gunicorn_options["max_requests_jitter"] = max_requests_before_restart_jitter
 

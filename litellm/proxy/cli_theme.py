@@ -74,11 +74,3 @@ def info(message: str) -> None:
 
 def accent(message: str) -> None:
     console.print(message, style=_STYLES["accent"])
-
-
-def dim(message: str) -> None:
-    console.print(message, style=_STYLES["dim"])
-
-
-def plain(message: str) -> None:
-    console.print(message, end="")

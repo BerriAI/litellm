@@ -122,7 +122,16 @@ export const ThemeProvider: React.FC<ThemeProviderProps> = ({ children, accessTo
 
   return (
     <ThemeContext.Provider
-      value={{ logoUrl, setLogoUrl, logoUrlDark, setLogoUrlDark, faviconUrl, setFaviconUrl, customThemeCss, setCustomThemeCss }}
+      value={{
+        logoUrl,
+        setLogoUrl,
+        logoUrlDark,
+        setLogoUrlDark,
+        faviconUrl,
+        setFaviconUrl,
+        customThemeCss,
+        setCustomThemeCss,
+      }}
     >
       {children}
     </ThemeContext.Provider>
