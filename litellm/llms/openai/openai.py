@@ -1542,16 +1542,17 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             shared_session=shared_session,
         )
 
+        sync_client: Final = cast(OpenAI, openai_client)
         logging_obj.pre_call(
             input=input,
             api_key=api_key,
             additional_args={
                 "complete_input_dict": {"model": model, "voice": voice, **optional_params},
-                "api_base": api_base,
+                "api_base": str(sync_client.base_url),
             },
         )
 
-        response: Final = cast(OpenAI, openai_client).audio.speech.create(
+        response: Final = sync_client.audio.speech.create(
             model=model,
             voice=voice,
             input=input,
@@ -1593,7 +1594,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             api_key=api_key,
             additional_args={
                 "complete_input_dict": {"model": model, "voice": voice, **optional_params},
-                "api_base": api_base,
+                "api_base": str(openai_client.base_url),
             },
         )
 

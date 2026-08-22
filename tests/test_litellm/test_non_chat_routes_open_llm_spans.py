@@ -13,7 +13,7 @@ from typing import Any, Final
 
 import httpx
 import pytest
-from openai import AsyncOpenAI
+from openai import AsyncAzureOpenAI, AsyncOpenAI
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
@@ -87,6 +87,19 @@ class _FakeAsyncOpenAI(AsyncOpenAI):
         self.moderations = _FakeModerations()
 
 
+class _FakeAsyncAzureOpenAI(AsyncAzureOpenAI):
+    """Same idea for the Azure entrypoint, which resolves no default endpoint of
+    its own when ``AZURE_API_BASE`` is unset."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            api_key="sk-test",
+            api_version="2024-02-01",
+            azure_endpoint="https://unit-test.openai.azure.com",
+        )
+        self.audio = type("_Audio", (), {"speech": _FakeSpeech()})()
+
+
 @pytest.fixture
 def recorder(monkeypatch):
     recorder: Final = _PreCallRecorder()
@@ -105,6 +118,23 @@ def test_async_speech_opens_an_llm_span(recorder):
         )
     )
     assert recorder.call_types == ["aspeech"]
+
+
+def test_azure_async_speech_opens_an_llm_span_without_api_base(recorder, monkeypatch):
+    """Azure resolves no default endpoint, so a missing ``api_base`` used to reach
+    ``_get_masked_api_base`` as ``None``; the ``TypeError`` was swallowed and the
+    whole callback dispatch was skipped."""
+    monkeypatch.delenv("AZURE_API_BASE", raising=False)
+    asyncio.run(
+        litellm.aspeech(
+            model="azure/tts-deployment",
+            input="hello",
+            voice="alloy",
+            client=_FakeAsyncAzureOpenAI(),
+        )
+    )
+    assert recorder.call_types == ["aspeech"]
+    assert recorder.api_bases == ["https://unit-test.openai.azure.com/openai/"]
 
 
 def test_async_image_generation_opens_an_llm_span(recorder):
