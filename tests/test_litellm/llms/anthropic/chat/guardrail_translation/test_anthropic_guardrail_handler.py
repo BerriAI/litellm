@@ -1907,6 +1907,41 @@ class TestAnthropicResponseScanConversation:
         assert conversation[-1] == {"role": "assistant", "content": "Sunny today."}
 
     @pytest.mark.asyncio
+    async def test_skip_system_scoping_matches_request_scan(self):
+        handler = AnthropicMessagesHandler()
+        guardrail = MockInputsRecordingGuardrail()
+        guardrail.skip_system_message_in_guardrail = True
+        request_data = self._request_data(
+            system="trusted top-level system prompt",
+            messages=[
+                {"role": "user", "content": "safe text"},
+                {"role": "system", "content": "prohibited correction"},
+                {"role": "user", "content": "continue"},
+            ],
+        )
+        response = {
+            "id": "msg_1",
+            "model": "claude-sonnet-4-5",
+            "content": [{"type": "text", "text": "Done."}],
+        }
+
+        await handler.process_input_messages(data=dict(request_data), guardrail_to_apply=guardrail)
+        await handler.process_output_response(
+            response=response,
+            guardrail_to_apply=guardrail,
+            request_data=dict(request_data),
+        )
+
+        (request_type, request_inputs), (response_type, response_inputs) = guardrail.calls
+        assert (request_type, response_type) == ("request", "response")
+        request_conversation = request_inputs["structured_messages"]
+        response_conversation = response_inputs["structured_messages"]
+        assert [message["role"] for message in request_conversation] == ["user", "system", "user"]
+        assert response_conversation[: len(request_conversation)] == request_conversation
+        assert response_conversation[len(request_conversation) :] == [{"role": "assistant", "content": "Done."}]
+        assert "trusted top-level system prompt" not in str(response_conversation)
+
+    @pytest.mark.asyncio
     async def test_response_scan_includes_translated_tools_and_tool_call_turn(self):
         handler = AnthropicMessagesHandler()
         guardrail = MockInputsRecordingGuardrail()
