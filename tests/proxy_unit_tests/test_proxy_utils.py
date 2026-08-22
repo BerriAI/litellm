@@ -1,7 +1,6 @@
 import asyncio
 import json
 import os
-import sys
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Union
 from unittest.mock import Mock
@@ -14,9 +13,6 @@ from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.proxy.utils import _get_docs_url, _get_openapi_url, _get_redoc_url
 from litellm.types.guardrails import GuardrailEventHooks
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import litellm
@@ -1026,7 +1022,7 @@ def test_enforced_params_check(
     from litellm.proxy.litellm_pre_call_utils import _enforced_params_check
 
     if expected_error:
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match='in request body\\. This is a required param'):
             _enforced_params_check(
                 request_body=request_body,
                 general_settings=general_settings,
@@ -2626,7 +2622,7 @@ async def test_during_call_hook_parallel_execution_with_error():
     try:
         litellm.callbacks = [FailingGuardrail()]
 
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(ValueError, match='Guardrail violation detected!') as exc_info:
             await proxy_logging.during_call_hook(
                 data={
                     "model": "gpt-4",

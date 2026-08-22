@@ -1,6 +1,4 @@
 import json
-import os
-import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -9,12 +7,8 @@ from fastapi.testclient import TestClient
 
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 
-from unittest.mock import MagicMock, patch
 
 import litellm
 from litellm.passthrough.main import allm_passthrough_route, llm_passthrough_route
@@ -721,9 +715,12 @@ async def test_allm_passthrough_route_429_streaming_raises():
 
         # result is an async generator — consuming it must raise, not silently yield error bytes
         chunks = []
-        with pytest.raises(httpx.HTTPStatusError) as exc_info:
+        async def _drain():
             async for chunk in result:  # type: ignore[union-attr]
                 chunks.append(chunk)
+
+        with pytest.raises(httpx.HTTPStatusError) as exc_info:
+            await _drain()
 
     assert exc_info.value.response.status_code == 429
     assert len(chunks) == 0, "No chunks should be yielded before the 429 raises"

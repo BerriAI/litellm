@@ -3,15 +3,12 @@ import copy
 import json
 import logging
 import os
-import sys
 import threading
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 
 import litellm
@@ -953,7 +950,7 @@ async def test_arouter_filter_team_based_models():
     assert result is not None
 
     # FAILS
-    with pytest.raises(Exception) as e:
+    with pytest.raises(Exception, match='No deployments available for selected model, Try again in') as e:
         result = await router.acompletion(
             model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": "Hello, world!"}],
@@ -1225,7 +1222,7 @@ def test_add_invalid_provider_to_router():
         ],
     )
 
-    with pytest.raises(Exception) as e:
+    with pytest.raises(Exception, match='Unsupported provider - vertex_ai_eu') as e:
         router.add_deployment(
             Deployment(
                 model_name="vertex_ai/*",
@@ -1320,7 +1317,7 @@ async def test_router_ageneric_api_call_with_fallbacks_helper():
     with patch.object(router, "async_get_available_deployment") as mock_get_deployment:
         mock_get_deployment.side_effect = Exception("No deployment available")
 
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(Exception, match='No deployment available') as exc_info:
             await router._ageneric_api_call_with_fallbacks_helper(
                 model="gpt-3.5-turbo",
                 original_generic_function=mock_generic_function,
@@ -1394,7 +1391,7 @@ async def test_router_ageneric_api_call_with_fallbacks_helper():
                 with patch.object(
                     router, "async_routing_strategy_pre_call_checks"
                 ) as mock_pre_call_checks:
-                    with pytest.raises(Exception) as exc_info:
+                    with pytest.raises(Exception, match='Mock failure') as exc_info:
                         await router._ageneric_api_call_with_fallbacks_helper(
                             model="gpt-3.5-turbo",
                             original_generic_function=mock_failing_function,
@@ -1999,9 +1996,12 @@ async def test_acompletion_streaming_iterator():
 
     # Collect streamed chunks — the first chunk succeeds, then the error re-raises
     collected_chunks = []
-    with pytest.raises(MidStreamFallbackError):
+    async def _drain():
         async for chunk in result:
             collected_chunks.append(chunk)
+
+    with pytest.raises(MidStreamFallbackError):
+        await _drain()
 
     assert len(collected_chunks) == 1, "one chunk yielded before the error"
     print("✓ MidStreamFallbackError re-raised correctly when content was already generated")
@@ -3734,7 +3734,7 @@ def test_count_pre_call_check_tokens_across_api_surfaces():
     assert string_input_tokens > 0
     assert list_input_tokens > 0
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match='Either messages or input must be provided to count tokens'):
         router._count_pre_call_check_tokens(messages=None, input=None)
 
 
@@ -5557,9 +5557,12 @@ async def test_acompletion_streaming_iterator_does_not_log_success_on_terminal_f
             initial_kwargs=dict(initial_kwargs),
         )
         collected = []
-        with pytest.raises(MidStreamFallbackError):
+        async def _drain():
             async for chunk in result:
                 collected.append(chunk)
+
+        with pytest.raises(MidStreamFallbackError):
+            await _drain()
 
     assert len(collected) == 1
     logging_obj.dispatch_success_handlers.assert_not_called()
@@ -5580,9 +5583,12 @@ async def test_acompletion_streaming_iterator_does_not_log_success_on_terminal_f
             initial_kwargs=dict(initial_kwargs),
         )
         collected = []
-        with pytest.raises(MidStreamFallbackError):
+        async def _drain():
             async for chunk in result:
                 collected.append(chunk)
+
+        with pytest.raises(MidStreamFallbackError):
+            await _drain()
 
     assert len(collected) == 1, "only the partial chunk before the error"
     mock_fallback.assert_not_called()
@@ -7300,6 +7306,78 @@ async def test_acreate_batch_surfaces_owning_provider_error_without_disable_fall
 
 
 @pytest.mark.asyncio
+async def test_acreate_batch_still_falls_back_within_the_owning_model_group():
+    """Holding a batch inside the model group that owns its input file must not
+    disable fallbacks outright (#35359): the owning group's second deployment is
+    still tried in `order`, and only the cross-group target is skipped."""
+    completion_window_error = "Invalid value: '5m'. Supported values are: '24h'."
+    attempted_models = []
+
+    async def _acreate_batch(**kwargs):
+        model = kwargs["model"]
+        attempted_models.append(model)
+        if model.startswith("azure/"):
+            raise litellm.BadRequestError(
+                message="Error code: 400 - {'error': {'code': 'quotaExceeded'}}",
+                model=model,
+                llm_provider="azure",
+            )
+        raise litellm.BadRequestError(
+            message=completion_window_error,
+            model=model,
+            llm_provider="openai",
+        )
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "my-gpt",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "sk-owning",
+                    "order": 1,
+                },
+                "model_info": {"id": "my-gpt-1"},
+            },
+            {
+                "model_name": "my-gpt",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini-backup",
+                    "api_key": "sk-owning",
+                    "order": 2,
+                },
+                "model_info": {"id": "my-gpt-2"},
+            },
+            {
+                "model_name": "my-azure-gpt",
+                "litellm_params": {
+                    "model": "azure/gpt-4o-mini",
+                    "api_key": "sk-fallback",
+                    "api_base": "https://fallback.openai.azure.com",
+                    "api_version": "2024-08-01-preview",
+                },
+                "model_info": {"id": "my-azure-gpt-1"},
+            },
+        ],
+        fallbacks=[{"my-gpt": ["my-azure-gpt"]}],
+        num_retries=0,
+    )
+
+    with patch.object(litellm, "acreate_batch", new=_acreate_batch):
+        with pytest.raises(litellm.BadRequestError) as raised:
+            await router.acreate_batch(
+                model="my-gpt",
+                input_file_id="file-owned-by-my-gpt",
+                endpoint="/v1/chat/completions",
+                completion_window="5m",
+            )
+
+    assert "24h" in str(raised.value)
+    assert "quotaExceeded" not in str(raised.value)
+    assert attempted_models == ["openai/gpt-4o-mini", "openai/gpt-4o-mini-backup"]
+
+
+@pytest.mark.asyncio
 async def test_acreate_batch_request_bedrock_tags_override_deployment_tags():
     import httpx
 
@@ -8259,6 +8337,94 @@ class TestTaggedAutoRouterOnSharedModelName:
         assert marker_only._model_name_has_plain_deployments("gpt4o") is False
 
 
+class TestAutoRouterSharedModelNameConnectionParams:
+    """A plain deployment sharing its model_name with an `auto_router/` marker must not have
+    its api_base and api_key grafted onto the routed tier's outbound call (#36619)."""
+
+    PLAIN_API_BASE = "https://plain-sibling.openai.example/v1"
+    PLAIN_API_KEY = "sk-plain-sibling-secret"
+
+    class _FixedRouteLayer:
+        def __call__(self, text: str):
+            from semantic_router.schema import RouteChoice
+
+            return RouteChoice(name="gemini-flash")
+
+    @classmethod
+    def _router(cls, plain_entry_first: bool) -> "litellm.Router":
+        pytest.importorskip("semantic_router", reason="auto-router needs the semantic-router extra")
+        plain = {
+            "model_name": "gpt4o",
+            "litellm_params": {
+                "model": "openai/gpt-4o",
+                "api_key": cls.PLAIN_API_KEY,
+                "api_base": cls.PLAIN_API_BASE,
+            },
+        }
+        marker = {
+            "model_name": "gpt4o",
+            "litellm_params": {
+                "model": "auto_router/gpt4o-router",
+                "auto_router_config": json.dumps(
+                    {"routes": [{"name": "gemini-flash", "utterances": ["capital city questions"]}]}
+                ),
+                "auto_router_default_model": "gemini-flash",
+                "auto_router_embedding_model": "text-embedding-3-small",
+                "drop_params": True,
+            },
+        }
+        tier = {
+            "model_name": "gemini-flash",
+            "litellm_params": {"model": "gemini/gemini-3.6-flash", "api_key": "sk-tier-key"},
+        }
+        shared_name_entries = [plain, marker] if plain_entry_first else [marker, plain]
+        router = litellm.Router(model_list=[*shared_name_entries, tier])
+        router.auto_routers["gpt4o"][0].strategy.routelayer = cls._FixedRouteLayer()
+        return router
+
+    @staticmethod
+    def _gemini_response() -> httpx.Response:
+        return httpx.Response(
+            status_code=200,
+            json={
+                "candidates": [
+                    {"content": {"parts": [{"text": "Paris"}], "role": "model"}, "finishReason": "STOP"}
+                ],
+                "usageMetadata": {"promptTokenCount": 5, "candidatesTokenCount": 1, "totalTokenCount": 6},
+                "modelVersion": "gemini-3.6-flash",
+            },
+            request=httpx.Request("POST", "https://generativelanguage.googleapis.com"),
+        )
+
+    @pytest.mark.parametrize(
+        "plain_entry_first", [True, False], ids=["plain_entry_first", "marker_entry_first"]
+    )
+    async def test_routed_tier_call_goes_out_on_its_own_endpoint_and_credentials(self, plain_entry_first):
+        """The outbound provider request for the routed tier hits the tier's own Gemini host
+        with the tier's own key, never the plain sibling's api_base or api_key."""
+        from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+
+        router = self._router(plain_entry_first)
+
+        with patch.object(
+            AsyncHTTPHandler, "post", new_callable=AsyncMock, return_value=self._gemini_response()
+        ) as mock_post:
+            await router.acompletion(
+                model="gpt4o",
+                messages=[{"role": "user", "content": "What is the capital of France?"}],
+            )
+
+        call = mock_post.call_args
+        outbound_url = str(call.kwargs["url"] if "url" in call.kwargs else call.args[0])
+        outbound_headers = dict(call.kwargs.get("headers") or {})
+
+        assert "generativelanguage.googleapis.com" in outbound_url
+        assert "gemini-3.6-flash" in outbound_url
+        assert self.PLAIN_API_BASE not in outbound_url
+        assert self.PLAIN_API_KEY not in outbound_url
+        assert self.PLAIN_API_KEY not in json.dumps(outbound_headers)
+
+
 class TestGetAllowedFailsFromPolicy:
     def _make_router(self, **policy_kwargs) -> litellm.Router:
         from litellm.types.router import AllowedFailsPolicy
@@ -8540,3 +8706,175 @@ def test_get_router_model_info_keeps_explicit_pricing_overrides():
 
     assert merged["input_cost_per_token"] == 1e-08
     assert litellm.get_model_info(model="anthropic/claude-sonnet-4-5")["input_cost_per_token"] != 1e-08
+
+
+class TestAutoRoutedRequestMarker:
+    """The proxy exposes the routed model group in the response body only when an
+    auto-routing strategy actually picked it. The marker is what separates that from
+    ordinary model-group routing, so it must clear on any re-entry (fallbacks reuse the
+    same request_kwargs) that routes plainly."""
+
+    class _RewriteStrategy:
+        async def async_pre_routing_hook(
+            self, model, request_kwargs, messages=None, input=None, specific_deployment=False
+        ):
+            from litellm.types.router import PreRoutingHookResponse
+
+            return PreRoutingHookResponse(model="gemini-flash", messages=messages)
+
+    class _AbstainStrategy:
+        async def async_pre_routing_hook(
+            self, model, request_kwargs, messages=None, input=None, specific_deployment=False
+        ):
+            return None
+
+    @classmethod
+    def _router(cls, strategy) -> "litellm.Router":
+        from litellm.types.router import TaggedPreRoutingStrategy
+
+        router = litellm.Router(
+            model_list=[
+                {"model_name": "smart-route", "litellm_params": {"model": "openai/gpt-4o"}},
+                {"model_name": "gemini-flash", "litellm_params": {"model": "gemini/gemini-3.6-flash"}},
+            ],
+        )
+        router.auto_routers = {"smart-route": [TaggedPreRoutingStrategy(tags=(), strategy=strategy)]}
+        return router
+
+    @pytest.mark.asyncio
+    async def test_marks_the_request_when_an_auto_routing_strategy_picked_the_group(self):
+        from litellm.constants import AUTO_ROUTED_REQUEST_METADATA_KEY
+
+        router = self._router(self._RewriteStrategy())
+        request_kwargs = {"metadata": {}}
+
+        await router.async_pre_routing_hook(model="smart-route", request_kwargs=request_kwargs)
+
+        assert request_kwargs["metadata"][AUTO_ROUTED_REQUEST_METADATA_KEY] is True
+
+    @pytest.mark.asyncio
+    async def test_marks_into_litellm_metadata_when_the_request_uses_that_bucket(self):
+        from litellm.constants import AUTO_ROUTED_REQUEST_METADATA_KEY
+
+        router = self._router(self._RewriteStrategy())
+        request_kwargs = {"litellm_metadata": {}}
+
+        await router.async_pre_routing_hook(model="smart-route", request_kwargs=request_kwargs)
+
+        assert request_kwargs["litellm_metadata"][AUTO_ROUTED_REQUEST_METADATA_KEY] is True
+
+    @pytest.mark.asyncio
+    async def test_no_marker_when_the_group_has_no_auto_routing_strategy(self):
+        from litellm.constants import AUTO_ROUTED_REQUEST_METADATA_KEY
+
+        router = self._router(self._RewriteStrategy())
+        request_kwargs = {"metadata": {}}
+
+        await router.async_pre_routing_hook(model="gemini-flash", request_kwargs=request_kwargs)
+
+        assert AUTO_ROUTED_REQUEST_METADATA_KEY not in request_kwargs["metadata"]
+
+    @pytest.mark.asyncio
+    async def test_no_marker_when_the_strategy_declined_to_route(self):
+        from litellm.constants import AUTO_ROUTED_REQUEST_METADATA_KEY
+
+        router = self._router(self._AbstainStrategy())
+        request_kwargs = {"metadata": {}}
+
+        await router.async_pre_routing_hook(model="smart-route", request_kwargs=request_kwargs)
+
+        assert AUTO_ROUTED_REQUEST_METADATA_KEY not in request_kwargs["metadata"]
+
+    @pytest.mark.asyncio
+    async def test_fallback_reentry_with_a_plain_group_clears_the_stale_marker(self):
+        from litellm.constants import AUTO_ROUTED_REQUEST_METADATA_KEY
+
+        router = self._router(self._RewriteStrategy())
+        request_kwargs = {"metadata": {}}
+
+        await router.async_pre_routing_hook(model="smart-route", request_kwargs=request_kwargs)
+        await router.async_pre_routing_hook(model="gemini-flash", request_kwargs=request_kwargs)
+
+        assert AUTO_ROUTED_REQUEST_METADATA_KEY not in request_kwargs["metadata"]
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+class TestAzureBaseModelFallbackLogging:
+    """When an azure deployment has no base_model but its model name is a known
+    azure key in the cost map, get_router_model_info resolves it via the
+    fallback, so it must not log the per-request 'Could not identify azure
+    model' ERROR. The ERROR must remain for genuinely unmappable deployment
+    names. Issue #33172."""
+
+    def _router_with_azure_deployment(self, deployment_model: str):
+        return litellm.Router(
+            model_list=[
+                {
+                    "model_name": "my-group",
+                    "litellm_params": {
+                        "model": deployment_model,
+                        "api_key": "fake-key",
+                        "api_base": "https://fake.openai.azure.com",
+                    },
+                    "model_info": {"id": "azure-base-model-test-id"},
+                }
+            ]
+        )
+
+    def test_map_known_deployment_name_resolves_without_error_log(self):
+        router = self._router_with_azure_deployment("azure/gpt-4o")
+
+        with patch(
+            "litellm.router.verbose_router_logger.error"
+        ) as mock_error:
+            model_info = router.get_router_model_info(
+                deployment=None, received_model_name="my-group", id="azure-base-model-test-id"
+            )
+
+        assert not any(
+            "Could not identify azure model" in str(call)
+            for call in mock_error.call_args_list
+        ), f"unexpected error log: {mock_error.call_args_list}"
+        # the fallback resolution must actually surface the map values
+        assert model_info["max_input_tokens"] == litellm.model_cost["azure/gpt-4o"]["max_input_tokens"]
+        assert model_info["input_cost_per_token"] == litellm.model_cost["azure/gpt-4o"]["input_cost_per_token"]
+
+    def test_unmappable_deployment_name_still_logs_error(self):
+        router = self._router_with_azure_deployment("azure/my-custom-deployment-name")
+
+        with patch(
+            "litellm.router.verbose_router_logger.error"
+        ) as mock_error:
+            model_info = router.get_router_model_info(
+                deployment=None, received_model_name="my-group", id="azure-base-model-test-id"
+            )
+
+        assert any(
+            "Could not identify azure model" in str(call)
+            for call in mock_error.call_args_list
+        ), "expected the error log for an unmappable azure deployment name"
+        # unmappable names resolve to a zeroed stub — unchanged behavior
+        assert model_info.get("max_input_tokens") is None
+
+    def test_explicit_base_model_still_wins(self):
+        router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "my-group",
+                    "litellm_params": {
+                        "model": "azure/some-deployment",
+                        "api_key": "fake-key",
+                        "api_base": "https://fake.openai.azure.com",
+                    },
+                    "model_info": {
+                        "id": "azure-base-model-test-id",
+                        "base_model": "azure/gpt-4o-mini",
+                    },
+                }
+            ]
+        )
+
+        model_info = router.get_router_model_info(
+            deployment=None, received_model_name="my-group", id="azure-base-model-test-id"
+        )
+        assert model_info["max_input_tokens"] == litellm.model_cost["azure/gpt-4o-mini"]["max_input_tokens"]

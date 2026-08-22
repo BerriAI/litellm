@@ -706,6 +706,9 @@
         "supports_xhigh_reasoning_effort": {
           "type": "boolean"
         },
+        "thinking_always_on": {
+          "type": "boolean"
+        },
         "tiered_pricing": {
           "type": "array",
           "description": "Context-length or result-count tiered rates; each tier's costs apply within its range.",

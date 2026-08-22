@@ -5091,14 +5091,16 @@ def completion(
     model_info: Final = kwargs.get("model_info", None)
     proxy_server_request: Final = kwargs.get("proxy_server_request", None)
     fallbacks = kwargs.get("fallbacks", None)
-    provider_specific_header: Final = cast(ProviderSpecificHeader | None, kwargs.get("provider_specific_header", None))
+    provider_specific_header: Final = cast(
+        ProviderSpecificHeader | Sequence[ProviderSpecificHeader] | None,
+        kwargs.get("provider_specific_header", None),
+    )
     headers = kwargs.get("headers", None) or extra_headers
 
     ensure_alternating_roles: Final[bool | None] = kwargs.get("ensure_alternating_roles", None)
     user_continue_message: Final[ChatCompletionUserMessage | None] = kwargs.get("user_continue_message", None)
     assistant_continue_message: ChatCompletionAssistantMessage | None = kwargs.get("assistant_continue_message", None)
-    if headers is None:
-        headers = {}
+    headers = {} if headers is None else dict(headers)
     if extra_headers is not None:
         headers.update(extra_headers)
     # Inject proxy auth headers if configured
@@ -7535,6 +7537,15 @@ async def amoderation(
             },
             custom_llm_provider=custom_llm_provider,
         )
+        moderation_request: Final = {"input": input, "model": model}  # mutable-ok: logged as the raw request body
+        litellm_logging_obj.pre_call(
+            input=input,
+            api_key=api_key,
+            additional_args={  # mutable-ok: loggers isinstance-check this payload as a dict
+                "complete_input_dict": moderation_request,
+                "api_base": str(_openai_client.base_url),
+            },
+        )
 
     if model is not None:
         response = await _openai_client.moderations.create(input=input, model=model)
@@ -8040,6 +8051,7 @@ def speech(
             project=project,
             max_retries=max_retries,
             timeout=timeout,
+            logging_obj=logging_obj,
             client=client,  # pass AsyncOpenAI, OpenAI client
             aspeech=aspeech,
             shared_session=shared_session,
@@ -8118,6 +8130,7 @@ def speech(
                 organization=organization,
                 max_retries=max_retries,
                 timeout=timeout,
+                logging_obj=logging_obj,
                 client=client,  # pass AsyncOpenAI, OpenAI client
                 aspeech=aspeech,
                 litellm_params=litellm_params_dict,

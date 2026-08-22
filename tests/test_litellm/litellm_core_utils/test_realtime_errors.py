@@ -1,8 +1,5 @@
 import json
-import os
-import sys
 
-sys.path.insert(0, os.path.abspath("../../.."))
 
 from litellm.litellm_core_utils.realtime_errors import (
     WEBSOCKET_CLOSE_REASON_MAX_BYTES,

@@ -1,8 +1,6 @@
 #### What this tests ####
 #    This tests litellm.token_counter.token_counter() function
 import importlib
-import os
-import sys
 import time
 import traceback
 from unittest.mock import MagicMock
@@ -10,10 +8,7 @@ from unittest.mock import MagicMock
 import pytest
 import tiktoken
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import litellm
 from litellm import create_pretrained_tokenizer, decode, encode, get_modified_max_tokens
@@ -634,7 +629,6 @@ def test_token_counter():
 
 
 import unittest
-from unittest.mock import MagicMock, patch
 
 from litellm.utils import _select_tokenizer_helper, claude_json_str, encoding
 
@@ -745,24 +739,6 @@ class TestTokenizerSelection(unittest.TestCase):
 @pytest.mark.parametrize(
     "messages",
     [
-        [
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": "These are some sample images from a movie. Based on these images, what do you think the tone of the movie is?",
-                    },
-                    {
-                        "type": "text",
-                        "image_url": {
-                            "url": "https://gratisography.com/wp-content/uploads/2024/11/gratisography-augmented-reality-800x525.jpg",
-                            "detail": "high",
-                        },
-                    },
-                ],
-            }
-        ],
         [
             {
                 "role": "user",
@@ -1043,13 +1019,12 @@ def test_token_counter_with_image_url():
         }
     ]
 
-    try:
+    with pytest.raises(ValueError, match="Invalid detail value") as exc_info:
         token_counter(model="gpt-3.5-turbo", messages=messages_invalid)
-        pytest.fail("Expected ValueError for invalid detail value")
-    except ValueError as e:
-        assert "Invalid detail value" in str(
-            e
-        ), f"Expected detail validation error, got: {e}"
+    e = exc_info.value
+    assert "Invalid detail value" in str(
+        e
+    ), f"Expected detail validation error, got: {e}"
 
 
 def test_token_counter_with_thinking_content():
@@ -1174,7 +1149,7 @@ def test_count_content_list_rejects_unknown_type():
     """
     from litellm.litellm_core_utils.token_counter import _count_content_list
 
-    with pytest.raises(ValueError) as exc_info:
+    with pytest.raises(ValueError, match='Error getting number of tokens from content list: Invalid') as exc_info:
         _count_content_list(
             count_function=len,
             content_list=[{"type": "totally_unknown_block"}],

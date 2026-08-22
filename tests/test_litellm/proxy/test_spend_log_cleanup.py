@@ -82,10 +82,10 @@ def test_spend_log_cleanup_cron_scheduling():
     assert trigger_weekly is not None
 
     # Invalid cron expression should raise ValueError
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match='Wrong number of fields; got'):
         CronTrigger.from_crontab("invalid cron")
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match='is higher than the maximum value'):
         CronTrigger.from_crontab("60 25 * * *")  # Invalid minute and hour
 
 

@@ -1,15 +1,10 @@
 import json
-import os
-import sys
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
 
-sys.path.insert(
-    0, os.path.abspath("../../../..")
-)  # Adds the parent directory to the system path
 
 from litellm.proxy._types import (
     LiteLLM_UserTableFiltered,
@@ -2975,6 +2970,7 @@ async def test_user_info_v2_response_shape(mocker):
         "updated_at": datetime(2024, 6, 1, tzinfo=timezone.utc),
         "sso_user_id": None,
         "teams": ["team-a", "team-b"],
+        "model_max_budget": {"gpt-3.5-turbo": {"budget_limit": 5.0, "time_period": "30d"}},
     }
 
     async def mock_find_unique(*args, **kwargs):
@@ -3018,8 +3014,19 @@ async def test_user_info_v2_response_shape(mocker):
         "sso_user_id",
         "teams",
         "object_permission",
+        "model_max_budget",
+        "model_max_budget_usage",
     }
     assert set(response_dict.keys()) == expected_fields
+
+    # The dashboard's user edit form hydrates its per-model budget rows from
+    # these two, so dropping them makes a save replace the user's budgets.
+    assert response_dict["model_max_budget"] == {
+        "gpt-3.5-turbo": {"budget_limit": 5.0, "time_period": "30d"}
+    }
+    assert response_dict["model_max_budget_usage"] == {
+        "gpt-3.5-turbo": {"current_spend": 0.0, "budget_limit": 5.0, "time_period": "30d"}
+    }
 
     # Verify teams is a list of strings (team IDs), not team objects
     assert isinstance(response.teams, list)
@@ -4150,3 +4157,66 @@ async def test_user_info_v2_returns_the_mcp_entitlement(mocker):
     assert response.object_permission.mcp_tool_permissions == {
         "github": ["list_issues"]
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "model_max_budget,expected_written",
+    [
+        (
+            {"claude-opus-4-8": {"budget_limit": 200.0, "time_period": "1mo"}},
+            '{"claude-opus-4-8": {"budget_limit": 200.0, "time_period": "1mo"}}',
+        ),
+        (None, None),
+        ({}, None),
+    ],
+    ids=["supplied", "omitted", "empty"],
+)
+async def test_user_new_persists_model_max_budget(
+    monkeypatch, model_max_budget, expected_written
+):
+    """
+    /user/new used to echo model_max_budget back while writing {} to the user row,
+    so a per-model budget looked configured and was read by nothing.
+
+    The omitted/empty cases are the other half: SSO and default-key callers reach
+    generate_key_helper_fn with no budget, and writing "{}" for them would clear
+    an existing user's budgets.
+    """
+    from litellm.proxy.management_endpoints import key_management_endpoints
+
+    captured = {}
+
+    class _FakeUserRow:
+        models = []
+
+    class _FakePrisma:
+        async def insert_data(self, data, table_name):
+            if table_name == "user":
+                captured["user_data"] = dict(data)
+                return _FakeUserRow()
+            captured["key_data"] = dict(data)
+            return SimpleNamespace(
+                token=data.get("token"),
+                litellm_budget_table=None,
+                created_at=None,
+                updated_at=None,
+            )
+
+        async def get_data(self, *args, **kwargs):
+            return None
+
+    import litellm.proxy.proxy_server as proxy_server
+
+    monkeypatch.setattr(proxy_server, "prisma_client", _FakePrisma(), raising=False)
+    # model_max_budget is an enterprise feature; without this the call is rejected
+    # before it ever reaches the write this test is about.
+    monkeypatch.setattr(proxy_server, "premium_user", True, raising=False)
+
+    await key_management_endpoints.generate_key_helper_fn(
+        request_type="user",
+        user_id="u-1",
+        model_max_budget=model_max_budget,
+    )
+
+    assert captured["user_data"].get("model_max_budget") == expected_written

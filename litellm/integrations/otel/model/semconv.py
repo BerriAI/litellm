@@ -3,7 +3,9 @@ Keys follow the OpenTelemetry GenAI semantic conventions (experimental). Anythin
 without a semconv equivalent lives under the ``litellm.*`` vendor namespace.
 """
 
+from collections.abc import Mapping
 from enum import Enum
+from types import MappingProxyType
 from typing import Final
 
 from litellm._logging import verbose_logger
@@ -30,6 +32,21 @@ class GenAIOperation(str, Enum):
     EXECUTE_TOOL = "execute_tool"  # MCP tool-call spans
     LITELLM_VECTOR_STORE_MANAGEMENT = "litellm.vector_store_management"
     LITELLM_VECTOR_STORE_FILE_MANAGEMENT = "litellm.vector_store_file_management"
+    LITELLM_MODERATION = "litellm.moderation"
+
+
+class GenAIOutputType(str, Enum):
+    """Values for ``gen_ai.output.type``, the modality the client asked for.
+
+    It is what separates the inference routes that share ``generate_content``:
+    image generation requests ``image``, speech requests ``speech``, and
+    transcription and OCR both request ``text``.
+    """
+
+    TEXT = "text"
+    JSON = "json"
+    IMAGE = "image"
+    SPEECH = "speech"
 
 
 class GenAIProvider(str, Enum):
@@ -258,6 +275,11 @@ class LiteLLM:
     """Vendor-extension keys (no semconv equivalent). Always ``litellm.*``."""
 
     CALL_ID: Final = "litellm.call_id"
+    # The litellm route that produced the call. Needed because the convention maps
+    # several routes onto one operation: transcription and OCR are both
+    # ``generate_content`` with a ``text`` output type, so this is the only thing
+    # that tells them apart.
+    CALL_TYPE: Final = "litellm.call_type"
     COST_PREFIX: Final = "litellm.cost."
     METADATA_PREFIX: Final = "litellm.metadata."
     TEAM_ID: Final = "litellm.team.id"
@@ -352,6 +374,16 @@ _OPERATION_BY_CALL_TYPE: Final[dict[str, GenAIOperation]] = {
     "aembedding": GenAIOperation.EMBEDDINGS,
     "responses": GenAIOperation.CHAT,
     "aresponses": GenAIOperation.CHAT,
+    "image_generation": GenAIOperation.GENERATE_CONTENT,
+    "aimage_generation": GenAIOperation.GENERATE_CONTENT,
+    "moderation": GenAIOperation.LITELLM_MODERATION,
+    "amoderation": GenAIOperation.LITELLM_MODERATION,
+    "ocr": GenAIOperation.GENERATE_CONTENT,
+    "aocr": GenAIOperation.GENERATE_CONTENT,
+    "speech": GenAIOperation.GENERATE_CONTENT,
+    "aspeech": GenAIOperation.GENERATE_CONTENT,
+    "transcription": GenAIOperation.GENERATE_CONTENT,
+    "atranscription": GenAIOperation.GENERATE_CONTENT,
     "call_mcp_tool": GenAIOperation.EXECUTE_TOOL,
     "vector_store_search": GenAIOperation.RETRIEVAL,
     "avector_store_search": GenAIOperation.RETRIEVAL,
@@ -385,6 +417,23 @@ _OPERATION_BY_CALL_TYPE: Final[dict[str, GenAIOperation]] = {
 }
 
 
+# litellm ``call_type`` -> ``gen_ai.output.type``. Only the call types whose route
+# fixes the requested modality are listed; the attribute is conditionally required
+# on a request that asks for an output format, so anything else is left unstamped.
+_OUTPUT_TYPE_BY_CALL_TYPE: Final[Mapping[str, GenAIOutputType]] = MappingProxyType(
+    {
+        "image_generation": GenAIOutputType.IMAGE,
+        "aimage_generation": GenAIOutputType.IMAGE,
+        "speech": GenAIOutputType.SPEECH,
+        "aspeech": GenAIOutputType.SPEECH,
+        "transcription": GenAIOutputType.TEXT,
+        "atranscription": GenAIOutputType.TEXT,
+        "ocr": GenAIOutputType.TEXT,
+        "aocr": GenAIOutputType.TEXT,
+    }
+)
+
+
 def resolve_provider(custom_llm_provider: str | None) -> str:
     """Map a litellm provider string to a ``gen_ai.provider.name`` value.
 
@@ -416,3 +465,11 @@ def resolve_operation(call_type: str | None) -> GenAIOperation:
         GenAIOperation.CHAT.value,
     )
     return GenAIOperation.CHAT
+
+
+def resolve_output_type(call_type: str | None) -> GenAIOutputType | None:
+    """Map a litellm ``call_type`` to a ``gen_ai.output.type`` value, or ``None``
+    for a route that doesn't pin the output modality."""
+    if not call_type:
+        return None
+    return _OUTPUT_TYPE_BY_CALL_TYPE.get(call_type.lower())

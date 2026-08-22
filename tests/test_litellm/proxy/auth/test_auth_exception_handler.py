@@ -1,7 +1,5 @@
 import asyncio
 import json
-import os
-import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -26,9 +24,6 @@ from prisma.errors import (
     UniqueViolationError,
 )
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 from litellm._logging import verbose_proxy_logger
 from litellm.exceptions import BudgetExceededError
@@ -338,12 +333,13 @@ async def test_handle_authentication_error_budget_exceeded():
     mock_api_key = "test-key"
 
     # Test with budget exceeded error
-    with pytest.raises(ProxyException) as exc_info:
-        from litellm.exceptions import BudgetExceededError
+    from litellm.exceptions import BudgetExceededError
 
-        budget_error = BudgetExceededError(
-            message="Budget exceeded", current_cost=100, max_budget=100
-        )
+    budget_error = BudgetExceededError(
+        message="Budget exceeded", current_cost=100, max_budget=100
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
         await handler._handle_authentication_error(
             budget_error,
             mock_request,

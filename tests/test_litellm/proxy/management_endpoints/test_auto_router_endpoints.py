@@ -2,8 +2,6 @@
 Unit tests for auto router management endpoints
 """
 
-import os
-import sys
 from pathlib import Path
 from typing import Final
 
@@ -11,7 +9,6 @@ import pytest
 from fastapi import HTTPException
 from pydantic import ValidationError
 
-sys.path.insert(0, os.path.abspath("../../../.."))  # Adds the parent directory to the system path
 
 from litellm.proxy._types import (
     LitellmUserRoles,
@@ -482,7 +479,6 @@ class TestAutoRouterBenchmarks:
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock
 
-from fastapi import HTTPException
 
 from litellm.proxy.management_endpoints.auto_router_endpoints import (
     get_shadow_eval_job,
