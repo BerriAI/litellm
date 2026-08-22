@@ -259,6 +259,14 @@ class LiteLLMCompletionResponsesConfig:
             if litellm_logging_obj:
                 litellm_logging_obj.stream_options = stream_options
 
+        # An empty tools list is invalid for strict OpenAI-compatible backends
+        # (e.g. vLLM 422s with "`tools` must not be an empty array. Either
+        # provide at least one tool or omit the field entirely."). Drop the
+        # field (and the now-meaningless tool_choice) when there are no tools.
+        if not litellm_completion_request.get("tools"):
+            litellm_completion_request.pop("tools", None)
+            litellm_completion_request.pop("tool_choice", None)
+
         # only pass non-None values
         litellm_completion_request = {k: v for k, v in litellm_completion_request.items() if v is not None}
         return litellm_completion_request
