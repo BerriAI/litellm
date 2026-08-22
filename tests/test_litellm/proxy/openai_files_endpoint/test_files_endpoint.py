@@ -1,7 +1,7 @@
 import json
 import os
 import sys
-from typing import List
+from typing import Final, List
 from unittest.mock import ANY, AsyncMock
 
 import pytest
@@ -2617,13 +2617,26 @@ def _setup_unscoped_list_files_route(mocker, monkeypatch, llm_router: Router, af
     return managed_files
 
 
-def _get_unscoped_list_files(query: str):
+def _get_list_files(path: str):
     try:
-        return client.get(f"/v1/files{query}", headers={"Authorization": "Bearer test-key"})
+        return client.get(path, headers={"Authorization": "Bearer test-key"})
     finally:
         import litellm.proxy.proxy_server as ps
 
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+def _get_unscoped_list_files(query: str):
+    return _get_list_files(f"/v1/files{query}")
+
+
+_EMPTY_FILE_LIST_PAGE: Final = {
+    "object": "list",
+    "data": [],
+    "first_id": None,
+    "last_id": None,
+    "has_more": False,
+}
 
 
 async def _validating_afile_list(**kwargs):
@@ -2631,13 +2644,12 @@ async def _validating_afile_list(**kwargs):
     from litellm.proxy.openai_files_endpoints.common_utils import validate_file_list_limit
 
     validate_file_list_limit(kwargs.get("limit"))
-    return {
-        "object": "list",
-        "data": [],
-        "first_id": None,
-        "last_id": None,
-        "has_more": False,
-    }
+    return dict(_EMPTY_FILE_LIST_PAGE)
+
+
+async def _permissive_afile_list(**kwargs):
+    """Stand in for a file store that validates nothing, so only the route can reject."""
+    return dict(_EMPTY_FILE_LIST_PAGE)
 
 
 @pytest.mark.parametrize(
@@ -2681,6 +2693,30 @@ def test_unscoped_list_files_accepts_the_ends_of_the_openai_limit_range(
     assert response.status_code == 200, response.text
     assert response.json()["data"] == []
     assert managed_files.afile_list.await_args.kwargs["limit"] == limit
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/v1/files?limit=0",
+        "/v1/files?limit=0&target_model_names=gpt-3.5-turbo",
+        "/openai/v1/files?limit=0",
+    ],
+    ids=["managed-file-store", "target-model-names", "provider-route"],
+)
+def test_list_files_validates_the_limit_on_every_branch(
+    mocker: MockerFixture, monkeypatch, llm_router: Router, path
+):
+    """The limit is a route-level contract, so the scoped and provider branches reject it too."""
+    _setup_unscoped_list_files_route(mocker, monkeypatch, llm_router, _permissive_afile_list)
+
+    response = _get_list_files(path)
+
+    assert response.status_code == 400, response.text
+    assert response.json()["error"]["param"] == "limit"
+    assert response.json()["error"]["message"] == (
+        "Invalid 'limit': integer below minimum value. Expected a value >= 1, but got 0 instead."
+    )
 
 
 def test_unscoped_list_files_returns_400_for_an_unknown_after_cursor(
