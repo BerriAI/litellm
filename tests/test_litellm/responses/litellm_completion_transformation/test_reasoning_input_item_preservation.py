@@ -23,13 +23,19 @@ from litellm.types.utils import Message
 
 def _transform_item(item):
     return LiteLLMCompletionResponsesConfig._transform_responses_api_input_item_to_chat_completion_message(
-        input_item=item
+        input_item=item, replay_reasoning=True
     )
 
 
 def _transform_input(input_items):
     return LiteLLMCompletionResponsesConfig._transform_response_input_param_to_chat_completion_message(
-        input=input_items
+        input=input_items, replay_reasoning=True
+    )
+
+
+def _inspect_input(input_items):
+    return LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+        input=input_items, responses_api_request={}
     )
 
 
@@ -264,6 +270,50 @@ class TestEncryptedReasoningRoundTrip:
         assert "reasoning_content" not in messages[0]
         assert messages[0]["thinking_blocks"][0]["signature"] == "sig-one"
         assert messages[1]["role"] == "user"
+
+
+class TestInspectionCallersStillSeeReasoningText:
+    """Token counting, rate limiting and guardrails read the request as text.
+
+    Moving reasoning onto ``reasoning_content`` is only right for messages on
+    their way to a provider. A guardrail scanning for sensitive data reads
+    message ``content``, so the inspection default keeps the text there.
+    """
+
+    def test_reasoning_text_stays_readable_as_content_by_default(self):
+        messages = _inspect_input(
+            [
+                {"role": "user", "content": "What did we decide?"},
+                {
+                    "type": "reasoning",
+                    "id": "rs_1",
+                    "content": [{"type": "output_text", "text": "card 4111111111111111"}],
+                },
+            ]
+        )
+        assert len(messages) == 2
+        blocks = messages[1]["content"]
+        assert "4111111111111111" in json.dumps(blocks)
+        assert "reasoning_content" not in messages[1]
+
+    def test_reasoning_moves_off_content_only_for_provider_bound_callers(self):
+        input_items = [
+            {
+                "type": "reasoning",
+                "id": "rs_1",
+                "content": [{"type": "output_text", "text": "hidden plan"}],
+            },
+            {"role": "user", "content": "go on"},
+        ]
+        provider_bound = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+            input=input_items, responses_api_request={}, replay_reasoning=True
+        )
+        assert provider_bound[0]["content"] is None
+        assert provider_bound[0]["reasoning_content"] == "hidden plan"
+
+        inspected = _inspect_input(input_items)
+        assert inspected[0]["role"] == "user"
+        assert "hidden plan" in json.dumps(inspected[0]["content"])
 
 
 class TestNonReasoningInputItemUnchanged:

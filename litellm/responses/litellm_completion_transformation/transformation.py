@@ -296,6 +296,7 @@ class LiteLLMCompletionResponsesConfig:
             "messages": LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
                 input=input,
                 responses_api_request=responses_api_request,
+                replay_reasoning=True,
             ),
             "model": model,
             "tool_choice": LiteLLMCompletionResponsesConfig._transform_tool_choice(
@@ -340,6 +341,7 @@ class LiteLLMCompletionResponsesConfig:
     def transform_responses_api_input_to_messages(
         input: str | ResponseInputParam,
         responses_api_request: ResponsesAPIOptionalRequestParams | dict,
+        replay_reasoning: bool = False,
     ) -> list[
         AllMessageValues
         | GenericChatCompletionMessage
@@ -349,6 +351,16 @@ class LiteLLMCompletionResponsesConfig:
     ]:
         """
         Transform a Responses API input into a list of messages
+
+        ``replay_reasoning`` belongs to callers whose messages are about to be
+        sent to a model: prior-turn ``reasoning`` items are then rebuilt as
+        assistant ``reasoning_content`` and signed ``thinking_blocks`` so the
+        provider gets its own chain-of-thought back instead of reading it as
+        visible text.
+
+        Callers that only inspect the messages (token counting, rate limiting,
+        guardrail scanning) leave it off, because they need every piece of text
+        in the request to stay readable as message ``content``.
         """
         messages: list[
             AllMessageValues
@@ -367,6 +379,7 @@ class LiteLLMCompletionResponsesConfig:
         messages.extend(
             LiteLLMCompletionResponsesConfig._transform_response_input_param_to_chat_completion_message(
                 input=input,
+                replay_reasoning=replay_reasoning,
             )
         )
 
@@ -443,11 +456,15 @@ class LiteLLMCompletionResponsesConfig:
     @staticmethod
     def _transform_response_input_param_to_chat_completion_message(
         input: str | ResponseInputParam,
+        replay_reasoning: bool = False,
     ) -> list[
         AllMessageValues | GenericChatCompletionMessage | ChatCompletionMessageToolCall | ChatCompletionResponseMessage
     ]:
         """
         Transform a ResponseInputParam into a Chat Completion message
+
+        See ``transform_responses_api_input_to_messages`` for what
+        ``replay_reasoning`` means.
         """
         messages: list[
             AllMessageValues
@@ -463,7 +480,8 @@ class LiteLLMCompletionResponsesConfig:
             for _input in input:
                 chat_completion_messages = (
                     LiteLLMCompletionResponsesConfig._transform_responses_api_input_item_to_chat_completion_message(
-                        input_item=_input
+                        input_item=_input,
+                        replay_reasoning=replay_reasoning,
                     )
                 )
 
@@ -559,6 +577,8 @@ class LiteLLMCompletionResponsesConfig:
                     continue
 
                 messages.extend(chat_completion_messages)
+        if not replay_reasoning:
+            return messages
         return LiteLLMCompletionResponsesConfig._merge_reasoning_only_assistant_messages(messages)
 
     @staticmethod
@@ -1151,6 +1171,7 @@ class LiteLLMCompletionResponsesConfig:
     @staticmethod
     def _transform_responses_api_input_item_to_chat_completion_message(
         input_item: Any,
+        replay_reasoning: bool = False,
     ) -> list[AllMessageValues | GenericChatCompletionMessage | ChatCompletionResponseMessage]:
         """
         Transform a Responses API input item into a Chat Completion message
@@ -1179,12 +1200,14 @@ class LiteLLMCompletionResponsesConfig:
             return LiteLLMCompletionResponsesConfig._transform_responses_api_function_call_to_chat_completion_message(
                 function_call=input_item
             )
-        elif input_item.get("type") == "reasoning":
+        elif replay_reasoning and input_item.get("type") == "reasoning":
             # A ResponseReasoningItemParam carries the prior-turn chain-of-thought.
             # Chat-completions providers (DeepSeek V4, Kimi K2.6, ...) expect this
             # to be replayed as `reasoning_content` on an assistant message, not as
             # visible `content` (prompt pollution) and not dropped (DeepSeek V4
             # rejects multi-turn requests with a missing `reasoning_content`).
+            # Callers that only inspect the request skip this branch so the
+            # reasoning text stays visible to them as message content.
             reasoning_text = LiteLLMCompletionResponsesConfig._extract_reasoning_text_from_input_item(  # rebind-ok: extraction result
                 input_item
             )
