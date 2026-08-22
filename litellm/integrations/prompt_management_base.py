@@ -3,6 +3,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from typing_extensions import TYPE_CHECKING, TypedDict
 
+from litellm._logging import verbose_logger
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.prompts.init_prompts import PromptSpec
 from litellm.types.utils import StandardCallbackDynamicParams
@@ -165,7 +166,15 @@ class PromptManagementBase(ABC):
         ignore_prompt_manager_optional_params: Optional[bool] = False,
     ) -> Tuple[str, List[AllMessageValues], dict]:
         if prompt_id is None:
-            raise ValueError("prompt_id is required for Prompt Management Base class")
+            # Prompt-management hooks can be triggered by dynamic params (e.g.
+            # `cache_control_injection_points`) without a prompt_id; a prompt-id-based
+            # integration has nothing to compile then, so skip instead of raising.
+            # See https://github.com/BerriAI/litellm/issues/31887
+            verbose_logger.debug(
+                "%s: no prompt_id provided, skipping prompt management",
+                self.integration_name,
+            )
+            return model, messages, non_default_params
         if not self.should_run_prompt_management(
             prompt_id=prompt_id,
             prompt_spec=prompt_spec,

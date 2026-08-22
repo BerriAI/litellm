@@ -843,6 +843,19 @@ class Logging(LiteLLMLoggingBaseClass):
             if auto_detected_logger is not None:
                 return auto_detected_logger
 
+        # Without a prompt_id, a call that reaches here was triggered by a dynamic param
+        # like `cache_control_injection_points` — the matching hook must be checked before
+        # the generic fallback below, which would select a prompt-management logger that
+        # requires a prompt_id (and raise) while never applying the injection points.
+        # See https://github.com/BerriAI/litellm/issues/31887
+        if prompt_id is None:
+            if (
+                anthropic_cache_control_logger
+                := AnthropicCacheControlHook.get_custom_logger_for_anthropic_cache_control_hook(non_default_params)
+            ):
+                self.model_call_details["prompt_integration"] = anthropic_cache_control_logger.__class__.__name__
+                return anthropic_cache_control_logger
+
         # Then check for any registered CustomPromptManagement loggers (fallback)
         prompt_management_loggers = litellm.logging_callback_manager.get_custom_loggers_for_type(
             callback_type=CustomPromptManagement
