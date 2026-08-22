@@ -52,12 +52,6 @@ class AnthropicMessagesRequestUtils:
                 drop_params=drop_params,
                 custom_llm_provider=custom_llm_provider,
             )
-            # Claude 4.7+ removed sampling params (the API 400s on top_p, top_k,
-            # and any temperature other than 1). Mirror the /chat/completions
-            # gating — drop under drop_params, else raise a clean client-side
-            # 400 — instead of forwarding a known-rejected param upstream, where
-            # router fallbacks would mask the provider 400 as a silent model
-            # downgrade.
             for param in ("temperature", "top_p", "top_k"):
                 if param in filtered_params:
                     AnthropicModelInfo._apply_sampling_param(  # pyright: ignore[reportPrivateUsage]  # same gating the /chat/completions path applies; forking it would drift
