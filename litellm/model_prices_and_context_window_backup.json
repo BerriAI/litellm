@@ -5057,8 +5057,8 @@
         "supports_tool_choice": true
     },
     "azure/gpt-realtime-2025-08-28": {
-        "cache_creation_input_audio_token_cost": 4e-06,
-        "cache_read_input_token_cost": 4e-06,
+        "cache_creation_input_audio_token_cost": 4e-07,
+        "cache_read_input_token_cost": 4e-07,
         "deprecation_date": "2027-03-02",
         "input_cost_per_audio_token": 3.2e-05,
         "input_cost_per_token": 4e-06,
@@ -5090,8 +5090,8 @@
         "input_cost_per_image_token": 5e-06
     },
     "azure/gpt-realtime-1.5-2026-02-23": {
-        "cache_creation_input_audio_token_cost": 4e-06,
-        "cache_read_input_token_cost": 4e-06,
+        "cache_creation_input_audio_token_cost": 4e-07,
+        "cache_read_input_token_cost": 4e-07,
         "deprecation_date": "2027-08-24",
         "input_cost_per_audio_token": 3.2e-05,
         "input_cost_per_token": 4e-06,
@@ -6773,7 +6773,9 @@
         "supports_xhigh_reasoning_effort": true,
         "supports_minimal_reasoning_effort": false,
         "cache_creation_input_token_cost": 2.5e-07,
-        "cache_creation_input_token_cost_above_272k_tokens": 5e-07
+        "cache_creation_input_token_cost_above_272k_tokens": 5e-07,
+        "cache_creation_input_token_cost_priority": 5e-07,
+        "source": "https://azure.microsoft.com/en-us/products/ai-services/openai-service"
     },
     "azure/us/gpt-5.6": {
         "cache_read_input_token_cost": 5.5e-07,
@@ -6829,11 +6831,11 @@
     "azure/us/gpt-5.6-sol": {
         "cache_read_input_token_cost": 5.5e-07,
         "cache_read_input_token_cost_above_272k_tokens": 1.1e-06,
-        "cache_read_input_token_cost_priority": 1.375e-06,
+        "cache_read_input_token_cost_priority": 1.1e-06,
         "deprecation_date": "2028-01-11",
         "input_cost_per_token": 5.5e-06,
         "input_cost_per_token_above_272k_tokens": 1.1e-05,
-        "input_cost_per_token_priority": 1.375e-05,
+        "input_cost_per_token_priority": 1.1e-05,
         "litellm_provider": "azure",
         "max_input_tokens": 922000,
         "max_output_tokens": 128000,
@@ -6841,7 +6843,7 @@
         "mode": "chat",
         "output_cost_per_token": 3.3e-05,
         "output_cost_per_token_above_272k_tokens": 4.95e-05,
-        "output_cost_per_token_priority": 8.25e-05,
+        "output_cost_per_token_priority": 6.6e-05,
         "search_context_cost_per_query": {
             "search_context_size_high": 0.01,
             "search_context_size_low": 0.01,
@@ -6874,16 +6876,18 @@
         "supports_xhigh_reasoning_effort": true,
         "supports_minimal_reasoning_effort": false,
         "cache_creation_input_token_cost": 6.875e-06,
-        "cache_creation_input_token_cost_above_272k_tokens": 1.375e-05
+        "cache_creation_input_token_cost_above_272k_tokens": 1.375e-05,
+        "cache_creation_input_token_cost_priority": 1.375e-05,
+        "source": "https://azure.microsoft.com/en-us/products/ai-services/openai-service"
     },
     "azure/us/gpt-5.6-terra": {
         "cache_read_input_token_cost": 2.2e-07,
         "cache_read_input_token_cost_above_272k_tokens": 4.4e-07,
-        "cache_read_input_token_cost_priority": 5.5e-07,
+        "cache_read_input_token_cost_priority": 4.4e-07,
         "deprecation_date": "2028-01-11",
         "input_cost_per_token": 2.2e-06,
         "input_cost_per_token_above_272k_tokens": 4.4e-06,
-        "input_cost_per_token_priority": 5.5e-06,
+        "input_cost_per_token_priority": 4.4e-06,
         "litellm_provider": "azure",
         "max_input_tokens": 922000,
         "max_output_tokens": 128000,
@@ -6891,7 +6895,7 @@
         "mode": "chat",
         "output_cost_per_token": 1.32e-05,
         "output_cost_per_token_above_272k_tokens": 1.98e-05,
-        "output_cost_per_token_priority": 3.3e-05,
+        "output_cost_per_token_priority": 2.64e-05,
         "search_context_cost_per_query": {
             "search_context_size_high": 0.01,
             "search_context_size_low": 0.01,
@@ -6923,16 +6927,19 @@
         "supports_none_reasoning_effort": true,
         "supports_xhigh_reasoning_effort": true,
         "supports_minimal_reasoning_effort": false,
-        "cache_creation_input_token_cost_above_272k_tokens": 5.5e-06
+        "cache_creation_input_token_cost_above_272k_tokens": 5.5e-06,
+        "cache_creation_input_token_cost": 2.75e-06,
+        "cache_creation_input_token_cost_priority": 5.5e-06,
+        "source": "https://azure.microsoft.com/en-us/products/ai-services/openai-service"
     },
     "azure/us/gpt-5.6-luna": {
         "cache_read_input_token_cost": 2.2e-08,
         "cache_read_input_token_cost_above_272k_tokens": 4.4e-08,
-        "cache_read_input_token_cost_priority": 5.5e-08,
+        "cache_read_input_token_cost_priority": 4.4e-08,
         "deprecation_date": "2028-01-11",
         "input_cost_per_token": 2.2e-07,
         "input_cost_per_token_above_272k_tokens": 4.4e-07,
-        "input_cost_per_token_priority": 5.5e-07,
+        "input_cost_per_token_priority": 4.4e-07,
         "litellm_provider": "azure",
         "max_input_tokens": 922000,
         "max_output_tokens": 128000,
@@ -6940,7 +6947,7 @@
         "mode": "chat",
         "output_cost_per_token": 1.32e-06,
         "output_cost_per_token_above_272k_tokens": 1.98e-06,
-        "output_cost_per_token_priority": 3.3e-06,
+        "output_cost_per_token_priority": 2.64e-06,
         "search_context_cost_per_query": {
             "search_context_size_high": 0.01,
             "search_context_size_low": 0.01,
@@ -6973,15 +6980,17 @@
         "supports_xhigh_reasoning_effort": true,
         "supports_minimal_reasoning_effort": false,
         "cache_creation_input_token_cost": 2.75e-07,
-        "cache_creation_input_token_cost_above_272k_tokens": 5.5e-07
+        "cache_creation_input_token_cost_above_272k_tokens": 5.5e-07,
+        "cache_creation_input_token_cost_priority": 5.5e-07,
+        "source": "https://azure.microsoft.com/en-us/products/ai-services/openai-service"
     },
     "azure/eu/gpt-5.6": {
         "cache_read_input_token_cost": 5.5e-07,
         "cache_read_input_token_cost_above_272k_tokens": 1.1e-06,
-        "cache_read_input_token_cost_priority": 1.375e-06,
+        "cache_read_input_token_cost_priority": 1.1e-06,
         "input_cost_per_token": 5.5e-06,
         "input_cost_per_token_above_272k_tokens": 1.1e-05,
-        "input_cost_per_token_priority": 1.375e-05,
+        "input_cost_per_token_priority": 1.1e-05,
         "litellm_provider": "azure",
         "max_input_tokens": 922000,
         "max_output_tokens": 128000,
@@ -6989,55 +6998,7 @@
         "mode": "chat",
         "output_cost_per_token": 3.3e-05,
         "output_cost_per_token_above_272k_tokens": 4.95e-05,
-        "output_cost_per_token_priority": 8.25e-05,
-        "search_context_cost_per_query": {
-            "search_context_size_high": 0.01,
-            "search_context_size_low": 0.01,
-            "search_context_size_medium": 0.01
-        },
-        "supported_endpoints": [
-            "/v1/chat/completions",
-            "/v1/batch",
-            "/v1/responses"
-        ],
-        "supported_modalities": [
-            "text",
-            "image"
-        ],
-        "supported_output_modalities": [
-            "text"
-        ],
-        "supports_function_calling": true,
-        "supports_native_streaming": true,
-        "supports_parallel_function_calling": true,
-        "supports_pdf_input": true,
-        "supports_prompt_caching": true,
-        "supports_reasoning": true,
-        "supports_response_schema": true,
-        "supports_system_messages": true,
-        "supports_tool_choice": true,
-        "supports_vision": true,
-        "supports_web_search": true,
-        "supports_none_reasoning_effort": true,
-        "supports_xhigh_reasoning_effort": true,
-        "supports_minimal_reasoning_effort": false
-    },
-    "azure/eu/gpt-5.6-sol": {
-        "cache_read_input_token_cost": 5.5e-07,
-        "cache_read_input_token_cost_above_272k_tokens": 1.1e-06,
-        "cache_read_input_token_cost_priority": 1.375e-06,
-        "deprecation_date": "2028-01-11",
-        "input_cost_per_token": 5.5e-06,
-        "input_cost_per_token_above_272k_tokens": 1.1e-05,
-        "input_cost_per_token_priority": 1.375e-05,
-        "litellm_provider": "azure",
-        "max_input_tokens": 922000,
-        "max_output_tokens": 128000,
-        "max_tokens": 128000,
-        "mode": "chat",
-        "output_cost_per_token": 3.3e-05,
-        "output_cost_per_token_above_272k_tokens": 4.95e-05,
-        "output_cost_per_token_priority": 8.25e-05,
+        "output_cost_per_token_priority": 6.6e-05,
         "search_context_cost_per_query": {
             "search_context_size_high": 0.01,
             "search_context_size_low": 0.01,
@@ -7070,7 +7031,61 @@
         "supports_xhigh_reasoning_effort": true,
         "supports_minimal_reasoning_effort": false,
         "cache_creation_input_token_cost": 6.875e-06,
-        "cache_creation_input_token_cost_above_272k_tokens": 1.375e-05
+        "cache_creation_input_token_cost_above_272k_tokens": 1.375e-05,
+        "cache_creation_input_token_cost_priority": 1.375e-05,
+        "source": "https://azure.microsoft.com/en-us/products/ai-services/openai-service"
+    },
+    "azure/eu/gpt-5.6-sol": {
+        "cache_read_input_token_cost": 5.5e-07,
+        "cache_read_input_token_cost_above_272k_tokens": 1.1e-06,
+        "cache_read_input_token_cost_priority": 1.1e-06,
+        "deprecation_date": "2028-01-11",
+        "input_cost_per_token": 5.5e-06,
+        "input_cost_per_token_above_272k_tokens": 1.1e-05,
+        "input_cost_per_token_priority": 1.1e-05,
+        "litellm_provider": "azure",
+        "max_input_tokens": 922000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 3.3e-05,
+        "output_cost_per_token_above_272k_tokens": 4.95e-05,
+        "output_cost_per_token_priority": 6.6e-05,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/batch",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_parallel_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "supports_web_search": true,
+        "supports_none_reasoning_effort": true,
+        "supports_xhigh_reasoning_effort": true,
+        "supports_minimal_reasoning_effort": false,
+        "cache_creation_input_token_cost": 6.875e-06,
+        "cache_creation_input_token_cost_above_272k_tokens": 1.375e-05,
+        "cache_creation_input_token_cost_priority": 1.375e-05,
+        "source": "https://azure.microsoft.com/en-us/products/ai-services/openai-service"
     },
     "azure/eu/gpt-5.6-terra": {
         "cache_read_input_token_cost": 2.2e-07,
@@ -7121,16 +7136,17 @@
         "supports_minimal_reasoning_effort": false,
         "cache_creation_input_token_cost_above_272k_tokens": 5.5e-06,
         "cache_creation_input_token_cost_priority": 5.5e-06,
-        "source": "https://azure.microsoft.com/en-us/products/ai-services/openai-service"
+        "source": "https://azure.microsoft.com/en-us/products/ai-services/openai-service",
+        "cache_creation_input_token_cost": 2.75e-06
     },
     "azure/eu/gpt-5.6-luna": {
         "cache_read_input_token_cost": 2.2e-08,
         "cache_read_input_token_cost_above_272k_tokens": 4.4e-08,
-        "cache_read_input_token_cost_priority": 5.5e-08,
+        "cache_read_input_token_cost_priority": 4.4e-08,
         "deprecation_date": "2028-01-11",
         "input_cost_per_token": 2.2e-07,
         "input_cost_per_token_above_272k_tokens": 4.4e-07,
-        "input_cost_per_token_priority": 5.5e-07,
+        "input_cost_per_token_priority": 4.4e-07,
         "litellm_provider": "azure",
         "max_input_tokens": 922000,
         "max_output_tokens": 128000,
@@ -7138,7 +7154,7 @@
         "mode": "chat",
         "output_cost_per_token": 1.32e-06,
         "output_cost_per_token_above_272k_tokens": 1.98e-06,
-        "output_cost_per_token_priority": 3.3e-06,
+        "output_cost_per_token_priority": 2.64e-06,
         "search_context_cost_per_query": {
             "search_context_size_high": 0.01,
             "search_context_size_low": 0.01,
@@ -7171,7 +7187,9 @@
         "supports_xhigh_reasoning_effort": true,
         "supports_minimal_reasoning_effort": false,
         "cache_creation_input_token_cost": 2.75e-07,
-        "cache_creation_input_token_cost_above_272k_tokens": 5.5e-07
+        "cache_creation_input_token_cost_above_272k_tokens": 5.5e-07,
+        "cache_creation_input_token_cost_priority": 5.5e-07,
+        "source": "https://azure.microsoft.com/en-us/products/ai-services/openai-service"
     },
     "azure/gpt-5.5": {
         "deprecation_date": "2027-10-26",
@@ -26487,14 +26505,13 @@
         "input_cost_per_token": 1.25e-05,
         "input_cost_per_token_above_272k_tokens": 2.5e-05,
         "litellm_provider": "openai",
-        "max_input_tokens": 400000,
+        "max_input_tokens": 272000,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 7.5e-05,
         "output_cost_per_token_above_272k_tokens": 0.0001125,
         "supported_endpoints": [
-            "/v1/chat/completions",
             "/v1/responses"
         ],
         "supported_modalities": [
@@ -26526,14 +26543,13 @@
         "input_cost_per_token": 1.25e-05,
         "input_cost_per_token_above_272k_tokens": 2.5e-05,
         "litellm_provider": "openai",
-        "max_input_tokens": 400000,
+        "max_input_tokens": 272000,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 7.5e-05,
         "output_cost_per_token_above_272k_tokens": 0.0001125,
         "supported_endpoints": [
-            "/v1/chat/completions",
             "/v1/responses"
         ],
         "supported_modalities": [
@@ -26565,14 +26581,13 @@
         "input_cost_per_token": 4e-06,
         "input_cost_per_token_above_272k_tokens": 8e-06,
         "litellm_provider": "openai",
-        "max_input_tokens": 1050000,
+        "max_input_tokens": 922000,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 2e-05,
         "output_cost_per_token_above_272k_tokens": 3e-05,
         "supported_endpoints": [
-            "/v1/chat/completions",
             "/v1/responses"
         ],
         "supported_modalities": [
@@ -28096,7 +28111,8 @@
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_system_messages": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "cache_read_input_token_cost": 6e-08
     },
     "gpt-realtime-2025-08-28": {
         "cache_creation_input_audio_token_cost": 4e-07,
@@ -42431,24 +42447,6 @@
         "mode": "chat",
         "source": "https://wandb.ai/site/pricing/tokens/"
     },
-    "wandb/zai-org/GLM-4.5": {
-        "max_tokens": 131072,
-        "max_input_tokens": 131072,
-        "max_output_tokens": 131072,
-        "input_cost_per_token": 0.055,
-        "output_cost_per_token": 0.2,
-        "litellm_provider": "wandb",
-        "mode": "chat"
-    },
-    "wandb/Qwen/Qwen3-235B-A22B-Instruct-2507": {
-        "max_tokens": 262144,
-        "max_input_tokens": 262144,
-        "max_output_tokens": 262144,
-        "input_cost_per_token": 0.01,
-        "output_cost_per_token": 0.01,
-        "litellm_provider": "wandb",
-        "mode": "chat"
-    },
     "wandb/Qwen/Qwen3-Coder-480B-A35B-Instruct": {
         "max_tokens": 262000,
         "max_input_tokens": 262000,
@@ -42458,15 +42456,6 @@
         "litellm_provider": "wandb",
         "mode": "chat",
         "source": "https://wandb.ai/site/pricing/tokens/"
-    },
-    "wandb/Qwen/Qwen3-235B-A22B-Thinking-2507": {
-        "max_tokens": 262144,
-        "max_input_tokens": 262144,
-        "max_output_tokens": 262144,
-        "input_cost_per_token": 0.01,
-        "output_cost_per_token": 0.01,
-        "litellm_provider": "wandb",
-        "mode": "chat"
     },
     "wandb/moonshotai/Kimi-K2-Instruct": {
         "max_tokens": 128000,
@@ -42525,24 +42514,6 @@
         "mode": "chat",
         "source": "https://wandb.ai/site/pricing/tokens/"
     },
-    "wandb/deepseek-ai/DeepSeek-R1-0528": {
-        "max_tokens": 161000,
-        "max_input_tokens": 161000,
-        "max_output_tokens": 161000,
-        "input_cost_per_token": 0.135,
-        "output_cost_per_token": 0.54,
-        "litellm_provider": "wandb",
-        "mode": "chat"
-    },
-    "wandb/deepseek-ai/DeepSeek-V3-0324": {
-        "max_tokens": 161000,
-        "max_input_tokens": 161000,
-        "max_output_tokens": 161000,
-        "input_cost_per_token": 0.114,
-        "output_cost_per_token": 0.275,
-        "litellm_provider": "wandb",
-        "mode": "chat"
-    },
     "wandb/meta-llama/Llama-3.3-70B-Instruct": {
         "max_tokens": 128000,
         "max_input_tokens": 128000,
@@ -42552,24 +42523,6 @@
         "litellm_provider": "wandb",
         "mode": "chat",
         "source": "https://wandb.ai/site/pricing/tokens/"
-    },
-    "wandb/meta-llama/Llama-4-Scout-17B-16E-Instruct": {
-        "max_tokens": 64000,
-        "max_input_tokens": 64000,
-        "max_output_tokens": 64000,
-        "input_cost_per_token": 0.017,
-        "output_cost_per_token": 0.066,
-        "litellm_provider": "wandb",
-        "mode": "chat"
-    },
-    "wandb/microsoft/Phi-4-mini-instruct": {
-        "max_tokens": 128000,
-        "max_input_tokens": 128000,
-        "max_output_tokens": 128000,
-        "input_cost_per_token": 0.008,
-        "output_cost_per_token": 0.035,
-        "litellm_provider": "wandb",
-        "mode": "chat"
     },
     "watsonx/ibm/granite-3-8b-instruct": {
         "input_cost_per_token": 2e-07,
@@ -46347,8 +46300,8 @@
     "novita/xiaomimimo/mimo-v2-flash": {
         "litellm_provider": "novita",
         "mode": "chat",
-        "input_cost_per_token": 1e-07,
-        "output_cost_per_token": 3e-07,
+        "input_cost_per_token": 1.1e-07,
+        "output_cost_per_token": 3.3e-07,
         "max_input_tokens": 262144,
         "max_output_tokens": 32000,
         "max_tokens": 32000,
@@ -46401,7 +46354,8 @@
         "supports_system_messages": true,
         "cache_read_input_token_cost": 3e-08,
         "input_cost_per_token_cache_hit": 3e-08,
-        "supports_reasoning": true
+        "supports_reasoning": true,
+        "supports_response_schema": true
     },
     "novita/paddlepaddle/paddleocr-vl": {
         "litellm_provider": "novita",
@@ -46439,7 +46393,9 @@
         "max_tokens": 32768,
         "supports_vision": true,
         "supports_system_messages": true,
-        "supports_reasoning": true
+        "supports_reasoning": true,
+        "supports_function_calling": true,
+        "supports_tool_choice": true
     },
     "novita/zai-org/glm-4.6v": {
         "litellm_provider": "novita",
@@ -46504,7 +46460,8 @@
         "supports_parallel_function_calling": true,
         "supports_tool_choice": true,
         "supports_system_messages": true,
-        "supports_response_schema": true
+        "supports_response_schema": true,
+        "supports_reasoning": true
     },
     "novita/qwen/qwen3-next-80b-a3b-thinking": {
         "litellm_provider": "novita",
@@ -46627,8 +46584,8 @@
     "novita/qwen/qwen3-coder-480b-a35b-instruct": {
         "litellm_provider": "novita",
         "mode": "chat",
-        "input_cost_per_token": 3e-07,
-        "output_cost_per_token": 1.3e-06,
+        "input_cost_per_token": 3.8e-07,
+        "output_cost_per_token": 1.55e-06,
         "max_input_tokens": 262144,
         "max_output_tokens": 65536,
         "max_tokens": 65536,
@@ -46736,7 +46693,8 @@
         "max_input_tokens": 16384,
         "max_output_tokens": 16384,
         "max_tokens": 16384,
-        "supports_system_messages": true
+        "supports_system_messages": true,
+        "supports_response_schema": true
     },
     "novita/google/gemma-3-12b-it": {
         "litellm_provider": "novita",
@@ -46821,7 +46779,8 @@
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_tool_choice": true,
-        "supports_system_messages": true
+        "supports_system_messages": true,
+        "supports_response_schema": true
     },
     "novita/qwen/qwen-2.5-72b-instruct": {
         "litellm_provider": "novita",
@@ -46861,7 +46820,8 @@
         "supports_parallel_function_calling": true,
         "supports_tool_choice": true,
         "supports_system_messages": true,
-        "supports_reasoning": true
+        "supports_reasoning": true,
+        "supports_response_schema": true
     },
     "novita/deepseek/deepseek-r1-0528": {
         "litellm_provider": "novita",
@@ -46901,7 +46861,8 @@
         "max_input_tokens": 8192,
         "max_output_tokens": 8192,
         "max_tokens": 8192,
-        "supports_system_messages": true
+        "supports_system_messages": true,
+        "supports_response_schema": true
     },
     "novita/microsoft/wizardlm-2-8x22b": {
         "litellm_provider": "novita",
@@ -46911,7 +46872,8 @@
         "max_input_tokens": 65535,
         "max_output_tokens": 8000,
         "max_tokens": 8000,
-        "supports_system_messages": true
+        "supports_system_messages": true,
+        "supports_response_schema": true
     },
     "novita/deepseek/deepseek-r1-0528-qwen3-8b": {
         "litellm_provider": "novita",
@@ -46958,7 +46920,8 @@
         "max_output_tokens": 20000,
         "max_tokens": 20000,
         "supports_system_messages": true,
-        "supports_reasoning": true
+        "supports_reasoning": true,
+        "supports_response_schema": true
     },
     "novita/meta-llama/llama-4-maverick-17b-128e-instruct-fp8": {
         "litellm_provider": "novita",
@@ -46969,7 +46932,8 @@
         "max_output_tokens": 8192,
         "max_tokens": 8192,
         "supports_vision": true,
-        "supports_system_messages": true
+        "supports_system_messages": true,
+        "supports_response_schema": true
     },
     "novita/meta-llama/llama-4-scout-17b-16e-instruct": {
         "litellm_provider": "novita",
@@ -47105,7 +47069,9 @@
         "max_output_tokens": 20000,
         "max_tokens": 20000,
         "supports_system_messages": true,
-        "supports_reasoning": true
+        "supports_reasoning": true,
+        "supports_function_calling": true,
+        "supports_tool_choice": true
     },
     "novita/google/gemma-3-27b-it": {
         "litellm_provider": "novita",
@@ -47143,7 +47109,8 @@
         "supports_parallel_function_calling": true,
         "supports_tool_choice": true,
         "supports_system_messages": true,
-        "supports_reasoning": true
+        "supports_reasoning": true,
+        "supports_response_schema": true
     },
     "novita/Sao10K/L3-8B-Stheno-v3.2": {
         "litellm_provider": "novita",
@@ -47335,7 +47302,9 @@
         "max_output_tokens": 20000,
         "max_tokens": 20000,
         "supports_system_messages": true,
-        "supports_reasoning": true
+        "supports_reasoning": true,
+        "supports_function_calling": true,
+        "supports_tool_choice": true
     },
     "novita/qwen/qwen2.5-7b-instruct": {
         "litellm_provider": "novita",
@@ -47375,7 +47344,8 @@
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_tool_choice": true,
-        "supports_system_messages": true
+        "supports_system_messages": true,
+        "supports_response_schema": true
     },
     "novita/qwen/qwen3-embedding-0.6b": {
         "litellm_provider": "novita",
@@ -51057,7 +51027,9 @@
         "supports_tool_choice": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "input_cost_per_token": 1e-07,
+        "output_cost_per_token": 3.4e-07
     },
     "openrouter/google/gemma-4-26b-a4b-it": {
         "max_input_tokens": 262144,
@@ -51069,7 +51041,10 @@
         "supports_tool_choice": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "input_cost_per_token": 7e-08,
+        "output_cost_per_token": 3.4e-07,
+        "max_output_tokens": 16384
     },
     "libertai/glm-5.2": {
         "litellm_provider": "libertai",
@@ -52692,7 +52667,11 @@
         "supports_function_calling": true,
         "supports_tool_choice": true,
         "supports_reasoning": true,
-        "supports_prompt_caching": true
+        "supports_prompt_caching": true,
+        "input_cost_per_token": 9.66e-07,
+        "output_cost_per_token": 3.036e-06,
+        "max_output_tokens": 131072,
+        "max_tokens": 131072
     },
     "azure_ai/mistral-ocr-2503": {
         "litellm_provider": "azure_ai",
@@ -53097,7 +53076,9 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "max_input_tokens": 272000,
+        "source": "https://platform.openai.com/docs/models/gpt-5.1"
     },
     "openrouter/openai/gpt-5.5": {
         "cache_read_input_token_cost": 5e-07,
@@ -53325,7 +53306,8 @@
         "max_tokens": 262000,
         "mode": "chat",
         "litellm_provider": "wandb",
-        "source": "https://wandb.ai/site/pricing/tokens/"
+        "source": "https://wandb.ai/site/pricing/tokens/",
+        "supports_vision": true
     },
     "wandb/Qwen/Qwen3.6-27B": {
         "input_cost_per_token": 6e-07,
@@ -53336,7 +53318,8 @@
         "max_tokens": 262000,
         "mode": "chat",
         "litellm_provider": "wandb",
-        "source": "https://wandb.ai/site/pricing/tokens/"
+        "source": "https://wandb.ai/site/pricing/tokens/",
+        "supports_vision": true
     },
     "wandb/Qwen/Qwen3.6-35B-A3B": {
         "input_cost_per_token": 2.5e-07,
@@ -53346,7 +53329,8 @@
         "max_tokens": 262000,
         "mode": "chat",
         "litellm_provider": "wandb",
-        "source": "https://wandb.ai/site/pricing/tokens/"
+        "source": "https://wandb.ai/site/pricing/tokens/",
+        "supports_vision": true
     },
     "wandb/zai-org/GLM-5.1": {
         "input_cost_per_token": 1.4e-06,
@@ -53381,7 +53365,10 @@
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_prompt_caching": true,
-        "supports_assistant_prefill": true
+        "supports_assistant_prefill": true,
+        "input_cost_per_token": 6.006e-08,
+        "output_cost_per_token": 1.2012e-07,
+        "source": "https://openrouter.ai/deepseek/deepseek-v4-flash"
     },
     "deepseek-v4-flash-vision-exp": {
         "cache_read_input_token_cost": 1.4e-08,
@@ -53418,5 +53405,1032 @@
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_vision": true
+    },
+    "azure_ai/gpt-5.6": {
+        "cache_read_input_token_cost": 5e-07,
+        "cache_read_input_token_cost_above_272k_tokens": 1e-06,
+        "cache_read_input_token_cost_priority": 1e-06,
+        "input_cost_per_token": 5e-06,
+        "input_cost_per_token_above_272k_tokens": 1e-05,
+        "input_cost_per_token_priority": 1e-05,
+        "max_input_tokens": 922000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 3e-05,
+        "output_cost_per_token_above_272k_tokens": 4.5e-05,
+        "output_cost_per_token_priority": 6e-05,
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/batch",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_parallel_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "supports_web_search": true,
+        "supports_none_reasoning_effort": true,
+        "supports_xhigh_reasoning_effort": true,
+        "supports_minimal_reasoning_effort": false,
+        "cache_creation_input_token_cost": 6.25e-06,
+        "cache_creation_input_token_cost_above_272k_tokens": 1.25e-05,
+        "cache_creation_input_token_cost_priority": 1.25e-05,
+        "litellm_provider": "azure_ai",
+        "source": "https://ai.azure.com/catalog/models/gpt-5.6"
+    },
+    "azure_ai/gpt-5.6-sol": {
+        "cache_read_input_token_cost": 5e-07,
+        "cache_read_input_token_cost_above_272k_tokens": 1e-06,
+        "cache_read_input_token_cost_priority": 1e-06,
+        "input_cost_per_token": 5e-06,
+        "input_cost_per_token_above_272k_tokens": 1e-05,
+        "input_cost_per_token_priority": 1e-05,
+        "max_input_tokens": 922000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 3e-05,
+        "output_cost_per_token_above_272k_tokens": 4.5e-05,
+        "output_cost_per_token_priority": 6e-05,
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/batch",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_parallel_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "supports_web_search": true,
+        "supports_none_reasoning_effort": true,
+        "supports_xhigh_reasoning_effort": true,
+        "supports_minimal_reasoning_effort": false,
+        "cache_creation_input_token_cost": 6.25e-06,
+        "cache_creation_input_token_cost_above_272k_tokens": 1.25e-05,
+        "cache_creation_input_token_cost_priority": 1.25e-05,
+        "litellm_provider": "azure_ai",
+        "source": "https://ai.azure.com/catalog/models/gpt-5.6-sol"
+    },
+    "azure_ai/gpt-5.6-terra": {
+        "cache_read_input_token_cost": 2e-07,
+        "cache_read_input_token_cost_above_272k_tokens": 4e-07,
+        "cache_read_input_token_cost_priority": 4e-07,
+        "input_cost_per_token": 2e-06,
+        "input_cost_per_token_above_272k_tokens": 4e-06,
+        "input_cost_per_token_priority": 4e-06,
+        "max_input_tokens": 922000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 1.2e-05,
+        "output_cost_per_token_above_272k_tokens": 1.8e-05,
+        "output_cost_per_token_priority": 2.4e-05,
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/batch",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_parallel_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "supports_web_search": true,
+        "supports_none_reasoning_effort": true,
+        "supports_xhigh_reasoning_effort": true,
+        "supports_minimal_reasoning_effort": false,
+        "cache_creation_input_token_cost": 2.5e-06,
+        "cache_creation_input_token_cost_above_272k_tokens": 5e-06,
+        "cache_creation_input_token_cost_priority": 5e-06,
+        "litellm_provider": "azure_ai",
+        "source": "https://ai.azure.com/catalog/models/gpt-5.6-terra"
+    },
+    "azure_ai/gpt-5.6-luna": {
+        "cache_read_input_token_cost": 2e-08,
+        "cache_read_input_token_cost_above_272k_tokens": 4e-08,
+        "cache_read_input_token_cost_priority": 4e-08,
+        "input_cost_per_token": 2e-07,
+        "input_cost_per_token_above_272k_tokens": 4e-07,
+        "input_cost_per_token_priority": 4e-07,
+        "max_input_tokens": 922000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 1.2e-06,
+        "output_cost_per_token_above_272k_tokens": 1.8e-06,
+        "output_cost_per_token_priority": 2.4e-06,
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/batch",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_parallel_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "supports_web_search": true,
+        "supports_none_reasoning_effort": true,
+        "supports_xhigh_reasoning_effort": true,
+        "supports_minimal_reasoning_effort": false,
+        "cache_creation_input_token_cost": 2.5e-07,
+        "cache_creation_input_token_cost_above_272k_tokens": 5e-07,
+        "cache_creation_input_token_cost_priority": 5e-07,
+        "litellm_provider": "azure_ai",
+        "source": "https://ai.azure.com/catalog/models/gpt-5.6-luna"
+    },
+    "wandb/Qwen/Qwen3.8-27B": {
+        "cache_read_input_token_cost": 1.5e-07,
+        "input_cost_per_token": 4e-07,
+        "litellm_provider": "wandb",
+        "max_input_tokens": 262000,
+        "max_output_tokens": 262000,
+        "max_tokens": 262000,
+        "mode": "chat",
+        "output_cost_per_token": 3e-06,
+        "source": "https://wandb.ai/site/pricing/tokens/",
+        "supports_vision": true
+    },
+    "novita/zai-org/glm-5.3": {
+        "input_cost_per_token": 1.4e-06,
+        "output_cost_per_token": 4.4e-06,
+        "litellm_provider": "novita",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 131072,
+        "max_tokens": 131072,
+        "mode": "chat",
+        "source": "https://api.novita.ai/v3/openai/models",
+        "supports_system_messages": true,
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_response_schema": true,
+        "supports_reasoning": true
+    },
+    "novita/deepseek/deepseek-v4-pro-0813": {
+        "input_cost_per_token": 1.32e-06,
+        "output_cost_per_token": 3.96e-06,
+        "litellm_provider": "novita",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 393216,
+        "max_tokens": 393216,
+        "mode": "chat",
+        "source": "https://api.novita.ai/v3/openai/models",
+        "supports_system_messages": true,
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_response_schema": true,
+        "supports_reasoning": true
+    },
+    "novita/tencent/hy3": {
+        "input_cost_per_token": 1.4e-07,
+        "output_cost_per_token": 5.8e-07,
+        "litellm_provider": "novita",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 262144,
+        "max_tokens": 262144,
+        "mode": "chat",
+        "source": "https://api.novita.ai/v3/openai/models",
+        "supports_system_messages": true,
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_response_schema": true,
+        "supports_reasoning": true
+    },
+    "novita/zai-org/glm-5.2": {
+        "input_cost_per_token": 1.4e-06,
+        "output_cost_per_token": 4.4e-06,
+        "litellm_provider": "novita",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 131072,
+        "max_tokens": 131072,
+        "mode": "chat",
+        "source": "https://api.novita.ai/v3/openai/models",
+        "supports_system_messages": true,
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_response_schema": true,
+        "supports_reasoning": true
+    },
+    "novita/moonshotai/kimi-k2.7-code": {
+        "input_cost_per_token": 9.499999999999999e-07,
+        "output_cost_per_token": 4e-06,
+        "litellm_provider": "novita",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 262144,
+        "max_tokens": 262144,
+        "mode": "chat",
+        "source": "https://api.novita.ai/v3/openai/models",
+        "supports_system_messages": true,
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_response_schema": true,
+        "supports_reasoning": true,
+        "supports_vision": true
+    },
+    "novita/deepseek/deepseek-v4-flash-0731": {
+        "input_cost_per_token": 4.4e-07,
+        "output_cost_per_token": 1.32e-06,
+        "litellm_provider": "novita",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 393216,
+        "max_tokens": 393216,
+        "mode": "chat",
+        "source": "https://api.novita.ai/v3/openai/models",
+        "supports_system_messages": true,
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_response_schema": true,
+        "supports_reasoning": true
+    },
+    "novita/mindai/macaron-v1-venti": {
+        "input_cost_per_token": 1.5e-06,
+        "output_cost_per_token": 4.5e-06,
+        "litellm_provider": "novita",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 131072,
+        "max_tokens": 131072,
+        "mode": "chat",
+        "source": "https://api.novita.ai/v3/openai/models",
+        "supports_system_messages": true,
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_reasoning": true
+    },
+    "novita/minimax/minimax-m3": {
+        "input_cost_per_token": 3e-07,
+        "output_cost_per_token": 1.2e-06,
+        "litellm_provider": "novita",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 131072,
+        "max_tokens": 131072,
+        "mode": "chat",
+        "source": "https://api.novita.ai/v3/openai/models",
+        "supports_system_messages": true,
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_response_schema": true,
+        "supports_reasoning": true,
+        "supports_vision": true
+    },
+    "novita/deepseek/deepseek-v4-flash": {
+        "input_cost_per_token": 1.4e-07,
+        "output_cost_per_token": 2.8e-07,
+        "litellm_provider": "novita",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 393216,
+        "max_tokens": 393216,
+        "mode": "chat",
+        "source": "https://api.novita.ai/v3/openai/models",
+        "supports_system_messages": true,
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_response_schema": true,
+        "supports_reasoning": true
+    },
+    "novita/deepseek/deepseek-v4-pro": {
+        "input_cost_per_token": 1.6000000000000001e-06,
+        "output_cost_per_token": 3.2000000000000003e-06,
+        "litellm_provider": "novita",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 393216,
+        "max_tokens": 393216,
+        "mode": "chat",
+        "source": "https://api.novita.ai/v3/openai/models",
+        "supports_system_messages": true,
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_response_schema": true,
+        "supports_reasoning": true
+    },
+    "novita/inclusionai/ling-3.0-flash-fast": {
+        "input_cost_per_token": 6e-08,
+        "output_cost_per_token": 1.8e-07,
+        "litellm_provider": "novita",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 32768,
+        "max_tokens": 32768,
+        "mode": "chat",
+        "source": "https://api.novita.ai/v3/openai/models",
+        "supports_system_messages": true,
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_reasoning": true
+    },
+    "novita/qwen/qwen3.8-max": {
+        "input_cost_per_token": 2e-06,
+        "output_cost_per_token": 6e-06,
+        "litellm_provider": "novita",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 131072,
+        "max_tokens": 131072,
+        "mode": "chat",
+        "source": "https://api.novita.ai/v3/openai/models",
+        "supports_system_messages": true,
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_response_schema": true,
+        "supports_reasoning": true,
+        "supports_vision": true
+    },
+    "novita/inclusionai/ling-3.0-flash": {
+        "input_cost_per_token": 6e-08,
+        "output_cost_per_token": 1.8e-07,
+        "litellm_provider": "novita",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 32768,
+        "max_tokens": 32768,
+        "mode": "chat",
+        "source": "https://api.novita.ai/v3/openai/models",
+        "supports_system_messages": true,
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_reasoning": true
+    },
+    "novita/mindai/macaron-v1-tall": {
+        "input_cost_per_token": 4.5000000000000003e-07,
+        "output_cost_per_token": 2.6e-06,
+        "litellm_provider": "novita",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 32768,
+        "max_tokens": 32768,
+        "mode": "chat",
+        "source": "https://api.novita.ai/v3/openai/models",
+        "supports_system_messages": true,
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_reasoning": true
+    },
+    "novita/stepfun/step-3.7-flash": {
+        "input_cost_per_token": 2.0000000000000002e-07,
+        "output_cost_per_token": 1.15e-06,
+        "litellm_provider": "novita",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 256000,
+        "max_tokens": 256000,
+        "mode": "chat",
+        "source": "https://api.novita.ai/v3/openai/models",
+        "supports_system_messages": true,
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_response_schema": true,
+        "supports_reasoning": true,
+        "supports_vision": true
+    },
+    "novita/nvidia/nemotron-3-nano-30b-a3b": {
+        "input_cost_per_token": 5.0000000000000004e-08,
+        "output_cost_per_token": 2.0000000000000002e-07,
+        "litellm_provider": "novita",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 32768,
+        "max_tokens": 32768,
+        "mode": "chat",
+        "source": "https://api.novita.ai/v3/openai/models",
+        "supports_system_messages": true,
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_response_schema": true,
+        "supports_reasoning": true
+    },
+    "novita/baidu/cobuddy": {
+        "input_cost_per_token": 2.8e-07,
+        "output_cost_per_token": 1.13e-06,
+        "litellm_provider": "novita",
+        "max_input_tokens": 131072,
+        "max_output_tokens": 65536,
+        "max_tokens": 65536,
+        "mode": "chat",
+        "source": "https://api.novita.ai/v3/openai/models",
+        "supports_system_messages": true,
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_reasoning": true
+    },
+    "novita/xiaomimimo/mimo-v2.5": {
+        "input_cost_per_token": 1.6800000000000002e-07,
+        "output_cost_per_token": 3.3600000000000004e-07,
+        "litellm_provider": "novita",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 131072,
+        "max_tokens": 131072,
+        "mode": "chat",
+        "source": "https://api.novita.ai/v3/openai/models",
+        "supports_system_messages": true,
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_response_schema": true,
+        "supports_reasoning": true,
+        "supports_vision": true
+    },
+    "novita/qwen/qwen3.7-max": {
+        "input_cost_per_token": 1.25e-06,
+        "output_cost_per_token": 3.75e-06,
+        "litellm_provider": "novita",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 65536,
+        "max_tokens": 65536,
+        "mode": "chat",
+        "source": "https://api.novita.ai/v3/openai/models",
+        "supports_system_messages": true,
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_response_schema": true,
+        "supports_reasoning": true
+    },
+    "novita/xiaomimimo/mimo-v2.5-pro": {
+        "input_cost_per_token": 5.22e-07,
+        "output_cost_per_token": 1.044e-06,
+        "litellm_provider": "novita",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 131072,
+        "max_tokens": 131072,
+        "mode": "chat",
+        "source": "https://api.novita.ai/v3/openai/models",
+        "supports_system_messages": true,
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_response_schema": true,
+        "supports_reasoning": true
+    },
+    "novita/qwen/qwen3.6-27b": {
+        "input_cost_per_token": 6e-07,
+        "output_cost_per_token": 3.6000000000000003e-06,
+        "litellm_provider": "novita",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 65536,
+        "max_tokens": 65536,
+        "mode": "chat",
+        "source": "https://api.novita.ai/v3/openai/models",
+        "supports_system_messages": true,
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_response_schema": true,
+        "supports_reasoning": true,
+        "supports_vision": true
+    },
+    "novita/moonshotai/kimi-k2.6": {
+        "input_cost_per_token": 8.000000000000001e-07,
+        "output_cost_per_token": 3.4e-06,
+        "litellm_provider": "novita",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 262144,
+        "max_tokens": 262144,
+        "mode": "chat",
+        "source": "https://api.novita.ai/v3/openai/models",
+        "supports_system_messages": true,
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_response_schema": true,
+        "supports_reasoning": true,
+        "supports_vision": true
+    },
+    "novita/zai-org/glm-5.1": {
+        "input_cost_per_token": 1.38e-06,
+        "output_cost_per_token": 4.4e-06,
+        "litellm_provider": "novita",
+        "max_input_tokens": 204800,
+        "max_output_tokens": 131072,
+        "max_tokens": 131072,
+        "mode": "chat",
+        "source": "https://api.novita.ai/v3/openai/models",
+        "supports_system_messages": true,
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_response_schema": true,
+        "supports_reasoning": true
+    },
+    "novita/minimax/minimax-m2.7-highspeed": {
+        "input_cost_per_token": 6e-07,
+        "output_cost_per_token": 2.4e-06,
+        "litellm_provider": "novita",
+        "max_input_tokens": 204800,
+        "max_output_tokens": 131072,
+        "max_tokens": 131072,
+        "mode": "chat",
+        "source": "https://api.novita.ai/v3/openai/models",
+        "supports_system_messages": true,
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_response_schema": true,
+        "supports_reasoning": true
+    },
+    "novita/zai-org/glm-5v-turbo": {
+        "input_cost_per_token": 1.2e-06,
+        "output_cost_per_token": 4e-06,
+        "litellm_provider": "novita",
+        "max_input_tokens": 204800,
+        "max_output_tokens": 131072,
+        "max_tokens": 131072,
+        "mode": "chat",
+        "source": "https://api.novita.ai/v3/openai/models",
+        "supports_system_messages": true,
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_response_schema": true,
+        "supports_reasoning": true,
+        "supports_vision": true
+    },
+    "novita/google/gemma-4-26b-a4b-it": {
+        "input_cost_per_token": 1.3e-07,
+        "output_cost_per_token": 4.0000000000000003e-07,
+        "litellm_provider": "novita",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 131072,
+        "max_tokens": 131072,
+        "mode": "chat",
+        "source": "https://api.novita.ai/v3/openai/models",
+        "supports_system_messages": true,
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_response_schema": true,
+        "supports_reasoning": true,
+        "supports_vision": true
+    },
+    "novita/google/gemma-4-31b-it": {
+        "input_cost_per_token": 1.4e-07,
+        "output_cost_per_token": 4.0000000000000003e-07,
+        "litellm_provider": "novita",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 131072,
+        "max_tokens": 131072,
+        "mode": "chat",
+        "source": "https://api.novita.ai/v3/openai/models",
+        "supports_system_messages": true,
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_response_schema": true,
+        "supports_reasoning": true,
+        "supports_vision": true
+    },
+    "novita/zai-org/glm-5-turbo": {
+        "input_cost_per_token": 1.2e-06,
+        "output_cost_per_token": 4e-06,
+        "litellm_provider": "novita",
+        "max_input_tokens": 202800,
+        "max_output_tokens": 131072,
+        "max_tokens": 131072,
+        "mode": "chat",
+        "source": "https://api.novita.ai/v3/openai/models",
+        "supports_system_messages": true,
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_response_schema": true,
+        "supports_reasoning": true
+    },
+    "novita/xiaomimimo/mimo-v2-pro": {
+        "input_cost_per_token": 2e-06,
+        "output_cost_per_token": 6e-06,
+        "litellm_provider": "novita",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 131072,
+        "max_tokens": 131072,
+        "mode": "chat",
+        "source": "https://api.novita.ai/v3/openai/models",
+        "supports_system_messages": true,
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_response_schema": true,
+        "supports_reasoning": true
+    },
+    "novita/minimax/minimax-m2.7": {
+        "input_cost_per_token": 3e-07,
+        "output_cost_per_token": 1.2e-06,
+        "litellm_provider": "novita",
+        "max_input_tokens": 204800,
+        "max_output_tokens": 131072,
+        "max_tokens": 131072,
+        "mode": "chat",
+        "source": "https://api.novita.ai/v3/openai/models",
+        "supports_system_messages": true,
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_response_schema": true,
+        "supports_reasoning": true
+    },
+    "novita/minimax/minimax-m2.5-highspeed": {
+        "input_cost_per_token": 6e-07,
+        "output_cost_per_token": 2.4e-06,
+        "litellm_provider": "novita",
+        "max_input_tokens": 204800,
+        "max_output_tokens": 131100,
+        "max_tokens": 131100,
+        "mode": "chat",
+        "source": "https://api.novita.ai/v3/openai/models",
+        "supports_system_messages": true,
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_response_schema": true,
+        "supports_reasoning": true
+    },
+    "novita/qwen/qwen3.5-27b": {
+        "input_cost_per_token": 3e-07,
+        "output_cost_per_token": 2.4e-06,
+        "litellm_provider": "novita",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 65536,
+        "max_tokens": 65536,
+        "mode": "chat",
+        "source": "https://api.novita.ai/v3/openai/models",
+        "supports_system_messages": true,
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_response_schema": true,
+        "supports_reasoning": true,
+        "supports_vision": true
+    },
+    "novita/qwen/qwen3.5-122b-a10b": {
+        "input_cost_per_token": 4.0000000000000003e-07,
+        "output_cost_per_token": 3.2000000000000003e-06,
+        "litellm_provider": "novita",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 65536,
+        "max_tokens": 65536,
+        "mode": "chat",
+        "source": "https://api.novita.ai/v3/openai/models",
+        "supports_system_messages": true,
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_response_schema": true,
+        "supports_reasoning": true,
+        "supports_vision": true
+    },
+    "novita/qwen/qwen3.5-35b-a3b": {
+        "input_cost_per_token": 2.5e-07,
+        "output_cost_per_token": 2e-06,
+        "litellm_provider": "novita",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 65536,
+        "max_tokens": 65536,
+        "mode": "chat",
+        "source": "https://api.novita.ai/v3/openai/models",
+        "supports_system_messages": true,
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_response_schema": true,
+        "supports_reasoning": true,
+        "supports_vision": true
+    },
+    "novita/qwen/qwen3.5-397b-a17b": {
+        "input_cost_per_token": 6e-07,
+        "output_cost_per_token": 3.6000000000000003e-06,
+        "litellm_provider": "novita",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 65536,
+        "max_tokens": 65536,
+        "mode": "chat",
+        "source": "https://api.novita.ai/v3/openai/models",
+        "supports_system_messages": true,
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_response_schema": true,
+        "supports_reasoning": true,
+        "supports_vision": true
+    },
+    "novita/minimax/minimax-m2.5": {
+        "input_cost_per_token": 3e-07,
+        "output_cost_per_token": 1.2e-06,
+        "litellm_provider": "novita",
+        "max_input_tokens": 204800,
+        "max_output_tokens": 131100,
+        "max_tokens": 131100,
+        "mode": "chat",
+        "source": "https://api.novita.ai/v3/openai/models",
+        "supports_system_messages": true,
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_response_schema": true,
+        "supports_reasoning": true
+    },
+    "novita/zai-org/glm-5": {
+        "input_cost_per_token": 1e-06,
+        "output_cost_per_token": 3.2000000000000003e-06,
+        "litellm_provider": "novita",
+        "max_input_tokens": 202800,
+        "max_output_tokens": 131072,
+        "max_tokens": 131072,
+        "mode": "chat",
+        "source": "https://api.novita.ai/v3/openai/models",
+        "supports_system_messages": true,
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_response_schema": true,
+        "supports_reasoning": true
+    },
+    "novita/qwen/qwen3-coder-next": {
+        "input_cost_per_token": 2.0000000000000002e-07,
+        "output_cost_per_token": 1.5e-06,
+        "litellm_provider": "novita",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 65536,
+        "max_tokens": 65536,
+        "mode": "chat",
+        "source": "https://api.novita.ai/v3/openai/models",
+        "supports_system_messages": true,
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_response_schema": true
+    },
+    "novita/deepseek/deepseek-ocr-2": {
+        "input_cost_per_token": 3e-08,
+        "output_cost_per_token": 3e-08,
+        "litellm_provider": "novita",
+        "max_input_tokens": 8192,
+        "max_output_tokens": 8192,
+        "max_tokens": 8192,
+        "mode": "chat",
+        "source": "https://api.novita.ai/v3/openai/models",
+        "supports_system_messages": true,
+        "supports_vision": true
+    },
+    "novita/moonshotai/kimi-k2.5": {
+        "input_cost_per_token": 6e-07,
+        "output_cost_per_token": 3e-06,
+        "litellm_provider": "novita",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 262144,
+        "max_tokens": 262144,
+        "mode": "chat",
+        "source": "https://api.novita.ai/v3/openai/models",
+        "supports_system_messages": true,
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_response_schema": true,
+        "supports_reasoning": true,
+        "supports_vision": true
+    },
+    "novita/zai-org/glm-4.7-h": {
+        "input_cost_per_token": 6e-07,
+        "output_cost_per_token": 2.2e-06,
+        "litellm_provider": "novita",
+        "max_input_tokens": 204800,
+        "max_output_tokens": 131072,
+        "max_tokens": 131072,
+        "mode": "chat",
+        "source": "https://api.novita.ai/v3/openai/models",
+        "supports_system_messages": true,
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_response_schema": true,
+        "supports_reasoning": true
+    },
+    "novita/zai-org/glm-4.7-flash": {
+        "input_cost_per_token": 7e-08,
+        "output_cost_per_token": 4.0000000000000003e-07,
+        "litellm_provider": "novita",
+        "max_input_tokens": 200000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "source": "https://api.novita.ai/v3/openai/models",
+        "supports_system_messages": true,
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_response_schema": true,
+        "supports_reasoning": true
+    },
+    "novita/qwen/qwen3.6-35b-a3b": {
+        "input_cost_per_token": 2.48e-07,
+        "output_cost_per_token": 1.4850000000000002e-06,
+        "litellm_provider": "novita",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 65536,
+        "max_tokens": 65536,
+        "mode": "chat",
+        "source": "https://api.novita.ai/v3/openai/models",
+        "supports_system_messages": true,
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_response_schema": true,
+        "supports_reasoning": true,
+        "supports_vision": true
+    },
+    "novita/deepseek/deepseek_v3": {
+        "input_cost_per_token": 8.900000000000001e-07,
+        "output_cost_per_token": 8.900000000000001e-07,
+        "litellm_provider": "novita",
+        "max_input_tokens": 64000,
+        "max_output_tokens": 16000,
+        "max_tokens": 16000,
+        "mode": "chat",
+        "source": "https://api.novita.ai/v3/openai/models",
+        "supports_system_messages": true,
+        "supports_function_calling": true,
+        "supports_tool_choice": true
+    },
+    "novita/deepseek/deepseek-r1": {
+        "input_cost_per_token": 4e-06,
+        "output_cost_per_token": 4e-06,
+        "litellm_provider": "novita",
+        "max_input_tokens": 64000,
+        "max_output_tokens": 16000,
+        "max_tokens": 16000,
+        "mode": "chat",
+        "source": "https://api.novita.ai/v3/openai/models",
+        "supports_system_messages": true,
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_reasoning": true
+    },
+    "novita/openchat/openchat-7b": {
+        "input_cost_per_token": 6e-08,
+        "output_cost_per_token": 6e-08,
+        "litellm_provider": "novita",
+        "max_input_tokens": 4096,
+        "max_output_tokens": 4096,
+        "max_tokens": 4096,
+        "mode": "chat",
+        "source": "https://api.novita.ai/v3/openai/models",
+        "supports_system_messages": true,
+        "supports_response_schema": true
+    },
+    "novita/nousresearch/nous-hermes-llama2-13b": {
+        "input_cost_per_token": 1.7000000000000001e-07,
+        "output_cost_per_token": 1.7000000000000001e-07,
+        "litellm_provider": "novita",
+        "max_input_tokens": 4096,
+        "max_output_tokens": 4096,
+        "max_tokens": 4096,
+        "mode": "chat",
+        "source": "https://api.novita.ai/v3/openai/models",
+        "supports_system_messages": true
+    },
+    "novita/teknium/openhermes-2.5-mistral-7b": {
+        "input_cost_per_token": 1.7000000000000001e-07,
+        "output_cost_per_token": 1.7000000000000001e-07,
+        "litellm_provider": "novita",
+        "max_input_tokens": 4096,
+        "max_output_tokens": 4096,
+        "max_tokens": 4096,
+        "mode": "chat",
+        "source": "https://api.novita.ai/v3/openai/models",
+        "supports_system_messages": true
+    },
+    "novita/deepseek/deepseek-v3/community": {
+        "input_cost_per_token": 8.900000000000001e-07,
+        "output_cost_per_token": 8.900000000000001e-07,
+        "litellm_provider": "novita",
+        "max_input_tokens": 64000,
+        "max_output_tokens": 8000,
+        "max_tokens": 8000,
+        "mode": "chat",
+        "source": "https://api.novita.ai/v3/openai/models",
+        "supports_system_messages": true,
+        "supports_function_calling": true,
+        "supports_tool_choice": true
+    },
+    "novita/deepseek/deepseek-r1/community": {
+        "input_cost_per_token": 4e-06,
+        "output_cost_per_token": 4e-06,
+        "litellm_provider": "novita",
+        "max_input_tokens": 64000,
+        "max_output_tokens": 8000,
+        "max_tokens": 8000,
+        "mode": "chat",
+        "source": "https://api.novita.ai/v3/openai/models",
+        "supports_system_messages": true,
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_reasoning": true
+    },
+    "novita/inclusionai/ring-2.6-1t": {
+        "input_cost_per_token": 3e-07,
+        "output_cost_per_token": 2.5e-06,
+        "litellm_provider": "novita",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 65536,
+        "max_tokens": 65536,
+        "mode": "chat",
+        "source": "https://api.novita.ai/v3/openai/models",
+        "supports_system_messages": true,
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_response_schema": true,
+        "supports_reasoning": true
+    },
+    "novita/inclusionai/ling-2.6-flash": {
+        "input_cost_per_token": 1.0000000000000001e-07,
+        "output_cost_per_token": 3e-07,
+        "litellm_provider": "novita",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 32768,
+        "max_tokens": 32768,
+        "mode": "chat",
+        "source": "https://api.novita.ai/v3/openai/models",
+        "supports_system_messages": true,
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_response_schema": true
+    },
+    "novita/inclusionai/ling-2.6-1t": {
+        "input_cost_per_token": 3e-07,
+        "output_cost_per_token": 2.5e-06,
+        "litellm_provider": "novita",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 32768,
+        "max_tokens": 32768,
+        "mode": "chat",
+        "source": "https://api.novita.ai/v3/openai/models",
+        "supports_system_messages": true,
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_response_schema": true
+    },
+    "novita/thudm/glm-4-32b-0414": {
+        "input_cost_per_token": 5.5e-07,
+        "output_cost_per_token": 1.66e-06,
+        "litellm_provider": "novita",
+        "max_input_tokens": 32000,
+        "max_output_tokens": 32000,
+        "max_tokens": 32000,
+        "mode": "chat",
+        "source": "https://api.novita.ai/v3/openai/models",
+        "supports_system_messages": true,
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_response_schema": true
+    },
+    "novita/qwen/qwen-2-vl-72b-instruct": {
+        "input_cost_per_token": 4.5000000000000003e-07,
+        "output_cost_per_token": 4.5000000000000003e-07,
+        "litellm_provider": "novita",
+        "max_input_tokens": 32768,
+        "max_output_tokens": 32768,
+        "max_tokens": 32768,
+        "mode": "chat",
+        "source": "https://api.novita.ai/v3/openai/models",
+        "supports_system_messages": true
+    },
+    "novita/meta-llama/llama-3.2-1b-instruct": {
+        "input_cost_per_token": 2e-08,
+        "output_cost_per_token": 2e-08,
+        "litellm_provider": "novita",
+        "max_input_tokens": 131000,
+        "max_output_tokens": 32000,
+        "max_tokens": 32000,
+        "mode": "chat",
+        "source": "https://api.novita.ai/v3/openai/models",
+        "supports_system_messages": true,
+        "supports_response_schema": true
+    },
+    "novita/qwen/qwen-2-7b-instruct": {
+        "input_cost_per_token": 5.4e-08,
+        "output_cost_per_token": 5.4e-08,
+        "litellm_provider": "novita",
+        "max_input_tokens": 32768,
+        "max_output_tokens": 32768,
+        "max_tokens": 32768,
+        "mode": "chat",
+        "source": "https://api.novita.ai/v3/openai/models",
+        "supports_system_messages": true
     }
 }
