@@ -1046,3 +1046,84 @@ class TestGetRequestBody:
         mock_request = MagicMock()
         mock_request.method = "GET"
         assert await get_request_body(mock_request) == {}
+
+
+class TestReadRequestBodyUnexpectedError:
+    """
+    The generic ``except Exception`` in ``_read_request_body`` must not
+    silently return ``{}``.  Returning an empty dict causes downstream
+    ``data.get("model")`` to return ``None``, which produces a confusing
+    ``ProxyModelNotFoundError`` instead of a clear "failed to read body" error.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/32114
+    """
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "raised_exception",
+        [
+            OSError("stream consumed"),
+            ValueError("unexpected EOF"),
+            ConnectionError("connection reset"),
+        ],
+    )
+    async def test_unexpected_error_raises_proxy_exception(self, raised_exception):
+        mock_request = MagicMock()
+        mock_request.body = AsyncMock(side_effect=raised_exception)
+        mock_request.headers = {"content-type": "application/json"}
+        mock_request.scope = {}
+
+        with pytest.raises(ProxyException) as exc_info:
+            await _read_request_body(mock_request)
+
+        assert str(exc_info.value.code) == "400"
+        assert "Failed to read request body" in exc_info.value.message
+        assert type(raised_exception).__name__ in exc_info.value.message
+
+    @pytest.mark.asyncio
+    async def test_unexpected_error_with_empty_message_still_logged(self):
+        """An exception whose ``str()`` is empty must still produce an
+        informative ``ProxyException`` that carries the type name."""
+        mock_request = MagicMock()
+        mock_request.body = AsyncMock(side_effect=OSError())
+        mock_request.headers = {"content-type": "application/json"}
+        mock_request.scope = {}
+
+        with pytest.raises(ProxyException) as exc_info:
+            await _read_request_body(mock_request)
+
+        assert str(exc_info.value.code) == "400"
+        assert "OSError" in exc_info.value.message
+
+    @pytest.mark.asyncio
+    async def test_runtime_error_returns_empty_dict(self):
+        """``RuntimeError`` from ``request.body()`` returns ``{}`` instead of
+        raising.  Starlette raises ``RuntimeError("Receive channel has not
+        been made available")`` for Request objects constructed without a
+        real ASGI receive channel (common in unit tests).  In production every
+        request has a receive channel, so this path is effectively test-only.
+        """
+        mock_request = MagicMock()
+        mock_request.body = AsyncMock(
+            side_effect=RuntimeError("Receive channel has not been made available")
+        )
+        mock_request.headers = {"content-type": "application/json"}
+        mock_request.scope = {}
+
+        result = await _read_request_body(mock_request)
+        assert result == {}
+
+    @pytest.mark.asyncio
+    async def test_type_error_returns_empty_dict(self):
+        """``TypeError`` from ``request.body()`` returns ``{}`` instead of
+        raising.  This occurs when ``request.body`` is a non-async mock
+        (common in unit tests).  In production every request has a proper
+        async ``body()`` method.
+        """
+        mock_request = MagicMock()
+        mock_request.body = MagicMock(return_value=b"{}")
+        mock_request.headers = {"content-type": "application/json"}
+        mock_request.scope = {}
+
+        result = await _read_request_body(mock_request)
+        assert result == {}

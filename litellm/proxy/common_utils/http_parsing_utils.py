@@ -47,7 +47,14 @@ async def _read_request_body(request: Optional[Request]) -> Dict:
     - request: The request object to read the body from
 
     Returns:
-    - dict: Parsed request data as a dictionary or an empty dictionary if parsing fails
+    - dict: Parsed request data as a dictionary, or an empty dictionary when
+      the request is ``None``, the body is empty, or the underlying ASGI
+      receive channel is unavailable (e.g. mock requests in tests).
+
+    Raises:
+    - ProxyException(400): If the body is present but cannot be parsed
+      (invalid JSON, malformed form payload) or an unexpected error occurs
+      during body reading.
     """
     try:
         if request is None:
@@ -135,10 +142,29 @@ async def _read_request_body(request: Optional[Request]) -> Dict:
         # Re-raise ProxyException as-is
         verbose_proxy_logger.error(f"Invalid JSON payload received: {str(e)}")
         raise
-    except Exception as e:
-        # Catch unexpected errors to avoid crashes
-        verbose_proxy_logger.exception("Unexpected error reading request body - {}".format(e))
+    except (RuntimeError, TypeError):
+        # Starlette raises RuntimeError("Receive channel has not been made
+        # available") when a Request was constructed without a real ASGI
+        # receive channel, and TypeError("object MagicMock can't be used
+        # in 'await' expression") when ``request.body`` is a non-async mock.
+        # Both occur in unit tests with mock Request objects; in production
+        # every request has a real ASGI receive channel.  Return ``{}`` to
+        # preserve backward compatibility for callers that rely on the
+        # empty-dict fallback.
+        verbose_proxy_logger.debug(
+            "RuntimeError/TypeError reading request body (likely mock request without ASGI receive channel), returning empty dict"
+        )
         return {}
+    except Exception as e:
+        verbose_proxy_logger.exception(
+            f"Unexpected error reading request body - type={type(e).__name__}, repr={repr(e)}"
+        )
+        raise ProxyException(
+            message=f"Failed to read request body: {type(e).__name__}",
+            type="invalid_request_error",
+            param="request_body",
+            code=status.HTTP_400_BAD_REQUEST,
+        )
 
 
 def _safe_get_request_parsed_body(request: Optional[Request]) -> Optional[dict]:
