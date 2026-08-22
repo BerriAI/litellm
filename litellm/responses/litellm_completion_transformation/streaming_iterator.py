@@ -709,15 +709,14 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         if not self.litellm_model_response or isinstance(self.litellm_model_response, TextCompletionResponse):
             self.litellm_model_response = self.create_litellm_model_response()
         if self.litellm_model_response:
-            # If tool calls exist, emit tool events before finishing/response.completed.
+            done_event: Final = self.return_default_done_events(self.litellm_model_response)
+            if done_event:
+                return done_event
+
             if isinstance(self.litellm_model_response, ModelResponse):
                 self._queue_final_tool_call_done_events(self.litellm_model_response)
             if self._pending_tool_events:
                 return self._pending_tool_events.pop(0)
-
-            done_event: Final = self.return_default_done_events(self.litellm_model_response)
-            if done_event:
-                return done_event
         else:
             if sync_mode:
                 raise StopIteration

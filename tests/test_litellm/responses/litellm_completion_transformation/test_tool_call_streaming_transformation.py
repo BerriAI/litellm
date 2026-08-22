@@ -8,6 +8,7 @@ Also ensures that tool calls that only appear in the final built response still 
 before response.completed.
 """
 
+from itertools import islice, takewhile
 from unittest.mock import AsyncMock
 
 from litellm.responses.litellm_completion_transformation.streaming_iterator import (
@@ -106,8 +107,15 @@ def test_tool_calls_present_only_in_final_response_are_emitted_before_completed(
     )
     iterator.litellm_model_response = response
 
-    # First common_done_event_logic call should yield tool events, not response.completed.
-    evt1 = iterator.common_done_event_logic(sync_mode=True)
+    # The message item holds output_index 0, so it finishes before the tool item at index 1.
+    prelude = tuple(iterator.common_done_event_logic(sync_mode=True) for _ in range(4))
+    message_done, evt1 = prelude[:-1], prelude[-1]
+    assert tuple(evt.type for evt in message_done) == (
+        ResponsesAPIStreamEvents.OUTPUT_TEXT_DONE,
+        ResponsesAPIStreamEvents.CONTENT_PART_DONE,
+        ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
+    )
+    assert all(evt.output_index == 0 for evt in message_done)
     assert evt1.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED
     assert evt1.output_index == 1
 
@@ -397,3 +405,46 @@ def test_reused_index_with_new_call_id_marks_fallback_ambiguous():
     assert arguments_by_call_id["call_b"] == '{"b":'
     assert arguments_by_call_id["call_a"] != '{"a":1}'
     assert arguments_by_call_id["call_b"] != '{"b":1}'
+
+def test_output_item_done_events_arrive_in_output_index_order():
+    """Regression: the tool item's done event was emitted before the message item's, inverting
+    arrival order relative to output_index and to the non-streaming response."""
+    iterator = LiteLLMCompletionStreamingIterator(
+        model="test-model",
+        litellm_custom_stream_wrapper=AsyncMock(),
+        request_input="Test input",
+        responses_api_request={},
+    )
+    iterator.litellm_model_response = ModelResponse(
+        id="resp-done-order",
+        created=123,
+        model="test-model",
+        object="chat.completion",
+        choices=[
+            {
+                "index": 0,
+                "finish_reason": "tool_calls",
+                "message": {
+                    "role": "assistant",
+                    "content": "calling a tool",
+                    "tool_calls": [
+                        {
+                            "id": "call_done_order",
+                            "type": "function",
+                            "function": {"name": "do_thing", "arguments": '{"y":2}'},
+                            "index": 0,
+                        }
+                    ],
+                },
+            }
+        ],
+    )
+
+    events = islice(iter(lambda: iterator.common_done_event_logic(sync_mode=True), None), 40)
+    turn = takewhile(lambda evt: evt.type != ResponsesAPIStreamEvents.RESPONSE_COMPLETED, events)
+    done_indexes = tuple(
+        evt.output_index for evt in turn if evt.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE
+    )
+
+    assert done_indexes == tuple(sorted(done_indexes))
+    assert done_indexes == (0, 1)
