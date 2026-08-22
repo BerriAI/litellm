@@ -111,7 +111,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         if isinstance(part, Mapping):
             mapping: Final = cast(Mapping[str, Any], part)  # cast-ok: summary parts are untyped provider json
             return str(mapping.get("text") or "")
-        return str(getattr(part, "text", "") or "")
+        return str(getattr(part, "text", None) or "")
 
     @classmethod
     def _thinking_blocks_from_reasoning_item(
