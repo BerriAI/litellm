@@ -15,6 +15,8 @@ from litellm.types.router import GenericLiteLLMParams
 from ....vertex_llm_base import VertexBase
 from ..output_params_utils import sanitize_vertex_anthropic_output_params
 
+_VERTEX_SESSION_AFFINITY_HEADER = "X-Vertex-Ai-Session-Id"
+
 
 class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, VertexBase):
     def should_strip_billing_metadata(self) -> bool:
@@ -107,7 +109,35 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
         if beta_values:
             headers["anthropic-beta"] = ",".join(beta_values)
 
+        # Vertex's global endpoint can route turns of one logical session to
+        # different in-memory cache servers, rebuilding the Anthropic prompt
+        # cache each turn. A stable X-Vertex-Ai-Session-Id pins the session to
+        # one server so the cache survives across turns.
+        self._ensure_session_affinity_header(headers, litellm_params)
+
         return headers, api_base
+
+    @staticmethod
+    def _resolve_session_affinity_id(litellm_params: Dict[str, Any]) -> Optional[str]:
+        # The proxy pre-call already resolves a session/trace id from request
+        # headers (see get_chain_id_from_headers) into litellm_session_id, so we
+        # reuse that instead of re-scanning headers here.
+        litellm_session_id = litellm_params.get("litellm_session_id")
+        if litellm_session_id:
+            return str(litellm_session_id)
+        for metadata_key in ("litellm_metadata", "metadata"):
+            metadata = litellm_params.get(metadata_key)
+            if isinstance(metadata, dict) and metadata.get("session_id"):
+                return str(metadata["session_id"])
+        return None
+
+    @classmethod
+    def _ensure_session_affinity_header(cls, headers: Dict[str, Any], litellm_params: Dict[str, Any]) -> None:
+        if any(key.lower() == _VERTEX_SESSION_AFFINITY_HEADER.lower() for key in headers):
+            return
+        session_id = cls._resolve_session_affinity_id(litellm_params)
+        if session_id:
+            headers[_VERTEX_SESSION_AFFINITY_HEADER] = session_id
 
     def get_complete_url(
         self,
