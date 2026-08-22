@@ -124,12 +124,6 @@ class GraySwanGuardrail(CustomGuardrail):
         self.streaming_end_of_stream_only = streaming_end_of_stream_only
         self.streaming_sampling_rate = streaming_sampling_rate
 
-        verbose_proxy_logger.debug(
-            "GraySwan __init__: streaming_end_of_stream_only=%s, streaming_sampling_rate=%s",
-            streaming_end_of_stream_only,
-            streaming_sampling_rate,
-        )
-
         super().__init__(
             guardrail_name=guardrail_name,
             supported_event_hooks=list(self.get_supported_event_hooks()),
@@ -143,25 +137,6 @@ class GraySwanGuardrail(CustomGuardrail):
             GuardrailEventHooks.during_call,
             GuardrailEventHooks.post_call,
         ]
-
-    # ------------------------------------------------------------------
-    # Debug override to trace post_call issues
-    # ------------------------------------------------------------------
-
-    def should_run_guardrail(self, data, event_type) -> bool:
-        """Override to add debug logging."""
-        result: Final = super().should_run_guardrail(data, event_type)
-        # Check if apply_guardrail is in __dict__
-        has_apply_guardrail: Final = "apply_guardrail" in type(self).__dict__
-        verbose_proxy_logger.debug(
-            "GraySwan DEBUG: should_run_guardrail event_type=%s, result=%s, event_hook=%s, has_apply_guardrail=%s, class=%s",
-            event_type,
-            result,
-            self.event_hook,
-            has_apply_guardrail,
-            type(self).__name__,
-        )
-        return result
 
     # ------------------------------------------------------------------
     # Unified Guardrail Interface (works with ALL endpoints automatically)
@@ -199,13 +174,6 @@ class GraySwanGuardrail(CustomGuardrail):
             HTTPException: If content is blocked (block mode)
             Exception: If guardrail check fails
         """
-        # DEBUG: Log when apply_guardrail is called
-        verbose_proxy_logger.debug(
-            "GraySwan DEBUG: apply_guardrail called with input_type=%s, texts=%s",
-            input_type,
-            inputs.get("texts", [])[:100] if inputs.get("texts") else "NONE",
-        )
-
         start_time: Final = time.time()
         try:
             messages, tools = self._build_monitor_input(inputs, request_data, input_type)
