@@ -968,7 +968,9 @@ describe("ComplexityRouterConfig per-model effort filtering", () => {
     expect(options).toEqual(["Default", "none", "minimal", "low", "medium", "high", "xhigh"]);
   });
 
-  it("falls back to every effort when the group intersects to nothing", async () => {
+  // An empty list is the group's own answer that its deployments share no level, which is different
+  // from the field being absent, so the control is dropped rather than falling back to every level.
+  it("offers no effort at all when the group intersects to nothing", () => {
     renderWithProviders(
       <ComplexityRouterConfig
         {...baseProps}
@@ -978,12 +980,9 @@ describe("ComplexityRouterConfig per-model effort filtering", () => {
         ]}
       />,
     );
-    const user = userEvent.setup();
-    await user.click(
-      screen.getByRole("combobox", { name: "Reasoning effort for claude-3-opus in the Reasoning tier" }),
-    );
-    const options = (await screen.findAllByRole("option")).map((option) => option.textContent);
-    expect(options).toEqual(["Default", "none", "minimal", "low", "medium", "high", "xhigh"]);
+    expect(
+      screen.queryByRole("combobox", { name: "Reasoning effort for claude-3-opus in the Reasoning tier" }),
+    ).not.toBeInTheDocument();
   });
 
   // Hand-authored configs can carry a level outside the supported set (e.g. max); it must render

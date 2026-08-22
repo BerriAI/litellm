@@ -11,8 +11,16 @@ class TestResolveSupportedReasoningEfforts:
         assert resolve_supported_reasoning_efforts({}) is None
 
     def test_non_reasoning_model_supports_no_efforts(self):
-        assert resolve_supported_reasoning_efforts({"supports_reasoning": None}) == ()
         assert resolve_supported_reasoning_efforts({"supports_reasoning": False}) == ()
+        assert resolve_supported_reasoning_efforts({"mode": "chat", "supports_reasoning": None}) == ()
+
+    def test_unset_flag_on_an_entry_with_no_mode_resolves_to_unknown(self):
+        # The router registers a deployment absent from the model map under a synthesized entry, and
+        # get_model_info then answers with supports_reasoning None just as it does for a mapped
+        # non-reasoning model. Only the missing mode tells them apart, and reading the synthesized
+        # one as () would let one custom model empty every level its mapped siblings agree on.
+        assert resolve_supported_reasoning_efforts({"supports_reasoning": None}) is None
+        assert resolve_supported_reasoning_efforts({"mode": None, "supports_reasoning": None}) is None
 
     def test_reasoning_model_with_no_flags_gets_the_opt_out_levels_only(self):
         # The kimi shape: supports_reasoning true, zero effort flags. medium/high are unconditional,

@@ -54,15 +54,19 @@ def _supports_none_reasoning_effort(model_info: Mapping[str, object]) -> bool:
 
 
 def resolve_supported_reasoning_efforts(model_info: Mapping[str, object]) -> tuple[str, ...] | None:
-    """None = the caller passed no supports_reasoning key at all; () = this deployment adds no
-    effort levels to its group. The router always supplies the key, so a deployment absent from the
-    model map arrives with supports_reasoning None and lands on (), the same answer a mapped
-    non-reasoning model gets: the group cannot promise a level on behalf of a model nothing is known
-    about. () therefore reads as "no usable answer" downstream, which is why the dashboard falls
-    back to the capability-blind level list on an empty group rather than hiding the control."""
+    """None = nothing is known about this deployment, so it must not narrow its group; () = this is a
+    known model that accepts no effort level, which correctly empties the group. Keeping the two
+    apart matters because the router registers a deployment absent from the model map under a
+    synthesized entry, and get_model_info then answers with supports_reasoning None exactly as it
+    does for a mapped non-reasoning model. That entry carries no mode, which every real map entry for
+    a routable model does, so an unset flag with no mode is the unknown case and one custom model in
+    a group no longer wipes the levels its mapped siblings agree on."""
     if "supports_reasoning" not in model_info:
         return None
-    if model_info.get("supports_reasoning") is not True:
+    supports_reasoning: Final = model_info.get("supports_reasoning")
+    if supports_reasoning is None and model_info.get("mode") is None:
+        return None
+    if supports_reasoning is not True:
         return ()
     opt_out: Final = frozenset(effort for effort, flag in _OPT_OUT_FLAGS if model_info.get(flag) is not False)
     opt_in: Final = frozenset(effort for effort, flag in _OPT_IN_FLAGS if model_info.get(flag) is True)

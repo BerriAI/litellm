@@ -8927,11 +8927,11 @@ def test_model_group_info_intersects_supported_reasoning_efforts():
     assert result.supported_reasoning_efforts == ("minimal", "low", "medium", "high")
 
 
-def test_model_group_info_reasoning_efforts_empty_when_a_deployment_is_off_the_map():
+def test_model_group_info_reasoning_efforts_ignore_a_deployment_off_the_map():
     """The router fills every ModelInfo key, so a deployment absent from the model map arrives with
-    supports_reasoning None rather than with the key missing, and the group can no longer promise a
-    level on its behalf. The dashboard reads the empty result as "nothing known" and falls back to
-    the capability-blind picker, which is what it showed before this field existed."""
+    supports_reasoning None rather than with the key missing. Its synthesized entry carries no mode,
+    which is what separates it from a mapped non-reasoning model, and nothing being known about it is
+    no reason to drop the levels the rest of the group agrees on."""
     router = litellm.Router(
         model_list=[
             {
@@ -8962,6 +8962,45 @@ def test_model_group_info_reasoning_efforts_empty_when_a_deployment_is_off_the_m
         result = router._set_model_group_info(
             model_group="smart-group",
             user_facing_model_group_name="smart-group",
+        )
+
+    assert result is not None
+    assert result.supported_reasoning_efforts == ("none", "minimal", "low", "medium", "high", "max")
+
+
+def test_model_group_info_reasoning_efforts_empty_on_a_mapped_non_reasoning_deployment():
+    """A group mixing a reasoning model with one the map knows is not a reasoning model shares no
+    level, so it advertises none and the picker offers nothing rather than a level routing would
+    hand to a deployment that rejects it."""
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "mixed-group",
+                "litellm_params": {"model": "anthropic/opus-like"},
+                "model_info": {"id": "opus-like-deployment"},
+            },
+            {
+                "model_name": "mixed-group",
+                "litellm_params": {"model": "openai/plain-chat"},
+                "model_info": {"id": "plain-chat-deployment"},
+            },
+        ]
+    )
+
+    def _model_info(model_id: str, model_name: str):
+        if model_id == "opus-like-deployment":
+            return {
+                "key": model_name,
+                "litellm_provider": "anthropic",
+                "mode": "chat",
+                "supports_reasoning": True,
+            }
+        return {"key": model_name, "litellm_provider": "openai", "mode": "chat", "supports_reasoning": None}
+
+    with patch.object(router, "get_deployment_model_info", side_effect=_model_info):
+        result = router._set_model_group_info(
+            model_group="mixed-group",
+            user_facing_model_group_name="mixed-group",
         )
 
     assert result is not None
