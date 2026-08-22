@@ -149,19 +149,50 @@ class IPAddress(BaseModel):
     ip: str
 
 
-_ALLOWED_THEME_VARS: Final[frozenset[str]] = frozenset({
-    "radius", "background", "foreground", "card", "card-foreground",
-    "popover", "popover-foreground", "primary", "primary-foreground",
-    "secondary", "secondary-foreground", "muted", "muted-foreground",
-    "accent", "accent-foreground", "destructive", "destructive-foreground",
-    "success", "success-foreground", "warning", "warning-foreground",
-    "info", "info-foreground", "border", "input", "ring",
-    "chart-1", "chart-2", "chart-3", "chart-4", "chart-5",
-    "sidebar", "sidebar-foreground", "sidebar-primary",
-    "sidebar-primary-foreground", "sidebar-accent",
-    "sidebar-accent-foreground", "sidebar-border", "sidebar-ring",
-    "neutral-border",
-})
+_ALLOWED_THEME_VARS: Final[frozenset[str]] = frozenset(
+    {
+        "radius",
+        "background",
+        "foreground",
+        "card",
+        "card-foreground",
+        "popover",
+        "popover-foreground",
+        "primary",
+        "primary-foreground",
+        "secondary",
+        "secondary-foreground",
+        "muted",
+        "muted-foreground",
+        "accent",
+        "accent-foreground",
+        "destructive",
+        "destructive-foreground",
+        "success",
+        "success-foreground",
+        "warning",
+        "warning-foreground",
+        "info",
+        "info-foreground",
+        "border",
+        "input",
+        "ring",
+        "chart-1",
+        "chart-2",
+        "chart-3",
+        "chart-4",
+        "chart-5",
+        "sidebar",
+        "sidebar-foreground",
+        "sidebar-primary",
+        "sidebar-primary-foreground",
+        "sidebar-accent",
+        "sidebar-accent-foreground",
+        "sidebar-border",
+        "sidebar-ring",
+        "neutral-border",
+    }
+)
 
 _THEME_BLOCK_RE: Final = re.compile(r"(?::root|\.dark)\s*\{([^}]*)\}")
 
