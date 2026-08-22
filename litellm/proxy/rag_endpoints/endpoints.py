@@ -8,6 +8,7 @@ Provides:
 
 import base64
 from collections.abc import Mapping
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
 import orjson
@@ -36,6 +37,43 @@ if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
 
 router: Final = APIRouter()
+
+# Fields that must never be logged verbatim from a client-supplied
+# ``retrieval_config`` (provider-native stores legitimately carry connection
+# credentials in the dict; the debug log below redacts them).
+_SENSITIVE_RETRIEVAL_CONFIG_FIELDS: Final = frozenset(
+    {
+        "api_key",
+        "aws_access_key_id",
+        "aws_secret_access_key",
+        "aws_session_token",
+        "vertex_credentials",
+        "vertex_ai_credentials",
+        "litellm_embedding_config",
+    }
+)
+
+# Connection credential/endpoint fields that an authenticated client must not
+# be able to inject into the vector store search through ``retrieval_config``.
+# For a managed store the operator-resolved registry params are authoritative
+# (they travel on a dedicated channel); for a provider-native store connection
+# params must come from the proxy's server-side configuration (env / litellm
+# credentials), never from the request body - a client-supplied ``api_base``
+# would let a tenant pivot the proxy's egress to an internal host (SSRF).
+_RETRIEVAL_CONFIG_CLIENT_BLOCKED_FIELDS: Final = frozenset(
+    {
+        "api_key",
+        "api_base",
+        "api_version",
+        "aws_region_name",
+        "region_name",
+        "aws_access_key_id",
+        "aws_secret_access_key",
+        "aws_session_token",
+        "litellm_embedding_config",
+        "litellm_embedding_model",
+    }
+)
 
 
 def _raise_vector_store_scan_depth_exceeded() -> None:
@@ -492,6 +530,7 @@ async def rag_ingest(
 
         # Add litellm data
         request_data: dict[str, Any] = {}
+        # rebind-ok: request_data is rebuilt from the litellm-enriched request.
         request_data = await add_litellm_data_to_request(
             data=request_data,
             request=request,
@@ -661,10 +700,17 @@ async def rag_query(
             user_api_key_dict=user_api_key_dict,
         )
 
+        # Deferred import: keeps vector_store_endpoints out of sys.modules at
+        # proxy boot so lazy router registration and the OpenAPI snapshot stub
+        # injection are not skipped for vector store routes.
+        from litellm.proxy.vector_store_endpoints.endpoints import (
+            _update_request_data_with_litellm_managed_vector_store_registry,  # pyright: ignore[reportPrivateUsage]  # one canonical managed-store registry resolver, shared with the vector store endpoints
+        )
+
         # Add litellm data
         request_data: dict[str, object] = {}
         request_data = await add_litellm_data_to_request(
-            data=request_data,
+            data={},  # mutable-ok: resolver populates this dict in place
             request=request,
             general_settings=general_settings,
             user_api_key_dict=user_api_key_dict,
@@ -672,15 +718,51 @@ async def rag_query(
             proxy_config=proxy_config,
         )
 
-        verbose_proxy_logger.debug("RAG Query - model: %s, retrieval_config: %s", model, retrieval_config)
+        resolved_registry = await _update_request_data_with_litellm_managed_vector_store_registry(
+            data={},  # mutable-ok: resolver populates this dict in place
+            vector_store_id=retrieval_config["vector_store_id"],
+            user_api_key_dict=user_api_key_dict,
+        )
+        resolved_registry.pop("litellm_credential_name", None)
+        # An authenticated client must not control the search connection
+        # params: strip credential/endpoint fields from the client-supplied
+        # retrieval_config. Connection params reach the search only through
+        # the trusted managed-store registry channel below (or the proxy's
+        # own server-side configuration for provider-native stores).
+        search_retrieval_config: Final[Mapping[str, Any]] = MappingProxyType(
+            {
+                key: value
+                for key, value in retrieval_config.items()
+                if key not in _RETRIEVAL_CONFIG_CLIENT_BLOCKED_FIELDS
+            }
+        )
+        # Trusted registry params travel on a separate channel (never merged
+        # into the client-controlled ``retrieval_config``), so client-supplied
+        # credential/endpoint fields can never be forwarded to the search for
+        # a managed store, and resolved credentials are never logged. The
+        # search call site forwards only an allowlisted subset of this dict
+        # (see ``_VECTOR_STORE_SEARCH_PARAMS`` in ``litellm/rag/main.py``),
+        # so stored metadata / guardrail fields never reach the LLM call.
+
+        verbose_proxy_logger.debug(
+            "RAG Query - model: %s, retrieval_config: %s",
+            model,
+            MappingProxyType(
+                {
+                    key: ("***" if key in _SENSITIVE_RETRIEVAL_CONFIG_FIELDS and value else value)
+                    for key, value in search_retrieval_config.items()
+                }
+            ),
+        )
 
         # Call query
         response: Final = await litellm.aquery(
             model=model,
             messages=messages,
-            retrieval_config=retrieval_config,
+            retrieval_config=search_retrieval_config,
             rerank=rerank,
             stream=stream,
+            litellm_managed_vector_store_registry=resolved_registry,
             router=llm_router,
             **request_data,
         )
