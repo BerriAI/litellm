@@ -219,9 +219,7 @@ def type_to_response_format_param(
     if isinstance(response_format, dict):
         return _dict_to_response_format_helper(response_format, ref_template)
 
-    if not _is_basemodel_class(response_format) and not _parsing._completions.is_basemodel_type(
-        response_format
-    ):
+    if not _is_basemodel_class(response_format) and not _parsing._completions.is_basemodel_type(response_format):
         raise TypeError(f"Unsupported response_format type - {response_format}")
 
     schema: Final = _response_format_json_schema(response_format, ref_template=ref_template)
