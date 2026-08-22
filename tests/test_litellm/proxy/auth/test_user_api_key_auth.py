@@ -29,6 +29,8 @@ from litellm.proxy.auth.auth_checks import get_key_object, _cache_key_object
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.auth.user_api_key_auth import (
     _check_key_model_budget_with_fallback,
+    _ensure_litellm_received_at_on_request_state,
+    _ensure_parent_otel_span_on_request_state,
     _PendingAutoRegister,
     _matches_routing_override,
     _reserve_budget_after_common_checks,
@@ -6694,3 +6696,42 @@ async def test_unlicensed_jwt_auth_is_forbidden_not_unauthorized():
 
     assert error.code == "403"
     assert "enterprise" in error.message.lower()
+
+
+class TestLitellmReceivedAtStamping:
+    """request.state.litellm_received_at must be stamped unconditionally at the
+    top of auth (LIT-6012), so request-latency Prometheus metrics don't depend
+    on OTEL being configured to see a true request-arrival timestamp."""
+
+    def test_stamped_even_when_otel_is_not_configured(self, monkeypatch):
+        monkeypatch.setattr(
+            "litellm.proxy.proxy_server.open_telemetry_logger", None
+        )
+        request = MagicMock()
+        request.state = SimpleNamespace()
+
+        _ensure_parent_otel_span_on_request_state(request)
+
+        assert isinstance(request.state.litellm_received_at, datetime)
+
+    def test_helper_is_idempotent(self):
+        request = MagicMock()
+        request.state = SimpleNamespace()
+
+        first = _ensure_litellm_received_at_on_request_state(request)
+        second = _ensure_litellm_received_at_on_request_state(request)
+
+        assert first == second
+        assert request.state.litellm_received_at == first
+
+    def test_does_not_overwrite_an_earlier_stamp(self):
+        """Body-parse failures must not shorten the measured window: a value
+        already on request.state (stamped earlier) must win."""
+        request = MagicMock()
+        earlier = datetime(2020, 1, 1)
+        request.state = SimpleNamespace(litellm_received_at=earlier)
+
+        result = _ensure_litellm_received_at_on_request_state(request)
+
+        assert result == earlier
+        assert request.state.litellm_received_at == earlier

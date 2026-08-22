@@ -1069,6 +1069,26 @@ async def _resolve_jwt_to_virtual_key(
     return None
 
 
+def _ensure_litellm_received_at_on_request_state(request: Request) -> datetime:
+    """Idempotently stamp ``request.state.litellm_received_at`` with the moment
+    litellm's own code started handling this request -- the first line of
+    ``user_api_key_auth``, before any auth/pre-call work runs. This is the
+    basis for the request-latency Prometheus metrics (see
+    ``litellm/integrations/prometheus.py``), and unlike the OTEL SERVER span
+    below, it is set unconditionally so those metrics don't depend on OTEL
+    being configured.
+    """
+    existing_received_at: Final[datetime | None] = getattr(request.state, "litellm_received_at", None)
+    if existing_received_at is not None:
+        return existing_received_at
+    received_at: Final = datetime.now(timezone.utc)
+    try:
+        request.state.litellm_received_at = received_at
+    except Exception:
+        pass
+    return received_at
+
+
 def _ensure_parent_otel_span_on_request_state(request: Request) -> None:
     """Idempotently create the OTEL SERVER span and stash it on
     ``request.state.parent_otel_span``. Safe to call multiple times.
@@ -1079,15 +1099,12 @@ def _ensure_parent_otel_span_on_request_state(request: Request) -> None:
     """
     from litellm.proxy.proxy_server import open_telemetry_logger
 
+    start_time: Final = _ensure_litellm_received_at_on_request_state(request)
+
     if open_telemetry_logger is None:
         return
     if getattr(request.state, "parent_otel_span", None) is not None:
         return
-    start_time: Final = datetime.now(timezone.utc)
-    try:
-        request.state.litellm_received_at = start_time
-    except Exception:
-        pass
     parent_otel_span: Final = open_telemetry_logger.create_litellm_proxy_request_started_span(
         start_time=start_time,
         headers=_safe_get_request_headers(request),

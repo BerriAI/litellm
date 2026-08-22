@@ -3,7 +3,6 @@ import contextlib
 import json
 import logging
 import math
-import time
 import traceback
 from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping
 from datetime import datetime
@@ -1726,13 +1725,17 @@ class ProxyBaseLLMRequestProcessing:
             )
 
         # Calculate request queue time after add_litellm_data_to_request
-        # which sets arrival_time in proxy_server_request
+        # which sets arrival_time in proxy_server_request. Ends at start_time
+        # (not a freshly captured time.time() here) so this window is exactly
+        # [arrival_time, start_time], with zero overlap with the
+        # litellm_request_total_latency_metric window of [start_time, end_time] --
+        # otherwise the few lines of add_litellm_data_to_request's own work would
+        # be double-counted across both metrics.
         proxy_server_request: Final = self.data.get("proxy_server_request", {})
         arrival_time: Final = proxy_server_request.get("arrival_time")
         queue_time_seconds = None
         if arrival_time is not None:
-            processing_start_time: Final = time.time()
-            queue_time_seconds = processing_start_time - arrival_time
+            queue_time_seconds = start_time.timestamp() - arrival_time
 
         # Store queue time in metadata after add_litellm_data_to_request to ensure it's preserved
         if queue_time_seconds is not None:

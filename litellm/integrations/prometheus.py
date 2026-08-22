@@ -215,7 +215,9 @@ class PrometheusLogger(CustomLogger):
             # request latency metrics
             self.litellm_request_total_latency_metric = self._histogram_factory(
                 "litellm_request_total_latency_metric",
-                "Total latency (seconds) for a request to LiteLLM",
+                "End-to-end latency (seconds) for a request to LiteLLM Proxy Server, from the moment "
+                "the request reached the proxy through the end of processing -- includes "
+                "authentication, pre-call hooks, the LLM API call, and post-call processing",
                 labelnames=self.get_labels_for_metric("litellm_request_total_latency_metric"),
                 buckets=self.latency_buckets,
             )
@@ -458,7 +460,8 @@ class PrometheusLogger(CustomLogger):
             # Request queue time metric
             self.litellm_request_queue_time_metric = self._histogram_factory(
                 "litellm_request_queue_time_seconds",
-                "Time spent in request queue before processing starts (seconds)",
+                "Time (seconds) from request arrival at the proxy to the start of pre-call "
+                "processing -- includes authentication and any ASGI-level queueing",
                 labelnames=self.get_labels_for_metric("litellm_request_queue_time_seconds"),
                 buckets=self.latency_buckets,
             )
@@ -2078,27 +2081,37 @@ class PrometheusLogger(CustomLogger):
                 _labels,
             )
 
-        # total request latency
+        # request queue time (time from arrival to processing start) -- read first so
+        # it can be folded into the total-latency metric below. start_time/end_time
+        # only span from after auth completes, so without this the "total" latency
+        # metric silently excludes auth and pre-call hook time.
+        _litellm_params: Final = kwargs.get("litellm_params", {}) or {}
+        queue_time_seconds: Final = (_litellm_params.get("metadata") or {}).get("queue_time_seconds")
+
+        # total request latency: true end-to-end, from request arrival (queue_time_seconds,
+        # when available) through the end of processing.
         total_time_seconds: Final = self._safe_duration_seconds(
             start_time=start_time,
             end_time=end_time,
         )
         if total_time_seconds is not None:
+            _observed_total_time_seconds: Final = (
+                total_time_seconds + queue_time_seconds
+                if queue_time_seconds is not None and queue_time_seconds >= 0
+                else total_time_seconds
+            )
             _labels = prometheus_label_factory(
                 supported_enum_labels=self.get_labels_for_metric(metric_name="litellm_request_total_latency_metric"),
                 enum_values=enum_values,
                 label_context=label_context,
             )
-            self.litellm_request_total_latency_metric.labels(**_labels).observe(total_time_seconds)
+            self.litellm_request_total_latency_metric.labels(**_labels).observe(_observed_total_time_seconds)
             self._track_end_user_metric_series(
                 self.litellm_request_total_latency_metric,
                 "litellm_request_total_latency_metric",
                 _labels,
             )
 
-        # request queue time (time from arrival to processing start)
-        _litellm_params: Final = kwargs.get("litellm_params", {}) or {}
-        queue_time_seconds: Final = (_litellm_params.get("metadata") or {}).get("queue_time_seconds")
         if queue_time_seconds is not None and queue_time_seconds >= 0:
             _labels = prometheus_label_factory(
                 supported_enum_labels=self.get_labels_for_metric(metric_name="litellm_request_queue_time_seconds"),
