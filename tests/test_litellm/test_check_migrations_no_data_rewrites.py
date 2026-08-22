@@ -97,6 +97,22 @@ class TestInsert:
     def test_insert_select_scans_and_is_flagged(self, tmp_path):
         assert _keywords(tmp_path, 'INSERT INTO "Foo" ("id") SELECT "id" FROM "Bar";') == ("INSERT ... SELECT",)
 
+    def test_insert_values_with_a_scalar_subquery_passes(self, tmp_path):
+        sql = 'INSERT INTO "Config" ("k", "v") VALUES (\'rev\', (SELECT max("id")::text FROM "Bar"));'
+        assert _keywords(tmp_path, sql) == ()
+
+    def test_insert_values_with_a_scalar_subquery_per_row_passes(self, tmp_path):
+        sql = (
+            'INSERT INTO "Config" ("k", "v") VALUES\n'
+            "    ('a', (SELECT \"id\" FROM \"Bar\" WHERE \"n\" = 'a')),\n"
+            "    ('b', (SELECT \"id\" FROM \"Bar\" WHERE \"n\" = 'b'));"
+        )
+        assert _keywords(tmp_path, sql) == ()
+
+    def test_values_inside_a_subquery_does_not_bound_an_insert_select(self, tmp_path):
+        sql = 'INSERT INTO "Foo" ("id") SELECT "id" FROM (VALUES (1), (2)) AS "v"("id");'
+        assert _keywords(tmp_path, sql) == ("INSERT ... SELECT",)
+
 
 class TestCommonTableExpressions:
     def test_cte_led_update_is_flagged(self, tmp_path):
@@ -113,6 +129,10 @@ class TestCommonTableExpressions:
 
     def test_read_only_cte_passes(self, tmp_path):
         sql = 'WITH batch AS (SELECT "id" FROM "Foo") SELECT count(*) FROM batch;'
+        assert _keywords(tmp_path, sql) == ()
+
+    def test_cte_led_insert_values_is_bounded_and_passes(self, tmp_path):
+        sql = 'WITH latest AS (SELECT max("id") AS "id" FROM "Bar")\nINSERT INTO "Config" ("k", "v") VALUES (\'rev\', (SELECT "id"::text FROM latest));'
         assert _keywords(tmp_path, sql) == ()
 
 
@@ -165,6 +185,32 @@ class TestDollarQuotedBlocks:
     def test_semicolons_inside_do_block_do_not_split_outer_statements(self, tmp_path):
         sql = 'DO $$ BEGIN PERFORM 1; END $$;\nALTER TABLE "Foo" ADD COLUMN "b" TEXT;'
         assert _keywords(tmp_path, sql) == ()
+
+    def test_line_number_inside_a_do_block_counts_from_the_top_of_the_file(self, tmp_path):
+        sql = (
+            "-- AlterTable\n"
+            'ALTER TABLE "Foo" ADD COLUMN "b" INT;\n'
+            "\n"
+            "DO $$\n"
+            "BEGIN\n"
+            '    UPDATE "Foo" SET "b" = 1;\n'
+            "END $$;"
+        )
+        assert _scan(tmp_path, sql)[0].line == 6
+
+    def test_line_number_inside_a_nested_body_counts_from_the_top_of_the_file(self, tmp_path):
+        sql = (
+            "-- CreateIndex\n"
+            'CREATE INDEX "i" ON "Foo"("a");\n'
+            "\n"
+            "DO $outer$\n"
+            "BEGIN\n"
+            "    EXECUTE $inner$\n"
+            '        UPDATE "Foo" SET "a" = 1\n'
+            "    $inner$;\n"
+            "END $outer$;"
+        )
+        assert _scan(tmp_path, sql)[0].line == 7
 
 
 class TestQuotingAndComments:
@@ -225,6 +271,68 @@ class TestEscapeHatch:
     def test_marker_below_the_statement_does_not_exempt_the_next_one(self, tmp_path):
         sql = 'UPDATE "Foo" SET "a" = 1;\n-- data-migration-ok: bounded\nALTER TABLE "Bar" ADD COLUMN "b" TEXT;'
         assert _keywords(tmp_path, sql) == ("UPDATE",)
+
+    def test_marker_inside_a_do_block_below_the_first_line_exempts(self, tmp_path):
+        sql = (
+            "-- AlterTable\n"
+            'ALTER TABLE "Foo" ADD COLUMN "b" INT;\n'
+            "\n"
+            "DO $$\n"
+            "BEGIN\n"
+            "    -- data-migration-ok: one config row\n"
+            '    UPDATE "Foo" SET "b" = 1;\n'
+            "END $$;"
+        )
+        assert _keywords(tmp_path, sql) == ()
+
+    def test_marker_above_a_do_block_does_not_exempt_a_rewrite_inside_it(self, tmp_path):
+        sql = (
+            "-- data-migration-ok: bounded, this belongs to the insert below\n"
+            "INSERT INTO \"Config\" (\"k\") VALUES ('x');\n"
+            "\n"
+            'DO $$ BEGIN UPDATE "Foo" SET "b" = 1; END $$;'
+        )
+        assert _keywords(tmp_path, sql) == ("UPDATE",)
+        assert _scan(tmp_path, sql)[0].line == 4
+
+
+class TestDynamicSql:
+    def test_execute_of_a_quoted_update_is_flagged(self, tmp_path):
+        sql = "DO $$\nBEGIN\n    EXECUTE 'UPDATE \"Foo\" SET \"a\" = 1';\nEND $$;"
+        assert _keywords(tmp_path, sql) == ("UPDATE",)
+        assert _scan(tmp_path, sql)[0].line == 3
+
+    def test_execute_of_a_quoted_delete_is_flagged(self, tmp_path):
+        sql = "DO $$\nBEGIN\n    EXECUTE 'DELETE FROM \"Foo\"';\nEND $$;"
+        assert _keywords(tmp_path, sql) == ("DELETE",)
+
+    def test_execute_of_a_formatted_update_is_flagged(self, tmp_path):
+        sql = "DO $$\nBEGIN\n    EXECUTE format('UPDATE %I SET \"a\" = 1', 'Foo');\nEND $$;"
+        assert _keywords(tmp_path, sql) == ("UPDATE",)
+
+    def test_execute_of_a_dollar_quoted_update_is_flagged(self, tmp_path):
+        sql = 'DO $outer$\nBEGIN\n    EXECUTE $q$UPDATE "Foo" SET "a" = 1$q$;\nEND $outer$;'
+        assert _keywords(tmp_path, sql) == ("UPDATE",)
+
+    def test_a_doubled_quote_inside_executed_sql_does_not_hide_the_rewrite(self, tmp_path):
+        sql = "DO $$\nBEGIN\n    EXECUTE 'UPDATE \"Foo\" SET \"a\" = date_trunc(''day'', \"t\")';\nEND $$;"
+        assert _keywords(tmp_path, sql) == ("UPDATE",)
+
+    def test_execute_of_ddl_passes(self, tmp_path):
+        sql = "DO $$\nBEGIN\n    EXECUTE 'ALTER TABLE \"Foo\" ADD COLUMN \"b\" TEXT';\nEND $$;"
+        assert _keywords(tmp_path, sql) == ()
+
+    def test_execute_of_a_read_only_query_passes(self, tmp_path):
+        sql = "DO $$\nBEGIN\n    EXECUTE 'SELECT 1';\nEND $$;"
+        assert _keywords(tmp_path, sql) == ()
+
+    def test_a_marker_exempts_an_executed_rewrite(self, tmp_path):
+        sql = "DO $$\nBEGIN\n    -- data-migration-ok: one row\n    EXECUTE 'UPDATE \"Foo\" SET \"a\" = 1';\nEND $$;"
+        assert _keywords(tmp_path, sql) == ()
+
+    def test_a_literal_that_is_not_executed_is_still_inert(self, tmp_path):
+        sql = "INSERT INTO \"Foo\" (\"note\") VALUES ('UPDATE \"Bar\" SET \"a\" = 1');"
+        assert _keywords(tmp_path, sql) == ()
 
 
 class TestReporting:
