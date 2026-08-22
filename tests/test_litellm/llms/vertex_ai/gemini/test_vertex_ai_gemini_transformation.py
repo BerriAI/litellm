@@ -2778,3 +2778,95 @@ def test_gemini_server_side_tool_signature_not_duplicated_on_text():
     assert "thoughtSignature" not in text_part
     tool_call_part = next(p for p in parts if "toolCall" in p)
     assert tool_call_part["thoughtSignature"] == "server_side_signature"
+
+
+def test_gemini_no_duplicate_reasoning_parts_when_both_fields_present():
+    """
+    Regression (#37973): when an assistant message has both reasoning_content and
+    thinking_blocks, only one reasoning part must be emitted. Signed thinking_blocks
+    take priority; reasoning_content is a fallback used only when thinking_blocks is absent.
+    """
+    reasoning_text = "Two plus two is four."
+    signature = "test-signature-abc123"
+
+    messages = [
+        {"role": "user", "content": "What is 2+2?"},
+        {
+            "role": "assistant",
+            "content": "4",
+            "reasoning_content": reasoning_text,
+            "thinking_blocks": [
+                {
+                    "type": "thinking",
+                    "thinking": reasoning_text,
+                    "signature": signature,
+                }
+            ],
+        },
+        {"role": "user", "content": "Multiply by 3."},
+    ]
+
+    contents = _gemini_convert_messages_with_history(messages=messages)
+    parts = contents[1]["parts"]
+
+    signed_parts = [p for p in parts if p.get("thoughtSignature") is not None]
+    plain_thought_parts = [p for p in parts if p.get("thought") is True]
+
+    assert len(signed_parts) == 1, (
+        f"Expected 1 signed reasoning part, got {len(signed_parts)}: {signed_parts}"
+    )
+    assert len(plain_thought_parts) == 0, (
+        f"reasoning_content must not be emitted when thinking_blocks is present; "
+        f"got {len(plain_thought_parts)} extra plain thought part(s)"
+    )
+    assert signed_parts[0]["thoughtSignature"] == signature
+
+
+def test_gemini_reasoning_content_fallback_when_no_thinking_blocks():
+    """
+    When an assistant message has reasoning_content but no thinking_blocks,
+    a plain thought part should be emitted as fallback.
+    """
+    reasoning_text = "I reasoned about this carefully."
+
+    messages = [
+        {"role": "user", "content": "Hello."},
+        {
+            "role": "assistant",
+            "content": "Hi there.",
+            "reasoning_content": reasoning_text,
+        },
+        {"role": "user", "content": "How are you?"},
+    ]
+
+    contents = _gemini_convert_messages_with_history(messages=messages)
+    parts = contents[1]["parts"]
+
+    plain_thought_parts = [p for p in parts if p.get("thought") is True]
+    assert len(plain_thought_parts) == 1
+    assert plain_thought_parts[0]["text"] == reasoning_text
+
+
+def test_gemini_reasoning_content_fallback_when_thinking_blocks_empty():
+    """
+    When thinking_blocks is non-null but empty, reasoning_content must still be emitted.
+    """
+    reasoning_text = "I reasoned carefully."
+
+    messages = [
+        {"role": "user", "content": "Hello."},
+        {
+            "role": "assistant",
+            "content": "Hi.",
+            "reasoning_content": reasoning_text,
+            "thinking_blocks": [],
+        },
+        {"role": "user", "content": "How are you?"},
+    ]
+
+    contents = _gemini_convert_messages_with_history(messages=messages)
+    parts = contents[1]["parts"]
+
+    plain_thought_parts = [p for p in parts if p.get("thought") is True]
+    assert len(plain_thought_parts) == 1
+    assert plain_thought_parts[0]["text"] == reasoning_text
