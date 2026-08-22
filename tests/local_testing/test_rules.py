@@ -1,16 +1,12 @@
 #### What this tests ####
 #    This tests setting rules before / after making llm api calls
 import asyncio
-import os
-import sys
+import re
 import time
 import traceback
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 import litellm
 from litellm import acompletion, completion
 
@@ -82,7 +78,7 @@ def test_post_call_rule():
     litellm.post_call_rules = [my_post_call_rule]
 
     ### completion
-    with pytest.raises(Exception, match="This violates LiteLLM Proxy Rules. Response too short") as exc_info:
+    with pytest.raises(Exception, match=re.escape("This violates LiteLLM Proxy Rules. Response too short")) as exc_info:
         completion(
             model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": "say sorry"}],
@@ -118,7 +114,7 @@ def test_post_call_rule_streaming():
         stream=True,
     )
 
-    with pytest.raises(Exception, match="This violates LiteLLM Proxy Rules. Response too short") as exc_info:
+    with pytest.raises(Exception, match=re.escape("This violates LiteLLM Proxy Rules. Response too short")) as exc_info:
         list(response)
     assert "This violates LiteLLM Proxy Rules. Response too short" in exc_info.value.message
 

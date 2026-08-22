@@ -1,14 +1,9 @@
-import os
-import sys
 from unittest.mock import patch
 
 import pytest
 
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 from litellm.llms.vertex_ai.common_utils import (
     _get_vertex_url,
@@ -33,7 +28,7 @@ def test_validate_vertex_location_accepts_valid(location):
     ["attacker.example/", "evil.com#", "us.attacker.example", "us/../..", "US", "us_central1", "-us", "", None],
 )
 def test_validate_vertex_location_rejects_invalid(location):
-    with pytest.raises(ValueError, match="vertex_location is required|Invalid vertex_location format"):
+    with pytest.raises(ValueError, match=r"vertex_location is required|Invalid vertex_location format"):
         validate_vertex_location(location)
 
 

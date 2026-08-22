@@ -1,13 +1,9 @@
 import json
-import os
-import sys
+import re
 from datetime import datetime
 from io import BytesIO
 from unittest.mock import AsyncMock
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system-path
 
 import litellm
 from litellm import completion, embedding
@@ -578,7 +574,7 @@ def test_litellm_gateway_from_sdk_with_response_cost_in_additional_headers():
 
 
 def test_litellm_gateway_from_sdk_with_thinking_param():
-    with pytest.raises(Exception, match="Connection error.") as exc_info:
+    with pytest.raises(Exception, match=re.escape("Connection error.")) as exc_info:
         response = litellm.completion(
             model="litellm_proxy/anthropic.claude-sonnet-4-5-20250929-v1:0",
             messages=[{"role": "user", "content": "Hello world"}],

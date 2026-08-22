@@ -2,14 +2,10 @@
 #    This tests if ahealth_check() actually works
 
 import os
-import sys
 
 import pytest
 from unittest.mock import AsyncMock, patch
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 import asyncio
 
 import litellm

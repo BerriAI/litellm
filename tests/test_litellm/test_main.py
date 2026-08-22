@@ -2,16 +2,12 @@ import contextlib
 import copy
 import json
 import os
-import sys
 
 import httpx
 import pytest
 import respx
 from fastapi.testclient import TestClient
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 
 import urllib.parse
 from unittest.mock import MagicMock, patch
@@ -2754,3 +2750,159 @@ def test_completion_default_api_base_sends_prompt_cache_breakpoint_for_gpt_5_6()
         {"type": "text", "text": "sys", "prompt_cache_breakpoint": {"mode": "explicit"}}
     ]
     assert request_body["extra_body"]["prompt_cache_options"] == {"mode": "explicit"}
+
+
+_SUBSCRIPTION_OAUTH_CREDENTIAL = "Bearer sk-ant-oat01-fake-subscription-token-for-testing-0123456789"
+
+
+def _scoped_headers_for_oauth_request():
+    from litellm.types.utils import ProviderSpecificHeader
+
+    return [
+        ProviderSpecificHeader(
+            custom_llm_provider="anthropic,bedrock,vertex_ai",
+            extra_headers={"anthropic-version": "2023-06-01"},
+        ),
+        ProviderSpecificHeader(
+            custom_llm_provider="anthropic",
+            extra_headers={"authorization": _SUBSCRIPTION_OAUTH_CREDENTIAL},
+        ),
+    ]
+
+
+def _run_anthropic_hop_with_shared_headers(shared_headers):
+    litellm.completion(
+        model="anthropic/claude-3-5-sonnet-20240620",
+        messages=[{"role": "user", "content": "Say OK"}],
+        extra_headers=shared_headers,
+        provider_specific_header=_scoped_headers_for_oauth_request(),
+        api_key="sk-fake-anthropic-key",
+        mock_response="OK",
+    )
+
+
+def test_completion_does_not_mutate_caller_supplied_headers():
+    shared_headers = {"x-tenant": "acme"}
+
+    _run_anthropic_hop_with_shared_headers(shared_headers)
+
+    assert shared_headers == {"x-tenant": "acme"}
+
+
+def test_anthropic_oauth_credential_does_not_persist_into_next_provider_hop():
+    shared_headers = {"x-tenant": "acme"}
+
+    _run_anthropic_hop_with_shared_headers(shared_headers)
+
+    leaked = [name for name, value in shared_headers.items() if value == _SUBSCRIPTION_OAUTH_CREDENTIAL]
+    assert leaked == []
+    assert "anthropic-version" not in shared_headers
+
+
+STREAM_COST_MODEL = "gpt-4o"
+STREAMED_USAGE = {"prompt_tokens": 137, "completion_tokens": 42, "total_tokens": 179}
+
+
+def _text_chunk(content, finish_reason=None, usage=None):
+    chunk = {
+        "id": "chatcmpl-stream-cost",
+        "object": "chat.completion.chunk",
+        "created": 1700000000,
+        "model": STREAM_COST_MODEL,
+        "choices": [
+            {
+                "index": 0,
+                "delta": {"role": "assistant", "content": content},
+                "finish_reason": finish_reason,
+            }
+        ],
+    }
+    if usage is not None:
+        chunk["usage"] = usage
+    return chunk
+
+
+def _priced_at(prompt_tokens, completion_tokens):
+    prices = litellm.model_cost[STREAM_COST_MODEL]
+    return (
+        prompt_tokens * prices["input_cost_per_token"]
+        + completion_tokens * prices["output_cost_per_token"]
+    )
+
+
+@pytest.fixture
+def local_cost_map(monkeypatch):
+    """The prices these tests assert are the checked-in ones. Setting the environment
+    variable alone does not reload the map, so pin the map itself."""
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+
+def test_a_streamed_response_bills_the_usage_the_provider_reported(local_cost_map):
+    rebuilt = litellm.stream_chunk_builder(
+        chunks=[
+            _text_chunk("Hello"),
+            _text_chunk(" there"),
+            _text_chunk(None, finish_reason="stop", usage=STREAMED_USAGE),
+        ],
+        messages=[{"role": "user", "content": "hi"}],
+    )
+
+    assert rebuilt.choices[0].message.content == "Hello there"
+    assert rebuilt.usage.prompt_tokens == STREAMED_USAGE["prompt_tokens"]
+    assert rebuilt.usage.completion_tokens == STREAMED_USAGE["completion_tokens"]
+
+    cost = litellm.completion_cost(completion_response=rebuilt, model=STREAM_COST_MODEL)
+
+    assert cost == pytest.approx(_priced_at(137, 42))
+    assert cost == pytest.approx(0.0007625)
+
+
+def test_streaming_and_not_streaming_bill_the_same_usage_the_same(local_cost_map):
+    rebuilt = litellm.stream_chunk_builder(
+        chunks=[
+            _text_chunk("Hello"),
+            _text_chunk(" there"),
+            _text_chunk(None, finish_reason="stop", usage=STREAMED_USAGE),
+        ],
+        messages=[{"role": "user", "content": "hi"}],
+    )
+    whole = litellm.ModelResponse(
+        id="chatcmpl-stream-cost",
+        model=STREAM_COST_MODEL,
+        object="chat.completion",
+        created=1700000000,
+        choices=[
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "Hello there"},
+                "finish_reason": "stop",
+            }
+        ],
+        usage=STREAMED_USAGE,
+    )
+
+    assert litellm.completion_cost(
+        completion_response=rebuilt, model=STREAM_COST_MODEL
+    ) == pytest.approx(litellm.completion_cost(completion_response=whole, model=STREAM_COST_MODEL))
+
+
+def test_a_stream_that_reported_no_usage_is_still_billed(local_cost_map):
+    rebuilt = litellm.stream_chunk_builder(
+        chunks=[
+            _text_chunk("Hello"),
+            _text_chunk(" there"),
+            _text_chunk(None, finish_reason="stop"),
+        ],
+        messages=[{"role": "user", "content": "hi"}],
+    )
+
+    assert rebuilt.usage.prompt_tokens > 0
+    assert rebuilt.usage.completion_tokens > 0
+
+    cost = litellm.completion_cost(completion_response=rebuilt, model=STREAM_COST_MODEL)
+
+    assert cost > 0
+    assert cost == pytest.approx(
+        _priced_at(rebuilt.usage.prompt_tokens, rebuilt.usage.completion_tokens)
+    )

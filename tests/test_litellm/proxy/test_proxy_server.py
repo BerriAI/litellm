@@ -2,9 +2,9 @@ import asyncio
 import importlib
 import json
 import os
+import re
 import socket
 import subprocess
-import sys
 import types
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -19,7 +19,6 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.testclient import TestClient
 
-sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system-path
 
 import litellm
 import litellm.proxy.proxy_server as proxy_server_module
@@ -2683,7 +2682,7 @@ async def test_get_config_from_file(tmp_path, monkeypatch):
     with open(empty_file, "w") as f:
         f.write("")  # Write empty content which will result in None when loaded
 
-    with pytest.raises(Exception, match="Config cannot be None or Empty."):
+    with pytest.raises(Exception, match=re.escape("Config cannot be None or Empty.")):
         await proxy_config._get_config_from_file(str(empty_file))
 
     # Test Case 5: Using global user_config_file_path when no config_file_path provided

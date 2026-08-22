@@ -1,12 +1,7 @@
-import os
-import sys
 from unittest.mock import MagicMock, call, patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 from litellm.llms.watsonx.common_utils import generate_iam_token
 

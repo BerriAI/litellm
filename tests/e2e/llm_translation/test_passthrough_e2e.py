@@ -28,6 +28,7 @@ from passthrough_client import (
 )
 
 EMBEDDING_MODEL = "text-embedding-3-small"
+REALTIME_MODEL = "gpt-realtime-2"
 
 pytestmark = pytest.mark.e2e
 
@@ -338,4 +339,53 @@ class TestOpenAIPassthroughSpend:
         assert (row.prompt_tokens or 0) > 0, (
             f"the embeddings row logged no prompt tokens, so whatever cost it carries "
             f"was not computed from the real usage: {row}"
+        )
+
+
+class TestOpenAIPassthroughWebsocket:
+    """The OpenAI passthrough prefixes must answer a websocket upgrade, not only a POST.
+
+    The customer points realtime and responses.connect clients at the same prefixes
+    their HTTP traffic already uses. Only HTTP routes were registered under those
+    prefixes, so every upgrade was refused before a socket existed and those clients
+    could not reach the gateway at all. A refused upgrade is an HTTP response, not a
+    close frame, which is why these assert on the handshake rather than a close code.
+    """
+
+    @pytest.mark.covers("llm.realtime.openai.passthrough.stream.works")
+    def test_realtime_upgrade_reaches_openai_through_the_passthrough_prefix(
+        self, client: PassthroughClient, scoped_key: str
+    ) -> None:
+        """Pins GitHub issue #36088: /openai_passthrough/v1/realtime accepts the
+        upgrade and relays OpenAI's own session, instead of rejecting it with a 403."""
+        handshake = client.openai_passthrough_websocket(
+            scoped_key, "/openai_passthrough/v1/realtime", model=REALTIME_MODEL
+        )
+
+        assert handshake.rejected_status is None, (
+            f"/openai_passthrough/v1/realtime refused the websocket upgrade with HTTP "
+            f"{handshake.rejected_status}, so a realtime client cannot connect through "
+            "the gateway at all"
+        )
+        assert handshake.first_event_type == "session.created", (
+            "the accepted socket never carried OpenAI's opening session event, so the "
+            f"upgrade was not relayed upstream; the first frame was "
+            f"{handshake.first_event_type}"
+        )
+
+    @pytest.mark.covers("llm.responses.openai.passthrough_websocket.stream.works")
+    def test_responses_upgrade_is_accepted_on_the_openai_prefix(
+        self, client: PassthroughClient, scoped_key: str
+    ) -> None:
+        """Pins GitHub issue #36088 on the second prefix: /openai/v1/responses upgrades
+        as well. A responses.connect socket waits for the client to speak first, so the
+        accepted handshake is the whole signal here."""
+        handshake = client.openai_passthrough_websocket(
+            scoped_key, "/openai/v1/responses", first_event_timeout=2.0
+        )
+
+        assert handshake.rejected_status is None, (
+            f"/openai/v1/responses refused the websocket upgrade with HTTP "
+            f"{handshake.rejected_status}; the prefix relays this route over HTTP but "
+            "drops a responses.connect client before the socket opens"
         )

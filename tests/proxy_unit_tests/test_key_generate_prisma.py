@@ -20,7 +20,7 @@
 # function to validate a request - async def user_auth(request: Request):
 
 import os
-import sys
+import re
 import traceback
 from litellm._uuid import uuid
 from datetime import datetime, timezone
@@ -37,9 +37,6 @@ import time
 
 # this file is to test litellm/proxy
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 import asyncio
 import logging
 
@@ -1498,7 +1495,9 @@ def test_key_generate_with_custom_auth(prisma_client):
             await litellm.proxy.proxy_server.prisma_client.connect()
             request = GenerateKeyRequest()
 
-            with pytest.raises(Exception, match="This violates LiteLLM Proxy Rules. No team id provided.") as exc_info:
+            with pytest.raises(
+                Exception, match=re.escape("This violates LiteLLM Proxy Rules. No team id provided.")
+            ) as exc_info:
                 key = await generate_key_fn(
                     request,
                     user_api_key_dict=UserAPIKeyAuth(
@@ -3045,7 +3044,9 @@ async def test_custom_api_key_header_name(prisma_client):
             "headers": [],
         }
     )
-    with pytest.raises(Exception, match="Malformed API Key passed in. Ensure Key has `Bearer ` prefix") as exc_info:
+    with pytest.raises(
+        Exception, match=re.escape("Malformed API Key passed in. Ensure Key has `Bearer ` prefix")
+    ) as exc_info:
         result = await user_api_key_auth(request=request, api_key="Bearer sk-1234")
     e = exc_info.value
     print("failed with error", e)
