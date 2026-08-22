@@ -536,7 +536,6 @@ async def test_high_traffic_cooldowns_all_healthy_deployments():
 
     all_deployment_ids = router.get_model_ids()
 
-    import random
     from collections import defaultdict
 
     # Create a defaultdict to track successes and failures for each model ID
@@ -629,7 +628,6 @@ async def test_high_traffic_cooldowns_one_bad_deployment():
 
     all_deployment_ids = router.get_model_ids()
 
-    import random
     from collections import defaultdict
 
     # Create a defaultdict to track successes and failures for each model ID
@@ -727,7 +725,6 @@ async def test_high_traffic_cooldowns_one_rate_limited_deployment():
 
     all_deployment_ids = router.get_model_ids()
 
-    import random
     from collections import defaultdict
 
     # Create a defaultdict to track successes and failures for each model ID
