@@ -516,6 +516,41 @@ class TestDynamicSql:
         assert _scan(tmp_path, sql)[0].line == 4
 
 
+class TestExplain:
+    def test_explain_analyze_over_an_update_is_flagged(self, tmp_path):
+        sql = 'EXPLAIN ANALYZE UPDATE "Foo" SET "a" = 1;'
+        assert _keywords(tmp_path, sql) == ("UPDATE",)
+        assert _scan(tmp_path, sql)[0].line == 1
+
+    def test_explain_analyze_verbose_over_a_delete_is_flagged(self, tmp_path):
+        assert _keywords(tmp_path, 'EXPLAIN ANALYZE VERBOSE DELETE FROM "Foo";') == ("DELETE",)
+
+    def test_explain_with_a_parenthesised_analyze_is_flagged(self, tmp_path):
+        assert _keywords(tmp_path, 'EXPLAIN (ANALYZE, BUFFERS) UPDATE "Foo" SET "a" = 1;') == ("UPDATE",)
+
+    def test_explain_analyze_over_an_insert_select_is_flagged(self, tmp_path):
+        sql = 'EXPLAIN ANALYZE INSERT INTO "Foo" SELECT "a" FROM "Bar";'
+        assert _keywords(tmp_path, sql) == ("INSERT ... SELECT",)
+
+    def test_explain_analyze_over_a_select_passes(self, tmp_path):
+        assert _keywords(tmp_path, 'EXPLAIN ANALYZE SELECT * FROM "Foo";') == ()
+
+    def test_a_marker_exempts_an_explained_rewrite(self, tmp_path):
+        sql = '-- data-migration-ok: one config row\nEXPLAIN ANALYZE UPDATE "Foo" SET "a" = 1;'
+        assert _keywords(tmp_path, sql) == ()
+
+    def test_an_analyze_of_its_own_passes(self, tmp_path):
+        assert _keywords(tmp_path, 'ANALYZE "Foo";') == ()
+
+    def test_a_vacuum_analyze_passes(self, tmp_path):
+        assert _keywords(tmp_path, 'VACUUM ANALYZE "Foo";') == ()
+
+    def test_an_explained_rewrite_inside_a_block_reports_its_line(self, tmp_path):
+        sql = 'DO $$\nBEGIN\n    EXPLAIN ANALYZE UPDATE "Foo" SET "a" = 1;\nEND $$;'
+        assert _keywords(tmp_path, sql) == ("UPDATE",)
+        assert _scan(tmp_path, sql)[0].line == 3
+
+
 class TestReporting:
     def test_line_number_points_at_the_statement_keyword(self, tmp_path):
         sql = '-- CreateIndex\nCREATE INDEX "i" ON "Foo"("a");\n\nUPDATE "Foo" SET "a" = 1;'
