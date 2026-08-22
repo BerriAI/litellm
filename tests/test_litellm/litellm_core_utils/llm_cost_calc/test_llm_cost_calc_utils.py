@@ -1136,8 +1136,10 @@ def test_generic_cost_per_token_gpt56_cyber(
 def test_generic_cost_per_token_azure_gpt56(
     model, input_cost, output_cost, cache_read_cost
 ):
-    """Azure gpt-5.6 (global + us/eu regional): pricing mirrors the openai
-    family for global deployments and carries the standard 10% regional uplift.
+    """Azure gpt-5.6 (global + us/eu regional): Azure prices this family on its own
+    schedule and carries the standard 10% regional uplift on top. It did not take the
+    promotional cut OpenAI applied to gpt-5.6-sol, so these rates deliberately sit
+    above the openai ones and must not be lowered to match them.
     """
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
