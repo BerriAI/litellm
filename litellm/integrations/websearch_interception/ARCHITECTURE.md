@@ -235,6 +235,11 @@ model_list:
 Clients cannot set it. `max_agentic_loops` is on the proxy's untrusted-field list, so a request body that
 carries it is ignored and one request can never drive an unbounded number of upstream model calls.
 
+Both places are validated at config load, and a value that is not an integer of at least 1 stops the proxy
+from starting rather than surfacing later. The per-deployment one is checked while the model list is read,
+not on `LiteLLM_Params`, because the proxy builds its router with `ignore_invalid_deployments=True` and a
+validator down there would drop the deployment silently instead of refusing to start.
+
 When the ceiling is reached on a non-streaming `/v1/messages` request, the turn ends there and the client gets
 the last response back with the internal `litellm_web_search` tool call removed and `stop_reason: end_turn`.
 The client never declared that tool, so leaving the block in would hand it a tool call it has no way to answer.

@@ -24,6 +24,7 @@ from litellm.integrations.websearch_interception.handler import (
 from litellm.llms.anthropic.experimental_pass_through.messages.fake_stream_iterator import (
     FakeAnthropicMessagesStreamIterator,
 )
+from litellm.litellm_core_utils.agentic_loop_settings import DEFAULT_MAX_AGENTIC_LOOPS
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.types.integrations.custom_logger import (
     AgenticLoopPlan,
@@ -409,7 +410,7 @@ class TestCappedLoopReturnsTerminalResponse:
     def test_rails_cannot_trip_in_the_outermost_frame(self):
         """
         Backs the invariant the test above relies on: at depth 0 the fingerprint set
-        is empty and max_loops is clamped to at least 1, so neither rail can refuse.
+        is empty and the ceiling is at least 1, so neither rail can refuse.
         """
         depth, max_loops, fingerprints = BaseLLMHTTPHandler._get_agentic_loop_settings(kwargs={})
 
@@ -418,10 +419,10 @@ class TestCappedLoopReturnsTerminalResponse:
         assert max_loops >= 1
 
         depth, max_loops, fingerprints = BaseLLMHTTPHandler._get_agentic_loop_settings(
-            kwargs={"max_agentic_loops": 0}
+            kwargs={"max_agentic_loops": 1}
         )
 
-        assert max_loops >= 1
+        assert max_loops == 1
         assert BaseLLMHTTPHandler._check_agentic_loop_safety(
             tool_calls={"tool_calls": [_internal_tool_use_block()]},
             fingerprints=fingerprints,
@@ -568,6 +569,55 @@ def _stream_events(response: dict) -> list[dict]:
             if line.startswith("data: "):
                 events.append(json.loads(line[len("data: ") :]))
     return events
+
+
+class TestBothCeilingKnobsAreValidated:
+    """
+    ``max_agentic_loops`` is settable per deployment and feature-wide, and the
+    per-deployment one wins. Only the feature-wide one used to be checked, so a
+    per-deployment ``0`` was swallowed by an ``or 3`` and read as the default 3,
+    handing the loosest ceiling to whoever asked for the tightest.
+    """
+
+    def test_a_per_deployment_zero_is_rejected_not_read_as_the_default(self):
+        with pytest.raises(ValueError, match="must be at least 1, got 0"):
+            BaseLLMHTTPHandler._get_agentic_loop_settings(kwargs={"max_agentic_loops": 0})
+
+    def test_a_per_deployment_non_integer_names_the_field_it_came_from(self):
+        with pytest.raises(TypeError, match=r"litellm_params\.max_agentic_loops must be an integer"):
+            BaseLLMHTTPHandler._get_agentic_loop_settings(kwargs={"max_agentic_loops": "three"})
+
+    def test_a_per_deployment_true_is_not_read_as_a_ceiling_of_one(self):
+        with pytest.raises(TypeError, match="must be an integer"):
+            BaseLLMHTTPHandler._get_agentic_loop_settings(kwargs={"max_agentic_loops": True})
+
+    def test_an_absent_ceiling_falls_back_to_the_shared_default(self):
+        _, max_loops, _ = BaseLLMHTTPHandler._get_agentic_loop_settings(kwargs={})
+
+        assert max_loops == DEFAULT_MAX_AGENTIC_LOOPS
+
+    def test_an_explicit_none_falls_back_to_the_shared_default(self):
+        _, max_loops, _ = BaseLLMHTTPHandler._get_agentic_loop_settings(kwargs={"max_agentic_loops": None})
+
+        assert max_loops == DEFAULT_MAX_AGENTIC_LOOPS
+
+    def test_a_valid_per_deployment_ceiling_is_passed_through(self):
+        _, max_loops, _ = BaseLLMHTTPHandler._get_agentic_loop_settings(kwargs={"max_agentic_loops": 6})
+
+        assert max_loops == 6
+
+    @pytest.mark.parametrize("rejected", [0, -1, "three", True])
+    def test_the_two_knobs_reject_the_same_values(self, rejected):
+        with pytest.raises((TypeError, ValueError)):
+            WebSearchInterceptionLogger(max_agentic_loops=rejected)
+        with pytest.raises((TypeError, ValueError)):
+            BaseLLMHTTPHandler._get_agentic_loop_settings(kwargs={"max_agentic_loops": rejected})
+
+    def test_each_knob_names_its_own_config_field(self):
+        with pytest.raises(ValueError, match=r"websearch_interception_params\.max_agentic_loops"):
+            WebSearchInterceptionLogger(max_agentic_loops=0)
+        with pytest.raises(ValueError, match=r"litellm_params\.max_agentic_loops"):
+            BaseLLMHTTPHandler._get_agentic_loop_settings(kwargs={"max_agentic_loops": 0})
 
 
 class TestRebuiltStreamIsWellFormed:
