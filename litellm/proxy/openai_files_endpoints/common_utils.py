@@ -25,6 +25,8 @@ if TYPE_CHECKING:
 
 MAX_FILE_LIST_LIMIT: Final = 10000
 
+FILE_LIST_CONTINUATION_CHUNK_SIZE: Final = 500
+
 
 def validate_file_list_limit(limit: int | None) -> None:
     """Reject a ``limit`` outside the range OpenAI documents for GET /v1/files."""
