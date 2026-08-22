@@ -429,6 +429,20 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 masked_entity_count[entity_type] = masked_entity_count.get(entity_type, 0) + 1
         return redacted_text["text"]
 
+    @staticmethod
+    def _is_numbered_token_of_type(token: str, prefix: str) -> bool:
+        """True if ``token`` is a ``<{ENTITY}_{n}>`` token for exactly ``prefix``.
+
+        ``prefix`` is ``<{entity_type}_``. A plain ``startswith(prefix)`` check
+        would falsely match a token whose entity type merely begins with this
+        one (e.g. prefix ``<PHONE_`` matching ``<PHONE_NUMBER_1>``), so the
+        suffix between the prefix and the closing ``>`` must be all digits.
+        """
+        if not token.startswith(prefix) or not token.endswith(">"):
+            return False
+        number = token[len(prefix) : -1]
+        return number.isdigit()
+
     def _finalize_presidio_anonymize_numbered_tokens(
         self,
         text: str,
@@ -454,12 +468,28 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             request_data["metadata"]["pii_tokens"] = {}
         pii_tokens = request_data["metadata"]["pii_tokens"]
 
-        # Assign sequence numbers in forward (left-to-right) order so
-        # that <PERSON_1> is the first entity in the text, etc.
+        def _token_for_value(entity_type: str, original_value: str) -> str:
+            # The pii_tokens dict is shared across every message of the
+            # request, so the same entity value must always resolve to the
+            # same token and the sequence counter must continue across
+            # messages — otherwise two messages both produce <PERSON_1> for
+            # different people and the last write silently wins,
+            # corrupting unmasking (issue #31959).
+            prefix = f"<{entity_type}_"
+            for existing_token, existing_value in pii_tokens.items():
+                if existing_value == original_value and self._is_numbered_token_of_type(existing_token, prefix):
+                    return existing_token
+            new_token = f"{prefix}{len(pii_tokens) + 1}>"
+            pii_tokens[new_token] = original_value
+            return new_token
+
+        # Assign tokens in forward (left-to-right) order so that new
+        # entities are numbered by order of appearance, e.g. <PERSON_1>
+        # is the first entity in the text.
         sorted_forward = sorted(analyze_results, key=lambda x: x["start"])
-        seq_map = {}
-        for idx, ar in enumerate(sorted_forward, start=1):
-            seq_map[(ar["start"], ar["end"])] = idx
+        token_map = {}
+        for ar in sorted_forward:
+            token_map[(ar["start"], ar["end"])] = _token_for_value(ar["entity_type"], text[ar["start"] : ar["end"]])
 
         # Apply replacements in reverse order by start position so
         # that replacing later spans first does not shift earlier
@@ -468,13 +498,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             start = ar["start"]
             end = ar["end"]
             entity_type = ar["entity_type"]
-            replacement = f"<{entity_type}>"
-            seq = seq_map[(start, end)]
-            if replacement.endswith(">"):
-                replacement = f"{replacement[:-1]}_{seq}>"
-            else:
-                replacement = f"{replacement}_{seq}"
-            pii_tokens[replacement] = text[start:end]
+            replacement = token_map[(start, end)]
             new_text = new_text[:start] + replacement + new_text[end:]
             masked_entity_count[entity_type] = masked_entity_count.get(entity_type, 0) + 1
         return new_text
