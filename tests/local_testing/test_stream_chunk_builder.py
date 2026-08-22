@@ -9,11 +9,11 @@ from typing import List
 from litellm.types.utils import StreamingChoices, ChatCompletionAudioResponse
 
 
-def check_non_streaming_response(completion):
-    assert completion.choices[0].message.audio is not None, "Audio response is missing"
-    print("audio", completion.choices[0].message.audio)
+def check_non_streaming_response(response):
+    assert response.choices[0].message.audio is not None, "Audio response is missing"
+    print("audio", response.choices[0].message.audio)
     assert isinstance(
-        completion.choices[0].message.audio, ChatCompletionAudioResponse
+        response.choices[0].message.audio, ChatCompletionAudioResponse
     ), "Invalid audio response type"
     assert len(completion.choices[0].message.audio.data) > 0, "Audio data is empty"
 
@@ -594,7 +594,6 @@ def test_stream_chunk_builder_multiple_tool_calls():
 
 
 def test_stream_chunk_builder_openai_prompt_caching():
-    from openai import OpenAI
     from pydantic import BaseModel
 
     client = OpenAI(
@@ -639,7 +638,6 @@ def test_stream_chunk_builder_openai_prompt_caching():
 @pytest.mark.flaky(retries=5, delay=2)
 def test_stream_chunk_builder_openai_audio_output_usage():
     from pydantic import BaseModel
-    from openai import OpenAI
     from typing import Optional
 
     client = OpenAI(
@@ -720,7 +718,6 @@ def test_stream_chunk_builder_tool_calls_list():
         Function,
         ModelResponseStream,
         Delta,
-        StreamingChoices,
         ChatCompletionDeltaToolCall,
     )
 

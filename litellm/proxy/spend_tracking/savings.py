@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Final, NamedTuple
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
 from litellm.litellm_core_utils.llm_cost_calc.utils import _get_cost_per_unit, generic_cost_per_token
 
 if TYPE_CHECKING:
@@ -437,6 +438,97 @@ def extract_cache_creation_tokens(usage_object: Mapping[str, object] | None) -> 
     return int(written)
 
 
+def _proxy_llm_router() -> "Router | None":
+    """The running proxy's router, or ``None`` outside a proxy (public rates only)."""
+    try:
+        from litellm.proxy.proxy_server import llm_router
+    except Exception:  # noqa: BLE001  # SDK-only usage has no proxy module to import
+        return None
+    return llm_router
+
+
+def _numeric_savings(value: object) -> float | None:
+    """``value`` as a recorded savings figure, or ``None`` when it is not one."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value)
+
+
+def autorouter_savings_for_request(
+    model: str | None,
+    custom_llm_provider: str | None,
+    routing_decision: Mapping[str, object] | None,
+    usage_object: Mapping[str, object] | None,
+    model_id: str | None = None,
+    llm_router: "Callable[[], Router | None] | None" = None,
+    cost_breakdown: Mapping[str, object] | None = None,
+) -> float | None:
+    """Auto-router savings for one request, or ``None`` when the driver is off.
+
+    ``None`` and ``0.0`` are different facts: ``None`` means this request cannot carry a
+    figure at all (no routing decision, no baseline, unusable usage), while ``0.0`` is a
+    real figure for a routed request whose baseline resolved to the served deployment.
+    Never raises: pricing failures inside degrade to zero, and the driver-off cases
+    return ``None``, so this is safe on the logging path where a raise would fail the
+    request's logging.
+    """
+    usage: Final = _usage_from_spend_log(usage_object)
+    if usage is None or not model:
+        return None
+    # The configured `autorouter_savings_baseline_model` wins; otherwise the baseline
+    # the deciding router recorded on its decision; neither means the driver is off.
+    decision: Final = routing_decision if isinstance(routing_decision, Mapping) else {}
+    recorded: Final = decision.get("savings_baseline_model")
+    recorded_id: Final = decision.get("savings_baseline_deployment_id")
+    configured: Final = litellm.autorouter_savings_baseline_model
+    baseline_model: Final = configured or (recorded if isinstance(recorded, str) else None)
+    baseline_id: Final = recorded_id if configured is None and isinstance(recorded_id, str) else None
+    if not decision or not baseline_model:
+        return None
+    router_instance: Final = llm_router() if llm_router else None
+    return compute_autorouter_savings(
+        baseline_model=baseline_model,
+        selected_model=model,
+        selected_provider=custom_llm_provider,
+        usage=usage,
+        # Absent means the router never recorded a shape, which is the conservative
+        # reading: charge the cache write rather than claim a first turn's saving.
+        conversation_continuing=decision.get("conversation_continuing") is not False,
+        selected_info=_effective_model_info(router_instance, model_id, model or ""),
+        baseline_info=_effective_model_info(router_instance, baseline_id, baseline_model or ""),
+        cost_breakdown=cost_breakdown,
+    )
+
+
+def autorouter_savings_for_logging_payload(
+    request_metadata: Mapping[str, object],
+    model: str | None,
+    custom_llm_provider: str | None,
+    model_id: str | None,
+    usage_object: Mapping[str, object] | None,
+    cost_breakdown: Mapping[str, object] | None,
+) -> float | None:
+    """The figure the logging payload records for a request, or ``None`` when none should be.
+
+    Internal sub-calls (the auto-router classifier, shadow eval's shadow and judge legs)
+    are excluded here for the same reason the spend writer zeroes them: they can carry a
+    real routing decision, but they are not requests the caller made, so a figure stamped
+    on them would report savings for traffic no user sent.
+    """
+    if request_metadata.get(INTERNAL_CALL_ORIGIN_METADATA_KEY):
+        return None
+    routing_decision: Final = request_metadata.get("routing_decision")
+    return autorouter_savings_for_request(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        routing_decision=routing_decision if isinstance(routing_decision, Mapping) else None,
+        usage_object=usage_object,
+        model_id=model_id,
+        llm_router=_proxy_llm_router,
+        cost_breakdown=cost_breakdown,
+    )
+
+
 def compute_savings_spend(
     model: str | None,
     custom_llm_provider: str | None,
@@ -446,6 +538,7 @@ def compute_savings_spend(
     model_id: str | None = None,
     llm_router: "Callable[[], Router | None] | None" = None,
     cost_breakdown: Mapping[str, object] | None = None,
+    recorded_autorouter_savings: object = None,
 ) -> SavingsSpend:
     """
     Dollar savings for one request, split by optimization driver.
@@ -488,6 +581,11 @@ def compute_savings_spend(
     hypothetical token delta off flat rate keys, so they are blind to tiered pricing in
     the same way; that is pre-existing behaviour on two shipped drivers rather than
     something introduced here, and moving those numbers is its own change.
+
+    ``recorded_autorouter_savings`` is the figure the logging path stamped on the spend
+    log's metadata, honoured over recomputation so the rollup, the turn table and the
+    per-request record cannot disagree; rows written before the field shipped carry
+    nothing and recompute, mirroring ``_recorded_token_cost``.
     """
     # Deployment rates when the request came through one, public rates otherwise --
     # `_effective_model_info` merges a deployment's configured prices over the built-in
@@ -505,32 +603,24 @@ def compute_savings_spend(
     write_premium: Final = max(cache_creation_input_tokens, 0) * (cache_write_cost - input_cost)
     prompt_caching: Final = read_discount - write_premium
 
-    usage: Final = _usage_from_spend_log(usage_object)
-    if usage is None or not model:
-        return SavingsSpend(compression=compression, prompt_caching=prompt_caching)
-
-    # The configured `autorouter_savings_baseline_model` wins; otherwise the baseline
-    # the deciding router recorded on its decision; neither means the driver is off.
-    decision: Final = routing_decision if isinstance(routing_decision, Mapping) else {}
-    recorded: Final = decision.get("savings_baseline_model")
-    recorded_id: Final = decision.get("savings_baseline_deployment_id")
-    configured: Final = litellm.autorouter_savings_baseline_model
-    baseline_model: Final = configured or (recorded if isinstance(recorded, str) else None)
-    baseline_id: Final = recorded_id if configured is None and isinstance(recorded_id, str) else None
+    # The figure the logging path recorded wins, before the usage gate on purpose: a row
+    # whose usage no longer parses still carries the number computed when it did.
+    recorded_savings: Final = _numeric_savings(recorded_autorouter_savings)
     autorouter: Final = (
-        compute_autorouter_savings(
-            baseline_model=baseline_model,
-            selected_model=model,
-            selected_provider=custom_llm_provider,
-            usage=usage,
-            # Absent means the router never recorded a shape, which is the conservative
-            # reading: charge the cache write rather than claim a first turn's saving.
-            conversation_continuing=decision.get("conversation_continuing") is not False,
-            selected_info=_effective_model_info(router_instance, model_id, model or ""),
-            baseline_info=_effective_model_info(router_instance, baseline_id, baseline_model or ""),
+        recorded_savings
+        if recorded_savings is not None
+        else autorouter_savings_for_request(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            routing_decision=routing_decision,
+            usage_object=usage_object,
+            model_id=model_id,
+            llm_router=llm_router,
             cost_breakdown=cost_breakdown,
         )
-        if decision and baseline_model
-        else 0.0
     )
-    return SavingsSpend(compression=compression, prompt_caching=prompt_caching, autorouter=autorouter)
+    return SavingsSpend(
+        compression=compression,
+        prompt_caching=prompt_caching,
+        autorouter=0.0 if autorouter is None else autorouter,
+    )

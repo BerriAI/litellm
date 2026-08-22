@@ -7,7 +7,6 @@ from litellm._uuid import uuid
 from dotenv import load_dotenv
 
 load_dotenv()
-import os
 import json
 
 sys.path.insert(
@@ -33,7 +32,6 @@ from datetime import timedelta
 messages = [{"role": "user", "content": "who is ishaan Github?  "}]
 # comment
 
-import random
 import string
 
 

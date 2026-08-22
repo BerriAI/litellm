@@ -131,7 +131,6 @@ def test_helicone_removes_otel_span_from_metadata():
     to prevent JSON serialization errors.
     """
     from litellm.integrations.helicone import HeliconeLogger
-    from unittest.mock import MagicMock
 
     # Create a mock span object (similar to what OpenTelemetry would create)
     mock_span = MagicMock()
