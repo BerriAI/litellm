@@ -8,7 +8,6 @@ import pytest
 from dotenv import load_dotenv
 
 load_dotenv()
-import os
 
 from litellm.proxy._types import LiteLLM_BudgetTableFull
 

@@ -17,21 +17,6 @@ from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_tran
 )
 
 
-@pytest.fixture
-def local_model_cost_map(monkeypatch):
-    """Force the bundled backup cost map so Opus 4.8 adaptive detection (driven
-    by the ``supports_adaptive_thinking`` flag) doesn't depend on the
-    network-fetched ``main`` copy, which lacks the flag until this branch merges."""
-    original = litellm.model_cost
-    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    litellm.model_cost = litellm.get_model_cost_map(url="")
-    litellm.get_model_info.cache_clear()
-    try:
-        yield
-    finally:
-        litellm.model_cost = original
-        litellm.get_model_info.cache_clear()
-
 
 @pytest.mark.parametrize(
     "reasoning_effort,expected_effort",
@@ -424,3 +409,33 @@ def test_legacy_thinking_left_untouched_on_non_adaptive_model():
 
     assert result.get("thinking") == {"type": "enabled", "budget_tokens": 31999}
     assert "output_config" not in result
+
+
+@pytest.mark.parametrize(
+    "model, expected_dropped",
+    [
+        ("claude-fable-5", True),
+        ("claude-opus-5", False),
+        ("claude-sonnet-4-5", False),
+    ],
+)
+def test_disabled_thinking_omitted_for_always_on_models_messages(
+    local_model_cost_map, model, expected_dropped
+):
+    """/v1/messages: ``thinking={"type": "disabled"}`` is omitted for always-on-thinking
+    models and forwarded verbatim for models that accept it."""
+    config = AnthropicMessagesConfig()
+    optional_params = {"max_tokens": 64, "thinking": {"type": "disabled"}}
+
+    result = config.transform_anthropic_messages_request(
+        model=model,
+        messages=[{"role": "user", "content": "Hello"}],
+        anthropic_messages_optional_request_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    if expected_dropped:
+        assert "thinking" not in result
+    else:
+        assert result["thinking"] == {"type": "disabled"}
