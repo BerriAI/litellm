@@ -90,9 +90,13 @@ from litellm.proxy.auth.auth_utils import (
     enforce_output_token_estimates_are_admin_only,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
 from litellm.proxy.common_utils.callback_utils import encrypt_callback_vars
 from litellm.proxy.common_utils.json_merge_patch import apply_json_merge_patch
-from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.proxy.common_utils.user_api_key_cache import (
+    UserApiKeyCache,
+    team_model_aliases_cache_key,
+)
 from litellm.proxy.management_endpoints.common_daily_activity import (
     get_daily_activity_aggregated,
 )
@@ -1647,6 +1651,7 @@ async def _update_model_table(
     data: UpdateTeamRequest,
     model_id: int | None,
     prisma_client: PrismaClient,
+    user_api_key_cache: UserApiKeyCache,
     user_api_key_dict: UserAPIKeyAuth,
     litellm_proxy_admin_name: str,
 ) -> int | None:
@@ -1673,6 +1678,11 @@ async def _update_model_table(
             )
 
         _model_id = model_dict.id
+        if model_id is not None:
+            await evict_and_broadcast(
+                (team_model_aliases_cache_key(model_id),),
+                user_api_key_cache,
+            )
 
     return _model_id
 
@@ -2222,6 +2232,7 @@ async def update_team(
                 data=data,
                 model_id=existing_team_row.model_id,
                 prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
                 user_api_key_dict=user_api_key_dict,
                 litellm_proxy_admin_name=litellm_proxy_admin_name,
             )

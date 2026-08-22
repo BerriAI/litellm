@@ -18,7 +18,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, cast
 
 from fastapi import HTTPException, Request, status
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -86,6 +86,7 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     object_permission_cache_key,
     tag_cache_key,
     tag_registry_cache_key,
+    team_model_aliases_cache_key,
 )
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.guardrails.tool_name_extraction import (
@@ -105,6 +106,7 @@ from litellm.repositories.table_repositories import (
     EndUserRepository,
     JWTKeyMappingRepository,
     ManagedVectorStoresRepository,
+    ModelTableRepository,
     TagRepository,
     TeamMembershipRepository,
 )
@@ -126,6 +128,8 @@ if TYPE_CHECKING:
 else:
     Span = Any
 
+_TEAM_MODEL_ALIASES_ADAPTER: Final = TypeAdapter(dict[str, str])
+
 
 class _PrismaDictableRow(Protocol):
     def dict(self) -> Mapping[str, object]: ...
@@ -137,6 +141,10 @@ class _PrismaJWTKeyMappingRow(Protocol):
 
 class _PrismaModelDumpRow(Protocol):
     def model_dump(self) -> Mapping[str, object]: ...
+
+
+class _PrismaModelAliasesRow(Protocol):
+    model_aliases: object
 
 
 class _PrismaTeamRow(Protocol):
@@ -198,6 +206,12 @@ def _jwt_key_mapping_table(
 
 
 def _model_dump_table(repo: _PrismaTableHolder[_PrismaModelDumpRow]) -> _PrismaAuthTable[_PrismaModelDumpRow]:
+    return repo.table
+
+
+def _model_aliases_table(
+    repo: _PrismaTableHolder[_PrismaModelAliasesRow],
+) -> _PrismaAuthTable[_PrismaModelAliasesRow]:
     return repo.table
 
 
@@ -2537,6 +2551,53 @@ async def _get_team_db_check(
 
 async def _get_team_object_from_db(team_id: str, prisma_client: PrismaClient) -> "_PrismaTeamRow | None":
     return await _team_table(TeamRepository(prisma_client)).find_unique(where={"team_id": team_id})
+
+
+async def get_team_model_aliases(
+    model_id: int,
+    prisma_client: PrismaClient,
+    user_api_key_cache: UserApiKeyCache,
+) -> dict[str, str] | None:  # mutable-ok: UserAPIKeyAuth.team_model_aliases requires a dict
+    cache_key: Final = team_model_aliases_cache_key(model_id)
+    cached: Final[object] = await user_api_key_cache.async_get_cache(  # pyright: ignore[reportAny] # cache API is untyped
+        cache_key
+    )
+    if cached is not None:
+        return _TEAM_MODEL_ALIASES_ADAPTER.validate_python(cached) or None
+
+    row: Final = await _model_aliases_table(ModelTableRepository(prisma_client)).find_unique(
+        where={"id": model_id}  # mutable-ok: prisma json-serializes query args, and a mappingproxy is not serializable
+    )
+    raw_aliases: Final = row.model_aliases if row is not None else None
+    aliases: Final = (
+        {}  # mutable-ok: the empty case is cached and returned under the same dict contract
+        if raw_aliases is None
+        else (
+            _TEAM_MODEL_ALIASES_ADAPTER.validate_json(raw_aliases)
+            if isinstance(raw_aliases, (str, bytes, bytearray))
+            else _TEAM_MODEL_ALIASES_ADAPTER.validate_python(raw_aliases)
+        )
+    )
+    await user_api_key_cache.async_set_cache(  # pyright: ignore[reportUnknownMemberType] # cache API has untyped kwargs
+        key=cache_key,
+        value=aliases,
+        ttl=60,
+    )
+    return aliases or None
+
+
+async def get_team_model_aliases_for_team(
+    team_object: LiteLLM_TeamTable | None,
+    prisma_client: PrismaClient | None,
+    user_api_key_cache: UserApiKeyCache,
+) -> dict[str, str] | None:  # mutable-ok: delegates UserAPIKeyAuth.team_model_aliases dict contract
+    if team_object is None or team_object.model_id is None or prisma_client is None:
+        return None
+    return await get_team_model_aliases(
+        model_id=team_object.model_id,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+    )
 
 
 async def _get_team_object_from_user_api_key_cache(

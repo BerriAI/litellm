@@ -69,6 +69,7 @@ from .auth_checks import (
     get_role_based_models,
     get_role_based_routes,
     get_team_membership,
+    get_team_model_aliases_for_team,
     get_team_object,
     get_team_object_by_alias,
     get_user_object,
@@ -1553,7 +1554,11 @@ class JWTAuthManager:
                             model=requested_model,
                             team_object=team_object,
                             llm_router=llm_router,
-                            team_model_aliases=None,
+                            team_model_aliases=await get_team_model_aliases_for_team(
+                                team_object=team_object,
+                                prisma_client=prisma_client,
+                                user_api_key_cache=user_api_key_cache,
+                            ),
                         )
                     ):
                         is_allowed = allowed_routes_check(
@@ -2090,7 +2095,11 @@ class JWTAuthManager:
                         model=requested_model,
                         team_object=team_object,
                         llm_router=llm_router,
-                        team_model_aliases=None,
+                        team_model_aliases=await get_team_model_aliases_for_team(
+                            team_object=team_object,
+                            prisma_client=prisma_client,
+                            user_api_key_cache=user_api_key_cache,
+                        ),
                     )
                 except ProxyException:
                     continue

@@ -51,6 +51,8 @@ from litellm.proxy.auth.auth_checks import (
     _virtual_key_max_budget_check,
     _virtual_key_soft_budget_check,
     get_key_object,
+    get_team_model_aliases,
+    get_team_model_aliases_for_team,
     get_user_object,
     vector_store_access_check,
 )
@@ -1317,6 +1319,102 @@ async def test_get_team_db_check_does_not_call_new_team_if_exists(
 
     # Verify that `new_team` was NEVER called, because the team was found.
     mock_new_team.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_team_model_aliases_for_team_guards_incomplete_context_and_delegates():
+    cache = UserApiKeyCache()
+    prisma_client = MagicMock()
+    team_without_model_id = LiteLLM_TeamTable(team_id="plain-team")
+    team_with_model_id = LiteLLM_TeamTable(team_id="alias-team", model_id=7)
+
+    with patch(
+        "litellm.proxy.auth.auth_checks.get_team_model_aliases",
+        new_callable=AsyncMock,
+        return_value={"requested": "target"},
+    ) as mock_loader:
+        for team_object, client in (
+            (None, prisma_client),
+            (team_without_model_id, prisma_client),
+            (team_with_model_id, None),
+        ):
+            assert (
+                await get_team_model_aliases_for_team(
+                    team_object=team_object,
+                    prisma_client=client,
+                    user_api_key_cache=cache,
+                )
+                is None
+            )
+
+        result = await get_team_model_aliases_for_team(
+            team_object=team_with_model_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=cache,
+        )
+
+    assert result == {"requested": "target"}
+    mock_loader.assert_awaited_once_with(
+        model_id=7,
+        prisma_client=prisma_client,
+        user_api_key_cache=cache,
+    )
+
+
+@pytest.mark.asyncio
+async def test_get_team_model_aliases_passes_json_serializable_query_args():
+    """Prisma json-serializes query args, so a non-dict mapping makes every JWT request fail auth."""
+
+    class _JsonSerializingModelTable:
+        def __init__(self):
+            self.serialized_where = None
+
+        async def find_unique(self, *, where, include=None):
+            self.serialized_where = json.dumps(where)
+            return SimpleNamespace(model_aliases={"claude-opus-4-8": "anthropic-haiku-4-5"})
+
+    model_table = _JsonSerializingModelTable()
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_modeltable = model_table
+
+    aliases = await get_team_model_aliases(
+        model_id=11,
+        prisma_client=prisma_client,
+        user_api_key_cache=UserApiKeyCache(),
+    )
+
+    assert aliases == {"claude-opus-4-8": "anthropic-haiku-4-5"}
+    assert json.loads(model_table.serialized_where) == {"id": 11}
+
+
+@pytest.mark.asyncio
+async def test_get_team_model_aliases_caches_the_absence_of_aliases():
+    """A team without aliases must not add a db read to every authenticated request."""
+
+    class _CountingModelTable:
+        def __init__(self):
+            self.calls = 0
+
+        async def find_unique(self, *, where, include=None):
+            self.calls += 1
+            return None
+
+    model_table = _CountingModelTable()
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_modeltable = model_table
+    cache = UserApiKeyCache()
+
+    for _ in range(3):
+        assert (
+            await get_team_model_aliases(
+                model_id=12,
+                prisma_client=prisma_client,
+                user_api_key_cache=cache,
+            )
+            is None
+        )
+
+    assert model_table.calls == 1
 
 
 # Vector Store Auth Check Tests

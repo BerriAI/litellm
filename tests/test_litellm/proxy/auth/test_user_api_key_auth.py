@@ -5,6 +5,7 @@ import sys
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 from types import SimpleNamespace
+from typing import cast
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 sys.path.insert(
@@ -30,7 +31,11 @@ from litellm.proxy._types import (
     JWTRoutingOverride,
 )
 from litellm.proxy.auth.handle_jwt import JWTHandler
-from litellm.proxy.auth.auth_checks import get_key_object, _cache_key_object
+from litellm.proxy.auth.auth_checks import (
+    _cache_key_object,
+    get_key_object,
+    get_team_model_aliases,
+)
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.auth.user_api_key_auth import (
     _check_key_model_budget_with_fallback,
@@ -1741,18 +1746,32 @@ def test_proxy_admin_jwt_auth_handles_no_team_object():
     assert result.end_user_id is None
 
 
+@pytest.mark.parametrize(
+    ("model_id", "expected_aliases"),
+    [
+        pytest.param(None, None, id="without-team"),
+        pytest.param(1, {"claude-opus-5": "FW-Kimi-K3"}, id="with-team-aliases"),
+    ],
+)
 @pytest.mark.asyncio
-async def test_standard_jwt_auth_propagates_user_email():
-    """
-    Standard (non-mapped) JWT auth must copy user_email from the resolved
-    LiteLLM_UserTable onto the returned UserAPIKeyAuth so spend logs attribute
-    user_api_key_user_email. Regression: this branch built
-    UserAPIKeyAuth(api_key=None, ...) with user_id but never user_email, so
-    the email was silently dropped even though the DB user row had it.
-    """
+async def test_standard_jwt_auth_propagates_user_identity_and_team_model_aliases(
+    model_id: int | None,
+    expected_aliases: dict[str, str] | None,
+):
+    from litellm.models.team import LiteLLM_TeamTable
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.utils import PrismaClient
+
     jwt_token = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1c2VyMSJ9.signature"
     general_settings = {"enable_jwt_auth": True}
-    user_api_key_cache = DualCache()
+    user_api_key_cache = UserApiKeyCache()
+    find_model_table = AsyncMock(return_value=SimpleNamespace(model_aliases='{"claude-opus-5": "FW-Kimi-K3"}'))
+    prisma_client = cast(
+        PrismaClient,
+        SimpleNamespace(
+            db=SimpleNamespace(litellm_modeltable=SimpleNamespace(find_unique=find_model_table)),
+        ),
+    )
     jwt_handler = MagicMock()
     jwt_handler.is_jwt.return_value = True
     jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth()
@@ -1762,14 +1781,22 @@ async def test_standard_jwt_auth_propagates_user_email():
         user_email="human@example.com",
         user_role="internal_user",
     )
+    team_object = (
+        LiteLLM_TeamTable(
+            team_id="jwt-team",
+            model_id=model_id,
+        )
+        if model_id is not None
+        else None
+    )
     mock_jwt_result = {
         "is_proxy_admin": False,
-        "team_object": None,
+        "team_object": team_object,
         "user_object": user_object,
         "end_user_object": None,
         "org_object": None,
         "token": jwt_token,
-        "team_id": None,
+        "team_id": team_object.team_id if team_object is not None else None,
         "user_id": "jwt-human-user",
         "user_email": "human@example.com",
         "end_user_id": None,
@@ -1789,7 +1816,7 @@ async def test_standard_jwt_auth_propagates_user_email():
         patch("litellm.proxy.proxy_server.general_settings", general_settings),
         patch("litellm.proxy.proxy_server.premium_user", True),
         patch("litellm.proxy.proxy_server.master_key", "sk-master"),
-        patch("litellm.proxy.proxy_server.prisma_client", None),
+        patch("litellm.proxy.proxy_server.prisma_client", prisma_client),
         patch("litellm.proxy.proxy_server.user_api_key_cache", user_api_key_cache),
         patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
         patch("litellm.proxy.proxy_server.jwt_handler", jwt_handler),
@@ -1812,6 +1839,41 @@ async def test_standard_jwt_auth_propagates_user_email():
     assert result.user_id == "jwt-human-user"
     assert result.user_email == "human@example.com"
     assert result.api_key is None
+    assert cast(dict[str, str] | None, result.team_model_aliases) == expected_aliases
+    if model_id is None:
+        find_model_table.assert_not_awaited()
+        return
+
+    assert await get_team_model_aliases(
+        model_id=model_id,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+    ) == {"claude-opus-5": "FW-Kimi-K3"}
+    find_model_table.assert_awaited_once_with(where={"id": 1})
+
+
+@pytest.mark.asyncio
+async def test_get_team_model_aliases_returns_none_when_model_row_missing():
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.utils import PrismaClient
+
+    find_model_table = AsyncMock(return_value=None)
+    prisma_client = cast(
+        PrismaClient,
+        SimpleNamespace(
+            db=SimpleNamespace(litellm_modeltable=SimpleNamespace(find_unique=find_model_table)),
+        ),
+    )
+
+    assert (
+        await get_team_model_aliases(
+            model_id=99,
+            prisma_client=prisma_client,
+            user_api_key_cache=UserApiKeyCache(),
+        )
+        is None
+    )
+    find_model_table.assert_awaited_once_with(where={"id": 99})
 
 
 @pytest.mark.asyncio
