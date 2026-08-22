@@ -1066,6 +1066,26 @@ async def _resolve_jwt_to_virtual_key(
     return None
 
 
+CUSTOM_AUTH_REQUEST_STATE_KEY = "litellm_authenticated_via_custom_auth"
+
+
+def _mark_authenticated_via_custom_auth(request: Request) -> None:
+    setattr(request.state, CUSTOM_AUTH_REQUEST_STATE_KEY, True)
+
+
+def was_authenticated_via_custom_auth(request: Request) -> bool:
+    """True only when ``user_custom_auth`` itself produced the identity for
+    *this* request.
+
+    Configuring ``custom_auth`` does not mean every request is authenticated by
+    it: the enterprise wrapper's ``auto``/``off`` modes fall back to LiteLLM's
+    own key auth, and a custom auth function may return an api key string that
+    is then resolved against the DB. Those requests carry a normal virtual key
+    and must still be authorized.
+    """
+    return bool(getattr(getattr(request, "state", None), CUSTOM_AUTH_REQUEST_STATE_KEY, False))
+
+
 def _ensure_parent_otel_span_on_request_state(request: Request) -> None:
     """Idempotently create the OTEL SERVER span and stash it on
     ``request.state.parent_otel_span``. Safe to call multiple times.
@@ -1223,6 +1243,7 @@ async def _user_api_key_auth_builder(
                 )
             if response is not None and isinstance(response, UserAPIKeyAuth):
                 validated = UserAPIKeyAuth.model_validate(response)
+                _mark_authenticated_via_custom_auth(request)
                 if getattr(litellm, "enable_post_custom_auth_checks", False):
                     validated = await _run_post_custom_auth_checks(
                         valid_token=validated,
@@ -1238,6 +1259,7 @@ async def _user_api_key_auth_builder(
         elif user_custom_auth is not None:
             response = await user_custom_auth(request=request, api_key=api_key)
             validated = UserAPIKeyAuth.model_validate(response)
+            _mark_authenticated_via_custom_auth(request)
             if getattr(litellm, "enable_post_custom_auth_checks", False):
                 validated = await _run_post_custom_auth_checks(
                     valid_token=validated,
@@ -2275,10 +2297,12 @@ async def _run_centralized_common_checks(
     model-access, budgets, guardrails, org, and vector-store checks.
 
     Invariants:
-    - ``user_custom_auth`` with ``custom_auth_run_common_checks`` unset
-      skips the gate — matches the existing custom-auth RPS guarantee.
-      Custom-auth deployments don't use OAuth2 / DB-fallback paths, so
-      the skip does not re-open any bypass.
+    - A request whose identity came from ``user_custom_auth`` skips the
+      gate when ``custom_auth_run_common_checks`` is unset — matches the
+      existing custom-auth RPS guarantee. Requests that merely ran on a
+      deployment where custom auth is *configured* but were authenticated
+      by LiteLLM's own key / JWT / OAuth2 path (enterprise ``auto``/``off``
+      modes, custom auth returning an api key string) are still gated.
     - ``PROXY_ADMIN`` tokens still run through ``common_checks`` so
       team-blocked / team-budget / end-user-budget / tag-budget /
       vector-store / tool-allowlist enforcement applies to admin keys
@@ -2293,7 +2317,6 @@ async def _run_centralized_common_checks(
         prisma_client,
         proxy_logging_obj,
         user_api_key_cache,
-        user_custom_auth,
     )
 
     # Public routes (e.g. /health/liveness) are exempt from
@@ -2328,7 +2351,7 @@ async def _run_centralized_common_checks(
     ):
         return
 
-    if user_custom_auth is not None and not general_settings.get("custom_auth_run_common_checks", False):
+    if was_authenticated_via_custom_auth(request) and not general_settings.get("custom_auth_run_common_checks", False):
         return
 
     parent_otel_span: Final = user_api_key_auth_obj.parent_otel_span
