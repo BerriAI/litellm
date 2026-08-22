@@ -5222,6 +5222,10 @@ async def list_keys(
         use_substring_matching = substring_matching and is_proxy_admin
 
         # Admins may omit user_id to list all keys; non-admins are scoped to self.
+        # Capture whether user_id was an explicit filter BEFORE applying the
+        # self-default below, so an explicit ?user_id= narrows results (issue
+        # #32062) while the implicit self-scope does not filter out team keys.
+        user_id_provided_as_filter = user_id is not None
         if not user_id and not is_proxy_admin:
             user_id = user_api_key_dict.user_id
 
@@ -5246,6 +5250,7 @@ async def list_keys(
             access_group_id=access_group_id,
             agent_id=agent_id,
             use_substring_matching=use_substring_matching,
+            apply_user_id_filter=user_id_provided_as_filter,
         )
 
         verbose_proxy_logger.debug("Successfully prepared response")
@@ -5467,6 +5472,7 @@ def _build_key_filter_conditions(
     access_group_id: Optional[str] = None,
     agent_id: Optional[str] = None,
     use_substring_matching: bool = False,
+    apply_user_id_filter: bool = False,
 ) -> Dict[str, Union[str, Dict[str, Any], List[Dict[str, Any]]]]:
     """Build filter conditions for key listing.
 
@@ -5540,9 +5546,17 @@ def _build_key_filter_conditions(
             # direct _list_key_helper callers like Prometheus)
             or_conditions.append({"created_by": user_id})
 
+    # Track whether an unfiltered team-visibility OR-branch is added below.
+    # Explicit user_id/key_alias filters are only unioned away (issue #32062)
+    # when such a branch exists; in the single-branch (own keys) case the
+    # filters are already applied inside that branch and get flattened into the
+    # top-level where dict, so we must not re-wrap them there.
+    team_visibility_branch_added = False
+
     # Add condition for admin team keys (admins see ALL team keys)
     if admin_team_ids:
         or_conditions.append({"team_id": {"in": admin_team_ids}})
+        team_visibility_branch_added = True
 
     # Add condition for member team service accounts (members only see keys with user_id=NULL)
     if member_team_ids:
@@ -5557,6 +5571,7 @@ def _build_key_filter_conditions(
                     ]
                 }
             )
+            team_visibility_branch_added = True
 
     # Combine conditions with OR if we have multiple conditions
     if len(or_conditions) > 1:
@@ -5574,6 +5589,39 @@ def _build_key_filter_conditions(
         where = {"AND": [where, {"access_group_ids": {"hasSome": [access_group_id]}}]}
     if agent_id and isinstance(agent_id, str):
         where = {"AND": [where, {"agent_id": agent_id}]}
+
+    # When an unfiltered team-visibility OR-branch is present, explicit
+    # user_id/key_alias query params would otherwise be unioned away and return
+    # all team keys (issue #32062). Re-apply them as global AND filters so they
+    # narrow across every visibility branch, exactly like team_id/project_id do
+    # above. In the single-branch (own keys) case the filters are already applied
+    # inside that branch, so we leave the flattened structure untouched.
+    #
+    # key_alias is always an explicit filter. user_id also doubles as the
+    # implicit self-scope for non-admins, so it is only narrowed here when the
+    # caller explicitly passed it (apply_user_id_filter); otherwise a team admin
+    # who omits user_id would be wrongly restricted to their own keys.
+    if team_visibility_branch_added:
+        if key_alias and isinstance(key_alias, str):
+            if use_substring_matching:
+                where = {
+                    "AND": [
+                        where,
+                        {"key_alias": {"contains": key_alias, "mode": "insensitive"}},
+                    ]
+                }
+            else:
+                where = {"AND": [where, {"key_alias": key_alias}]}
+        if apply_user_id_filter and user_id and isinstance(user_id, str):
+            if use_substring_matching:
+                where = {
+                    "AND": [
+                        where,
+                        {"user_id": {"contains": user_id, "mode": "insensitive"}},
+                    ]
+                }
+            else:
+                where = {"AND": [where, {"user_id": user_id}]}
 
     verbose_proxy_logger.debug(f"Filter conditions: {where}")
     return where
@@ -5603,6 +5651,7 @@ async def _list_key_helper(
     access_group_id: Optional[str] = None,
     agent_id: Optional[str] = None,
     use_substring_matching: bool = False,
+    apply_user_id_filter: bool = False,
 ) -> KeyListResponseObject:
     """
     Helper function to list keys
@@ -5640,6 +5689,7 @@ async def _list_key_helper(
         access_group_id=access_group_id,
         agent_id=agent_id,
         use_substring_matching=use_substring_matching,
+        apply_user_id_filter=apply_user_id_filter,
     )
 
     # Calculate skip for pagination
