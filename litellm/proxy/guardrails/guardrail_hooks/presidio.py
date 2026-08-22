@@ -22,6 +22,7 @@ from typing_extensions import NotRequired, ReadOnly
 import litellm
 from litellm import get_secret
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.logging_utils import truncate_base64_in_messages
 from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
@@ -846,6 +847,10 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
 
             verbose_proxy_logger.debug("Presidio PII Masking: Redacted pii message: %s", messages)
             kwargs["messages"] = messages
+
+            standard_logging_object: Final = kwargs.get("standard_logging_object")
+            if isinstance(standard_logging_object, dict) and standard_logging_object.get("messages") is not None:
+                standard_logging_object["messages"] = truncate_base64_in_messages(messages)
 
         return kwargs, result
 

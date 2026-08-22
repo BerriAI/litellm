@@ -586,6 +586,54 @@ async def test_logging_hook_multiple_content_items(presidio_guardrail):
 
 
 @pytest.mark.asyncio
+async def test_logging_hook_propagates_masked_messages_into_standard_logging_object(
+    presidio_guardrail,
+):
+    """
+    The standard_logging_object is built before async_logging_hook runs and holds
+    a separate copy of the messages. Downstream logging callbacks (Langfuse, Datadog,
+    etc.) read from standard_logging_object["messages"], so the hook must propagate the
+    masked messages there too. Regression test for issue #35951.
+    """
+    test_kwargs = {
+        "messages": [
+            {
+                "role": "user",
+                "content": "My credit card is 4111-1111-1111-1111 and email test@example.com",
+            }
+        ],
+        "model": "gpt-4",
+        "standard_logging_object": {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "My credit card is 4111-1111-1111-1111 and email test@example.com",
+                }
+            ],
+        },
+    }
+
+    async def mock_check_pii(text, output_parse_pii, presidio_config, request_data):
+        return text.replace("4111-1111-1111-1111", "[CREDIT_CARD]").replace(
+            "test@example.com", "[EMAIL]"
+        )
+
+    presidio_guardrail.check_pii = mock_check_pii
+
+    result_kwargs, _ = await presidio_guardrail.async_logging_hook(
+        kwargs=test_kwargs,
+        result={"choices": [{"message": {"content": "Response"}}]},
+        call_type="completion",
+    )
+
+    slo_content = result_kwargs["standard_logging_object"]["messages"][0]["content"]
+    assert "[CREDIT_CARD]" in slo_content
+    assert "[EMAIL]" in slo_content
+    assert "4111-1111-1111-1111" not in slo_content
+    assert "test@example.com" not in slo_content
+
+
+@pytest.mark.asyncio
 async def test_logging_only_does_not_mask_pre_call_request(
     mock_user_api_key, mock_cache
 ):
