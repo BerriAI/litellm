@@ -14,7 +14,6 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 
-from unittest.mock import MagicMock, patch
 
 import litellm
 from litellm.passthrough.main import allm_passthrough_route, llm_passthrough_route
@@ -43,9 +42,10 @@ def test_llm_passthrough_route():
             client=client,
         )
 
-        mock_post.call_args.kwargs[
-            "request"
-        ].url == "http://localhost:8090/v1/chat/completions"
+        assert (
+            mock_post.call_args.kwargs["request"].url
+            == "http://localhost:8090/v1/chat/completions"
+        )
 
         assert response.status_code == 200
         assert response.json == {"message": "Hello, world!"}
@@ -720,9 +720,12 @@ async def test_allm_passthrough_route_429_streaming_raises():
 
         # result is an async generator — consuming it must raise, not silently yield error bytes
         chunks = []
-        with pytest.raises(httpx.HTTPStatusError) as exc_info:
+        async def _drain():
             async for chunk in result:  # type: ignore[union-attr]
                 chunks.append(chunk)
+
+        with pytest.raises(httpx.HTTPStatusError) as exc_info:
+            await _drain()
 
     assert exc_info.value.response.status_code == 429
     assert len(chunks) == 0, "No chunks should be yielded before the 429 raises"

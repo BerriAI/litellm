@@ -150,7 +150,6 @@ def test_router_timeout_with_retries_anthropic_model(num_retries, expected_call_
     If request hits custom timeout, ensure it's retried.
     """
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
-    import time
 
     litellm.num_retries = num_retries
     litellm.request_timeout = 0.000001

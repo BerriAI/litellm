@@ -48,7 +48,6 @@ def setup_and_teardown():
         0, os.path.abspath("../..")
     )  # Adds the project directory to the system path
 
-    import litellm
 
     from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 

@@ -288,7 +288,7 @@ def test_capability_info_backfills_requested_provider(restore_generalizations):
 def test_routing_only_match_does_not_resolve_model_info(restore_generalizations):
     restore_generalizations([{"name": "route", "pattern": r"^ceeco-", "model_info": {"litellm_provider": "openai"}}])
     litellm.get_model_info.cache_clear()
-    with pytest.raises(Exception):
+    with pytest.raises(Exception, match="This model isn't mapped yet"):
         litellm.get_model_info("ceeco-fast-1", custom_llm_provider="openai")
 
 
@@ -364,6 +364,17 @@ def test_shipped_rules_stack_adaptive_and_mid_conversation_flags(shipped_cost_ma
     assert info["supports_adaptive_thinking"] is True
     assert info["supports_mid_conversation_system"] is True
     assert info["supports_function_calling"] is True
+
+
+def test_shipped_rules_flag_unmapped_fable_as_always_on_thinking(shipped_cost_map):
+    """An unmapped Fable/Mythos id picks up ``thinking_always_on`` from the
+    claude-always-on-thinking rule, while other unmapped Claudes stay unflagged."""
+    model = "claude-fable-5-1"
+    assert model not in litellm.model_cost
+    info = litellm.get_model_info(model, custom_llm_provider="anthropic")
+    assert info["thinking_always_on"] is True
+    other = litellm.get_model_info("claude-opus-4-9", custom_llm_provider="anthropic")
+    assert other.get("thinking_always_on") is None
 
 
 @pytest.mark.parametrize(
@@ -470,7 +481,7 @@ def test_shipped_adaptive_rule_requires_claude_prefix(shipped_cost_map):
     model = "openai/team-sonnet-5-1-alias"
     assert model not in litellm.model_cost
     assert match_capability_generalizations("team-sonnet-5-1-alias") is None
-    with pytest.raises(Exception):
+    with pytest.raises(Exception, match="This model isn't mapped yet"):
         litellm.get_model_info(model)
 
 
@@ -496,7 +507,7 @@ def test_shipped_rules_lose_to_exact_entries_across_cost_ladder_variants(shipped
     from litellm.types.utils import ModelResponse, Usage
 
     assert "claude-haiku-4-5-20251001" in litellm.model_cost
-    with pytest.raises(Exception):
+    with pytest.raises(Exception, match="This model isn't mapped yet"):
         litellm.get_model_info("claude-haiku-4-5-20251001", custom_llm_provider="bedrock")
 
     entry = litellm.model_cost["us.anthropic.claude-haiku-4-5-20251001-v1:0"]

@@ -197,7 +197,7 @@ def test_enqueue_tool_registry_upsert_reads_every_choice():
 
     db_writer._enqueue_tool_registry_upsert(kwargs={}, completion_response=response)
 
-    enqueued = [call.args[0]["tool_name"] for call in db_writer.tool_discovery_queue.add_update.call_args_list]
+    enqueued = [c.args[0]["tool_name"] for c in db_writer.tool_discovery_queue.add_update.call_args_list]
     assert enqueued == ["tool_alpha", "tool_beta"]
 
 

@@ -1,5 +1,4 @@
 import React from "react";
-import { Typography } from "antd";
 import { Button } from "@/components/ui/button";
 import { CopyToClipboard } from "react-copy-to-clipboard";
 import { toast } from "@/lib/toast";
@@ -59,7 +58,6 @@ export default function OnboardingModal({
   invitationLinkData,
   modalType = "invitation",
 }: OnboardingProps) {
-  const { Paragraph } = Typography;
   const handleInvitationCancel = () => {
     setIsInvitationLinkModalVisible(false);
   };
@@ -78,11 +76,11 @@ export default function OnboardingModal({
         <DialogHeader>
           <DialogTitle>{modalType === "invitation" ? "Invitation Link" : "Reset Password Link"}</DialogTitle>
         </DialogHeader>
-        <Paragraph>
+        <p className="text-sm text-foreground">
           {modalType === "invitation"
             ? "Copy and send the generated link to onboard this user to the proxy."
             : "Copy and send the generated link to the user to reset their password."}
-        </Paragraph>
+        </p>
         <div className="flex justify-between pt-5 pb-2">
           <p className="text-base">User ID</p>
           <p className="text-sm">{invitationLinkData?.user_id}</p>

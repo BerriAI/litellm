@@ -46,9 +46,16 @@ from litellm.proxy.common_utils.proxy_rate_limit_error import (
     ProxyRateLimitError,
     map_v3_rate_limit_type,
 )
+from litellm.proxy.hooks.batch_enqueued_tokens import (
+    BatchEnqueuedTokenOverLimit,
+    BatchEnqueuedTokenReservation,
+    BatchEnqueuedTokenScope,
+    resolve_batch_enqueued_token_scopes,
+)
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     PROJECT_ITPM_DESCRIPTOR_KEY,
     PROJECT_OTPM_DESCRIPTOR_KEY,
+    get_or_create_request_stash,
 )
 from litellm.proxy.hooks.rate_limiter_utils import resolve_llm_provider_for_rate_limit
 
@@ -291,6 +298,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         self,
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
+        has_enqueued_scopes: bool = False,
     ) -> tuple[bool, list["RateLimitDescriptor"] | None]:
         """
         Skip downloading batch input files when the operator disabled batch
@@ -343,8 +351,10 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             user_api_key_dict=user_api_key_dict,
             data=data,
         )
-        if not self._has_applicable_batch_rate_limits(descriptors) and not self._project_has_any_io_token_limits(
-            user_api_key_dict
+        if (
+            not has_enqueued_scopes
+            and not self._has_applicable_batch_rate_limits(descriptors)
+            and not self._project_has_any_io_token_limits(user_api_key_dict)
         ):
             verbose_proxy_logger.debug("Skipping batch input file processing: no rate limits configured")
             return True, None
@@ -510,6 +520,59 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                 pass
 
         return file_id, fetch_kwargs
+
+    async def _reserve_batch_enqueued_tokens(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        data: Mapping[str, object],
+        batch_usage: BatchFileUsage,
+        scopes: tuple[BatchEnqueuedTokenScope, ...],
+    ) -> None:
+        """Reserve the batch's estimated tokens against the caller's enqueued-token allowance.
+
+        Runs instead of the per-minute counter charge when the key or team
+        opted in via ``batch_enqueued_token_limit`` metadata. The reservation
+        is stashed on the request so the v3 limiter's post-call hooks can
+        persist it (keyed by the provider batch id) and refund it when the
+        batch reaches a terminal state.
+        """
+        outcome: Final = await self.parallel_request_limiter.batch_enqueued_token_store.reserve(
+            tokens=batch_usage.total_tokens,
+            scopes=scopes,
+            litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
+        )
+        match outcome:
+            case BatchEnqueuedTokenOverLimit():
+                self._raise_enqueued_limit_error(over_limit=outcome, data=data, batch_usage=batch_usage)
+            case BatchEnqueuedTokenReservation():
+                get_or_create_request_stash().batch_enqueued_reservation = outcome
+
+    def _raise_enqueued_limit_error(
+        self,
+        over_limit: BatchEnqueuedTokenOverLimit,
+        data: Mapping[str, object],
+        batch_usage: BatchFileUsage,
+    ) -> NoReturn:
+        scope: Final = over_limit.scope
+        remaining: Final = max(0, scope.limit - over_limit.enqueued)
+        detail: Final = (
+            f"Batch enqueued token limit exceeded for {scope.key}: {scope.value}. "
+            f"Batch requires {batch_usage.total_tokens} tokens but only {remaining} enqueued tokens remaining "
+            f"out of {scope.limit} enqueued token limit. "
+            f"Tokens free up as running batches complete or are cancelled."
+        )
+        raw_model: Final = data.get("model")
+        resolved_model, llm_provider = resolve_llm_provider_for_rate_limit(
+            raw_model if isinstance(raw_model, str) else None
+        )
+        raise ProxyRateLimitError(
+            detail=detail,
+            headers=MappingProxyType({"rate_limit_type": "tokens"}),
+            category=RateLimitErrorCategory.LITELLM_BATCH_RATE_LIMIT,
+            rate_limit_type=map_v3_rate_limit_type("tokens"),
+            model=resolved_model,
+            llm_provider=llm_provider,
+        )
 
     def _raise_rate_limit_error(
         self,
@@ -1039,8 +1102,9 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                 verbose_proxy_logger.debug("No input_file_id in batch request, skipping rate limiting")
                 return data
 
+            enqueued_scopes: Final = resolve_batch_enqueued_token_scopes(user_api_key_dict)
             should_skip, batch_rate_limit_descriptors = self._should_skip_batch_input_file_processing(
-                data=data, user_api_key_dict=user_api_key_dict
+                data=data, user_api_key_dict=user_api_key_dict, has_enqueued_scopes=bool(enqueued_scopes)
             )
             if should_skip:
                 return data
@@ -1065,6 +1129,16 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             # Store batch usage in data for later reference
             data["_batch_token_count"] = batch_usage.total_tokens
             data["_batch_request_count"] = batch_usage.request_count
+
+            if enqueued_scopes:
+                await self._reserve_batch_enqueued_tokens(
+                    user_api_key_dict=user_api_key_dict,
+                    data=data,
+                    batch_usage=batch_usage,
+                    scopes=enqueued_scopes,
+                )
+                verbose_proxy_logger.debug("Batch enqueued-token reservation succeeded")
+                return data
 
             # Directly increment counters by batch amounts (check happens atomically)
             # This will raise HTTPException if limits are exceeded

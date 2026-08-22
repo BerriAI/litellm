@@ -125,7 +125,7 @@ describe("TopKeyView", () => {
     const chartViewButton = screen.getByRole("button", { name: "Chart View" });
     await user.click(chartViewButton);
 
-    expect(chartViewButton).toHaveClass("bg-blue-100");
+    expect(chartViewButton).toHaveClass("bg-info/15");
   });
 
   it("renders cyan bars with truncated aliases in chart view and opens the key info modal on bar click", async () => {
@@ -177,7 +177,7 @@ describe("TopKeyView", () => {
     await user.click(chartViewButton);
     await user.click(tableViewButton);
 
-    expect(tableViewButton).toHaveClass("bg-blue-100");
+    expect(tableViewButton).toHaveClass("bg-info/15");
   });
 
   it("should call setTopKeysLimit when limit is changed via the segmented control", async () => {

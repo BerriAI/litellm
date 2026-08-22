@@ -281,7 +281,7 @@ const CreateSearchTool: React.FC<CreateSearchToolProps> = ({
                   <TooltipTrigger
                     render={
                       <a
-                        className="text-sm text-blue-600 hover:underline dark:text-blue-400"
+                        className="text-sm text-info hover:underline"
                         href="https://github.com/BerriAI/litellm/issues"
                         target="_blank"
                         rel="noopener noreferrer"

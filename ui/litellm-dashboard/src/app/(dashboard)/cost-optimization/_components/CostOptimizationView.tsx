@@ -4,6 +4,7 @@ import React from "react";
 import { Info, PiggyBank } from "lucide-react";
 
 import useCan from "@/app/(dashboard)/hooks/useCan";
+import PaginationStatusAlerts from "@/components/shared/PaginationStatusAlerts";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import UsageTab from "./UsageTab";
 import PromptCompressionTab from "./PromptCompressionTab";
@@ -62,6 +63,12 @@ const CostOptimizationView: React.FC<CostOptimizationViewProps> = ({ accessToken
         </p>
       </div>
 
+      <PaginationStatusAlerts
+        isFetchingMore={activity.isFetchingMore}
+        cancelled={activity.cancelled}
+        progress={activity.progress}
+        cancel={activity.cancel}
+      />
       <Tabs defaultValue="usage" onValueChange={handleTabChange}>
         <TabsList variant="line" className="h-auto w-full justify-start rounded-none p-0">
           <TabsTrigger value="usage" className="flex-none rounded-none px-4 py-2">
@@ -94,7 +101,7 @@ const CostOptimizationView: React.FC<CostOptimizationViewProps> = ({ accessToken
               <PromptCachingTab accessToken={accessToken} activity={activity} />
             </TabsContent>
             <TabsContent value="autorouter-usage" keepMounted={visitedTabs.includes("autorouter-usage")}>
-              <AutoRouterBenchmarksTab accessToken={accessToken} />
+              <AutoRouterBenchmarksTab accessToken={accessToken} activity={activity} />
             </TabsContent>
           </>
         )}

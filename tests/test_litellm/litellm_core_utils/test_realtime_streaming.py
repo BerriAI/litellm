@@ -62,7 +62,7 @@ def test_realtime_streaming_store_message():
 
     # Test 3: Invalid message format
     invalid_msg = "invalid json"
-    with pytest.raises(Exception):
+    with pytest.raises(json.JSONDecodeError):
         streaming.store_message(invalid_msg)
 
     # Test 4: Message type not in logged events

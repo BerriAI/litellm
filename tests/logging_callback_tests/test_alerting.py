@@ -19,7 +19,6 @@ from litellm.types.integrations.slack_alerting import AlertType
 # import logging
 # logging.basicConfig(level=logging.DEBUG)
 sys.path.insert(0, os.path.abspath("../.."))
-import asyncio
 import os
 import unittest.mock
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -132,8 +131,6 @@ def test_init():
     print("passed testing slack alerting init")
 
 
-from datetime import datetime, timedelta
-from unittest.mock import AsyncMock, patch
 
 
 @pytest.fixture
@@ -342,7 +339,6 @@ async def test_daily_reports_redis_cache_scheduler():
     # we need this to be 0 so it actualy sends the report
     slack_alerting.alerting_args.daily_report_frequency = 0
 
-    from litellm.router import AlertingConfig
 
     router = litellm.Router(
         model_list=[
@@ -382,7 +378,6 @@ async def test_daily_reports_redis_cache_scheduler():
 @pytest.mark.asyncio
 @pytest.mark.skip(reason="Local test. Test if slack alerts are sent.")
 async def test_send_llm_exception_to_slack():
-    from litellm.router import AlertingConfig
 
     # on async success
     router = litellm.Router(

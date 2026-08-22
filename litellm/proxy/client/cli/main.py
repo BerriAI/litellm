@@ -9,7 +9,7 @@ from litellm._version import version as litellm_version
 from litellm.proxy.client.health import HealthManagementClient
 
 from .commands.agents import agent_commands
-from .commands.auth import auth_group, get_stored_api_key, login, logout, whoami
+from .commands.auth import auth_group, context_secret_vault, get_stored_api_key, login, logout, whoami
 from .commands.autoroute.commands import autoroute_group
 from .commands.chat import chat
 from .commands.config import config_commands, get_config_value, hidden_command_names
@@ -93,11 +93,16 @@ def cli(ctx: click.Context, show_version: bool, base_url: str | None, api_key: s
 
     # If no API key provided via flag or environment variable, try to load from saved token.
     # Pass base_url so we only use the stored key when it was issued for this server.
-    if api_key is None:
-        api_key = get_stored_api_key(expected_base_url=base_url)
+    api_key_from_token_file: Final = api_key is None
+    resolved_api_key: Final = (
+        get_stored_api_key(expected_base_url=base_url, vault=context_secret_vault(ctx))
+        if api_key_from_token_file
+        else api_key
+    )
 
     ctx.obj["base_url"] = base_url
-    ctx.obj["api_key"] = api_key
+    ctx.obj["api_key"] = resolved_api_key
+    ctx.obj["api_key_from_token_file"] = api_key_from_token_file
     # `--base-url` defaults to localhost:4000 for local dev convenience, but
     # apiKeyHelper is invoked bare (no flags) -- commands that must work
     # unattended (print-token) need to tell "user didn't say" apart from
@@ -107,7 +112,7 @@ def cli(ctx: click.Context, show_version: bool, base_url: str | None, api_key: s
     ctx.obj["base_url_explicit"] = base_url_provided or bool(stored_base_url)
 
     if show_version:
-        print_version(base_url, api_key)
+        print_version(base_url, resolved_api_key)
         ctx.exit()
 
     # If no subcommand was invoked, start interactive mode

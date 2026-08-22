@@ -13,7 +13,6 @@ from mcp.client.stdio import stdio_client
 import os
 from litellm import experimental_mcp_client
 import litellm
-import pytest
 import json
 
 

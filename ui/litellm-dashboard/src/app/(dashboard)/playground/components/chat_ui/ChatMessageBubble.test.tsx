@@ -15,6 +15,9 @@ vi.mock("react-syntax-highlighter", () => ({
 
 vi.mock("react-syntax-highlighter/dist/esm/styles/prism", () => ({
   coy: {},
+  oneDark: {},
+  oneLight: {},
+  prism: {},
 }));
 
 vi.mock("@/components/chat_ui/ReasoningContent", () => ({

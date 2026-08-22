@@ -10,7 +10,6 @@ from dotenv import load_dotenv
 load_dotenv()
 import asyncio
 import io
-import os
 
 sys.path.insert(
     0, os.path.abspath("../..")

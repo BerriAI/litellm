@@ -15,7 +15,6 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-import litellm
 from litellm import completion
 from litellm._logging import verbose_logger
 from litellm.integrations.gcs_pubsub.pub_sub import *
@@ -43,6 +42,7 @@ ignored_keys = [
     "metadata.cold_storage_object_key",
     "metadata.litellm_overhead_time_ms",
     "metadata.cost_breakdown",
+    "metadata.autorouter_savings",
     "metadata.eval_information",
 ]
 
@@ -133,7 +133,7 @@ def assert_gcs_pubsub_request_matches_expected(
         actual_request_body, expected_request_body, ignore_keys=ignored_keys
     )
     if differences:
-        assert False, f"Dictionary mismatch: {differences}"
+        pytest.fail(f"Dictionary mismatch: {differences}")
 
 
 def assert_gcs_pubsub_request_matches_expected_standard_logging_payload(

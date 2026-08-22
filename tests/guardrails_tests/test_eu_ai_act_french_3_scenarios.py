@@ -19,6 +19,7 @@ from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_fil
 from litellm.types.proxy.guardrails.guardrail_hooks.litellm_content_filter import (
     ContentFilterCategoryConfig,
 )
+from fastapi import HTTPException
 
 
 @pytest.fixture
@@ -82,7 +83,7 @@ class TestEUAIActFrench3Scenarios:
         print(f"{'='*70}\n")
 
         # Should raise an exception (blocked)
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(Exception, match="prohibited_practices_fr conditional match 'concevoir \\+") as exc_info:
             await content_filter_guardrail.apply_guardrail(
                 inputs={"texts": [sentence]},
                 request_data=request_data,
@@ -122,7 +123,7 @@ class TestEUAIActFrench3Scenarios:
         print(f"{'='*70}\n")
 
         # Should raise an exception (blocked)
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(Exception, match="prohibited_practices_fr conditional match 'créer \\+") as exc_info:
             await content_filter_guardrail.apply_guardrail(
                 inputs={"texts": [sentence]},
                 request_data=request_data,
@@ -193,7 +194,7 @@ class TestEUAIActFrench3Scenarios:
         print(f"{'='*70}\n")
 
         # Should raise an exception (blocked by conditional matching)
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(Exception, match="prohibited_practices_fr conditional match 'développer \\+") as exc_info:
             await content_filter_guardrail.apply_guardrail(
                 inputs={"texts": [sentence]},
                 request_data=request_data,
@@ -228,7 +229,7 @@ class TestFrenchEdgeCases:
         request_data = {"messages": [{"role": "user", "content": sentence}]}
 
         # Should block (contains "build" and "système de crédit social")
-        with pytest.raises(Exception):
+        with pytest.raises(HTTPException):
             await content_filter_guardrail.apply_guardrail(
                 inputs={"texts": [sentence]},
                 request_data=request_data,
@@ -257,7 +258,7 @@ class TestFrenchEdgeCases:
         request_data = {"messages": [{"role": "user", "content": sentence}]}
 
         # Should block (case-insensitive)
-        with pytest.raises(Exception):
+        with pytest.raises(HTTPException):
             await content_filter_guardrail.apply_guardrail(
                 inputs={"texts": [sentence]},
                 request_data=request_data,
@@ -277,7 +278,7 @@ class TestFrenchEdgeCases:
         request_data = {"messages": [{"role": "user", "content": sentence}]}
 
         # Should still block (no exception bypass)
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(Exception, match="prohibited_practices_fr conditional match 'créer \\+ crédit") as exc_info:
             await content_filter_guardrail.apply_guardrail(
                 inputs={"texts": [sentence]},
                 request_data=request_data,

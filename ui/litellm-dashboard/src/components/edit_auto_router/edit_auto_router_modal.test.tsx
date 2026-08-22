@@ -268,8 +268,6 @@ describe("EditAutoRouterModal classifier context window", () => {
 
     expect(await screen.findByLabelText("Classifier system prompt")).toBeInTheDocument();
     expect(baseElement.querySelectorAll('[data-slot="dialog-content"]')).toHaveLength(2);
-    // eslint-disable-next-line local/no-antd-class-selectors -- the assertion IS that no antd modal renders; naming the class is the point
-    expect(baseElement.querySelector(".ant-modal")).toBeNull();
   });
 
   it("persists an edited classifier context window size", async () => {

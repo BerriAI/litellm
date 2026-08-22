@@ -14,12 +14,10 @@ from dotenv import load_dotenv
 from fastapi import Request
 
 load_dotenv()
-import os
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
-import asyncio
 import logging
 
 import pytest
@@ -54,7 +52,6 @@ verbose_proxy_logger.setLevel(level=logging.DEBUG)
 
 from starlette.datastructures import URL
 
-from litellm.caching.caching import DualCache
 from litellm.proxy._types import (
     BlockUsers,
     DynamoDBArgs,
