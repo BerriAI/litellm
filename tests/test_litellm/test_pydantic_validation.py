@@ -1,19 +1,75 @@
 import json
 from typing import Final
-from unittest.mock import patch
 
 import pytest
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, field_validator
 
 import litellm
-from litellm.llms.base_llm.base_utils import _pydantic_model_json_schema, type_to_response_format_param
-from litellm.types.utils import ModelResponse
-from litellm.utils import Rules, post_call_processing, process_response_format
+from litellm.llms.base_llm.base_utils import (
+    _is_basemodel_class,
+    _pydantic_model_json_schema,
+    type_to_response_format_param,
+)
+from litellm.types.utils import LlmProviders, ModelResponse
+from litellm.utils import (
+    ProviderConfigManager,
+    Rules,
+    _is_pydantic_basemodel_type,
+    _should_preserve_pydantic_response_format,
+    normalize_completion_response_format,
+    post_call_processing,
+    pre_process_non_default_params,
+    process_response_format,
+)
 
 
 class MovieReview(BaseModel):
     title: str
     rating: int
+
+
+class Actor(BaseModel):
+    name: str
+
+
+class Film(BaseModel):
+    title: str
+    lead: Actor
+
+
+class AlphabeticReview(BaseModel):
+    title: str
+    rating: int
+
+    @field_validator("title")
+    @classmethod
+    def title_must_be_alpha(cls, value: str) -> str:
+        if not value.isalpha():
+            raise TypeError("title must be alphabetic")
+        return value
+
+
+class TypeErrorReview(BaseModel):
+    title: str
+    rating: int
+
+    @classmethod
+    def model_validate_json(cls, json_data: str | bytes | bytearray, **kwargs):
+        raise TypeError("custom validator failed")
+
+
+class SchemaOnlyFormat:
+    @classmethod
+    def schema(cls) -> dict[str, object]:
+        return {
+            "title": "SchemaOnlyFormat",
+            "type": "object",
+            "properties": {"x": {"title": "X", "type": "string"}},
+        }
+
+
+class NoSchemaFormat:
+    pass
 
 
 def _mock_completion():
@@ -29,6 +85,22 @@ def _make_response(content: str) -> ModelResponse:
     return response
 
 
+STRICT_SCHEMA: Final = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "MovieReview",
+        "schema": {
+            "type": "object",
+            "properties": {
+                "title": {"type": "string"},
+                "rating": {"type": "integer"},
+            },
+            "required": ["title", "rating"],
+        },
+    },
+}
+
+
 def test_process_response_format_converts_pydantic_v2_basemodel():
     processed: Final = process_response_format(MovieReview)
 
@@ -39,8 +111,6 @@ def test_process_response_format_converts_pydantic_v2_basemodel():
     assert json_schema["strict"] is True
     schema: Final = json_schema["schema"]
     assert schema["type"] == "object"
-    assert "title" in schema["properties"]
-    assert "rating" in schema["properties"]
     assert schema["properties"]["title"]["type"] == "string"
     assert schema["properties"]["rating"]["type"] == "integer"
 
@@ -57,38 +127,71 @@ def test_process_response_format_passthrough_none_and_dict():
     assert process_response_format(existing)["json_schema"]["name"] == "MovieReview"
 
 
-def test_pydantic_v1_schema_fallback_when_model_json_schema_missing():
-    class LegacyShape(BaseModel):
-        x: str
+def test_process_response_format_rejects_unsupported_type():
+    with pytest.raises(TypeError, match="Unsupported response_format type"):
+        process_response_format("json")
 
-    def _v1_schema() -> dict:
-        return {
-            "title": "LegacyShape",
-            "type": "object",
-            "properties": {"x": {"title": "X", "type": "string"}},
-        }
 
-    with patch.object(LegacyShape, "model_json_schema", None):
-        with patch.object(LegacyShape, "schema", staticmethod(_v1_schema)):
-            schema: Final = _pydantic_model_json_schema(LegacyShape)
+def test_pydantic_v2_model_json_schema_helper():
+    schema: Final = _pydantic_model_json_schema(MovieReview)
+    assert schema["properties"]["title"]["type"] == "string"
 
+
+def test_type_to_response_format_param_with_ref_template():
+    processed: Final = type_to_response_format_param(Film, ref_template="/$defs/{model}")
+    assert processed is not None
+    assert processed["json_schema"]["name"] == "Film"
+
+
+def test_pydantic_v1_schema_method_is_used_when_model_json_schema_absent():
+    schema: Final = _pydantic_model_json_schema(SchemaOnlyFormat)
     assert schema["properties"]["x"]["type"] == "string"
-    assert schema["title"] == "LegacyShape"
+    assert schema["title"] == "SchemaOnlyFormat"
 
 
-def test_type_to_response_format_param_falls_back_when_strict_schema_fails():
-    with patch(
+def test_pydantic_schema_helper_raises_when_no_schema_methods():
+    with pytest.raises(TypeError, match="Unsupported response_format type"):
+        _pydantic_model_json_schema(NoSchemaFormat)
+
+
+def test_pydantic_model_json_schema_accepts_ref_template():
+    schema: Final = _pydantic_model_json_schema(Film, ref_template="/$defs/{model}")
+    assert "title" in schema["properties"]
+    assert "lead" in schema["properties"]
+
+
+def test_is_pydantic_basemodel_type():
+    assert _is_pydantic_basemodel_type(MovieReview) is True
+    assert _is_pydantic_basemodel_type({"type": "json_object"}) is False
+    assert _is_pydantic_basemodel_type(dict) is False
+    assert _is_basemodel_class(MovieReview) is True
+    assert _is_basemodel_class("json") is False
+
+
+def test_is_pydantic_basemodel_type_swallows_issubclass_typeerror(monkeypatch):
+    def _boom(cls, classinfo):
+        raise TypeError("not a class")
+
+    monkeypatch.setattr("builtins.issubclass", _boom)
+    assert _is_pydantic_basemodel_type(MovieReview) is False
+    assert _is_basemodel_class(MovieReview) is False
+
+
+def test_strict_json_schema_failure_falls_back_to_model_json_schema(monkeypatch):
+    def _boom(_model):
+        raise TypeError("strict schema failed")
+
+    monkeypatch.setattr(
         "litellm.llms.base_llm.base_utils._pydantic.to_strict_json_schema",
-        side_effect=ValidationError.from_exception_data("MovieReview", []),
-    ):
-        processed: Final = type_to_response_format_param(MovieReview)
-
+        _boom,
+    )
+    processed: Final = type_to_response_format_param(MovieReview)
     assert processed is not None
     assert processed["json_schema"]["schema"]["properties"]["title"]["type"] == "string"
 
 
 def test_post_call_processing_raises_apierror_on_invalid_pydantic_json():
-    with pytest.raises(litellm.APIError, match="Structured output"):
+    with pytest.raises(litellm.APIError, match="Structured output") as exc:
         post_call_processing(
             _make_response("not-json"),
             "gpt-4o",
@@ -99,10 +202,11 @@ def test_post_call_processing_raises_apierror_on_invalid_pydantic_json():
             _mock_completion,
             Rules(),
         )
+    assert exc.value.status_code == 422
 
 
 def test_post_call_processing_raises_apierror_on_pydantic_validation_error():
-    with pytest.raises(litellm.APIError, match="Structured output"):
+    with pytest.raises(litellm.APIError, match="Structured output") as exc:
         post_call_processing(
             _make_response(json.dumps({"title": "Inception", "rating": "nine"})),
             "gpt-4o",
@@ -113,6 +217,67 @@ def test_post_call_processing_raises_apierror_on_pydantic_validation_error():
             _mock_completion,
             Rules(),
         )
+    assert exc.value.status_code == 422
+
+
+def test_custom_pydantic_validator_typeerror_becomes_apierror():
+    with pytest.raises(litellm.APIError, match="Structured output") as exc:
+        post_call_processing(
+            _make_response(json.dumps({"title": "Inception", "rating": 9})),
+            "gpt-4o",
+            {
+                "response_format": TypeErrorReview,
+                "enable_json_schema_validation": True,
+            },
+            _mock_completion,
+            Rules(),
+        )
+    assert exc.value.status_code == 422
+
+
+def test_field_validator_typeerror_becomes_apierror():
+    with pytest.raises(litellm.APIError, match="Structured output") as exc:
+        post_call_processing(
+            _make_response(json.dumps({"title": "Inception 2", "rating": 9})),
+            "gpt-4o",
+            {
+                "response_format": AlphabeticReview,
+                "enable_json_schema_validation": True,
+            },
+            _mock_completion,
+            Rules(),
+        )
+    assert exc.value.status_code == 422
+
+
+def test_invalid_json_jsonschema_validation_becomes_apierror():
+    with pytest.raises(litellm.APIError, match="Structured output") as exc:
+        post_call_processing(
+            _make_response("not-json"),
+            "gpt-4o",
+            {
+                "response_format": STRICT_SCHEMA,
+                "enable_json_schema_validation": True,
+            },
+            _mock_completion,
+            Rules(),
+        )
+    assert exc.value.status_code == 422
+
+
+def test_jsonschema_mismatch_becomes_apierror():
+    with pytest.raises(litellm.APIError, match="Structured output") as exc:
+        post_call_processing(
+            _make_response(json.dumps({"name": "test", "age": 25})),
+            "gpt-4o",
+            {
+                "response_format": STRICT_SCHEMA,
+                "enable_json_schema_validation": True,
+            },
+            _mock_completion,
+            Rules(),
+        )
+    assert exc.value.status_code == 422
 
 
 def test_post_call_processing_accepts_valid_pydantic_response():
@@ -121,6 +286,19 @@ def test_post_call_processing_accepts_valid_pydantic_response():
         "gpt-4o",
         {
             "response_format": MovieReview,
+            "enable_json_schema_validation": True,
+        },
+        _mock_completion,
+        Rules(),
+    )
+
+
+def test_post_call_skips_validation_for_non_schema_response_format():
+    post_call_processing(
+        _make_response("plain text"),
+        "gpt-4o",
+        {
+            "response_format": "json",
             "enable_json_schema_validation": True,
         },
         _mock_completion,
@@ -139,3 +317,86 @@ def test_completion_converts_pydantic_response_format_with_mock_response():
     payload: Final = json.loads(response.choices[0].message.content)
     assert payload["title"] == "Inception"
     assert payload["rating"] == 9
+
+
+def test_normalize_preserves_pydantic_class_for_gemini_and_vertex():
+    gemini_preserved: Final = normalize_completion_response_format(
+        MovieReview,
+        model="gemini-2.5-flash",
+        custom_llm_provider="gemini",
+    )
+    vertex_preserved: Final = normalize_completion_response_format(
+        MovieReview,
+        model="vertex_ai/gemini-2.5-pro",
+        custom_llm_provider="vertex_ai",
+    )
+    prefix_preserved: Final = normalize_completion_response_format(
+        MovieReview,
+        model="gemini-2.5-pro",
+        custom_llm_provider=None,
+    )
+    assert gemini_preserved is MovieReview
+    assert vertex_preserved is MovieReview
+    assert prefix_preserved is MovieReview
+
+
+def test_normalize_converts_pydantic_class_for_openai():
+    processed: Final = normalize_completion_response_format(
+        MovieReview,
+        model="gpt-4o",
+        custom_llm_provider="openai",
+    )
+    assert isinstance(processed, dict)
+    assert processed["type"] == "json_schema"
+    assert processed["json_schema"]["name"] == "MovieReview"
+    assert normalize_completion_response_format(None, model="gpt-4o") is None
+
+
+def test_gdc_preserves_pydantic_via_vertex_params_flag():
+    assert _should_preserve_pydantic_response_format("gdc", "ignored") is True
+    assert _should_preserve_pydantic_response_format("vertex_ai_beta", "m") is True
+    assert _should_preserve_pydantic_response_format(None, "gemini/gemini-2.5-flash") is True
+    assert _should_preserve_pydantic_response_format(None, "vertex_ai_beta/gemini") is True
+    assert _should_preserve_pydantic_response_format(None, "vertex_ai/gemini-2.5-pro") is True
+
+
+def test_openai_and_bedrock_do_not_preserve_pydantic_class():
+    assert _should_preserve_pydantic_response_format("openai", "gpt-4o") is False
+    assert _should_preserve_pydantic_response_format("bedrock", "claude-4-sonnet") is False
+
+
+def test_gemini_pre_process_keeps_compact_pydantic_schema():
+    provider_config = ProviderConfigManager.get_provider_chat_config(
+        model="gemini-2.5-flash",
+        provider=LlmProviders.GEMINI,
+    )
+    processed: Final = pre_process_non_default_params(
+        model="gemini-2.5-flash",
+        passed_params={"model": "gemini-2.5-flash", "response_format": Film},
+        special_params={},
+        custom_llm_provider="gemini",
+        additional_drop_params=None,
+        provider_config=provider_config,
+    )
+    schema: Final = processed["response_format"]["json_schema"]["schema"]
+    serialized: Final = json.dumps(schema)
+    assert "$ref" in serialized or "$defs" in schema
+    assert schema.get("additionalProperties") is not False
+
+
+def test_vertex_pre_process_keeps_compact_pydantic_schema():
+    provider_config = ProviderConfigManager.get_provider_chat_config(
+        model="gemini-2.5-pro",
+        provider=LlmProviders.VERTEX_AI,
+    )
+    processed: Final = pre_process_non_default_params(
+        model="gemini-2.5-pro",
+        passed_params={"model": "gemini-2.5-pro", "response_format": Film},
+        special_params={},
+        custom_llm_provider="vertex_ai",
+        additional_drop_params=None,
+        provider_config=provider_config,
+    )
+    schema: Final = processed["response_format"]["json_schema"]["schema"]
+    serialized: Final = json.dumps(schema)
+    assert "$ref" in serialized or "$defs" in schema

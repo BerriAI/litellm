@@ -482,8 +482,6 @@ async def acompletion(
         - The `completion` function is called using `run_in_executor` to execute synchronously in the event loop.
         - If `stream` is True, the function returns an async generator that yields completion lines.
     """
-    request_response_format: Final = normalize_completion_response_format(response_format, model=model)
-
     fallbacks = kwargs.get("fallbacks", None)
     mock_timeout = kwargs.get("mock_timeout", None)
 
@@ -575,7 +573,7 @@ async def acompletion(
         "frequency_penalty": frequency_penalty,
         "logit_bias": logit_bias,
         "user": user,
-        "response_format": request_response_format,
+        "response_format": response_format,
         "seed": seed,
         "tools": tools,
         "tool_choice": tool_choice,
@@ -5021,7 +5019,6 @@ def completion(
     # model whose model_cost mode is "responses" but whose provider has no
     # Responses API config (get_provider_responses_api_config -> None).
     skip_responses_api_bridge: Final = kwargs.pop("_skip_responses_api_bridge", False)
-    request_response_format: Final = normalize_completion_response_format(response_format, model=model)
 
     skip_mcp_handler: Final = kwargs.pop("_skip_mcp_handler", False)
     if not skip_mcp_handler and tools:
@@ -5056,7 +5053,7 @@ def completion(
                 frequency_penalty=frequency_penalty,
                 logit_bias=logit_bias,
                 user=user,
-                response_format=request_response_format,
+                response_format=response_format,
                 seed=seed,
                 tools=tools,
                 tool_choice=tool_choice,
@@ -5337,6 +5334,11 @@ def completion(
 
         if dynamic_api_key is not None:
             api_key = dynamic_api_key
+        request_response_format: Final = normalize_completion_response_format(
+            response_format,
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+        )
         # check if user passed in any of the OpenAI optional params
         optional_param_args: Final = {
             "functions": functions,

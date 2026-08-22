@@ -235,7 +235,7 @@ except (ImportError, AttributeError, TypeError):
 claude_json_str = json.dumps(json_data)
 import importlib.metadata
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Union, cast, get_args
+from typing import TYPE_CHECKING, Any, Final, Literal, Optional, TypeGuard, Union, cast, get_args
 
 from litellm import utils as litellm_utils
 
@@ -1252,64 +1252,78 @@ async def async_post_call_success_deployment_hook(
     return response
 
 
+def _is_pydantic_basemodel_type(response_format: object) -> TypeGuard[type[BaseModel]]:
+    if not isinstance(response_format, type):
+        return False
+    try:
+        return issubclass(response_format, BaseModel)
+    except TypeError:
+        return False
+
+
 def process_response_format(
-    response_format: type[BaseModel] | dict | None,
-) -> dict | None:
+    response_format: type[BaseModel] | dict[str, object] | None,
+) -> dict[str, object] | None:
     if response_format is None:
         return None
     if isinstance(response_format, dict):
         return type_to_response_format_param(response_format)
-    if isinstance(response_format, type) and issubclass(response_format, BaseModel):
+    if _is_pydantic_basemodel_type(response_format):
         return type_to_response_format_param(response_format)
     raise TypeError(f"Unsupported response_format type - {response_format}")
 
 
-def normalize_completion_response_format(
-    response_format: type[BaseModel] | dict | None,
+_PRESERVE_PYDANTIC_RESPONSE_FORMAT_PROVIDERS: Final = frozenset(
+    {"gemini", "vertex_ai", "vertex_ai_beta"}
+)
+
+
+def _should_preserve_pydantic_response_format(
+    custom_llm_provider: str | None,
     model: str,
-) -> dict | type[BaseModel] | None:
-    try:
-        processed: Final = process_response_format(response_format)
-    except (ValidationError, json.JSONDecodeError) as e:
-        raise litellm.APIError(
-            status_code=400,
-            message=f"Invalid Pydantic response_format: {e}",
-            llm_provider="",
-            model=model,
-        ) from e
+) -> bool:
+    if custom_llm_provider is not None:
+        if custom_llm_provider in _PRESERVE_PYDANTIC_RESPONSE_FORMAT_PROVIDERS:
+            return True
+        if _provider_supports_vertex_params(custom_llm_provider):
+            return True
+    lowered: Final = model.lower()
+    return lowered.startswith(("gemini/", "vertex_ai/", "vertex_ai_beta/", "gemini-"))
+
+
+def normalize_completion_response_format(
+    response_format: type[BaseModel] | dict[str, object] | None,
+    model: str,
+    custom_llm_provider: str | None = None,
+) -> type[BaseModel] | dict[str, object] | None:
+    if _should_preserve_pydantic_response_format(custom_llm_provider, model):
+        return response_format
+    processed: Final = process_response_format(response_format)
     return processed if processed is not None else response_format
 
 
 def _deserialize_pydantic_response_format(
     response_format: type[BaseModel],
     model_response: str,
-    model: str | None,
 ) -> None:
-    try:
-        model_validate_json = getattr(response_format, "model_validate_json", None)
-        if callable(model_validate_json):
-            model_validate_json(model_response)
-            return
-        parse_raw = getattr(response_format, "parse_raw", None)
-        if callable(parse_raw):
-            parse_raw(model_response)
-            return
-        json.loads(model_response)
-    except (ValidationError, json.JSONDecodeError) as e:
-        raise litellm.APIError(
-            status_code=500,
-            message=f"Structured output did not match the Pydantic response_format: {e}",
-            llm_provider="",
-            model=model or "",
-        ) from e
+    response_format.model_validate_json(model_response)
 
 
-def _response_format_as_json_schema(response_format: object) -> dict | None:
-    if isinstance(response_format, type) and issubclass(response_format, BaseModel):
+def _response_format_as_json_schema(response_format: object) -> dict[str, object] | None:
+    if _is_pydantic_basemodel_type(response_format):
         return process_response_format(response_format)
     if isinstance(response_format, dict) and response_format.get("json_schema") is not None:
         return response_format
     return None
+
+
+def _raise_structured_output_api_error(error: BaseException, model: str | None) -> None:
+    raise litellm.APIError(
+        status_code=422,
+        message=f"Structured output did not match response_format: {error}",
+        llm_provider="",
+        model=model or "",
+    ) from error
 
 
 def _apply_response_format_validation(
@@ -1317,12 +1331,13 @@ def _apply_response_format_validation(
     model_response: str,
     model: str | None,
 ) -> None:
+    from jsonschema.exceptions import ValidationError as JsonschemaValidationError
+
     try:
-        if isinstance(response_format, type) and issubclass(response_format, BaseModel):
+        if _is_pydantic_basemodel_type(response_format):
             _deserialize_pydantic_response_format(
                 response_format=response_format,
                 model_response=model_response,
-                model=model,
             )
         json_response_format: Final = _response_format_as_json_schema(response_format)
         if json_response_format is not None:
@@ -1330,13 +1345,14 @@ def _apply_response_format_validation(
                 schema=json_response_format["json_schema"]["schema"],
                 response=model_response,
             )
-    except (ValidationError, json.JSONDecodeError) as e:
-        raise litellm.APIError(
-            status_code=500,
-            message=f"Structured output did not match the Pydantic response_format: {e}",
-            llm_provider="",
-            model=model or "",
-        ) from e
+    except (
+        ValidationError,
+        json.JSONDecodeError,
+        JsonschemaValidationError,
+        TypeError,
+        litellm.JSONSchemaValidationError,
+    ) as e:
+        _raise_structured_output_api_error(e, model)
 
 
 def post_call_processing(
@@ -1374,19 +1390,16 @@ def post_call_processing(
                                 else litellm.enable_json_schema_validation
                             )
                             if _enable_json_schema_validation is True:
-                                try:
-                                    if (
-                                        optional_params is not None
-                                        and "response_format" in optional_params
-                                        and optional_params["response_format"] is not None
-                                    ):
-                                        _apply_response_format_validation(
-                                            response_format=optional_params["response_format"],
-                                            model_response=model_response,
-                                            model=model,
-                                        )
-                                except TypeError:
-                                    pass
+                                if (
+                                    optional_params is not None
+                                    and "response_format" in optional_params
+                                    and optional_params["response_format"] is not None
+                                ):
+                                    _apply_response_format_validation(
+                                        response_format=optional_params["response_format"],
+                                        model_response=model_response,
+                                        model=model,
+                                    )
                             if (
                                 optional_params is not None
                                 and "response_format" in optional_params
