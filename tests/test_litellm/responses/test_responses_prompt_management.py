@@ -13,7 +13,6 @@ Covers:
   I) async path propagates optional params to downstream handler
 """
 
-import asyncio
 from typing import List
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -54,18 +53,15 @@ def _patch_responses_dispatch():
             return_value=("gpt-4o", "openai", None, None),
         ),
         patch(
-            "litellm.responses.mcp.litellm_proxy_mcp_handler."
-            "LiteLLM_Proxy_MCP_Handler._should_use_litellm_mcp_gateway",
+            "litellm.responses.mcp.litellm_proxy_mcp_handler.LiteLLM_Proxy_MCP_Handler._should_use_litellm_mcp_gateway",
             return_value=False,
         ),
         patch(
-            "litellm.responses.main.ProviderConfigManager"
-            ".get_provider_responses_api_config",
+            "litellm.responses.main.ProviderConfigManager.get_provider_responses_api_config",
             return_value=None,
         ),
         patch(
-            "litellm.responses.main.litellm_completion_transformation_handler"
-            ".response_api_handler",
+            "litellm.responses.main.litellm_completion_transformation_handler.response_api_handler",
             return_value=MagicMock(),
         ),
     ]
@@ -77,7 +73,6 @@ def _patch_responses_dispatch():
 
 
 class TestResponsesAPIPromptManagement:
-
     def test_str_input_coerced_and_merged(self):
         """[A] str input is wrapped into a message list before being passed to the hook."""
         template_messages: List[AllMessageValues] = [
@@ -108,9 +103,7 @@ class TestResponsesAPIPromptManagement:
         logging_obj.get_chat_completion_prompt.assert_called_once()
         call_kwargs = logging_obj.get_chat_completion_prompt.call_args.kwargs
         # str was coerced to a single user message before being passed to the hook
-        assert call_kwargs["messages"] == [
-            {"role": "user", "content": "Tell me about AI."}
-        ]
+        assert call_kwargs["messages"] == [{"role": "user", "content": "Tell me about AI."}]
         assert call_kwargs["prompt_id"] == "summariser-prompt"
 
     def test_list_input_merged_with_template(self):
@@ -393,3 +386,169 @@ class TestAsyncResponsesAPIPromptManagement:
         passed_messages = call_kwargs["messages"]
         assert all(isinstance(m, dict) and "role" in m for m in passed_messages)
         assert len(passed_messages) == 1
+
+
+class TestResponsesAPIPromptManagementPreservesNonMessageItems:
+    """Regression tests for https://github.com/BerriAI/litellm/issues/32335.
+
+    Multi-turn Responses API input carries role-less items ("reasoning",
+    "function_call", ...) alongside messages. The prompt management hook only
+    sees the message items; the merged result must not silently drop the
+    role-less ones, otherwise providers reject the request (Azure: "Item
+    'msg_...' was provided without its required 'reasoning' item: 'rs_...'").
+    """
+
+    @staticmethod
+    def _mixed_input():
+        return [
+            {"role": "user", "content": "Analyze this code snippet for bugs"},
+            {"type": "reasoning", "id": "rs_123", "summary": []},
+            {
+                "type": "message",
+                "id": "msg_123",
+                "role": "assistant",
+                "status": "completed",
+                "content": [{"type": "output_text", "text": "Analysis done", "annotations": []}],
+            },
+            {
+                "type": "function_call",
+                "id": "fc_1",
+                "call_id": "call_1",
+                "name": "lookup",
+                "arguments": "{}",
+            },
+            {"role": "user", "content": "Now check for security issues too"},
+        ]
+
+    @staticmethod
+    def _role_items(items):
+        return [item for item in items if isinstance(item, dict) and "role" in item]
+
+    def test_sync_noop_hook_preserves_non_message_items(self):
+        """When the hook returns the messages unchanged (e.g. no prompt logger
+        matched), the original input must reach the downstream handler intact,
+        including reasoning and function_call items."""
+        mixed_input = self._mixed_input()
+        client_messages = self._role_items(mixed_input)
+        logging_obj = _make_logging_obj(
+            merged_model="openai/gpt-4o",
+            merged_messages=list(client_messages),  # type: ignore[arg-type]
+        )
+
+        patches = _patch_responses_dispatch()
+        with patches[0], patches[1], patches[2], patches[3] as mock_handler:
+            import litellm
+
+            litellm.responses(
+                input=mixed_input,  # type: ignore[arg-type]
+                model="gpt-4o",
+                prompt_id="noop-hook",
+                litellm_logging_obj=logging_obj,
+            )
+
+        handler_input = mock_handler.call_args.kwargs["input"]
+        assert handler_input == mixed_input
+        assert {"type": "reasoning", "id": "rs_123", "summary": []} in handler_input
+
+    def test_sync_template_prepend_preserves_non_message_items(self):
+        """When the hook prepends template messages, the new messages are
+        prepended to the full original input rather than replacing it with the
+        filtered message subset."""
+        mixed_input = self._mixed_input()
+        client_messages = self._role_items(mixed_input)
+        template = [{"role": "system", "content": "You are a security reviewer."}]
+        logging_obj = _make_logging_obj(
+            merged_model="openai/gpt-4o",
+            merged_messages=template + list(client_messages),  # type: ignore[arg-type]
+        )
+
+        patches = _patch_responses_dispatch()
+        with patches[0], patches[1], patches[2], patches[3] as mock_handler:
+            import litellm
+
+            litellm.responses(
+                input=mixed_input,  # type: ignore[arg-type]
+                model="gpt-4o",
+                prompt_id="template-prepend",
+                litellm_logging_obj=logging_obj,
+            )
+
+        handler_input = mock_handler.call_args.kwargs["input"]
+        assert handler_input == template + mixed_input
+
+    @pytest.mark.asyncio
+    async def test_async_noop_hook_preserves_non_message_items(self):
+        """The async aresponses() path must also preserve role-less items."""
+        mixed_input = self._mixed_input()
+        client_messages = self._role_items(mixed_input)
+        logging_obj = _make_logging_obj(
+            merged_model="openai/gpt-4o",
+            merged_messages=list(client_messages),  # type: ignore[arg-type]
+        )
+
+        patches = _patch_responses_dispatch()
+        with patches[0], patches[1], patches[2], patches[3] as mock_handler:
+            import litellm
+
+            await litellm.aresponses(
+                input=mixed_input,  # type: ignore[arg-type]
+                model="gpt-4o",
+                prompt_id="async-noop-hook",
+                litellm_logging_obj=logging_obj,
+            )
+
+        handler_input = mock_handler.call_args.kwargs["input"]
+        assert handler_input == mixed_input
+
+    def test_sync_rewriting_hook_falls_back_to_merged_messages(self):
+        """When the hook rewrites messages in a way that can't be aligned with
+        the original input, the merged messages are used as-is (pre-existing
+        behavior, now logged)."""
+        mixed_input = self._mixed_input()
+        rewritten = [{"role": "user", "content": "Entirely rewritten prompt"}]
+        logging_obj = _make_logging_obj(
+            merged_model="openai/gpt-4o",
+            merged_messages=rewritten,  # type: ignore[arg-type]
+        )
+
+        patches = _patch_responses_dispatch()
+        with patches[0], patches[1], patches[2], patches[3] as mock_handler:
+            import litellm
+
+            litellm.responses(
+                input=mixed_input,  # type: ignore[arg-type]
+                model="gpt-4o",
+                prompt_id="rewriting-hook",
+                litellm_logging_obj=logging_obj,
+            )
+
+        handler_input = mock_handler.call_args.kwargs["input"]
+        assert handler_input == rewritten
+
+    def test_sync_input_with_no_message_items_preserved(self):
+        """Input consisting entirely of role-less items (no message the hook can
+        see) must survive: a template-only hook prepends its messages in front of
+        the role-less items rather than replacing them."""
+        role_less_input = [
+            {"type": "reasoning", "id": "rs_1", "summary": []},
+            {"type": "function_call_output", "call_id": "call_1", "output": "42"},
+        ]
+        template = [{"role": "system", "content": "You are helpful."}]
+        logging_obj = _make_logging_obj(
+            merged_model="openai/gpt-4o",
+            merged_messages=list(template),  # type: ignore[arg-type]
+        )
+
+        patches = _patch_responses_dispatch()
+        with patches[0], patches[1], patches[2], patches[3] as mock_handler:
+            import litellm
+
+            litellm.responses(
+                input=role_less_input,  # type: ignore[arg-type]
+                model="gpt-4o",
+                prompt_id="template-only",
+                litellm_logging_obj=logging_obj,
+            )
+
+        handler_input = mock_handler.call_args.kwargs["input"]
+        assert handler_input == template + role_less_input
