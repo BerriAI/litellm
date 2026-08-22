@@ -1200,14 +1200,31 @@ class LiteLLMCompletionResponsesConfig:
             return LiteLLMCompletionResponsesConfig._transform_responses_api_function_call_to_chat_completion_message(
                 function_call=input_item
             )
-        elif replay_reasoning and input_item.get("type") == "reasoning":
+        elif input_item.get("type") == "reasoning":
             # A ResponseReasoningItemParam carries the prior-turn chain-of-thought.
             # Chat-completions providers (DeepSeek V4, Kimi K2.6, ...) expect this
             # to be replayed as `reasoning_content` on an assistant message, not as
             # visible `content` (prompt pollution) and not dropped (DeepSeek V4
             # rejects multi-turn requests with a missing `reasoning_content`).
-            # Callers that only inspect the request skip this branch so the
-            # reasoning text stays visible to them as message content.
+            # Callers that only inspect the request keep reading the text as
+            # message `content`, summary-only items included: whatever the
+            # provider-bound branch below replays must stay scannable.
+            if not replay_reasoning:
+                inspectable: Final[object] = (
+                    input_item.get("content")
+                    if input_item.get("content") is not None
+                    else LiteLLMCompletionResponsesConfig._extract_reasoning_text_from_input_item(input_item)
+                )
+                if inspectable is None:
+                    return []  # mutable-ok: empty drop result
+                return [  # mutable-ok: single message result
+                    GenericChatCompletionMessage(
+                        role=input_item.get("role") or "user",
+                        content=LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(
+                            inspectable
+                        ),
+                    )
+                ]
             reasoning_text = LiteLLMCompletionResponsesConfig._extract_reasoning_text_from_input_item(  # rebind-ok: extraction result
                 input_item
             )
