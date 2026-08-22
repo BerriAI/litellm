@@ -242,7 +242,6 @@ from litellm import utils as litellm_utils
 # These are lazy loaded via __getattr__
 from litellm.llms.base_llm.base_utils import (
     BaseLLMModelInfo,
-    _pydantic_model_json_schema,
     type_to_response_format_param,
 )
 
