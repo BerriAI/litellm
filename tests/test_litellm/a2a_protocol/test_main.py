@@ -176,10 +176,32 @@ _AGENT_A_HEADERS = {"x-agent-token": "token-for-a", "x-tenant": "tenant-a"}
 _AGENT_B_HEADERS = {"x-agent-token": "token-for-b", "x-tenant": "tenant-b"}
 
 
+_V1_RPC_REPLY = {
+    "jsonrpc": "2.0",
+    "id": "reply",
+    "result": {"message": {"messageId": "reply-1", "role": "ROLE_AGENT", "parts": [{"text": "pong"}]}},
+}
+
+
+_LOWERCASE_BINDING_CARD = {
+    "name": "langgraph-agent",
+    "version": "1.0.0",
+    "capabilities": {"streaming": True},
+    "defaultInputModes": ["text/plain"],
+    "defaultOutputModes": ["text/plain"],
+    "skills": [],
+    "supportedInterfaces": [
+        {"url": "http://127.0.0.1:9/", "protocolBinding": "jsonrpc", "protocolVersion": "1.0"}
+    ],
+}
+
+
 class _RequestRecorder:
     """Records the headers httpx put on the wire, per outbound request."""
 
-    def __init__(self):
+    def __init__(self, card=_AGENT_CARD, rpc_reply=_RPC_REPLY):
+        self.card = card
+        self.rpc_reply = rpc_reply
         self.card_requests = []
         self.rpc_requests = []
         self.client = None
@@ -188,23 +210,23 @@ class _RequestRecorder:
         headers = {k.lower(): v for k, v in request.headers.items()}
         if request.method == "GET":
             self.card_requests.append(headers)
-            return httpx.Response(200, json=_AGENT_CARD)
+            return httpx.Response(200, json=self.card)
         self.rpc_requests.append(headers)
-        return httpx.Response(200, json=_RPC_REPLY)
+        return httpx.Response(200, json=self.rpc_reply)
 
 
 def _a2a_client_cache_key(timeout: float) -> str:
     return "async_httpx_client" + f"timeout_{timeout}" + httpxSpecialProvider.A2AProvider
 
 
-async def _seed_shared_a2a_client() -> _RequestRecorder:
+async def _seed_shared_a2a_client(card=_AGENT_CARD, rpc_reply=_RPC_REPLY) -> _RequestRecorder:
     """Put the one A2A client the cache will hand out behind a mock transport.
 
     Seeding has to happen on the test's own event loop, because the client cache keys on
     it. The injected client is a real httpx.AsyncClient, so the merge of per-request
     headers over client defaults, which is what these tests are about, stays real.
     """
-    recorder = _RequestRecorder()
+    recorder = _RequestRecorder(card=card, rpc_reply=rpc_reply)
     handler = AsyncHTTPHandler(timeout=DEFAULT_A2A_AGENT_TIMEOUT)
     owned_client = handler.client
     handler.client = httpx.AsyncClient(transport=httpx.MockTransport(recorder))
@@ -309,6 +331,19 @@ async def test_streaming_send_carries_only_its_own_caller_headers(isolated_clien
     assert received["a"]["x-agent-token"] == "token-for-a"
     assert received["b"]["x-agent-token"] == "token-for-b"
     assert received["b"]["x-tenant"] == "tenant-b"
+
+
+@pytest.mark.asyncio
+async def test_lowercase_protocol_binding_in_agent_card_still_gets_a_client(isolated_client_cache):
+    """LangGraph Platform serves cards with protocolBinding "jsonrpc"; a2a-sdk matches
+    bindings case-sensitively, so without normalization client creation raises
+    ValueError("no compatible transports found.")."""
+    await _seed_shared_a2a_client(card=_LOWERCASE_BINDING_CARD, rpc_reply=_V1_RPC_REPLY)
+
+    a2a_client = await create_a2a_client(base_url="http://127.0.0.1:9")
+    response = await _send_message(a2a_client, _send_request("lc"))
+
+    assert type(response.root.result).__name__ == "Message"
 
 
 @pytest.mark.asyncio
