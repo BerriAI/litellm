@@ -1846,6 +1846,158 @@ def test_provider_reported_cost_ignores_unusable_shapes():
     assert CustomStreamWrapper._resolve_provider_reported_cost({}) is None
     assert CustomStreamWrapper._resolve_provider_reported_cost({"total_cost": None}) is None
     assert CustomStreamWrapper._resolve_provider_reported_cost(0.5) == 0.5
+    # 0 is not a real provider total — fall through to token-based pricing
+    assert CustomStreamWrapper._resolve_provider_reported_cost(0) is None
+    assert CustomStreamWrapper._resolve_provider_reported_cost(0.0) is None
+    assert CustomStreamWrapper._resolve_provider_reported_cost({"total_cost": 0}) is None
+
+
+def _vertex_anthropic_stream_chunks(*, cache_read: int, prompt_tokens: int, completion_tokens: int):
+    from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+
+    config = AnthropicConfig()
+    raw_input = prompt_tokens - cache_read
+    start_usage = config.calculate_usage(
+        usage_object={
+            "input_tokens": raw_input,
+            "cache_read_input_tokens": cache_read,
+            "cache_creation_input_tokens": 0,
+            "output_tokens": 1,
+        },
+        reasoning_content=None,
+    )
+    delta_usage = config.calculate_usage(
+        usage_object={
+            "input_tokens": raw_input,
+            "cache_read_input_tokens": cache_read,
+            "cache_creation_input_tokens": 0,
+            "output_tokens": completion_tokens,
+        },
+        reasoning_content=None,
+    )
+    return [
+        ModelResponseStream(
+            id="chatcmpl-vertex-anthropic-cache",
+            created=1745513206,
+            model="claude-opus-5",
+            object="chat.completion.chunk",
+            choices=[
+                StreamingChoices(
+                    finish_reason=None,
+                    index=0,
+                    delta=Delta(content="Hi", role="assistant"),
+                )
+            ],
+            usage=start_usage,
+        ),
+        ModelResponseStream(
+            id="chatcmpl-vertex-anthropic-cache",
+            created=1745513207,
+            model="claude-opus-5",
+            object="chat.completion.chunk",
+            choices=[
+                StreamingChoices(
+                    finish_reason="stop",
+                    index=0,
+                    delta=Delta(content=""),
+                )
+            ],
+            usage=delta_usage,
+        ),
+    ]
+
+
+def _stream_spend_via_logging(complete_response, *, model: str, custom_llm_provider: str) -> float:
+    """Price an assembled stream the same way success_handler does."""
+    logging_obj = Logging(
+        model=model,
+        messages=[{"role": "user", "content": "count to five"}],
+        stream=True,
+        call_type="completion",
+        start_time=time.time(),
+        litellm_call_id="stream-spend-cache-read",
+        function_id="1245",
+    )
+    logging_obj.model_call_details["custom_llm_provider"] = custom_llm_provider
+    logging_obj.optional_params = {}
+    CustomStreamWrapper._propagate_usage_cost_to_hidden_params(complete_response)
+    cost = logging_obj._response_cost_calculator(result=complete_response)
+    assert cost is not None
+    return cost
+
+
+def test_stream_spend_prices_vertex_anthropic_cache_read_tokens():
+    """#37923: streamed Vertex Anthropic usage with cache_read_input_tokens > 0
+    must be priced the same way as cost_per_token on that Usage, not logged as $0.
+    """
+    from litellm.cost_calculator import get_response_cost_from_hidden_params
+
+    cache_read = 44616
+    prompt_tokens = 70961
+    completion_tokens = 4096
+    chunks = _vertex_anthropic_stream_chunks(
+        cache_read=cache_read,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+    )
+    complete_response = litellm.stream_chunk_builder(
+        chunks=chunks,
+        messages=[{"role": "user", "content": "count to five"}],
+    )
+    assert complete_response is not None
+    usage = complete_response.usage
+    assert usage.cache_read_input_tokens == cache_read
+    assert usage.prompt_tokens == prompt_tokens
+    assert usage.completion_tokens == completion_tokens
+
+    token_prompt, token_completion = litellm.cost_per_token(
+        model="claude-opus-5",
+        custom_llm_provider="vertex_ai",
+        usage_object=usage,
+    )
+    token_total = token_prompt + token_completion
+    assert token_total > 0
+
+    # A leftover usage.cost=0 must not override token-based stream spend.
+    usage.cost = 0
+    CustomStreamWrapper._propagate_usage_cost_to_hidden_params(complete_response)
+    assert get_response_cost_from_hidden_params(complete_response._hidden_params) is None
+
+    stream_spend = _stream_spend_via_logging(
+        complete_response,
+        model="claude-opus-5",
+        custom_llm_provider="vertex_ai",
+    )
+    # Stream spend uses the same Usage; regional Vertex uplift may raise the
+    # logged figure above the raw cost_per_token total, but it must not be 0.
+    assert stream_spend > 0
+    assert stream_spend >= token_total - 1e-12
+
+
+def test_stream_spend_prices_vertex_anthropic_without_cache_read():
+    """Stream without cache-read tokens must still price from the assembled usage."""
+    chunks = _vertex_anthropic_stream_chunks(
+        cache_read=0, prompt_tokens=9, completion_tokens=16
+    )
+    complete_response = litellm.stream_chunk_builder(
+        chunks=chunks,
+        messages=[{"role": "user", "content": "count to five"}],
+    )
+    assert complete_response is not None
+    token_prompt, token_completion = litellm.cost_per_token(
+        model="claude-opus-5",
+        custom_llm_provider="vertex_ai",
+        usage_object=complete_response.usage,
+    )
+    token_total = token_prompt + token_completion
+    assert token_total == pytest.approx(9 * 5e-6 + 16 * 2.5e-5)
+    stream_spend = _stream_spend_via_logging(
+        complete_response,
+        model="claude-opus-5",
+        custom_llm_provider="vertex_ai",
+    )
+    assert stream_spend > 0
+    assert stream_spend >= token_total - 1e-12
 
 
 def test_handle_special_delta_attributes(

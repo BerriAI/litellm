@@ -1835,10 +1835,18 @@ class CustomStreamWrapper:
         """
         Providers report usage.cost either as a number or, for Perplexity, as a
         breakdown object whose total lives under ``total_cost``.
+
+        Zero / negative is not a real provider total. Stream assembly can leave
+        ``usage.cost = 0`` on Vertex Anthropic chunks that still have tokens
+        (including cache-read). Treating that 0 as authoritative made the
+        stream spend path log spend=0 while ``cost_per_token`` on the same
+        Usage priced correctly. Leave it absent so token-based pricing runs.
         """
         if isinstance(usage_cost, bool):
             return None
         if isinstance(usage_cost, (int, float)):
+            if usage_cost <= 0:
+                return None
             return float(usage_cost)
         if isinstance(usage_cost, dict):
             return CustomStreamWrapper._resolve_provider_reported_cost(usage_cost.get("total_cost"))
