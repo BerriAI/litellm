@@ -136,6 +136,7 @@ from litellm.proxy.management_helpers.team_metadata_validation import (
     validate_team_metadata_if_configured,
 )
 from litellm.proxy.management_helpers.utils import (
+    MemberWriteTx,
     add_new_member,
     management_endpoint_wrapper,
 )
@@ -2600,8 +2601,13 @@ async def _process_team_members(
     prisma_client: PrismaClient,
     user_api_key_dict: UserAPIKeyAuth,
     litellm_proxy_admin_name: str,
+    tx: MemberWriteTx | None = None,
 ) -> tuple[list[LiteLLM_UserTable], list[LiteLLM_TeamMembership]]:
-    """Process and add new team members."""
+    """Process and add new team members.
+
+    ``tx`` is the caller's open transaction, when it has one, so the member writes run on the
+    connection it already holds instead of checking out a second one.
+    """
     updated_users: Final[list[LiteLLM_UserTable]] = []
     updated_team_memberships: Final[list[LiteLLM_TeamMembership]] = []
 
@@ -2627,6 +2633,7 @@ async def _process_team_members(
                 default_team_budget_id=default_team_budget_id,
                 allowed_models=member_allowed_models,
                 budget_duration=data.budget_duration,
+                tx=tx,
             )
         except Exception as e:
             raise HTTPException(
@@ -2649,6 +2656,7 @@ async def _process_team_members(
                     default_team_budget_id=default_team_budget_id,
                     allowed_models=member_allowed_models,
                     budget_duration=data.budget_duration,
+                    tx=tx,
                 )
             except Exception as e:
                 raise HTTPException(
@@ -2737,10 +2745,10 @@ async def _add_team_members_to_team(
     lock around its own sweep-and-delete, so the two can never interleave; whichever
     acquires the lock first runs to completion before the other's re-read can proceed.
 
-    Holding the lock's transaction open while the user/membership writes go through
-    their own connection is intentional: those writes don't need to be IN this
-    transaction, only ordered after the existence check and before this transaction
-    commits, which an open transaction on a separate connection already guarantees.
+    The user and membership writes run on this transaction too, not on a second
+    connection from the pool: a lock waiter that needs a connection it hasn't got yet is
+    a waiter that can deadlock the pool, since enough concurrent adds for one team would
+    hold every connection waiting on the lock while the holder waits for a free one.
     """
     async with prisma_client.tx() as tx:
         await tx.query_raw(TEAM_ADVISORY_LOCK_SQL, data.team_id)
@@ -2759,6 +2767,7 @@ async def _add_team_members_to_team(
             prisma_client=prisma_client,
             user_api_key_dict=user_api_key_dict,
             litellm_proxy_admin_name=litellm_proxy_admin_name,
+            tx=tx,
         )
 
         await _update_team_members_list(

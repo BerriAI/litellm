@@ -78,7 +78,11 @@ client = TestClient(app)
 
 def _wire_team_create_tx(prisma_client):
     """`/team/new` inserts the team and mirrors it onto the access groups in one transaction,
-    so a mocked client has to hand its team table back out of `db.tx()`."""
+    so a mocked client has to hand its team table back out of `db.tx()`.
+
+    A `/team/new` carrying members then adds them under the team's advisory lock, and those
+    writes run on that lock's transaction, so `tx()` has to hand back the mocked tables too
+    for the per-table assertions on `prisma_client.db.*` to keep seeing them."""
 
     @asynccontextmanager
     async def _tx():
@@ -88,6 +92,28 @@ def _wire_team_create_tx(prisma_client):
         )
 
     prisma_client.db.tx = lambda *_args, **_kwargs: _tx()
+    _wire_member_add_tx(prisma_client)
+
+
+def _wire_member_add_tx(prisma_client):
+    """/team/member_add takes the team's advisory lock, re-reads the roster under it, and runs
+    the user, budget, and membership writes on that same transaction, so a mocked client has
+    to hand its own table mocks back out of `tx()`.
+
+    Tables resolve on access, not here, since tests routinely replace `db.<table>` after
+    wiring the transaction."""
+
+    class _Tx:
+        query_raw = AsyncMock(return_value=[{"members_with_roles": []}])
+
+        def __getattr__(self, table_name):
+            return getattr(prisma_client.db, table_name)
+
+    tx = _Tx()
+    tx_cm = MagicMock()
+    tx_cm.__aenter__ = AsyncMock(return_value=tx)
+    tx_cm.__aexit__ = AsyncMock(return_value=None)
+    prisma_client.tx = MagicMock(return_value=tx_cm)
 
 
 def _wire_member_delete_tx(prisma_client):
@@ -1700,6 +1726,7 @@ async def test_process_team_members_single_member():
             default_team_budget_id="budget-123",
             allowed_models=None,
             budget_duration=None,
+            tx=None,
         )
 
 
@@ -1910,6 +1937,55 @@ async def test_add_team_members_reconciles_against_freshly_locked_row():
     )
 
     assert [m.user_id for m in updated_team.members_with_roles] == ["zed", "alice", "bob"]
+
+
+@pytest.mark.asyncio
+async def test_add_team_members_runs_member_writes_on_the_lock_holding_transaction():
+    """
+    Regression pin against exhausting the connection pool with advisory-lock waiters.
+
+    Every concurrent /team/member_add for one team holds a pooled connection while it waits
+    on the team's advisory lock. If the holder's member writes went to the regular client,
+    it would need a second connection to finish, so enough concurrent adds fill the pool
+    with waiters and the holder can never commit or release the lock. The member writes
+    therefore have to run on the transaction that already owns the connection.
+    """
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        _add_team_members_to_team,
+    )
+
+    tx = MagicMock()
+    tx.query_raw = AsyncMock(return_value=[{"members_with_roles": []}])
+    tx.litellm_teamtable.update = AsyncMock(
+        return_value=LiteLLM_TeamTable(team_id="team-pool", members_with_roles=[])
+    )
+
+    tx_cm = MagicMock()
+    tx_cm.__aenter__ = AsyncMock(return_value=tx)
+    tx_cm.__aexit__ = AsyncMock(return_value=None)
+
+    prisma_client = MagicMock()
+    prisma_client.tx = MagicMock(return_value=tx_cm)
+
+    process_team_members = AsyncMock(return_value=([], []))
+    with patch(
+        "litellm.proxy.management_endpoints.team_endpoints._process_team_members",
+        new=process_team_members,
+    ):
+        await _add_team_members_to_team(
+            data=TeamMemberAddRequest(
+                team_id="team-pool",
+                member=Member(user_id="bob", role="user"),
+            ),
+            complete_team_data=LiteLLM_TeamTable(team_id="team-pool", members_with_roles=[]),
+            prisma_client=cast(object, prisma_client),
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+            litellm_proxy_admin_name="admin",
+        )
+
+    assert process_team_members.call_args.kwargs["tx"] is tx, (
+        "member writes must reuse the lock holder's connection, not check out another one"
+    )
 
 
 @pytest.mark.asyncio
