@@ -125,6 +125,32 @@ class TestInsert:
         sql = 'INSERT INTO "Foo" ("id") VALUES (1), (2) UNION ALL SELECT "id" FROM "Bar";'
         assert _keywords(tmp_path, sql) == ("INSERT ... SELECT",)
 
+    def test_a_parenthesised_select_row_source_is_flagged(self, tmp_path):
+        sql = 'INSERT INTO "Foo" ("id") (SELECT "id" FROM "Bar");'
+        assert _keywords(tmp_path, sql) == ("INSERT ... SELECT",)
+
+    def test_a_parenthesised_select_row_source_without_a_column_list_is_flagged(self, tmp_path):
+        sql = 'INSERT INTO "Foo" (SELECT "id" FROM "Bar");'
+        assert _keywords(tmp_path, sql) == ("INSERT ... SELECT",)
+
+    def test_a_parenthesised_select_row_source_spanning_lines_is_flagged(self, tmp_path):
+        sql = 'INSERT INTO "Foo" ("id")\n(\n    SELECT "id" FROM "Bar"\n);'
+        assert _keywords(tmp_path, sql) == ("INSERT ... SELECT",)
+
+    def test_a_parenthesised_select_over_a_values_list_is_flagged(self, tmp_path):
+        sql = 'INSERT INTO "Foo" ("id") (SELECT * FROM (VALUES (1), (2)) AS "v"("id"));'
+        assert _keywords(tmp_path, sql) == ("INSERT ... SELECT",)
+
+    def test_a_set_operation_over_parenthesised_selects_is_flagged(self, tmp_path):
+        sql = 'INSERT INTO "Foo" ("id") (SELECT 1) UNION (SELECT 2);'
+        assert _keywords(tmp_path, sql) == ("INSERT ... SELECT",)
+
+    def test_a_table_row_source_is_flagged(self, tmp_path):
+        assert _keywords(tmp_path, 'INSERT INTO "Foo" TABLE "Bar";') == ("INSERT ... TABLE",)
+
+    def test_a_table_named_in_the_insert_target_does_not_flag_it(self, tmp_path):
+        assert _keywords(tmp_path, 'INSERT INTO "audit table" ("id") VALUES (1);') == ()
+
 
 class TestCommonTableExpressions:
     def test_cte_led_update_is_flagged(self, tmp_path):
@@ -138,6 +164,14 @@ class TestCommonTableExpressions:
     def test_cte_led_insert_select_is_flagged(self, tmp_path):
         sql = 'WITH batch AS (SELECT "id" FROM "Bar") INSERT INTO "Foo" ("id") SELECT "id" FROM batch;'
         assert _keywords(tmp_path, sql) == ("WITH ... INSERT ... SELECT",)
+
+    def test_cte_led_insert_from_a_parenthesised_select_is_flagged(self, tmp_path):
+        sql = 'WITH batch AS (SELECT "id" FROM "Bar") INSERT INTO "Foo" ("id") (SELECT "id" FROM batch);'
+        assert _keywords(tmp_path, sql) == ("WITH ... INSERT ... SELECT",)
+
+    def test_cte_led_insert_into_a_values_list_passes(self, tmp_path):
+        sql = 'WITH batch AS (SELECT max("id") FROM "Bar") INSERT INTO "Foo" ("id") VALUES (1);'
+        assert _keywords(tmp_path, sql) == ()
 
     def test_read_only_cte_passes(self, tmp_path):
         sql = 'WITH batch AS (SELECT "id" FROM "Foo") SELECT count(*) FROM batch;'
