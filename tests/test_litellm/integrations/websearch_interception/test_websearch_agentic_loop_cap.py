@@ -214,6 +214,40 @@ class TestCappedLoopReturnsTerminalResponse:
         assert _block_types(result) == ["server_tool_use", "web_search_tool_result", "text"]
 
     @pytest.mark.asyncio
+    async def test_turn_carrying_only_the_refused_call_still_ends_cleanly(self):
+        """
+        The refused call can be every block the model produced, which leaves the
+        turn with no content once it is dropped. That still has to come back as a
+        finished turn rather than as the leaked call, so the client stops instead
+        of waiting on a tool it cannot run, and the rest of the message survives
+        so the request is still billed and traceable.
+
+        An empty turn renders as nothing, which is the ceiling being set too low
+        for the question rather than a malformed response.
+        """
+        nothing_but_the_refused_call = {
+            "id": "msg_123",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-sonnet-4-5",
+            "content": [_internal_tool_use_block()],
+            "stop_reason": "tool_use",
+            "usage": {"input_tokens": 10, "output_tokens": 5},
+        }
+
+        result = await _run_hooks(
+            self.handler,
+            self.callback,
+            kwargs={"_agentic_loop_depth": 3, "max_agentic_loops": 3},
+            response=nothing_but_the_refused_call,
+        )
+
+        assert result["content"] == []
+        assert result["stop_reason"] == "end_turn"
+        assert result["usage"] == {"input_tokens": 10, "output_tokens": 5}
+        assert result["id"] == "msg_123"
+
+    @pytest.mark.asyncio
     async def test_no_follow_up_model_call_is_planned(self):
         """
         The rail has to end the turn without planning another model call, and it
