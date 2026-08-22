@@ -14,8 +14,8 @@ import pytest
 from typing import Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from litellm.proxy._types import UserAPIKeyAuth
-from litellm.types.llms.openai import OpenAIFileObject
+from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+from litellm.types.llms.openai import FileListPage, OpenAIFileObject
 from litellm.types.utils import LiteLLMBatch
 
 
@@ -283,10 +283,70 @@ async def test_afile_list_returns_owner_scoped_managed_files():
         take=10001,
         order=[{"created_at": "desc"}, {"unified_file_id": "desc"}],
     )
-    assert [file.id for file in response["data"]] == ["unified-file-id"]
-    assert response["first_id"] == "unified-file-id"
-    assert response["last_id"] == "unified-file-id"
-    assert response["has_more"] is False
+    assert [file.id for file in response.data] == ["unified-file-id"]
+    assert response.first_id == "unified-file-id"
+    assert response.last_id == "unified-file-id"
+    assert response.has_more is False
+
+
+@pytest.mark.asyncio
+async def test_afile_list_returns_a_page_object_callbacks_can_read():
+    """Post-call hooks receive the listing and read ``.data`` off it, the way the
+    provider SDK's page lets them. The body on the wire stays a plain list page."""
+    from fastapi.encoders import jsonable_encoder
+
+    managed_files, _ = _make_managed_files_over_rows([_make_managed_file_row("unified-file-id")])
+
+    page = await managed_files.afile_list(
+        purpose=None,
+        litellm_parent_otel_span=None,
+        user_api_key_dict=_make_user_api_key_dict(),
+    )
+
+    assert isinstance(page, FileListPage)
+    assert [file.id for file in page.data] == ["unified-file-id"]
+
+    body = jsonable_encoder(page)
+    assert list(body) == ["object", "data", "first_id", "last_id", "has_more"]
+    assert body["object"] == "list"
+    assert [file["id"] for file in body["data"]] == ["unified-file-id"]
+    assert body["first_id"] == "unified-file-id"
+    assert body["last_id"] == "unified-file-id"
+    assert body["has_more"] is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("purpose", ["nonexistent_purpose", "EVALS", "batch "])
+async def test_afile_list_rejects_a_purpose_the_files_api_never_accepts(purpose):
+    """No stored file can carry an undocumented purpose, so filtering on one is a
+    bad request rather than a legitimately empty page."""
+    managed_files, table = _make_managed_files_over_rows([_make_managed_file_row("unified-file-id")])
+
+    with pytest.raises(ProxyException) as exc_info:
+        await managed_files.afile_list(
+            purpose=purpose,
+            litellm_parent_otel_span=None,
+            user_api_key_dict=_make_user_api_key_dict(),
+        )
+
+    assert exc_info.value.code == "400"
+    assert exc_info.value.type == "invalid_request_error"
+    assert exc_info.value.param == "purpose"
+    assert table.find_many_calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("purpose", ["batch", "assistants", "fine-tune", None])
+async def test_afile_list_accepts_every_documented_purpose(purpose):
+    managed_files, _ = _make_managed_files_over_rows([_make_managed_file_row("unified-file-id")])
+
+    page = await managed_files.afile_list(
+        purpose=purpose,
+        litellm_parent_otel_span=None,
+        user_api_key_dict=_make_user_api_key_dict(),
+    )
+
+    assert isinstance(page, FileListPage)
 
 
 @pytest.mark.asyncio
@@ -305,7 +365,7 @@ async def test_afile_list_does_not_leak_another_callers_files():
         user_api_key_dict=_make_user_api_key_dict(),
     )
 
-    assert [file.id for file in response["data"]] == ["unified-mine-2", "unified-mine-1"]
+    assert [file.id for file in response.data] == ["unified-mine-2", "unified-mine-1"]
     assert table.find_many_calls[0]["where"] == {"created_by": "test-user"}
 
 
@@ -319,8 +379,8 @@ async def test_afile_list_denies_a_caller_without_a_user_or_team():
         user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", parent_otel_span=None),
     )
 
-    assert response["data"] == []
-    assert response["has_more"] is False
+    assert response.data == []
+    assert response.has_more is False
     assert table.find_many_calls == []
 
 
@@ -339,7 +399,7 @@ async def test_afile_list_filters_by_purpose():
         user_api_key_dict=_make_user_api_key_dict(),
     )
 
-    assert [file.id for file in response["data"]] == ["unified-batch"]
+    assert [file.id for file in response.data] == ["unified-batch"]
 
 
 async def _walk_afile_list(managed_files, user_api_key_dict, purpose, limit):
@@ -354,10 +414,10 @@ async def _walk_afile_list(managed_files, user_api_key_dict, purpose, limit):
             limit=limit,
             after=after,
         )
-        page_ids = [file.id for file in page["data"]]
+        page_ids = [file.id for file in page.data]
         assert not set(page_ids) & set(seen)
         seen.extend(page_ids)
-        if not page["has_more"]:
+        if not page.has_more:
             return seen
         assert page_ids, "an SDK stops paging on an empty page, so has_more must never ride one"
         after = page_ids[-1]
@@ -384,20 +444,20 @@ async def test_afile_list_fills_a_page_past_rows_the_purpose_filter_drops():
         limit=1,
     )
 
-    assert [file.id for file in first_page["data"]] == ["unified-2"]
-    assert first_page["has_more"] is True
-    assert first_page["last_id"] == "unified-2"
+    assert [file.id for file in first_page.data] == ["unified-2"]
+    assert first_page.has_more is True
+    assert first_page.last_id == "unified-2"
 
     second_page = await managed_files.afile_list(
         purpose="batch",
         litellm_parent_otel_span=None,
         user_api_key_dict=user_api_key_dict,
         limit=1,
-        after=first_page["last_id"],
+        after=first_page.last_id,
     )
 
-    assert [file.id for file in second_page["data"]] == ["unified-4"]
-    assert second_page["has_more"] is False
+    assert [file.id for file in second_page.data] == ["unified-4"]
+    assert second_page.has_more is False
 
 
 @pytest.mark.parametrize("limit", [1, 2, 3])
@@ -437,8 +497,8 @@ async def test_afile_list_fills_a_page_past_rows_that_do_not_parse():
         limit=1,
     )
 
-    assert [file.id for file in page["data"]] == ["unified-2"]
-    assert page["has_more"] is False
+    assert [file.id for file in page.data] == ["unified-2"]
+    assert page.has_more is False
 
 
 _DEEP_SCAN_ROW_COUNT = 2000
@@ -460,8 +520,8 @@ async def test_afile_list_bounds_the_queries_a_deep_purpose_match_costs():
         limit=1,
     )
 
-    assert [file.id for file in page["data"]] == ["unified-match"]
-    assert page["has_more"] is False
+    assert [file.id for file in page.data] == ["unified-match"]
+    assert page.has_more is False
     assert len(table.find_many_calls) <= _DEEP_SCAN_QUERY_BUDGET
 
 
@@ -480,8 +540,8 @@ async def test_afile_list_bounds_the_queries_a_deep_unparseable_run_costs():
         limit=1,
     )
 
-    assert [file.id for file in page["data"]] == ["unified-parses"]
-    assert page["has_more"] is False
+    assert [file.id for file in page.data] == ["unified-parses"]
+    assert page.has_more is False
     assert len(table.find_many_calls) <= _DEEP_SCAN_QUERY_BUDGET
 
 
@@ -499,8 +559,8 @@ async def test_afile_list_reads_one_chunk_when_the_first_one_fills_the_page():
         limit=2,
     )
 
-    assert [file.id for file in page["data"]] == ["unified-00000", "unified-00001"]
-    assert page["has_more"] is True
+    assert [file.id for file in page.data] == ["unified-00000", "unified-00001"]
+    assert page.has_more is True
     assert [call["take"] for call in table.find_many_calls] == [3]
 
 
@@ -517,10 +577,10 @@ async def test_afile_list_reports_no_more_pages_when_nothing_matches():
         limit=2,
     )
 
-    assert page["data"] == []
-    assert page["has_more"] is False
-    assert page["first_id"] is None
-    assert page["last_id"] is None
+    assert page.data == []
+    assert page.has_more is False
+    assert page.first_id is None
+    assert page.last_id is None
 
 
 @pytest.mark.asyncio
@@ -536,8 +596,8 @@ async def test_afile_list_honors_limit_and_reports_more_pages():
         limit=2,
     )
 
-    assert [file.id for file in response["data"]] == ["unified-0", "unified-1"]
-    assert response["has_more"] is True
+    assert [file.id for file in response.data] == ["unified-0", "unified-1"]
+    assert response.has_more is True
     assert table.find_many_calls[0]["take"] == 3
 
 
@@ -558,12 +618,12 @@ async def test_afile_list_pages_through_every_file_without_overlap():
             limit=2,
             after=after,
         )
-        page_ids = [file.id for file in page["data"]]
+        page_ids = [file.id for file in page.data]
         assert not set(page_ids) & set(seen)
         seen.extend(page_ids)
-        if not page["has_more"]:
+        if not page.has_more:
             break
-        after = page["last_id"]
+        after = page.last_id
 
     assert seen == [f"unified-{index}" for index in range(5)]
     assert table.find_many_calls[1]["cursor"] == {"unified_file_id": "unified-1"}
@@ -648,8 +708,8 @@ async def test_afile_list_accepts_the_ends_of_the_openai_limit_range(limit):
         limit=limit,
     )
 
-    assert [file.id for file in response["data"]] == ["unified-mine"]
-    assert response["has_more"] is False
+    assert [file.id for file in response.data] == ["unified-mine"]
+    assert response.has_more is False
     assert table.find_many_calls[0]["take"] == limit + 1
 
 

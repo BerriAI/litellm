@@ -11,6 +11,7 @@ from litellm.types.llms.openai import (
     AllMessageValues,
     CreateFileRequest,
     FileContentRequest,
+    FileListPage,
     OpenAICreateFileRequestOptionalParams,
     OpenAIFileObject,
 )
@@ -245,7 +246,7 @@ class BaseFileEndpoints(ABC):
         limit: int | None = None,
         after: str | None = None,
         **data: dict,
-    ) -> dict[str, object]:
+    ) -> FileListPage:
         pass
 
     @abstractmethod
