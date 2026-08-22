@@ -42,6 +42,16 @@ TEAM_RATE_LIMIT_METRICS = (
 )
 
 
+@pytest.fixture(autouse=True)
+def _single_process_collection(monkeypatch):
+    """
+    Series retirement is only possible outside multiprocess collection, so pin
+    the mode rather than depending on whatever the ambient environment has set.
+    """
+    monkeypatch.delenv("PROMETHEUS_MULTIPROC_DIR", raising=False)
+    monkeypatch.delenv("prometheus_multiproc_dir", raising=False)
+
+
 def _logger_with_mock_team_gauges() -> PrometheusLogger:
     with patch("litellm.integrations.prometheus.PrometheusLogger.__init__", return_value=None):
         logger = PrometheusLogger()
@@ -498,3 +508,33 @@ def test_rename_survives_a_tracked_series_that_is_already_gone():
 
     renamed = {**TEAM_LABELS, "team_alias": "ml-research"}
     assert registry.get_sample_value("litellm_team_rpm_limit", renamed) == 60
+
+
+def test_does_not_attempt_retirement_under_multiprocess_collection(monkeypatch):
+    """
+    prometheus_client refuses to remove a labelset when PROMETHEUS_MULTIPROC_DIR
+    is set, warning instead, because a worker cannot retire a series another
+    worker wrote. Attempting it on every team request would emit warnings while
+    leaving the sample in place, so the gauges are set and nothing is retired.
+    """
+    monkeypatch.setenv("PROMETHEUS_MULTIPROC_DIR", "/tmp/does-not-need-to-exist")
+    logger = _logger_with_mock_team_gauges()
+
+    _set_team_metrics(logger, _payload_with_headers(dict(ALL_TEAM_HEADERS)))
+    _set_team_metrics(logger, _payload_with_headers({}))
+
+    _assert_set_once(logger, "litellm_remaining_team_requests_for_model", 42)
+    for metric_name in TEAM_RATE_LIMIT_METRICS:
+        getattr(logger, metric_name).remove.assert_not_called()
+
+
+def test_retires_series_when_collection_is_single_process(monkeypatch):
+    monkeypatch.delenv("PROMETHEUS_MULTIPROC_DIR", raising=False)
+    monkeypatch.delenv("prometheus_multiproc_dir", raising=False)
+    logger = _logger_with_mock_team_gauges()
+
+    _set_team_metrics(logger, _payload_with_headers(dict(ALL_TEAM_HEADERS)))
+    _set_team_metrics(logger, _payload_with_headers({}))
+
+    for metric_name in TEAM_RATE_LIMIT_METRICS:
+        getattr(logger, metric_name).remove.assert_called_once_with("team-abc", "research", "gpt-4o-mini")

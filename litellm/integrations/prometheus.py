@@ -184,6 +184,17 @@ _TEAM_RATE_LIMIT_GAUGE_SPECS: Final[
 )
 
 
+def _series_retirement_supported() -> bool:
+    """
+    ``prometheus_client`` refuses to remove a labelset in multiprocess mode and
+    warns when asked, because each worker owns its own mmap file and cannot
+    retire a series another worker wrote. Retirement is therefore a
+    single-process capability, and attempting it under multiprocess collection
+    would only emit warnings while leaving the sample in place.
+    """
+    return not ("PROMETHEUS_MULTIPROC_DIR" in os.environ or "prometheus_multiproc_dir" in os.environ)
+
+
 class PrometheusLogger(CustomLogger):
     # Class variables or attributes
 
@@ -2181,11 +2192,16 @@ class PrometheusLogger(CustomLogger):
             label_context=label_context,
         )
         label_values: Final = tuple(labels.get(name, "") for name in labelnames)
-        self._drop_superseded_team_series(
-            gauge=gauge, metric_name=metric_name, labels=labels, label_values=label_values
-        )
+        can_retire: Final = _series_retirement_supported()
+        if can_retire:
+            self._drop_superseded_team_series(
+                gauge=gauge, metric_name=metric_name, labels=labels, label_values=label_values
+            )
         if value is not None:
             gauge.labels(*label_values).set(value)
+            return
+
+        if not can_retire:
             return
 
         self._forget_team_series(metric_name=metric_name, labels=labels)
