@@ -1,6 +1,6 @@
 import json
 import re
-from typing import Any, AsyncGenerator, Dict, List, Literal, Optional, Union
+from typing import Any, AsyncGenerator, Literal, Optional, Union
 
 from fastapi import HTTPException
 
@@ -37,7 +37,7 @@ GUARDRAIL_NAME = "tool_permission"
 class ToolPermissionGuardrail(CustomGuardrail):
     def __init__(
         self,
-        rules: Optional[List[Dict]] = None,
+        rules: Optional[list[dict]] = None,
         default_action: Literal["deny", "allow"] = "deny",
         on_disallowed_action: Literal["block", "rewrite"] = "block",
         **kwargs,
@@ -74,7 +74,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
             self.default_action,
         )
 
-    def _load_rules(self, rules: Optional[List[Any]]) -> None:
+    def _load_rules(self, rules: Optional[list[Any]]) -> None:
         """Parse ``rules`` and (re)build the compiled target/pattern lookups.
 
         ``self.rules`` plus ``_compiled_rule_targets`` / ``_compiled_rule_patterns``
@@ -83,14 +83,14 @@ class ToolPermissionGuardrail(CustomGuardrail):
         single source of truth, so an in-place update (PUT /guardrails, immediate
         sync) reflects rule changes instead of keeping the construction-time maps.
         """
-        parsed_rules: List[ToolPermissionRule] = []
-        compiled_targets: Dict[str, Dict[str, Optional[re.Pattern]]] = {}
-        compiled_patterns: Dict[str, Dict[str, re.Pattern]] = {}
+        parsed_rules: list[ToolPermissionRule] = []
+        compiled_targets: dict[str, dict[str, Optional[re.Pattern]]] = {}
+        compiled_patterns: dict[str, dict[str, re.Pattern]] = {}
 
         for rule_item in rules or []:
             rule = rule_item if isinstance(rule_item, ToolPermissionRule) else ToolPermissionRule(**rule_item)
 
-            target_patterns: Dict[str, Optional[re.Pattern]] = {
+            target_patterns: dict[str, Optional[re.Pattern]] = {
                 "tool_name": None,
                 "tool_type": None,
             }
@@ -105,7 +105,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
                 except re.error as exc:
                     raise ValueError(f"Invalid regex for tool_type in rule '{rule.id}': {exc}") from exc
 
-            rule_patterns: Dict[str, re.Pattern] = {}
+            rule_patterns: dict[str, re.Pattern] = {}
             for path, pattern in (rule.allowed_param_patterns or {}).items():
                 try:
                     rule_patterns[path] = re.compile(pattern)
@@ -264,7 +264,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
 
     def _parse_tool_call_arguments(
         self, tool_call: ChatCompletionMessageToolCall
-    ) -> tuple[Optional[Dict[str, Any]], Optional[str]]:
+    ) -> tuple[Optional[dict[str, Any]], Optional[str]]:
         arguments = getattr(tool_call.function, "arguments", None)
         if not arguments:
             return None, "missing arguments"
@@ -298,7 +298,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
         self,
         value: Any,
         current_path: str,
-        collected: Dict[str, List[Any]],
+        collected: dict[str, list[Any]],
         depth: int = 0,
     ) -> None:
         from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
@@ -322,7 +322,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
     def _patterns_match_for_rule(
         self,
         *,
-        arguments: Dict[str, Any],
+        arguments: dict[str, Any],
         rule: ToolPermissionRule,
         tool_name: Optional[str],
     ) -> tuple[bool, Optional[str]]:
@@ -330,7 +330,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
         if not compiled_patterns:
             return True, None
 
-        path_value_map: Dict[str, List[Any]] = {}
+        path_value_map: dict[str, list[Any]] = {}
         self._collect_argument_paths(arguments, "", path_value_map)
 
         for path, compiled_pattern in compiled_patterns.items():
@@ -444,7 +444,130 @@ class ToolPermissionGuardrail(CustomGuardrail):
             function={"name": function_name, "arguments": arguments},
         )
 
-    def _extract_tool_calls_from_response(self, response: ModelResponse) -> List[ChatCompletionMessageToolCall]:
+    @staticmethod
+    def _raw_arguments_to_json(arguments: Any) -> str:
+        if arguments is None:
+            return ""
+        if isinstance(arguments, str):
+            return arguments
+        try:
+            return json.dumps(arguments)
+        except TypeError:
+            return json.dumps(str(arguments))
+
+    def _raw_tool_call_to_standard_tool_call(
+        self,
+        *,
+        tool_name: Optional[str],
+        arguments: Any,
+        tool_call_id: Optional[str],
+        fallback_id: str,
+    ) -> Optional[ChatCompletionMessageToolCall]:
+        if not tool_name:
+            return None
+
+        return ChatCompletionMessageToolCall(
+            id=tool_call_id or fallback_id,
+            type="function",
+            function={
+                "name": tool_name,
+                "arguments": self._raw_arguments_to_json(arguments),
+            },
+        )
+
+    def _extract_openai_raw_tool_calls(self, response: dict[str, Any]) -> list[ChatCompletionMessageToolCall]:
+        tool_calls: list[ChatCompletionMessageToolCall] = []
+        for choice_index, choice in enumerate(response.get("choices") or []):
+            message = self._get_mapping_value(choice, "message") or {}
+            for tool_index, tool_call in enumerate(self._get_mapping_value(message, "tool_calls") or []):
+                function = self._get_mapping_value(tool_call, "function") or {}
+                standard_tool_call = self._raw_tool_call_to_standard_tool_call(
+                    tool_name=self._get_mapping_value(function, "name"),
+                    arguments=self._get_mapping_value(function, "arguments"),
+                    tool_call_id=self._get_mapping_value(tool_call, "id"),
+                    fallback_id=f"raw_openai_tool_call_{choice_index}_{tool_index}",
+                )
+                if standard_tool_call is not None:
+                    tool_calls.append(standard_tool_call)
+
+            legacy_tool_call = self._legacy_function_call_to_tool_call(
+                self._get_mapping_value(message, "function_call"), choice_index
+            )
+            if legacy_tool_call is not None:
+                tool_calls.append(legacy_tool_call)
+        return tool_calls
+
+    def _extract_anthropic_raw_tool_calls(self, response: dict[str, Any]) -> list[ChatCompletionMessageToolCall]:
+        tool_calls: list[ChatCompletionMessageToolCall] = []
+        for block_index, block in enumerate(response.get("content") or []):
+            if self._get_mapping_value(block, "type") != "tool_use":
+                continue
+            standard_tool_call = self._raw_tool_call_to_standard_tool_call(
+                tool_name=self._get_mapping_value(block, "name"),
+                arguments=self._get_mapping_value(block, "input"),
+                tool_call_id=self._get_mapping_value(block, "id"),
+                fallback_id=f"raw_anthropic_tool_use_{block_index}",
+            )
+            if standard_tool_call is not None:
+                tool_calls.append(standard_tool_call)
+        return tool_calls
+
+    def _extract_gemini_raw_tool_calls(self, response: dict[str, Any]) -> list[ChatCompletionMessageToolCall]:
+        tool_calls: list[ChatCompletionMessageToolCall] = []
+        for candidate_index, candidate in enumerate(response.get("candidates") or []):
+            content = self._get_mapping_value(candidate, "content") or {}
+            for part_index, part in enumerate(self._get_mapping_value(content, "parts") or []):
+                function_call = self._get_mapping_value(part, "functionCall")
+                if function_call is None:
+                    continue
+                standard_tool_call = self._raw_tool_call_to_standard_tool_call(
+                    tool_name=self._get_mapping_value(function_call, "name"),
+                    arguments=self._get_mapping_value(function_call, "args"),
+                    tool_call_id=None,
+                    fallback_id=f"raw_gemini_function_call_{candidate_index}_{part_index}",
+                )
+                if standard_tool_call is not None:
+                    tool_calls.append(standard_tool_call)
+        return tool_calls
+
+    def _extract_bedrock_raw_tool_calls(self, response: dict[str, Any]) -> list[ChatCompletionMessageToolCall]:
+        tool_calls: list[ChatCompletionMessageToolCall] = []
+        output = response.get("output")
+        output_message = self._get_mapping_value(output, "message") if isinstance(output, dict) else None
+        bedrock_content = (
+            self._get_mapping_value(output_message, "content") if isinstance(output_message, dict) else None
+        )
+        for block_index, block in enumerate(bedrock_content or []):
+            tool_use = self._get_mapping_value(block, "toolUse")
+            if not isinstance(tool_use, dict):
+                continue
+            standard_tool_call = self._raw_tool_call_to_standard_tool_call(
+                tool_name=self._get_mapping_value(tool_use, "name"),
+                arguments=self._get_mapping_value(tool_use, "input"),
+                tool_call_id=self._get_mapping_value(tool_use, "toolUseId"),
+                fallback_id=f"raw_bedrock_tool_use_{block_index}",
+            )
+            if standard_tool_call is not None:
+                tool_calls.append(standard_tool_call)
+        return tool_calls
+
+    def _extract_tool_calls_from_raw_response(self, response: dict[str, Any]) -> list[ChatCompletionMessageToolCall]:
+        """
+        Extract tool calls from provider-native pass-through responses.
+
+        Pass-through endpoints hand post-call guardrails the raw upstream JSON,
+        not LiteLLM's normalized ModelResponse. Keep this parser narrow and
+        provider-shape based so tool_permission can still enforce post-call
+        rules without changing pass-through response semantics.
+        """
+        return [
+            *self._extract_openai_raw_tool_calls(response),
+            *self._extract_anthropic_raw_tool_calls(response),
+            *self._extract_gemini_raw_tool_calls(response),
+            *self._extract_bedrock_raw_tool_calls(response),
+        ]
+
+    def _extract_tool_calls_from_response(self, response: ModelResponse) -> list[ChatCompletionMessageToolCall]:
         """
         Extract tool_calls from all choices in a model response.
 
@@ -498,8 +621,8 @@ class ToolPermissionGuardrail(CustomGuardrail):
             return function_call
         return self._get_mapping_value(function_call, "name")
 
-    def _collect_request_tools(self, data: dict) -> List[tuple[str, Optional[str]]]:
-        request_tools: List[tuple[str, Optional[str]]] = []
+    def _collect_request_tools(self, data: dict) -> list[tuple[str, Optional[str]]]:
+        request_tools: list[tuple[str, Optional[str]]] = []
 
         for tool in data.get("tools") or []:
             tool_name, tool_type = self._get_request_tool_name(tool)
@@ -523,7 +646,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
     def _modify_request_with_permission_errors(
         self,
         data: dict,
-        denied_tool_names: List[str],
+        denied_tool_names: list[str],
     ):
         """
         Modify the request to replace denied tool_calls blocks with error results
@@ -542,7 +665,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
         for tool_use in denied_tool_names:
             error_tool_names.add(tool_use)
 
-        tools: Optional[List[ChatCompletionToolParam]] = data.get("tools")
+        tools: Optional[list[ChatCompletionToolParam]] = data.get("tools")
         if tools is not None:
             new_tools = []
             for tool in tools:
@@ -590,7 +713,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
     def _modify_response_with_permission_errors(
         self,
         response: ModelResponse,
-        denied_tools: List[tuple[ChatCompletionMessageToolCall, PermissionError]],
+        denied_tools: list[tuple[ChatCompletionMessageToolCall, PermissionError]],
     ) -> None:
         """
         Modify the response to replace denied tool_calls blocks with error results
@@ -643,6 +766,131 @@ class ToolPermissionGuardrail(CustomGuardrail):
                         choice.message.content = existing_content + "\n\n" + "\n".join(error_messages)
                     else:
                         choice.message.content = "\n".join(error_messages)
+
+    def _rewrite_openai_raw_response(
+        self,
+        response: dict[str, Any],
+        error_messages_by_id: dict[str, str],
+    ) -> None:
+        for choice_index, choice in enumerate(response.get("choices") or []):
+            message = self._get_mapping_value(choice, "message")
+            if not isinstance(message, dict):
+                continue
+
+            error_messages: list[str] = []
+            filtered_tool_calls = []
+            for tool_index, tool_call in enumerate(message.get("tool_calls") or []):
+                tool_call_id = self._get_mapping_value(tool_call, "id") or (
+                    f"raw_openai_tool_call_{choice_index}_{tool_index}"
+                )
+                error_message = error_messages_by_id.get(tool_call_id)
+                if error_message is not None:
+                    error_messages.append(error_message)
+                else:
+                    filtered_tool_calls.append(tool_call)
+
+            if "tool_calls" in message:
+                message["tool_calls"] = filtered_tool_calls or None
+
+            legacy_error_message = error_messages_by_id.get(self._legacy_function_call_id(choice_index))
+            if legacy_error_message is not None:
+                message["function_call"] = None
+                error_messages.append(legacy_error_message)
+
+            if error_messages:
+                existing_content = message.get("content")
+                error_text = "\n".join(error_messages)
+                message["content"] = f"{existing_content}\n\n{error_text}" if existing_content else error_text
+
+    def _rewrite_anthropic_raw_response(
+        self,
+        response: dict[str, Any],
+        error_messages_by_id: dict[str, str],
+    ) -> None:
+        content = response.get("content")
+        if not isinstance(content, list):
+            return
+
+        filtered_content = []
+        error_messages = []
+        for block_index, block in enumerate(content):
+            tool_call_id = self._get_mapping_value(block, "id") or f"raw_anthropic_tool_use_{block_index}"
+            error_message = error_messages_by_id.get(tool_call_id)
+            if self._get_mapping_value(block, "type") == "tool_use" and error_message is not None:
+                error_messages.append(error_message)
+            else:
+                filtered_content.append(block)
+        if error_messages:
+            filtered_content.append({"type": "text", "text": "\n".join(error_messages)})
+            response["content"] = filtered_content
+
+    def _rewrite_gemini_raw_response(
+        self,
+        response: dict[str, Any],
+        error_messages_by_id: dict[str, str],
+    ) -> None:
+        for candidate_index, candidate in enumerate(response.get("candidates") or []):
+            content = self._get_mapping_value(candidate, "content")
+            if not isinstance(content, dict):
+                continue
+
+            filtered_parts = []
+            error_messages = []
+            for part_index, part in enumerate(content.get("parts") or []):
+                tool_call_id = f"raw_gemini_function_call_{candidate_index}_{part_index}"
+                error_message = error_messages_by_id.get(tool_call_id)
+                if self._get_mapping_value(part, "functionCall") is not None and error_message is not None:
+                    error_messages.append(error_message)
+                else:
+                    filtered_parts.append(part)
+            if error_messages:
+                filtered_parts.append({"text": "\n".join(error_messages)})
+                content["parts"] = filtered_parts
+
+    def _rewrite_bedrock_raw_response(
+        self,
+        response: dict[str, Any],
+        error_messages_by_id: dict[str, str],
+    ) -> None:
+        output = response.get("output")
+        output_message = self._get_mapping_value(output, "message") if isinstance(output, dict) else None
+        bedrock_content = (
+            self._get_mapping_value(output_message, "content") if isinstance(output_message, dict) else None
+        )
+        if not isinstance(bedrock_content, list):
+            return
+
+        filtered_content = []
+        error_messages = []
+        for block_index, block in enumerate(bedrock_content):
+            tool_use = self._get_mapping_value(block, "toolUse")
+            tool_call_id = self._get_mapping_value(tool_use, "toolUseId") if isinstance(tool_use, dict) else None
+            error_message = error_messages_by_id.get(tool_call_id or f"raw_bedrock_tool_use_{block_index}")
+            if isinstance(tool_use, dict) and error_message is not None:
+                error_messages.append(error_message)
+            else:
+                filtered_content.append(block)
+        if error_messages:
+            filtered_content.append({"text": "\n".join(error_messages)})
+            output_message["content"] = filtered_content
+
+    def _modify_raw_response_with_permission_errors(
+        self,
+        response: dict[str, Any],
+        denied_tools: list[tuple[ChatCompletionMessageToolCall, PermissionError]],
+    ) -> None:
+        if not denied_tools:
+            return
+
+        error_messages_by_id = {
+            tool_call.id: self._create_permission_error_result(tool_call, error).content
+            for tool_call, error in denied_tools
+        }
+
+        self._rewrite_openai_raw_response(response, error_messages_by_id)
+        self._rewrite_anthropic_raw_response(response, error_messages_by_id)
+        self._rewrite_gemini_raw_response(response, error_messages_by_id)
+        self._rewrite_bedrock_raw_response(response, error_messages_by_id)
 
     @log_guardrail_information
     async def async_pre_call_hook(
@@ -710,17 +958,18 @@ class ToolPermissionGuardrail(CustomGuardrail):
             user_api_key_dict: User API key information (unused but required by interface)
             response: The model response to check
         """
-        if not isinstance(response, ModelResponse):
-            return response
-
         verbose_proxy_logger.debug("Tool Permission Guardrail Post-Call Hook: Checking response")
 
         if not self.should_run_guardrail(data=data, event_type=GuardrailEventHooks.post_call):
             verbose_proxy_logger.debug("Tool Permission Guardrail: Skipping check (not enabled)")
             return response
 
-        # Extract tool_calls from the response
-        tool_calls = self._extract_tool_calls_from_response(response)
+        if isinstance(response, ModelResponse):
+            tool_calls = self._extract_tool_calls_from_response(response)
+        elif isinstance(response, dict):
+            tool_calls = self._extract_tool_calls_from_raw_response(response)
+        else:
+            return response
 
         if not tool_calls:
             verbose_proxy_logger.debug("Tool Permission Guardrail: No tool uses found")
@@ -757,7 +1006,10 @@ class ToolPermissionGuardrail(CustomGuardrail):
                 )
 
         if denied_tools:
-            self._modify_response_with_permission_errors(response, denied_tools)
+            if isinstance(response, ModelResponse):
+                self._modify_response_with_permission_errors(response, denied_tools)
+            else:
+                self._modify_raw_response_with_permission_errors(response, denied_tools)
         else:
             verbose_proxy_logger.debug("Tool Permission Guardrail Post-Call Hook: All tools allowed")
 
@@ -785,7 +1037,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
         from litellm.types.utils import TextCompletionResponse
 
         # Collect all chunks to process them together
-        all_chunks: List[ModelResponseStream] = []
+        all_chunks: list[ModelResponseStream] = []
         async for chunk in response:
             all_chunks.append(chunk)
 
