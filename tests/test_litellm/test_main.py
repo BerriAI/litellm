@@ -2863,9 +2863,17 @@ def _priced_at(prompt_tokens, completion_tokens):
 @pytest.fixture
 def local_cost_map(monkeypatch):
     """The prices these tests assert are the checked-in ones. Setting the environment
-    variable alone does not reload the map, so pin the map itself."""
+    variable alone does not reload the map, so pin the map itself.
+
+    ``get_model_info`` is lru_cached, so pinning ``model_cost`` is not enough on its
+    own: a cached entry warmed against the network-fetched map keeps its old prices
+    and ``completion_cost`` bills at those while the assertions read the pinned map.
+    Clear on the way in and out so entries never leak across tests in either direction."""
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+    litellm.get_model_info.cache_clear()
+    yield
+    litellm.get_model_info.cache_clear()
 
 
 def test_a_streamed_response_bills_the_usage_the_provider_reported(local_cost_map):

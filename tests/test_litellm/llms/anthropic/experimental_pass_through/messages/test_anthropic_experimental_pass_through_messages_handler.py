@@ -1176,13 +1176,22 @@ async def _drain(sse_stream) -> List[bytes]:
     return [chunk async for chunk in sse_stream]
 
 
-async def _flush_logging_worker() -> None:
+def _bind_logging_worker_to_running_loop() -> None:
+    """The worker's queue keeps the loop it was built on, so one left over from an earlier
+    test makes ``flush`` raise "bound to a different event loop". ``start`` runs
+    ``_ensure_queue``, which rebinds the queue when the running loop has changed."""
+    GLOBAL_LOGGING_WORKER.start()
+
+
+async def _flush_logging_worker(capture: "_SuccessPayloadCapture") -> None:
     await asyncio.sleep(0)
     try:
         await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10.0)
-    except asyncio.TimeoutError:
+    except (asyncio.TimeoutError, RuntimeError):
         pass
-    await asyncio.sleep(0.1)
+    deadline = asyncio.get_running_loop().time() + 10.0
+    while not capture.payloads and asyncio.get_running_loop().time() < deadline:
+        await asyncio.sleep(0.05)
 
 
 def _assert_anthropic_sse(chunks: List[bytes]) -> None:
@@ -1211,6 +1220,8 @@ class TestMessagesStreamingSuccessLogging:
             LiteLLMMessagesToResponsesAPIHandler,
         )
 
+        _bind_logging_worker_to_running_loop()
+
         with patch(
             "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
             new_callable=AsyncMock,
@@ -1230,7 +1241,7 @@ class TestMessagesStreamingSuccessLogging:
             )
             chunks = await _drain(sse_stream)
 
-        await _flush_logging_worker()
+        await _flush_logging_worker(capture_success_payloads)
 
         _assert_anthropic_sse(chunks)
         assert len(capture_success_payloads.payloads) == 1
@@ -1250,6 +1261,8 @@ class TestMessagesStreamingSuccessLogging:
             LiteLLMMessagesToCompletionTransformationHandler,
         )
 
+        _bind_logging_worker_to_running_loop()
+
         with patch(
             "litellm.llms.anthropic.experimental_pass_through.adapters.handler._proxy_router_fallback",
             return_value=None,
@@ -1265,7 +1278,7 @@ class TestMessagesStreamingSuccessLogging:
             )
             chunks = await _drain(sse_stream)
 
-        await _flush_logging_worker()
+        await _flush_logging_worker(capture_success_payloads)
 
         _assert_anthropic_sse(chunks)
         assert len(capture_success_payloads.payloads) == 1
