@@ -566,9 +566,14 @@ def bind_values_start(statement: str) -> int:
     """Where a statement stops handing commands to the server and starts listing bind values.
     The expressions after `USING` are values substituted into the command, never commands in
     their own right, so one that merely spells out a rewrite is not running it. Read off the
-    masked text, so a `USING` written inside the command string is not mistaken for this one."""
-    keyword = BIND_VALUES.search(statement)
-    return len(statement) if keyword is None else keyword.start()
+    masked text, so a `USING` written inside the command string is not mistaken for this one,
+    and only once the parentheses have closed, so that the `USING` of a `JOIN` in a subquery
+    that helps build the command does not cut the command short and hide the rest of it."""
+    for keyword in BIND_VALUES.finditer(statement):
+        preceding = statement[: keyword.start()]
+        if preceding.count("(") == preceding.count(")"):
+            return keyword.start()
+    return len(statement)
 
 
 def statement_start(statement: re.Match[str]) -> int:
