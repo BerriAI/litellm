@@ -48,6 +48,7 @@ def _logger_with_mock_team_gauges() -> PrometheusLogger:
     for metric_name in TEAM_RATE_LIMIT_METRICS:
         setattr(logger, metric_name, MagicMock())
     logger.get_labels_for_metric = MagicMock(side_effect=PrometheusMetricLabels.get_labels)
+    logger._team_series_label_values = {}
     return logger
 
 

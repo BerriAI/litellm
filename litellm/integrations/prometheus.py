@@ -7,7 +7,7 @@ import asyncio
 import math
 import os
 import sys
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, MutableMapping, Sequence
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeVar, cast
 
@@ -228,6 +228,11 @@ class PrometheusLogger(CustomLogger):
             _custom_buckets: Final = litellm.prometheus_latency_buckets
             self.latency_buckets = tuple(_custom_buckets) if _custom_buckets is not None else LATENCY_BUCKETS
             self._bounded_prometheus_series_tracker = BoundedPrometheusSeriesTracker()
+            # Last labelset emitted per (metric, team, model), so a renamed team's
+            # previous series can be retired without scanning the registry.
+            self._team_series_label_values: MutableMapping[  # mutable-ok: per-process emission state, rewritten as teams are renamed
+                tuple[str, str, str], tuple[str, ...]
+            ] = {}
 
             # Create metric factory functions
             self._counter_factory = self._create_metric_factory(Counter)
@@ -2176,11 +2181,14 @@ class PrometheusLogger(CustomLogger):
             label_context=label_context,
         )
         label_values: Final = tuple(labels.get(name, "") for name in labelnames)
-        self._drop_superseded_team_series(gauge=gauge, labelnames=labelnames, labels=labels)
+        self._drop_superseded_team_series(
+            gauge=gauge, metric_name=metric_name, labels=labels, label_values=label_values
+        )
         if value is not None:
             gauge.labels(*label_values).set(value)
             return
 
+        self._forget_team_series(metric_name=metric_name, labels=labels)
         try:
             gauge.remove(*label_values)
         except KeyError:
@@ -2191,36 +2199,49 @@ class PrometheusLogger(CustomLogger):
     def _drop_superseded_team_series(
         self,
         gauge: _LabeledGauge,
-        labelnames: Sequence[str],
+        metric_name: DEFINED_PROMETHEUS_METRICS,
         labels: Mapping[str, str],
+        label_values: tuple[str, ...],
     ) -> None:
         """
-        Retire child series that describe this same team and model under a
-        different alias. Renaming a team changes ``team_alias``, which starts a
-        new series, and the old one would otherwise keep publishing the values
-        it held at rename time, double counting the team on any sum over
-        ``team``.
-        """
-        collect: Final = getattr(gauge, "collect", None)
-        if collect is None:
-            return
+        Retire the series this team and model last published under a different
+        alias. Renaming a team changes ``team_alias``, which starts a new
+        series, and the old one would otherwise keep publishing the values it
+        held at rename time, double counting the team on any sum over ``team``.
 
-        team_label: Final = UserAPIKeyLabelNames.TEAM.value
-        alias_label: Final = UserAPIKeyLabelNames.TEAM_ALIAS.value
-        model_label: Final = UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME.value
-        superseded: Final = tuple(
-            tuple(sample.labels.get(name, "") for name in labelnames)
-            for metric in collect()
-            for sample in metric.samples
-            if sample.labels.get(team_label) == labels.get(team_label)
-            and sample.labels.get(model_label) == labels.get(model_label)
-            and sample.labels.get(alias_label) != labels.get(alias_label)
+        The previously emitted labelset is remembered per (metric, team, model)
+        rather than found by scanning the registry. A scan would cost every
+        team request work proportional to the total number of team series ever
+        emitted, which any authenticated caller could amplify by sending
+        ordinary traffic.
+        """
+        identity: Final = (
+            metric_name,
+            labels.get(UserAPIKeyLabelNames.TEAM.value, ""),
+            labels.get(UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME.value, ""),
         )
-        for label_values in superseded:
+        previous: Final = self._team_series_label_values.get(identity)
+        if previous is not None and previous != label_values:
             try:
-                gauge.remove(*label_values)
+                gauge.remove(*previous)
             except KeyError:
                 pass
+        self._team_series_label_values[identity] = label_values
+
+    def _forget_team_series(
+        self,
+        metric_name: DEFINED_PROMETHEUS_METRICS,
+        labels: Mapping[str, str],
+    ) -> None:
+        """Stop tracking a (metric, team, model) whose series has been dropped."""
+        self._team_series_label_values.pop(
+            (
+                metric_name,
+                labels.get(UserAPIKeyLabelNames.TEAM.value, ""),
+                labels.get(UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME.value, ""),
+            ),
+            None,
+        )
 
     def _set_latency_metrics(
         self,
