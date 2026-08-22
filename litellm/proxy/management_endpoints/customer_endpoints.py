@@ -222,6 +222,25 @@ async def _handle_customer_object_permission_update(
             update_end_user_table_data["object_permission_id"] = object_permission_id
 
 
+async def _invalidate_end_user_cache(user_ids: list[str]) -> None:
+    """Drop the cached end-user object(s) after a customer create/update/delete.
+
+    Budget enforcement reads the end-user from ``user_api_key_cache`` under
+    ``end_user_id:{id}`` (TTL 300s); without invalidation it keeps serving the
+    stale budget/spend for up to the TTL after the DB changes (issue #31838).
+    """
+    if not user_ids:
+        return
+    try:
+        from litellm.proxy.proxy_server import user_api_key_cache
+
+        for user_id in user_ids:
+            if user_id:
+                await user_api_key_cache.async_delete_cache(key=f"end_user_id:{user_id}")
+    except Exception as e:  # noqa: BLE001 - cache invalidation must never fail the customer op
+        verbose_proxy_logger.debug(f"Failed to invalidate end_user cache: {e}")
+
+
 @router.post(
     "/end_user/new",
     tags=["Customer Management"],
@@ -390,6 +409,7 @@ async def new_end_user(
             include={"litellm_budget_table": True, "object_permission": True},
         )
 
+        await _invalidate_end_user_cache([data.user_id])
         return _to_customer_response(end_user_record)
     except Exception as e:
         verbose_proxy_logger.exception(
@@ -636,6 +656,7 @@ async def update_end_user(
                 raise ValueError(f"Failed updating customer data. User ID does not exist passed user_id={data.user_id}")
             verbose_proxy_logger.debug(f"received response from updating prisma client. response={response}")
 
+            await _invalidate_end_user_cache([data.user_id])
             return _to_customer_response(response)
         else:
             raise ValueError(f"user_id is required, passed user_id = {data.user_id}")
@@ -711,6 +732,7 @@ async def delete_end_user(
                 where={"user_id": {"in": data.user_ids}}
             )
             verbose_proxy_logger.debug(f"received response from updating prisma client. response={response}")
+            await _invalidate_end_user_cache(data.user_ids)
             return DeleteCustomersResponse(
                 deleted_customers=response,
                 message="Successfully deleted customers with ids: " + str(data.user_ids),
