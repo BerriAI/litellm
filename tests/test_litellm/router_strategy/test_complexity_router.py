@@ -1806,6 +1806,51 @@ class TestLLMClassifier:
         assert call_kwargs["metadata"] == {**request_metadata, "internal_call_origin": "autorouter_classifier"}
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "request_kwargs",
+        [
+            pytest.param({"metadata": {"user_api_key": "sk-abc"}}, id="metadata-bucket"),
+            pytest.param(
+                {"litellm_metadata": {"user_api_key": "sk-abc"}}, id="litellm-metadata-bucket"
+            ),
+            pytest.param({}, id="no-caller-context"),
+            pytest.param(None, id="no-request-kwargs"),
+        ],
+    )
+    async def test_aclassify_reaches_the_llm_for_every_caller_metadata_shape(
+        self, llm_classifier_config, request_kwargs
+    ):
+        """Whatever the caller's metadata bucket looks like, the configured classifier must
+        actually run. The forwarded metadata reaches litellm's own metadata handling, which
+        raises "'NoneType' object has no attribute 'update'" on a shape it does not expect;
+        aclassify catches that and silently degrades to heuristic scoring, so the tier is
+        decided by word counting while the config says otherwise. A real Router is used here
+        because a mocked acompletion accepts any shape and never reaches that handling.
+        """
+        real_router = Router(
+            model_list=[
+                {
+                    "model_name": "haiku-classifier",
+                    "litellm_params": {
+                        "model": "openai/haiku-classifier",
+                        "api_key": "sk-classifier",
+                        "mock_response": '{"tier": "COMPLEX"}',
+                    },
+                }
+            ]
+        )
+        router = ComplexityRouter(
+            model_name="test-complexity-router",
+            litellm_router_instance=real_router,
+            complexity_router_config=llm_classifier_config,
+        )
+
+        outcome = await router.aclassify("hi", request_kwargs=request_kwargs)
+
+        assert outcome.cause == "llm_classifier"
+        assert outcome.tier == ComplexityTier.COMPLEX
+
+    @pytest.mark.asyncio
     async def test_aclassify_captures_request_body_in_proxy_server_request(
         self, llm_complexity_router, mock_router_instance
     ):
