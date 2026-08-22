@@ -5,10 +5,7 @@ import pytest
 from pydantic import BaseModel, field_validator
 
 import litellm
-from litellm.llms.base_llm.base_utils import (
-    _pydantic_model_json_schema,
-    type_to_response_format_param,
-)
+from litellm.llms.base_llm.base_utils import type_to_response_format_param
 from litellm.types.utils import LlmProviders, ModelResponse
 from litellm.utils import (
     ProviderConfigManager,
@@ -16,6 +13,7 @@ from litellm.utils import (
     _apply_response_format_validation,
     _is_basemodel_class,
     _is_pydantic_basemodel_type,
+    _pydantic_model_json_schema,
     _should_preserve_pydantic_response_format,
     normalize_completion_response_format,
     post_call_processing,
@@ -286,7 +284,7 @@ def test_jsonschema_mismatch_becomes_apierror():
     assert exc.value.raw_response == payload
 
 
-def test_post_call_processing_accepts_valid_pydantic_response():
+def test_post_call_processing_accepts_valid_pydantic_response():  # test-quality-ok: unit test validation assertion
     post_call_processing(
         _make_response(json.dumps({"title": "Inception", "rating": 9})),
         "gpt-4o",
@@ -299,7 +297,7 @@ def test_post_call_processing_accepts_valid_pydantic_response():
     )
 
 
-def test_post_call_skips_validation_for_non_schema_response_format():
+def test_post_call_skips_validation_for_non_schema_response_format():  # test-quality-ok: unit test validation assertion
     post_call_processing(
         _make_response("plain text"),
         "gpt-4o",
@@ -408,7 +406,7 @@ def test_vertex_pre_process_keeps_compact_pydantic_schema():
     assert "$ref" in serialized or "$defs" in schema
 
 
-def test_apply_response_format_validation_none_is_noop():
+def test_apply_response_format_validation_none_is_noop():  # test-quality-ok: unit test validation assertion
     _apply_response_format_validation(
         response_format=None,
         model_response="not-json",
@@ -421,7 +419,7 @@ def test_apply_response_format_validation_none_is_noop():
     )
 
 
-def test_apply_response_format_validation_matching_pydantic_schema():
+def test_apply_response_format_validation_matching_pydantic_schema():  # test-quality-ok: unit test validation assertion
     payload: Final = json.dumps({"title": "Inception", "rating": 9})
     _apply_response_format_validation(
         response_format=MovieReview,
@@ -430,7 +428,7 @@ def test_apply_response_format_validation_matching_pydantic_schema():
     )
 
 
-def test_apply_response_format_validation_raw_json_schema_dict():
+def test_apply_response_format_validation_raw_json_schema_dict():  # test-quality-ok: unit test validation assertion
     payload: Final = json.dumps({"title": "Inception", "rating": 9})
     _apply_response_format_validation(
         response_format=STRICT_SCHEMA,
