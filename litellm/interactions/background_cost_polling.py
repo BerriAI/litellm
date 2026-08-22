@@ -10,6 +10,14 @@ billing: it schedules a poll task that fetches the interaction until it
 reaches a terminal status and logs the final usage as a single success event
 attributed to the original request.
 
+``requires_action`` is terminal for the interaction it names. The API has no
+operation that resumes one: a caller answers a tool request by creating a new
+interaction whose ``previous_interaction_id`` points at it, and that new
+interaction bills itself. The paused interaction keeps the tokens it already
+spent producing the tool request, so it is billed and settled where it stops
+rather than polled until the timeout, which would both lose that usage and
+hold its budget reservation open for the whole timeout window.
+
 Deleting an interaction makes every subsequent poll fail, which would let a
 caller retrieve the completed output themselves and then delete it before the
 poll task settles, leaving the work unbilled and the budget reservation
@@ -39,7 +47,7 @@ from litellm.types.interactions import InteractionsAPIResponse
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
-_TERMINAL_STATUSES = frozenset({"completed", "failed", "cancelled", "incomplete", "budget_exceeded"})
+_TERMINAL_STATUSES = frozenset({"completed", "failed", "cancelled", "incomplete", "budget_exceeded", "requires_action"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -125,7 +133,7 @@ async def poll_and_log_background_interaction_cost(
         if not _claim_settlement(context.logging_obj):
             return
         if response.usage is not None:
-            await context.logging_obj.async_log_background_interaction_completion(result=response)
+            await _bill_settled_interaction(logging_obj=context.logging_obj, response=response)
         else:
             await _release_open_budget_reservation(logging_obj=context.logging_obj)
         return
@@ -160,6 +168,20 @@ async def _release_open_budget_reservation(logging_obj: "LiteLLMLoggingObj") -> 
         await release_budget_reservation(budget_reservation=budget_reservation)
     except Exception:  # noqa: BLE001  # a failed release must not crash the poll task; counters expire via TTL
         verbose_logger.exception("Failed to release budget reservation for an unbilled background interaction")
+
+
+async def _bill_settled_interaction(logging_obj: "LiteLLMLoggingObj", response: InteractionsAPIResponse) -> None:
+    """
+    Claiming the settlement makes the claimer solely responsible for the
+    reservation, and no one retries a claim that is already set. A billing
+    failure here must therefore release the reservation on its way out, or it
+    stays pinned at the estimated cost until the whole poll times out.
+    """
+    try:
+        await logging_obj.async_log_background_interaction_completion(result=response)
+    except Exception:
+        await _release_open_budget_reservation(logging_obj=logging_obj)
+        raise
 
 
 def is_pollable_background_interaction(response: InteractionsAPIResponse) -> bool:
@@ -247,6 +269,6 @@ async def maybe_settle_background_interaction_before_delete(
     if not _claim_settlement(context.logging_obj):
         return
     if response.status in _TERMINAL_STATUSES and response.usage is not None:
-        await context.logging_obj.async_log_background_interaction_completion(result=response)
+        await _bill_settled_interaction(logging_obj=context.logging_obj, response=response)
         return
     await _release_open_budget_reservation(logging_obj=context.logging_obj)
