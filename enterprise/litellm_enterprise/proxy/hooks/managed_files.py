@@ -1384,11 +1384,13 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
 
         Pagination is keyset based on ``unified_file_id`` so a key that owns
         every file on the proxy still reads one bounded page at a time.
-        ``purpose`` is applied after parsing because the managed file table
-        keeps it inside the ``file_object`` blob instead of a column, so a
-        narrowed page can hold fewer files than ``limit``. ``last_id`` then
-        falls back to the last row the page read, which keeps the cursor
-        usable even when every file on the page was filtered out.
+        ``purpose`` is applied after parsing, because the managed file table
+        keeps it inside the ``file_object`` blob instead of a column, and rows
+        whose blob will not parse drop out there too, so a chunk of rows can
+        yield fewer matches than the page holds. Successive chunks are read
+        until the page is full or the caller's rows run out, which keeps
+        ``data`` non-empty while matches remain and its last id usable as the
+        next cursor.
         """
         validate_file_list_limit(limit)
 
@@ -1410,28 +1412,29 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 )
 
         page_size: Final = min(limit or MAX_FILE_LIST_LIMIT, MAX_FILE_LIST_LIMIT)
-        cursor_args: _CursorPageArgs = {"cursor": {"unified_file_id": after}, "skip": 1} if after else {}
+        chunk_size: Final = page_size + 1
+        matches: Final[List[OpenAIFileObject]] = []
+        cursor_id = after
 
-        rows: Final = await _managed_file_table(self.prisma_client).find_many(
-            where=owner_filter,
-            take=page_size + 1,
-            order=[{"created_at": "desc"}, {"unified_file_id": "desc"}],
-            **cursor_args,
-        )
-        has_more: Final = len(rows) > page_size
-        page_rows: Final = rows[:page_size]
+        while len(matches) <= page_size:
+            cursor_args: _CursorPageArgs = {"cursor": {"unified_file_id": cursor_id}, "skip": 1} if cursor_id else {}
+            chunk = await _managed_file_table(self.prisma_client).find_many(
+                where=owner_filter,
+                take=chunk_size,
+                order=[{"created_at": "desc"}, {"unified_file_id": "desc"}],
+                **cursor_args,
+            )
+            matches.extend(
+                parsed_file_object.model_copy(update={"id": row.unified_file_id})
+                for row in chunk
+                if (parsed_file_object := _parse_managed_file_object(row.file_object, row.unified_file_id)) is not None
+                and (purpose is None or parsed_file_object.purpose == purpose)
+            )
+            if len(chunk) < chunk_size:
+                break
+            cursor_id = chunk[-1].unified_file_id
 
-        files: Final = [
-            parsed_file_object.model_copy(update={"id": row.unified_file_id})
-            for row in page_rows
-            if (parsed_file_object := _parse_managed_file_object(row.file_object, row.unified_file_id)) is not None
-            and (purpose is None or parsed_file_object.purpose == purpose)
-        ]
-        return build_list_page(
-            files,
-            has_more=has_more,
-            next_cursor_id=page_rows[-1].unified_file_id if page_rows else None,
-        )
+        return build_list_page(matches[:page_size], has_more=len(matches) > page_size)
 
     def _is_batch_polling_enabled(self) -> bool:
         """

@@ -65,6 +65,7 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
     get_credentials_for_model,
     handle_model_based_routing,
     prepare_data_with_credentials,
+    validate_file_list_limit,
     validate_managed_files_requirement,
     validate_managed_id_requirement,
 )
@@ -1436,6 +1437,8 @@ async def list_files(
 
     data: dict = {}
     try:
+        validate_file_list_limit(limit)
+
         # Include original request and headers in the data
         base_llm_response_processor: Final = ProxyBaseLLMRequestProcessing(data=data)
         (

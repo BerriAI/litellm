@@ -81,6 +81,14 @@ def _make_managed_file_row(
     )
 
 
+def _make_unparseable_managed_file_row(
+    unified_file_id: str,
+    created_by: str = "test-user",
+) -> MagicMock:
+    """A row whose stored blob cannot be parsed back into a file object."""
+    return MagicMock(unified_file_id=unified_file_id, file_object=None, created_by=created_by)
+
+
 class _FakeManagedFileTable:
     """In-memory stand-in for the managed file table, newest row first."""
 
@@ -334,13 +342,37 @@ async def test_afile_list_filters_by_purpose():
     assert [file.id for file in response["data"]] == ["unified-batch"]
 
 
+async def _walk_afile_list(managed_files, user_api_key_dict, purpose, limit):
+    """Page through the listing the way the official SDK does, off ``data[-1].id``."""
+    seen = []
+    after = None
+    while True:
+        page = await managed_files.afile_list(
+            purpose=purpose,
+            litellm_parent_otel_span=None,
+            user_api_key_dict=user_api_key_dict,
+            limit=limit,
+            after=after,
+        )
+        page_ids = [file.id for file in page["data"]]
+        assert not set(page_ids) & set(seen)
+        seen.extend(page_ids)
+        if not page["has_more"]:
+            return seen
+        assert page_ids, "an SDK stops paging on an empty page, so has_more must never ride one"
+        after = page_ids[-1]
+
+
 @pytest.mark.asyncio
-async def test_afile_list_keeps_a_usable_cursor_when_a_page_filters_everything_out():
+async def test_afile_list_fills_a_page_past_rows_the_purpose_filter_drops():
+    """The newest rows do not match, so the page must reach past them rather than come back empty."""
     managed_files, _ = _make_managed_files_over_rows(
         [
             _make_managed_file_row("unified-0"),
             _make_managed_file_row("unified-1"),
             _make_managed_file_row("unified-2", purpose="batch"),
+            _make_managed_file_row("unified-3"),
+            _make_managed_file_row("unified-4", purpose="batch"),
         ]
     )
     user_api_key_dict = _make_user_api_key_dict()
@@ -349,23 +381,83 @@ async def test_afile_list_keeps_a_usable_cursor_when_a_page_filters_everything_o
         purpose="batch",
         litellm_parent_otel_span=None,
         user_api_key_dict=user_api_key_dict,
-        limit=2,
+        limit=1,
     )
 
-    assert first_page["data"] == []
+    assert [file.id for file in first_page["data"]] == ["unified-2"]
     assert first_page["has_more"] is True
-    assert first_page["last_id"] == "unified-1"
+    assert first_page["last_id"] == "unified-2"
 
     second_page = await managed_files.afile_list(
         purpose="batch",
         litellm_parent_otel_span=None,
         user_api_key_dict=user_api_key_dict,
-        limit=2,
+        limit=1,
         after=first_page["last_id"],
     )
 
-    assert [file.id for file in second_page["data"]] == ["unified-2"]
+    assert [file.id for file in second_page["data"]] == ["unified-4"]
     assert second_page["has_more"] is False
+
+
+@pytest.mark.parametrize("limit", [1, 2, 3])
+@pytest.mark.asyncio
+async def test_afile_list_walks_every_purpose_match_at_any_limit(limit):
+    managed_files, _ = _make_managed_files_over_rows(
+        [
+            _make_managed_file_row("unified-0"),
+            _make_managed_file_row("unified-1"),
+            _make_managed_file_row("unified-2", purpose="batch"),
+            _make_managed_file_row("unified-3"),
+            _make_managed_file_row("unified-4", purpose="batch"),
+            _make_managed_file_row("unified-5", purpose="batch"),
+            _make_managed_file_row("unified-6"),
+        ]
+    )
+
+    seen = await _walk_afile_list(managed_files, _make_user_api_key_dict(), "batch", limit)
+
+    assert seen == ["unified-2", "unified-4", "unified-5"]
+
+
+@pytest.mark.asyncio
+async def test_afile_list_fills_a_page_past_rows_that_do_not_parse():
+    managed_files, _ = _make_managed_files_over_rows(
+        [
+            _make_unparseable_managed_file_row("unified-0"),
+            _make_unparseable_managed_file_row("unified-1"),
+            _make_managed_file_row("unified-2"),
+        ]
+    )
+
+    page = await managed_files.afile_list(
+        purpose=None,
+        litellm_parent_otel_span=None,
+        user_api_key_dict=_make_user_api_key_dict(),
+        limit=1,
+    )
+
+    assert [file.id for file in page["data"]] == ["unified-2"]
+    assert page["has_more"] is False
+
+
+@pytest.mark.asyncio
+async def test_afile_list_reports_no_more_pages_when_nothing_matches():
+    managed_files, _ = _make_managed_files_over_rows(
+        [_make_managed_file_row(f"unified-{index}") for index in range(5)]
+    )
+
+    page = await managed_files.afile_list(
+        purpose="batch",
+        litellm_parent_otel_span=None,
+        user_api_key_dict=_make_user_api_key_dict(),
+        limit=2,
+    )
+
+    assert page["data"] == []
+    assert page["has_more"] is False
+    assert page["first_id"] is None
+    assert page["last_id"] is None
 
 
 @pytest.mark.asyncio
