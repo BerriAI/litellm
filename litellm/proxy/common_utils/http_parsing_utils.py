@@ -274,10 +274,10 @@ async def get_form_data(request: Request) -> dict[str, Any]:
     Handles when OpenAI SDKs pass form keys as `timestamp_granularities[]="word"` instead of `timestamp_granularities=["word", "sentence"]`
     """
     form: Final = await request.form()
-    form_data: Final = dict(form)
     parsed_form_data: Final[dict[str, Any]] = {}
-    for key, value in form_data.items():
-        # OpenAI SDKs pass form keys as `timestamp_granularities[]="word"` instead of `timestamp_granularities=["word", "sentence"]`
+    # multi_items(), not dict(form): a dict drops every value but the last of a repeated key,
+    # which is the whole array this function exists to rebuild
+    for key, value in form.multi_items():
         if key.endswith("[]"):
             clean_key = key[:-2]
             parsed_form_data.setdefault(clean_key, []).append(value)

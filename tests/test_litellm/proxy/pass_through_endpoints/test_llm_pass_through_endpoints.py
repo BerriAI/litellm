@@ -13,6 +13,7 @@ import httpx
 import pytest
 from fastapi import HTTPException, Request, Response
 from fastapi.testclient import TestClient
+from starlette.datastructures import FormData
 
 sys.path.insert(
     0, os.path.abspath("../../../..")
@@ -1384,7 +1385,7 @@ async def test_is_streaming_request_fn():
     mock_request = Mock()
     mock_request.method = "POST"
     mock_request.headers = {"content-type": "multipart/form-data"}
-    mock_request.form = AsyncMock(return_value={"stream": "true"})
+    mock_request.form = AsyncMock(return_value=FormData({"stream": "true"}))
     assert await is_streaming_request_fn(mock_request) is True
 
 
