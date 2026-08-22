@@ -27,7 +27,6 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 GRAYSWAN_BLOCK_ERROR_MSG: Final = "Blocked by Gray Swan Guardrail"
-GRAYSWAN_CONVERSATION_CACHE_KEY: Final = "_grayswan_request_conversation"
 
 
 class MonitorTurn(TypedDict):
@@ -159,8 +158,9 @@ class GraySwanGuardrail(CustomGuardrail):
         Args:
             inputs: Dictionary containing:
                 - texts: List of extracted texts (fallback scan content)
-                - structured_messages: Normalized, scoped conversation (request scans)
-                - tools: Scoped tool definitions (request scans)
+                - structured_messages: Normalized, scoped conversation (response
+                  scans carry the request conversation plus the response turns)
+                - tools: Scoped tool definitions
                 - tool_calls: Tool calls emitted by the model (response scans)
                 - images: Optional list of images (not currently used by GraySwan)
             request_data: The original request data
@@ -176,7 +176,7 @@ class GraySwanGuardrail(CustomGuardrail):
         """
         start_time: Final = time.time()
         try:
-            messages, tools = self._build_monitor_input(inputs, request_data, input_type)
+            messages, tools = self._build_monitor_input(inputs, input_type)
             if not messages:
                 verbose_proxy_logger.debug("Gray Swan Guardrail: No content to scan")
                 return inputs
@@ -505,53 +505,24 @@ class GraySwanGuardrail(CustomGuardrail):
     def _build_monitor_input(
         self,
         inputs: GenericGuardrailAPIInputs,
-        request_data: dict,  # mutable-ok: the shared per-request state dict every hook receives; the request scan caches on it
         input_type: Literal["request", "response"],
     ) -> tuple[tuple[Mapping[str, Any], ...], tuple[Mapping[str, Any], ...] | None]:
         """Build the monitor conversation from the translation layer's scoped view.
 
-        Request scans send `structured_messages` and `tools` exactly as the unified
-        guardrail system produced them (normalized per API surface, operator scoping
-        flags applied) and cache them on the request. Response scans replay the
-        cached conversation and append the response turns. Without a structured
-        view, the pre-existing texts-only wrapping is kept.
+        Both scan types send `structured_messages` and `tools` exactly as the
+        unified guardrail system produced them (normalized per API surface,
+        operator scoping flags applied; response scans carry the request
+        conversation with the response turns appended). Without a structured
+        view, request scans keep the pre-existing texts-only wrapping and
+        response scans send context-free assistant turns (the SDK/direct-call
+        path, where no request conversation exists).
         """
+        conversation: Final = self._sanitize_json_list(inputs.get("structured_messages"))
+        if conversation:
+            return conversation, self._sanitize_json_list(inputs.get("tools"))
         if input_type == "request":
-            conversation: Final = self._sanitize_json_list(inputs.get("structured_messages"))
-            if not conversation:
-                return self._texts_fallback(inputs, "user"), None
-            tools: Final = self._sanitize_json_list(inputs.get("tools"))
-            self._cache_request_conversation(request_data, conversation, tools)
-            return conversation, tools
-        response_turns: Final = self._build_response_turns(inputs)
-        if not response_turns:
-            return (), None
-        cached: Final = self._cached_request_conversation(request_data)
-        if cached is None:
-            return self._texts_fallback(inputs, "assistant"), None
-        return (*cached[0], *response_turns), cached[1]
-
-    def _cache_request_conversation(
-        self,
-        request_data: dict,  # mutable-ok: the shared per-request state dict every hook receives; caching on it is the point
-        conversation: tuple[Mapping[str, Any], ...],
-        tools: tuple[Mapping[str, Any], ...] | None,
-    ) -> None:
-        metadata: Final = request_data.setdefault(
-            "metadata",
-            {},  # mutable-ok: request metadata is shared mutable state other hooks also write to
-        )  # rebind-ok: response scans replay the request-time scoped conversation and request_data is the only object shared across hooks
-        if isinstance(metadata, dict):
-            metadata[GRAYSWAN_CONVERSATION_CACHE_KEY] = (conversation, tools)
-
-    def _cached_request_conversation(
-        self, request_data: Mapping[str, Any]
-    ) -> tuple[tuple[Mapping[str, Any], ...], tuple[Mapping[str, Any], ...] | None] | None:
-        metadata: Final = request_data.get("metadata")
-        cached: Final = metadata.get(GRAYSWAN_CONVERSATION_CACHE_KEY) if isinstance(metadata, dict) else None
-        if isinstance(cached, tuple) and len(cached) == 2:
-            return cached
-        return None
+            return self._texts_fallback(inputs, "user"), None
+        return self._build_response_turns(inputs), None
 
     def _build_response_turns(self, inputs: GenericGuardrailAPIInputs) -> tuple[Mapping[str, Any], ...]:
         tool_calls: Final = self._sanitize_json_list(inputs.get("tool_calls"))

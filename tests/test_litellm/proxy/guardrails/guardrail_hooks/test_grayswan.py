@@ -666,9 +666,11 @@ async def test_apply_guardrail_scans_texts_not_raw_messages(monkeypatch, grayswa
 
 
 @pytest.mark.asyncio
-async def test_apply_guardrail_response_appends_assistant_turn_with_tool_calls(
+async def test_apply_guardrail_response_uses_structured_conversation_with_tools(
     monkeypatch, grayswan_guardrail: GraySwanGuardrail
 ) -> None:
+    """The translation layer hands response scans the request conversation with
+    the response turns already appended; the payload sends it verbatim."""
     captured: dict = {}
 
     async def _fake_call(payload: dict):
@@ -677,34 +679,65 @@ async def test_apply_guardrail_response_appends_assistant_turn_with_tool_calls(
 
     monkeypatch.setattr(grayswan_guardrail, "_call_grayswan_api", _fake_call)
 
-    structured_messages = [{"role": "user", "content": "write a script"}]
-    response_tool_calls = [
+    structured_messages = [
+        {"role": "user", "content": "write a script"},
         {
-            "id": "call_9",
-            "type": "function",
-            "function": {"name": "write_file", "arguments": '{"path": "x.sh", "content": "xmrig"}'},
-        }
+            "role": "assistant",
+            "content": "sure, writing it now",
+            "tool_calls": [
+                {
+                    "id": "call_9",
+                    "type": "function",
+                    "function": {"name": "write_file", "arguments": '{"path": "x.sh", "content": "xmrig"}'},
+                }
+            ],
+        },
     ]
-    request_data: dict = {"model": "gpt-4"}
+    tools = [{"type": "function", "function": {"name": "write_file", "parameters": {}}}]
 
     await grayswan_guardrail.apply_guardrail(
-        inputs={"texts": ["write a script"], "structured_messages": structured_messages},
-        request_data=request_data,
-        input_type="request",
-    )
-    await grayswan_guardrail.apply_guardrail(
-        inputs={"texts": ["sure, writing it now"], "tool_calls": response_tool_calls},
-        request_data=request_data,
+        inputs={
+            "texts": ["sure, writing it now"],
+            "structured_messages": structured_messages,
+            "tools": tools,
+        },
+        request_data={"model": "gpt-4"},
         input_type="response",
     )
 
     wire = _wire(captured["payload"])
-    assert wire["messages"][:-1] == structured_messages
-    assert wire["messages"][-1] == {
-        "role": "assistant",
-        "content": "sure, writing it now",
-        "tool_calls": response_tool_calls,
-    }
+    assert wire["messages"] == structured_messages
+    assert wire["tools"] == tools
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_response_does_not_read_request_metadata(
+    monkeypatch, grayswan_guardrail: GraySwanGuardrail
+) -> None:
+    """Request scans no longer stash the conversation on request_data, and
+    response scans build the payload from inputs alone."""
+    captured: dict = {}
+
+    async def _fake_call(payload: dict):
+        captured["payload"] = payload
+        return {"violation": 0.0}
+
+    monkeypatch.setattr(grayswan_guardrail, "_call_grayswan_api", _fake_call)
+
+    request_data: dict = {"model": "gpt-4"}
+    await grayswan_guardrail.apply_guardrail(
+        inputs={"texts": ["go"], "structured_messages": [{"role": "user", "content": "go"}]},
+        request_data=request_data,
+        input_type="request",
+    )
+    assert "_grayswan_request_conversation" not in (request_data.get("metadata") or {})
+
+    await grayswan_guardrail.apply_guardrail(
+        inputs={"texts": ["done"]},
+        request_data=request_data,
+        input_type="response",
+    )
+    assert _wire(captured["payload"])["messages"] == [{"role": "assistant", "content": "done"}]
 
 
 @pytest.mark.asyncio
@@ -720,23 +753,15 @@ async def test_apply_guardrail_scans_tool_call_only_response(
     monkeypatch.setattr(grayswan_guardrail, "_call_grayswan_api", _fake_call)
 
     response_tool_calls = [{"id": "call_2", "type": "function", "function": {"name": "run", "arguments": "{}"}}]
-    request_data: dict = {"model": "gpt-4"}
 
     await grayswan_guardrail.apply_guardrail(
-        inputs={"texts": ["go"], "structured_messages": [{"role": "user", "content": "go"}]},
-        request_data=request_data,
-        input_type="request",
-    )
-    await grayswan_guardrail.apply_guardrail(
         inputs={"texts": [], "tool_calls": response_tool_calls},
-        request_data=request_data,
+        request_data={"model": "gpt-4"},
         input_type="response",
     )
 
     wire = _wire(captured["payload"])
-    assert wire["messages"][0] == {"role": "user", "content": "go"}
-    assert wire["messages"][-1]["tool_calls"] == response_tool_calls
-    assert wire["messages"][-1]["content"] == ""
+    assert wire["messages"] == [{"role": "assistant", "content": "", "tool_calls": response_tool_calls}]
 
 
 @pytest.mark.asyncio
@@ -795,20 +820,14 @@ async def test_apply_guardrail_empty_response_is_not_scanned(
 
     monkeypatch.setattr(grayswan_guardrail, "_call_grayswan_api", _fake_call)
 
-    request_data: dict = {"model": "gpt-4"}
-    await grayswan_guardrail.apply_guardrail(
-        inputs={"texts": ["go"], "structured_messages": [{"role": "user", "content": "go"}]},
-        request_data=request_data,
-        input_type="request",
-    )
     inputs: dict = {"texts": []}
     result = await grayswan_guardrail.apply_guardrail(
         inputs=inputs,
-        request_data=request_data,
+        request_data={"model": "gpt-4"},
         input_type="response",
     )
 
-    assert len(calls) == 1
+    assert len(calls) == 0
     assert result is inputs
 
 
@@ -824,19 +843,13 @@ async def test_apply_guardrail_multiple_response_texts_get_separate_turns(
 
     monkeypatch.setattr(grayswan_guardrail, "_call_grayswan_api", _fake_call)
 
-    request_data: dict = {"model": "gpt-4"}
-    await grayswan_guardrail.apply_guardrail(
-        inputs={"texts": ["pick one"], "structured_messages": [{"role": "user", "content": "pick one"}]},
-        request_data=request_data,
-        input_type="request",
-    )
     await grayswan_guardrail.apply_guardrail(
         inputs={"texts": ["candidate one", "candidate two"]},
-        request_data=request_data,
+        request_data={"model": "gpt-4"},
         input_type="response",
     )
 
-    assert _wire(captured["payload"])["messages"][-2:] == [
+    assert _wire(captured["payload"])["messages"] == [
         {"role": "assistant", "content": "candidate one"},
         {"role": "assistant", "content": "candidate two"},
     ]
