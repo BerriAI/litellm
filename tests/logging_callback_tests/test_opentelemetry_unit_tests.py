@@ -9,8 +9,6 @@ import traceback
 from dotenv import load_dotenv
 
 load_dotenv()
-import os
-import asyncio
 
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -213,3 +211,35 @@ class TestOpentelemetryUnitTests(BaseLoggingCallbackTest):
         mock_span.set_attribute.assert_called_with(
             ErrorAttributes.ERROR_MESSAGE, "Fallback error message"
         )
+
+    def test_record_metrics_semconv_provider_name(self):
+        """
+        Test that _record_metrics emits gen_ai.provider.name under semconv mode.
+        """
+        from litellm.integrations.opentelemetry import OpenTelemetry
+        from litellm.integrations.opentelemetry_utils.gen_ai_semconv import OTELSemconvCategory
+
+        otel_integration = OpenTelemetry()
+        mock_histogram = MagicMock()
+        otel_integration._operation_duration_histogram = mock_histogram
+
+        # Case 1: Default legacy mode
+        kwargs = {
+            "litellm_params": {"custom_llm_provider": "anthropic"},
+            "model": "claude-3-5-sonnet",
+        }
+        start = datetime.now()
+        end = datetime.now()
+        otel_integration._record_metrics(kwargs, None, start, end)
+        call_attrs = mock_histogram.record.call_args[1]["attributes"]
+        assert call_attrs.get("gen_ai.system") == "anthropic"
+
+        # Case 2: Semconv experimental mode
+        otel_integration.config.semconv_stability_opt_in = {
+            OTELSemconvCategory.GEN_AI_LATEST_EXPERIMENTAL
+        }
+        otel_integration._record_metrics(kwargs, None, start, end)
+        call_attrs = mock_histogram.record.call_args[1]["attributes"]
+        assert call_attrs.get("gen_ai.provider.name") == "anthropic"
+        assert "gen_ai.system" not in call_attrs
+
