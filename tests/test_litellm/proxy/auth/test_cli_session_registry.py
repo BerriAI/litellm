@@ -1,13 +1,9 @@
 import json
-import os
-import sys
 import time
 from datetime import datetime, timedelta, timezone
 
 import pytest
 from prisma.engine.errors import EngineConnectionError
-
-sys.path.insert(0, os.path.abspath("../.."))
 
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
@@ -316,9 +312,7 @@ async def test_db_outage_follows_the_proxy_wide_posture(monkeypatch):
 
     monkeypatch.setattr(proxy_server, "general_settings", {"allow_requests_on_db_unavailable": True}, raising=False)
     assert (
-        await is_cli_session_revoked(
-            session_token=SESSION_TOKEN, prisma_client=prisma, user_api_key_cache=_cache()
-        )
+        await is_cli_session_revoked(session_token=SESSION_TOKEN, prisma_client=prisma, user_api_key_cache=_cache())
         is False
     )
 

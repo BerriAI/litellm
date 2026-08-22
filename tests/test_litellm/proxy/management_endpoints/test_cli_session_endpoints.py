@@ -1,12 +1,8 @@
-import os
-import sys
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 import pytest
 from fastapi import HTTPException
-
-sys.path.insert(0, os.path.abspath("../../../"))
 
 from litellm.caching.dual_cache import DualCache
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
@@ -109,6 +105,8 @@ async def test_revoking_an_unknown_session_is_a_404():
 
     with prisma_patch, cache_patch:
         with pytest.raises(HTTPException) as exc_info:
-            await revoke_cli_session_endpoint(session_id="nope", user_api_key_dict=_caller(LitellmUserRoles.PROXY_ADMIN))
+            await revoke_cli_session_endpoint(
+                session_id="nope", user_api_key_dict=_caller(LitellmUserRoles.PROXY_ADMIN)
+            )
 
     assert exc_info.value.status_code == 404
