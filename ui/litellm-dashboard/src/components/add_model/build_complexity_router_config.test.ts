@@ -601,6 +601,27 @@ describe("buildComplexityRouterConfig scorer knobs", () => {
   it("drops them when the classifier falls back to the default model and nothing is scored", () => {
     expect(buildComplexityRouterConfig(llmWithDefaultFallback)).not.toHaveProperty("tier_boundaries");
   });
+
+  it("omits the reasoning override floor while untouched, so it keeps tracking simple_medium", () => {
+    expect(buildComplexityRouterConfig(baseParams)).not.toHaveProperty("reasoning_override_min_score");
+  });
+
+  it("emits the reasoning override floor that was set", () => {
+    const config = buildComplexityRouterConfig({ ...baseParams, reasoningOverrideMinScore: 0.4 });
+    expect(config.reasoning_override_min_score).toBe(0.4);
+  });
+
+  // 0 is an unconditional override, not an absent knob, so a falsy check here would silently discard it.
+  it("emits an explicit 0 reasoning override floor", () => {
+    const config = buildComplexityRouterConfig({ ...baseParams, reasoningOverrideMinScore: 0 });
+    expect(config.reasoning_override_min_score).toBe(0);
+  });
+
+  it("drops the reasoning override floor when nothing is scored", () => {
+    expect(buildComplexityRouterConfig({ ...llmWithDefaultFallback, reasoningOverrideMinScore: 0 })).not.toHaveProperty(
+      "reasoning_override_min_score",
+    );
+  });
 });
 
 describe("plan-mode minimum tier", () => {
@@ -633,5 +654,22 @@ describe("getPlanModeTierError", () => {
 
   it("blocks a tier whose models were removed, which the backend would reject with a 400", () => {
     expect(getPlanModeTierError("COMPLEX", tiersWithEmptyComplex)).toContain("COMPLEX");
+  });
+});
+
+describe("buildComplexityRouterConfig tier model params", () => {
+  it("keeps tier_model_configs out of the payload when nothing is set", () => {
+    expect(buildComplexityRouterConfig(baseParams)).not.toHaveProperty("tier_model_configs");
+  });
+
+  it("emits tier_model_configs beside string tiers when efforts are set", () => {
+    const config = buildComplexityRouterConfig({
+      ...baseParams,
+      tierModelParams: { COMPLEX: { "claude-sonnet-4": { reasoning_effort: "high" } } },
+    });
+    expect(config.tiers).toEqual(tiers);
+    expect(config.tier_model_configs).toEqual({
+      COMPLEX: [{ model_name: "claude-sonnet-4", litellm_params: { reasoning_effort: "high" } }],
+    });
   });
 });

@@ -8,15 +8,12 @@ detail 404'd, overview omitted them (or rendered them as Custom/Guardrail
 orphans), and logs missed their logical-name alias.
 """
 
-import os
-import sys
 from datetime import datetime
 from typing import Any, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../.."))
 
 from fastapi import HTTPException
 from prisma.errors import TableNotFoundError

@@ -1,5 +1,5 @@
 import { PaginationState } from "@tanstack/react-table";
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import React, { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
@@ -128,7 +128,7 @@ describe("MemoryTable", () => {
     const onRefresh = vi.fn();
     render(<MemoryTable {...baseProps} onSearchChange={onSearchChange} onRefresh={onRefresh} />);
 
-    await user.type(screen.getByTestId("datatable-search"), "u");
+    fireEvent.change(screen.getByTestId("datatable-search"), { target: { value: "u" } });
     expect(onSearchChange).toHaveBeenCalledWith("u");
 
     await user.click(screen.getByTestId("datatable-refresh"));

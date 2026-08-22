@@ -8,6 +8,12 @@ from logging import Formatter
 from typing import Any, Final
 
 import litellm
+from litellm.constants import (
+    LITELLM_TRUNCATED_PAYLOAD_FIELD,
+    LITELLM_TRUNCATION_STDOUT_SAFEGUARD_NOTE,
+    MAX_STRING_LENGTH_STDOUT_LOG,
+)
+from litellm.litellm_core_utils.env_utils import get_env_int
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.litellm_core_utils.secret_redaction import redact_string, redact_structured_value
@@ -82,6 +88,24 @@ def redact_secrets(value: str) -> str:
     return _redact_string(value)
 
 
+def _substituted_color_message(record: logging.LogRecord) -> str | None:
+    """Render a record's ``color_message`` against its args, or None if absent.
+
+    uvicorn's colorized formatter re-renders `color_message` against
+    record.args at emit time (see uvicorn.logging.ColourizedFormatter) instead
+    of using the already-formatted record.msg, so it has to be substituted
+    before args are cleared or it is later formatted with no args and prints
+    the raw "%s://%s:%d" placeholders instead of the URL.
+    """
+    color_message: Final = record.__dict__.get("color_message")
+    if not isinstance(color_message, str) or not record.args:
+        return None
+    try:
+        return color_message % record.args
+    except TypeError:
+        return color_message
+
+
 class SecretRedactionFilter(logging.Filter):
     """Scrubs known secret/credential patterns from log records."""
 
@@ -90,6 +114,12 @@ class SecretRedactionFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
         if not _ENABLE_SECRET_REDACTION:
             return True
+
+        # Runs before args are cleared, and before the extra-field loop below
+        # that redacts the substituted result.
+        substituted_color_message: Final = _substituted_color_message(record)
+        if substituted_color_message is not None:
+            record.color_message = substituted_color_message  # rebind-ok: a Filter scrubs records in place
 
         try:
             record.msg = _redact_string(record.getMessage())
@@ -101,7 +131,7 @@ class SecretRedactionFilter(logging.Filter):
         # Redact exception tracebacks
         if record.exc_info and record.exc_info[1] is not None:
             try:
-                record.exc_text = _redact_string(self._formatter.formatException(record.exc_info))
+                record.exc_text = _redact_string(record.exc_text or self._formatter.formatException(record.exc_info))
             except Exception:
                 pass
 
@@ -114,6 +144,72 @@ class SecretRedactionFilter(logging.Filter):
 
 
 _secret_filter: Final = SecretRedactionFilter()
+
+
+def _get_max_string_length_stdout_log() -> int:
+    """Read the limit per record so a value loaded later via proxy config
+    environment_variables is honored."""
+    return get_env_int("MAX_STRING_LENGTH_STDOUT_LOG", MAX_STRING_LENGTH_STDOUT_LOG)
+
+
+def _stdout_truncation_marker(skipped_chars: int) -> str:
+    return (
+        f"... ({LITELLM_TRUNCATED_PAYLOAD_FIELD} skipped {skipped_chars} chars. "
+        f"{LITELLM_TRUNCATION_STDOUT_SAFEGUARD_NOTE}) ..."
+    )
+
+
+def _truncate_for_stdout_log(text: str, limit: int) -> str:
+    kept_chars: Final = limit - len(_stdout_truncation_marker(len(text)))
+    if kept_chars <= 0:
+        return text[:limit]
+    head_chars: Final = kept_chars // 2
+    tail_chars: Final = kept_chars - head_chars
+    return f"{text[:head_chars]}{_stdout_truncation_marker(len(text) - kept_chars)}{text[-tail_chars:]}"
+
+
+class StdoutLogTruncationFilter(logging.Filter):
+    """Bounds how much of an oversized log line reaches stdout.
+
+    A provider error string can echo the whole request payload, so one failed agentic
+    request writes hundreds of KB to stdout, repeatedly as the exception propagates from
+    the router to the proxy handler and into its traceback, all inline on the event loop.
+
+    DEBUG records pass through untouched, since dumping full payloads is the point of
+    `--detailed_debug`, and logging callbacks (OTEL, Datadog, etc.) don't run through
+    logging filters at all, so they still get the untruncated error.
+    """
+
+    _formatter = logging.Formatter()
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if record.levelno < logging.INFO:
+            return True
+
+        limit: Final = _get_max_string_length_stdout_log()
+        if limit <= 0:
+            return True
+
+        try:
+            message: Final = record.getMessage()
+        except (TypeError, ValueError):
+            return True
+
+        if len(message) > limit:
+            record.msg = _truncate_for_stdout_log(message, limit)  # rebind-ok: the Filter interface mutates the record
+            record.args = None  # rebind-ok: args are consumed by the truncated message above
+
+        if isinstance(record.exc_info, tuple):
+            exc_text: Final = record.exc_text or self._formatter.formatException(record.exc_info)
+            if len(exc_text) > limit:
+                record.exc_text = _truncate_for_stdout_log(  # rebind-ok: the Filter interface mutates the record
+                    exc_text, limit
+                )
+
+        return True
+
+
+_stdout_truncation_filter: Final = StdoutLogTruncationFilter()
 
 
 class CorrelationContextFilter(logging.Filter):
@@ -301,6 +397,7 @@ def _setup_json_exception_handlers(formatter):
     error_handler: Final = logging.StreamHandler()
     error_handler.setFormatter(formatter)
     error_handler.addFilter(_secret_filter)
+    error_handler.addFilter(_stdout_truncation_filter)
     error_handler.addFilter(_correlation_filter)
 
     # Setup excepthook for uncaught exceptions
@@ -364,6 +461,12 @@ verbose_logger = logging.getLogger("LiteLLM")
 verbose_router_logger.addHandler(handler)
 verbose_proxy_logger.addHandler(handler)
 verbose_logger.addHandler(handler)
+
+# Filters attached to the logger, not the handler, survive callers swapping in their own
+# handlers (JSON mode, uvicorn log config, a host app's root handler).
+verbose_router_logger.addFilter(_stdout_truncation_filter)
+verbose_proxy_logger.addFilter(_stdout_truncation_filter)
+verbose_logger.addFilter(_stdout_truncation_filter)
 
 
 def _suppress_loggers():

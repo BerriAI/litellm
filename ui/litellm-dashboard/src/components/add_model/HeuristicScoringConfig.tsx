@@ -23,6 +23,8 @@ interface GroupSpec {
   labels: Record<string, string>;
 }
 
+const OVERRIDE_FLOOR_ID = "reasoning-override-min-score";
+
 const GROUPS: GroupSpec[] = [
   {
     group: "tier_boundaries",
@@ -88,7 +90,12 @@ const HeuristicScoringConfig: React.FC<HeuristicScoringConfigProps> = ({ value, 
   // falls back to the default model, so there is nothing here to configure.
   const scorerRuns = heuristicScoringRole(value) !== "never";
 
-  const overrides = GROUPS.filter((spec) => value[spec.group] !== undefined).length;
+  // What an untouched override floor follows: the boundary in effect, override included, not the shipped one.
+  const trackedFloor: number | undefined = { ...defaults?.tier_boundaries, ...value.tier_boundaries }.simple_medium;
+
+  const overrides =
+    GROUPS.filter((spec) => value[spec.group] !== undefined).length +
+    (value.reasoning_override_min_score !== undefined ? 1 : 0);
 
   // min/max are inert on a text input, and a plain number input renders Number("0.") as "0" so a decimal
   // cannot be typed. Hence the local draft plus an explicit clamp here.
@@ -100,6 +107,12 @@ const HeuristicScoringConfig: React.FC<HeuristicScoringConfigProps> = ({ value, 
       ...value,
       [spec.group]: { ...effective, [key]: spec.step === 1 ? Math.round(clamped) : clamped },
     });
+  };
+
+  const commitOverrideFloor = (raw: string) => {
+    const parsed = Number(raw);
+    if (raw.trim() === "" || !Number.isFinite(parsed)) return;
+    onChange({ ...value, reasoning_override_min_score: Math.min(1, Math.max(-1, parsed)) });
   };
 
   if (!scorerRuns) return null;
@@ -215,6 +228,50 @@ const HeuristicScoringConfig: React.FC<HeuristicScoringConfigProps> = ({ value, 
                   </section>
                 );
               })}
+
+              <section className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-sm font-medium">Reasoning override floor</span>
+                  {value.reasoning_override_min_score !== undefined && (
+                    <Button
+                      type="button"
+                      variant="link"
+                      size="xs"
+                      onClick={() => onChange({ ...value, reasoning_override_min_score: undefined })}
+                    >
+                      Reset to defaults
+                    </Button>
+                  )}
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Two or more reasoning markers promote a request to the reasoning tier, but only once its weighted
+                  score reaches this floor.{" "}
+                  {trackedFloor === undefined
+                    ? "Left untouched, it tracks the Simple to Medium boundary."
+                    : `Left untouched, it tracks the Simple to Medium boundary, currently ${trackedFloor.toFixed(2)}.`}{" "}
+                  Set it to 0 to promote on the markers alone.
+                </p>
+                <div className="flex items-center gap-3">
+                  <Label htmlFor={OVERRIDE_FLOOR_ID} className="w-44 text-xs font-normal">
+                    Minimum score
+                  </Label>
+                  <Input
+                    id={OVERRIDE_FLOOR_ID}
+                    type="text"
+                    inputMode="decimal"
+                    className="w-28"
+                    placeholder={trackedFloor === undefined ? undefined : trackedFloor.toFixed(2)}
+                    value={
+                      draft?.id === OVERRIDE_FLOOR_ID ? draft.raw : value.reasoning_override_min_score?.toString() ?? ""
+                    }
+                    onChange={(event) => {
+                      setDraft({ id: OVERRIDE_FLOOR_ID, raw: event.target.value });
+                      commitOverrideFloor(event.target.value);
+                    }}
+                    onBlur={() => setDraft(null)}
+                  />
+                </div>
+              </section>
             </>
           )}
         </div>

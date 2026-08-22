@@ -10,7 +10,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from itertools import groupby
 from os import PathLike
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Final, Literal, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, TypeVar, cast
 
 from openai.types.chat.chat_completion_custom_tool_param import (
     CustomFormatGrammar,
@@ -1323,6 +1323,16 @@ def check_is_function_call(logging_obj: "LoggingClass") -> bool:
             return True
 
     return False
+
+
+_MarkedT: Final = TypeVar("_MarkedT", bound=Mapping[str, object])
+
+
+def with_prompt_cache_breakpoint(target: _MarkedT, marker: object) -> _MarkedT:
+    if marker is None:
+        return target
+    marked: Final = {**target, "prompt_cache_breakpoint": marker}  # mutable-ok: API message payload
+    return cast(_MarkedT, marked)  # cast-ok: same block shape as the input plus the marker key
 
 
 def filter_value_from_dict(dictionary: dict, key: str, depth: int = 0) -> Any:

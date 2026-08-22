@@ -51,6 +51,8 @@ from litellm.proxy._experimental.mcp_server.mcp_debug import MCPDebug
 from litellm.proxy._experimental.mcp_server.oauth_utils import (
     _redact_mcp_resource_url,
     get_passthrough_www_authenticate,
+    get_route_relative_request_path,
+    well_known_root_suffix,
 )
 from litellm.proxy._experimental.mcp_server.utils import (
     LITELLM_MCP_SERVER_DESCRIPTION,
@@ -407,8 +409,6 @@ if MCP_AVAILABLE:
         StreamableHTTPSessionManager = None
     from mcp.types import (
         CallToolResult,
-        EmbeddedResource,
-        ImageContent,
         ListToolsResult,
         Prompt,
         TextContent,
@@ -430,6 +430,7 @@ if MCP_AVAILABLE:
         MCPServerManager,
         _caller_authorization_fans_out,
         _client_forwarded_authorization_headers,
+        _resolve_openapi_tool_auth,
         _should_strip_caller_authorization,
         _without_authorization,
         global_mcp_server_manager,
@@ -2835,69 +2836,36 @@ if MCP_AVAILABLE:
                 arguments = hook_result["arguments"]
 
             verbose_logger.debug("Executing local registry tool: %s", name)
-            # For BYOK servers the credential must be injected via a ContextVar
-            # because the tool function has headers baked into its closure.
-            # Pre-format the full Authorization header value using the server's
-            # configured auth_type so the generator doesn't need to know the prefix.
-            auth_header_value: str | None = None
-            if mcp_auth_header:
-                server_auth_type: Final = getattr(mcp_server, "auth_type", None) if mcp_server else None
-                if server_auth_type == MCPAuth.api_key:
-                    auth_header_value = f"ApiKey {mcp_auth_header}"
-                elif server_auth_type == MCPAuth.basic:
-                    auth_header_value = f"Basic {mcp_auth_header}"
-                else:
-                    auth_header_value = f"Bearer {mcp_auth_header}"
-
-            # Forward named client headers to OpenAPI tool upstream requests.
-            # MCPServer.extra_headers lists header names to copy from raw_headers.
-            # The strip decision is centralized in _should_strip_caller_authorization so this
-            # OpenAPI/local path agrees with the managed paths: M2M and the resolver-owned modes
-            # (token_exchange's raw subject token, authorization_code's stored token) must never
-            # have the caller's Authorization forwarded verbatim upstream.
-            forwarded_headers: dict[str, str] | None = None
-            if mcp_server and mcp_server.extra_headers and raw_headers:
-                normalized_raw: Final = {str(k).lower(): v for k, v in raw_headers.items() if isinstance(k, str)}
-                skip_caller_authorization: Final = _should_strip_caller_authorization(
-                    mcp_server=mcp_server,
-                    raw_headers=raw_headers,
-                    user_api_key_auth=user_api_key_auth,
-                )
-                for header_name in mcp_server.extra_headers:
-                    if not isinstance(header_name, str):
-                        continue
-                    if skip_caller_authorization and header_name.lower() == "authorization":
-                        continue
-                    value = normalized_raw.get(header_name.lower())
-                    if value is not None:
-                        if forwarded_headers is None:
-                            forwarded_headers = {}
-                        forwarded_headers[header_name] = value
-
-            resolved_auth_headers: dict[str, str] | None = None
-            if mcp_server:
-                (
-                    resolved_auth_headers,
-                    forwarded_headers,
-                ) = await global_mcp_server_manager.resolve_openapi_upstream_auth(
-                    mcp_server=mcp_server,
-                    oauth2_headers=oauth2_headers,
-                    raw_headers=raw_headers,
-                    mcp_auth_header=mcp_auth_header,
-                    user_api_key_auth=user_api_key_auth,
-                    forwarded_headers=forwarded_headers,
-                )
+            # The credential rides ContextVars because the tool function has its
+            # headers baked into the closure at registration time.
+            auth_header_value, openapi_forwarded_headers, upstream_credential = _resolve_openapi_tool_auth(
+                mcp_server=mcp_server,
+                mcp_auth_header=mcp_auth_header,
+                mcp_server_auth_headers=mcp_server_auth_headers,
+                raw_headers=raw_headers,
+                user_api_key_auth=user_api_key_auth,
+            )
+            (
+                resolved_auth_headers,
+                forwarded_headers,
+            ) = await global_mcp_server_manager.resolve_openapi_upstream_auth(
+                mcp_server=mcp_server,
+                oauth2_headers=oauth2_headers,
+                raw_headers=raw_headers,
+                mcp_auth_header=upstream_credential,
+                user_api_key_auth=user_api_key_auth,
+                forwarded_headers=openapi_forwarded_headers,
+            )
 
             _auth_token: Final = _request_auth_header.set(auth_header_value)
             _extra_token: Final = _request_extra_headers.set(forwarded_headers)
             _resolved_token: Final = _request_resolved_auth_headers.set(resolved_auth_headers)
             try:
-                local_content = await _handle_local_mcp_tool(name, arguments)
+                response = await _handle_local_mcp_tool(name, arguments)
             finally:
                 _request_auth_header.reset(_auth_token)
                 _request_extra_headers.reset(_extra_token)
                 _request_resolved_auth_headers.reset(_resolved_token)
-            response = CallToolResult(content=local_content, isError=False)
 
         # Try managed MCP server tool (the name is bare; the prefix boundary was
         # already resolved above against this server's registered prefixes)
@@ -2971,8 +2939,7 @@ if MCP_AVAILABLE:
                 if "arguments" in hook_result:
                     arguments = hook_result["arguments"]  # pyright: ignore[reportAny]  # hook returns untyped args
 
-            local_content = await _handle_local_mcp_tool(original_tool_name, arguments)
-            response = CallToolResult(content=local_content, isError=False)
+            response = await _handle_local_mcp_tool(original_tool_name, arguments)
 
         return await _run_post_mcp_call_guardrails(
             result=response,
@@ -3350,11 +3317,18 @@ if MCP_AVAILABLE:
         verbose_logger.debug("CALL TOOL RESULT: %s", call_tool_result)
         return call_tool_result
 
-    async def _handle_local_mcp_tool(
-        name: str, arguments: dict[str, object]
-    ) -> list[TextContent | ImageContent | EmbeddedResource]:
-        """
-        Handle tool execution for local registry tools
+    async def _handle_local_mcp_tool(name: str, arguments: dict[str, object]) -> CallToolResult:
+        """Execute a local-registry tool and report whether it succeeded.
+
+        Returns the result rather than bare content because the verdict is part of it: the content
+        alone cannot say whether the handler failed, so callers used to stamp isError=False on every
+        outcome and an upstream rejection was served as tool output.
+
+        A failure is reported as ``isError=True`` here rather than raised, because the REST surface
+        turns an unrecognized exception into a 500 and an upstream 403 or 429 is not a gateway crash.
+        ``MCPUpstreamAuthError`` is the exception: it propagates so the caller is told to
+        re-authenticate, which both renderers already know how to say.
+
         Note: Local tools don't use prefixes, so we use the original name
         """
         import inspect
@@ -3364,15 +3338,16 @@ if MCP_AVAILABLE:
             raise HTTPException(status_code=404, detail=f"Tool '{name}' not found")
 
         try:
-            # Check if handler is async or sync
             if inspect.iscoroutinefunction(tool.handler):
                 result = await tool.handler(**arguments)
             else:
                 result = tool.handler(**arguments)
-            return [TextContent(text=str(result), type="text")]
+        except MCPUpstreamAuthError:
+            raise
         except Exception as e:
             verbose_logger.exception("Error executing local tool %s: %s", name, e)
-            return [TextContent(text=f"Error: {e}", type="text")]
+            return CallToolResult(content=[TextContent(text=f"Error: {e}", type="text")], isError=True)
+        return CallToolResult(content=[TextContent(text=str(result), type="text")], isError=False)
 
     def _get_mcp_servers_in_path(path: str) -> list[str] | None:
         """
@@ -3809,14 +3784,15 @@ if MCP_AVAILABLE:
 
                     request = StarletteRequest(scope)
                     base_url = get_request_base_url(request)
-                    _path = scope.get("_original_path") or scope.get("path", "") or ""
+                    _path = get_route_relative_request_path(scope)
 
                     # Pick the well-known AS-metadata form that matches the inbound route
                     # so strict RFC 9728 §3.2 clients can resolve it correctly.
+                    as_metadata_root = f"{base_url}/.well-known/oauth-authorization-server{well_known_root_suffix()}"
                     if _path.startswith(f"/mcp/{server_name}"):
-                        _as_url = f"{base_url}/.well-known/oauth-authorization-server/mcp/{server_name}"
+                        _as_url = f"{as_metadata_root}/mcp/{server_name}"
                     else:
-                        _as_url = f"{base_url}/.well-known/oauth-authorization-server/{server_name}"
+                        _as_url = f"{as_metadata_root}/{server_name}"
                     authorization_uri = f'Bearer authorization_uri="{_as_url}"'
 
                     raise HTTPException(

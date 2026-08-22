@@ -150,7 +150,7 @@ async def test_no_leak_on_over_limit_rejection(rate_limiter):
         f"estimated={estimated}, limit={user_api_key_dict.tpm_limit}"
     )
 
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(Exception, match='Limit type: tokens\\. Current limit') as exc_info:
         await handler.async_pre_call_hook(
             user_api_key_dict=user_api_key_dict,
             cache=cache,
@@ -685,7 +685,7 @@ async def test_contentless_request_reserves_minimum(rate_limiter):
         f"counter should be 2, got {counter_after_two}"
     )
 
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(Exception, match='Limit type: tokens\\. Current limit') as exc_info:
         await handler.async_pre_call_hook(
             user_api_key_dict=user_api_key_dict,
             cache=cache,
@@ -1319,7 +1319,7 @@ async def test_project_otpm_rejects_multiple_completion_candidates(rate_limiter)
         "n": 10,
     }
 
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(Exception, match='Rate limit exceeded for model_per_project_otpm') as exc_info:
         await handler.async_pre_call_hook(
             user_api_key_dict=user_api_key_dict,
             cache=cache,
@@ -1347,7 +1347,7 @@ async def test_project_otpm_reserves_largest_conflicting_output_cap(rate_limiter
         "max_completion_tokens": 100,
     }
 
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(Exception, match='Rate limit exceeded for model_per_project_otpm') as exc_info:
         await handler.async_pre_call_hook(
             user_api_key_dict=user_api_key_dict,
             cache=cache,
@@ -1377,7 +1377,7 @@ async def test_project_otpm_rejects_google_genai_native_output_cap(
         project_metadata={"model_otpm_limit": {model: 50}},
     )
 
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(Exception, match='Rate limit exceeded for model_per_project_otpm') as exc_info:
         await handler.async_pre_call_hook(
             user_api_key_dict=user_api_key_dict,
             cache=cache,
@@ -1411,7 +1411,7 @@ async def test_project_otpm_rejects_google_genai_native_candidate_count(
         project_metadata={"model_otpm_limit": {model: 150}},
     )
 
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(Exception, match='Rate limit exceeded for model_per_project_otpm') as exc_info:
         await handler.async_pre_call_hook(
             user_api_key_dict=user_api_key_dict,
             cache=cache,
@@ -1500,7 +1500,7 @@ async def test_project_otpm_over_limit_rolls_back_itpm_reservation(rate_limiter)
         "max_tokens": 500,  # blows past the 10-token OTPM limit
     }
 
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(Exception, match='Rate limit exceeded for model_per_project_otpm') as exc_info:
         await handler.async_pre_call_hook(
             user_api_key_dict=user_api_key_dict,
             cache=cache,
@@ -2003,7 +2003,7 @@ async def test_otpm_rejection_does_not_double_refund_combined_tpm(rate_limiter):
         rate_limit_type="tokens",
     )
 
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(Exception, match='Rate limit exceeded for model_per_project_otpm') as exc_info:
         await handler.async_pre_call_hook(
             user_api_key_dict=user_api_key_dict,
             cache=cache,
@@ -2060,7 +2060,7 @@ async def test_project_itpm_rejects_pretokenized_embedding_input(
         "input": embedding_input,
     }
 
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(Exception, match='Rate limit exceeded for model_per_project_itpm') as exc_info:
         await handler.async_pre_call_hook(
             user_api_key_dict=user_api_key_dict,
             cache=cache,
@@ -2250,7 +2250,7 @@ async def test_itpm_reservation_accounts_for_audio_content_not_just_text(rate_li
         ],
     }
 
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(Exception, match='Rate limit exceeded for model_per_project_itpm') as exc_info:
         await handler.async_pre_call_hook(
             user_api_key_dict=user_api_key_dict,
             cache=cache,
@@ -2361,7 +2361,7 @@ async def test_itpm_rejects_large_audio_payload_that_would_pass_flat_estimate(
         ],
     }
 
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(Exception, match='Rate limit exceeded for model_per_project_itpm') as exc_info:
         await handler.async_pre_call_hook(
             user_api_key_dict=user_api_key_dict,
             cache=cache,
@@ -2622,7 +2622,7 @@ async def test_explicit_zero_output_responses_call_reserves_effective_provider_m
         },
     )
 
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(Exception, match='Rate limit exceeded for model_per_project_otpm') as exc_info:
         await handler.async_pre_call_hook(
             user_api_key_dict=user_api_key_dict,
             cache=cache,
@@ -2850,7 +2850,7 @@ async def test_otpm_rejection_releases_stashed_parallel_slot(rate_limiter):
         "rate_limit": {"tokens_per_unit": 5, "window_size": 60},
     }
 
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(Exception, match='Rate limit exceeded for model_per_project_otpm') as exc_info:
         await handler._reserve_project_io_tokens_or_raise(
             descriptors=[otpm_descriptor],
             data=data,
@@ -3296,7 +3296,7 @@ async def test_rerank_query_and_documents_enforce_project_itpm(
         project_metadata={"model_itpm_limit": {"rerank-model": 100}},
     )
 
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(Exception, match='Rate limit exceeded for model_per_project_itpm') as exc_info:
         await handler.async_pre_call_hook(
             user_api_key_dict=user_api_key_dict,
             cache=cache,

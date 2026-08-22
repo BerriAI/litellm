@@ -42,6 +42,7 @@ from litellm.types.utils import (
 # OpenTelemetry imports moved to individual functions to avoid import errors when not installed
 
 if TYPE_CHECKING:
+    from opentelemetry.sdk.resources import Resource as _Resource
     from opentelemetry.sdk.trace import TracerProvider as _SDKTracerProvider
     from opentelemetry.sdk.trace.export import SpanExporter as _SpanExporter
     from opentelemetry.trace import Context as _Context
@@ -389,6 +390,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         self._tracer_provider_cache: OrderedDict[str, _CachedTracerProvider] = OrderedDict()
         self._tracer_provider_cache_lock: Final = threading.Lock()
         self._max_dynamic_tracer_providers: Final = max(1, max_dynamic_tracer_providers)
+        self._litellm_resource_memo: _Resource | None = None
         self._init_tracing(tracer_provider)
 
         _debug_otel: Final = str(os.getenv("DEBUG_OTEL", "False")).lower()
@@ -414,7 +416,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         self._init_otel_logger_on_litellm_proxy()
 
     @staticmethod
-    def _get_litellm_resource(config: OpenTelemetryConfig):
+    def _get_litellm_resource(config: OpenTelemetryConfig) -> "_Resource":
         """Create an OpenTelemetry Resource using config-driven defaults."""
         from opentelemetry.sdk.resources import OTELResourceDetector, Resource
 
@@ -428,6 +430,21 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         otel_resource_detector: Final = OTELResourceDetector()
         env_resource: Final = otel_resource_detector.detect()
         return base_resource.merge(env_resource)
+
+    def _litellm_resource(self) -> "_Resource":
+        """The Resource every provider on this logger is built with, frozen at first use.
+
+        ``Resource.create`` scans every installed distribution's entry points, roughly 3ms and
+        200 file opens, and the dynamic providers reach it from the async logging path. Freezing
+        also keeps them consistent with whatever this logger built at startup. ``cached_property``
+        locks class-wide before 3.12, which this file still supports.
+        """
+        memo: Final = self._litellm_resource_memo
+        if memo is not None:
+            return memo
+        built: Final = self._get_litellm_resource(self.config)
+        self._litellm_resource_memo = built
+        return built
 
     def _init_otel_logger_on_litellm_proxy(self):
         """
@@ -596,7 +613,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         from opentelemetry.trace import SpanKind
 
         def create_tracer_provider():
-            provider: Final = TracerProvider(resource=self._get_litellm_resource(self.config))
+            provider: Final = TracerProvider(resource=self._litellm_resource())
             provider.add_span_processor(self._get_span_processor())
             return provider
 
@@ -634,7 +651,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             metric_reader: Final = self._get_metric_reader()
             return MeterProvider(
                 metric_readers=[metric_reader],
-                resource=self._get_litellm_resource(self.config),
+                resource=self._litellm_resource(),
             )
 
         meter_provider = self._get_or_create_provider(
@@ -692,7 +709,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
 
         def create_logger_provider():
-            provider: Final = OTLoggerProvider(resource=self._get_litellm_resource(self.config))
+            provider: Final = OTLoggerProvider(resource=self._litellm_resource())
             log_exporter: Final = self._get_log_exporter()
             provider.add_log_record_processor(BatchLogRecordProcessor(log_exporter))
             return provider
@@ -1144,9 +1161,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         owns_exporter: Final = _provider_owns_exporter(dynamic_config.exporter)
 
         def _build() -> "_SDKTracerProvider":
-            provider: Final = TracerProvider(
-                resource=self._get_litellm_resource(self.config), shutdown_on_exit=owns_exporter
-            )
+            provider: Final = TracerProvider(resource=self._litellm_resource(), shutdown_on_exit=owns_exporter)
             provider.add_span_processor(self._get_span_processor(config_override=dynamic_config))
             return provider
 
@@ -1162,9 +1177,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         owns_exporter: Final = _provider_owns_exporter(self.OTEL_EXPORTER)
 
         def _build() -> "_SDKTracerProvider":
-            provider: Final = TracerProvider(
-                resource=self._get_litellm_resource(self.config), shutdown_on_exit=owns_exporter
-            )
+            provider: Final = TracerProvider(resource=self._litellm_resource(), shutdown_on_exit=owns_exporter)
             provider.add_span_processor(self._get_span_processor(dynamic_headers=dynamic_headers))
             return provider
 

@@ -74,7 +74,7 @@ describe("UserSearchModal", () => {
     expect(notice).toHaveTextContent(/users that already exist/i);
     expect(notice).toHaveTextContent(/ask a proxy admin to create their account first/i);
     // info, not warning: a warning here would read as an error state on an empty form
-    expect(notice.className).toMatch(/ant-alert-info/);
+    expect(notice).toHaveAttribute("data-variant", "info");
   });
 });
 
@@ -196,5 +196,100 @@ describe("UserSearchModal submit payload", () => {
     await user.click(save());
 
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+  });
+});
+
+describe("UserSearchModal out-of-order search results", () => {
+  const answers = new Map<string, (users: { user_id: string; user_email: string }[]) => void>();
+
+  beforeEach(() => {
+    answers.clear();
+    vi.mocked(userFilterUICall).mockReset();
+    vi.mocked(userFilterUICall).mockImplementation(
+      (_accessToken, params) =>
+        new Promise((resolve) => {
+          answers.set(params.get("user_email") ?? "", resolve);
+        }) as never,
+    );
+  });
+
+  const answerFor = async (search: string, users: { user_id: string; user_email: string }[]) => {
+    const resolve = answers.get(search);
+    if (resolve === undefined) throw new Error(`no pending search for "${search}"`);
+    await act(async () => {
+      resolve(users);
+    });
+  };
+
+  it("commits the current search's match when an abandoned search answers last", async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn();
+    render(<UserSearchModal isVisible onCancel={vi.fn()} onSubmit={onSubmit} accessToken="sk-test" />);
+
+    const input = getEmailSearchInput();
+    await user.click(input);
+    await user.type(input, "ali");
+    await waitFor(() => expect(answers.has("ali")).toBe(true), { timeout: 3000 });
+
+    await user.type(input, "ce.smith@example.com");
+    await waitFor(() => expect(answers.has("alice.smith@example.com")).toBe(true), { timeout: 3000 });
+
+    await answerFor("alice.smith@example.com", [{ user_id: "u-smith", user_email: "alice.smith@example.com" }]);
+    await screen.findByRole("option", { name: "alice.smith@example.com" });
+
+    await answerFor("ali", [
+      { user_id: "u-jones", user_email: "alice.jones@example.com" },
+      { user_id: "u-smith", user_email: "alice.smith@example.com" },
+    ]);
+
+    await user.keyboard("{Enter}");
+    await user.click(screen.getByRole("button", { name: /add member/i }));
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(onSubmit.mock.calls[0][0]).toStrictEqual({
+      user_email: "alice.smith@example.com",
+      user_id: "u-smith",
+      role: "user",
+    });
+  });
+
+  it("stops loading once the box is cleared and the abandoned search answers", async () => {
+    const user = userEvent.setup();
+    render(<UserSearchModal isVisible onCancel={vi.fn()} onSubmit={vi.fn()} accessToken="sk-test" />);
+
+    const input = getEmailSearchInput();
+    await user.click(input);
+    await user.type(input, "ali");
+    await waitFor(() => expect(answers.has("ali")).toBe(true), { timeout: 3000 });
+    await screen.findByText("Loading...");
+
+    await user.clear(input);
+    await screen.findByText("No results");
+
+    await answerFor("ali", [{ user_id: "u-jones", user_email: "alice.jones@example.com" }]);
+
+    expect(screen.queryByRole("option")).not.toBeInTheDocument();
+    expect(screen.getByText("No results")).toBeInTheDocument();
+  });
+
+  it("keeps loading while a newer search is still in flight", async () => {
+    const user = userEvent.setup();
+    render(<UserSearchModal isVisible onCancel={vi.fn()} onSubmit={vi.fn()} accessToken="sk-test" />);
+
+    const input = getEmailSearchInput();
+    await user.click(input);
+    await user.type(input, "ali");
+    await waitFor(() => expect(answers.has("ali")).toBe(true), { timeout: 3000 });
+
+    await user.type(input, "ce.smith@example.com");
+    await waitFor(() => expect(answers.has("alice.smith@example.com")).toBe(true), { timeout: 3000 });
+
+    await answerFor("ali", []);
+
+    expect(screen.getByText("Loading...")).toBeInTheDocument();
+    expect(screen.queryByText("No results")).not.toBeInTheDocument();
+
+    await answerFor("alice.smith@example.com", [{ user_id: "u-smith", user_email: "alice.smith@example.com" }]);
+    await screen.findByRole("option", { name: "alice.smith@example.com" });
   });
 });

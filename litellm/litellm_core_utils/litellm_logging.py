@@ -13,7 +13,7 @@ import traceback
 from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime as dt_object
 from functools import lru_cache
-from types import TracebackType
+from types import MappingProxyType, TracebackType
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Union, cast
 
 from httpx import Response
@@ -370,6 +370,35 @@ def _published_pricing(deployment_model: str | None) -> ModelInfo | None:
         return litellm.get_model_info(model=deployment_model)
     except Exception:  # noqa: BLE001  # no published entry to layer the declared rates over
         return None
+
+
+def _resolve_vertex_location_for_cost(
+    custom_llm_provider: str | None,
+    litellm_params: Mapping[str, object] | None,
+    optional_params: Mapping[str, object] | None,
+    model: str,
+) -> str | None:
+    """
+    The Vertex AI location a request was served from, resolved the same way
+    dispatch resolves it, so regional deployments price with the
+    regional-endpoint uplift. None for non-Vertex providers.
+
+    Chat dispatch reads the location from request kwargs, which reach this
+    logging object through optional_params: on the proxy the logging object is
+    created before the router picks a deployment, so the deployment's location
+    never lands in litellm_params.
+    """
+    if custom_llm_provider is None or not custom_llm_provider.startswith("vertex_ai"):
+        return None
+    from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
+
+    empty: Final[Mapping[str, object]] = MappingProxyType({})
+    configured_location: Final = (
+        VertexBase.explicit_vertex_ai_location(optional_params or empty)
+        or VertexBase.explicit_vertex_ai_location(litellm_params or empty)
+        or VertexBase.safe_get_vertex_ai_location(empty)
+    )
+    return VertexBase.get_vertex_region(configured_location, model)
 
 
 class Logging(LiteLLMLoggingBaseClass):
@@ -803,8 +832,8 @@ class Logging(LiteLLMLoggingBaseClass):
 
         eg. AnthropicCacheControlHook and BedrockKnowledgeBaseHook both don't require a `prompt_id` to be passed in, they are triggered by dynamic params
         """
-        for param in non_default_params:
-            if param in DynamicPromptManagementParamLiteral.list_all_params():
+        for param in DynamicPromptManagementParamLiteral.list_all_params():
+            if non_default_params.get(param):
                 return True
 
         #############################################################################
@@ -937,6 +966,23 @@ class Logging(LiteLLMLoggingBaseClass):
 
         return None
 
+    @staticmethod
+    def _prompt_manager_runs_without_prompt_id(
+        logger: CustomLogger,
+        prompt_spec: PromptSpec | None,
+        dynamic_callback_params: StandardCallbackDynamicParams | None,
+    ) -> bool:
+        if not isinstance(logger, CustomPromptManagement):
+            return False
+        try:
+            return logger.should_run_prompt_management(
+                prompt_id=None,
+                prompt_spec=prompt_spec,
+                dynamic_callback_params=dynamic_callback_params or StandardCallbackDynamicParams(),
+            )
+        except Exception:
+            return False
+
     def get_custom_logger_for_prompt_management(
         self,
         model: str,
@@ -987,8 +1033,13 @@ class Logging(LiteLLMLoggingBaseClass):
             callback_type=CustomPromptManagement
         )
 
-        if prompt_management_loggers:
-            logger: Final = prompt_management_loggers[0]
+        for logger in prompt_management_loggers:
+            if prompt_id is None and not self._prompt_manager_runs_without_prompt_id(
+                logger=logger,
+                prompt_spec=prompt_spec,
+                dynamic_callback_params=dynamic_callback_params,
+            ):
+                continue
             self.model_call_details["prompt_integration"] = logger.__class__.__name__
             return logger
 
@@ -1432,6 +1483,7 @@ class Logging(LiteLLMLoggingBaseClass):
         reasoning_cost: float | None = None,
         service_tier: str | None = None,
         data_residency: str | None = None,
+        vertex_location: str | None = None,
     ) -> None:
         """
         Helper method to store cost breakdown in the logging object.
@@ -1450,6 +1502,7 @@ class Logging(LiteLLMLoggingBaseClass):
             margin_total_amount: Total margin added in USD
             service_tier: Tier the costs above were priced on, already resolved
             data_residency: Region uplift the costs above were priced on, already resolved
+            vertex_location: Vertex AI location the costs above were priced on, already resolved
         """
 
         self.cost_breakdown = CostBreakdown(
@@ -1459,6 +1512,7 @@ class Logging(LiteLLMLoggingBaseClass):
             tool_usage_cost=cost_for_built_in_tools_cost_usd_dollar,
             service_tier=service_tier,
             data_residency=data_residency,
+            vertex_location=vertex_location,
         )
         if cache_read_cost is not None and cache_read_cost > 0:
             self.cost_breakdown["cache_read_cost"] = cache_read_cost
@@ -1573,6 +1627,12 @@ class Logging(LiteLLMLoggingBaseClass):
                     self.litellm_params.get("data_residency")
                     if hasattr(self, "litellm_params") and self.litellm_params
                     else None
+                ),
+                "vertex_location": _resolve_vertex_location_for_cost(
+                    custom_llm_provider=self.model_call_details.get("custom_llm_provider", None),
+                    litellm_params=(self.litellm_params if hasattr(self, "litellm_params") else None),
+                    optional_params=self.optional_params,
+                    model=litellm_model_name or self.model,
                 ),
             }
         except Exception as e:  # error creating kwargs for cost calculation
@@ -5555,6 +5615,37 @@ def _extract_response_obj_and_hidden_params(
     return response_obj, hidden_params
 
 
+def _autorouter_savings_for_payload(
+    request_metadata: Mapping[str, object],
+    model: str | None,
+    custom_llm_provider: str | None,
+    model_id: str | None,
+    usage_object: Mapping[str, object] | None,
+    cost_breakdown: Mapping[str, object] | None,
+) -> float | None:
+    """The auto-router savings figure for the payload, or ``None`` when there is none.
+
+    Lazy proxy import: the savings module lives with the spend trackers that own the
+    math, and SDK-only installs have no proxy package to import.
+    """
+    try:
+        from litellm.proxy.spend_tracking.savings import autorouter_savings_for_logging_payload
+    except Exception:  # noqa: BLE001  # SDK-only install: no savings driver to run
+        return None
+    try:
+        return autorouter_savings_for_logging_payload(
+            request_metadata=request_metadata,
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            model_id=model_id,
+            usage_object=usage_object,
+            cost_breakdown=cost_breakdown,
+        )
+    except Exception as e:  # noqa: BLE001  # a savings figure must never fail request logging
+        verbose_logger.debug("autorouter savings skipped on logging payload: %s", e)
+        return None
+
+
 def get_standard_logging_object_payload(
     kwargs: dict | None,
     init_response_obj: Any | BaseModel | dict,
@@ -5712,6 +5803,16 @@ def get_standard_logging_object_payload(
         ):
             model_name = response_model_name
 
+        request_cost_breakdown: Final = cost_breakdown_with_guardrail(logging_obj.cost_breakdown, guardrail_cost)
+        autorouter_savings: Final = _autorouter_savings_for_payload(
+            request_metadata=metadata,
+            model=model_name,
+            custom_llm_provider=custom_llm_provider,
+            model_id=_model_id,
+            usage_object=usage_dict,
+            cost_breakdown=request_cost_breakdown,
+        )
+
         payload: Final[StandardLoggingPayload] = StandardLoggingPayload(
             id=str(id),
             litellm_call_id=kwargs.get("litellm_call_id") or litellm_params.get("litellm_call_id"),
@@ -5742,7 +5843,8 @@ def get_standard_logging_object_payload(
             metadata=clean_metadata,
             cache_key=clean_hidden_params["cache_key"],
             response_cost=response_cost,
-            cost_breakdown=cost_breakdown_with_guardrail(logging_obj.cost_breakdown, guardrail_cost),
+            cost_breakdown=request_cost_breakdown,
+            autorouter_savings=autorouter_savings,
             total_tokens=usage_dict.get("total_tokens", 0),
             prompt_tokens=usage_dict.get("prompt_tokens", 0),
             completion_tokens=usage_dict.get("completion_tokens", 0),
@@ -5938,6 +6040,7 @@ def create_dummy_standard_logging_payload() -> StandardLoggingPayload:
         call_type="completion",
         stream=False,
         response_cost=response_cost,
+        autorouter_savings=None,
         response_cost_failure_debug_info=None,
         status="success",
         total_tokens=int(DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT + DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT),

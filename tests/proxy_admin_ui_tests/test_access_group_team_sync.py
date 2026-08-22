@@ -10,7 +10,6 @@ suite, which is the only place a `NOT (... = ANY(...))` guard going missing show
 
 import asyncio
 import os
-import sys
 from contextlib import asynccontextmanager
 from datetime import timedelta
 from types import SimpleNamespace
@@ -18,7 +17,6 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 from litellm.proxy.management_helpers.access_group_team_sync import (
     reconcile_team_access_group_membership,
@@ -170,11 +168,14 @@ async def test_a_failed_mirror_takes_the_new_team_row_with_it():
     async with _clean_db() as db:
         await _seed(db, {GROUPS[0]: [], GROUPS[1]: [OTHER_TEAM]})
 
-        with pytest.raises(RuntimeError):
+        async def _blow_up_after_reconcile():
             async with db.tx() as tx:
                 await tx.litellm_teamtable.create(data={"team_id": TEAM, "access_group_ids": [GROUPS[0]]})
                 await reconcile_team_access_group_membership(tx, TEAM)
                 raise RuntimeError("the cache handoff blew up")
+
+        with pytest.raises(RuntimeError):
+            await _blow_up_after_reconcile()
 
         assert await _read(db) == {GROUPS[0]: [], GROUPS[1]: [OTHER_TEAM]}
         assert await db.litellm_teamtable.find_unique(where={"team_id": TEAM}) is None

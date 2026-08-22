@@ -18,7 +18,6 @@ from litellm.proxy._experimental.mcp_server.exceptions import (
 from litellm.proxy._experimental.mcp_server.faults.list_outcomes import ServerListFault
 
 # Add the parent directory to the path so we can import litellm
-sys.path.insert(0, "../../../../../")
 
 
 import httpx
@@ -42,6 +41,7 @@ from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
     _deserialize_json_list,
     _normalize_mcp_server_cost_info,
     _obo_retry_applies,
+    _resolve_openapi_tool_auth,
     _should_strip_caller_authorization,
     _without_authorization,
 )
@@ -4394,8 +4394,12 @@ class TestMCPServerManager:
 
         captured: dict = {}
 
-        def fake_create_tool_function(path, method, operation, base_url, headers=None):
+        def fake_create_tool_function(
+            path, method, operation, base_url, headers=None, server_label=None, relays_upstream_auth=False
+        ):
             captured["headers"] = headers
+            captured["server_label"] = server_label
+            captured["relays_upstream_auth"] = relays_upstream_auth
 
             async def tool_func(**kwargs):
                 return "ok"
@@ -4424,6 +4428,11 @@ class TestMCPServerManager:
 
         assert captured["headers"] is not None
         assert captured["headers"]["Authorization"] == "STATIC token"
+        # The label names the server in an upstream-failure error, so registration must thread it;
+        # without this the fake would simply tolerate the argument and prove nothing about it.
+        assert captured["server_label"] == "openapi-server"
+        # auth_type is none here, so a 401 from this upstream must not be dressed up as a re-auth signal
+        assert captured["relays_upstream_auth"] is False
 
     @pytest.mark.asyncio
     async def test_pre_call_tool_check_allowed_tools_list_allows_tool(self):
@@ -4836,7 +4845,9 @@ class TestMCPServerManager:
     @staticmethod
     def _manager_with_deepwiki_and_huggingface() -> MCPServerManager:
         manager = MCPServerManager()
-        deepwiki = MCPServer(server_id="deepwiki-id", name="deepwiki", server_name="deepwiki", transport=MCPTransport.http)
+        deepwiki = MCPServer(
+            server_id="deepwiki-id", name="deepwiki", server_name="deepwiki", transport=MCPTransport.http
+        )
         huggingface = MCPServer(
             server_id="huggingface-id", name="huggingface", server_name="huggingface", transport=MCPTransport.http
         )
@@ -4857,8 +4868,14 @@ class TestMCPServerManager:
         with pytest.raises(ValueError, match="Tool hub_repo_search not found"):
             manager._resolve_mcp_server_for_tool_call("deepwiki", "hub_repo_search")
 
-        assert manager._resolve_mcp_server_for_tool_call("deepwiki", "read_wiki_structure") is manager.registry["deepwiki-id"]
-        assert manager._resolve_mcp_server_for_tool_call("huggingface", "hub_repo_search") is manager.registry["huggingface-id"]
+        assert (
+            manager._resolve_mcp_server_for_tool_call("deepwiki", "read_wiki_structure")
+            is manager.registry["deepwiki-id"]
+        )
+        assert (
+            manager._resolve_mcp_server_for_tool_call("huggingface", "hub_repo_search")
+            is manager.registry["huggingface-id"]
+        )
 
     def test_get_mcp_server_from_tool_name_rejects_other_servers_prefix(self):
         manager = self._manager_with_deepwiki_and_huggingface()
@@ -4866,7 +4883,9 @@ class TestMCPServerManager:
         assert manager._get_mcp_server_from_tool_name("huggingface-read_wiki_structure") is None
         assert manager._get_mcp_server_from_tool_name("deepwiki-hub_repo_search") is None
         assert manager._get_mcp_server_from_tool_name("deepwiki-read_wiki_structure") is manager.registry["deepwiki-id"]
-        assert manager._get_mcp_server_from_tool_name("huggingface-hub_repo_search") is manager.registry["huggingface-id"]
+        assert (
+            manager._get_mcp_server_from_tool_name("huggingface-hub_repo_search") is manager.registry["huggingface-id"]
+        )
 
     def test_resolve_mcp_server_for_tool_call_shared_bare_name_resolves_via_own_prefixed_spelling(self):
         manager = MCPServerManager()
@@ -10491,6 +10510,39 @@ class TestSessionResourceScopeIntersect:
         assert MCPServerManager._admitted_session_resource_scope(self._admitted_auth("b")) == "b"
 
     @pytest.mark.asyncio
+    async def test_admin_registry_seed_still_bounded_by_session_resource_scope(self):
+        """The admin-view registry seed flows through the same scoped exit as every union: a
+        session envelope sealed to one server never widens past it, even held by an admin whose
+        role resolves the whole registry. Pin for the connect-page-parity change; without the
+        single-exit shape, the old early return would hand a per-server bearer the registry."""
+        from unittest.mock import AsyncMock, patch
+
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
+        from litellm.proxy._types import LitellmUserRoles
+        from litellm.types.mcp import MCPTransport
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+        manager = MCPServerManager()
+        for sid in ("granted-id", "other-id"):
+            manager.registry[sid] = MCPServer(
+                server_id=sid, name=sid, server_name=sid, url="https://example.com/mcp", transport=MCPTransport.http
+            )
+        auth = self._admitted_auth("granted-id")
+        auth.user_role = LitellmUserRoles.PROXY_ADMIN
+        with (
+            patch.object(MCPServerManager, "get_allow_all_keys_server_ids", return_value=[]),
+            patch.object(
+                MCPServerManager,
+                "_get_active_submitted_mcp_server_ids_for_user",
+                new_callable=AsyncMock,
+                return_value=[],
+            ),
+        ):
+            assert await manager.get_allowed_mcp_servers(auth) == ["granted-id"]
+            auth.mcp_session_resource_server_id = None
+            assert set(await manager.get_allowed_mcp_servers(auth)) == {"granted-id", "other-id"}
+
+    @pytest.mark.asyncio
     async def test_get_allowed_mcp_servers_scopes_past_operator_open_union(self):
         """The intersect applies AFTER the operator-open (allow_all_keys) union, so a scoped
         bearer cannot reach an allow-all server outside its scope, and applies on the
@@ -10509,7 +10561,12 @@ class TestSessionResourceScopeIntersect:
                 new_callable=AsyncMock,
                 return_value=["granted-id", "other-id"],
             ),
-            patch.object(MCPServerManager, "_get_active_submitted_mcp_server_ids_for_user", new_callable=AsyncMock, return_value=[]),
+            patch.object(
+                MCPServerManager,
+                "_get_active_submitted_mcp_server_ids_for_user",
+                new_callable=AsyncMock,
+                return_value=[],
+            ),
         ):
             allowed = await manager.get_allowed_mcp_servers(auth)
         assert allowed == ["granted-id"]
@@ -10521,7 +10578,12 @@ class TestSessionResourceScopeIntersect:
                 new_callable=AsyncMock,
                 side_effect=RuntimeError("resolver down"),
             ),
-            patch.object(MCPServerManager, "_get_active_submitted_mcp_server_ids_for_user", new_callable=AsyncMock, return_value=[]),
+            patch.object(
+                MCPServerManager,
+                "_get_active_submitted_mcp_server_ids_for_user",
+                new_callable=AsyncMock,
+                return_value=[],
+            ),
         ):
             fallback = await manager.get_allowed_mcp_servers(auth)
         assert fallback == ["granted-id"]
@@ -10635,9 +10697,7 @@ class TestClientForwardedDiscoveryFailureIsNotFatal:
 
     @pytest.mark.parametrize("auth_type", [MCPAuth.true_passthrough, MCPAuth.oauth_delegate])
     @pytest.mark.asyncio
-    async def test_client_forwarded_servers_keep_discovering_their_front_door_endpoints(
-        self, auth_type: MCPAuthType
-    ):
+    async def test_client_forwarded_servers_keep_discovering_their_front_door_endpoints(self, auth_type: MCPAuthType):
         """Exempting these modes from the FAILURE must not exempt them from discovery itself.
 
         ``/authorize``, ``/token`` and ``/register`` read the discovered endpoints for these servers
@@ -10664,3 +10724,161 @@ class TestClientForwardedDiscoveryFailureIsNotFatal:
         assert resolved.registration_url == "https://idp.example.com/register"
         assert manager.config_mcp_servers[server.server_id].authorization_url == "https://idp.example.com/authorize"
         assert manager._oauth_discovery_slot(server.server_id) is None
+
+
+class TestResolveOpenapiToolAuth:
+    """The credential matrix for a ``spec_path`` server's two OpenAPI dispatch arms.
+
+    A per-server ``x-mcp-{alias}-authorization`` is already a complete header value and is forwarded
+    verbatim; a BYOK credential is a raw secret that takes the auth-type prefix. Conflating them
+    ships ``Bearer Bearer <token>``, so every cell pins which of the two a value came from.
+    """
+
+    @staticmethod
+    def _server(auth_type: MCPAuthType = MCPAuth.oauth_delegate) -> MCPServer:
+        return MCPServer(
+            server_id="srv-openapi",
+            name="report_api",
+            server_name="report_api",
+            alias="report_api",
+            url="https://api.internal.example.com",
+            transport=MCPTransport.http,
+            auth_type=auth_type,
+            spec_path="https://api.internal.example.com/openapi.json",
+            extra_headers=["X-Tenant"],
+        )
+
+    @pytest.mark.parametrize(
+        "per_server, byok, expected_auth, expected_extra_keys, expected_credential",
+        [
+            (
+                {"report_api": "Bearer caller-token"},
+                None,
+                "Bearer caller-token",
+                {"X-Tenant"},
+                "Bearer caller-token",
+            ),
+            (
+                {"report_api": {"Authorization": "Bearer caller-token", "X-Trace": "abc"}},
+                None,
+                "Bearer caller-token",
+                {"X-Tenant", "X-Trace"},
+                {"Authorization": "Bearer caller-token", "X-Trace": "abc"},
+            ),
+            (
+                {"report_api": {"X-Api-Key": "k1"}},
+                "byok-secret",
+                "Bearer byok-secret",
+                {"X-Tenant", "X-Api-Key"},
+                "byok-secret",
+            ),
+            ({"report_api": {"X-Api-Key": "k1"}}, None, None, {"X-Tenant", "X-Api-Key"}, None),
+            (None, "byok-secret", "Bearer byok-secret", {"X-Tenant"}, "byok-secret"),
+            (None, None, None, {"X-Tenant"}, None),
+            ({"other_server": "Bearer wrong"}, None, None, {"X-Tenant"}, None),
+        ],
+    )
+    def test_credential_matrix(
+        self,
+        per_server: dict | None,
+        byok: str | None,
+        expected_auth: str | None,
+        expected_extra_keys: set,
+        expected_credential: object,
+    ):
+        auth_value, forwarded, credential = _resolve_openapi_tool_auth(
+            mcp_server=self._server(),
+            mcp_auth_header=byok,
+            mcp_server_auth_headers=per_server,
+            raw_headers={"x-tenant": "acme", "authorization": "Bearer admission-key"},
+            user_api_key_auth=None,
+        )
+
+        assert auth_value == expected_auth
+        assert set(forwarded or {}) == expected_extra_keys
+        assert credential == expected_credential
+
+    def test_per_server_value_is_never_re_prefixed(self):
+        """The regression that a naive wiring produces: the caller already sent ``Bearer <token>``."""
+        auth_value, _, credential = _resolve_openapi_tool_auth(
+            mcp_server=self._server(auth_type=MCPAuth.api_key),
+            mcp_auth_header="byok-secret",
+            mcp_server_auth_headers={"report_api": "Bearer caller-token"},
+            raw_headers=None,
+            user_api_key_auth=None,
+        )
+
+        assert auth_value == "Bearer caller-token"
+        assert credential == "Bearer caller-token"
+        assert not auth_value.startswith("ApiKey ")
+
+    def test_per_server_authorization_is_not_also_left_in_forwarded_headers(self):
+        """``resolve_openapi_upstream_auth`` pops Authorization out of the forwarded headers, so a
+        second copy there would give the passthrough arm two sources to reconcile."""
+        _, forwarded, _ = _resolve_openapi_tool_auth(
+            mcp_server=self._server(),
+            mcp_auth_header=None,
+            mcp_server_auth_headers={"report_api": {"Authorization": "Bearer caller-token"}},
+            raw_headers={"x-tenant": "acme"},
+            user_api_key_auth=None,
+        )
+
+        assert "Authorization" not in (forwarded or {})
+
+
+class TestOpenApiHandlerRelaysUpstreamAuth:
+    """`_call_openapi_tool_handler` must not flatten a re-auth signal into a generic message.
+
+    Its catch-all turned every exception into "Error calling OpenAPI tool ...", which is an isError
+    result but loses the status, so the REST surface could no longer relay a 401 with the upstream's
+    WWW-Authenticate and the streamable surface could not name the status the caller must act on.
+    """
+
+    @staticmethod
+    def _server() -> MCPServer:
+        return MCPServer(
+            server_id="srv-openapi",
+            name="report_api",
+            server_name="report_api",
+            url="https://api.example.com",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth_delegate,
+            spec_path="https://api.example.com/openapi.json",
+        )
+
+    @pytest.mark.asyncio
+    async def test_upstream_auth_error_keeps_its_type(self):
+        from litellm.proxy._experimental.mcp_server.exceptions import MCPUpstreamAuthError
+        from litellm.proxy._experimental.mcp_server.tool_registry import global_mcp_tool_registry
+
+        manager = MCPServerManager()
+        server = self._server()
+
+        async def raising_handler(**_kwargs):
+            raise MCPUpstreamAuthError(status_code=401, www_authenticate="Bearer realm=x", server_name="report_api")
+
+        tool = MagicMock()
+        tool.handler = raising_handler
+        with patch.object(global_mcp_tool_registry, "get_tool", return_value=tool):
+            with pytest.raises(MCPUpstreamAuthError) as exc:
+                await manager._call_openapi_tool_handler(server, "list_reports", {})
+
+        assert exc.value.status_code == 401
+        assert exc.value.www_authenticate == "Bearer realm=x"
+
+    @pytest.mark.asyncio
+    async def test_other_failures_still_become_an_error_result(self):
+        from litellm.proxy._experimental.mcp_server.tool_registry import global_mcp_tool_registry
+
+        manager = MCPServerManager()
+
+        async def raising_handler(**_kwargs):
+            raise RuntimeError("upstream returned HTTP 503")
+
+        tool = MagicMock()
+        tool.handler = raising_handler
+        with patch.object(global_mcp_tool_registry, "get_tool", return_value=tool):
+            result = await manager._call_openapi_tool_handler(self._server(), "list_reports", {})
+
+        assert result.isError is True
+        assert "upstream returned HTTP 503" in result.content[0].text

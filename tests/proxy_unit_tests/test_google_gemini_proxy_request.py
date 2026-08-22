@@ -8,8 +8,6 @@ The request payload is correctly processed and forwarded to the httpx client.
 """
 
 import json
-import os
-import sys
 import unittest.mock
 from typing import Optional
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -18,7 +16,6 @@ import httpx
 import pytest
 
 # Add the parent directory to the system path
-sys.path.insert(0, os.path.abspath("../.."))
 
 import litellm
 from litellm.proxy._types import UserAPIKeyAuth

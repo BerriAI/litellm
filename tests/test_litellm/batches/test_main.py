@@ -23,8 +23,6 @@ production. Provider env vars are not required: missing creds resolve to None an
 flow through harmlessly because the handler is mocked.
 """
 
-import os
-import sys
 from contextlib import ExitStack
 from dataclasses import dataclass
 from typing import Any, Dict
@@ -33,7 +31,6 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../.."))
 
 import litellm
 import litellm.batches.main as bm
