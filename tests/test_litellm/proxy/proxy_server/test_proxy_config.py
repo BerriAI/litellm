@@ -199,6 +199,19 @@ def test_validate_deployment_max_agentic_loops_rejects_a_bool():
         )
 
 
+def test_validate_deployment_max_agentic_loops_accepts_a_ceiling_from_an_env_var():
+    """
+    `max_agentic_loops: os.environ/MAX_AGENTIC_LOOPS` is resolved to a string
+    before this check runs, and the old `int(... or 3)` accepted that, so
+    refusing it here would stop an already working proxy from booting.
+    """
+    model = {"model_name": "gpt-4o", "litellm_params": {"model": "gpt-4o", "max_agentic_loops": "5"}}
+
+    validate_deployment_max_agentic_loops(model)
+
+    assert model["litellm_params"]["max_agentic_loops"] == "5"
+
+
 def test_validate_deployment_max_agentic_loops_names_the_offending_model():
     with pytest.raises(ValueError, match="on model 'claude-sonnet-4-5'"):
         validate_deployment_max_agentic_loops(

@@ -26,6 +26,7 @@ from litellm.llms.anthropic.experimental_pass_through.messages.fake_stream_itera
 )
 from litellm.litellm_core_utils.agentic_loop_settings import DEFAULT_MAX_AGENTIC_LOOPS
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+from litellm.secret_managers.main import get_secret
 from litellm.types.integrations.custom_logger import (
     AgenticLoopPlan,
     AgenticLoopRequestPatch,
@@ -509,12 +510,24 @@ class TestMaxAgenticLoopsConfigKnob:
                 {"enabled_providers": ["bedrock"], "max_agentic_loops": bad_value}
             )
 
-    @pytest.mark.parametrize("bad_value", ["5", True, 2.5])
+    @pytest.mark.parametrize("bad_value", ["three", True, 2.5])
     def test_non_integer_ceilings_are_rejected_at_config_load(self, bad_value):
         with pytest.raises(TypeError, match="max_agentic_loops"):
             WebSearchInterceptionLogger.from_config_yaml(
                 {"enabled_providers": ["bedrock"], "max_agentic_loops": bad_value}
             )
+
+    def test_a_ceiling_spelled_as_a_string_is_read_at_config_load(self):
+        """
+        `max_agentic_loops: os.environ/MAX_AGENTIC_LOOPS` resolves to a string
+        before it reaches the knob, so refusing "5" would break a config that
+        works today.
+        """
+        logger = WebSearchInterceptionLogger.from_config_yaml(
+            {"enabled_providers": ["bedrock"], "max_agentic_loops": "5"}
+        )
+
+        assert logger.max_agentic_loops == 5
 
     @pytest.mark.asyncio
     async def test_knob_reaches_the_loop_settings(self):
@@ -618,6 +631,43 @@ class TestBothCeilingKnobsAreValidated:
             WebSearchInterceptionLogger(max_agentic_loops=0)
         with pytest.raises(ValueError, match=r"litellm_params\.max_agentic_loops"):
             BaseLLMHTTPHandler._get_agentic_loop_settings(kwargs={"max_agentic_loops": 0})
+
+
+class TestACeilingThatSpellsAWholeNumberStillWorks:
+    """
+    The ceiling used to go through ``int(... or 3)``, which accepted anything
+    ``int()`` accepted. A ceiling is routinely parameterized as
+    ``max_agentic_loops: os.environ/MAX_AGENTIC_LOOPS``, and ``get_secret``
+    hands that back as the string ``"5"``, so tightening the check to
+    ``isinstance(int)`` would stop such a proxy from booting on upgrade.
+    """
+
+    @pytest.mark.parametrize("spelled", ["5", " 5 ", 5.0])
+    def test_a_ceiling_that_spells_five_is_accepted_by_both_knobs(self, spelled):
+        _, max_loops, _ = BaseLLMHTTPHandler._get_agentic_loop_settings(kwargs={"max_agentic_loops": spelled})
+
+        assert max_loops == 5
+        assert WebSearchInterceptionLogger(max_agentic_loops=spelled).max_agentic_loops == 5
+
+    def test_an_env_var_sourced_ceiling_survives_secret_resolution(self, monkeypatch):
+        monkeypatch.setenv("MAX_AGENTIC_LOOPS_UNDER_TEST", "7")
+        resolved = get_secret("os.environ/MAX_AGENTIC_LOOPS_UNDER_TEST")
+
+        assert isinstance(resolved, str)
+        _, max_loops, _ = BaseLLMHTTPHandler._get_agentic_loop_settings(kwargs={"max_agentic_loops": resolved})
+        assert max_loops == 7
+
+    def test_a_spelled_zero_is_still_refused_and_reports_the_number(self):
+        with pytest.raises(ValueError, match="must be at least 1, got 0"):
+            BaseLLMHTTPHandler._get_agentic_loop_settings(kwargs={"max_agentic_loops": "0"})
+
+    def test_a_word_is_still_refused(self):
+        with pytest.raises(TypeError, match=r"litellm_params\.max_agentic_loops must be an integer"):
+            BaseLLMHTTPHandler._get_agentic_loop_settings(kwargs={"max_agentic_loops": "three"})
+
+    def test_a_fractional_ceiling_is_refused_rather_than_truncated(self):
+        with pytest.raises(TypeError, match="must be an integer"):
+            BaseLLMHTTPHandler._get_agentic_loop_settings(kwargs={"max_agentic_loops": 5.5})
 
 
 class TestRebuiltStreamIsWellFormed:
