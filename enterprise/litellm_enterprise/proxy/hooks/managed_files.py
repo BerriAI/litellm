@@ -1391,8 +1391,6 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         usable even when every file on the page was filtered out.
         """
         validate_file_list_limit(limit)
-        if limit == 0:
-            return build_list_page([])
 
         owner_filter: Final = build_owner_filter(user_api_key_dict)
         if owner_filter is None:
@@ -1403,9 +1401,12 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 where={**owner_filter, "unified_file_id": after}
             )
             if cursor_row is None:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Invalid 'after' cursor: no file found with id '{after}'.",
+                raise ProxyException(
+                    message=f"Invalid 'after' cursor: no file found with id '{after}'.",
+                    type="invalid_request_error",
+                    param="after",
+                    code=400,
+                    openai_code="invalid_value",
                 )
 
         page_size: Final = min(limit or MAX_FILE_LIST_LIMIT, MAX_FILE_LIST_LIMIT)

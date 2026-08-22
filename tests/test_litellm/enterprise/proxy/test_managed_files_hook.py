@@ -415,9 +415,14 @@ async def test_afile_list_pages_through_every_file_without_overlap():
     assert table.find_many_calls[1]["skip"] == 1
 
 
+@pytest.mark.parametrize(
+    "unknown_cursor",
+    ["unified-theirs", "unified-nowhere"],
+    ids=["another-users-file", "no-such-file"],
+)
 @pytest.mark.asyncio
-async def test_afile_list_rejects_an_after_cursor_outside_the_callers_files():
-    from fastapi import HTTPException
+async def test_afile_list_rejects_an_after_cursor_outside_the_callers_files(unknown_cursor):
+    from litellm.proxy._types import ProxyException
 
     managed_files, table = _make_managed_files_over_rows(
         [
@@ -426,24 +431,35 @@ async def test_afile_list_rejects_an_after_cursor_outside_the_callers_files():
         ]
     )
 
-    with pytest.raises(HTTPException) as exc_info:
+    with pytest.raises(ProxyException) as exc_info:
         await managed_files.afile_list(
             purpose=None,
             litellm_parent_otel_span=None,
             user_api_key_dict=_make_user_api_key_dict(),
-            after="unified-theirs",
+            after=unknown_cursor,
         )
 
-    assert exc_info.value.status_code == 400
+    assert exc_info.value.code == "400"
+    assert exc_info.value.type == "invalid_request_error"
+    assert exc_info.value.param == "after"
+    assert exc_info.value.message == f"Invalid 'after' cursor: no file found with id '{unknown_cursor}'."
     assert table.find_first_calls[0] == {
         "created_by": "test-user",
-        "unified_file_id": "unified-theirs",
+        "unified_file_id": unknown_cursor,
     }
     assert table.find_many_calls == []
 
 
+@pytest.mark.parametrize(
+    "limit, bound, expected_range",
+    [
+        (0, "below minimum", ">= 1"),
+        (-1, "below minimum", ">= 1"),
+        (10001, "above maximum", "<= 10000"),
+    ],
+)
 @pytest.mark.asyncio
-async def test_afile_list_rejects_a_limit_above_the_openai_maximum():
+async def test_afile_list_rejects_a_limit_outside_the_openai_range(limit, bound, expected_range):
     from litellm.proxy._types import ProxyException
 
     managed_files, table = _make_managed_files_over_rows([_make_managed_file_row("unified-mine")])
@@ -453,28 +469,33 @@ async def test_afile_list_rejects_a_limit_above_the_openai_maximum():
             purpose=None,
             litellm_parent_otel_span=None,
             user_api_key_dict=_make_user_api_key_dict(),
-            limit=10001,
+            limit=limit,
         )
 
     assert exc_info.value.code == "400"
+    assert exc_info.value.type == "invalid_request_error"
     assert exc_info.value.param == "limit"
+    assert exc_info.value.message == (
+        f"Invalid 'limit': integer {bound} value. Expected a value {expected_range}, but got {limit} instead."
+    )
     assert table.find_many_calls == []
 
 
+@pytest.mark.parametrize("limit", [1, 10000])
 @pytest.mark.asyncio
-async def test_afile_list_returns_an_empty_page_for_a_zero_limit():
+async def test_afile_list_accepts_the_ends_of_the_openai_limit_range(limit):
     managed_files, table = _make_managed_files_over_rows([_make_managed_file_row("unified-mine")])
 
     response = await managed_files.afile_list(
         purpose=None,
         litellm_parent_otel_span=None,
         user_api_key_dict=_make_user_api_key_dict(),
-        limit=0,
+        limit=limit,
     )
 
-    assert response["data"] == []
+    assert [file.id for file in response["data"]] == ["unified-mine"]
     assert response["has_more"] is False
-    assert table.find_many_calls == []
+    assert table.find_many_calls[0]["take"] == limit + 1
 
 
 @pytest.mark.asyncio
