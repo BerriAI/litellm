@@ -710,6 +710,54 @@ async def test_add_litellm_data_to_request_body_snapshot_excludes_proxy_server_r
     )
 
 
+def test_refresh_proxy_server_request_body_snapshot_picks_up_guardrail_masking():
+    """
+    Regression: proxy_server_request['body'] is snapshotted by
+    add_litellm_data_to_request BEFORE guardrails (e.g. Presidio PII masking) run
+    in pre_call_hook. Without a refresh after pre_call_hook, the persisted body
+    silently bypasses whatever masking the guardrail applied, so raw PII/PCI
+    lands in SpendLogs when store_prompts_in_spend_logs is enabled.
+    """
+    from litellm.proxy.litellm_pre_call_utils import (
+        refresh_proxy_server_request_body_snapshot,
+    )
+
+    class _FakeLoggingObj:
+        """Stands in for the live, non-JSON-serializable Logging instance that
+        litellm.utils.function_setup stamps onto `data` between the initial
+        snapshot and pre_call_hook."""
+
+    data = {
+        "model": "gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": "my ssn is 123-45-6789"}],
+        "secret_fields": {"raw_headers": {"authorization": "Bearer sk-secret"}},
+        "litellm_logging_obj": _FakeLoggingObj(),
+        "proxy_server_request": {
+            "url": "http://localhost/v1/chat/completions",
+            "method": "POST",
+            "body": {
+                "model": "gpt-3.5-turbo",
+                "messages": [{"role": "user", "content": "my ssn is 123-45-6789"}],
+            },
+        },
+    }
+
+    # Simulate a PII-masking guardrail mutating `messages` in place, like Presidio's
+    # async_pre_call_hook does, after the initial snapshot was already taken.
+    data["messages"] = [{"role": "user", "content": "my ssn is <MASKED>"}]
+
+    refresh_proxy_server_request_body_snapshot(data)
+
+    refreshed_body = data["proxy_server_request"]["body"]
+    assert refreshed_body["messages"] == data["messages"]
+    # Still excludes secrets, self-reference, and the live logging object, same as
+    # the initial snapshot -- and proves the persisted body stays JSON-serializable.
+    assert "secret_fields" not in refreshed_body
+    assert "proxy_server_request" not in refreshed_body
+    assert "litellm_logging_obj" not in refreshed_body
+    assert "123-45-6789" not in json.dumps(refreshed_body)
+
+
 @pytest.mark.asyncio
 async def test_add_litellm_data_to_request_strips_string_encoded_admin_injection():
     """Regression: metadata arriving as a JSON string (multipart/form-data or
