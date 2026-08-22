@@ -5,6 +5,7 @@ Type definitions for WebSearch Interception integration.
 from typing import Literal, TypedDict
 
 from pydantic import BaseModel
+from typing_extensions import ReadOnly
 
 
 class AnthropicSearchQuery(BaseModel):
@@ -35,6 +36,7 @@ class WebSearchInterceptionConfig(TypedDict, total=False):
           websearch_interception_params:
             enabled_providers: ["bedrock"]
             search_tool_name: "my-perplexity-search"
+            max_agentic_loops: 5
     """
 
     enabled_providers: list[str]
@@ -42,3 +44,6 @@ class WebSearchInterceptionConfig(TypedDict, total=False):
 
     search_tool_name: str | None
     """Name of search tool configured in router's search_tools. If None, uses first available."""
+
+    max_agentic_loops: ReadOnly[int | None]
+    """How many follow-up model calls one intercepted request may chain. If None, LiteLLM's default of 3 applies."""

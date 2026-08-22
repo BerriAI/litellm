@@ -1,14 +1,11 @@
 import asyncio
 import json
-import os
-import sys
 from datetime import datetime, timedelta
 from typing import AsyncGenerator
 from unittest.mock import AsyncMock, MagicMock, mock_open, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 import httpx
 from respx import MockRouter

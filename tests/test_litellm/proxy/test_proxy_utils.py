@@ -1,7 +1,5 @@
 import datetime as real_datetime
-import os
 import smtplib
-import sys
 
 import pytest
 from fastapi import HTTPException
@@ -12,9 +10,6 @@ from litellm.proxy._types import ProxyErrorTypes
 from litellm.proxy.utils import ProxyLogging
 from litellm.types.guardrails import GuardrailEventHooks
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 
 from unittest.mock import MagicMock, patch

@@ -4,12 +4,14 @@ import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Literal, Optional, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Final, Literal, Optional, Protocol, get_args, runtime_checkable
 
+from litellm.proxy._types import ProxyException
 from litellm.repositories.table_repositories import (
     ManagedFileRepository,
     ManagedObjectRepository,
 )
+from litellm.types.llms.openai import OpenAIFilesPurpose
 from litellm.types.utils import SpecialEnums
 
 if TYPE_CHECKING:
@@ -20,6 +22,50 @@ if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
     from litellm.router import Router
     from litellm.types.utils import LiteLLMBatch
+
+
+MAX_FILE_LIST_LIMIT: Final = 10000
+
+FILE_LIST_CONTINUATION_CHUNK_SIZE: Final = 500
+
+
+def validate_file_list_limit(limit: int | None) -> None:
+    """Reject a ``limit`` outside the range OpenAI documents for GET /v1/files."""
+    if limit is None or 1 <= limit <= MAX_FILE_LIST_LIMIT:
+        return
+    bound, expected, openai_code = (
+        ("below minimum", ">= 1", "integer_below_min_value")
+        if limit < 1
+        else ("above maximum", f"<= {MAX_FILE_LIST_LIMIT}", "integer_above_max_value")
+    )
+    raise ProxyException(
+        message=f"Invalid 'limit': integer {bound} value. Expected a value {expected}, but got {limit} instead.",
+        type="invalid_request_error",
+        param="limit",
+        code=400,
+        openai_code=openai_code,
+    )
+
+
+def validate_file_list_purpose(purpose: str | None) -> None:
+    """Reject a ``purpose`` filter no upload to this proxy could have stored.
+
+    An unknown purpose matches no file, so filtering on it would report an
+    empty page for what is really a bad request. Rejecting it keeps a managed
+    listing consistent with the upload route, which refuses the same values
+    against this same set. The provider-backed listings do not: they pass
+    ``purpose`` upstream, so a purpose OpenAI accepts before it is added here
+    is rejected on the managed path while still working on those.
+    """
+    valid_purposes: Final = get_args(OpenAIFilesPurpose)
+    if purpose is None or purpose in valid_purposes:
+        return
+    raise ProxyException(
+        message=f"Invalid purpose: {purpose}. Must be one of: {valid_purposes}",
+        type="invalid_request_error",
+        param="purpose",
+        code=400,
+    )
 
 
 @runtime_checkable

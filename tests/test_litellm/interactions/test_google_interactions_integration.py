@@ -10,11 +10,9 @@ Run with: pytest tests/test_litellm/interactions/test_google_interactions_integr
 
 import asyncio
 import os
-import sys
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../.."))
 
 import litellm
 import litellm.interactions as interactions

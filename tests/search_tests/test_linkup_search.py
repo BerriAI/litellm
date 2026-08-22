@@ -3,11 +3,9 @@ Tests for Linkup Search API integration.
 """
 
 import os
-import sys
 import pytest
 from unittest.mock import Mock, patch
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 import litellm
 from tests.search_tests.base_search_unit_tests import BaseSearchTest

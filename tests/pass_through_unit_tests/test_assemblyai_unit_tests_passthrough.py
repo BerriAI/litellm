@@ -1,12 +1,7 @@
 import json
-import os
-import sys
 from datetime import datetime
 from unittest.mock import AsyncMock, Mock, patch
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system-path
 
 
 import httpx
@@ -15,12 +10,7 @@ import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 
-import os
-import sys
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system-path
 
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.assembly_passthrough_logging_handler import (
     AssemblyAIPassthroughLoggingHandler,
