@@ -783,6 +783,7 @@ openai_compatible_endpoints: Final[list] = [
     "https://pinstripes.io/v1",
     "https://api.meta.ai/v1",
     "https://api.cognition.ai/v1",
+    "https://api.scx.ai/v1",
 ]
 
 
@@ -851,6 +852,7 @@ openai_compatible_providers: Final[list] = [
     "darkbloom",
     "meta",  # Meta Model API (Muse Spark) - JSON-configured provider
     "cognition",
+    "scx-ai",
 ]
 openai_text_completion_compatible_providers: Final[list] = [  # providers that support `/v1/completions`
     "together_ai",
