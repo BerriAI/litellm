@@ -1508,7 +1508,7 @@ def test_multiple_tool_calls_in_single_choice():
     print("✓ Multiple tool calls are correctly grouped in a single choice")
 
 
-def test_map_reasoning_effort_adds_summary_detailed():
+def test_map_reasoning_effort_adds_summary_detailed(monkeypatch):
     """
     Test that _map_reasoning_effort behavior with reasoning_auto_summary flag.
 
@@ -1571,7 +1571,7 @@ def test_map_reasoning_effort_adds_summary_detailed():
 
         # Test 3: With env var enabled (flag disabled) - summary IS added
         litellm.reasoning_auto_summary = False
-        os.environ["LITELLM_REASONING_AUTO_SUMMARY"] = "true"
+        monkeypatch.setenv("LITELLM_REASONING_AUTO_SUMMARY", "true")
 
         result = handler._map_reasoning_effort("high")
         assert (
@@ -1603,7 +1603,7 @@ def test_map_reasoning_effort_adds_summary_detailed():
         # Restore original values
         litellm.reasoning_auto_summary = original_flag
         if original_env is not None:
-            os.environ["LITELLM_REASONING_AUTO_SUMMARY"] = original_env
+            monkeypatch.setenv("LITELLM_REASONING_AUTO_SUMMARY", original_env)
         elif "LITELLM_REASONING_AUTO_SUMMARY" in os.environ:
             del os.environ["LITELLM_REASONING_AUTO_SUMMARY"]
 
