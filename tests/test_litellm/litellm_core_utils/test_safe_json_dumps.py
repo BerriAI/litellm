@@ -230,3 +230,26 @@ def test_pydantic_base_model():
     assert len(result["healthy_endpoints"]) == 2
     assert result["healthy_endpoints"][0]["name"] == "test"
     assert result["healthy_endpoints"][1] == {"value": 1, "label": "one"}
+
+
+def test_dict_mutated_during_serialization_does_not_raise():
+    # Regression: safe_dumps runs on request_data / model_call_details, which a
+    # concurrent async hook can mutate while we iterate. Serializing one value
+    # here inserts a new key into the same dict (standing in for that hook). On
+    # the pre-fix code this raised "RuntimeError: dictionary changed size during
+    # iteration"; the list() snapshot must keep iteration stable.
+    class _MutateOnStr:
+        def __init__(self, target):
+            self._target = target
+
+        def __str__(self):
+            self._target["injected_by_concurrent_hook"] = "value"
+            return "mutated"
+
+    data = {}
+    data["trigger"] = _MutateOnStr(data)
+    data["after"] = 1
+
+    result = json.loads(safe_dumps(data))
+    assert result["trigger"] == "mutated"
+    assert result["after"] == 1
