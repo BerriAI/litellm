@@ -106,6 +106,7 @@ INTO_TARGETS = re.compile(
     re.IGNORECASE,
 )
 LOOP_TARGET = re.compile(r"\bFOR(?:EACH)?\s+([A-Za-z_][A-Za-z0-9_]*)\s+IN\b", re.IGNORECASE)
+LOOP_HEADER = re.compile(r"\bFOR(?:EACH)?\b.*?\bLOOP\b", re.IGNORECASE | re.DOTALL)
 WORD_OR_ASSIGN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*|:=|(?<![<>!:=])=(?![=>])")
 PRECEDING_WORD = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)[^A-Za-z0-9_]*$")
 EXPLAIN_OPTIONS = re.compile(r"\bEXPLAIN\b(?:\s+(?:ANALYZE|ANALYSE|VERBOSE)\b)+", re.IGNORECASE)
@@ -530,23 +531,35 @@ def scan_region(
     executed = executed_names(masked)
 
     for match in STATEMENT.finditer(masked):
-        start = offset + statement_start(match)
-        end = offset + match.end()
-        exempt = markers.exempt(start, end)
+        exempt = markers.exempt(offset + statement_start(match), offset + match.end())
 
-        if hands_off_sql(match.group(), executed) and not exempt:
-            commands_end = match.start() + bind_values_start(match.group())
-            for start, end in literals:
-                if match.start() <= start and end <= commands_end:
-                    yield from scan_region(document, region[start:end], migration, markers, offset + start)
+        for clause, base in clauses(match.group(), match.start()):
+            if hands_off_sql(clause, executed) and not exempt:
+                commands_end = base + bind_values_start(clause)
+                for start, end in literals:
+                    if base <= start and end <= commands_end:
+                        yield from scan_region(document, region[start:end], migration, markers, offset + start)
 
-        keyword = offending_keyword(match.group())
-        if keyword is None or exempt:
-            continue
-        yield Violation(migration, line_of(document, offset + keyword_start(match)), keyword)
+            keyword = offending_keyword(clause)
+            if keyword is None or exempt:
+                continue
+            yield Violation(migration, line_of(document, offset + keyword_start(clause, base)), keyword)
 
     for start, end in bodies:
         yield from scan_region(document, region[start:end], migration, markers, offset + start)
+
+
+def clauses(statement: str, start: int) -> Iterator[tuple[str, int]]:
+    """The statements written inside one semicolon-delimited run, each with where it begins. A
+    `FOR ... LOOP` header takes no semicolon of its own, so the first statement of the loop body
+    is written into the same run, and reading the pair as one statement lets the header's row
+    source stand in as the keyword for both. That hides the statement the loop repeats, which is
+    the shape a row-by-row backfill takes. Splitting after each header, nested ones included,
+    reads the header and the body as the separate statements Postgres runs them as."""
+    edges = (0, *(header.end() for header in LOOP_HEADER.finditer(statement)), len(statement))
+    for opens, closes in zip(edges, edges[1:]):
+        if opens < closes:
+            yield statement[opens:closes], start + opens
 
 
 def bind_values_start(statement: str) -> int:
@@ -565,9 +578,9 @@ def statement_start(statement: re.Match[str]) -> int:
     return statement.start() + len(text) - len(text.lstrip())
 
 
-def keyword_start(statement: re.Match[str]) -> int:
-    word = leading_keyword(statement.group())
-    return statement.start() + (0 if word is None else word.start())
+def keyword_start(clause: str, base: int) -> int:
+    word = leading_keyword(clause)
+    return base + (0 if word is None else word.start())
 
 
 def line_of(sql: str, offset: int) -> int:
