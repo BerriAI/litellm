@@ -2202,7 +2202,20 @@ class Logging(LiteLLMLoggingBaseClass):
         ``in_progress`` response (no usage, so no cost was tracked); clearing
         the dedup flags lets the completed result flow through cost calculation
         and spend tracking exactly once, spanning create to completion.
+
+        The poll fetched this body through its own client call, which priced it
+        against a throwaway logging object holding none of this request's
+        deployment context: no ``model_info``, no router ``model_id``, no
+        deployment ``litellm_params``. Keeping that price would bill a
+        custom-priced deployment at the wrong rate, and it would also satisfy
+        the "already calculated" shortcut and skip repricing here, leaving the
+        cost breakdown at the zeros the usage-less create stamped and writing
+        those zeros to the spend log. Dropping it makes this event price the
+        settled body itself, against the deployment that served the create.
         """
+        settled_hidden_params: Final = getattr(result, "_hidden_params", None)
+        if isinstance(settled_hidden_params, dict):
+            settled_hidden_params.pop("response_cost", None)
         self._reset_success_emission_dedupe()
         await self.async_success_handler(result=result)
 

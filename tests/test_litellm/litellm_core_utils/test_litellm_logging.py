@@ -4645,6 +4645,49 @@ async def test_background_interaction_completion_rebills_after_in_progress_succe
 
 
 @pytest.mark.asyncio
+async def test_background_interaction_completion_prices_the_settled_body_itself():
+    """
+    The poll fetches the settled body through its own client call, which
+    prices it against a throwaway logging object holding none of this
+    request's deployment context. Adopting that price would bill a
+    custom-priced deployment at the wrong rate, and it would also satisfy the
+    "already calculated" shortcut and skip repricing, leaving the breakdown at
+    the zeros the usage-less create stamped and writing those to the spend log.
+    """
+    import datetime as dt
+
+    from litellm.types.interactions import InteractionsAPIResponse
+
+    logging_obj = _interactions_logging_obj(stream=False)
+    in_progress = InteractionsAPIResponse(id="interactions/abc", model="gemini-2.5-flash", status="in_progress")
+    await logging_obj.async_success_handler(
+        result=in_progress,
+        start_time=dt.datetime.now(),
+        end_time=dt.datetime.now(),
+    )
+
+    completed = InteractionsAPIResponse(
+        id="interactions/abc",
+        model="gemini-2.5-flash",
+        status="completed",
+        steps=[],
+        usage=dict(INTERACTIONS_USAGE_BLOCK),
+    )
+    completed._hidden_params = {"response_cost": 99.0}
+
+    await logging_obj.async_log_background_interaction_completion(result=completed)
+
+    response_cost = logging_obj.model_call_details["response_cost"]
+    assert response_cost != 99.0
+    assert response_cost > 0
+
+    cost_breakdown = logging_obj.model_call_details["standard_logging_object"]["cost_breakdown"]
+    assert cost_breakdown["total_cost"] == response_cost
+    assert cost_breakdown["input_cost"] > 0
+    assert cost_breakdown["output_cost"] > 0
+
+
+@pytest.mark.asyncio
 async def test_background_interaction_completion_lets_otel_emit_the_cost_span():
     """
     OTEL, and every integration that derives from it, dedupes span emission on
