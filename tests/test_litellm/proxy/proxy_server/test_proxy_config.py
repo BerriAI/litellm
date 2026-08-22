@@ -1871,6 +1871,28 @@ def test_ProxyConfig_get_model_info_with_id_missing_model_id_raises(monkeypatch)
         pc.get_model_info_with_id(model=bad)
 
 
+def test_ProxyConfig_get_model_info_with_id_hydrates_metadata_without_premium(monkeypatch):
+    """DB-row created_at/created_by/updated_at/updated_by are served to non-premium
+    users: /model/info is admin-scoped, so the caller already has access."""
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", False)
+    from datetime import datetime, timezone
+
+    pc = ProxyConfig()
+    now = datetime.now(timezone.utc)
+    model = SimpleNamespace(
+        model_id="m-2",
+        model_info={"id": "m-2"},
+        blocked=False,
+        created_at=now,
+        updated_at=now,
+        created_by="user-1",
+        updated_by="user-1",
+    )
+    out = pc.get_model_info_with_id(model=model, db_model=True)
+    assert str(out.created_at) == str(now)
+    assert out.created_by == "user-1"
+
+
 # ---------------------------------------------------------------------------
 # ProxyConfig._delete_deployment
 # ---------------------------------------------------------------------------
