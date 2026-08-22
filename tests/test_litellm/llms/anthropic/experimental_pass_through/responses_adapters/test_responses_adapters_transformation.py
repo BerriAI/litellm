@@ -1249,6 +1249,20 @@ class TestTranslateResponse:
         result: Any = _ADAPTER.translate_response(response)
         assert result["content"] == []
 
+    def test_null_summary_text_skipped_rather_than_stringified(self):
+        """A summary part whose text is null must not reach the client as the word "None"."""
+        response = _make_mock_response(
+            output=[
+                {
+                    "type": "reasoning",
+                    "id": "rs_null_1",
+                    "summary": [{"type": "summary_text", "text": None}],
+                }
+            ]
+        )
+        result: Any = _ADAPTER.translate_response(response)
+        assert result["content"] == []
+
     def test_reasoning_item_id_never_becomes_a_thinking_signature(self):
         """Only Anthropic can sign a thinking block, so a stand-in signature is never invented."""
         reasoning = _make_reasoning_item(["Part one.", "Part two."], item_id="rs_abc123")

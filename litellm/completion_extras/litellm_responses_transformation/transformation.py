@@ -428,12 +428,14 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 if role == "assistant":
                     input_items.extend(_reasoning_input_items(msg))
                 input_items.append(
-                    {
+                    {  # mutable-ok: API message payload
                         "type": "message",
                         "role": role,
                         "content": self._convert_content_to_responses_format(content, cast(str, role)),
                     }
                 )
+            elif role == "assistant":
+                input_items.extend(_reasoning_input_items(msg))
 
         return input_items, instructions
 
