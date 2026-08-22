@@ -162,3 +162,23 @@ func TestTeamUpdateClearsRemovedTagsAndSoftBudget(t *testing.T) {
 		t.Fatalf("payload metadata = %v, want department only", got)
 	}
 }
+
+func TestTeamReadClearsSoftBudgetWhenProxyReturnsNull(t *testing.T) {
+	var captured map[string]interface{}
+	srv := newTeamTestServer(t, &captured, `{"team_id":"team-1","team_info":{"team_id":"team-1","team_alias":"insights","soft_budget":null},"keys":[],"team_memberships":[]}`)
+	defer srv.Close()
+
+	d := schema.TestResourceDataRaw(t, ResourceLiteLLMTeam().Schema, map[string]interface{}{
+		"team_alias":  "insights",
+		"soft_budget": 600.0,
+	})
+	d.SetId("team-1")
+
+	if err := resourceLiteLLMTeamRead(d, NewClient(srv.URL, "test-key", true)); err != nil {
+		t.Fatalf("read failed: %v", err)
+	}
+
+	if got := d.Get("soft_budget"); got != 0.0 {
+		t.Fatalf("soft_budget = %v, want cleared after the proxy returned null", got)
+	}
+}

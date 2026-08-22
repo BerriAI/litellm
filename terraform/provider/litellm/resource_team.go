@@ -158,9 +158,7 @@ func resourceLiteLLMTeamRead(d *schema.ResourceData, m interface{}) error {
 	if teamResp.MaxBudget != nil {
 		d.Set("max_budget", *teamResp.MaxBudget)
 	}
-	if teamResp.SoftBudget != nil {
-		d.Set("soft_budget", *teamResp.SoftBudget)
-	}
+	d.Set("soft_budget", teamResp.SoftBudget)
 	d.Set("budget_duration", GetStringValue(teamResp.BudgetDuration, d.Get("budget_duration").(string)))
 
 	// Handle models separately as it's a list
