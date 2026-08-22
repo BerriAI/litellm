@@ -275,6 +275,140 @@ class TestDollarQuotedBlocks:
         assert _scan(tmp_path, sql)[0].line == 7
 
 
+class TestLoopBodies:
+    def test_a_rewrite_in_a_query_driven_loop_is_flagged(self, tmp_path):
+        sql = (
+            "DO $$\n"
+            "DECLARE r record;\n"
+            "BEGIN\n"
+            '    FOR r IN SELECT "id" FROM "Bar" LOOP\n'
+            '        UPDATE "Foo" SET "a" = 1;\n'
+            "    END LOOP;\n"
+            "END $$;"
+        )
+        assert _keywords(tmp_path, sql) == ("UPDATE",)
+        assert _scan(tmp_path, sql)[0].line == 5
+
+    def test_a_delete_in_a_query_driven_loop_is_flagged(self, tmp_path):
+        sql = (
+            "DO $$\n"
+            "DECLARE r record;\n"
+            "BEGIN\n"
+            '    FOR r IN SELECT "id" FROM "Bar" LOOP\n'
+            '        DELETE FROM "Foo" WHERE "id" = r."id";\n'
+            "    END LOOP;\n"
+            "END $$;"
+        )
+        assert _keywords(tmp_path, sql) == ("DELETE",)
+
+    def test_a_join_using_in_the_loop_query_does_not_hide_the_body(self, tmp_path):
+        sql = (
+            "DO $$\n"
+            "DECLARE r record;\n"
+            "BEGIN\n"
+            '    FOR r IN SELECT a."id" FROM "A" a JOIN "B" b USING ("id") LOOP\n'
+            "        EXECUTE 'UPDATE \"Foo\" SET \"a\" = 1';\n"
+            "    END LOOP;\n"
+            "END $$;"
+        )
+        assert _keywords(tmp_path, sql) == ("UPDATE",)
+
+    def test_a_rewrite_executed_in_a_query_driven_loop_is_flagged(self, tmp_path):
+        sql = (
+            "DO $$\n"
+            "DECLARE r record;\n"
+            "BEGIN\n"
+            '    FOR r IN SELECT "id" FROM "Bar" LOOP\n'
+            "        EXECUTE 'UPDATE \"Foo\" SET \"a\" = 1';\n"
+            "    END LOOP;\n"
+            "END $$;"
+        )
+        assert _keywords(tmp_path, sql) == ("UPDATE",)
+
+    def test_a_rewrite_nested_under_a_guard_inside_a_loop_is_flagged(self, tmp_path):
+        sql = (
+            "DO $$\n"
+            "DECLARE r record;\n"
+            "BEGIN\n"
+            '    FOR r IN SELECT "id" FROM "Bar" LOOP\n'
+            '        IF r."id" > 0 THEN\n'
+            '            UPDATE "Foo" SET "a" = 1;\n'
+            "        END IF;\n"
+            "    END LOOP;\n"
+            "END $$;"
+        )
+        assert _keywords(tmp_path, sql) == ("UPDATE",)
+
+    def test_a_rewrite_inside_a_nested_loop_is_flagged(self, tmp_path):
+        sql = (
+            "DO $$\n"
+            "DECLARE a record;\n"
+            "DECLARE b record;\n"
+            "BEGIN\n"
+            '    FOR a IN SELECT "id" FROM "A" LOOP FOR b IN SELECT "id" FROM "B" LOOP\n'
+            '        UPDATE "Foo" SET "a" = 1;\n'
+            "    END LOOP; END LOOP;\n"
+            "END $$;"
+        )
+        assert _keywords(tmp_path, sql) == ("UPDATE",)
+
+    def test_a_rewrite_supplying_a_nested_loop_is_flagged(self, tmp_path):
+        sql = (
+            "DO $$\n"
+            "DECLARE a record;\n"
+            "DECLARE b record;\n"
+            "BEGIN\n"
+            '    FOR a IN SELECT "id" FROM "A" LOOP\n'
+            '    FOR b IN UPDATE "Foo" SET "x" = 1 RETURNING "id" LOOP\n'
+            "        NULL;\n"
+            "    END LOOP; END LOOP;\n"
+            "END $$;"
+        )
+        assert _keywords(tmp_path, sql) == ("UPDATE",)
+        assert _scan(tmp_path, sql)[0].line == 6
+
+    def test_a_loop_running_only_ddl_passes(self, tmp_path):
+        sql = (
+            "DO $$\n"
+            "DECLARE r record;\n"
+            "BEGIN\n"
+            '    FOR r IN SELECT "id" FROM "Bar" LOOP\n'
+            '        CREATE INDEX "i" ON "Foo"("a");\n'
+            "    END LOOP;\n"
+            "END $$;"
+        )
+        assert _keywords(tmp_path, sql) == ()
+
+    def test_a_loop_over_a_rewrite_returning_rows_is_flagged_once(self, tmp_path):
+        sql = (
+            "DO $$\n"
+            "DECLARE r record;\n"
+            "BEGIN\n"
+            '    FOR r IN UPDATE "Foo" SET "a" = 1 RETURNING "id" LOOP\n'
+            "        NULL;\n"
+            "    END LOOP;\n"
+            "END $$;"
+        )
+        assert _keywords(tmp_path, sql) == ("UPDATE",)
+
+    def test_a_marker_on_a_loop_exempts_the_rewrite_it_repeats(self, tmp_path):
+        sql = (
+            "DO $$\n"
+            "DECLARE r record;\n"
+            "BEGIN\n"
+            "    -- data-migration-ok: one row\n"
+            '    FOR r IN SELECT "id" FROM "Bar" LOOP\n'
+            '        UPDATE "Foo" SET "a" = 1;\n'
+            "    END LOOP;\n"
+            "END $$;"
+        )
+        assert _keywords(tmp_path, sql) == ()
+
+    def test_a_select_for_update_lock_is_not_read_as_a_loop(self, tmp_path):
+        sql = 'DO $$\nBEGIN\n    PERFORM 1 FROM "Foo" FOR UPDATE;\nEND $$;'
+        assert _keywords(tmp_path, sql) == ()
+
+
 class TestQuotingAndComments:
     def test_update_inside_string_literal_passes(self, tmp_path):
         sql = 'ALTER TABLE "Foo" ADD COLUMN "note" TEXT NOT NULL DEFAULT \'UPDATE nothing\';'
