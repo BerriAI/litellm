@@ -27,6 +27,8 @@ from litellm.constants import (
     REDIS_CIRCUIT_BREAKER_ENABLED,
     REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD,
     REDIS_CIRCUIT_BREAKER_RECOVERY_TIMEOUT,
+    REDIS_ERROR_LOG_HEAD_BYTES,
+    REDIS_ERROR_LOG_TAIL_BYTES,
 )
 from litellm.litellm_core_utils.core_helpers import _get_parent_otel_span_from_kwargs
 from litellm.litellm_core_utils.coroutine_checker import coroutine_checker
@@ -215,6 +217,42 @@ def _record_swallowed_redis_failure(breaker: RedisCircuitBreaker, exc: BaseExcep
         return
     breaker.record_failure()
     _swallowed_redis_failures.set(_swallowed_redis_failures.get() + 1)
+
+
+_UNRENDERABLE_REDIS_ERROR: Final = "UnrenderableException: <exception could not be rendered>"
+
+
+def _redis_error_text(exc: BaseException) -> str:
+    """Render ``exc`` for an error log without letting it carry the cached payload.
+
+    Dropping the value argument does not close the path on its own, because a Redis
+    client can put the command it failed on, key and value included, into the exception.
+    redis-py rewraps every pipelined failure as
+    ``Command # N (<the whole command>) of pipeline caused error: <reason>``, so on the
+    pipeline paths the value arrives through ``str(exc)`` while the value argument reads
+    ``None``. The client does that wrapping, so even a short generic server error
+    produces the long line.
+
+    Bounded at both ends because the two shapes put the diagnostic at opposite ends: a
+    connection error leads with the reason, the pipeline wrapper trails with it, and a
+    head-only bound would print part of the command and drop the reason. Bounded in
+    bytes so a non-ASCII payload cannot exceed the budget several times over.
+
+    ``__str__`` is caller-controlled code and every caller is an ``except`` block that
+    exists to keep the request alive, so rendering must never raise. Everything after
+    the guard operates on ``bytes`` and cannot.
+    """
+    try:
+        name: Final = type(exc).__name__
+        raw: Final = str(exc).encode("utf-8", "replace")
+    except BaseException:  # noqa: BLE001  # __str__ is caller-controlled and can raise anything, KeyboardInterrupt included
+        return _UNRENDERABLE_REDIS_ERROR
+    if len(raw) <= REDIS_ERROR_LOG_HEAD_BYTES + REDIS_ERROR_LOG_TAIL_BYTES:
+        return f"{name}: {raw.decode('utf-8', 'replace')}"
+    head: Final = raw[:REDIS_ERROR_LOG_HEAD_BYTES].decode("utf-8", "replace")
+    tail: Final = raw[len(raw) - REDIS_ERROR_LOG_TAIL_BYTES :].decode("utf-8", "replace")
+    dropped: Final = len(raw) - REDIS_ERROR_LOG_HEAD_BYTES - REDIS_ERROR_LOG_TAIL_BYTES
+    return f"{name}: {head} ...[truncated {dropped} bytes]... {tail}"
 
 
 async def _run_under_circuit_breaker(
@@ -537,7 +575,7 @@ class RedisCache(BaseCache):
             _duration = end_time - start_time
             verbose_logger.error(
                 "LiteLLM Redis Caching: increment_cache() - Got exception from REDIS %s, key=%s, value_bytes=%s",
-                str(e),
+                _redis_error_text(e),
                 key,
                 len(str(value)),
             )
@@ -710,7 +748,7 @@ class RedisCache(BaseCache):
             )
             verbose_logger.error(
                 "LiteLLM Redis Caching: async set() - Got exception from REDIS %s, key=%r, value_bytes=%s",
-                str(e),
+                _redis_error_text(e),
                 key,
                 len(str(value)),
             )
@@ -762,7 +800,7 @@ class RedisCache(BaseCache):
             )
             verbose_logger.error(
                 "LiteLLM Redis Caching: async set() - Got exception from REDIS %s, key=%s, value_bytes=%s",
-                str(e),
+                _redis_error_text(e),
                 key,
                 len(str(value)),
             )
@@ -849,7 +887,7 @@ class RedisCache(BaseCache):
 
             verbose_logger.error(
                 "LiteLLM Redis Caching: async set_cache_pipeline() - Got exception from REDIS %s, num_keys=%s, value_bytes=%s",
-                str(e),
+                _redis_error_text(e),
                 len(cache_list),
                 sum(len(str(cache_value)) for _, cache_value in cache_list),
             )
@@ -896,7 +934,7 @@ class RedisCache(BaseCache):
             # NON blocking - notify users Redis is throwing an exception
             verbose_logger.error(
                 "LiteLLM Redis Caching: async set() - Got exception from REDIS %s, key=%s, value_bytes=%s",
-                str(e),
+                _redis_error_text(e),
                 key,
                 len(str(value)),
             )
@@ -936,7 +974,7 @@ class RedisCache(BaseCache):
             # NON blocking - notify users Redis is throwing an exception
             verbose_logger.error(
                 "LiteLLM Redis Caching: async set_cache_sadd() - Got exception from REDIS %s, key=%s, value_bytes=%s",
-                str(e),
+                _redis_error_text(e),
                 key,
                 len(str(value)),
             )
@@ -1009,7 +1047,7 @@ class RedisCache(BaseCache):
             )
             verbose_logger.error(
                 "LiteLLM Redis Caching: async async_increment() - Got exception from REDIS %s, key=%s, value_bytes=%s",
-                str(e),
+                _redis_error_text(e),
                 key,
                 len(str(value)),
             )

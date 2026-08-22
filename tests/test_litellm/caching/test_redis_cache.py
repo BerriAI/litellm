@@ -751,3 +751,160 @@ async def test_async_set_cache_sadd_error_log_omits_the_cached_value(
     assert all(member_marker not in message for message in logged)
     assert any("Connection closed by server." in message for message in logged)
     assert any("lit4930" in message for message in logged)
+
+
+# Dropping the value argument is only half the path. redis-py rewraps every pipelined
+# failure as "Command # N (<the whole command>) of pipeline caused error: <reason>", so
+# the cached value reaches the same ERROR log through the exception text while the value
+# argument reads None. The failure still has to be reported; the payload does not.
+
+
+def _payload_bearing_error(reason_first: bool, marker: str) -> str:
+    """A redis error text carrying a response body, in each of the two observed shapes."""
+    body = f"{'x' * 200}{marker}{'x' * 200}"
+    if reason_first:
+        return f"Connection closed by server. {body}"
+    return f"Command # 1 (SET litellm:lit4930 {body}) of pipeline caused error: READONLY You can't write against a read only replica."
+
+
+@pytest.mark.asyncio
+async def test_async_set_cache_error_log_bounds_the_exception_text(
+    monkeypatch, redis_no_ping, caplog
+):
+    """The exception text is bounded, so a client that embeds the command cannot use it
+    as a second route for the value into the log."""
+    from redis.exceptions import ConnectionError as RedisConnectionError
+
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache = RedisCache()
+
+    response_marker = "exception-slot-marker"
+    redis_error = RedisConnectionError(
+        _payload_bearing_error(reason_first=True, marker=response_marker)
+    )
+
+    mock_redis_instance = AsyncMock()
+    mock_redis_instance.set.side_effect = redis_error
+
+    with caplog.at_level(logging.ERROR, logger="LiteLLM"), patch.object(
+        redis_cache, "init_async_client", return_value=mock_redis_instance
+    ):
+        await redis_cache.async_set_cache("lit4930", {"choices": []})
+
+    logged = [
+        record.getMessage()
+        for record in caplog.records
+        if "async set()" in record.getMessage()
+    ]
+    assert logged, "a failed cache write still has to be reported"
+    assert all(
+        response_marker not in message for message in logged
+    ), "the payload embedded in the exception must not reach the log record"
+    assert any(
+        "Connection closed by server." in message for message in logged
+    ), "the reason leads this shape, so bounding must keep it"
+    assert any("ConnectionError:" in message for message in logged)
+    assert any("truncated" in message for message in logged)
+    assert all(len(message) < 500 for message in logged)
+
+
+@pytest.mark.asyncio
+async def test_async_set_cache_pipeline_error_log_keeps_the_reason_at_the_tail(
+    monkeypatch, redis_no_ping, caplog
+):
+    """redis-py's pipeline wrapper puts the command first and the reason last, so a
+    head-only bound would print part of the payload and drop the only diagnostic."""
+    from redis.exceptions import ResponseError
+
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache = RedisCache()
+
+    response_marker = "pipeline-exception-slot-marker"
+    redis_error = ResponseError(
+        _payload_bearing_error(reason_first=False, marker=response_marker)
+    )
+
+    mock_redis_instance = AsyncMock()
+    mock_redis_instance.pipeline = MagicMock(side_effect=redis_error)
+
+    with caplog.at_level(logging.ERROR, logger="LiteLLM"), patch.object(
+        redis_cache, "init_async_client", return_value=mock_redis_instance
+    ):
+        await redis_cache.async_set_cache_pipeline(
+            cache_list=[("lit4930", {"choices": []})]
+        )
+
+    logged = [
+        record.getMessage()
+        for record in caplog.records
+        if "async set_cache_pipeline()" in record.getMessage()
+    ]
+    assert logged, "a failed pipeline write still has to be reported"
+    assert all(
+        response_marker not in message for message in logged
+    ), "the payload embedded in the exception must not reach the log record"
+    assert any(
+        "READONLY" in message for message in logged
+    ), "the reason trails this shape, so a head-only bound would lose it"
+    assert any("truncated" in message for message in logged)
+    assert all(len(message) < 500 for message in logged)
+
+
+@pytest.mark.parametrize(
+    "raised",
+    [
+        pytest.param(ValueError("no"), id="exception"),
+        pytest.param(KeyboardInterrupt("no"), id="base_exception"),
+    ],
+)
+def test_redis_error_text_never_raises(raised):
+    """__str__ is caller-controlled code and this runs inside except blocks that exist
+    to keep the request alive, so an unrenderable exception has to render to something."""
+    from litellm.caching.redis_cache import _redis_error_text
+
+    class Unrenderable(Exception):
+        def __str__(self):
+            raise raised
+
+    try:
+        rendered = _redis_error_text(Unrenderable())
+    except BaseException as escaped:  # noqa: BLE001  # the regression is precisely that anything escapes here
+        pytest.fail(f"rendering must not re-raise: {escaped!r}")
+
+    assert "UnrenderableException" in rendered
+
+
+@pytest.mark.asyncio
+async def test_error_log_survives_an_exception_that_cannot_be_rendered(
+    monkeypatch, redis_no_ping, caplog
+):
+    """End to end: a write whose error cannot be rendered is still a swallowed write,
+    not a failed request."""
+    from redis.exceptions import ConnectionError as RedisConnectionError
+
+    class UnrenderableRedisError(RedisConnectionError):
+        def __str__(self):
+            raise ValueError("__str__ is caller-controlled code")
+
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache = RedisCache()
+
+    mock_redis_instance = AsyncMock()
+    mock_redis_instance.set.side_effect = UnrenderableRedisError()
+
+    with caplog.at_level(logging.ERROR, logger="LiteLLM"), patch.object(
+        redis_cache, "init_async_client", return_value=mock_redis_instance
+    ):
+        try:
+            await redis_cache.async_set_cache("lit4930", {"choices": []})
+        except BaseException as escaped:  # noqa: BLE001  # the regression is precisely that anything escapes here
+            pytest.fail(f"rendering the exception must not escalate the failure: {escaped!r}")
+
+    logged = [
+        record.getMessage()
+        for record in caplog.records
+        if "async set()" in record.getMessage()
+    ]
+    assert logged, "the write failure still has to be reported"
+    assert any("UnrenderableException" in message for message in logged)
+    assert any("lit4930" in message for message in logged)
