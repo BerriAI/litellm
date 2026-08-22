@@ -10,7 +10,7 @@ import type { ComplexityScorerDefaults } from "@/components/networking";
  * which is how the failure path is covered.
  */
 export const SHIPPED_SCORER_DEFAULTS: ComplexityScorerDefaults = {
-  tier_boundaries: { simple_medium: 0.15, medium_complex: 0.35, complex_reasoning: 0.6 },
+  tier_boundaries: { simple_medium: 0.1, medium_complex: 0.25, complex_reasoning: 0.5 },
   token_thresholds: { simple: 15, complex: 400 },
   dimension_weights: {
     codePresence: 0.3,

@@ -29,10 +29,10 @@ The weighted sum is mapped to tiers using configurable boundaries:
 
 | Tier | Score Range | Boundary key below it | Typical Use |
 |------|-------------|-----------------------|-------------|
-| SIMPLE | < 0.15 | - | Basic questions, greetings |
-| MEDIUM | 0.15 - 0.35 | `simple_medium` | Standard queries |
-| COMPLEX | 0.35 - 0.60 | `medium_complex` | Technical, multi-part requests |
-| REASONING | > 0.60 | `complex_reasoning` | Chain-of-thought, analysis |
+| SIMPLE | < 0.10 | - | Basic questions, greetings |
+| MEDIUM | 0.10 - 0.25 | `simple_medium` | Standard queries |
+| COMPLEX | 0.25 - 0.50 | `medium_complex` | Technical, multi-part requests |
+| REASONING | > 0.50 | `complex_reasoning` | Chain-of-thought, analysis |
 
 Tier names are defaults you can rename with [`tier_labels`](#renaming-the-tiers). The three `tier_boundaries` keys are named after those defaults but they are scorer knobs, not tiers: each one names the gap between two rungs and is persisted by name on every routing decision, so they stay `simple_medium` / `medium_complex` / `complex_reasoning` no matter what you call the tiers. The column above tells a renamed deployment which knob it is turning.
 
@@ -120,9 +120,9 @@ model_list:
         
         # Tier boundaries (normalized scores)
         tier_boundaries:
-          simple_medium: 0.15
-          medium_complex: 0.35
-          complex_reasoning: 0.60
+          simple_medium: 0.10
+          medium_complex: 0.25
+          complex_reasoning: 0.50
         
         # Token count thresholds
         token_thresholds:

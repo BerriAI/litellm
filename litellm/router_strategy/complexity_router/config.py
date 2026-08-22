@@ -366,9 +366,9 @@ DEFAULT_DIMENSION_WEIGHTS: Final[dict[str, float]] = {
 # ─── Default Tier Boundaries ───
 
 DEFAULT_TIER_BOUNDARIES: Final[dict[str, float]] = {
-    "simple_medium": 0.15,  # Lower threshold to catch more MEDIUM cases
-    "medium_complex": 0.35,  # Lower threshold to catch technical COMPLEX cases
-    "complex_reasoning": 0.60,  # Reasoning tier reserved for explicit reasoning markers
+    "simple_medium": 0.10,
+    "medium_complex": 0.25,
+    "complex_reasoning": 0.50,
 }
 
 

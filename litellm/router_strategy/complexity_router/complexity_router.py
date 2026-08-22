@@ -48,6 +48,7 @@ from .config import (
     DEFAULT_REASONING_KEYWORDS,
     DEFAULT_SIMPLE_KEYWORDS,
     DEFAULT_TECHNICAL_KEYWORDS,
+    DEFAULT_TIER_BOUNDARIES,
     PLAN_MODE_SYSTEM_SENTINELS,
     PLAN_MODE_TAIL_SENTINELS,
     PLAN_MODE_TOOL_NAME,
@@ -1097,9 +1098,9 @@ class ComplexityRouter(CustomLogger):
         """
         boundaries: Final = self.config.tier_boundaries
         return StandardLoggingRoutingDecisionTierBoundaries(
-            simple_medium=boundaries.get("simple_medium", 0.15),
-            medium_complex=boundaries.get("medium_complex", 0.35),
-            complex_reasoning=boundaries.get("complex_reasoning", 0.60),
+            simple_medium=boundaries.get("simple_medium", DEFAULT_TIER_BOUNDARIES["simple_medium"]),
+            medium_complex=boundaries.get("medium_complex", DEFAULT_TIER_BOUNDARIES["medium_complex"]),
+            complex_reasoning=boundaries.get("complex_reasoning", DEFAULT_TIER_BOUNDARIES["complex_reasoning"]),
         )
 
     def _build_routing_decision(

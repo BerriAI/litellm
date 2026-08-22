@@ -37,6 +37,7 @@ from litellm.router_strategy.complexity_router.config import (
     DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE,
     DEFAULT_COMPLEXITY_CONFIG,
     DEFAULT_TECHNICAL_KEYWORDS,
+    DEFAULT_TIER_BOUNDARIES,
     ClassifierLLMConfig,
     ComplexityRouterConfig,
     ComplexityTier,
@@ -600,6 +601,44 @@ class TestPreRoutingHook:
         )
         assert result is not None
         assert result.model == "o1-preview"  # REASONING tier model
+
+
+class TestEffectiveTierBoundaries:
+    """Test how configured boundaries resolve against the shipped defaults."""
+
+    def test_unconfigured_boundaries_resolve_to_the_shipped_defaults(self, mock_router_instance):
+        """A router with no tier_boundaries runs on DEFAULT_TIER_BOUNDARIES, not on stale literals."""
+        router = ComplexityRouter(
+            model_name="test-complexity-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={"tiers": {"SIMPLE": "a", "MEDIUM": "b", "COMPLEX": "c", "REASONING": "d"}},
+        )
+        assert dict(router._effective_tier_boundaries()) == DEFAULT_TIER_BOUNDARIES
+
+    def test_partial_boundaries_fill_missing_keys_from_the_defaults(self, mock_router_instance):
+        """Overriding one boundary must not strand the other two on a second, drifting copy of the defaults."""
+        router = ComplexityRouter(
+            model_name="test-complexity-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                "tiers": {"SIMPLE": "a", "MEDIUM": "b", "COMPLEX": "c", "REASONING": "d"},
+                "tier_boundaries": {"simple_medium": 0.42},
+            },
+        )
+        assert dict(router._effective_tier_boundaries()) == {
+            "simple_medium": 0.42,
+            "medium_complex": DEFAULT_TIER_BOUNDARIES["medium_complex"],
+            "complex_reasoning": DEFAULT_TIER_BOUNDARIES["complex_reasoning"],
+        }
+
+    def test_defaults_stay_ordered_and_within_the_scoring_range(self):
+        """The tiers only all remain reachable while the boundaries ascend."""
+        simple_medium, medium_complex, complex_reasoning = (
+            DEFAULT_TIER_BOUNDARIES["simple_medium"],
+            DEFAULT_TIER_BOUNDARIES["medium_complex"],
+            DEFAULT_TIER_BOUNDARIES["complex_reasoning"],
+        )
+        assert 0 < simple_medium < medium_complex < complex_reasoning < 1
 
 
 class TestConfigOverrides:
@@ -5074,7 +5113,7 @@ class TestRoutingDecisionContents:
         assert isinstance(decision["score"], float)
         assert any("short" in signal for signal in decision["signals"])
         # The snapshot must reflect the CONFIGURED boundaries (the fixture overrides the
-        # 0.15/0.35/0.60 defaults), so a logged row stays truthful after config edits.
+        # shipped defaults), so a logged row stays truthful after config edits.
         assert decision["tier_boundaries"] == {
             "simple_medium": 0.25,
             "medium_complex": 0.50,

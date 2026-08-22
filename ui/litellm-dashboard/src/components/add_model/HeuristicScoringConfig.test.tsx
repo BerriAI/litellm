@@ -41,7 +41,7 @@ describe("HeuristicScoringConfig", () => {
   it("prefills the shipped defaults", async () => {
     await render(BASE);
 
-    expect(screen.getByLabelText("Simple to Medium")).toHaveValue("0.15");
+    expect(screen.getByLabelText("Simple to Medium")).toHaveValue("0.1");
     expect(screen.getByLabelText("Long above")).toHaveValue("400");
     expect(screen.getByTestId("dimension-weight-total")).toHaveTextContent("total 1.00");
   });
@@ -57,8 +57,8 @@ describe("HeuristicScoringConfig", () => {
 
     expect((onChange.mock.calls.at(-1)?.[0] as ComplexityRouterConfigValue).tier_boundaries).toEqual({
       simple_medium: 0.22,
-      medium_complex: 0.35,
-      complex_reasoning: 0.6,
+      medium_complex: 0.25,
+      complex_reasoning: 0.5,
     });
   });
 
@@ -184,7 +184,7 @@ describe("ClassificationMethodConfig scorer gating", () => {
 
     expect(screen.getByText(/Score < 0.22/)).toBeInTheDocument();
     expect(screen.getByText(/Score 0.44 - 0.66/)).toBeInTheDocument();
-    expect(screen.queryByText(/0.15/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/0.10/)).not.toBeInTheDocument();
   });
 
   it("states the configured override floor in the reasoning-marker aside, not the boundary", () => {
@@ -196,7 +196,7 @@ describe("ClassificationMethodConfig scorer gating", () => {
   it("falls back to the Simple to Medium boundary when no override floor is set", () => {
     renderWithProviders(<ClassificationMethodConfig {...props} value={BASE} />);
 
-    expect(screen.getByText(/2\+ reasoning markers with a score of at least 0\.15/)).toBeInTheDocument();
+    expect(screen.getByText(/2\+ reasoning markers with a score of at least 0\.10/)).toBeInTheDocument();
   });
 
   it("renders a row for every scored dimension", async () => {
