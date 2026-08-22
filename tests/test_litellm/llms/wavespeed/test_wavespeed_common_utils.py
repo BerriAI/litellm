@@ -46,7 +46,7 @@ class TestUrls:
             build_submit_url(None, "///")
 
     def test_path_traversal_in_the_model_id_is_rejected(self):
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="model cannot be a dot path segment"):
             build_submit_url(None, "wavespeed-ai/../../admin")
 
     def test_prediction_id_is_percent_encoded(self):
