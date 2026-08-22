@@ -4,13 +4,14 @@ import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Literal, Optional, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Final, Literal, Optional, Protocol, get_args, runtime_checkable
 
 from litellm.proxy._types import ProxyException
 from litellm.repositories.table_repositories import (
     ManagedFileRepository,
     ManagedObjectRepository,
 )
+from litellm.types.llms.openai import OpenAIFilesPurpose
 from litellm.types.utils import SpecialEnums
 
 if TYPE_CHECKING:
@@ -43,6 +44,25 @@ def validate_file_list_limit(limit: int | None) -> None:
         param="limit",
         code=400,
         openai_code=openai_code,
+    )
+
+
+def validate_file_list_purpose(purpose: str | None) -> None:
+    """Reject a ``purpose`` filter the Files API never accepts.
+
+    An unknown purpose matches no file, so filtering on it would report an
+    empty page for what is really a bad request. Rejecting it keeps a managed
+    listing consistent with the upload route and with the provider-backed
+    listings, which both refuse the same values.
+    """
+    valid_purposes: Final = get_args(OpenAIFilesPurpose)
+    if purpose is None or purpose in valid_purposes:
+        return
+    raise ProxyException(
+        message=f"Invalid purpose: {purpose}. Must be one of: {valid_purposes}",
+        type="invalid_request_error",
+        param="purpose",
+        code=400,
     )
 
 

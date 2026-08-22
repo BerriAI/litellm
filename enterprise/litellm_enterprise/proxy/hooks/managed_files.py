@@ -57,6 +57,7 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
     normalize_mime_type_for_provider,
     resolve_managed_output_file_model_name,
     validate_file_list_limit,
+    validate_file_list_purpose,
 )
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.batch_attribution import (
     request_tags_from_metadata,
@@ -66,6 +67,7 @@ from litellm.types.llms.openai import (  # pyright: ignore[reportAttributeAccess
     AsyncCursorPage,
     ChatCompletionFileObject,
     CreateFileRequest,
+    FileListPage,
     FileObject,
     OpenAIFileObject,
     ResponsesAPIResponse,
@@ -1380,7 +1382,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         limit: Optional[int] = None,
         after: Optional[str] = None,
         **data: Dict,
-    ) -> Dict[str, object]:
+    ) -> FileListPage:
         """List the managed files the caller owns, newest first.
 
         Pagination is keyset based on ``unified_file_id`` so a key that owns
@@ -1397,10 +1399,11 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         behind the newest rows cannot degenerate into thousands of queries.
         """
         validate_file_list_limit(limit)
+        validate_file_list_purpose(purpose)
 
         owner_filter: Final = build_owner_filter(user_api_key_dict)
         if owner_filter is None:
-            return build_list_page([])
+            return FileListPage(**build_list_page([]))
 
         if after:
             cursor_row = await _managed_file_table(self.prisma_client).find_first(
@@ -1439,7 +1442,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             cursor_id = chunk[-1].unified_file_id
             chunk_size = max(chunk_size, FILE_LIST_CONTINUATION_CHUNK_SIZE)
 
-        return build_list_page(matches[:page_size], has_more=len(matches) > page_size)
+        return FileListPage(**build_list_page(matches[:page_size], has_more=len(matches) > page_size))
 
     def _is_batch_polling_enabled(self) -> bool:
         """

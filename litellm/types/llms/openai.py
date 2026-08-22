@@ -65,6 +65,7 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Discriminator,
+    Field,
     PrivateAttr,
     field_serializer,
     field_validator,
@@ -379,6 +380,21 @@ class OpenAIFileObject(BaseModel):
         except Exception:
             # if using pydantic v1
             return self.dict()
+
+
+class FileListPage(BaseModel):
+    """A page of files, as `GET /v1/files` returns it.
+
+    Post-call hooks and logging callbacks are handed the listing response, and
+    the provider SDKs hand them a page object rather than a mapping, so this
+    exposes the same ``.data`` attribute while serializing to an identical body.
+    """
+
+    object: Literal["list"] = "list"
+    data: list[OpenAIFileObject] = Field(default_factory=list)
+    first_id: str | None = None
+    last_id: str | None = None
+    has_more: bool = False
 
 
 CREATE_FILE_REQUESTS_PURPOSE = Literal["assistants", "batch", "fine-tune", "messages"]
