@@ -162,17 +162,19 @@ const Navbar: React.FC<NavbarProps> = ({
               </div>
             )}
 
-            {!isPublicPage && (
-              <div className="flex shrink-0 items-center border-l border-border pl-4">
-                <div className="flex items-center gap-0.5 rounded-lg bg-muted px-1 py-0 transition-colors hover:bg-accent">
-                  <ThemeToggle />
-                  <span className="mx-0.5 h-6 w-px shrink-0 bg-border" aria-hidden />
-                  <NotificationsBell />
-                  <span className="mx-0.5 h-6 w-px shrink-0 bg-border" aria-hidden />
-                  <UserDropdown onLogout={handleLogout} />
-                </div>
+            <div className="flex shrink-0 items-center border-l border-border pl-4">
+              <div className="flex items-center gap-0.5 rounded-lg bg-muted px-1 py-0 transition-colors hover:bg-accent">
+                <ThemeToggle />
+                {!isPublicPage && (
+                  <>
+                    <span className="mx-0.5 h-6 w-px shrink-0 bg-border" aria-hidden />
+                    <NotificationsBell />
+                    <span className="mx-0.5 h-6 w-px shrink-0 bg-border" aria-hidden />
+                    <UserDropdown onLogout={handleLogout} />
+                  </>
+                )}
               </div>
-            )}
+            </div>
           </div>
         </div>
       </div>
