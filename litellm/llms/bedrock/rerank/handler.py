@@ -158,6 +158,7 @@ class BedrockRerankHandler(BaseAWSLLM):
             endpoint_url=proxy_endpoint_url,
             data=body,
             headers=headers,
+            supports_bearer_token=False,
         )
 
         return BedrockPreparedRequest(
