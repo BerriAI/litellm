@@ -11,7 +11,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 )
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
-from litellm.utils import supports_reasoning
+from litellm.utils import is_thinking_always_on, supports_reasoning
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 
@@ -127,16 +127,20 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
 
     def _thinking_mode_active(self, model: str, optional_params: dict) -> bool:
         """
-        Returns True only when thinking mode is actually active for this request:
+        Returns True when thinking mode is active for this request:
           - model supports reasoning (capability check)
-          - user explicitly passed thinking={"type": "enabled"} (opt-in check)
+          - AND either the user explicitly opted in with thinking={"type": "enabled"},
+            or thinking is on by default for this model and was not explicitly disabled.
         """
+        if not supports_reasoning(model=model, custom_llm_provider="deepseek"):
+            return False
         thinking: Final = optional_params.get("thinking")
-        return (
-            supports_reasoning(model=model, custom_llm_provider="deepseek")
-            and isinstance(thinking, dict)
-            and thinking.get("type") == "enabled"
-        )
+        thinking_type = thinking.get("type") if isinstance(thinking, dict) else None
+        if thinking_type == "enabled":
+            return True
+        if thinking_type == "disabled":
+            return False
+        return is_thinking_always_on(model=model, custom_llm_provider="deepseek")
 
     @staticmethod
     def _drop_unsupported_tools(optional_params: dict) -> dict:
