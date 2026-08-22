@@ -87,7 +87,7 @@ export default function EditFallbacks({
         maxFallbacks={maxFallbacks}
         disablePrimaryModel
       />
-      <div className="flex items-center justify-end space-x-3 pt-6 mt-6 border-t border-gray-100">
+      <div className="flex items-center justify-end space-x-3 pt-6 mt-6 border-t border-border">
         <Button variant="outline" onClick={onClose} disabled={isSaving}>
           Cancel
         </Button>

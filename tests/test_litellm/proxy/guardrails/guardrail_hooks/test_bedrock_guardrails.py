@@ -3,7 +3,6 @@ Unit tests for Bedrock Guardrails
 """
 
 import json
-import os
 import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -11,7 +10,6 @@ import httpx
 import pytest
 from fastapi import HTTPException
 
-sys.path.insert(0, os.path.abspath("../../../../../.."))
 
 import litellm
 from litellm.caching.caching import DualCache
@@ -2113,7 +2111,7 @@ async def test_make_bedrock_api_request_forwards_guardrail_action():
     ):
         mock_post.return_value = mock_bedrock_response
 
-        with pytest.raises(Exception):
+        with pytest.raises(Exception, match="blocked"):
             await guardrail.make_bedrock_api_request(
                 source="INPUT",
                 messages=request_data["messages"],

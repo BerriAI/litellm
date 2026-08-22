@@ -6,11 +6,8 @@ API docs: https://docs.aws.amazon.com/bedrock/latest/userguide/bedrock-mantle.ht
 """
 
 import json
-import os
-import sys
 from unittest.mock import patch
 
-sys.path.insert(0, os.path.abspath("../../../../.."))
 
 import httpx
 import pytest
@@ -107,7 +104,7 @@ class TestBedrockMantleConfig:
         monkeypatch.delenv("BEDROCK_MANTLE_API_BASE", raising=False)
         monkeypatch.delenv("AWS_REGION", raising=False)
         cfg = BedrockMantleChatConfig()
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="api\\.aws\\.attacker\\.example/'\\. Region names must contain only"):
             cfg._get_openai_compatible_provider_info(
                 None,
                 None,
@@ -416,7 +413,7 @@ class TestBedrockMantleChatAuth:
         signer.get_credentials = MagicMock(side_effect=NoCredentialsError())
         cfg = BedrockMantleChatConfig(aws_signer=signer)
 
-        with pytest.raises(ValueError) as exc:
+        with pytest.raises(ValueError, match='Bedrock Mantle auth failed: no Bearer token and no usable') as exc:
             cfg.sign_request(
                 headers={},
                 optional_params={"aws_region_name": "us-east-2"},

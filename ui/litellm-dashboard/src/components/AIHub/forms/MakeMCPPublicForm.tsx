@@ -140,7 +140,7 @@ const MakeMCPPublicForm: React.FC<MakeMCPPublicFormProps> = ({
           </div>
         </div>
 
-        <p className="text-sm text-gray-600">
+        <p className="text-sm text-muted-foreground">
           Select the MCP servers you want to be visible on the public model hub. Users will still require a valid
           Virtual Key to use these servers.
         </p>
@@ -148,7 +148,7 @@ const MakeMCPPublicForm: React.FC<MakeMCPPublicFormProps> = ({
         <div className="max-h-96 overflow-y-auto border rounded-lg p-4">
           <div className="space-y-3">
             {mcpHubData.length === 0 ? (
-              <div className="text-center py-8 text-gray-500">
+              <div className="text-center py-8 text-muted-foreground">
                 <p>No MCP servers available.</p>
               </div>
             ) : (
@@ -157,7 +157,7 @@ const MakeMCPPublicForm: React.FC<MakeMCPPublicFormProps> = ({
                 return (
                   <div
                     key={server.server_id}
-                    className="flex items-center space-x-3 p-3 border rounded-lg hover:bg-gray-50"
+                    className="flex items-center space-x-3 p-3 border rounded-lg hover:bg-accent"
                   >
                     <Checkbox
                       checked={selectedServers.has(server.server_id)}
@@ -170,7 +170,9 @@ const MakeMCPPublicForm: React.FC<MakeMCPPublicFormProps> = ({
                         <Badge variant="secondary">{server.transport}</Badge>
                         <Badge variant={statusVariant(server.status)}>{server.status || "unknown"}</Badge>
                       </div>
-                      <p className="text-xs text-gray-600 mt-1 break-words">{server.description || server.url}</p>
+                      <p className="text-xs text-muted-foreground mt-1 break-words">
+                        {server.description || server.url}
+                      </p>
                       {server.allowed_tools && server.allowed_tools.length > 0 && (
                         <div className="flex flex-wrap gap-1 mt-1">
                           {server.allowed_tools.slice(0, 3).map((tool, idx) => (
@@ -179,7 +181,7 @@ const MakeMCPPublicForm: React.FC<MakeMCPPublicFormProps> = ({
                             </Badge>
                           ))}
                           {server.allowed_tools.length > 3 && (
-                            <p className="text-xs text-gray-500">+{server.allowed_tools.length - 3} more</p>
+                            <p className="text-xs text-muted-foreground">+{server.allowed_tools.length - 3} more</p>
                           )}
                         </div>
                       )}
@@ -192,8 +194,8 @@ const MakeMCPPublicForm: React.FC<MakeMCPPublicFormProps> = ({
         </div>
 
         {selectedServers.size > 0 && (
-          <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
-            <p className="text-sm text-blue-800">
+          <div className="bg-info/10 border border-info/20 rounded-lg p-3">
+            <p className="text-sm text-info">
               <strong>{selectedServers.size}</strong> MCP server{selectedServers.size !== 1 ? "s" : ""} selected
             </p>
           </div>
@@ -207,8 +209,8 @@ const MakeMCPPublicForm: React.FC<MakeMCPPublicFormProps> = ({
       <div className="space-y-4">
         <h3 className="text-lg font-semibold">Confirm Making MCP Servers Public</h3>
 
-        <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
-          <p className="text-sm text-yellow-800">
+        <div className="bg-warning/10 border border-warning/20 rounded-lg p-4">
+          <p className="text-sm text-warning">
             <strong>Warning:</strong> Once you make these MCP servers public, anyone who can go to the{" "}
             <code>/ui/model_hub_table</code> will be able to know they exist on the proxy.
           </p>
@@ -221,7 +223,7 @@ const MakeMCPPublicForm: React.FC<MakeMCPPublicFormProps> = ({
               {Array.from(selectedServers).map((serverId) => {
                 const server = mcpHubData.find((s) => s.server_id === serverId);
                 return (
-                  <div key={serverId} className="flex items-center justify-between p-2 bg-gray-50 rounded-sm">
+                  <div key={serverId} className="flex items-center justify-between p-2 bg-muted rounded-sm">
                     <div className="flex-1 min-w-0">
                       <div className="flex flex-wrap items-center gap-2">
                         <p className="font-medium break-words">{server?.server_name || serverId}</p>
@@ -233,9 +235,9 @@ const MakeMCPPublicForm: React.FC<MakeMCPPublicFormProps> = ({
                         )}
                       </div>
                       {server?.description && (
-                        <p className="text-xs text-gray-600 mt-1 break-words">{server.description}</p>
+                        <p className="text-xs text-muted-foreground mt-1 break-words">{server.description}</p>
                       )}
-                      {server?.url && <p className="text-xs text-gray-500 mt-1 break-words">{server.url}</p>}
+                      {server?.url && <p className="text-xs text-muted-foreground mt-1 break-words">{server.url}</p>}
                     </div>
                   </div>
                 );
@@ -244,8 +246,8 @@ const MakeMCPPublicForm: React.FC<MakeMCPPublicFormProps> = ({
           </div>
         </div>
 
-        <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
-          <p className="text-sm text-blue-800">
+        <div className="bg-info/10 border border-info/20 rounded-lg p-3">
+          <p className="text-sm text-info">
             Total: <strong>{selectedServers.size}</strong> MCP server{selectedServers.size !== 1 ? "s" : ""} will be
             made public
           </p>

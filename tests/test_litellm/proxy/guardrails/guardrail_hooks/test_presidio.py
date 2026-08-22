@@ -4,14 +4,11 @@ Tests PII detection and masking for different message formats
 """
 
 import asyncio
-import os
-import sys
 from contextlib import asynccontextmanager
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../../../.."))
 
 import litellm
 from litellm.caching.caching import DualCache
@@ -22,6 +19,7 @@ from litellm.proxy.guardrails.guardrail_hooks.presidio import (
 from litellm.exceptions import GuardrailRaisedException
 from litellm.types.guardrails import LitellmParams, PiiAction, PiiEntityType
 from litellm.types.utils import Choices, Message, ModelResponse
+from litellm.exceptions import BlockedPiiEntityError
 
 
 def _make_mock_session_iterator(
@@ -1345,7 +1343,7 @@ def test_blocking_respects_threshold_filter():
         {"entity_type": PiiEntityType.CREDIT_CARD, "score": 0.95, "start": 0, "end": 4}
     ]
     filtered_high = guardrail.filter_analyze_results_by_score(high_score_results)
-    with pytest.raises(Exception):
+    with pytest.raises(BlockedPiiEntityError):
         guardrail.raise_exception_if_blocked_entities_detected(filtered_high)
 
 

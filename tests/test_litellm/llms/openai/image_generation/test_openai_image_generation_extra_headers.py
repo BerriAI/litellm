@@ -6,13 +6,10 @@ litellm.aimage_generation() are forwarded to the OpenAI API client as
 extra_headers in the images.generate() call.
 """
 
-import os
-import sys
 from unittest.mock import MagicMock, AsyncMock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../../.."))
 
 from litellm.llms.openai.openai import OpenAIChatCompletion
 

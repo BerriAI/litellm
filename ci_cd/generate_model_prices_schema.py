@@ -27,6 +27,7 @@ EXTRA_BOOLEAN_KEYS = frozenset(
         "uses_embed_content",
         "use_openai_responses_path",
         "bedrock_converse_supports_strict_tools",
+        "thinking_always_on",
     }
 )
 
@@ -144,6 +145,11 @@ NUMBER_KEYS: dict[str, JsonSchema] = {
         "type": "number",
         "minimum": 1,
         "description": "Multiplier applied to all token costs for US data residency (e.g. 1.10 = +10%).",
+    },
+    "regional_endpoint_uplift_multiplier": {
+        "type": "number",
+        "minimum": 1,
+        "description": "Multiplier applied to all token costs when served from a non-global Vertex AI endpoint (e.g. 1.10 = +10%).",
     },
 }
 

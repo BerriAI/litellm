@@ -1,12 +1,7 @@
 import json
-import os
-import sys
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 from litellm.responses.litellm_completion_transformation.transformation import (
     TOOL_CALLS_CACHE,
@@ -418,6 +413,107 @@ class TestLiteLLMCompletionResponsesConfig:
             item for item in responses_api_response.output if item.type == "message"
         ]
         assert len(message_items) == 2, "Should have two message items"
+
+    def test_signature_only_thinking_block_still_emits_reasoning_item(self):
+        response = ModelResponse(
+            id="test-id",
+            created=1234567890,
+            model="test-model",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=Message(
+                        content="10",
+                        role="assistant",
+                        reasoning_content="",
+                        thinking_blocks=[
+                            {"type": "thinking", "thinking": "", "signature": "signature-payload"}
+                        ],
+                    ),
+                )
+            ],
+        )
+
+        responses_api_response = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+            request_input="Test input",
+            responses_api_request={},
+            chat_completion_response=response,
+        )
+
+        reasoning_items = [
+            item for item in responses_api_response.output if item.type == "reasoning"
+        ]
+        assert len(reasoning_items) == 1, "Signature-only thinking should still surface a reasoning item"
+        assert reasoning_items[0].content == []
+        assert "signature-payload" in reasoning_items[0].encrypted_content
+
+    def test_redacted_thinking_block_preserved_as_encrypted_content(self):
+        response = ModelResponse(
+            id="test-id",
+            created=1234567890,
+            model="test-model",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=Message(
+                        content="10",
+                        role="assistant",
+                        thinking_blocks=[{"type": "redacted_thinking", "data": "redacted-payload"}],
+                    ),
+                )
+            ],
+        )
+
+        responses_api_response = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+            request_input="Test input",
+            responses_api_request={},
+            chat_completion_response=response,
+        )
+
+        reasoning_items = [
+            item for item in responses_api_response.output if item.type == "reasoning"
+        ]
+        assert len(reasoning_items) == 1
+        assert "redacted-payload" in reasoning_items[0].encrypted_content
+
+    def test_visible_thinking_keeps_text_and_signature(self):
+        response = ModelResponse(
+            id="test-id",
+            created=1234567890,
+            model="test-model",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=Message(
+                        content="10",
+                        role="assistant",
+                        reasoning_content="counting the primes",
+                        thinking_blocks=[
+                            {"type": "thinking", "thinking": "counting the primes", "signature": "sig"}
+                        ],
+                    ),
+                )
+            ],
+        )
+
+        responses_api_response = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+            request_input="Test input",
+            responses_api_request={},
+            chat_completion_response=response,
+        )
+
+        reasoning_items = [
+            item for item in responses_api_response.output if item.type == "reasoning"
+        ]
+        assert len(reasoning_items) == 1
+        assert reasoning_items[0].content[0].text == "counting the primes"
+        assert "sig" in reasoning_items[0].encrypted_content
 
     def test_transform_chat_completion_response_status_with_stop(self):
         """
@@ -2537,10 +2633,10 @@ class TestUsageTransformation:
         assert response_usage.output_tokens_details.text_tokens == 50
         assert response_usage.output_tokens_details.image_tokens == 100
 
-    def test_reasoning_tokens_not_forced_to_zero_when_absent(self):
-        # Regression: previously the else branch wrote reasoning_tokens=0 even when
-        # completion_tokens_details had no reasoning (reasoning_tokens=None). That caused
-        # the proxy to always report reasoning_tokens=0 for non-thinking responses.
+    def test_reasoning_tokens_fall_back_to_zero_when_absent(self):
+        # The OpenAI SDK's ResponseUsage requires output_tokens_details.reasoning_tokens
+        # as an int, so an absent count degrades to 0 on the responses wire instead of
+        # dropping output_tokens_details and breaking SDK clients.
         usage = Usage(
             prompt_tokens=10,
             completion_tokens=50,
@@ -2571,7 +2667,8 @@ class TestUsageTransformation:
         )
 
         assert response_usage.output_tokens_details is not None
-        assert response_usage.output_tokens_details.reasoning_tokens is None
+        assert response_usage.output_tokens_details.reasoning_tokens == 0
+        assert response_usage.output_tokens_details.text_tokens == 50
 
     def test_reasoning_tokens_preserved_when_thinking_occurred(self):
         # Regression: reasoning_tokens must survive the chat->responses translation

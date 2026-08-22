@@ -5,7 +5,7 @@ import ssl
 from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from functools import lru_cache
-from types import ModuleType
+from types import MappingProxyType, ModuleType
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, TypedDict, TypeVar, Union, cast, get_type_hints
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
@@ -20,6 +20,7 @@ from litellm._logging import _redact_string, verbose_logger
 from litellm.anthropic_beta_headers_manager import update_headers_with_filtered_beta
 from litellm.constants import REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
 from litellm.litellm_core_utils.asyncify import run_async_function
+from litellm.litellm_core_utils.realtime_errors import realtime_error_event, websocket_close_reason
 from litellm.litellm_core_utils.realtime_streaming import RealTimeStreaming
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.llms.base_llm.anthropic_messages.transformation import (
@@ -634,6 +635,7 @@ class BaseLLMHTTPHandler:
                 model=model,
                 custom_llm_provider=custom_llm_provider,
                 logging_obj=logging_obj,
+                _response_headers=headers,
             )
 
         if client is None or not isinstance(client, HTTPHandler):
@@ -797,6 +799,7 @@ class BaseLLMHTTPHandler:
             model=model,
             custom_llm_provider=custom_llm_provider,
             logging_obj=logging_obj,
+            _response_headers=_response_headers,
         )
         return streamwrapper
 
@@ -1788,6 +1791,14 @@ class BaseLLMHTTPHandler:
             api_key=api_key,
         )
 
+        signed_headers, signed_json_body = provider_config.sign_request(
+            headers=headers,
+            optional_params=optional_params,
+            request_data=data,
+            api_base=complete_url,
+            api_key=api_key,
+        )
+
         ## LOGGING
         logging_obj.pre_call(
             input=query if isinstance(query, str) else str(query),
@@ -1811,14 +1822,15 @@ class BaseLLMHTTPHandler:
                 # Note: timeout is set on the client itself, not per-request for GET
                 response = client.get(
                     url=complete_url,
-                    headers=headers,
+                    headers=signed_headers,
                 )
             else:
-                # Make POST request with JSON data
+                # A signed body must be sent verbatim, re-serializing it would break the signature
                 response = client.post(
                     url=complete_url,
-                    headers=headers,
-                    json=data,
+                    headers=signed_headers,
+                    data=signed_json_body,
+                    json=data if signed_json_body is None else None,
                     timeout=timeout,
                 )
         except Exception as e:
@@ -1872,6 +1884,14 @@ class BaseLLMHTTPHandler:
             api_key=api_key,
         )
 
+        signed_headers, signed_json_body = provider_config.sign_request(
+            headers=headers,
+            optional_params=optional_params,
+            request_data=data,
+            api_base=complete_url,
+            api_key=api_key,
+        )
+
         ## LOGGING
         logging_obj.pre_call(
             input=query if isinstance(query, str) else str(query),
@@ -1900,14 +1920,15 @@ class BaseLLMHTTPHandler:
                 # Note: timeout is set on the client itself, not per-request for GET
                 response = await async_httpx_client.get(
                     url=complete_url,
-                    headers=headers,
+                    headers=signed_headers,
                 )
             else:
-                # Make async POST request with JSON data
+                # A signed body must be sent verbatim, re-serializing it would break the signature
                 response = await async_httpx_client.post(
                     url=complete_url,
-                    headers=headers,
-                    json=data,
+                    headers=signed_headers,
+                    data=signed_json_body,
+                    json=data if signed_json_body is None else None,
                     timeout=timeout,
                 )
         except Exception as e:
@@ -2035,7 +2056,7 @@ class BaseLLMHTTPHandler:
         # Prepare headers
         kwargs = kwargs or {}
         provider_specific_header: Final = cast(
-            litellm.types.utils.ProviderSpecificHeader | None,
+            litellm.types.utils.ProviderSpecificHeader | Sequence[litellm.types.utils.ProviderSpecificHeader] | None,
             kwargs.get("provider_specific_header", None),
         )
         provider_specific_headers: Final = ProviderSpecificHeaderUtils.get_provider_specific_headers(
@@ -2069,6 +2090,14 @@ class BaseLLMHTTPHandler:
         if anthropic_messages_provider_config.should_filter_anthropic_beta_headers():
             headers = update_headers_with_filtered_beta(headers=headers, provider=custom_llm_provider)
 
+        from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
+
+        explicit_vertex_location: Final = VertexBase.explicit_vertex_ai_location(MappingProxyType(dict(litellm_params)))
+        vertex_location_params: Final = (
+            MappingProxyType({"vertex_location": explicit_vertex_location})
+            if explicit_vertex_location
+            else MappingProxyType({})
+        )
         logging_obj.update_from_kwargs(
             kwargs=kwargs,
             model=model,
@@ -2077,6 +2106,7 @@ class BaseLLMHTTPHandler:
                 "preset_cache_key": None,
                 "stream_response": {},
                 "model_info": kwargs.get("model_info"),
+                **vertex_location_params,
                 **anthropic_messages_optional_request_params,
             },
             custom_llm_provider=custom_llm_provider,
@@ -5949,8 +5979,19 @@ class BaseLLMHTTPHandler:
             await websocket.close(code=e.status_code, reason=_redact_string(str(e)))
         except Exception as e:
             verbose_logger.exception("Error connecting to backend: %s", e)
+            redacted_error: Final = _redact_string(str(e))
             try:
-                await websocket.close(code=1011, reason=_redact_string(f"Internal server error: {e}"))
+                await websocket.send_text(realtime_error_event(redacted_error, error_type="server_error"))
+            except Exception:  # noqa: BLE001  # best-effort notice: a dead client socket must not skip the close below
+                verbose_logger.debug("Could not send realtime error event to client; closing anyway")
+            try:
+                await websocket.close(
+                    code=1011,
+                    reason=websocket_close_reason(
+                        _redact_string(f"Internal server error: {e}"),
+                        fallback="Internal server error",
+                    ),
+                )
             except RuntimeError as close_error:
                 if "already completed" in str(close_error) or "websocket.close" in str(close_error):
                     # The WebSocket is already closed or the response is completed, so we can ignore this error

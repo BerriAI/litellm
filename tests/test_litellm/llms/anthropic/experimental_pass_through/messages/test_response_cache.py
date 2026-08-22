@@ -1,11 +1,8 @@
 import asyncio
-import os
-import sys
 from typing import Any, AsyncIterator, Dict, List
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../../.."))
 
 import litellm
 from litellm.caching.caching import Cache, LiteLLMCacheType

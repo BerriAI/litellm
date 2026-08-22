@@ -164,6 +164,41 @@ class TestProxyExceptionPassthrough:
         mock_logging.post_call_failure_hook.assert_awaited_once()
 
 
+class TestFailureHookRequestData:
+    @pytest.mark.asyncio
+    async def test_failure_hook_gets_post_setup_data_with_logging_obj(self):
+        """Request setup replaces the processor's data dict (adding the logging
+        object the failure hook needs to lift token usage from); the exception
+        handler must pass that replaced dict, not the raw request body dict."""
+        import litellm.proxy.anthropic_endpoints.endpoints as ep
+        import litellm.proxy.proxy_server as proxy_server
+        from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+
+        captured = {}
+
+        async def fake_process(self, **kwargs):
+            self.data = {**self.data, "litellm_logging_obj": "logging-obj-sentinel"}
+            captured["processor_data"] = self.data
+            raise RuntimeError("provider timeout")
+
+        with (
+            patch.object(ep, "_read_request_body", new=AsyncMock(return_value={"model": "claude-sonnet"})),
+            patch.object(ep.ProxyBaseLLMRequestProcessing, "base_process_llm_request", new=fake_process),
+            patch.object(proxy_server, "proxy_logging_obj") as mock_logging,
+        ):
+            mock_logging.post_call_failure_hook = AsyncMock()
+            with pytest.raises(ProxyException):
+                await ep.anthropic_response(
+                    fastapi_response=MagicMock(),
+                    request=MagicMock(),
+                    user_api_key_dict=UserAPIKeyAuth(),
+                )
+
+        hook_request_data = mock_logging.post_call_failure_hook.await_args.kwargs["request_data"]
+        assert hook_request_data is captured["processor_data"]
+        assert hook_request_data["litellm_logging_obj"] == "logging-obj-sentinel"
+
+
 class TestEventLoggingBatchEndpoint:
     """Test the stubbed event logging batch endpoint"""
 

@@ -471,7 +471,7 @@ async def test_afile_content_error_reports_unified_id_not_provider_uri():
     mock_router.get_deployment_credentials_with_provider = MagicMock(return_value=None)
     mock_router.afile_content = AsyncMock(side_effect=Exception("deployment failed"))
 
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(Exception, match='LiteLLM Managed File object with') as exc_info:
         await managed_files.afile_content(
             file_id=unified_file_id,
             litellm_parent_otel_span=None,

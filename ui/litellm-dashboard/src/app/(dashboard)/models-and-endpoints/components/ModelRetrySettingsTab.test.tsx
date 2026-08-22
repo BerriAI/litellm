@@ -263,7 +263,7 @@ describe("ModelRetrySettingsTab", () => {
 
     const inputs = screen.getAllByRole("spinbutton");
     await user.clear(inputs[0]);
-    await user.type(inputs[0], "4");
+    fireEvent.change(inputs[0], { target: { value: "4" } });
 
     // setGlobalRetryPolicy is called with a function updater
     expect(setGlobalRetryPolicy).toHaveBeenCalled();
@@ -291,7 +291,7 @@ describe("ModelRetrySettingsTab", () => {
 
     const inputs = screen.getAllByRole("spinbutton");
     await user.clear(inputs[0]);
-    await user.type(inputs[0], "2");
+    fireEvent.change(inputs[0], { target: { value: "2" } });
 
     expect(setModelGroupRetryPolicy).toHaveBeenCalled();
     const updater = setModelGroupRetryPolicy.mock.calls.at(-1)![0];

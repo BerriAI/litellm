@@ -150,7 +150,7 @@ export function CodeInterpreterToggle({ enabled, onToggle }: CodeInterpreterTogg
             className={cn(
               "size-8 rounded-lg border border-border/40",
               enabled
-                ? "border-blue-200 bg-blue-50 text-blue-600 hover:bg-blue-100"
+                ? "border-info/20 bg-info/10 text-info hover:bg-info/15"
                 : "text-muted-foreground hover:text-foreground",
             )}
             aria-label={enabled ? "Code Interpreter enabled (click to disable)" : "Enable Code Interpreter"}

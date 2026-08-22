@@ -2,16 +2,14 @@ import { useModelCostMap } from "@/app/(dashboard)/hooks/models/useModelCostMap"
 import { useModelHub, useModelsInfo } from "@/app/(dashboard)/hooks/models/useModels";
 import { useQueryClient } from "@tanstack/react-query";
 import { transformModelData } from "@/app/(dashboard)/models-and-endpoints/utils/modelDataTransformer";
-import { InfoCircleOutlined } from "@ant-design/icons";
 import { KeyIcon, RefreshIcon, TrashIcon } from "@heroicons/react/outline";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { SimpleTooltip } from "@/components/ui/tooltip";
-import { Button as AntdButton, Modal } from "antd";
 import { applyPtuModelInfo } from "../utils/ptuModelInfo";
 import { usePtuCostAttributionEnabled } from "@/app/(dashboard)/hooks/uiSettings/usePtuCostAttributionEnabled";
-import { ArrowLeft, CheckIcon, CopyIcon } from "lucide-react";
+import { ArrowLeft, CheckIcon, CopyIcon, Info } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { copyToClipboard as utilCopyToClipboard } from "../utils/dataUtils";
 import { stripMaskedSecrets } from "../utils/maskedSecretUtils";
@@ -47,6 +45,7 @@ import UpdateModelCredentialsModal from "./update_model_credentials_modal";
 import ModelInfoEditForm, { type ModelEditFormValues, type TouchedPricingField } from "./ModelInfoEditForm";
 import { Tag } from "./tag_management/types";
 import { getDisplayModelName } from "./view_model/model_name_display";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 interface ModelInfoViewProps {
   modelId: string;
@@ -600,65 +599,69 @@ export default function ModelInfoView({
           <h2 className="text-xl font-semibold">Public Model Name: {getDisplayModelName(modelData)}</h2>
           <div className="flex items-center cursor-pointer">
             <span className="text-sm text-muted-foreground font-mono">{modelData.model_info.id}</span>
-            <AntdButton
-              type="text"
-              size="small"
-              icon={copiedStates["model-id"] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
+            <Button
+              variant="ghost"
+              size="icon-xs"
               aria-label="Copy model ID"
               onClick={() => copyToClipboard(modelData.model_info.id, "model-id")}
               className={`left-2 z-10 transition-all duration-200 ${
                 copiedStates["model-id"]
-                  ? "text-green-600 bg-green-50 border-green-200"
+                  ? "text-success bg-success/10 border-success/20"
                   : "text-muted-foreground hover:text-foreground hover:bg-muted"
               }`}
-            />
+            >
+              {copiedStates["model-id"] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
+            </Button>
           </div>
         </div>
         <div className="flex gap-2">
           {(!isAnyAutoRouter || isComplexityRouterModel) && (
-            <AntdButton
-              icon={<RefreshIcon className="h-4 w-4" />}
+            <Button
+              variant="outline"
               onClick={handleTestConnection}
               className="flex items-center gap-2"
               data-testid="test-connection-button"
             >
+              <RefreshIcon className="h-4 w-4" />
               Test Connection
-            </AntdButton>
+            </Button>
           )}
 
           {!isAnyAutoRouter && (
             <>
-              <AntdButton
-                icon={<KeyIcon className="h-4 w-4" />}
+              <Button
+                variant="outline"
                 onClick={() => setIsUpdateCredentialsModalOpen(true)}
                 className="flex items-center"
                 disabled={!canEditModel}
                 data-testid="update-api-key-button"
               >
+                <KeyIcon className="h-4 w-4" />
                 Update API Key
-              </AntdButton>
+              </Button>
 
-              <AntdButton
-                icon={<KeyIcon className="h-4 w-4" />}
+              <Button
+                variant="outline"
                 onClick={() => setIsCredentialModalOpen(true)}
                 className="flex items-center"
                 disabled={!isAdmin}
                 data-testid="reuse-credentials-button"
               >
+                <KeyIcon className="h-4 w-4" />
                 Re-use Credentials
-              </AntdButton>
+              </Button>
             </>
           )}
-          <AntdButton
-            danger
-            icon={<TrashIcon className="h-4 w-4" />}
+          <Button
+            variant="destructive"
             onClick={() => setIsDeleteModalOpen(true)}
             className="flex items-center"
             disabled={!canEditModel}
             data-testid="delete-model-button"
           >
+            <TrashIcon className="h-4 w-4" />
             {deleteLabel}
-          </AntdButton>
+          </Button>
         </div>
       </div>
 
@@ -753,7 +756,7 @@ export default function ModelInfoView({
                     )
                   ) : (
                     <SimpleTooltip content="Only DB models can be edited. You must be an admin or the creator of the model to edit it.">
-                      <InfoCircleOutlined />
+                      <Info className="size-4 text-muted-foreground" />
                     </SimpleTooltip>
                   )}
                 </div>
@@ -829,13 +832,19 @@ export default function ModelInfoView({
           setIsCredentialModalOpen={setIsCredentialModalOpen}
         />
       ) : (
-        <Modal
-          open={isCredentialModalOpen}
-          onCancel={() => setIsCredentialModalOpen(false)}
-          title="Using Existing Credential"
-        >
-          <p className="text-sm">{modelData.litellm_params.litellm_credential_name}</p>
-        </Modal>
+        <Dialog open={isCredentialModalOpen} onOpenChange={(open) => !open && setIsCredentialModalOpen(false)}>
+          <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle>Using Existing Credential</DialogTitle>
+            </DialogHeader>
+            <p className="text-sm">{modelData.litellm_params.litellm_credential_name}</p>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setIsCredentialModalOpen(false)}>
+                Cancel
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       )}
 
       {isUpdateCredentialsModalOpen && accessToken && (
@@ -860,21 +869,25 @@ export default function ModelInfoView({
         userRole={userRole || ""}
       />
 
-      <Modal
-        title="Connection Test Results"
-        open={isAutoRouterTestModalOpen}
-        onCancel={() => setIsAutoRouterTestModalOpen(false)}
-        footer={[
-          <AntdButton key="close" onClick={() => setIsAutoRouterTestModalOpen(false)}>
-            Close
-          </AntdButton>,
-        ]}
-        width={700}
-      >
-        {isAutoRouterTestModalOpen && accessToken && (
-          <AutoRouterConnectionTest key={autoRouterTestId} accessToken={accessToken} targets={autoRouterTestTargets} />
-        )}
-      </Modal>
+      <Dialog open={isAutoRouterTestModalOpen} onOpenChange={(open) => !open && setIsAutoRouterTestModalOpen(false)}>
+        <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[700px]">
+          <DialogHeader>
+            <DialogTitle>Connection Test Results</DialogTitle>
+          </DialogHeader>
+          {isAutoRouterTestModalOpen && accessToken && (
+            <AutoRouterConnectionTest
+              key={autoRouterTestId}
+              accessToken={accessToken}
+              targets={autoRouterTestTargets}
+            />
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsAutoRouterTestModalOpen(false)}>
+              Close
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

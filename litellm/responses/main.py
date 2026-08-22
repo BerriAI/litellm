@@ -810,7 +810,7 @@ def _responses_try_dispatch_emulated_file_search(
     extra_body: dict[str, object] | None,
     timeout: float | httpx.Timeout | None,
     custom_llm_provider: str | None,
-    kwargs: dict[str, Any],
+    kwargs: dict[str, object],
     _is_async: bool,
 ) -> ResponsesAPIResponse | Coroutine[object, object, ResponsesAPIResponse] | None:
     """Return a response when emulated file_search handles the call; otherwise None."""

@@ -123,7 +123,7 @@ const DynamicForm: React.FC<DynamicFormProps> = ({
               size="icon-sm"
               aria-label={`Reset ${value.field_name}`}
               onClick={() => handleResetField(value.field_name, index)}
-              className="text-red-500"
+              className="text-destructive"
             >
               <Trash2 className="size-5" />
             </Button>

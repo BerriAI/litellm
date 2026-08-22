@@ -183,6 +183,29 @@ class BaseSearchConfig:
         """
         return headers
 
+    def sign_request(
+        self,
+        headers: dict[str, str],  # mutable-ok: matches the request header dict every other hook on this base takes
+        optional_params: dict[str, object],  # mutable-ok: matches every other hook on this base
+        request_data: dict[str, object] | list[dict[str, object]],  # mutable-ok: transform_search_request's body
+        api_base: str,
+        api_key: str | None = None,
+    ) -> tuple[dict[str, str], bytes | None]:  # mutable-ok: the handler passes these headers straight to httpx
+        """
+        OPTIONAL
+
+        Sign the request. Providers like Bedrock AgentCore need to SigV4-sign
+        the request before sending it to the API.
+
+        For all other providers, this is a no-op and we just return the headers.
+
+        Returns:
+            Tuple of (headers, signed_json_body). When signed_json_body is not
+            None, the handler MUST send it verbatim as the request body —
+            re-serializing the payload would invalidate the signature.
+        """
+        return headers, None
+
     def get_complete_url(
         self,
         api_base: str | None,

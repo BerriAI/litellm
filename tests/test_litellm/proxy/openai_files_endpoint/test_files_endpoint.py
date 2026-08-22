@@ -1,6 +1,4 @@
 import json
-import os
-import sys
 from typing import List
 from unittest.mock import ANY, AsyncMock
 
@@ -10,9 +8,6 @@ import httpx
 from fastapi.testclient import TestClient
 from pytest_mock import MockerFixture
 
-sys.path.insert(
-    0, os.path.abspath("../../../..")
-)  # Adds the parent directory to the system path
 
 import litellm
 from litellm import Router
@@ -30,6 +25,11 @@ client = TestClient(app)
 from litellm.caching.caching import DualCache
 from litellm.proxy.proxy_server import hash_token
 from litellm.proxy.utils import ProxyLogging
+
+VALID_BATCH_LINE = (
+    b'{"custom_id": "req-1", "method": "POST", "url": "/v1/chat/completions",'
+    b' "body": {"model": "gpt-3.5-turbo", "messages": [{"role": "user", "content": "hi"}]}}\n'
+)
 
 
 @pytest.fixture
@@ -225,7 +225,10 @@ def test_invalid_purpose(mocker: MockerFixture, monkeypatch, llm_router: Router)
 
     assert response.status_code == 400
     print(f"response: {response.json()}")
-    assert "Invalid purpose: my-bad-purpose" in response.json()["error"]["message"]
+    error = response.json()["error"]
+    assert "Invalid purpose: my-bad-purpose" in error["message"]
+    assert error["type"] == "invalid_request_error"
+    assert error["param"] == "purpose"
 
 
 def test_get_file_content_rejects_raw_cloud_storage_uri(llm_router: Router):
@@ -1599,7 +1602,7 @@ def _post_file_with_team_metadata(
     user_key = UserAPIKeyAuth(api_key="test-key", team_metadata=team_metadata)
     app.dependency_overrides[user_api_key_auth] = lambda: user_key
 
-    test_file = ("mydata.jsonl", b'{"prompt": "Hello"}', "application/json")
+    test_file = ("mydata.jsonl", VALID_BATCH_LINE, "application/jsonl")
     try:
         response = client.post(
             "/v1/files",
@@ -1703,7 +1706,7 @@ def _post_file_raw(
     user_key = UserAPIKeyAuth(api_key="test-key", team_metadata=team_metadata)
     app.dependency_overrides[user_api_key_auth] = lambda: user_key
 
-    test_file = ("mydata.jsonl", b'{"prompt": "Hello"}', "application/json")
+    test_file = ("mydata.jsonl", VALID_BATCH_LINE, "application/jsonl")
     try:
         response = client.post(
             "/v1/files",
@@ -2749,7 +2752,7 @@ def test_create_file_provider_only_resolves_named_vertex_credentials(
     try:
         response = client.post(
             "/v1/files",
-            files={"file": ("batch.jsonl", b"{}", "application/jsonl")},
+            files={"file": ("batch.jsonl", VALID_BATCH_LINE, "application/jsonl")},
             data={"purpose": "batch"},
             headers={
                 "Authorization": "Bearer test-key",
@@ -2991,7 +2994,7 @@ def test_create_file_provider_only_skips_other_team_vertex_deployment(
     try:
         response = client.post(
             "/v1/files",
-            files={"file": ("batch.jsonl", b"{}", "application/jsonl")},
+            files={"file": ("batch.jsonl", VALID_BATCH_LINE, "application/jsonl")},
             data={"purpose": "batch"},
             headers={
                 "Authorization": "Bearer test-key",
@@ -3341,3 +3344,412 @@ def test_raw_provider_file_id_retrieve_allowed_when_managed_files_not_required(
 
     assert response.status_code == 200, response.text
     mock_retrieve.assert_called_once()
+
+
+def _setup_batch_upload_endpoint(monkeypatch, llm_router: Router) -> list:
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+    from litellm.proxy.openai_files_endpoints import files_endpoints as fe
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", llm_router)
+    setup_proxy_logging_object(monkeypatch, llm_router)
+
+    forwarded_calls: list = []
+
+    async def fake_route_create_file(**kwargs):
+        forwarded_calls.append(kwargs)
+        return OpenAIFileObject(
+            id="dummy-id",
+            object="file",
+            bytes=0,
+            created_at=1234567890,
+            filename="batch.jsonl",
+            purpose="batch",
+            status="uploaded",
+        )
+
+    monkeypatch.setattr(fe, "route_create_file", fake_route_create_file)
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="test-user"
+    )
+    return forwarded_calls
+
+
+def _teardown_batch_upload_endpoint():
+    import litellm.proxy.proxy_server as ps
+
+    app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+def test_create_file_batch_over_max_batch_file_size_mb_rejected_before_forwarding(
+    monkeypatch, llm_router: Router
+):
+    import litellm.proxy.proxy_server as ps
+
+    forwarded_calls = _setup_batch_upload_endpoint(monkeypatch, llm_router)
+    monkeypatch.setitem(ps.general_settings, "max_batch_file_size_mb", 1)
+
+    oversized = VALID_BATCH_LINE * (2 * 1024 * 1024 // len(VALID_BATCH_LINE) + 1)
+    try:
+        response = client.post(
+            "/v1/files",
+            files={"file": ("batch.jsonl", oversized, "application/jsonl")},
+            data={"purpose": "batch"},
+            headers={"Authorization": "Bearer test-key"},
+        )
+    finally:
+        _teardown_batch_upload_endpoint()
+
+    assert response.status_code == 413, response.text
+    error = response.json()["error"]
+    assert error["type"] == "invalid_request_error"
+    assert error["param"] == "file"
+    assert "max_batch_file_size_mb" in error["message"]
+    assert "1 MB" in error["message"]
+    assert forwarded_calls == []
+
+
+def test_create_file_batch_under_max_batch_file_size_mb_forwards(monkeypatch, llm_router: Router):
+    import litellm.proxy.proxy_server as ps
+
+    forwarded_calls = _setup_batch_upload_endpoint(monkeypatch, llm_router)
+    monkeypatch.setitem(ps.general_settings, "max_batch_file_size_mb", 1)
+
+    try:
+        response = client.post(
+            "/v1/files",
+            files={"file": ("batch.jsonl", VALID_BATCH_LINE, "application/jsonl")},
+            data={"purpose": "batch"},
+            headers={"Authorization": "Bearer test-key"},
+        )
+    finally:
+        _teardown_batch_upload_endpoint()
+
+    assert response.status_code == 200, response.text
+    assert len(forwarded_calls) == 1
+
+
+def test_create_file_batch_wrong_extension_rejected_before_forwarding(monkeypatch, llm_router: Router):
+    forwarded_calls = _setup_batch_upload_endpoint(monkeypatch, llm_router)
+
+    try:
+        response = client.post(
+            "/v1/files",
+            files={"file": ("batch.csv", VALID_BATCH_LINE, "text/csv")},
+            data={"purpose": "batch"},
+            headers={"Authorization": "Bearer test-key"},
+        )
+    finally:
+        _teardown_batch_upload_endpoint()
+
+    assert response.status_code == 400, response.text
+    error = response.json()["error"]
+    assert error["type"] == "invalid_request_error"
+    assert error["param"] == "file"
+    assert "batch.csv" in error["message"]
+    assert ".jsonl" in error["message"]
+    assert forwarded_calls == []
+
+
+def test_create_file_batch_missing_line_key_rejected_before_forwarding(monkeypatch, llm_router: Router):
+    forwarded_calls = _setup_batch_upload_endpoint(monkeypatch, llm_router)
+
+    bad_line = b'{"custom_id": "req-1", "url": "/v1/chat/completions", "body": {"model": "gpt-3.5-turbo"}}\n'
+    try:
+        response = client.post(
+            "/v1/files",
+            files={"file": ("batch.jsonl", VALID_BATCH_LINE + bad_line, "application/jsonl")},
+            data={"purpose": "batch"},
+            headers={"Authorization": "Bearer test-key"},
+        )
+    finally:
+        _teardown_batch_upload_endpoint()
+
+    assert response.status_code == 400, response.text
+    error = response.json()["error"]
+    assert error["type"] == "invalid_request_error"
+    assert error["param"] == "method"
+    assert "line 2" in error["message"]
+    assert forwarded_calls == []
+
+
+def test_create_file_batch_invalid_json_line_rejected_before_forwarding(monkeypatch, llm_router: Router):
+    forwarded_calls = _setup_batch_upload_endpoint(monkeypatch, llm_router)
+
+    try:
+        response = client.post(
+            "/v1/files",
+            files={"file": ("batch.jsonl", b"this is not jsonl\n", "application/jsonl")},
+            data={"purpose": "batch"},
+            headers={"Authorization": "Bearer test-key"},
+        )
+    finally:
+        _teardown_batch_upload_endpoint()
+
+    assert response.status_code == 400, response.text
+    error = response.json()["error"]
+    assert error["param"] == "file"
+    assert "line 1" in error["message"]
+    assert "not valid JSON" in error["message"]
+    assert forwarded_calls == []
+
+
+def test_create_file_non_batch_purpose_skips_batch_validation(monkeypatch, llm_router: Router):
+    forwarded_calls = _setup_batch_upload_endpoint(monkeypatch, llm_router)
+
+    try:
+        response = client.post(
+            "/v1/files",
+            files={"file": ("notes.txt", b"plain text, not jsonl", "text/plain")},
+            data={"purpose": "user_data"},
+            headers={"Authorization": "Bearer test-key"},
+        )
+    finally:
+        _teardown_batch_upload_endpoint()
+
+    assert response.status_code == 200, response.text
+    assert len(forwarded_calls) == 1
+
+
+def _batch_upload(client_, content: bytes, purpose: str = "batch"):
+    return client_.post(
+        "/v1/files",
+        files={"file": ("batch.jsonl", content, "application/jsonl")},
+        data={"purpose": purpose},
+        headers={"Authorization": "Bearer test-key"},
+    )
+
+
+@pytest.mark.parametrize(
+    "content, purpose, expected_status, expected_fragment",
+    [
+        (
+            b'{"custom_id":"r-0","method":"POST","url":"/v1/chat/completions",'
+            b'"body":{"model":"gpt-3.5-turbo","messages":[{"role":"user","content":"hi"}]}}\n',
+            "batch",
+            200,
+            None,
+        ),
+        (
+            b'{"custom_id":"r-0","method":"POST","url":"/v1/chat/completions",'
+            b'"body":{"model":"gpt-3.5-turbo","messages":[{"role":"user","content":"leak me"}]}}\n',
+            "batch",
+            200,
+            None,
+        ),
+        (
+            b'{"custom_id":"r-0","method":"POST","url":"/v1/chat/completions",'
+            b'"body":{"model":"gpt-3.5-turbo","messages":[{"role":"user","content":"leak me"}]}}\n',
+            "assistants",
+            200,
+            None,
+        ),
+        (b"{ not json\n", "batch", 400, "line 1"),
+    ],
+)
+def test_batch_upload_runs_guardrails_on_each_record(
+    monkeypatch, llm_router: Router, content, purpose, expected_status, expected_fragment
+):
+    """POST /v1/files with purpose=batch must reach the guardrail chain; other purposes must not."""
+    import litellm
+    import litellm.proxy.openai_files_endpoints.files_endpoints as fe
+    import litellm.proxy.proxy_server as ps
+    from litellm.integrations.custom_guardrail import CustomGuardrail
+    from litellm.proxy._types import LitellmUserRoles
+    from litellm.proxy.utils import ProxyLogging
+
+    class _Redactor(CustomGuardrail):
+        async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+            for message in data.get("messages") or []:
+                if isinstance(message.get("content"), str) and "leak" in message["content"]:
+                    message["content"] = "***"
+            return data
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", llm_router)
+    setup_proxy_logging_object(monkeypatch, llm_router)
+    monkeypatch.setattr(litellm, "callbacks", [_Redactor(guardrail_name="g", default_on=True)])
+    ProxyLogging._callback_capabilities_cache.clear()
+
+    async def fake_route_create_file(**kwargs):
+        return OpenAIFileObject(
+            id="dummy-id",
+            object="file",
+            bytes=0,
+            created_at=1234567890,
+            filename="batch.jsonl",
+            purpose="batch",
+            status="uploaded",
+        )
+
+    monkeypatch.setattr(fe, "route_create_file", fake_route_create_file)
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="test-user"
+    )
+    try:
+        resp = _batch_upload(client, content, purpose)
+        assert resp.status_code == expected_status, resp.text
+        if expected_fragment is not None:
+            assert expected_fragment in resp.text
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+        ProxyLogging._callback_capabilities_cache.clear()
+
+
+def test_batch_upload_redacts_per_record(monkeypatch, llm_router: Router):
+    """An offending record is submitted masked, matching what the online path does per request."""
+    expected_custom_ids = ["keep-1", "dirty", "keep-2"]
+    import json as _json
+
+    import litellm
+    import litellm.proxy.openai_files_endpoints.files_endpoints as fe
+    import litellm.proxy.proxy_server as ps
+    from litellm.integrations.custom_guardrail import CustomGuardrail
+    from litellm.proxy._types import LitellmUserRoles
+    from litellm.proxy.utils import ProxyLogging
+
+    class _Redactor(CustomGuardrail):
+        async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+            for message in data.get("messages") or []:
+                if isinstance(message.get("content"), str) and "leak" in message["content"]:
+                    message["content"] = message["content"].replace("leak", "***")
+            return data
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", llm_router)
+    setup_proxy_logging_object(monkeypatch, llm_router)
+    monkeypatch.setattr(litellm, "callbacks", [_Redactor(guardrail_name="g", default_on=True)])
+    ProxyLogging._callback_capabilities_cache.clear()
+
+    uploaded = {}
+
+    async def fake_route_create_file(**kwargs):
+        handle = kwargs["_create_file_request"]["file"][1]
+        uploaded["body"] = handle.read() if hasattr(handle, "read") else handle
+        return OpenAIFileObject(
+            id="dummy-id",
+            object="file",
+            bytes=0,
+            created_at=1234567890,
+            filename="batch.jsonl",
+            purpose="batch",
+            status="uploaded",
+        )
+
+    monkeypatch.setattr(fe, "route_create_file", fake_route_create_file)
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="test-user"
+    )
+
+    def _row(custom_id, content):
+        return _json.dumps(
+            {
+                "custom_id": custom_id,
+                "method": "POST",
+                "url": "/v1/chat/completions",
+                "body": {"model": "gpt-3.5-turbo", "messages": [{"role": "user", "content": content}]},
+            }
+        )
+
+    content = ("\n".join([_row("keep-1", "fine"), _row("dirty", "please leak this"), _row("keep-2", "fine")])).encode()
+    try:
+        resp = client.post(
+            "/v1/files",
+            files={"file": ("batch.jsonl", content, "application/jsonl")},
+            data={"purpose": "batch"},
+            headers={"Authorization": "Bearer test-key"},
+        )
+        assert resp.status_code == 200, resp.text
+        rows = [_json.loads(line) for line in uploaded["body"].decode().splitlines()]
+        assert [row["custom_id"] for row in rows] == expected_custom_ids
+        assert rows[1]["body"]["messages"][0]["content"] == "please *** this"
+        report = resp.json()["litellm_batch_guardrail"]
+        assert report["submitted_records"] == 3
+        assert report["modified_records"] == [
+            {"line": 2, "custom_id": "dirty", "action": "redacted", "guardrail": None}
+        ]
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+        ProxyLogging._callback_capabilities_cache.clear()
+
+
+def test_batch_upload_closes_the_spools_it_opened(monkeypatch, llm_router: Router):
+    """The scan and the rewrite each open a spool; the request owns both and must not leak them."""
+    import json as _json
+
+    import litellm
+    import litellm.proxy.openai_files_endpoints.batch_guardrails as bg
+    import litellm.proxy.openai_files_endpoints.files_endpoints as fe
+    import litellm.proxy.proxy_server as ps
+    from litellm.integrations.custom_guardrail import CustomGuardrail
+    from litellm.proxy._types import LitellmUserRoles
+    from litellm.proxy.utils import ProxyLogging
+
+    class _Redactor(CustomGuardrail):
+        async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+            for message in data.get("messages") or []:
+                if "leak" in (message.get("content") or ""):
+                    message["content"] = message["content"].replace("leak", "***")
+            return data
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", llm_router)
+    setup_proxy_logging_object(monkeypatch, llm_router)
+    monkeypatch.setattr(litellm, "callbacks", [_Redactor(guardrail_name="g", default_on=True)])
+    ProxyLogging._callback_capabilities_cache.clear()
+
+    spools = []
+    real = bg.tempfile.SpooledTemporaryFile
+
+    def _tracking(*args, **kwargs):
+        handle = real(*args, **kwargs)
+        spools.append(handle)
+        return handle
+
+    monkeypatch.setattr(bg.tempfile, "SpooledTemporaryFile", _tracking)
+
+    async def fake_route_create_file(**kwargs):
+        return OpenAIFileObject(
+            id="dummy-id",
+            object="file",
+            bytes=0,
+            created_at=1234567890,
+            filename="batch.jsonl",
+            purpose="batch",
+            status="uploaded",
+        )
+
+    monkeypatch.setattr(fe, "route_create_file", fake_route_create_file)
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="test-user"
+    )
+
+    def _row(custom_id, content):
+        return _json.dumps(
+            {
+                "custom_id": custom_id,
+                "method": "POST",
+                "url": "/v1/chat/completions",
+                "body": {"model": "gpt-3.5-turbo", "messages": [{"role": "user", "content": content}]},
+            }
+        )
+
+    content = ("\n".join([_row("keep", "fine"), _row("dirty", "please leak this")])).encode()
+    try:
+        resp = client.post(
+            "/v1/files",
+            files={"file": ("batch.jsonl", content, "application/jsonl")},
+            data={"purpose": "batch"},
+            headers={"Authorization": "Bearer test-key"},
+        )
+        assert resp.status_code == 200, resp.text
+        assert len(spools) == 2, f"expected a scan spool and a rewrite spool, saw {len(spools)}"
+        assert all(handle.closed for handle in spools), "the request must close every spool it opened"
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+        ProxyLogging._callback_capabilities_cache.clear()

@@ -1,7 +1,5 @@
 import asyncio
 import json
-import os
-import sys
 from typing import Dict, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -10,9 +8,6 @@ from fastapi.testclient import TestClient
 
 from litellm._uuid import uuid
 
-sys.path.insert(
-    0, os.path.abspath("../../../..")
-)  # Adds the parent directory to the system path
 from litellm.proxy._types import (
     LiteLLM_ModelTable,
     LiteLLM_ProxyModelTable,
@@ -140,7 +135,7 @@ class TestModelManagementAuthChecks:
     @pytest.mark.asyncio
     async def test_can_user_make_team_model_call_non_premium_fails(self):
         """Test that non-premium users cannot make team model calls"""
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(Exception, match='You must be a LiteLLM Enterprise user to use this feature\\.') as exc_info:
             ModelManagementAuthChecks.can_user_make_team_model_call(
                 team_id="test_team",
                 user_api_key_dict=self.admin_user,
@@ -195,7 +190,7 @@ class TestModelManagementAuthChecks:
         )
         prisma_client = MockPrismaClient(team_exists=True)
 
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(Exception, match='You must be a LiteLLM Enterprise user to use this feature\\.') as exc_info:
             await ModelManagementAuthChecks.allow_team_model_action(
                 model_params=model_params,
                 user_api_key_dict=self.admin_user,
@@ -216,7 +211,7 @@ class TestModelManagementAuthChecks:
         )
         prisma_client = MockPrismaClient(team_exists=False)
 
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(Exception, match="Team id=nonexistent_team does not exist in db'\\}") as exc_info:
             await ModelManagementAuthChecks.allow_team_model_action(
                 model_params=model_params,
                 user_api_key_dict=self.admin_user,
@@ -257,7 +252,7 @@ class TestModelManagementAuthChecks:
         )
         prisma_client = MockPrismaClient(team_exists=True, user_admin=False)
 
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(Exception, match="Team ID=test_team does not match the API key's team") as exc_info:
             await ModelManagementAuthChecks.can_user_make_model_call(
                 model_params=model_params,
                 user_api_key_dict=self.normal_user,
@@ -1483,7 +1478,7 @@ class TestTeamModelUpdate:
             "litellm.proxy.proxy_server.premium_user",
             True,
         ):
-            with pytest.raises(Exception) as exc_info:
+            with pytest.raises(Exception, match="does not match the API key's team ID=None, OR you are") as exc_info:
                 await _update_team_model_in_db(
                     db_model=db_model,
                     patch_data=patch_data,
@@ -3256,7 +3251,7 @@ class TestPatchModelBlockedAuthGate:
                 new=AsyncMock(return_value=None),
             ),
         ):
-            with pytest.raises(Exception) as exc_info:
+            with pytest.raises(Exception, match="Only proxy admins can change a model's blocked flag\\.") as exc_info:
                 await patch_model(
                     model_id="m1",
                     patch_data=updateDeployment(blocked=True),

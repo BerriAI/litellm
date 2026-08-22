@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import userEvent, { PointerEventsCheckLevel } from "@testing-library/user-event";
-import { renderWithProviders, screen, waitFor } from "../../tests/test-utils";
+import { fireEvent, renderWithProviders, screen, waitFor } from "../../tests/test-utils";
 import AddPassThroughEndpoint from "./add_pass_through";
 
 const createPassThroughEndpoint = vi.fn();
@@ -34,17 +34,58 @@ const openModal = async (user: User) => {
   await screen.findByText("Route Configuration");
 };
 
-const fillRequiredFields = async (user: User) => {
-  await user.type(screen.getByPlaceholderText("bria"), "bria");
-  await user.type(screen.getByPlaceholderText("https://engine.prod.bria-api.com"), "https://example.com");
+interface RequiredFieldValues {
+  path?: string;
+  target?: string;
+  headerName?: string;
+  headerValue?: string;
+}
+
+const fillRequiredFields = async (user: User, values: RequiredFieldValues = {}) => {
+  const {
+    path = "bria",
+    target = "https://example.com",
+    headerName = "Authorization",
+    headerValue = "Bearer abc",
+  } = values;
+
+  fireEvent.change(screen.getByPlaceholderText("bria"), { target: { value: path } });
+  fireEvent.change(screen.getByPlaceholderText("https://engine.prod.bria-api.com"), {
+    target: { value: target },
+  });
   await user.click(screen.getByRole("button", { name: /add header/i }));
-  await user.type(screen.getByPlaceholderText("Header Name"), "Authorization");
-  await user.type(screen.getByPlaceholderText("Header Value"), "Bearer abc");
+  fireEvent.change(screen.getByPlaceholderText("Header Name"), { target: { value: headerName } });
+  fireEvent.change(screen.getByPlaceholderText("Header Value"), { target: { value: headerValue } });
+};
+
+const addQueryParam = async (user: User, name: string, value: string) => {
+  await user.click(screen.getByRole("button", { name: /add query parameter/i }));
+  fireEvent.change(screen.getByPlaceholderText("Parameter Name (e.g., version)"), { target: { value: name } });
+  fireEvent.change(screen.getByPlaceholderText("Parameter Value (e.g., v1)"), { target: { value } });
 };
 
 const submit = async (user: User) => user.click(screen.getByRole("button", { name: "Add Pass-Through Endpoint" }));
 
 const lastPayload = () => createPassThroughEndpoint.mock.calls.at(-1)?.[1] as Record<string, unknown>;
+
+const reopenedFields: RequiredFieldValues = {
+  path: "adobe",
+  target: "https://adobe.example.com",
+  headerName: "x-api-key",
+  headerValue: "second-secret",
+};
+
+const reopenedPayload = {
+  path: "/adobe",
+  target: "https://adobe.example.com",
+  headers: { "x-api-key": "second-secret" },
+  include_subpath: true,
+  methods: undefined,
+  default_query_params: undefined,
+  auth: undefined,
+  timeout: undefined,
+  cost_per_request: undefined,
+};
 
 describe("add_pass_through submit payload", () => {
   beforeEach(() => {
@@ -57,8 +98,8 @@ describe("add_pass_through submit payload", () => {
     renderForm();
     await openModal(user);
     await fillRequiredFields(user);
-    await user.type(screen.getByPlaceholderText("600"), "900");
-    await user.type(screen.getByPlaceholderText("2.0000"), "1.5");
+    fireEvent.change(screen.getByPlaceholderText("600"), { target: { value: "900" } });
+    fireEvent.change(screen.getByPlaceholderText("2.0000"), { target: { value: "1.5" } });
 
     await submit(user);
 
@@ -84,8 +125,8 @@ describe("add_pass_through submit payload", () => {
     renderForm();
     await openModal(user);
     await fillRequiredFields(user);
-    await user.type(screen.getByPlaceholderText("600"), "900");
-    await user.type(screen.getByPlaceholderText("2.0000"), "1.5");
+    fireEvent.change(screen.getByPlaceholderText("600"), { target: { value: "900" } });
+    fireEvent.change(screen.getByPlaceholderText("2.0000"), { target: { value: "1.5" } });
 
     await submit(user);
 
@@ -183,7 +224,9 @@ describe("add_pass_through submit payload", () => {
     await fillRequiredFields(user);
 
     await user.clear(screen.getByPlaceholderText("https://engine.prod.bria-api.com"));
-    await user.type(screen.getByPlaceholderText("https://engine.prod.bria-api.com"), "not a url");
+    fireEvent.change(screen.getByPlaceholderText("https://engine.prod.bria-api.com"), {
+      target: { value: "not a url" },
+    });
 
     await submit(user);
 
@@ -213,5 +256,36 @@ describe("add_pass_through submit payload", () => {
     await user.click(screen.getByRole("button", { name: "Cancel" }));
 
     expect(createPassThroughEndpoint).not.toHaveBeenCalled();
+  });
+
+  it("leaves no header or query parameter rows behind when the modal is cancelled and reopened", async () => {
+    const user = setup();
+    renderForm();
+    await openModal(user);
+    await fillRequiredFields(user);
+    await addQueryParam(user, "version", "v1");
+
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    await openModal(user);
+
+    expect(screen.queryByPlaceholderText("Header Name")).not.toBeInTheDocument();
+    expect(screen.queryByPlaceholderText("Parameter Name (e.g., version)")).not.toBeInTheDocument();
+  });
+
+  it("submits the reopened endpoint instead of rejecting it as missing headers", async () => {
+    const user = setup();
+    renderForm();
+    await openModal(user);
+    await fillRequiredFields(user);
+
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    await openModal(user);
+    await fillRequiredFields(user, reopenedFields);
+
+    await submit(user);
+
+    await waitFor(() => expect(createPassThroughEndpoint).toHaveBeenCalled());
+    expect(screen.queryByText("Please configure the headers")).not.toBeInTheDocument();
+    expect(lastPayload()).toStrictEqual(reopenedPayload);
   });
 });

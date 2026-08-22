@@ -1,5 +1,5 @@
 import React from "react";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent, { PointerEventsCheckLevel } from "@testing-library/user-event";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import AgentInfoView from "./agent_info";
@@ -176,7 +176,7 @@ describe("AgentInfoView update payload", () => {
     await openEditor(user);
 
     await user.clear(screen.getByLabelText("TPM Limit"));
-    await user.type(screen.getByLabelText("TPM Limit"), "-5");
+    fireEvent.change(screen.getByLabelText("TPM Limit"), { target: { value: "-5" } });
     await save(user);
 
     expect(patchedPayload().tpm_limit).toBe(0);
@@ -222,7 +222,7 @@ describe("AgentInfoView update payload", () => {
     await openEditor(user);
 
     await user.clear(screen.getByLabelText("API Base"));
-    await user.type(screen.getByLabelText("API Base"), "https://other.example.com");
+    fireEvent.change(screen.getByLabelText("API Base"), { target: { value: "https://other.example.com" } });
 
     await save(user);
 
