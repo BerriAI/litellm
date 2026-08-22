@@ -78,12 +78,7 @@ async def test_content_policy_exception_openai():
             request=request,
         )
 
-    rejecting_client = AsyncOpenAI(
-        api_key="sk-test",
-        http_client=httpx.AsyncClient(transport=httpx.MockTransport(reject_as_safety_system)),
-    )
-
-    async def stream_response():
+    async def stream_response(rejecting_client: AsyncOpenAI):
         response = await litellm.acompletion(
             model="gpt-3.5-turbo",
             stream=True,
@@ -93,8 +88,12 @@ async def test_content_policy_exception_openai():
         async for chunk in response:
             print(chunk)
 
-    with pytest.raises(litellm.ContentPolicyViolationError) as exc_info:
-        await stream_response()
+    async with AsyncOpenAI(
+        api_key="sk-test",
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(reject_as_safety_system)),
+    ) as rejecting_client:
+        with pytest.raises(litellm.ContentPolicyViolationError) as exc_info:
+            await stream_response(rejecting_client)
     assert exc_info.value.llm_provider == "openai"
     assert exc_info.value.status_code == 400
 
