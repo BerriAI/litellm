@@ -467,6 +467,40 @@ class TestDynamicSql:
         sql = "DO $$\nBEGIN\n    EXECUTE 'UPDATE \"Foo\" SET \"a\" = date_trunc(''day'', \"t\")';\nEND $$;"
         assert _keywords(tmp_path, sql) == ("UPDATE",)
 
+    def test_a_rewrite_quoted_as_data_inside_executed_sql_is_not_run(self, tmp_path):
+        sql = "DO $$\nBEGIN\n    EXECUTE 'SELECT ''UPDATE \"Foo\" SET \"a\" = 1''';\nEND $$;"
+        assert _keywords(tmp_path, sql) == ()
+
+    def test_a_doubled_quote_does_not_split_the_literal_it_sits_in(self, tmp_path):
+        sql = "INSERT INTO \"Foo\" (\"note\") VALUES ('a''UPDATE \"Bar\" SET \"a\" = 1''b');"
+        assert _keywords(tmp_path, sql) == ()
+
+    def test_a_rewrite_following_a_doubled_quote_in_the_same_payload_is_flagged(self, tmp_path):
+        sql = "DO $$\nBEGIN\n    EXECUTE 'SELECT ''x''; UPDATE \"Foo\" SET \"a\" = 1';\nEND $$;"
+        assert _keywords(tmp_path, sql) == ("UPDATE",)
+
+    def test_a_rewrite_in_a_later_command_before_bind_values_is_flagged(self, tmp_path):
+        sql = "DO $$\nBEGIN\n    EXECUTE 'SELECT 1; DELETE FROM \"Foo\" WHERE \"a\" = $1' USING 1;\nEND $$;"
+        assert _keywords(tmp_path, sql) == ("DELETE",)
+
+    def test_a_bind_value_naming_a_rewrite_is_not_run(self, tmp_path):
+        sql = (
+            "DO $$\nBEGIN\n    EXECUTE 'INSERT INTO \"Audit\" (\"note\") VALUES ($1)'"
+            " USING 'DELETE FROM \"Foo\"';\nEND $$;"
+        )
+        assert _keywords(tmp_path, sql) == ()
+
+    def test_a_rewrite_executed_with_bind_values_is_still_flagged(self, tmp_path):
+        sql = "DO $$\nBEGIN\n    EXECUTE 'DELETE FROM \"Foo\" WHERE \"a\" = $1' USING 1;\nEND $$;"
+        assert _keywords(tmp_path, sql) == ("DELETE",)
+
+    def test_using_written_inside_the_command_does_not_end_it(self, tmp_path):
+        sql = (
+            "DO $$\nBEGIN\n    EXECUTE 'DELETE FROM \"Foo\" USING \"Bar\""
+            " WHERE \"Foo\".\"a\" = \"Bar\".\"a\"';\nEND $$;"
+        )
+        assert _keywords(tmp_path, sql) == ("DELETE",)
+
     def test_execute_of_ddl_passes(self, tmp_path):
         sql = "DO $$\nBEGIN\n    EXECUTE 'ALTER TABLE \"Foo\" ADD COLUMN \"b\" TEXT';\nEND $$;"
         assert _keywords(tmp_path, sql) == ()

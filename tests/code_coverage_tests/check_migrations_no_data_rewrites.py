@@ -147,6 +147,8 @@ OPENS_A_BLOCK = frozenset({"BEGIN", "THEN", "ELSE", "LOOP"})
 
 NEVER_A_VARIABLE = frozenset({"INTO", "USING"})
 
+BIND_VALUES = re.compile(r"\bUSING\b", re.IGNORECASE)
+
 GUIDANCE = """
 Migrations apply at proxy boot, before it serves traffic, so a statement whose cost
 scales with table size is downtime. Add the column and let the application backfill
@@ -286,10 +288,20 @@ def skip_block_comment(sql: str, start: int) -> int:
 
 
 def skip_quoted(sql: str, start: int, quote: str) -> int:
-    """One quoted run, up to and including its closing quote. A doubled quote needs no
-    special case: closing on the first and reopening on the second masks the same span."""
-    stop = sql.find(quote, start + 1)
-    return len(sql) if stop == -1 else stop + 1
+    """One quoted run, up to and including its closing quote. A doubled quote is an escaped
+    quote sitting inside the run rather than the end of it. Closing on the first and reopening
+    on the second would mask the same span, which is why this looked like it needed no special
+    case, but the run is also handed on whole as one literal, and splitting it there offers the
+    tail of a string to be read as SQL in its own right."""
+    index = start + 1
+    while True:
+        stop = sql.find(quote, index)
+        if stop == -1:
+            return len(sql)
+        if sql[stop + 1 : stop + 2] == quote:
+            index = stop + 2
+            continue
+        return stop + 1
 
 
 def strip_parens(statement: str) -> str:
@@ -523,8 +535,9 @@ def scan_region(
         exempt = markers.exempt(start, end)
 
         if hands_off_sql(match.group(), executed) and not exempt:
+            commands_end = match.start() + bind_values_start(match.group())
             for start, end in literals:
-                if match.start() <= start and end <= match.end():
+                if match.start() <= start and end <= commands_end:
                     yield from scan_region(document, region[start:end], migration, markers, offset + start)
 
         keyword = offending_keyword(match.group())
@@ -534,6 +547,15 @@ def scan_region(
 
     for start, end in bodies:
         yield from scan_region(document, region[start:end], migration, markers, offset + start)
+
+
+def bind_values_start(statement: str) -> int:
+    """Where a statement stops handing commands to the server and starts listing bind values.
+    The expressions after `USING` are values substituted into the command, never commands in
+    their own right, so one that merely spells out a rewrite is not running it. Read off the
+    masked text, so a `USING` written inside the command string is not mistaken for this one."""
+    keyword = BIND_VALUES.search(statement)
+    return len(statement) if keyword is None else keyword.start()
 
 
 def statement_start(statement: re.Match[str]) -> int:
