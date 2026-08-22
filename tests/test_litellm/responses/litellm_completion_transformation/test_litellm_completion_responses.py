@@ -3945,3 +3945,60 @@ class TestStreamingSnapshotItemIds:
         for item in _bridged_output_items(completed_event.response, "message"):
             assert item.id.startswith("msg_")
             assert not item.id.startswith("chatcmpl-")
+
+    def _make_reasoning_chunk(self, reasoning_content):
+        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+        return ModelResponseStream(
+            id=BRIDGED_CHAT_COMPLETION_ID,
+            choices=[
+                StreamingChoices(
+                    index=0,
+                    delta=Delta(role="assistant", reasoning_content=reasoning_content),
+                    finish_reason=None,
+                )
+            ],
+            created=1717000000,
+            model="claude-sonnet-4-5",
+            object="chat.completion.chunk",
+        )
+
+    def _reasoning_chat_completion_response(self):
+        message = Message(role="assistant", content="apple")
+        message.reasoning_content = "thinking about fruit"
+        return _bridged_chat_completion_response(
+            choices=[Choices(index=0, finish_reason="stop", message=message)]
+        )
+
+    def test_reasoning_delta_events_share_one_item_id(self):
+        """The old rs_{hash(text)} ID changed with every delta, so a client accumulating
+        reasoning by item ID saw a new item per chunk."""
+        iterator = self._make_iterator()
+
+        first = iterator._transform_chat_completion_chunk_to_response_api_chunk(
+            self._make_reasoning_chunk("thinking ")
+        )
+        second = iterator._transform_chat_completion_chunk_to_response_api_chunk(
+            self._make_reasoning_chunk("about fruit")
+        )
+
+        assert first is not None and second is not None
+        assert first.item_id.startswith("rs_")
+        assert first.item_id == second.item_id
+
+    def test_completed_snapshot_reuses_streamed_reasoning_item_id(self):
+        iterator = self._make_iterator()
+
+        streamed_event = iterator._transform_chat_completion_chunk_to_response_api_chunk(
+            self._make_reasoning_chunk("thinking about fruit")
+        )
+        assert streamed_event is not None
+
+        completed_event = iterator._emit_response_completed_event(
+            self._reasoning_chat_completion_response()
+        )
+
+        assert completed_event is not None
+        reasoning_items = _bridged_output_items(completed_event.response, "reasoning")
+        assert len(reasoning_items) == 1
+        assert reasoning_items[0].id == streamed_event.item_id
