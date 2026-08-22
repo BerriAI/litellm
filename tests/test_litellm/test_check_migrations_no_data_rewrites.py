@@ -161,6 +161,39 @@ class TestInsert:
         sql = 'INSERT INTO "Foo" ("id") VALUES ((SELECT 1 UNION SELECT 2 LIMIT 1));'
         assert _keywords(tmp_path, sql) == ()
 
+    def test_a_scalar_subquery_in_a_set_operated_values_list_stays_bounded(self, tmp_path):
+        sql = (
+            'INSERT INTO "Foo" ("id") VALUES ((SELECT max("id") FROM "Bar"))'
+            " UNION ALL VALUES (2);"
+        )
+        assert _keywords(tmp_path, sql) == ()
+
+    def test_a_scalar_subquery_in_a_parenthesised_values_list_stays_bounded(self, tmp_path):
+        sql = 'INSERT INTO "Foo" ("id") (VALUES ((SELECT max("id") FROM "Bar")));'
+        assert _keywords(tmp_path, sql) == ()
+
+    def test_a_scalar_subquery_in_set_operated_parenthesised_values_lists_stays_bounded(self, tmp_path):
+        sql = (
+            'INSERT INTO "Foo" ("id") (VALUES ((SELECT max("id") FROM "Bar")))'
+            " UNION ALL (VALUES (2));"
+        )
+        assert _keywords(tmp_path, sql) == ()
+
+    def test_a_set_operation_inside_a_values_list_does_not_split_the_terms(self, tmp_path):
+        sql = (
+            'INSERT INTO "Foo" ("id") VALUES ((SELECT max("id") FROM "Bar"'
+            ' UNION SELECT max("id") FROM "Bar")) UNION ALL VALUES (2);'
+        )
+        assert _keywords(tmp_path, sql) == ()
+
+    def test_a_query_term_written_before_a_values_term_is_still_the_row_source(self, tmp_path):
+        sql = 'INSERT INTO "Foo" ("id") (SELECT "id" FROM "Bar") UNION ALL (VALUES (2));'
+        assert _keywords(tmp_path, sql) == ("INSERT ... SELECT",)
+
+    def test_a_table_term_beside_parenthesised_values_is_still_the_row_source(self, tmp_path):
+        sql = 'INSERT INTO "Foo" ("id") (VALUES (1)) UNION ALL (TABLE "Bar");'
+        assert _keywords(tmp_path, sql) == ("INSERT ... TABLE",)
+
     def test_a_table_row_source_is_flagged(self, tmp_path):
         assert _keywords(tmp_path, 'INSERT INTO "Foo" TABLE "Bar";') == ("INSERT ... TABLE",)
 
