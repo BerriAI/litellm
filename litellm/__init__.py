@@ -453,6 +453,7 @@ max_end_user_budget_id: Optional[str] = None
 # backwards compatibility — arbitrary client-supplied identifiers still
 # pass through unchanged.
 validate_end_user_id_in_db: bool = False
+block_requests_for_models_without_pricing: bool = False
 disable_end_user_cost_tracking: Optional[bool] = None
 disable_end_user_cost_tracking_prometheus_only: Optional[bool] = None
 enable_end_user_cost_tracking_prometheus_only: Optional[bool] = None

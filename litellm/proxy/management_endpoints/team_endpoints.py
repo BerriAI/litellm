@@ -2640,51 +2640,63 @@ async def _process_team_members(
     return updated_users, updated_team_memberships
 
 
+def _resolve_member_identity(member: Member, updated_users: Sequence[LiteLLM_UserTable]) -> Member:
+    """Return ``member`` with whichever of ``user_id`` / ``user_email`` the caller left out filled in.
+
+    The roster entry is a snapshot, so whatever is missing here is missing for good.
+    Resolution runs both ways off the user rows the add just touched: added by email
+    -> stamp the user_id, added by user_id -> stamp the email. A value the caller
+    supplied is never overwritten.
+    """
+    resolved_user_id: Final = member.user_id or next(
+        (
+            user.user_id
+            for user in updated_users
+            if member.user_email is not None and user.user_email == member.user_email
+        ),
+        None,
+    )
+    resolved_user_email: Final = member.user_email or next(
+        (
+            user.user_email
+            for user in updated_users
+            if resolved_user_id is not None and user.user_id == resolved_user_id and user.user_email is not None
+        ),
+        None,
+    )
+    return member.model_copy(
+        update={  # mutable-ok: pydantic update payload
+            "user_id": resolved_user_id,
+            "user_email": resolved_user_email,
+        }
+    )
+
+
+def _member_already_in_team(member: Member, complete_team_data: LiteLLM_TeamTable) -> bool:
+    return any(
+        (member.user_id is not None and existing_member.user_id == member.user_id)
+        or (member.user_email is not None and existing_member.user_email == member.user_email)
+        for existing_member in complete_team_data.members_with_roles
+    )
+
+
 async def _update_team_members_list(
     data: TeamMemberAddRequest,
     complete_team_data: LiteLLM_TeamTable,
     updated_users: list[LiteLLM_UserTable],
 ) -> None:
     """Update the team's members_with_roles list."""
-    if isinstance(data.member, Member):
-        new_member: Final = data.member.model_copy()
+    requested_members: Final[Sequence[Member]] = (
+        (data.member,) if isinstance(data.member, Member) else tuple(data.member)
+    )
+    resolved_members: Final = tuple(_resolve_member_identity(m, updated_users) for m in requested_members)
 
-        # get user id
-        if new_member.user_id is None and new_member.user_email is not None:
-            for user in updated_users:
-                if user.user_email is not None and user.user_email == new_member.user_email:
-                    new_member.user_id = user.user_id
-
-        # Check if member already exists in team before adding
-        member_already_exists = False
-        for existing_member in complete_team_data.members_with_roles:
-            if (new_member.user_id is not None and existing_member.user_id == new_member.user_id) or (
-                new_member.user_email is not None and existing_member.user_email == new_member.user_email
-            ):
-                member_already_exists = True
-                break
-
-        if not member_already_exists:
-            complete_team_data.members_with_roles.append(new_member)
-
-    elif isinstance(data.member, list):
-        for nm in data.member:
-            if nm.user_id is None and nm.user_email is not None:
-                for user in updated_users:
-                    if user.user_email is not None and user.user_email == nm.user_email:
-                        nm.user_id = user.user_id
-
-            # Check if member already exists in team before adding
-            member_already_exists = False
-            for existing_member in complete_team_data.members_with_roles:
-                if (nm.user_id is not None and existing_member.user_id == nm.user_id) or (
-                    nm.user_email is not None and existing_member.user_email == nm.user_email
-                ):
-                    member_already_exists = True
-                    break
-
-            if not member_already_exists:
-                complete_team_data.members_with_roles.append(nm)
+    # extend() consumes the generator as it appends, so a member already added by this
+    # same call is seen by the next _member_already_in_team check - the batch dedupes
+    # against itself exactly as the append-one-at-a-time loop this replaced did.
+    complete_team_data.members_with_roles.extend(  # rebind-ok: this helper's contract is to grow the caller's roster in place
+        m for m in resolved_members if not _member_already_in_team(m, complete_team_data)
+    )
 
 
 async def _add_team_members_to_team(
@@ -4086,6 +4098,39 @@ async def _add_team_member_budget_table(
     return team_info_response_object
 
 
+async def _hydrate_member_emails(
+    prisma_client: PrismaClient,
+    members: Sequence[Member],
+) -> tuple[Member, ...]:
+    """Fill in ``user_email`` for roster entries that were stored without one.
+
+    ``members_with_roles`` is a denormalized snapshot written at add-time, so an entry
+    stored with ``user_email=None`` keeps that null even once the user row has an email.
+    Look the missing ones up in ``LiteLLM_UserTable`` (one indexed query) and fill them
+    in. A stored email is never overwritten - the snapshot stays the source of truth
+    wherever it has a value.
+    """
+    missing_user_ids: Final = frozenset(m.user_id for m in members if not m.user_email and m.user_id is not None)
+    if not missing_user_ids:
+        return tuple(members)
+
+    user_rows: Final[Sequence[LiteLLM_UserTable]] = await _user_db(prisma_client).find_many(
+        where={  # mutable-ok: Prisma query filters are dict-shaped
+            "user_id": {  # mutable-ok: Prisma query filters are dict-shaped
+                "in": sorted(missing_user_ids)
+            }
+        }
+    )
+    email_by_user_id: Final = MappingProxyType({u.user_id: u.user_email for u in user_rows if u.user_email})
+
+    return tuple(
+        m.model_copy(update={"user_email": email_by_user_id[m.user_id]})  # mutable-ok: pydantic update payload
+        if not m.user_email and m.user_id in email_by_user_id
+        else m
+        for m in members
+    )
+
+
 async def _resolve_team_access_group_resources(
     _team_info: TeamInfoResponseObjectTeamTable,
 ) -> TeamInfoResponseObjectTeamTable:
@@ -4221,9 +4266,22 @@ async def team_info(
         # Resolve resources inherited from access groups
         resolved_team_info: Final = await _resolve_team_access_group_resources(_team_info)
 
+        # Fill in emails the add-time roster snapshot never captured
+        hydrated_members: Final = await _hydrate_member_emails(
+            prisma_client=prisma_client,
+            members=resolved_team_info.members_with_roles,
+        )
+        hydrated_team_info: Final = resolved_team_info.model_copy(
+            update={  # mutable-ok: pydantic update payload
+                # list(), not the tuple: model_copy skips validation, so the field has
+                # to be handed the list[Member] the response model declares.
+                "members_with_roles": list(hydrated_members)  # mutable-ok: declared list[Member]
+            }
+        )
+
         response_object: Final = TeamInfoResponseObject(
             team_id=team_id,
-            team_info=resolved_team_info,
+            team_info=hydrated_team_info,
             keys=keys,
             team_memberships=returned_tm,
         )

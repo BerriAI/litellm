@@ -27,11 +27,15 @@ from litellm.types.integrations.anthropic_cache_control_hook import (
     CacheControlInjectionPoint,
     CacheControlMessageInjectionPoint,
 )
-from litellm.types.llms.anthropic import AnthropicSystemMessageContent
+from litellm.types.llms.anthropic import (
+    AllAnthropicToolsValues,
+    AnthropicSystemMessageContent,
+)
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionCachedContent,
     ChatCompletionTextObject,
+    ChatCompletionToolParam,
     PromptCacheBreakpoint,
     PromptCacheOptions,
 )
@@ -56,6 +60,8 @@ OPENAI_PROMPT_CACHE_BREAKPOINT_BLOCK_TYPES: Final = frozenset(
 )
 OPENAI_API_HOST: Final = "api.openai.com"
 OPENAI_API_BASE_ENV_VARS: Final = ("OPENAI_BASE_URL", "OPENAI_API_BASE")
+
+AllToolParamValues = ChatCompletionToolParam | AllAnthropicToolsValues
 
 
 def supports_openai_prompt_cache_breakpoint(model: str) -> bool:
@@ -624,6 +630,50 @@ class AnthropicCacheControlHook(CustomPromptManagement):
             CacheControlMessageInjectionPoint(location="message", role=None, index=-1, control=control),
         ]
         return points
+
+    @staticmethod
+    def messages_with_default_injections(
+        messages: list[AllMessageValues],
+        models: Iterable[str],
+        tools: list[AllToolParamValues] | None = None,
+        enable_prompt_caching: bool | None = None,
+    ) -> list[AllMessageValues]:
+        """Return the messages auto prompt caching will send, default breakpoints included.
+
+        Router cache affinity depends on this. Deployment selection runs before the injection in
+        `litellm.acompletion`, so it has to reproduce the markers to derive the same cache key the
+        success event later writes from the sent messages. `models` is every candidate model of the
+        group: the first that would auto-inject decides, since the default breakpoints (system
+        prompt and trailing turn) do not depend on which deployment serves the call. Returns the
+        input list itself when auto-injection would not apply
+        """
+        points: Final = next(
+            (
+                candidate
+                for candidate in (
+                    AnthropicCacheControlHook.get_default_injection_points(
+                        messages=messages,
+                        system=None,
+                        model=model,
+                        custom_llm_provider=None,
+                        tools=tools,
+                        enable_prompt_caching=enable_prompt_caching,
+                    )
+                    for model in models
+                )
+                if candidate
+            ),
+            None,
+        )
+        if not points:
+            return messages
+        return AnthropicCacheControlHook._apply_message_injections(
+            points=cast(  # cast-ok: the default points are all message-location points
+                list[CacheControlMessageInjectionPoint], points
+            ),
+            messages=copy.deepcopy(messages),
+            max_blocks=MAX_CACHE_CONTROL_BLOCKS,
+        )
 
     @staticmethod
     def maybe_seed_default_injection_points(

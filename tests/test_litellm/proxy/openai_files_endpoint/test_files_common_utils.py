@@ -1,11 +1,8 @@
-import os
-import sys
 from types import MappingProxyType
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../.."))
 
 from litellm.proxy.openai_files_endpoints.common_utils import (
     apply_unified_file_ids,

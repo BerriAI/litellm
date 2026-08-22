@@ -1,5 +1,4 @@
 import os
-import sys
 import traceback
 from litellm._uuid import uuid
 from unittest import mock
@@ -10,7 +9,6 @@ from fastapi import Request
 load_dotenv()
 import time
 
-sys.path.insert(0, os.path.abspath("../.."))
 import logging
 
 import pytest
@@ -29,6 +27,7 @@ from litellm_enterprise.proxy.management_endpoints.project_endpoints import (
 from litellm.proxy.proxy_server import (
     LitellmUserRoles,
 )
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 
 verbose_proxy_logger.setLevel(level=logging.DEBUG)
@@ -447,7 +446,7 @@ def test_check_team_project_limits_models_not_in_team():
         models=["gpt-5.5", "claude-3"],  # claude-3 not in team
     )
 
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(Exception, match="not in team's allowed models\\. Team allowed models") as exc_info:
         _check_team_project_limits(team_object=team, data=data)
 
     assert "claude-3" in str(exc_info.value.detail)
@@ -475,7 +474,7 @@ def test_check_team_project_limits_budget_exceeds_team():
         max_budget=150.0,  # exceeds team's 100.0
     )
 
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(Exception, match='Project max_budget') as exc_info:
         _check_team_project_limits(team_object=team, data=data)
 
     assert "exceeds team's max_budget" in str(exc_info.value.detail)
@@ -550,7 +549,7 @@ def test_check_team_project_limits_tpm_exceeds_team():
         tpm_limit=20000,  # exceeds team's 10000
     )
 
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(Exception, match='Project tpm_limit') as exc_info:
         _check_team_project_limits(team_object=team, data=data)
 
     assert "exceeds team's tpm_limit" in str(exc_info.value.detail)
@@ -576,7 +575,7 @@ def test_check_team_project_limits_negative_budget():
         max_budget=-10.0,
     )
 
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(Exception, match='max_budget cannot be negative\\. Received') as exc_info:
         _check_team_project_limits(team_object=team, data=data)
 
     assert "cannot be negative" in str(exc_info.value.detail)
@@ -603,7 +602,7 @@ def test_check_team_project_limits_soft_budget_gte_max():
         soft_budget=100.0,  # equal to max, should fail
     )
 
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(Exception, match='must be strictly lower than max_budget') as exc_info:
         _check_team_project_limits(team_object=team, data=data)
 
     assert "must be strictly lower" in str(exc_info.value.detail)
@@ -1039,3 +1038,70 @@ async def test_project_eviction_publishes_cross_worker_invalidation(monkeypatch)
         )
 
     mock_publish.assert_awaited_once_with(cache_key=f"project_id:{project_id}")
+
+
+def _project_update_mocks(monkeypatch, stored_metadata: dict) -> mock.MagicMock:
+    existing_row = mock.MagicMock(
+        team_id=None, budget_id=None, object_permission_id=None, metadata=stored_metadata
+    )
+    mock_prisma = mock.MagicMock()
+    mock_prisma.jsonify_object = lambda data: data
+    mock_prisma.db.litellm_projecttable.find_unique = mock.AsyncMock(return_value=existing_row)
+    mock_prisma.db.litellm_projecttable.update = mock.AsyncMock(return_value=mock.MagicMock())
+
+    monkeypatch.setattr(litellm.proxy.proxy_server, "premium_user", True)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "prisma_client", mock_prisma)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "user_api_key_cache", UserApiKeyCache())
+    return mock_prisma
+
+
+async def _run_project_update(project_id: str, **fields) -> None:
+    await update_project(
+        data=UpdateProjectRequest(project_id=project_id, **fields),
+        http_request=Request(scope={"type": "http"}),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            api_key="sk-1234",
+            user_id="1234",
+        ),
+    )
+
+
+def _written_project_data(mock_prisma: mock.MagicMock) -> dict:
+    return mock_prisma.db.litellm_projecttable.update.await_args.kwargs["data"]
+
+
+@pytest.mark.asyncio
+async def test_update_project_clears_model_itpm_limit_sent_as_an_empty_map(monkeypatch):
+    """
+    LIT-4693 regression: an omitted key means "leave this alone", so the only way to drop a
+    per-model input/output TPM quota is to send it as an explicitly empty map. The written
+    metadata must stop carrying the quota, otherwise the proxy keeps enforcing a limit the
+    operator has already removed in the UI.
+    """
+    project_id = f"project-{uuid.uuid4()}"
+    mock_prisma = _project_update_mocks(
+        monkeypatch,
+        {"owner": "platform", "model_itpm_limit": {"gpt-4": 60}, "model_otpm_limit": {"gpt-4": 40}},
+    )
+
+    await _run_project_update(project_id, model_itpm_limit={}, model_otpm_limit={})
+
+    written_metadata = _written_project_data(mock_prisma)["metadata"]
+    assert written_metadata["model_itpm_limit"] == {}
+    assert written_metadata["model_otpm_limit"] == {}
+
+
+@pytest.mark.asyncio
+async def test_update_project_leaves_metadata_untouched_when_no_limit_is_sent(monkeypatch):
+    """
+    The other half of the same contract: an update that says nothing about the limits must not
+    write metadata at all. That is what makes a dropped key silently preserve the old quota, so
+    the UI has to send the empty map instead of omitting it.
+    """
+    project_id = f"project-{uuid.uuid4()}"
+    mock_prisma = _project_update_mocks(monkeypatch, {"model_itpm_limit": {"gpt-4": 60}})
+
+    await _run_project_update(project_id, description="renamed only")
+
+    assert "metadata" not in _written_project_data(mock_prisma)

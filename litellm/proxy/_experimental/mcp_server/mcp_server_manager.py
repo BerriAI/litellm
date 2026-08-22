@@ -46,7 +46,7 @@ from litellm.constants import (
     MCP_TOOL_LISTING_TIMEOUT,
 )
 from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
-from litellm.experimental_mcp_client.client import MCPClient, MCPSigV4Auth
+from litellm.experimental_mcp_client.client import MCPClient, MCPSigV4Auth, strip_auth_scheme
 from litellm.integrations.custom_guardrail import (
     _sync_guardrail_info_to_logging_obj,  # pyright: ignore[reportPrivateUsage] - the same bridge @log_guardrail_information uses; reimplementing it here would fork the metadata-key logic
 )
@@ -841,12 +841,17 @@ def _without_authorization(
 
 
 def _format_byok_openapi_auth_header(mcp_server: MCPServer, mcp_auth_header: str) -> str:
-    """Format a raw BYOK credential for OpenAPI tool ``Authorization`` injection."""
+    """Format a raw BYOK credential for OpenAPI tool ``Authorization`` injection.
+
+    A non-BYOK server short-circuits ``_resolve_byok_mcp_auth_header``, so the value here can also
+    be the deprecated global ``x-mcp-auth``, which is a complete header value and would otherwise
+    be given a second scheme.
+    """
     if mcp_server.auth_type == MCPAuth.api_key:
-        return f"ApiKey {mcp_auth_header}"
+        return f"ApiKey {strip_auth_scheme(mcp_auth_header, 'ApiKey')}"
     if mcp_server.auth_type == MCPAuth.basic:
-        return f"Basic {mcp_auth_header}"
-    return f"Bearer {mcp_auth_header}"
+        return f"Basic {strip_auth_scheme(mcp_auth_header, 'Basic')}"
+    return f"Bearer {strip_auth_scheme(mcp_auth_header, 'Bearer')}"
 
 
 def _openapi_forwarded_extra_headers(
@@ -2938,17 +2943,14 @@ class MCPServerManager:
         2. If admin and no object_permission, return all servers
         3. Otherwise, use standard permission checks
         """
-        from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
-
         allow_all_server_ids: Final = self.get_allow_all_keys_server_ids()
 
         # A keyless admitted subject is resolved per grant source, and channel decisions that are
         # absolute for a scoped KEY credential are not absolute for it: its own opt-out silences its
-        # own source (handled per source in the resolver), never its teams' grants, and its admin
-        # role does not swallow the grant model — a session bearer is a third-party client
-        # credential, not the dashboard, so an admin signing in through the connect flow gets their
-        # grants like anyone else rather than handing the client the full registry ahead of every
-        # per-team org ceiling.
+        # own source (handled per source in the resolver), never its teams' grants. Its admin role
+        # rides the HUMAN, not the credential: an admin's session resolves the same registry their
+        # dashboard shows (connect-page parity), bounded like an admin key by explicit
+        # object_permission scope, the entitlement ceiling, and the session resource scope below.
         is_admitted_subject: Final = _is_mcp_admitted_user_subject(user_api_key_auth)
 
         # The key explicitly opted out of every MCP server. Return zero before
@@ -2977,26 +2979,16 @@ class MCPServerManager:
         )
 
         try:
-            # If admin but NO explicit object permission, get all servers (never for an admitted
-            # subject — see is_admitted_subject above)
-            if (
-                user_api_key_auth
-                and not is_admitted_subject
-                and _user_has_admin_view(user_api_key_auth)
-                and not has_explicit_object_permission
-                # An entitlement attached to the HUMAN binds them whatever their role: it is the
-                # person's scope, not the credential's, so an admin role is not a waiver of it. An
-                # UNRESOLVED entitlement also skips the shortcut, so the resolver denies rather than
-                # handing over the whole registry on a transient fault.
-                and not await MCPRequestHandler._user_places_mcp_ceiling(user_api_key_auth)
-            ):
-                verbose_logger.debug("Admin user without explicit object_permission - returning all servers")
-                return list(self.get_registry().keys())
-
-            # Get allowed servers from object permissions (respects object_permission even for admins)
-            allowed_mcp_servers: Final = await MCPRequestHandler.get_allowed_mcp_servers(user_api_key_auth)
-            verbose_logger.debug("Allowed MCP Servers for user api key auth: %s", allowed_mcp_servers)
-            combined_servers: Final = set(allowed_mcp_servers)
+            # Admin view with no explicit object permission and no entitlement ceiling resolves the
+            # whole registry, for keys AND admitted session subjects alike (one predicate owns the
+            # question). Seeded into the union rather than returned early so the session resource
+            # scope below still bounds a per-server envelope held by an admin.
+            combined_servers: Final = (
+                set(self.get_registry().keys())
+                if await MCPRequestHandler.admin_view_unscoped(user_api_key_auth)
+                else set(await MCPRequestHandler.get_allowed_mcp_servers(user_api_key_auth))
+            )
+            verbose_logger.debug("Allowed MCP Servers for user api key auth: %s", combined_servers)
             combined_servers.update(
                 await self.operator_open_server_ids(
                     user_api_key_auth,

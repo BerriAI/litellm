@@ -11,7 +11,7 @@ import sys
 import threading
 import time
 import traceback
-from collections.abc import AsyncGenerator, Awaitable, Callable, Coroutine, Mapping, Sequence
+from collections.abc import AsyncGenerator, Awaitable, Callable, Collection, Coroutine, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from email.mime.multipart import MIMEMultipart
@@ -28,6 +28,7 @@ from litellm.constants import (
     MAX_TEAM_LIST_LIMIT,
     SPEND_LOG_QUEUE_MAX_BYTES,
     SPEND_LOG_WRITE_BATCH_MAX_BYTES,
+    SPEND_LOG_WRITE_BATCH_MAX_ROWS,
 )
 from litellm.proxy._types import (
     CommonProxyErrors,
@@ -127,6 +128,11 @@ from litellm.proxy.db.spend_log_batching import (
     spend_log_row_bytes,
     spend_log_write_batches,
 )
+from litellm.proxy.db.token_auth import (
+    DatabaseTokenAuth,
+    mint_database_token,
+    resolve_database_token_auth,
+)
 from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
     UnifiedLLMGuardrails,
 )
@@ -180,6 +186,7 @@ if TYPE_CHECKING:
     from litellm.models.team import LiteLLM_TeamTableCachedObj
     from litellm.proxy.db.autorouter_session_rollup import AutoRouterTurnTransaction
     from litellm.proxy.db.spend_log_tool_index import ToolUsageTransaction
+    from litellm.types.proxy.policy_engine.pipeline_types import GuardrailPipeline
 
     Span = _Span | object
 else:
@@ -402,6 +409,46 @@ def _exception_changes_request_flow(exc: BaseException) -> bool:
     return isinstance(exc, (SensitiveDataRouteException, ModifyResponseException))
 
 
+def _policy_state_metadata(data: Mapping[str, object]) -> Mapping[str, object]:
+    """
+    Return the metadata bucket the policy engine wrote its pipeline state into.
+
+    The route decides the bucket (``litellm_metadata`` for ``/v1/messages``,
+    responses, batches, files and bedrock, ``metadata`` everywhere else), and both
+    buckets can be present at once because callers send their own provider-facing
+    ``metadata`` (Claude Code sends ``metadata.user_id``) or their own
+    ``litellm_metadata``. Pipeline slots are stripped from caller input before the
+    policy engine runs, so whichever bucket carries them is the proxy's own write.
+    """
+    return next(
+        (
+            bucket
+            for bucket in (data.get("metadata"), data.get("litellm_metadata"))
+            if isinstance(bucket, dict)
+            and ("_guardrail_pipelines" in bucket or "_pipeline_managed_guardrails" in bucket)
+        ),
+        {},
+    )
+
+
+def _policy_pipelines(data: Mapping[str, object]) -> tuple[tuple[str, "GuardrailPipeline"], ...]:
+    pipelines: Final = _policy_state_metadata(data).get("_guardrail_pipelines")
+    return (
+        tuple(cast("Sequence[tuple[str, GuardrailPipeline]]", pipelines))  # cast-ok: the policy engine wrote the slot
+        if pipelines
+        else ()
+    )
+
+
+def _pipeline_managed_guardrail_names(data: Mapping[str, object]) -> frozenset[str]:
+    managed: Final = _policy_state_metadata(data).get("_pipeline_managed_guardrails")
+    return (
+        frozenset(cast("Collection[str]", managed))  # cast-ok: the policy engine wrote these guardrail names
+        if managed
+        else frozenset()
+    )
+
+
 def _prompt_block_text(block: object) -> str:
     if isinstance(block, str):
         return block
@@ -558,6 +605,7 @@ class _CallbackCapabilities:
     has_streaming_chunk_override: bool = False
     has_guardrail: bool = False
     has_pre_call_override: bool = False
+    has_content_enforcer: bool = False
     # Tuple[(resolved_callback, "override" | "apply_guardrail"), ...]
     # Ordered the same as ``litellm.callbacks``; used to build the streaming
     # iterator chain without re-scanning per request.
@@ -1439,8 +1487,7 @@ class ProxyLogging:
 
         Returns the (possibly modified) data dict.
         """
-        metadata: Final = data.get("metadata", data.get("litellm_metadata", {})) or {}
-        pipelines: Final = metadata.get("_guardrail_pipelines")
+        pipelines: Final = _policy_pipelines(data)
         if not pipelines:
             return data
 
@@ -1524,19 +1571,26 @@ class ProxyLogging:
 
     def has_pre_call_guardrails(self, request_metadata: Mapping[str, object]) -> bool:
         """
-        Whether any guardrail or guardrail pipeline would inspect a request carrying this metadata.
+        Whether anything configured would inspect the content of a request carrying this metadata.
 
         Evaluated with the same predicate the pre-call loop uses, so a proxy configured only with
         post-call guardrails answers False. Callers that must pay a real cost to build the hook's
         input, such as streaming a batch input file off disk, use this to skip that work.
+
+        A content-enforcing ``CustomLogger`` counts too. It is not a guardrail and has no event
+        hook to consult, but it judges the payload the same way, so a proxy configured only with
+        one of those still has something to say about every record.
         """
         if request_metadata.get("_guardrail_pipelines"):
+            return True
+        caps: Final = ProxyLogging._callback_capabilities()
+        if caps.has_content_enforcer:
             return True
         probe: Final = {"metadata": dict(request_metadata)}  # mutable-ok: should_run_guardrail takes a dict
         return any(
             isinstance(callback, CustomGuardrail)
             and callback.should_run_guardrail(data=probe, event_type=GuardrailEventHooks.pre_call)
-            for callback in ProxyLogging._callback_capabilities().resolved_callbacks
+            for callback in caps.resolved_callbacks
         )
 
     # The actual implementation of the function
@@ -1617,8 +1671,7 @@ class ProxyLogging:
             )
 
             # Get pipeline-managed guardrails to skip in normal loop
-            metadata: Final = data.get("metadata", data.get("litellm_metadata", {})) or {}
-            pipeline_managed: Final[set] = metadata.get("_pipeline_managed_guardrails", set())
+            pipeline_managed: Final = _pipeline_managed_guardrail_names(data)
 
             caps: Final = ProxyLogging._callback_capabilities()
             # Skip the per-request callback walk entirely when nothing in
@@ -1626,7 +1679,11 @@ class ProxyLogging:
             # CustomGuardrail is configured. Saves the loop overhead +
             # ``time.time()`` x2 per registered callback for the common
             # "callbacks=[]" case on small / dev deployments.
-            if not caps.has_guardrail and (guardrails_only or not caps.has_pre_call_override):
+            if (
+                not caps.has_guardrail
+                and not caps.has_content_enforcer
+                and (guardrails_only or not caps.has_pre_call_override)
+            ):
                 if data is not None:
                     self._process_guardrail_metadata(data)
                 return data
@@ -1663,9 +1720,9 @@ class ProxyLogging:
                         data = result
 
                     elif (
-                        not guardrails_only
-                        and _callback is not None
+                        _callback is not None
                         and isinstance(_callback, CustomLogger)
+                        and (not guardrails_only or _callback.enforces_request_content)
                         and "async_pre_call_hook" in vars(_callback.__class__)
                         and _callback.__class__.async_pre_call_hook != CustomLogger.async_pre_call_hook
                     ):
@@ -1917,6 +1974,7 @@ class ProxyLogging:
         has_streaming_chunk_override = False
         has_guardrail = False
         has_pre_call_override = False
+        has_content_enforcer = False
         iterator_overrides: Final[list[tuple[Any, str]]] = []  # (callback, kind)
         resolved_callbacks: Final[list[CustomLogger]] = []
 
@@ -1968,6 +2026,8 @@ class ProxyLogging:
                 has_streaming_chunk_override = True
             if "async_pre_call_hook" in cls_attrs:
                 has_pre_call_override = True
+                if resolved.enforces_request_content is True:
+                    has_content_enforcer = True
 
         caps: Final = _CallbackCapabilities(
             has_post_call_response_headers=has_post_call_response_headers,
@@ -1976,6 +2036,7 @@ class ProxyLogging:
             has_streaming_chunk_override=has_streaming_chunk_override,
             has_guardrail=has_guardrail,
             has_pre_call_override=has_pre_call_override,
+            has_content_enforcer=has_content_enforcer,
             iterator_overrides=tuple(iterator_overrides),
             resolved_callbacks=tuple(resolved_callbacks),
         )
@@ -3304,7 +3365,7 @@ class PrismaClient:
     ):
         ## init logging object
         self.proxy_logging_obj = proxy_logging_obj
-        self.iam_token_db_auth: bool | None = str_to_bool(os.getenv("IAM_TOKEN_DB_AUTH"))
+        self.token_auth: DatabaseTokenAuth | None = resolve_database_token_auth()
         verbose_proxy_logger.debug("Creating Prisma Client..")
         try:
             from prisma import Prisma
@@ -3313,22 +3374,22 @@ class PrismaClient:
             verbose_proxy_logger.error("This usually means 'prisma generate' hasn't been run yet.")
             verbose_proxy_logger.error("Please run 'prisma generate' to generate the Prisma client.")
             raise Exception("Unable to find Prisma binaries. Please run 'prisma generate' first.")
-        iam_flag: Final = self.iam_token_db_auth if self.iam_token_db_auth is not None else False
+        token_auth: Final = self.token_auth
         # When read-replica routing is on, tag log lines with [writer]/[reader]
-        # so the two wrappers' interleaved IAM refresh logs can be told apart.
+        # so the two wrappers' interleaved token refresh logs can be told apart.
         # Single-DB deployments get an empty prefix (logs unchanged).
         read_replica_url = os.getenv("DATABASE_URL_READ_REPLICA")
         writer_log_prefix: Final = "[writer]" if read_replica_url else ""
         if http_client is not None:
             writer_wrapper = PrismaWrapper(
                 original_prisma=Prisma(http=http_client),
-                iam_token_db_auth=iam_flag,
+                token_auth=token_auth,
                 log_prefix=writer_log_prefix,
             )
         else:
             writer_wrapper = PrismaWrapper(
                 original_prisma=Prisma(),
-                iam_token_db_auth=iam_flag,
+                token_auth=token_auth,
                 log_prefix=writer_log_prefix,
             )
 
@@ -3340,29 +3401,22 @@ class PrismaClient:
         self.db: PrismaWrapper | RoutingPrismaWrapper
         if read_replica_url:
             try:
-                # If IAM auth is enabled, the reader refreshes its own token on
+                # If token auth is enabled, the reader refreshes its own token on
                 # the same cadence as the writer. We parse the static endpoint
                 # pieces (host/port/user/db) once from the reader URL — only
-                # the IAM token rotates after that.
-                reader_iam_endpoint: Final = parse_iam_endpoint_from_url(read_replica_url) if iam_flag else None
-                # Mint a fresh IAM token for the reader BEFORE constructing the
+                # the token rotates after that.
+                reader_iam_endpoint: Final = (
+                    parse_iam_endpoint_from_url(read_replica_url) if token_auth is not None else None
+                )
+                # Mint a fresh token for the reader BEFORE constructing the
                 # Prisma client. Mirrors what `proxy_cli.py` already does for
-                # the writer (proxy_cli.py:812-832) — without this, the reader
-                # Prisma is built with whatever placeholder URL the user
-                # supplied (no real token), and the first query falls through
-                # to the synchronous fallback path in
-                # `PrismaWrapper.__getattr__`, which deadlocks the event loop
-                # and times out after 30s.
-                if iam_flag and reader_iam_endpoint is not None:
-                    from litellm.proxy.auth.rds_iam_token import (
-                        generate_iam_auth_token,
-                    )
-
-                    reader_token: Final = generate_iam_auth_token(
-                        db_host=reader_iam_endpoint.host,
-                        db_port=reader_iam_endpoint.port,
-                        db_user=reader_iam_endpoint.user,
-                    )
+                # the writer — without this, the reader Prisma is built with
+                # whatever placeholder URL the user supplied (no real token),
+                # and the first query falls through to the synchronous fallback
+                # path in `PrismaWrapper.__getattr__`, which deadlocks the event
+                # loop and times out after 30s.
+                if token_auth is not None and reader_iam_endpoint is not None:
+                    reader_token: Final = mint_database_token(token_auth, reader_iam_endpoint)
                     read_replica_url = reader_iam_endpoint.build_url(reader_token)
                     os.environ["DATABASE_URL_READ_REPLICA"] = read_replica_url
                 reader_kwargs: Final[dict[str, Any]] = {"datasource": {"url": read_replica_url}}
@@ -3372,7 +3426,7 @@ class PrismaClient:
                     reader_prisma = Prisma(**reader_kwargs)
                 reader_wrapper: Final = PrismaWrapper(
                     original_prisma=reader_prisma,
-                    iam_token_db_auth=iam_flag,
+                    token_auth=token_auth,
                     db_url_env_var="DATABASE_URL_READ_REPLICA",
                     iam_endpoint=reader_iam_endpoint,
                     recreate_uses_datasource=True,
@@ -3381,15 +3435,15 @@ class PrismaClient:
                 self.db = RoutingPrismaWrapper(writer=writer_wrapper, reader=reader_wrapper)
                 verbose_proxy_logger.info(
                     "PrismaClient: read-replica routing enabled via DATABASE_URL_READ_REPLICA"
-                    + (" (with IAM token auto-refresh)" if iam_flag else "")
+                    + (f" (with {token_auth.label} auto-refresh)" if token_auth is not None else "")
                 )
             except Exception as e:
                 # Reader is opt-in; never let its construction fail proxy
                 # startup. Mirrors the runtime contract from
                 # `RoutingPrismaWrapper.connect`: reader-side failures are
                 # logged and we keep serving traffic via the writer alone.
-                # This recovers from transient AWS STS hiccups during the
-                # reader IAM token mint, malformed DATABASE_URL_READ_REPLICA,
+                # This recovers from transient credential-provider hiccups
+                # during the reader token mint, malformed DATABASE_URL_READ_REPLICA,
                 # and Prisma construction errors. Operator restart is required
                 # to retry read-routing once the underlying issue is resolved.
                 verbose_proxy_logger.warning(
@@ -6050,7 +6104,9 @@ class ProxyUpdateSpend:
                             batch_with_dates = [prisma_client.jsonify_object({**entry}) for entry in batch]
                             isolation_budget = MAX_SPEND_LOG_ISOLATION_FAILURES_PER_BATCH
                             for statement_rows in spend_log_write_batches(
-                                batch_with_dates, SPEND_LOG_WRITE_BATCH_MAX_BYTES
+                                batch_with_dates,
+                                SPEND_LOG_WRITE_BATCH_MAX_BYTES,
+                                SPEND_LOG_WRITE_BATCH_MAX_ROWS,
                             ):
                                 isolation_budget = await _create_spend_logs_with_poison_isolation(
                                     SpendLogsRepository(prisma_client),

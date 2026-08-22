@@ -247,12 +247,17 @@ from litellm.constants import (
     PROXY_BUDGET_RESCHEDULER_MAX_TIME,
     PROXY_BUDGET_RESCHEDULER_MIN_TIME,
     PROXY_CONFIG_RELOAD_INTERVAL_SECONDS,
+    ROUTER_MODEL_NAME_RESPONSE_FIELD,
     WEEKLY_SPEND_REPORT_JOB_ID,
 )
 from litellm.exceptions import RejectedRequestError
 from litellm.integrations.custom_guardrail import ModifyResponseException
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
+from litellm.litellm_core_utils.agentic_loop_settings import (
+    validated_max_agentic_loops,
+)
+from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.core_helpers import (
     _get_parent_otel_span_from_kwargs,
     get_litellm_metadata_from_kwargs,
@@ -2994,6 +2999,13 @@ async def _is_spend_counter_cache_warm(counter_key: str) -> bool:
     return spend_counter_cache.in_memory_cache.get_cache(key=counter_key) is not None
 
 
+async def increment_spend_counter(counter_key: str, increment: float):
+    """Public raw-counter increment for budget domains outside the entity scopes (e.g.
+    shadow eval's per-leg spend), sharing the primitive the entity counters use so
+    invalidation and read semantics can never drift."""
+    return await _increment_spend_counter_cache(counter_key=counter_key, increment=increment)
+
+
 async def _increment_spend_counter_cache(counter_key: str, increment: float):
     if spend_counter_cache.redis_cache is not None:
         try:
@@ -4070,6 +4082,27 @@ def resolve_complexity_router_plugins(
             source_label=f"complexity_router_config.classifier_plugin on model {model_name!r}",
         )
         complexity_router_config["classifier_plugin"] = resolved_classifier  # rebind-ok: out-param, resolved in place
+
+
+def validate_deployment_max_agentic_loops(model: Mapping[str, Any]) -> None:
+    """
+    Reject a per-deployment `max_agentic_loops` the agentic loop cannot honor.
+
+    Checked here rather than on `LiteLLM_Params` because the proxy builds its
+    router with `ignore_invalid_deployments=True`, so a validator down there
+    turns a bad value into a silently missing model instead of a refusal to
+    start. Left unchecked entirely, a `0` used to read as the default ceiling
+    of 3 and a non-integer failed every request to that model instead.
+    """
+    litellm_params: Final = model.get("litellm_params") or {}
+    if "max_agentic_loops" not in litellm_params:
+        return
+
+    model_name: Final = model.get("model_name", "")
+    validated_max_agentic_loops(
+        litellm_params["max_agentic_loops"],
+        field=f"litellm_params.max_agentic_loops on model {model_name!r}",
+    )
 
 
 def pin_complexity_router_model_id(model: dict) -> None:  # mutable-ok: out-param, model_info is stamped in place
@@ -5407,6 +5440,7 @@ class ProxyConfig:
                 for k, v in model["litellm_params"].items():
                     if isinstance(v, str) and v.startswith("os.environ/"):
                         model["litellm_params"][k] = get_secret(v)
+                validate_deployment_max_agentic_loops(model)
                 pin_complexity_router_model_id(model)
                 complexity_router_config = model["litellm_params"].get("complexity_router_config")
                 if isinstance(complexity_router_config, dict):
@@ -6308,7 +6342,8 @@ class ProxyConfig:
         # Schedule new job if retention period is set (not None)
         retention_period: Final = general_settings.get("maximum_spend_logs_retention_period")
         autorouter_retention: Final = general_settings.get("maximum_autorouter_session_retention_period")
-        if retention_period is not None or autorouter_retention is not None:
+        health_check_retention: Final = general_settings.get("maximum_health_check_retention_period")
+        if retention_period is not None or autorouter_retention is not None or health_check_retention is not None:
             from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import (
                 SpendLogCleanup,
             )
@@ -6461,6 +6496,13 @@ class ProxyConfig:
             new_session_value: Final = _general_settings["maximum_autorouter_session_retention_period"]
             general_settings["maximum_autorouter_session_retention_period"] = new_session_value
             if old_session_value != new_session_value:
+                await self._reschedule_spend_log_cleanup_job()
+
+        if "maximum_health_check_retention_period" in _general_settings:
+            old_health_check_value: Final = general_settings.get("maximum_health_check_retention_period")
+            new_health_check_value: Final = _general_settings["maximum_health_check_retention_period"]
+            general_settings["maximum_health_check_retention_period"] = new_health_check_value
+            if old_health_check_value != new_health_check_value:
                 await self._reschedule_spend_log_cleanup_job()
 
         ## SPEND LOG CLEANUP BOUNDS ##
@@ -6823,6 +6865,20 @@ class ProxyConfig:
 
         if self._should_load_db_object(object_type="config_overrides"):
             await self._init_hashicorp_vault_config_override(prisma_client=prisma_client)
+
+        await self._apply_safe_litellm_settings_overrides_from_db(prisma_client=prisma_client)
+
+    async def _apply_safe_litellm_settings_overrides_from_db(self, prisma_client: PrismaClient) -> None:
+        config_record: Final = await get_config_param(prisma_client, "litellm_settings")
+        if config_record is None or config_record.param_value is None:
+            return
+        raw_settings: Final = config_record.param_value
+        litellm_settings: Final = json.loads(raw_settings) if isinstance(raw_settings, str) else raw_settings
+        if not isinstance(litellm_settings, dict):
+            return
+        for key, value in litellm_settings.items():
+            if key in LITELLM_SETTINGS_SAFE_DB_OVERRIDES:
+                setattr(litellm, key, value)
 
     async def _init_semantic_filter_settings_in_db(self, prisma_client: PrismaClient):
         """
@@ -7883,6 +7939,10 @@ def _fast_serialize_simple_model_response_stream(
     for top_level_key in ("id", "object", "created"):
         if payload[top_level_key] is None:
             payload.pop(top_level_key)
+
+    router_model_name: Final = getattr(chunk, ROUTER_MODEL_NAME_RESPONSE_FIELD, None)
+    if router_model_name is not None:
+        payload[ROUTER_MODEL_NAME_RESPONSE_FIELD] = router_model_name
     return orjson.dumps(payload)
 
 
@@ -8180,6 +8240,9 @@ async def async_data_generator(
         model_mismatch_logged = False
         fallback_metadata_event_sent = False
         include_fallback_errors: Final = _should_include_fallback_errors(request_data)
+        # Fallbacks resolve on the first ``__anext__``, so the selected group is read
+        # per chunk off this object rather than snapshotted here.
+        router_logging_obj: Final = request_data.get("litellm_logging_obj")
         # Use a running string instead of list + join to avoid O(n^2) overhead.
         # Previously "".join(str_so_far_parts) was called every chunk, re-joining
         # the entire accumulated response. String += is O(n) amortized total.
@@ -8268,6 +8331,10 @@ async def async_data_generator(
                 model_mismatch_logged=model_mismatch_logged,
                 fallback_was_attempted=fallback_was_attempted,
                 fallback_model_from_metadata=fallback_model_from_metadata,
+            )
+            ProxyBaseLLMRequestProcessing.set_router_selected_model_field(
+                response_obj=chunk,
+                router_model_name=ProxyBaseLLMRequestProcessing.get_router_selected_model_name(router_logging_obj),
             )
 
             if strip_stream_usage and _is_injected_stream_usage_artifact(chunk):
@@ -8384,10 +8451,6 @@ async def async_data_generator(
         stream_completed = True
         yield f"data: {error_returned}\n\n"
     finally:
-        from litellm.proxy.common_request_processing import (
-            ProxyBaseLLMRequestProcessing,
-        )
-
         await ProxyBaseLLMRequestProcessing._finalize_streaming_generator_cleanup(
             request=request,
             request_data=request_data,
@@ -8859,6 +8922,7 @@ class ProxyStartupEvent:
                 proxy_logging_obj=proxy_logging_obj,
                 prisma_client=prisma_client,
                 reset_settings=get_budget_reset_settings(),
+                pod_lock_manager=proxy_logging_obj.db_spend_update_writer.pod_lock_manager,
             )
 
             scheduler.add_job(
@@ -9078,6 +9142,7 @@ class ProxyStartupEvent:
         if (
             general_settings.get("maximum_spend_logs_retention_period") is not None
             or general_settings.get("maximum_autorouter_session_retention_period") is not None
+            or general_settings.get("maximum_health_check_retention_period") is not None
         ):
             spend_log_cleanup: Final = SpendLogCleanup()
             cleanup_cron: Final = general_settings.get("maximum_spend_logs_cleanup_cron")
@@ -11909,8 +11974,6 @@ async def token_counter(request: TokenCountRequest, call_endpoint: bool = False)
     Returns:
         TokenCountResponse
     """
-    from litellm import token_counter
-
     global llm_router
 
     prompt: Final = request.prompt
@@ -11994,7 +12057,7 @@ async def token_counter(request: TokenCountRequest, call_endpoint: bool = False)
     _tokenizer_used: Final = litellm.utils._select_tokenizer(model=model_to_use, custom_tokenizer=custom_tokenizer)
 
     tokenizer_used: Final = str(_tokenizer_used["type"])
-    total_tokens: Final = token_counter(
+    total_tokens: Final = await asyncify(litellm.token_counter)(
         model=model_to_use,
         text=prompt,
         messages=messages,
@@ -15813,6 +15876,7 @@ _GENERAL_SETTINGS_CONFIG_LIST_FIELD_TYPES: Final[Mapping[str, str]] = MappingPro
         "store_model_in_db": "Boolean",
         "store_prompts_in_spend_logs": "Boolean",
         "maximum_spend_logs_retention_period": "String",
+        "maximum_health_check_retention_period": "String",
         "maximum_spend_logs_cleanup_batch_size": "Integer",
         "maximum_spend_logs_cleanup_max_batches": "Integer",
         "maximum_spend_logs_cleanup_run_budget": "String",
