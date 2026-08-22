@@ -617,3 +617,24 @@ async def test_message_history_looks_up_the_decoded_chat_completion_id():
         )
 
     assert fake_prisma_client.db.calls == [(request_id,)]
+
+
+@pytest.mark.asyncio
+async def test_session_lookup_does_not_retry_when_spend_logs_are_disabled(
+    instant_session_lookup_retries: None,
+):
+    """
+    A deployment that writes no spend logs has nothing to wait for, so the miss path keeps
+    the single query it always had.
+    """
+    fake_prisma_client = _FakePrismaClient(results=[])
+
+    with patch("litellm.proxy.proxy_server.prisma_client", fake_prisma_client), patch(
+        "litellm.proxy.proxy_server.disable_spend_logs", True
+    ):
+        spend_logs = await ResponsesSessionHandler.get_all_spend_logs_for_previous_response_id(
+            "chatcmpl-does-not-exist"
+        )
+
+    assert spend_logs == []
+    assert fake_prisma_client.db.calls == [("chatcmpl-does-not-exist",)]
