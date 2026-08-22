@@ -32,9 +32,10 @@ Statements inside dollar-quoted bodies are scanned too. `DO $$ ... $$` is this
 repo's idiom for conditional DDL, so a body is where an `UPDATE` would otherwise
 hide. The SQL an `EXECUTE` runs is scanned the same way, since a rewrite reads the
 same to Postgres whether it is spelled out or handed over as a string, and so is a
-literal assigned with `:=` to a variable some `EXECUTE` in the same body then runs
-by name, and so is the body of a `DO` written in single quotes rather than dollar
-quotes. A literal nothing runs is text, however much it reads like a statement, so
+literal parked in a variable some `EXECUTE` in the same body then runs by name,
+however it got there: an assignment with `:=`, the bare `=` PL/pgSQL takes as the
+same operator, or a query returning it through `INTO`. So is the body of a `DO`
+written in single quotes rather than dollar quotes. A literal nothing runs is text, however much it reads like a statement, so
 an error message naming a `DELETE` the application handles stays a message.
 
 Each literal is read on its own, so a keyword built by concatenating fragments that
@@ -91,9 +92,16 @@ DOLLAR_TAG = re.compile(r"\$(?:[A-Za-z_][A-Za-z0-9_]*)?\$")
 FIRST_WORD = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 STATEMENT = re.compile(r"[^;]+")
 RUN_BY_NAME = re.compile(r"\bEXECUTE[ \t]+([A-Za-z_][A-Za-z0-9_]*)", re.IGNORECASE)
+INTO_TARGETS = re.compile(
+    r"\bINTO[ \t]+(?:STRICT[ \t]+)?"
+    r"([A-Za-z_][A-Za-z0-9_]*(?:[ \t]*,[ \t]*[A-Za-z_][A-Za-z0-9_]*)*)",
+    re.IGNORECASE,
+)
 EXPLAIN_OPTIONS = re.compile(r"\bEXPLAIN\b(?:\s+(?:ANALYZE|ANALYSE|VERBOSE)\b)+", re.IGNORECASE)
 
 REWRITES_ROWS = frozenset({"UPDATE", "DELETE", "MERGE"})
+
+JOINS_QUERIES = ("UNION", "INTERSECT", "EXCEPT")
 
 STATEMENT_KEYWORDS = REWRITES_ROWS | frozenset(
     {
@@ -121,6 +129,10 @@ STATEMENT_KEYWORDS = REWRITES_ROWS | frozenset(
         "ANALYZE",
     }
 )
+
+GUARDS_A_CONDITION = frozenset({"IF", "ELSIF", "ELSEIF", "CASE", "WHEN", "WHILE", "EXIT", "ASSERT"})
+
+OPENS_A_BLOCK = frozenset({"BEGIN", "THEN", "ELSE", "LOOP"})
 
 GUIDANCE = """
 Migrations apply at proxy boot, before it serves traffic, so a statement whose cost
@@ -311,17 +323,21 @@ def offending_keyword(statement: str) -> str | None:
 
 def row_source_keyword(statement: str) -> str | None:
     """Which keyword supplies an `INSERT` its rows, or `None` when a literal `VALUES` list
-    does. A query outside every parenthesis is the row source outright, including one a set
-    operation joins to a `VALUES` list. Failing that, a `VALUES` outside every parenthesis
-    is itself the row source, so the scalar subqueries and helper CTEs nested within that
-    list do not make the insert a rewrite. Failing both, the rows come from a parenthesised
-    query, which Postgres accepts and which reading only the unparenthesised text would let
-    through: `INSERT INTO "t" ("a") (SELECT ...)` copies a whole table."""
+    does. A query outside every parenthesis is the row source outright. Failing that, a
+    `VALUES` outside every parenthesis is itself the row source, so the scalar subqueries
+    and helper CTEs nested within that list do not make the insert a rewrite, though only
+    while no set operation sits beside it at that same level: one that does joins the list
+    to a second query term, and that term is the row source however deeply it is
+    parenthesised. Failing both, the rows come from a parenthesised query, which Postgres
+    accepts and which reading only the unparenthesised text would let through:
+    `INSERT INTO "t" ("a") (SELECT ...)` copies a whole table."""
     outer = strip_parens(statement)
     joined = row_source_in(outer)
     if joined is not None:
         return joined
-    return None if contains(outer, "VALUES") else row_source_in(statement)
+    if contains(outer, "VALUES") and not any(contains(outer, word) for word in JOINS_QUERIES):
+        return None
+    return row_source_in(statement)
 
 
 def row_source_in(text: str) -> str | None:
@@ -339,13 +355,40 @@ def hands_off_sql(statement: str, executed: frozenset[str]) -> bool:
 
 
 def assigned_names(statement: str) -> frozenset[str]:
-    """The candidate variable names an assignment writes to, taken as every word ahead of the
-    `:=`. A declaration carries its type and sometimes a leading `DECLARE` alongside the name,
-    and none of that is worth parsing when the only question is which name is executed."""
-    head, separator, _ = statement.partition(":=")
-    if not separator:
-        return frozenset()
-    return frozenset(word.group().lower() for word in FIRST_WORD.finditer(head))
+    """The candidate variable names a statement writes to, taken as every word ahead of the
+    assignment operator. A declaration carries its type and sometimes a leading `DECLARE`
+    alongside the name, and none of that is worth parsing when the only question is which
+    name is executed. PL/pgSQL spells that operator `:=` and takes a bare `=` as the same
+    thing, so both count, the second only where `assigns_rather_than_compares` reads it as
+    an assignment. A query assigns through the target list after its `INTO` instead, which
+    is how a rewrite reaches a variable with neither operator appearing at all."""
+    names: set[str] = set()
+
+    head, operator, _ = statement.partition(":=")
+    assigns = bool(operator)
+    if not assigns:
+        head, operator, _ = statement.partition("=")
+        assigns = bool(operator) and assigns_rather_than_compares(head)
+    if assigns:
+        names.update(word.group().lower() for word in FIRST_WORD.finditer(head))
+
+    for targets in INTO_TARGETS.finditer(statement):
+        names.update(word.group().lower() for word in FIRST_WORD.finditer(targets.group(1)))
+
+    return frozenset(names)
+
+
+def assigns_rather_than_compares(head: str) -> bool:
+    """Whether the bare `=` this text runs up to writes a variable or tests one. Only the
+    words ahead of it tell the two apart: an assignment is reached with a name and perhaps a
+    type, while a comparison is reached either through a statement carrying its own keyword
+    or through a word that guards a condition. Those words stop counting once something
+    opens a block after them, since a `THEN` ends the condition its `IF` began and the
+    assignment that follows on the same line is an assignment like any other."""
+    words = [word.group().upper() for word in FIRST_WORD.finditer(head)]
+    opened = max((index for index, word in enumerate(words) if word in OPENS_A_BLOCK), default=-1)
+    reached = set(words[opened + 1 :])
+    return not (reached & STATEMENT_KEYWORDS) and not (reached & GUARDS_A_CONDITION)
 
 
 def executed_names(masked: str) -> frozenset[str]:
