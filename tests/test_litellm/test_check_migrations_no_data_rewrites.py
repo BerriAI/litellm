@@ -663,6 +663,140 @@ class TestDynamicSql:
         )
         assert _keywords(tmp_path, sql) == ()
 
+    def test_a_rewrite_compared_beside_an_assignment_is_not_run(self, tmp_path):
+        sql = (
+            "DO $$\n"
+            "DECLARE\n"
+            "    stmt text;\n"
+            "    total int := 1;\n"
+            "    ok boolean;\n"
+            "BEGIN\n"
+            "    stmt := 'CREATE INDEX IF NOT EXISTS \"ix_a\" ON \"Foo\" (\"a\")';\n"
+            "    ok := total = 1 AND stmt = 'DELETE FROM \"Foo\"';\n"
+            "    RAISE NOTICE 'purge script? %', ok;\n"
+            "    EXECUTE stmt;\n"
+            "END $$;"
+        )
+        assert _keywords(tmp_path, sql) == ()
+
+    def test_a_rewrite_named_as_an_argument_beside_an_assignment_is_not_run(self, tmp_path):
+        sql = (
+            "DO $$\n"
+            "DECLARE\n"
+            "    stmt text;\n"
+            "    ok boolean;\n"
+            "BEGIN\n"
+            "    stmt := 'CREATE INDEX IF NOT EXISTS \"ix_a\" ON \"Foo\" (\"a\")';\n"
+            "    ok := probe_match(subject => stmt, wanted => 'DELETE FROM \"Foo\"');\n"
+            "    EXECUTE stmt;\n"
+            "END $$;"
+        )
+        assert _keywords(tmp_path, sql) == ()
+
+    def test_a_rewrite_compared_after_a_wider_comparison_is_not_run(self, tmp_path):
+        sql = (
+            "DO $$\n"
+            "DECLARE\n"
+            "    stmt text;\n"
+            "    total int := 1;\n"
+            "    ok boolean;\n"
+            "BEGIN\n"
+            "    stmt := 'CREATE INDEX IF NOT EXISTS \"ix_a\" ON \"Foo\" (\"a\")';\n"
+            "    ok := total >= 1 AND stmt = 'DELETE FROM \"Foo\"';\n"
+            "    EXECUTE stmt;\n"
+            "END $$;"
+        )
+        assert _keywords(tmp_path, sql) == ()
+
+    def test_a_rewrite_assigned_through_a_case_expression_is_flagged(self, tmp_path):
+        sql = (
+            "DO $$\n"
+            "DECLARE\n"
+            "    stmt text;\n"
+            "    total int := 1;\n"
+            "BEGIN\n"
+            "    stmt := CASE WHEN total = 1 THEN 'DELETE FROM \"Foo\"' ELSE 'SELECT 1' END;\n"
+            "    EXECUTE stmt;\n"
+            "END $$;"
+        )
+        assert _keywords(tmp_path, sql) == ("DELETE",)
+
+    def test_a_query_reaching_into_past_an_execute_is_not_a_rewrite(self, tmp_path):
+        sql = (
+            "DO $$\n"
+            "DECLARE\n"
+            "    stmt text;\n"
+            "    total int;\n"
+            "BEGIN\n"
+            "    stmt := 'CREATE INDEX IF NOT EXISTS \"ix_a\" ON \"Foo\" (\"a\")';\n"
+            "    EXECUTE 'SELECT count(*) FROM \"Foo\"'\n"
+            "        INTO total;\n"
+            "    SELECT (CASE WHEN total > 0 THEN 1 ELSE 2 END) INTO total\n"
+            "        FROM \"Foo\"\n"
+            "       WHERE \"a\" = 'DELETE FROM \"Foo\"';\n"
+            "    EXECUTE stmt;\n"
+            "END $$;"
+        )
+        assert _keywords(tmp_path, sql) == ()
+
+    def test_a_query_reaching_using_past_an_execute_is_not_a_rewrite(self, tmp_path):
+        sql = (
+            "DO $$\n"
+            "DECLARE\n"
+            "    stmt text;\n"
+            "    total int;\n"
+            "BEGIN\n"
+            "    stmt := 'CREATE INDEX IF NOT EXISTS \"ix_a\" ON \"Foo\" (\"a\")';\n"
+            "    EXECUTE 'SELECT count(*) FROM \"Foo\" WHERE \"a\" = $1'\n"
+            "        USING 'k1';\n"
+            "    SELECT (CASE WHEN true THEN 1 ELSE 2 END) INTO total\n"
+            "        FROM \"Foo\" x JOIN \"Foo\" y USING (\"a\")\n"
+            "       WHERE x.\"a\" = 'DELETE FROM \"Foo\"';\n"
+            "    EXECUTE stmt;\n"
+            "END $$;"
+        )
+        assert _keywords(tmp_path, sql) == ()
+
+    def test_a_rewrite_walked_by_a_loop_is_flagged(self, tmp_path):
+        sql = (
+            "DO $$\n"
+            "DECLARE\n"
+            "    stmt text;\n"
+            "BEGIN\n"
+            "    FOR stmt IN SELECT 'DELETE FROM \"Foo\"' LOOP\n"
+            "        EXECUTE stmt;\n"
+            "    END LOOP;\n"
+            "END $$;"
+        )
+        assert _keywords(tmp_path, sql) == ("DELETE",)
+        assert _scan(tmp_path, sql)[0].line == 5
+
+    def test_a_rewrite_walked_by_a_foreach_loop_is_flagged(self, tmp_path):
+        sql = (
+            "DO $$\n"
+            "DECLARE\n"
+            "    stmt text;\n"
+            "BEGIN\n"
+            "    FOREACH stmt IN ARRAY ARRAY['UPDATE \"Foo\" SET \"a\" = 1'] LOOP\n"
+            "        EXECUTE stmt;\n"
+            "    END LOOP;\n"
+            "END $$;"
+        )
+        assert _keywords(tmp_path, sql) == ("UPDATE",)
+
+    def test_a_loop_over_a_query_running_nothing_is_inert(self, tmp_path):
+        sql = (
+            "DO $$\n"
+            "DECLARE\n"
+            "    rec record;\n"
+            "BEGIN\n"
+            "    FOR rec IN SELECT \"a\" FROM \"Foo\" LOOP\n"
+            "        RAISE NOTICE 'the DELETE FROM \"Foo\" path is the application''s: %', rec;\n"
+            "    END LOOP;\n"
+            "END $$;"
+        )
+        assert _keywords(tmp_path, sql) == ()
+
     def test_a_literal_selected_into_a_variable_nothing_runs_is_inert(self, tmp_path):
         sql = (
             "DO $$\n"
