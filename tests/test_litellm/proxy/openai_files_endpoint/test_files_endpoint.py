@@ -2523,6 +2523,70 @@ def test_unscoped_list_files_uses_managed_file_store(
     assert response.json()["data"][0]["id"] == "unified-file-id"
     managed_files.afile_list.assert_awaited_once()
     assert managed_files.afile_list.await_args.kwargs["user_api_key_dict"].user_id == "test-user"
+    assert managed_files.afile_list.await_args.kwargs["limit"] is None
+    assert managed_files.afile_list.await_args.kwargs["after"] is None
+    provider_list.assert_not_awaited()
+    proxy_logging_obj.post_call_failure_hook.assert_not_called()
+
+
+def test_unscoped_list_files_forwards_limit_and_after_to_the_managed_file_store(
+    mocker: MockerFixture, monkeypatch, llm_router: Router
+):
+    import litellm.proxy.proxy_server as ps
+    from litellm.llms.base_llm.files.transformation import BaseFileEndpoints
+    from litellm.proxy._types import LitellmUserRoles
+
+    second_page_file = OpenAIFileObject(
+        id="unified-file-id-2",
+        object="file",
+        bytes=100,
+        created_at=1700000000,
+        filename="output.jsonl",
+        purpose="batch",
+        status="processed",
+    )
+
+    proxy_logging_obj = setup_proxy_logging_object(monkeypatch, llm_router)
+    managed_files = mocker.MagicMock(spec=BaseFileEndpoints)
+    managed_files.afile_list = mocker.AsyncMock(
+        return_value={
+            "object": "list",
+            "data": [second_page_file],
+            "first_id": second_page_file.id,
+            "last_id": second_page_file.id,
+            "has_more": True,
+        }
+    )
+    proxy_logging_obj.proxy_hook_mapping["managed_files"] = managed_files
+    proxy_logging_obj.update_request_status = mocker.AsyncMock()
+    proxy_logging_obj.post_call_success_hook = mocker.AsyncMock(return_value=None)
+    proxy_logging_obj.post_call_failure_hook = mocker.AsyncMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", llm_router)
+    provider_list = mocker.patch.object(litellm, "afile_list", new=mocker.AsyncMock())
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        api_key="test-key",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="test-user",
+    )
+
+    try:
+        response = client.get(
+            "/v1/files?limit=2&after=unified-file-id-1&purpose=batch",
+            headers={"Authorization": "Bearer test-key"},
+        )
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+    assert response.status_code == 200, response.text
+    assert response.json()["data"][0]["id"] == "unified-file-id-2"
+    assert response.json()["has_more"] is True
+    call_kwargs = managed_files.afile_list.await_args.kwargs
+    assert call_kwargs["limit"] == 2
+    assert call_kwargs["after"] == "unified-file-id-1"
+    assert call_kwargs["purpose"] == "batch"
     provider_list.assert_not_awaited()
     proxy_logging_obj.post_call_failure_hook.assert_not_called()
 

@@ -242,6 +242,8 @@ class BaseFileEndpoints(ABC):
         purpose: str | None,
         litellm_parent_otel_span: Span | None,
         user_api_key_dict: UserAPIKeyAuth,
+        limit: int | None = None,
+        after: str | None = None,
         **data: dict,
     ) -> dict[str, object]:
         pass

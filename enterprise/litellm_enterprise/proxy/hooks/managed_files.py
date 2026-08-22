@@ -45,6 +45,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.openai_files_endpoints.common_utils import (
+    MAX_FILE_LIST_LIMIT,
     _is_base64_encoded_unified_file_id,
     apply_unified_file_ids,
     ensure_batch_response_managed_file_ids,
@@ -54,6 +55,7 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
     map_raw_file_ids_to_unified,
     normalize_mime_type_for_provider,
     resolve_managed_output_file_model_name,
+    validate_file_list_limit,
 )
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.batch_attribution import (
     request_tags_from_metadata,
@@ -144,7 +146,14 @@ class _ManagedFileRow(Protocol):
 class _ManagedFileTableActions(Protocol):
     async def find_first(self, where: Mapping[str, object]) -> Optional[_ManagedFileRow]: ...
 
-    async def find_many(self, where: Mapping[str, object]) -> Sequence[_ManagedFileRow]: ...
+    async def find_many(
+        self,
+        where: Mapping[str, object],
+        take: int = ...,
+        order: Union[Mapping[str, str], Sequence[Mapping[str, str]]] = ...,
+        cursor: Mapping[str, str] = ...,
+        skip: int = ...,
+    ) -> Sequence[_ManagedFileRow]: ...
 
     async def upsert(self, where: Mapping[str, str], data: Mapping[str, Mapping[str, object]]) -> _ManagedFileRow: ...
 
@@ -1365,23 +1374,56 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
 
     async def afile_list(
         self,
-        purpose: str | None,
+        purpose: Optional[str],
         litellm_parent_otel_span: Optional[Span],
         user_api_key_dict: UserAPIKeyAuth,
+        limit: Optional[int] = None,
+        after: Optional[str] = None,
         **data: Dict,
     ) -> Dict[str, object]:
+        """List the managed files the caller owns, newest first.
+
+        Pagination is keyset based on ``unified_file_id`` so a key that owns
+        every file on the proxy still reads one bounded page at a time.
+        ``purpose`` is applied after parsing because the managed file table
+        keeps it inside the ``file_object`` blob instead of a column.
+        """
+        validate_file_list_limit(limit)
+        if limit == 0:
+            return build_list_page([])
+
         owner_filter: Final = build_owner_filter(user_api_key_dict)
         if owner_filter is None:
             return build_list_page([])
 
-        rows: Final = await _managed_file_table(self.prisma_client).find_many(where=owner_filter)
+        if after:
+            cursor_row = await _managed_file_table(self.prisma_client).find_first(
+                where={**owner_filter, "unified_file_id": after}
+            )
+            if cursor_row is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid 'after' cursor: no file found with id '{after}'.",
+                )
+
+        page_size: Final = min(limit or MAX_FILE_LIST_LIMIT, MAX_FILE_LIST_LIMIT)
+        cursor_args: _CursorPageArgs = {"cursor": {"unified_file_id": after}, "skip": 1} if after else {}
+
+        rows: Final = await _managed_file_table(self.prisma_client).find_many(
+            where=owner_filter,
+            take=page_size + 1,
+            order=[{"created_at": "desc"}, {"unified_file_id": "desc"}],
+            **cursor_args,
+        )
+        has_more: Final = len(rows) > page_size
+
         files: Final = [
             parsed_file_object.model_copy(update={"id": row.unified_file_id})
-            for row in rows
+            for row in rows[:page_size]
             if (parsed_file_object := _parse_managed_file_object(row.file_object, row.unified_file_id)) is not None
             and (purpose is None or parsed_file_object.purpose == purpose)
         ]
-        return build_list_page(files)
+        return build_list_page(files, has_more=has_more)
 
     def _is_batch_polling_enabled(self) -> bool:
         """

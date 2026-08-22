@@ -66,6 +66,62 @@ def _make_user_api_key_dict() -> UserAPIKeyAuth:
     )
 
 
+def _make_managed_file_row(
+    unified_file_id: str,
+    purpose: str = "batch_output",
+    created_by: str = "test-user",
+) -> MagicMock:
+    file_object = _make_file_object(f"file-provider-{unified_file_id}").model_copy(
+        update={"purpose": purpose}
+    )
+    return MagicMock(
+        unified_file_id=unified_file_id,
+        file_object=file_object.model_dump(),
+        created_by=created_by,
+    )
+
+
+class _FakeManagedFileTable:
+    """In-memory stand-in for the managed file table, newest row first."""
+
+    def __init__(self, rows):
+        self.rows = list(rows)
+        self.find_many_calls = []
+        self.find_first_calls = []
+
+    def _owned_rows(self, where):
+        created_by = where.get("created_by")
+        return [row for row in self.rows if created_by is None or row.created_by == created_by]
+
+    async def find_first(self, where):
+        self.find_first_calls.append(where)
+        return next(
+            (row for row in self._owned_rows(where) if row.unified_file_id == where.get("unified_file_id")),
+            None,
+        )
+
+    async def find_many(self, where, take=None, order=None, cursor=None, skip=0):
+        self.find_many_calls.append(
+            {"where": where, "take": take, "order": order, "cursor": cursor, "skip": skip}
+        )
+        rows = self._owned_rows(where)
+        if cursor is not None:
+            start = next(
+                index
+                for index, row in enumerate(rows)
+                if row.unified_file_id == cursor["unified_file_id"]
+            )
+            rows = rows[start + skip :]
+        return rows if take is None else rows[:take]
+
+
+def _make_managed_files_over_rows(rows):
+    managed_files = _make_managed_files_instance()
+    table = _FakeManagedFileTable(rows)
+    managed_files.prisma_client.db.litellm_managedfiletable = table
+    return managed_files, table
+
+
 def _make_managed_files_instance():
     """Create a _PROXY_LiteLLMManagedFiles with storage methods mocked out."""
     from litellm_enterprise.proxy.hooks.managed_files import (
@@ -215,12 +271,176 @@ async def test_afile_list_returns_owner_scoped_managed_files():
     )
 
     managed_files.prisma_client.db.litellm_managedfiletable.find_many.assert_awaited_once_with(
-        where={"created_by": "test-user"}
+        where={"created_by": "test-user"},
+        take=10001,
+        order=[{"created_at": "desc"}, {"unified_file_id": "desc"}],
     )
     assert [file.id for file in response["data"]] == ["unified-file-id"]
     assert response["first_id"] == "unified-file-id"
     assert response["last_id"] == "unified-file-id"
     assert response["has_more"] is False
+
+
+@pytest.mark.asyncio
+async def test_afile_list_does_not_leak_another_callers_files():
+    managed_files, table = _make_managed_files_over_rows(
+        [
+            _make_managed_file_row("unified-mine-2"),
+            _make_managed_file_row("unified-theirs", created_by="other-user"),
+            _make_managed_file_row("unified-mine-1"),
+        ]
+    )
+
+    response = await managed_files.afile_list(
+        purpose=None,
+        litellm_parent_otel_span=None,
+        user_api_key_dict=_make_user_api_key_dict(),
+    )
+
+    assert [file.id for file in response["data"]] == ["unified-mine-2", "unified-mine-1"]
+    assert table.find_many_calls[0]["where"] == {"created_by": "test-user"}
+
+
+@pytest.mark.asyncio
+async def test_afile_list_denies_a_caller_without_a_user_or_team():
+    managed_files, table = _make_managed_files_over_rows([_make_managed_file_row("unified-mine")])
+
+    response = await managed_files.afile_list(
+        purpose=None,
+        litellm_parent_otel_span=None,
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", parent_otel_span=None),
+    )
+
+    assert response["data"] == []
+    assert response["has_more"] is False
+    assert table.find_many_calls == []
+
+
+@pytest.mark.asyncio
+async def test_afile_list_filters_by_purpose():
+    managed_files, _ = _make_managed_files_over_rows(
+        [
+            _make_managed_file_row("unified-batch-output"),
+            _make_managed_file_row("unified-batch", purpose="batch"),
+        ]
+    )
+
+    response = await managed_files.afile_list(
+        purpose="batch",
+        litellm_parent_otel_span=None,
+        user_api_key_dict=_make_user_api_key_dict(),
+    )
+
+    assert [file.id for file in response["data"]] == ["unified-batch"]
+
+
+@pytest.mark.asyncio
+async def test_afile_list_honors_limit_and_reports_more_pages():
+    managed_files, table = _make_managed_files_over_rows(
+        [_make_managed_file_row(f"unified-{index}") for index in range(5)]
+    )
+
+    response = await managed_files.afile_list(
+        purpose=None,
+        litellm_parent_otel_span=None,
+        user_api_key_dict=_make_user_api_key_dict(),
+        limit=2,
+    )
+
+    assert [file.id for file in response["data"]] == ["unified-0", "unified-1"]
+    assert response["has_more"] is True
+    assert table.find_many_calls[0]["take"] == 3
+
+
+@pytest.mark.asyncio
+async def test_afile_list_pages_through_every_file_without_overlap():
+    managed_files, table = _make_managed_files_over_rows(
+        [_make_managed_file_row(f"unified-{index}") for index in range(5)]
+    )
+    user_api_key_dict = _make_user_api_key_dict()
+
+    seen = []
+    after = None
+    while True:
+        page = await managed_files.afile_list(
+            purpose=None,
+            litellm_parent_otel_span=None,
+            user_api_key_dict=user_api_key_dict,
+            limit=2,
+            after=after,
+        )
+        page_ids = [file.id for file in page["data"]]
+        assert not set(page_ids) & set(seen)
+        seen.extend(page_ids)
+        if not page["has_more"]:
+            break
+        after = page["last_id"]
+
+    assert seen == [f"unified-{index}" for index in range(5)]
+    assert table.find_many_calls[1]["cursor"] == {"unified_file_id": "unified-1"}
+    assert table.find_many_calls[1]["skip"] == 1
+
+
+@pytest.mark.asyncio
+async def test_afile_list_rejects_an_after_cursor_outside_the_callers_files():
+    from fastapi import HTTPException
+
+    managed_files, table = _make_managed_files_over_rows(
+        [
+            _make_managed_file_row("unified-mine"),
+            _make_managed_file_row("unified-theirs", created_by="other-user"),
+        ]
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await managed_files.afile_list(
+            purpose=None,
+            litellm_parent_otel_span=None,
+            user_api_key_dict=_make_user_api_key_dict(),
+            after="unified-theirs",
+        )
+
+    assert exc_info.value.status_code == 400
+    assert table.find_first_calls[0] == {
+        "created_by": "test-user",
+        "unified_file_id": "unified-theirs",
+    }
+    assert table.find_many_calls == []
+
+
+@pytest.mark.asyncio
+async def test_afile_list_rejects_a_limit_above_the_openai_maximum():
+    from litellm.proxy._types import ProxyException
+
+    managed_files, table = _make_managed_files_over_rows([_make_managed_file_row("unified-mine")])
+
+    with pytest.raises(ProxyException) as exc_info:
+        await managed_files.afile_list(
+            purpose=None,
+            litellm_parent_otel_span=None,
+            user_api_key_dict=_make_user_api_key_dict(),
+            limit=10001,
+        )
+
+    assert exc_info.value.code == "400"
+    assert exc_info.value.param == "limit"
+    assert table.find_many_calls == []
+
+
+@pytest.mark.asyncio
+async def test_afile_list_returns_an_empty_page_for_a_zero_limit():
+    managed_files, table = _make_managed_files_over_rows([_make_managed_file_row("unified-mine")])
+
+    response = await managed_files.afile_list(
+        purpose=None,
+        litellm_parent_otel_span=None,
+        user_api_key_dict=_make_user_api_key_dict(),
+        limit=0,
+    )
+
+    assert response["data"] == []
+    assert response["has_more"] is False
+    assert table.find_many_calls == []
 
 
 @pytest.mark.asyncio

@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, Optional, Protocol, runtime_checkable
 
+from litellm.proxy._types import ProxyException
 from litellm.repositories.table_repositories import (
     ManagedFileRepository,
     ManagedObjectRepository,
@@ -20,6 +21,27 @@ if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
     from litellm.router import Router
     from litellm.types.utils import LiteLLMBatch
+
+
+MAX_FILE_LIST_LIMIT: Final = 10000
+
+
+def validate_file_list_limit(limit: int | None) -> None:
+    """Reject a ``limit`` outside the range OpenAI documents for GET /v1/files."""
+    if limit is None or 0 <= limit <= MAX_FILE_LIST_LIMIT:
+        return
+    bound, expected, openai_code = (
+        ("below minimum", ">= 0", "integer_below_min_value")
+        if limit < 0
+        else ("above maximum", f"<= {MAX_FILE_LIST_LIMIT}", "integer_above_max_value")
+    )
+    raise ProxyException(
+        message=f"Invalid 'limit': integer {bound} value. Expected a value {expected}, but got {limit} instead.",
+        type="invalid_request_error",
+        param="limit",
+        code=400,
+        openai_code=openai_code,
+    )
 
 
 @runtime_checkable
