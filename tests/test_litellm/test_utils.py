@@ -1,16 +1,12 @@
 import json
 import logging
 import os
-import sys
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from jsonschema import validate
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 
 import litellm
 from litellm._logging import (

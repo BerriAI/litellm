@@ -1,12 +1,10 @@
 import json
 import os
-import sys
 
 import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-sys.path.insert(0, os.path.abspath("../../../../.."))
 
 from unittest.mock import AsyncMock, MagicMock, patch
 

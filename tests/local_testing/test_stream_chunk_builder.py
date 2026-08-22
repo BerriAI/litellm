@@ -1,6 +1,5 @@
 import asyncio
 import os
-import sys
 import time
 import traceback
 
@@ -18,10 +17,6 @@ def check_non_streaming_response(response):
     assert len(response.choices[0].message.audio.data) > 0, "Audio data is empty"
 
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
-import os
 
 import dotenv
 from openai import OpenAI

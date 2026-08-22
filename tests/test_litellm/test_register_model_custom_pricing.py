@@ -11,13 +11,9 @@ calculations for DB-sourced models with prompt caching pricing.
 
 import copy
 import os
-import sys
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 
 import litellm
 from litellm.main import _build_custom_pricing_entry

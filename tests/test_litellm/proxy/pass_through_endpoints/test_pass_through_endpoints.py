@@ -2,7 +2,6 @@ import asyncio
 import json
 import logging
 import os
-import sys
 from contextlib import ExitStack, contextmanager
 from io import BytesIO
 from types import SimpleNamespace
@@ -15,7 +14,6 @@ from fastapi import Request, UploadFile
 from starlette.datastructures import FormData, Headers, QueryParams
 from starlette.datastructures import UploadFile as StarletteUploadFile
 
-sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system path
 
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     DEFAULT_PASS_THROUGH_REQUEST_TIMEOUT_SECONDS,

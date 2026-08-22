@@ -1,13 +1,8 @@
 import asyncio
 import copy
 import json
-import os
 import re
-import sys
 
-sys.path.insert(
-    0, os.path.abspath("../../../..")
-)  # Adds the parent directory to the system path
 
 
 from collections.abc import Callable

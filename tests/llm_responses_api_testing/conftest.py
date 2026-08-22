@@ -2,14 +2,9 @@
 
 import asyncio
 import importlib
-import os
-import sys
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 
 import litellm  # noqa: E402
 
@@ -77,9 +72,6 @@ def setup_and_teardown():
     """
     This fixture reloads litellm before every function. To speed up testing by removing callbacks being chained.
     """
-    sys.path.insert(
-        0, os.path.abspath("../..")
-    )  # Adds the project directory to the system path
 
 
     importlib.reload(litellm)
