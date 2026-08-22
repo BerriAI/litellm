@@ -2157,6 +2157,10 @@ class PrometheusLogger(CustomLogger):
         limit is removed would keep publishing the last remaining/limit
         values it ever saw, and alerts would evaluate against a number no
         longer being enforced.
+
+        Superseded aliases are swept on both paths, because a team can be
+        renamed and then have its limit removed before it sends another
+        limited request, which would otherwise strand the pre-rename series.
         """
         labelnames: Final = self.get_labels_for_metric(metric_name)
         if UserAPIKeyLabelNames.TEAM.value not in labelnames:
@@ -2172,8 +2176,8 @@ class PrometheusLogger(CustomLogger):
             label_context=label_context,
         )
         label_values: Final = tuple(labels.get(name, "") for name in labelnames)
+        self._drop_superseded_team_series(gauge=gauge, labelnames=labelnames, labels=labels)
         if value is not None:
-            self._drop_superseded_team_series(gauge=gauge, labelnames=labelnames, labels=labels)
             gauge.labels(*label_values).set(value)
             return
 

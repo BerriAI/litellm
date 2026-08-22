@@ -445,3 +445,29 @@ def test_excluded_labels_never_reach_team_gauge_labelnames():
         labelnames = logger.get_labels_for_metric(metric_name)
         assert not frozenset(labelnames) & logger.exclude_labels
         assert "team" in labelnames
+
+
+def test_retires_the_old_alias_when_the_limit_is_removed_after_a_rename():
+    """
+    A team can be renamed and then have its limit removed before it sends
+    another limited request. The removal path only knows the current
+    labelset, so without sweeping superseded aliases on that path too, the
+    pre-rename series would stay published forever.
+    """
+    registry = CollectorRegistry()
+    gauge = Gauge("litellm_team_rpm_limit", "doc", labelnames=list(ORIGINAL_LABELNAMES), registry=registry)
+    logger = _logger_with_real_gauge("litellm_team_rpm_limit", gauge)
+
+    _set_team_metrics(logger, _payload_with_headers({"x-ratelimit-model_per_team-limit-requests": 60}))
+    assert registry.get_sample_value("litellm_team_rpm_limit", TEAM_LABELS) == 60
+
+    logger._set_team_rate_limit_metrics(
+        user_api_team="team-abc",
+        user_api_team_alias="ml-research",
+        model_group="gpt-4o-mini",
+        standard_logging_payload=_payload_with_headers({}),
+    )
+
+    assert registry.get_sample_value("litellm_team_rpm_limit", TEAM_LABELS) is None
+    renamed = {**TEAM_LABELS, "team_alias": "ml-research"}
+    assert registry.get_sample_value("litellm_team_rpm_limit", renamed) is None
