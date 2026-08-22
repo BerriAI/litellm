@@ -76,10 +76,44 @@ class AmazonDeepSeekR1Config(AmazonLlamaConfig):
         return response
 
 
+_END_OF_THINKING: Final = "</think>"
+
+
 class AmazonDeepseekR1ResponseIterator(BaseModelResponseIterator):
     def __init__(self, streaming_response: Any, sync_stream: bool) -> None:
         super().__init__(streaming_response=streaming_response, sync_stream=sync_stream)
         self.has_finished_thinking = False
+        self.held_back = ""
+
+    def _split_on_end_of_thinking(self, generated_content: str, is_last_chunk: bool) -> tuple[str, str]:
+        """Split a chunk of the thinking phase into (reasoning, content).
+
+        ``</think>`` is not guaranteed to arrive as a chunk of its own: it can be glued to the
+        text on either side, or split across chunks. Matching the whole marker against one chunk
+        misses both, leaving every later chunk filed as reasoning and ``content`` empty for the
+        entire turn. Text that could still be the start of the marker is held back until the next
+        chunk decides it, and released if the stream ends first.
+        """
+        buffered: Final = self.held_back + generated_content
+        reasoning, marker, content = buffered.partition(_END_OF_THINKING)
+        if marker:
+            verbose_logger.debug("Deepseek r1: </think> received, setting has_finished_thinking to True")
+            self.has_finished_thinking = True
+            self.held_back = ""
+            return reasoning, content
+        if is_last_chunk:
+            self.held_back = ""
+            return buffered, ""
+        partial: Final = next(
+            (
+                length
+                for length in range(min(len(buffered), len(_END_OF_THINKING) - 1), 0, -1)
+                if buffered.endswith(_END_OF_THINKING[:length])
+            ),
+            0,
+        )
+        self.held_back = buffered[len(buffered) - partial :] if partial else ""
+        return buffered[: len(buffered) - partial] if partial else buffered, ""
 
     def chunk_parser(self, chunk: dict) -> ModelResponseStream:
         """
@@ -88,10 +122,11 @@ class AmazonDeepseekR1ResponseIterator(BaseModelResponseIterator):
         try:
             typed_chunk: Final = AmazonDeepSeekR1StreamingResponse(**chunk)
             generated_content = typed_chunk["generation"]
-            if generated_content == "</think>" and not self.has_finished_thinking:
-                verbose_logger.debug("Deepseek r1: </think> received, setting has_finished_thinking to True")
-                generated_content = ""
-                self.has_finished_thinking = True
+            reasoning_delta: str = ""
+            if not self.has_finished_thinking:
+                reasoning_delta, generated_content = self._split_on_end_of_thinking(
+                    generated_content, is_last_chunk=typed_chunk["stop_reason"] is not None
+                )
 
             prompt_token_count: Final = typed_chunk.get("prompt_token_count") or 0
             generation_token_count: Final = typed_chunk.get("generation_token_count") or 0
@@ -106,8 +141,8 @@ class AmazonDeepseekR1ResponseIterator(BaseModelResponseIterator):
                     StreamingChoices(
                         finish_reason=typed_chunk["stop_reason"],
                         delta=Delta(
-                            content=(generated_content if self.has_finished_thinking else None),
-                            reasoning_content=(generated_content if not self.has_finished_thinking else None),
+                            content=generated_content if self.has_finished_thinking else None,
+                            reasoning_content=reasoning_delta or None,
                         ),
                     )
                 ],
