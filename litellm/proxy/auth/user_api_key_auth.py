@@ -49,6 +49,7 @@ from litellm.proxy.auth.auth_checks import (
     common_checks,
     get_end_user_object,
     get_jwt_key_mapping_object,
+    get_object_permission,
     get_project_object,
     get_team_object,
     get_user_object,
@@ -1142,6 +1143,31 @@ async def _record_unparsable_body_failure(
         verbose_proxy_logger.exception("Failed to log the request rejected for an unparsable body: %s", e)
 
 
+async def _resolve_object_permission_for_unresolvable_team(
+    object_permission_id: str | None,
+    prisma_client: PrismaClient | None,
+    user_api_key_cache: UserApiKeyCache,
+    parent_otel_span: Span | None,
+    proxy_logging_obj: ProxyLogging,
+) -> LiteLLM_ObjectPermissionTable | None:
+    """Resolve a team's object permission by id when the team row itself cannot be read.
+
+    The token-derived team fallback reconstructs the team from the token's own cached
+    fields, which carry the object_permission id but not the resolved row. Leaving it
+    unset would silently drop any vector-store/MCP restriction the team carried,
+    granting more than the token's own object_permission_id vouches for.
+    """
+    if object_permission_id is None or prisma_client is None:
+        return None
+    return await get_object_permission(
+        object_permission_id=object_permission_id,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        parent_otel_span=parent_otel_span,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+
+
 async def _user_api_key_auth_builder(
     request: Request,
     api_key: str,
@@ -2114,6 +2140,13 @@ async def _user_api_key_auth_builder(
                         models=valid_token.team_models,
                         metadata=valid_token.team_metadata,
                         object_permission_id=valid_token.team_object_permission_id,
+                        object_permission=await _resolve_object_permission_for_unresolvable_team(
+                            object_permission_id=valid_token.team_object_permission_id,
+                            prisma_client=prisma_client,
+                            user_api_key_cache=user_api_key_cache,
+                            parent_otel_span=parent_otel_span,
+                            proxy_logging_obj=proxy_logging_obj,
+                        ),
                     )
             else:
                 _team_obj = None
