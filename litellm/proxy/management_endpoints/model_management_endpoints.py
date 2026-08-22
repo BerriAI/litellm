@@ -49,12 +49,16 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
 from litellm.proxy.common_utils.config_sync_pubsub import (
     coordination_redis_cache,
     publish_config_change,
 )
 from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
-from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.proxy.common_utils.user_api_key_cache import (
+    UserApiKeyCache,
+    team_model_aliases_cache_key,
+)
 from litellm.proxy.management_endpoints.common_utils import _is_user_team_admin
 from litellm.proxy.management_endpoints.team_endpoints import (
     _refresh_cached_team,
@@ -1260,6 +1264,7 @@ async def _remove_unbacked_team_models(
         else await delete_team_model_alias(
             public_model_name=model_params.model_name,
             prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
         )
     )
     removed_alias_names: Final = {alias for alias_team_id, alias in removed_model_aliases if alias_team_id == team_id}
@@ -1625,6 +1630,7 @@ async def delete_model(
 async def delete_team_model_alias(
     public_model_name: str,
     prisma_client: PrismaClient,
+    user_api_key_cache: UserApiKeyCache,
 ) -> list[tuple[str, str]]:
     """
     Delete a team model alias
@@ -1635,6 +1641,11 @@ async def delete_team_model_alias(
     - List of team id + model alias pairs that were removed
     """
     team_model_aliases: Final = await _model_alias_table(prisma_client).find_many(include={"team": True})
+    alias_cache_keys: Final = tuple(
+        team_model_aliases_cache_key(team_model_alias.id)
+        for team_model_alias in team_model_aliases
+        if public_model_name in team_model_alias.model_aliases.values()
+    )
     tasks: Final = []
     removed_model_aliases: Final[list[tuple[str, str]]] = []
     for team_model_alias in team_model_aliases:
@@ -1653,6 +1664,7 @@ async def delete_team_model_alias(
                 )
             )
     await asyncio.gather(*tasks)
+    await evict_and_broadcast(alias_cache_keys, user_api_key_cache)
 
     return removed_model_aliases
 

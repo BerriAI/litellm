@@ -148,6 +148,10 @@ class UserApiKeyCache(DualCache):
         return await super().async_set_cache_pipeline(cache_list=normalized, local_only=local_only, **kwargs)
 
 
+def team_model_aliases_cache_key(model_id: int) -> str:
+    return f"team_model_aliases:{model_id}"
+
+
 #: Value cached under ``user_object_permission_id_cache_key`` when the user links no permission row,
 #: so a human without an entitlement costs no DB read per request. Lives beside the key builder
 #: because it is part of the same cache protocol: a reader that knows the key must know this value.

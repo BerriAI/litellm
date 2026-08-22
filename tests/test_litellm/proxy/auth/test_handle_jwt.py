@@ -5215,6 +5215,44 @@ async def test_find_team_with_model_access_defers_no_team_403_under_db_fallback(
     assert team_object is None
 
 
+@pytest.mark.asyncio
+async def test_find_team_with_model_access_loads_aliases_before_restricted_team_selection():
+    team = LiteLLM_TeamTable(
+        team_id="alias-team",
+        models=["FW-Kimi-K3"],
+        model_id=1,
+    )
+    jwt_handler = JWTHandler()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(enforce_team_based_model_access=True)
+
+    with (
+        patch(
+            "litellm.proxy.auth.handle_jwt.get_team_object",
+            new_callable=AsyncMock,
+            return_value=team,
+        ),
+        patch(
+            "litellm.proxy.auth.handle_jwt.get_team_model_aliases_for_team",
+            new_callable=AsyncMock,
+            return_value={"claude-opus-5": "FW-Kimi-K3"},
+        ) as mock_get_aliases,
+    ):
+        team_id, team_object = await JWTAuthManager.find_team_with_model_access(
+            team_ids={team.team_id},
+            requested_model="claude-opus-5",
+            route="/chat/completions",
+            jwt_handler=jwt_handler,
+            prisma_client=MagicMock(),
+            user_api_key_cache=MagicMock(),
+            parent_otel_span=None,
+            proxy_logging_obj=MagicMock(),
+        )
+
+    assert team_id == team.team_id
+    assert team_object is team
+    mock_get_aliases.assert_awaited_once()
+
+
 def _db_fallback_handler(litellm_jwtauth: Optional[LiteLLM_JWTAuth] = None) -> JWTHandler:
     handler = JWTHandler()
     handler.litellm_jwtauth = litellm_jwtauth or LiteLLM_JWTAuth()
@@ -5552,6 +5590,51 @@ async def test_resolve_db_team_fallback_skips_team_without_model_access():
 
     assert team_id == "allowed_team"
     assert team_object is teams["allowed_team"]
+
+
+@pytest.mark.asyncio
+async def test_resolve_db_team_fallback_loads_aliases_before_restricted_team_selection():
+    team = LiteLLM_TeamTable(
+        team_id="alias-team",
+        models=["FW-Kimi-K3"],
+        model_id=1,
+    )
+    user_object = LiteLLM_UserTable(
+        user_id="alias-user",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        teams=[team.team_id],
+    )
+
+    with (
+        patch(
+            "litellm.proxy.auth.handle_jwt.get_team_object",
+            new_callable=AsyncMock,
+            return_value=team,
+        ),
+        patch(
+            "litellm.proxy.auth.handle_jwt.get_team_model_aliases_for_team",
+            new_callable=AsyncMock,
+            return_value={"claude-opus-5": "FW-Kimi-K3"},
+        ) as mock_get_aliases,
+    ):
+        team_id, team_object, membership = await JWTAuthManager._resolve_db_team_fallback(
+            user_object=user_object,
+            user_id=None,
+            requested_model="claude-opus-5",
+            route="/chat/completions",
+            jwt_handler=_db_fallback_handler(),
+            enforce_team_based_model_access=True,
+            team_id_upsert=False,
+            prisma_client=MagicMock(),
+            user_api_key_cache=MagicMock(),
+            parent_otel_span=None,
+            proxy_logging_obj=MagicMock(),
+        )
+
+    assert team_id == team.team_id
+    assert team_object is team
+    assert membership is None
+    mock_get_aliases.assert_awaited_once()
 
 
 @pytest.mark.asyncio

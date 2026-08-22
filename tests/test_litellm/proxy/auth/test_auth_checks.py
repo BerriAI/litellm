@@ -51,6 +51,7 @@ from litellm.proxy.auth.auth_checks import (
     _virtual_key_max_budget_check,
     _virtual_key_soft_budget_check,
     get_key_object,
+    get_team_model_aliases_for_team,
     get_user_object,
     vector_store_access_check,
 )
@@ -1317,6 +1318,46 @@ async def test_get_team_db_check_does_not_call_new_team_if_exists(
 
     # Verify that `new_team` was NEVER called, because the team was found.
     mock_new_team.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_team_model_aliases_for_team_guards_incomplete_context_and_delegates():
+    cache = UserApiKeyCache()
+    prisma_client = MagicMock()
+    team_without_model_id = LiteLLM_TeamTable(team_id="plain-team")
+    team_with_model_id = LiteLLM_TeamTable(team_id="alias-team", model_id=7)
+
+    with patch(
+        "litellm.proxy.auth.auth_checks.get_team_model_aliases",
+        new_callable=AsyncMock,
+        return_value={"requested": "target"},
+    ) as mock_loader:
+        for team_object, client in (
+            (None, prisma_client),
+            (team_without_model_id, prisma_client),
+            (team_with_model_id, None),
+        ):
+            assert (
+                await get_team_model_aliases_for_team(
+                    team_object=team_object,
+                    prisma_client=client,
+                    user_api_key_cache=cache,
+                )
+                is None
+            )
+
+        result = await get_team_model_aliases_for_team(
+            team_object=team_with_model_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=cache,
+        )
+
+    assert result == {"requested": "target"}
+    mock_loader.assert_awaited_once_with(
+        model_id=7,
+        prisma_client=prisma_client,
+        user_api_key_cache=cache,
+    )
 
 
 # Vector Store Auth Check Tests
