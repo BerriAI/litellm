@@ -2836,7 +2836,10 @@ def _priced_at(prompt_tokens, completion_tokens):
 
 @pytest.fixture
 def local_cost_map(monkeypatch):
+    """The prices these tests assert are the checked-in ones. Setting the environment
+    variable alone does not reload the map, so pin the map itself."""
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
 
 
 def test_a_streamed_response_bills_the_usage_the_provider_reported(local_cost_map):
