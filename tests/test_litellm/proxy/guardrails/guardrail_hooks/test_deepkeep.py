@@ -17,14 +17,14 @@ from litellm.proxy.guardrails.init_guardrails import init_guardrails_v2
 from litellm.exceptions import GuardrailRaisedException
 
 
-def test_deepkeep_guard_config():
+def test_deepkeep_guard_config(monkeypatch):
     """Test DeepKeep guard configuration with init_guardrails_v2."""
     litellm.set_verbose = True
     litellm.guardrail_name_config_map = {}
 
-    os.environ["DEEPKEEP_API_KEY"] = "test-key"
-    os.environ["DEEPKEEP_API_BASE"] = "https://test.deepkeep.ai"
-    os.environ["DEEPKEEP_FIREWALL_ID"] = "fw-123"
+    monkeypatch.setenv("DEEPKEEP_API_KEY", "test-key")
+    monkeypatch.setenv("DEEPKEEP_API_BASE", "https://test.deepkeep.ai")
+    monkeypatch.setenv("DEEPKEEP_FIREWALL_ID", "fw-123")
 
     init_guardrails_v2(
         all_guardrails=[
@@ -108,11 +108,11 @@ class TestDeepKeepGuardrail:
             == "https://test.deepkeep.ai/v3/openai/beta/litellm_basic_guardrail_api"
         )
 
-    def test_initialization_with_env_vars(self):
+    def test_initialization_with_env_vars(self, monkeypatch):
         """should initialize successfully using environment variables."""
-        os.environ["DEEPKEEP_API_KEY"] = "env-key"
-        os.environ["DEEPKEEP_API_BASE"] = "https://env.deepkeep.ai"
-        os.environ["DEEPKEEP_FIREWALL_ID"] = "fw-env-456"
+        monkeypatch.setenv("DEEPKEEP_API_KEY", "env-key")
+        monkeypatch.setenv("DEEPKEEP_API_BASE", "https://env.deepkeep.ai")
+        monkeypatch.setenv("DEEPKEEP_FIREWALL_ID", "fw-env-456")
 
         guardrail = DeepKeepGuardrail(
             guardrail_name="deepkeep-env-test",

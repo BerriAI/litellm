@@ -51,11 +51,11 @@ def test_zai_in_provider_lists():
     assert "zai" in litellm.provider_list
 
 
-def test_zai_models_in_model_cost():
+def test_zai_models_in_model_cost(monkeypatch):
     """Test that ZAI models are in the model cost map"""
     import os
 
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
     zai_models = [
@@ -75,11 +75,11 @@ def test_zai_models_in_model_cost():
         assert litellm.model_cost[model]["litellm_provider"] == "zai"
 
 
-def test_zai_glm46_cost_calculation():
+def test_zai_glm46_cost_calculation(monkeypatch):
     """Test the cost calculation for glm-4.6"""
     import os
 
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
     key = "zai/glm-4.6"
@@ -96,11 +96,11 @@ def test_zai_glm46_cost_calculation():
     assert math.isclose(completion_cost, 2.2, rel_tol=1e-6)
 
 
-def test_zai_flash_model_is_free():
+def test_zai_flash_model_is_free(monkeypatch):
     """Test that glm-4.5-flash has zero cost"""
     import os
 
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
     key = "zai/glm-4.5-flash"
@@ -110,11 +110,11 @@ def test_zai_flash_model_is_free():
     assert info["output_cost_per_token"] == 0
 
 
-def test_glm47_supports_reasoning():
+def test_glm47_supports_reasoning(monkeypatch):
     """Test that GLM-4.7 supports reasoning"""
     import os
 
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
     key = "zai/glm-4.7"
@@ -124,11 +124,11 @@ def test_glm47_supports_reasoning():
     assert info["supports_reasoning"] is True
 
 
-def test_glm47_cost_calculation():
+def test_glm47_cost_calculation(monkeypatch):
     """Test cost calculation for GLM-4.7"""
     import os
 
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
     prompt_cost, completion_cost = cost_per_token(

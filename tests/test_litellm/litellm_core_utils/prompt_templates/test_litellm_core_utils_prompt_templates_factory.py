@@ -2844,7 +2844,7 @@ def test_anthropic_messages_pt_file_block_preserves_cache_control():
     assert text_block["cache_control"]["type"] == "ephemeral"
 
 
-def test_add_cache_point_tool_block_passes_ttl_for_claude_4_5():
+def test_add_cache_point_tool_block_passes_ttl_for_claude_4_5(monkeypatch):
     """
     Tools with cache_control ttl should preserve the ttl in the cachePoint
     block for Claude 4.5+ models on Bedrock, matching the behavior of system
@@ -2867,7 +2867,7 @@ def test_add_cache_point_tool_block_passes_ttl_for_claude_4_5():
 
     old_env = os.environ.get("LITELLM_LOCAL_MODEL_COST_MAP")
     old_cost = litellm.model_cost
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
     try:
         tool_with_1h = {
@@ -2927,10 +2927,10 @@ def test_add_cache_point_tool_block_passes_ttl_for_claude_4_5():
         if old_env is None:
             os.environ.pop("LITELLM_LOCAL_MODEL_COST_MAP", None)
         else:
-            os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = old_env
+            monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", old_env)
 
 
-def test_bedrock_tools_pt_passes_ttl_for_claude_4_5():
+def test_bedrock_tools_pt_passes_ttl_for_claude_4_5(monkeypatch):
     """
     End-to-end: _bedrock_tools_pt should produce cachePoint blocks with ttl
     for Claude 4.5+ models when tools have cache_control with ttl.
@@ -2944,7 +2944,7 @@ def test_bedrock_tools_pt_passes_ttl_for_claude_4_5():
 
     old_env = os.environ.get("LITELLM_LOCAL_MODEL_COST_MAP")
     old_cost = litellm.model_cost
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
     try:
         tools = [
@@ -2980,7 +2980,7 @@ def test_bedrock_tools_pt_passes_ttl_for_claude_4_5():
         if old_env is None:
             os.environ.pop("LITELLM_LOCAL_MODEL_COST_MAP", None)
         else:
-            os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = old_env
+            monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", old_env)
 
 
 def test_convert_to_anthropic_tool_result_openai_file_pdf_becomes_document():

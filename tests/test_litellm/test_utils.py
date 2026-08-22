@@ -672,8 +672,8 @@ def test_all_model_configs():
     ) == {"max_output_tokens": 10}
 
 
-def test_anthropic_web_search_in_model_info():
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+def test_anthropic_web_search_in_model_info(monkeypatch):
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
     supported_models = [
@@ -1193,11 +1193,11 @@ def test_max_tokens_consistency():
         raise AssertionError(error_msg)
 
 
-def test_get_model_info_gemini():
+def test_get_model_info_gemini(monkeypatch):
     """
     Tests if ALL gemini models have 'tpm' and 'rpm' in the model info
     """
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
     model_map = litellm.model_cost
@@ -1252,8 +1252,8 @@ def test_get_model_info_bedrock_double_provider_prefix_resolves(local_model_cost
     assert info["key"] == "us.anthropic.claude-sonnet-4-6"
 
 
-def test_openai_models_in_model_info():
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+def test_openai_models_in_model_info(monkeypatch):
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
     model_map = litellm.model_cost
@@ -1408,7 +1408,7 @@ for commitment in BEDROCK_COMMITMENTS:
 print("block_list", block_list)
 
 
-def test_supports_computer_use_utility():
+def test_supports_computer_use_utility(monkeypatch):
     """
     Tests the litellm.utils.supports_computer_use utility function.
     """
@@ -1420,7 +1420,7 @@ def test_supports_computer_use_utility():
     original_env_var = os.getenv("LITELLM_LOCAL_MODEL_COST_MAP")
     original_model_cost = getattr(litellm, "model_cost", None)
 
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")  # Load with local/backup
 
     try:
@@ -1438,7 +1438,7 @@ def test_supports_computer_use_utility():
         if original_env_var is None:
             del os.environ["LITELLM_LOCAL_MODEL_COST_MAP"]
         else:
-            os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = original_env_var
+            monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", original_env_var)
 
         if original_model_cost is not None:
             litellm.model_cost = original_model_cost
@@ -1446,13 +1446,13 @@ def test_supports_computer_use_utility():
             delattr(litellm, "model_cost")
 
 
-def test_get_model_info_shows_supports_computer_use():
+def test_get_model_info_shows_supports_computer_use(monkeypatch):
     """
     Tests if 'supports_computer_use' is correctly retrieved by get_model_info.
     We'll use 'claude-4-sonnet-20250514' as it's configured
     in the backup JSON to have supports_computer_use: True.
     """
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     # Ensure litellm.model_cost is loaded, relying on the backup mechanism if primary fails
     # as per previous debugging.
     litellm.model_cost = litellm.get_model_cost_map(url="")
