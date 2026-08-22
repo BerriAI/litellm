@@ -913,7 +913,7 @@ def test_generic_cost_per_token_gpt55_pro():
 @pytest.mark.parametrize(
     "model,input_cost,output_cost,cache_read_cost,cache_write_cost",
     [
-        ("gpt-5.6", 5e-6, 3e-5, 5e-7, 6.25e-6),
+        ("gpt-5.6", 4e-6, 2e-5, 4e-7, 5e-6),
         ("gpt-5.6-sol", 4e-6, 2e-5, 4e-7, 5e-6),
         ("gpt-5.6-terra", 2e-6, 1.2e-5, 2e-7, 2.5e-6),
         ("gpt-5.6-luna", 2e-7, 1.2e-6, 2e-8, 2.5e-7),
@@ -965,10 +965,28 @@ def test_generic_cost_per_token_gpt56(
     assert round(completion_cost, 10) == round(output_cost * completion_tokens, 10)
 
 
+def test_gpt_5_6_alias_prices_match_sol():
+    """Regression: the bare gpt-5.6 alias routes to GPT-5.6 Sol, so every cost field on
+    the two entries has to hold the same value. They drifted once before, when Sol took
+    its promotional cut and gpt-5.6 was left on the pre-cut rates, overbilling callers
+    who used the alias."""
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    alias = litellm.model_cost["gpt-5.6"]
+    sol = litellm.model_cost["gpt-5.6-sol"]
+
+    cost_fields = sorted(field for field in sol if "cost" in field)
+    assert len(cost_fields) == 23
+
+    for field in cost_fields:
+        assert alias.get(field) == sol.get(field), field
+
+
 @pytest.mark.parametrize(
     "model,flex_long_input_cost,flex_long_output_cost",
     [
-        ("gpt-5.6", 5e-6, 2.25e-5),
+        ("gpt-5.6", 4e-6, 1.5e-5),
         ("gpt-5.6-sol", 4e-6, 1.5e-5),
         ("gpt-5.6-terra", 2e-6, 9e-6),
         ("gpt-5.6-luna", 2e-7, 9e-7),
