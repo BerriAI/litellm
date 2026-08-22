@@ -18,7 +18,6 @@ mock_image_response = {"images": ["base64_encoded_image_data"], "error": None}
 class TestBedrockImageGeneration:
     def test_image_generation_with_api_key_bearer_token(self):
         """Test image generation with bearer token authentication"""
-        litellm.set_verbose = True
         test_api_key = "test-bearer-token-12345"
         model = "bedrock/stability.sd3-large-v1:0"
         prompt = "A cute baby sea otter"
@@ -53,7 +52,6 @@ class TestBedrockImageGeneration:
 
     def test_image_generation_with_env_variable_bearer_token(self, monkeypatch):
         """Test image generation with bearer token from environment variable"""
-        litellm.set_verbose = True
         test_api_key = "env-bearer-token-12345"
         model = "bedrock/stability.sd3-large-v1:0"
         prompt = "A cute baby sea otter"
@@ -90,7 +88,6 @@ class TestBedrockImageGeneration:
     @pytest.mark.asyncio
     async def test_async_image_generation_with_bearer_token(self):
         """Test async image generation with bearer token authentication"""
-        litellm.set_verbose = True
         test_api_key = "async-bearer-token-12345"
         model = "bedrock/stability.sd3-large-v1:0"
         prompt = "A cute baby sea otter"
@@ -125,7 +122,6 @@ class TestBedrockImageGeneration:
 
     def test_image_generation_with_sigv4(self):
         """Test image generation falls back to SigV4 auth when no bearer token is provided"""
-        litellm.set_verbose = True
         model = "bedrock/stability.sd3-large-v1:0"
         prompt = "A cute baby sea otter"
 

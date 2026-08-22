@@ -86,7 +86,6 @@ async def test_openai_client_reuse(function_name, is_async, args):
     """
     Test that multiple API calls reuse the same OpenAI client
     """
-    litellm.set_verbose = True
 
     # Determine which client class to mock based on whether the test is async
     client_path = (
