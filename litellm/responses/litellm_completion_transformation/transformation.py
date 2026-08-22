@@ -1210,10 +1210,14 @@ class LiteLLMCompletionResponsesConfig:
             # message `content`, summary-only items included: whatever the
             # provider-bound branch below replays must stay scannable.
             if not replay_reasoning:
+                # `content` wins only when it is what the provider-bound branch
+                # would replay; an empty or block-only `content` falls back to
+                # the summary text, which is what that branch replays instead.
                 inspectable: Final[object] = (
                     input_item.get("content")
-                    if input_item.get("content") is not None
-                    else LiteLLMCompletionResponsesConfig._extract_reasoning_text_from_input_item(input_item)
+                    if LiteLLMCompletionResponsesConfig._reasoning_text_from_content(input_item) is not None
+                    else LiteLLMCompletionResponsesConfig._reasoning_text_from_summary(input_item)
+                    or input_item.get("content")
                 )
                 if inspectable is None:
                     return []  # mutable-ok: empty drop result
@@ -1255,22 +1259,19 @@ class LiteLLMCompletionResponsesConfig:
             ]
 
     @staticmethod
-    def _extract_reasoning_text_from_input_item(input_item: Mapping[str, object]) -> str | None:
+    def _reasoning_text_from_content(input_item: Mapping[str, object]) -> str | None:
         """
-        Extract plaintext reasoning from a ResponseReasoningItemParam.
+        Plaintext a ResponseReasoningItemParam carries in ``content``.
 
-        Handles:
-        - content as a string
-        - content as a list of blocks (output_text / summary_text / text)
-        - summary as a list of summary_text blocks (fallback)
-
-        Returns None when only opaque forms (e.g. encrypted_content) are present.
+        Handles content as a string and content as a list of blocks
+        (output_text / summary_text / text). Returns None when the item has
+        no content, or only opaque blocks (e.g. encrypted_content).
         """
         content: Final[object] = input_item.get("content")
         if isinstance(content, str) and content.strip():
             return content
         if isinstance(content, list):
-            text_parts: list[str] = []  # mutable-ok: text accumulator  # rebind-ok: text accumulator
+            text_parts: Final[list[str]] = []  # mutable-ok: text accumulator
             for block in content:
                 if not isinstance(block, Mapping):
                     continue
@@ -1282,21 +1283,39 @@ class LiteLLMCompletionResponsesConfig:
                     text_parts.append(text.strip())
             if text_parts:
                 return "\n".join(text_parts)
-
-        # Guardrail traversal in litellm/proxy/guardrails/_content_utils.py
-        # inspects and rewrites these summary blocks before they are forwarded.
-        summary: Final[object] = input_item.get("summary")
-        if isinstance(summary, list):
-            text_parts = []  # mutable-ok: text accumulator  # rebind-ok: text accumulator
-            for block in summary:
-                if not isinstance(block, Mapping):
-                    continue
-                text = block.get("text")
-                if isinstance(text, str) and text.strip():
-                    text_parts.append(text.strip())
-            if text_parts:
-                return "\n".join(text_parts)
         return None
+
+    @staticmethod
+    def _reasoning_text_from_summary(input_item: Mapping[str, object]) -> str | None:
+        """
+        Plaintext a ResponseReasoningItemParam carries in ``summary``.
+
+        Guardrail traversal in litellm/proxy/guardrails/_content_utils.py
+        inspects and rewrites these summary blocks before they are forwarded.
+        """
+        summary: Final[object] = input_item.get("summary")
+        if not isinstance(summary, list):
+            return None
+        text_parts: Final[list[str]] = []  # mutable-ok: text accumulator
+        for block in summary:
+            if not isinstance(block, Mapping):
+                continue
+            text = block.get("text")
+            if isinstance(text, str) and text.strip():
+                text_parts.append(text.strip())
+        return "\n".join(text_parts) if text_parts else None
+
+    @staticmethod
+    def _extract_reasoning_text_from_input_item(input_item: Mapping[str, object]) -> str | None:
+        """
+        Extract plaintext reasoning from a ResponseReasoningItemParam.
+
+        ``content`` wins, ``summary`` is the fallback. Returns None when only
+        opaque forms (e.g. encrypted_content) are present.
+        """
+        return LiteLLMCompletionResponsesConfig._reasoning_text_from_content(
+            input_item
+        ) or LiteLLMCompletionResponsesConfig._reasoning_text_from_summary(input_item)
 
     @staticmethod
     def _decode_thinking_blocks_from_input_item(
