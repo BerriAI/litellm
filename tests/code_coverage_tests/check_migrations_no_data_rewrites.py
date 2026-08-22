@@ -6,6 +6,13 @@ anything whose cost scales with existing table size turns into downtime. A singl
 `UPDATE` with no batching over a spend-log-sized table is minutes of unavailability
 plus a doubled heap that plain autovacuum will not give back.
 
+What is banned is the row-rewriting DML behind that, not everything whose cost
+scales that way. A non-concurrent `CREATE INDEX`, an `ALTER COLUMN ... TYPE` that is
+not binary coercible, and a volatile `DEFAULT` on a new column all read the whole
+table and all pass. That is deliberate: a rule wide enough to reach them fires on
+most ordinary migrations, and a marker everyone adds by reflex stops carrying
+information. The outage this was written for was a backfill.
+
 Flagged, per statement, by its leading keyword:
 
   UPDATE      rewrites every matching row, and `WHERE` does not bound the scan
@@ -97,6 +104,7 @@ INTO_TARGETS = re.compile(
     r"([A-Za-z_][A-Za-z0-9_]*(?:[ \t]*,[ \t]*[A-Za-z_][A-Za-z0-9_]*)*)",
     re.IGNORECASE,
 )
+PRECEDING_WORD = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)[^A-Za-z0-9_]*$")
 EXPLAIN_OPTIONS = re.compile(r"\bEXPLAIN\b(?:\s+(?:ANALYZE|ANALYSE|VERBOSE)\b)+", re.IGNORECASE)
 
 REWRITES_ROWS = frozenset({"UPDATE", "DELETE", "MERGE"})
@@ -373,9 +381,21 @@ def assigned_names(statement: str) -> frozenset[str]:
         names.update(word.group().lower() for word in FIRST_WORD.finditer(head))
 
     for targets in INTO_TARGETS.finditer(statement):
+        if names_a_table(statement[: targets.start()]):
+            continue
         names.update(word.group().lower() for word in FIRST_WORD.finditer(targets.group(1)))
 
     return frozenset(names)
+
+
+def names_a_table(before: str) -> bool:
+    """Whether the `INTO` this text runs up to introduces a table rather than a query's
+    target list. `INSERT INTO` is the one that does, and reading its table as somewhere a
+    string was parked would have an insert scanned for the SQL its own literals spell out.
+    An `INSERT` that really does assign reaches its `INTO` through a `RETURNING` list, so
+    the word immediately before is what separates the two."""
+    word = PRECEDING_WORD.search(before)
+    return word is not None and word.group(1).upper() == "INSERT"
 
 
 def assigns_rather_than_compares(head: str) -> bool:
