@@ -134,11 +134,11 @@ async def _find_users_by_email(
 
 
 async def _create_user_row(
-    prisma_client: PrismaClient, tx: MemberWriteTx | None, user_data: Mapping[str, object]
+    prisma_client: PrismaClient, tx: MemberWriteTx | None, user_data: dict[str, object]
 ) -> _PrismaUserRecord | None:
     if tx is not None:
-        return await tx.litellm_usertable.create(data=jsonify_object(dict(user_data)))
-    return await prisma_client.insert_data(data=dict(user_data), table_name="user")
+        return await tx.litellm_usertable.create(data=jsonify_object(user_data))
+    return await prisma_client.insert_data(data=user_data, table_name="user")
 
 
 def get_new_internal_user_defaults(user_id: str, user_email: str | None = None) -> dict[str, object]:
