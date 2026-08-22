@@ -24,7 +24,7 @@ async def test_bedrock_sonnet_4_5_with_advanced_tool_use_beta_header():
     """
     litellm._turn_on_debug()
     response = await litellm.anthropic.messages.acreate(
-        model="bedrock/invoke/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        model=f"bedrock/invoke/us.{os.environ.get('CI_CD_DEFAULT_BEDROCK_MODEL', 'anthropic.claude-haiku-4-5-20251001-v1:0')}",
         messages=[{"role": "user", "content": "What is 2+2?"}],
         max_tokens=100,
         provider_specific_header={
