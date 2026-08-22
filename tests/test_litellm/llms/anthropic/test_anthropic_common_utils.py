@@ -929,7 +929,7 @@ class TestValidateEnvironmentAuthToken:
         config = AnthropicModelInfo()
         with mock_patch.dict("os.environ", {}, clear=True):
             with pytest.raises(
-                Exception, match="ANTHROPIC_API_KEY.*ANTHROPIC_AUTH_TOKEN"
+                Exception, match=r"ANTHROPIC_API_KEY.*ANTHROPIC_AUTH_TOKEN"
             ):
                 config.validate_environment(
                     headers={},
@@ -1741,22 +1741,6 @@ class TestAnthropicThinkingSignatureSelfHeal:
         assert "thinking" not in data
         assert data["messages"] == []
 
-
-@pytest.fixture
-def local_model_cost_map(monkeypatch):
-    """Force the bundled backup cost map so detection doesn't depend on the
-    network-fetched ``main`` copy (which lacks this branch's flags until merge)."""
-    import litellm
-
-    original = litellm.model_cost
-    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    litellm.model_cost = litellm.get_model_cost_map(url="")
-    litellm.get_model_info.cache_clear()
-    try:
-        yield
-    finally:
-        litellm.model_cost = original
-        litellm.get_model_info.cache_clear()
 
 
 class TestClaudeOpus48AdaptiveThinking:

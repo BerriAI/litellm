@@ -1192,19 +1192,19 @@ async def test_tpm_api_key_rate_limits_v3():
 
     # Test the pre-call hook
     error = None
-    try:
+    with pytest.raises(HTTPException) as exc_info:
         await parallel_request_handler.async_pre_call_hook(
             user_api_key_dict=user_api_key_dict,
             cache=local_cache,
             data={"model": model},
             call_type="",
         )
-    except HTTPException as e:
-        error = e
-        assert e.status_code == 429
-        assert "rate_limit_type" in e.headers
-        assert e.headers.get("rate_limit_type") == "tokens"
-        assert "retry-after" in e.headers
+    e = exc_info.value
+    error = e
+    assert e.status_code == 429
+    assert "rate_limit_type" in e.headers
+    assert e.headers.get("rate_limit_type") == "tokens"
+    assert "retry-after" in e.headers
 
     assert error is not None, "An Exception must be thrown"
     assert captured_descriptors is not None, "Rate limit descriptors should be captured"
@@ -1287,19 +1287,19 @@ async def test_rpm_api_key_rate_limits_v3():
 
     # Test the pre-call hook
     error = None
-    try:
+    with pytest.raises(HTTPException) as exc_info:
         await parallel_request_handler.async_pre_call_hook(
             user_api_key_dict=user_api_key_dict,
             cache=local_cache,
             data={"model": model},
             call_type="",
         )
-    except HTTPException as e:
-        error = e
-        assert e.status_code == 429
-        assert "rate_limit_type" in e.headers
-        assert e.headers.get("rate_limit_type") == "requests"
-        assert "retry-after" in e.headers
+    e = exc_info.value
+    error = e
+    assert e.status_code == 429
+    assert "rate_limit_type" in e.headers
+    assert e.headers.get("rate_limit_type") == "requests"
+    assert "retry-after" in e.headers
 
     assert error is not None, "An Exception must be thrown"
     assert captured_descriptors is not None, "Rate limit descriptors should be captured"
@@ -1441,19 +1441,19 @@ async def test_team_member_rate_limits_v3_raises_429_when_over_limit():
     parallel_request_handler.should_rate_limit = mock_should_rate_limit
 
     error = None
-    try:
+    with pytest.raises(HTTPException) as exc_info:
         await parallel_request_handler.async_pre_call_hook(
             user_api_key_dict=user_api_key_dict,
             cache=local_cache,
             data={"model": "gpt-3.5-turbo"},
             call_type="",
         )
-    except HTTPException as e:
-        error = e
-        assert e.status_code == 429
-        assert "rate_limit_type" in e.headers
-        assert e.headers.get("rate_limit_type") == "requests"
-        assert "retry-after" in e.headers
+    e = exc_info.value
+    error = e
+    assert e.status_code == 429
+    assert "rate_limit_type" in e.headers
+    assert e.headers.get("rate_limit_type") == "requests"
+    assert "retry-after" in e.headers
 
     assert error is not None, "An Exception must be thrown"
     assert captured_descriptors is not None, "Rate limit descriptors should be captured"
@@ -1575,7 +1575,6 @@ async def test_async_increment_tokens_with_ttl_preservation():
     3. Second call: Increment same keys
     4. Verify TTL decreased but wasn't reset to 60s
     """
-    import os
     import time
 
     from litellm.caching.redis_cache import RedisCache
