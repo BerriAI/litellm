@@ -255,7 +255,6 @@ def test_get_azure_ad_token_from_username_password(
 
 
 def test_azure_openai_gpt_4o_naming(monkeypatch):
-    from openai import AzureOpenAI
     from pydantic import BaseModel, Field
 
     monkeypatch.setenv("AZURE_API_VERSION", "2024-10-21")
@@ -302,7 +301,6 @@ def test_azure_gpt_4o_with_tool_call_and_response_format(api_version):
     from pydantic import BaseModel
     import litellm
 
-    from openai import AzureOpenAI
 
     client = AzureOpenAI(
         api_key="fake-key",

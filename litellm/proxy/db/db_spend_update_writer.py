@@ -316,6 +316,7 @@ class DBSpendUpdateWriter:
                 model_id=payload.get("model_id"),
                 llm_router=_get_llm_router,
                 cost_breakdown=metadata.get("cost_breakdown"),
+                recorded_autorouter_savings=metadata.get("autorouter_savings"),
             )
             transaction: Final = build_autorouter_turn_transaction(
                 payload=payload,
@@ -1877,6 +1878,7 @@ class DBSpendUpdateWriter:
                 llm_router=_get_llm_router,
                 usage_object=usage_obj,
                 cost_breakdown=_metadata.get("cost_breakdown"),
+                recorded_autorouter_savings=_metadata.get("autorouter_savings"),
             )
 
             daily_transaction: Final = BaseDailySpendTransaction(

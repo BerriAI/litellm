@@ -665,8 +665,16 @@ def get_redis_async_client(
         cluster_kwargs.setdefault("health_check_interval", REDIS_CLUSTER_HEALTH_CHECK_INTERVAL)
         cluster_kwargs.setdefault("socket_keepalive", True)
 
+        # A single node's client-side timeout must reset only that node's connections,
+        # not tear down the whole cluster client for every concurrent caller.
+        from litellm.caching.redis_cluster_node_isolation import (
+            get_litellm_async_redis_cluster_class,
+        )
+
+        async_redis_cluster_class: Final = get_litellm_async_redis_cluster_class()
+
         # Create async RedisCluster with IAM token as password if available
-        cluster_client: Final = async_redis.RedisCluster(
+        cluster_client: Final = async_redis_cluster_class(
             startup_nodes=new_startup_nodes,
             **cluster_kwargs,
         )
