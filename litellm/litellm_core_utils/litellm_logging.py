@@ -2200,11 +2200,36 @@ class Logging(LiteLLMLoggingBaseClass):
         Log the terminal result of a background interaction as a fresh success
         event. The create request already ran success logging for its
         ``in_progress`` response (no usage, so no cost was tracked); clearing
-        the dedup flag lets the completed result flow through cost calculation
+        the dedup flags lets the completed result flow through cost calculation
         and spend tracking exactly once, spanning create to completion.
         """
-        self.model_call_details.pop("has_logged_async_success", None)
+        self._reset_success_emission_dedupe()
         await self.async_success_handler(result=result)
+
+    def _reset_success_emission_dedupe(self) -> None:
+        """
+        Success callbacks dedupe per request, because the sync and async
+        handlers both fire on some paths and would otherwise report one call
+        twice. A settled background interaction is a genuinely second success
+        event on the same request, so every such marker has to be cleared or
+        the completion, the only event that carries usage and cost, is
+        discarded as a duplicate of the in-progress create.
+        """
+        self.model_call_details.pop("has_logged_async_success", None)
+        litellm_params = self.model_call_details.get("litellm_params")
+        if not isinstance(litellm_params, dict):
+            return
+        metadata = litellm_params.get("metadata")
+        if not isinstance(metadata, dict):
+            return
+        otel_internal = metadata.get("_otel_internal")
+        if not isinstance(otel_internal, dict):
+            return
+        spans_logged = otel_internal.get("spans_logged")
+        if not isinstance(spans_logged, dict):
+            return
+        for scope in [key for key in spans_logged if isinstance(key, tuple) and key[-1:] == ("success",)]:
+            del spans_logged[scope]
 
     def _flush_passthrough_collected_chunks_helper(
         self,
