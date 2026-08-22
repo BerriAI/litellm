@@ -1,4 +1,5 @@
 import json
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import litellm
@@ -15,6 +16,7 @@ from litellm.types.llms.openai import (
 from litellm.types.utils import ChatCompletionMessageToolCall, Message, ModelResponse
 
 if TYPE_CHECKING:
+    from litellm.proxy.utils import PrismaClient
     from litellm.responses.litellm_completion_transformation.transformation import (
         ChatCompletionSession,
     )
@@ -244,8 +246,17 @@ class ResponsesSessionHandler:
         return False
 
     @staticmethod
+    def _get_prisma_client() -> "PrismaClient | None":
+        """Return the proxy Prisma client used for spend-log lookups."""
+        from litellm.proxy.proxy_server import prisma_client
+
+        return prisma_client
+
+    @staticmethod
     async def get_all_spend_logs_for_previous_response_id(
         previous_response_id: str,
+        prisma_client: "PrismaClient | None" = None,
+        response_id_decoder: Callable[[str], str] | None = None,
     ) -> list[SpendLogsPayload]:
         """
         Get all spend logs for a previous response id
@@ -255,13 +266,14 @@ class ResponsesSessionHandler:
 
         SELECT session_id FROM spend_logs WHERE response_id = previous_response_id, SELECT * FROM spend_logs WHERE session_id = session_id
         """
-        from litellm.proxy.proxy_server import prisma_client
-
         verbose_proxy_logger.debug("decoding response id=%s", previous_response_id)
 
-        decoded_response_id: Final = ResponsesAPIRequestUtils._decode_responses_api_response_id(previous_response_id)
-        previous_response_id = decoded_response_id.get("response_id", previous_response_id)
-        if prisma_client is None:
+        decode_response_id: Final = (
+            response_id_decoder or ResponsesAPIRequestUtils.decode_previous_response_id_to_original_previous_response_id
+        )
+        resolved_previous_response_id: Final = decode_response_id(previous_response_id)
+        resolved_prisma_client: Final = prisma_client or ResponsesSessionHandler._get_prisma_client()
+        if resolved_prisma_client is None:
             return []
 
         query: Final = """
@@ -276,7 +288,7 @@ class ResponsesSessionHandler:
             ORDER BY "endTime" ASC;
         """
 
-        spend_logs: Final = await prisma_client.db.query_raw(query, previous_response_id)
+        spend_logs: Final = await resolved_prisma_client.db.query_raw(query, resolved_previous_response_id)
 
         verbose_proxy_logger.debug(
             "Found the following spend logs for previous response id %s: %s",

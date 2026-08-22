@@ -1,6 +1,8 @@
+import builtins
 import base64
 import os
 import sys
+import types
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -145,6 +147,86 @@ class TestResponsesAPIRequestUtils:
         plain_id = "resp_xyz789"
         result_plain = ResponsesAPIRequestUtils.decode_previous_response_id_to_original_previous_response_id(plain_id)
         assert result_plain == plain_id
+
+    def test_decode_previous_response_id_to_original_previous_response_id_decrypts_proxy_id(self):
+        """A proxy-encrypted response ID is decrypted then decoded to the original request ID."""
+        test_provider = "openai"
+        test_model_id = "gpt-4o"
+        original_response_id = "resp_abc123"
+
+        managed_id = ResponsesAPIRequestUtils._build_responses_api_response_id(
+            custom_llm_provider=test_provider,
+            model_id=test_model_id,
+            response_id=original_response_id,
+        )
+        encrypted_id = f"resp_{'encrypted' * 20}"
+
+        result = ResponsesAPIRequestUtils.decode_previous_response_id_to_original_previous_response_id(
+            encrypted_id,
+            decrypt_previous_response_id=lambda _: managed_id,
+        )
+
+        assert result == original_response_id
+
+    def test_decrypt_proxy_encrypted_previous_response_id_uses_security_hook(self):
+        """The proxy security hook result is returned when the ID is encrypted."""
+        managed_id = ResponsesAPIRequestUtils._build_responses_api_response_id(
+            custom_llm_provider="openai",
+            model_id="gpt-4o",
+            response_id="resp_abc123",
+        )
+        encrypted_id = f"resp_{'encrypted' * 20}"
+
+        mock_security = MagicMock()
+        mock_security._is_encrypted_response_id.return_value = True
+        mock_security._decrypt_response_id.return_value = (managed_id, "user-1", "team-1")
+
+        result = ResponsesAPIRequestUtils._decrypt_proxy_encrypted_previous_response_id(
+            encrypted_id,
+            responses_id_security=mock_security,
+        )
+
+        assert result == managed_id
+
+    def test_decrypt_proxy_encrypted_previous_response_id_instantiates_security_hook(self):
+        """The lazy import path instantiates ResponsesIDSecurity when no hook is injected."""
+        managed_id = ResponsesAPIRequestUtils._build_responses_api_response_id(
+            custom_llm_provider="openai",
+            model_id="gpt-4o",
+            response_id="resp_abc123",
+        )
+        encrypted_id = f"resp_{'encrypted' * 20}"
+
+        mock_security = MagicMock()
+        mock_security._is_encrypted_response_id.return_value = True
+        mock_security._decrypt_response_id.return_value = (managed_id, "user-1", "team-1")
+
+        real_import = builtins.__import__
+
+        def fake_import(name, *args, **kwargs):
+            if name == "litellm.proxy.hooks.responses_id_security":
+                module = types.ModuleType(name)
+                module.ResponsesIDSecurity = lambda: mock_security
+                return module
+            return real_import(name, *args, **kwargs)
+
+        with patch("builtins.__import__", side_effect=fake_import):
+            result = ResponsesAPIRequestUtils._decrypt_proxy_encrypted_previous_response_id(encrypted_id)
+
+        assert result == managed_id
+
+    def test_decrypt_proxy_encrypted_previous_response_id_falls_back(self):
+        """A non-encrypted ID is returned unchanged."""
+        plain_id = "resp_plain"
+        mock_security = MagicMock()
+        mock_security._is_encrypted_response_id.return_value = False
+
+        result = ResponsesAPIRequestUtils._decrypt_proxy_encrypted_previous_response_id(
+            plain_id,
+            responses_id_security=mock_security,
+        )
+
+        assert result == plain_id
 
     def test_update_responses_api_response_id_with_model_id_handles_dict(self):
         """Ensure _update_responses_api_response_id_with_model_id works with dict input"""

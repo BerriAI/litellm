@@ -42,6 +42,7 @@ class ResponsesIDSecurity(CustomLogger):
         # MAP all the responses api response ids to the encrypted response ids
         responses_api_call_types: Final = {
             "aresponses",
+            "acompact_responses",
             "aget_responses",
             "adelete_responses",
             "acancel_responses",
@@ -49,7 +50,7 @@ class ResponsesIDSecurity(CustomLogger):
         }
         if call_type not in responses_api_call_types:
             return None
-        if call_type == "aresponses":
+        if call_type in {"aresponses", "acompact_responses"}:  # mutable-ok: response call types
             # check 'previous_response_id' if present in the data
             previous_response_id: Final = data.get("previous_response_id")
             if previous_response_id and self._is_encrypted_response_id(previous_response_id):

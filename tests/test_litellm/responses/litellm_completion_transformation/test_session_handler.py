@@ -1,7 +1,9 @@
+import builtins
 import json
 import os
 import sys
-from unittest.mock import AsyncMock, patch
+import types
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
@@ -15,6 +17,52 @@ from litellm.responses.litellm_completion_transformation import session_handler
 from litellm.responses.litellm_completion_transformation.session_handler import (
     ResponsesSessionHandler,
 )
+
+
+@pytest.mark.asyncio
+async def test_get_all_spend_logs_for_previous_response_id_decrypts_encrypted_id():
+    """Encrypted proxy response IDs are resolved before the spend-log query."""
+    original_response_id = "resp_abc123"
+    encrypted_id = f"resp_{'encrypted' * 20}"
+
+    fake_prisma = MagicMock()
+    fake_prisma.db.query_raw = AsyncMock(return_value=[])
+
+    await ResponsesSessionHandler.get_all_spend_logs_for_previous_response_id(
+        encrypted_id,
+        prisma_client=fake_prisma,
+        response_id_decoder=lambda _: original_response_id,
+    )
+
+    assert fake_prisma.db.query_raw.call_args[0][1] == original_response_id
+
+
+def test_get_prisma_client_imports_proxy_server():
+    """The Prisma client seam returns the proxy module's prisma_client."""
+    fake_prisma = MagicMock()
+    real_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):
+        if name == "litellm.proxy.proxy_server":
+            module = types.ModuleType(name)
+            module.prisma_client = fake_prisma
+            return module
+        return real_import(name, *args, **kwargs)
+
+    with patch("builtins.__import__", side_effect=fake_import):
+        assert ResponsesSessionHandler._get_prisma_client() is fake_prisma
+
+
+@pytest.mark.asyncio
+async def test_get_all_spend_logs_for_previous_response_id_returns_empty_without_prisma():
+    """When no Prisma client is configured, the spend-log lookup returns []."""
+    result = await ResponsesSessionHandler.get_all_spend_logs_for_previous_response_id(
+        "resp_abc123",
+        prisma_client=None,
+        response_id_decoder=lambda _: "resp_abc123",
+    )
+
+    assert result == []
 
 
 @pytest.mark.asyncio

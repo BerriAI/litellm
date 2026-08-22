@@ -1,6 +1,6 @@
 import base64
 import re
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from typing import Any, Final, Optional, Union, cast, get_type_hints, overload
 
 from pydantic import BaseModel
@@ -597,6 +597,7 @@ class ResponsesAPIRequestUtils:
     @staticmethod
     def decode_previous_response_id_to_original_previous_response_id(
         previous_response_id: str,
+        decrypt_previous_response_id: Callable[[str], str] | None = None,
     ) -> str:
         """
         Decode the previous_response_id to the original previous_response_id
@@ -611,8 +612,48 @@ class ResponsesAPIRequestUtils:
         Returns:
             The original previous_response_id
         """
-        decoded_response_id: Final = ResponsesAPIRequestUtils._decode_responses_api_response_id(previous_response_id)
-        return decoded_response_id.get("response_id", previous_response_id)
+        decrypt_id: Final = (
+            decrypt_previous_response_id or ResponsesAPIRequestUtils._decrypt_proxy_encrypted_previous_response_id
+        )
+        decrypted_previous_response_id: Final = decrypt_id(previous_response_id)
+        decoded_response_id: Final = ResponsesAPIRequestUtils._decode_responses_api_response_id(
+            decrypted_previous_response_id
+        )
+        return decoded_response_id.get("response_id", decrypted_previous_response_id)
+
+    @staticmethod
+    def _decrypt_proxy_encrypted_previous_response_id(
+        previous_response_id: str,
+        responses_id_security: object | None = None,
+    ) -> str:
+        """
+        Resolve a proxy-encrypted Responses API ID to the wrapped managed ID.
+
+        ``ResponsesIDSecurity`` encrypts the LiteLLM-managed response ID before
+        it reaches the client (``resp_<ciphertext>``). Decrypt that layer first
+        so the managed-ID decode can resolve it to the request_id stored in
+        spend logs. If decryption is unavailable or the ID is not encrypted,
+        the original value is returned unchanged.
+        """
+        try:
+            security_hook: Any
+            if responses_id_security is None:
+                from litellm.proxy.hooks.responses_id_security import ResponsesIDSecurity
+
+                security_hook = ResponsesIDSecurity()
+            else:
+                security_hook = responses_id_security
+            if security_hook._is_encrypted_response_id(previous_response_id):
+                decrypted_id, _, _ = security_hook._decrypt_response_id(previous_response_id)
+                if decrypted_id:
+                    return decrypted_id
+        except Exception as e:  # noqa: BLE001
+            verbose_logger.debug(
+                "Failed to decrypt previous_response_id=%s for session lookup: %s",
+                previous_response_id,
+                e,
+            )
+        return previous_response_id
 
     @staticmethod
     def _build_container_id(
