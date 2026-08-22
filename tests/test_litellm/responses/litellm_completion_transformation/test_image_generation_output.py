@@ -199,3 +199,47 @@ class TestExtractMessageOutputItemsIntegration:
         assert len(result) == 1
         assert isinstance(result[0], GenericResponseOutputItem)
         assert result[0].type == "message"
+
+
+class TestImageGenerationOutputItemIds:
+    """Image generation call IDs must use the ig_ prefix (issue #27333).
+
+    Native OpenAI Responses validates the prefix before it looks the item up, so a
+    replayed chatcmpl-*_img_N ID is rejected outright.
+    """
+
+    def _choice_with_images(self, count):
+        mock_message = Mock(spec=Message)
+        mock_message.images = [
+            {"image_url": {"url": f"data:image/png;base64,IMG{idx}"}}
+            for idx in range(count)
+        ]
+        mock_choice = Mock(spec=Choices)
+        mock_choice.message = mock_message
+        mock_choice.finish_reason = "stop"
+        return mock_choice
+
+    def _chat_completion_response(self):
+        mock_response = Mock(spec=ModelResponse)
+        mock_response.id = "chatcmpl-dfa2da3a-1586-4ff7-b64e-f59c692a5d11"
+        return mock_response
+
+    def test_image_generation_item_id_uses_ig_prefix(self):
+        result = LiteLLMCompletionResponsesConfig._extract_image_generation_output_items(
+            chat_completion_response=self._chat_completion_response(),
+            choice=self._choice_with_images(2),
+        )
+
+        assert len(result) == 2
+        for item in result:
+            assert item.id.startswith("ig_")
+            assert "chatcmpl-" not in item.id
+            assert "_img_" not in item.id
+
+    def test_image_generation_item_ids_are_unique(self):
+        result = LiteLLMCompletionResponsesConfig._extract_image_generation_output_items(
+            chat_completion_response=self._chat_completion_response(),
+            choice=self._choice_with_images(3),
+        )
+
+        assert len({item.id for item in result}) == 3
