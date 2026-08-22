@@ -148,13 +148,13 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         if btype == "thinking":
             blocks: Final = cast(tuple[ChatCompletionThinkingBlock, ...], group)  # cast-ok: untrusted client payload
             reasoning_item: Final = responses_reasoning_item_from_thinking_blocks(blocks)
-            return None if reasoning_item is None else dict(reasoning_item)
+            return None if reasoning_item is None else dict(reasoning_item)  # mutable-ok: API message payload
         if btype == "tool_use":
             return {  # mutable-ok: API message payload
                 "type": "function_call",
                 "call_id": first.get("id", ""),
                 "name": first.get("name", ""),
-                "arguments": json.dumps(first.get("input", {})),
+                "arguments": json.dumps(first.get("input", {})),  # mutable-ok: API message payload
             }
         return None
 
