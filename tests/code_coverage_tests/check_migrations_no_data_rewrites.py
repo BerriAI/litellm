@@ -11,10 +11,12 @@ Flagged, per statement, by its leading keyword:
   UPDATE      rewrites every matching row, and `WHERE` does not bound the scan
   DELETE      same scan, and the dead tuples outlive the migration
   MERGE       both of the above in one statement
-  INSERT      only when it draws rows from a `SELECT`; an insert whose row source is
-              a leading `VALUES` is bounded by the rows spelled out there and passes,
-              scalar subqueries in that list included, while a `VALUES` reached
-              through a subquery or a set operation bounds nothing
+  INSERT      only when its rows come from a query rather than a literal `VALUES`
+              list. The query counts wherever it sits, since Postgres takes it
+              parenthesised, and `TABLE t` is one as much as a `SELECT` is. An
+              insert bounded by a leading `VALUES` passes, scalar subqueries in that
+              list included, while a `VALUES` reached through a subquery or joined
+              to a query by a set operation bounds nothing
   WITH        a CTE-led statement containing any of the above
 
 Referential actions (`ON DELETE CASCADE`, `ON UPDATE CASCADE`) are schema, never a
@@ -292,24 +294,38 @@ def offending_keyword(statement: str) -> str | None:
         return keyword
 
     if keyword == "INSERT":
-        return "INSERT ... SELECT" if draws_rows_from_a_select(statement) else None
+        source = row_source_keyword(statement)
+        return None if source is None else f"INSERT ... {source}"
 
     if keyword == "WITH":
         nested = next((name for name in sorted(REWRITES_ROWS) if contains(statement, name)), None)
         if nested is not None:
             return f"WITH ... {nested}"
-        if contains(statement, "INSERT") and draws_rows_from_a_select(statement):
-            return "WITH ... INSERT ... SELECT"
+        if contains(statement, "INSERT"):
+            source = row_source_keyword(statement)
+            if source is not None:
+                return f"WITH ... INSERT ... {source}"
 
     return None
 
 
-def draws_rows_from_a_select(statement: str) -> bool:
-    """Whether an `INSERT` takes its rows from a query rather than a literal list. Only a
-    `SELECT` the insert is built on counts, so the scalar subqueries and helper CTEs that
-    sit in parentheses around a `VALUES` list do not make it a rewrite, while one reached
-    through a set operation does."""
-    return contains(strip_parens(statement), "SELECT")
+def row_source_keyword(statement: str) -> str | None:
+    """Which keyword supplies an `INSERT` its rows, or `None` when a literal `VALUES` list
+    does. A query outside every parenthesis is the row source outright, including one a set
+    operation joins to a `VALUES` list. Failing that, a `VALUES` outside every parenthesis
+    is itself the row source, so the scalar subqueries and helper CTEs nested within that
+    list do not make the insert a rewrite. Failing both, the rows come from a parenthesised
+    query, which Postgres accepts and which reading only the unparenthesised text would let
+    through: `INSERT INTO "t" ("a") (SELECT ...)` copies a whole table."""
+    outer = strip_parens(statement)
+    joined = row_source_in(outer)
+    if joined is not None:
+        return joined
+    return None if contains(outer, "VALUES") else row_source_in(statement)
+
+
+def row_source_in(text: str) -> str | None:
+    return next((word for word in ("SELECT", "TABLE") if contains(text, word)), None)
 
 
 def hands_off_sql(statement: str, executed: frozenset[str]) -> bool:
