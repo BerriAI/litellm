@@ -20,6 +20,7 @@ from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_fil
 from litellm.types.proxy.guardrails.guardrail_hooks.litellm_content_filter import (
     ContentFilterCategoryConfig,
 )
+from fastapi import HTTPException
 
 
 # Test cases: (sentence, expected_result, reason)
@@ -210,7 +211,7 @@ class TestEUAIActArticle5ConditionalMatching:
         # Apply guardrail
         if expected == "BLOCK":
             # Should raise an exception or return modified response indicating block
-            with pytest.raises(Exception) as exc_info:
+            with pytest.raises(Exception, match='Content blocked: eu_ai_act_article') as exc_info:
                 await content_filter_guardrail.apply_guardrail(
                     inputs={"texts": [sentence]},
                     request_data=request_data,
@@ -275,7 +276,7 @@ class TestEUAIActEdgeCases:
         for sentence in sentences:
             request_data = {"messages": [{"role": "user", "content": sentence}]}
 
-            with pytest.raises(Exception):
+            with pytest.raises(HTTPException):
                 await content_filter_guardrail.apply_guardrail(
                     inputs={"texts": [sentence]},
                     request_data=request_data,
@@ -289,7 +290,7 @@ class TestEUAIActEdgeCases:
         request_data = {"messages": [{"role": "user", "content": sentence}]}
 
         # Should block (contains multiple violations)
-        with pytest.raises(Exception):
+        with pytest.raises(HTTPException):
             await content_filter_guardrail.apply_guardrail(
                 inputs={"texts": [sentence]},
                 request_data=request_data,

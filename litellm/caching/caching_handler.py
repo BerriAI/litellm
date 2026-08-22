@@ -18,7 +18,7 @@ import asyncio
 import datetime
 import inspect
 import time
-from collections.abc import AsyncGenerator, AsyncIterator, Callable, Generator
+from collections.abc import AsyncGenerator, AsyncIterator, Callable, Generator, Mapping
 from typing import TYPE_CHECKING, Any, Final, Optional, TypeVar
 
 from pydantic import BaseModel
@@ -106,7 +106,7 @@ def _is_chat_completion_cached_dict(cached_result: dict) -> bool:
     return "choices" in cached_result
 
 
-def _should_defer_streaming_cache_hit_callbacks(*, kwargs: dict[str, Any]) -> bool:
+def _should_defer_streaming_cache_hit_callbacks(*, kwargs: dict[str, object]) -> bool:
     """
     When stream=True, do not run success callbacks at cache-hit time.
 
@@ -119,11 +119,21 @@ def _should_defer_streaming_cache_hit_callbacks(*, kwargs: dict[str, Any]) -> bo
     return kwargs.get("stream", False) is True
 
 
+def _prompt_tokens_details_as_mapping(details: "PromptTokensDetailsWrapper") -> Mapping[str, object]:
+    """Dump prompt token details to an opaque field mapping, tolerating non-pydantic stand-ins."""
+    return details.model_dump(exclude_none=True) if hasattr(details, "model_dump") else {}
+
+
+def _request_cache_key(request_kwargs: Mapping[str, Any]) -> str | None:
+    """Read the caller-supplied ``cache_key`` off the request kwargs."""
+    return request_kwargs.get("cache_key", None)
+
+
 class LLMCachingHandler:
     def __init__(
         self,
         original_function: Callable,
-        request_kwargs: dict[str, Any],
+        request_kwargs: dict[str, object],
         start_time: datetime.datetime,
     ):
         from litellm.caching import DualCache, RedisCache
@@ -150,7 +160,7 @@ class LLMCachingHandler:
         start_time: datetime.datetime,
         call_type: str,
         kwargs: dict[str, Any],
-        args: tuple[Any, ...] | None = None,
+        args: tuple[object, ...] | None = None,
     ) -> CachingHandlerResponse | None:
         """
         Internal method to get from the cache.
@@ -289,7 +299,7 @@ class LLMCachingHandler:
         start_time: datetime.datetime,
         call_type: str,
         kwargs: dict[str, Any],
-        args: tuple[Any, ...] | None = None,
+        args: tuple[object, ...] | None = None,
     ) -> CachingHandlerResponse:
         cached_result: Any | None = None
 
@@ -366,7 +376,7 @@ class LLMCachingHandler:
                     return CachingHandlerResponse(cached_result=cached_result)
         return CachingHandlerResponse(cached_result=cached_result)
 
-    def handle_kwargs_input_list_or_str(self, kwargs: dict[str, Any]) -> list[str]:
+    def handle_kwargs_input_list_or_str(self, kwargs: dict[str, object]) -> list[str]:
         """
         Handles the input of kwargs['input'] being a list or a string
         """
@@ -548,8 +558,8 @@ class LLMCachingHandler:
         if details2 is None:
             return details1
 
-        dict1: Final = details1.model_dump(exclude_none=True) if hasattr(details1, "model_dump") else {}
-        dict2: Final = details2.model_dump(exclude_none=True) if hasattr(details2, "model_dump") else {}
+        dict1: Final = _prompt_tokens_details_as_mapping(details1)
+        dict2: Final = _prompt_tokens_details_as_mapping(details2)
 
         merged: Final[dict] = {}
         for key in set(dict1.keys()) | set(dict2.keys()):
@@ -671,7 +681,9 @@ class LLMCachingHandler:
             cache_hit=cache_hit,
         )
 
-    async def _retrieve_from_cache(self, call_type: str, kwargs: dict[str, Any], args: tuple[Any, ...]) -> Any | None:
+    async def _retrieve_from_cache(
+        self, call_type: str, kwargs: dict[str, object], args: tuple[object, ...]
+    ) -> Any | None:
         """
         Internal method to
         - get cache key
@@ -727,7 +739,8 @@ class LLMCachingHandler:
                     cached_result = None
         else:
             request_kwargs: Final = new_kwargs.copy()
-            request_cache_key: Final = request_kwargs.pop("cache_key", None)
+            request_cache_key: Final = _request_cache_key(request_kwargs)
+            request_kwargs.pop("cache_key", None)
             if litellm.cache._supports_async() is True:
                 ## check if dual cache is supported ##
                 self.preset_cache_key = request_cache_key or litellm.cache.get_cache_key(**request_kwargs)
@@ -749,10 +762,10 @@ class LLMCachingHandler:
         self,
         cached_result: Any,
         call_type: str,
-        kwargs: dict[str, Any],
+        kwargs: dict[str, object],
         logging_obj: LiteLLMLoggingObj,
         model: str,
-        args: tuple[Any, ...],
+        args: tuple[object, ...],
         custom_llm_provider: str | None = None,
     ) -> (
         ModelResponse
@@ -948,7 +961,7 @@ class LLMCachingHandler:
         result: Any,
         original_function: Callable,
         kwargs: dict[str, Any],
-        args: tuple[Any, ...] | None = None,
+        args: tuple[object, ...] | None = None,
     ):
         """
         Internal method to check the type of the result & cache used and adds the result to the cache accordingly
@@ -1013,8 +1026,8 @@ class LLMCachingHandler:
     def sync_set_cache(
         self,
         result: Any,
-        kwargs: dict[str, Any],
-        args: tuple[Any, ...] | None = None,
+        kwargs: dict[str, object],
+        args: tuple[object, ...] | None = None,
     ):
         """
         Sync internal method to add the result to the cache
@@ -1204,8 +1217,8 @@ class LLMCachingHandler:
 
 def convert_args_to_kwargs(
     original_function: Callable,
-    args: tuple[Any, ...] | None = None,
-) -> dict[str, Any]:
+    args: tuple[object, ...] | None = None,
+) -> dict[str, object]:
     # Get the signature of the original function
     signature: Final = inspect.signature(original_function)
 

@@ -708,11 +708,10 @@ async def test_key_crossing_budget():
         response = await chat_completion(session=session, key=key)
         print("response 1: ", response)
         await asyncio.sleep(10)
-        try:
+        with pytest.raises(Exception, match="Budget has been exceeded!") as exc_info:
             response = await chat_completion(session=session, key=key)
-            pytest.fail("Should have failed - Key crossed it's budget")
-        except Exception as e:
-            assert "Budget has been exceeded!" in str(e)
+        e = exc_info.value
+        assert "Budget has been exceeded!" in str(e)
 
 
 @pytest.mark.skip(reason="AWS Suspended Account")
@@ -884,8 +883,7 @@ async def test_key_over_budget():
         ## CALL `/models` - expect to work
         model_list = await get_key_info(session=session, get_key=key, call_key=key)
         ## CALL `/chat/completions` - expect to fail
-        try:
+        with pytest.raises(Exception, match="Budget has been exceeded!") as exc_info:
             await chat_completion(session=session, key=key)
-            pytest.fail("Expected this call to fail")
-        except Exception as e:
-            assert "Budget has been exceeded!" in str(e)
+        e = exc_info.value
+        assert "Budget has been exceeded!" in str(e)
