@@ -4,6 +4,7 @@ Handles transforming from Responses API -> LiteLLM completion  (Chat Completion 
 
 import json
 import re
+import uuid
 from collections.abc import Iterator, Mapping, Sequence
 from types import MappingProxyType
 from typing import (
@@ -2017,7 +2018,7 @@ class LiteLLMCompletionResponsesConfig:
                     return [
                         GenericResponseOutputItem(
                             type="reasoning",
-                            id=f"rs_{hash(reasoning_content or encrypted_content)}",
+                            id=f"rs_{uuid.uuid4()}",
                             status=LiteLLMCompletionResponsesConfig._map_chat_completion_finish_reason_to_responses_status(
                                 choice.finish_reason
                             ),
@@ -2054,7 +2055,7 @@ class LiteLLMCompletionResponsesConfig:
         To Responses API format:
         {
             'type': 'image_generation_call',
-            'id': 'img_...',
+            'id': 'ig_...',
             'status': 'completed',
             'result': 'iVBORw0...'  # Pure base64 without data: prefix
         }
@@ -2065,7 +2066,7 @@ class LiteLLMCompletionResponsesConfig:
         if not images:
             return image_generation_items
 
-        for idx, image_item in enumerate(_DICT_ITEMS_LIST_ADAPTER.validate_python(images)):
+        for image_item in _DICT_ITEMS_LIST_ADAPTER.validate_python(images):
             # Extract base64 from data URL
             image_url = _TEXT_ADAPTER.validate_python(
                 _ANY_KEY_DICT_ADAPTER.validate_python(image_item.get("image_url", {})).get("url", "")
@@ -2076,7 +2077,7 @@ class LiteLLMCompletionResponsesConfig:
                 image_generation_items.append(
                     OutputImageGenerationCall(
                         type="image_generation_call",
-                        id=f"{chat_completion_response.id}_img_{idx}",
+                        id=f"ig_{uuid.uuid4()}",
                         status=LiteLLMCompletionResponsesConfig._map_finish_reason_to_image_generation_status(
                             choice.finish_reason
                         ),
@@ -2150,7 +2151,7 @@ class LiteLLMCompletionResponsesConfig:
                 message_output_items.append(
                     GenericResponseOutputItem(
                         type="message",
-                        id=chat_completion_response.id,
+                        id=f"msg_{uuid.uuid4()}",
                         status=LiteLLMCompletionResponsesConfig._map_chat_completion_finish_reason_to_responses_status(
                             choice.finish_reason
                         ),

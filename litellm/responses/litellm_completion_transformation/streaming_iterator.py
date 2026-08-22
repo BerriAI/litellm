@@ -966,9 +966,9 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         and the ReasoningSummaryTextDeltaEvent, which is used by the responses API to emit reasoning content.
         It also handles emitting annotation.added events when annotations are detected in the chunk.
         """
-        if self._cached_item_id is None and chunk.id:
-            self._cached_item_id = chunk.id
-        item_id: Final = self._cached_item_id or chunk.id
+        if self._cached_item_id is None:
+            self._cached_item_id = f"msg_{uuid.uuid4()}"
+        item_id: Final = self._cached_item_id
 
         # Check if this chunk has annotations first (before processing text/reasoning)
         # This ensures we detect and queue annotation events from the annotation chunk
@@ -1003,9 +1003,12 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         ):
             reasoning_content: Final = chunk.choices[0].delta.reasoning_content
 
+            if self._cached_reasoning_item_id is None:
+                self._cached_reasoning_item_id = f"rs_{uuid.uuid4()}"
+
             return ReasoningSummaryTextDeltaEvent(
                 type=ResponsesAPIStreamEvents.REASONING_SUMMARY_TEXT_DELTA,
-                item_id=f"rs_{hash(str(reasoning_content))}",
+                item_id=self._cached_reasoning_item_id,
                 output_index=0,
                 delta=reasoning_content,
             )
@@ -1056,6 +1059,35 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         chat_completion_delta: Final[ChatCompletionDelta] = choice.delta
         return chat_completion_delta.content or ""
 
+    def _align_output_item_ids_with_streamed_ids(self, responses_api_response: ResponsesAPIResponse) -> None:
+        """
+        Reuse the item IDs already emitted by the incremental streaming events in the
+        ``response.completed`` snapshot, so a streaming client that replays the snapshot
+        sends back the same IDs it observed mid-stream.
+        """
+        self._set_first_output_item_id(responses_api_response, "message", self._cached_item_id)
+        self._set_first_output_item_id(responses_api_response, "reasoning", self._cached_reasoning_item_id)
+
+    @staticmethod
+    def _set_first_output_item_id(
+        responses_api_response: ResponsesAPIResponse,
+        item_type: str,
+        cached_id: str | None,
+    ) -> None:
+        if cached_id is None:
+            return
+
+        for item in getattr(responses_api_response, "output", None) or []:
+            current_type = item.get("type") if isinstance(item, dict) else getattr(item, "type", None)
+            if current_type != item_type:
+                continue
+
+            if isinstance(item, dict):
+                item["id"] = cached_id
+            else:
+                item.id = cached_id
+            return
+
     def _emit_response_completed_event(self, litellm_model_response: ModelResponse) -> ResponseCompletedEvent | None:
         if litellm_model_response:
             # Add cost to usage object if include_cost_in_streaming_usage is True
@@ -1080,6 +1112,8 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             # Use the cached response ID to ensure consistency across all events
             if self._cached_response_id:
                 responses_api_response.id = self._cached_response_id
+
+            self._align_output_item_ids_with_streamed_ids(responses_api_response)
 
             # Encode the response ID to match non-streaming behavior
             encoded_response: Final = ResponsesAPIRequestUtils._update_responses_api_response_id_with_model_id(

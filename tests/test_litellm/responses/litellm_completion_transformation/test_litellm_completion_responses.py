@@ -2841,9 +2841,9 @@ class TestStreamingIDConsistency:
         # Verify the cached ID is set and matches
         assert iterator._cached_item_id is not None, "Iterator should cache the item_id"
         assert iterator._cached_item_id == item_id_1, "Cached ID should match event IDs"
-        assert (
-            iterator._cached_item_id == "chatcmpl-first-id"
-        ), "Should use the first chunk's ID"
+        assert iterator._cached_item_id.startswith(
+            "msg_"
+        ), "Message item IDs must use the Responses API msg_ prefix (issue #27333)"
 
     def test_streaming_iterator_initial_events_use_cached_id(self):
         """
