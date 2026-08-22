@@ -1,6 +1,6 @@
 import json
-from typing import Final, List
-from unittest.mock import ANY, AsyncMock
+from typing import Final, List, Optional
+from unittest.mock import ANY, AsyncMock, MagicMock
 
 import pytest
 import respx
@@ -4302,3 +4302,177 @@ def test_batch_upload_closes_the_spools_it_opened(monkeypatch, llm_router: Route
     finally:
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
         ProxyLogging._callback_capabilities_cache.clear()
+
+
+def _managed_file_row(
+    unified_file_id: str,
+    stored_file_id: Optional[str] = None,
+    created_by: str = "test-user",
+    team_id: Optional[str] = None,
+) -> MagicMock:
+    file_object = OpenAIFileObject(
+        id=stored_file_id or unified_file_id,
+        bytes=100,
+        created_at=1700000000,
+        filename="batch.jsonl",
+        object="file",
+        purpose="batch",
+        status="processed",
+    )
+    return MagicMock(
+        unified_file_id=unified_file_id,
+        file_object=file_object.model_dump(),
+        created_by=created_by,
+        team_id=team_id,
+    )
+
+
+def _row_matches_where(row, where) -> bool:
+    for field, expected in where.items():
+        if field == "OR":
+            if not any(_row_matches_where(row, clause) for clause in expected):
+                return False
+        elif getattr(row, field) != expected:
+            return False
+    return True
+
+
+class _ManagedFileTableOverRows:
+    """Enough of the Prisma table for the real hook's owner-scoped keyset query."""
+
+    def __init__(self, rows):
+        self.rows = list(rows)
+
+    def _owned_rows(self, where):
+        return [row for row in self.rows if _row_matches_where(row, where)]
+
+    async def find_first(self, where):
+        return next(iter(self._owned_rows(where)), None)
+
+    async def find_many(self, where, take=None, order=None, cursor=None, skip=0):
+        rows = self._owned_rows(where)
+        if cursor is not None:
+            start = next(
+                index
+                for index, row in enumerate(rows)
+                if row.unified_file_id == cursor["unified_file_id"]
+            )
+            rows = rows[start + skip :]
+        return rows if take is None else rows[:take]
+
+
+def _setup_unscoped_list_files_route_over_real_hook(
+    mocker, monkeypatch, llm_router: Router, rows
+):
+    """Wire GET /v1/files to a real managed-files hook over `rows`, with no provider
+    credentials in the process. The neighbouring setup stubs the hook with a
+    MagicMock, so it cannot see anything past the route's argument plumbing."""
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+    from litellm_enterprise.proxy.hooks.managed_files import (
+        _PROXY_LiteLLMManagedFiles,
+    )
+
+    for env_var in ("OPENAI_API_KEY", "OPENAI_ADMIN_KEY", "OPENAI_ORGANIZATION"):
+        monkeypatch.delenv(env_var, raising=False)
+    monkeypatch.setattr(litellm, "api_key", None, raising=False)
+    monkeypatch.setattr(litellm, "openai_key", None, raising=False)
+
+    managed_files = _PROXY_LiteLLMManagedFiles(
+        internal_usage_cache=MagicMock(), prisma_client=MagicMock()
+    )
+    managed_files.prisma_client.db.litellm_managedfiletable = _ManagedFileTableOverRows(rows)
+
+    proxy_logging_obj = setup_proxy_logging_object(monkeypatch, llm_router)
+    proxy_logging_obj.proxy_hook_mapping["managed_files"] = managed_files
+    proxy_logging_obj.update_request_status = mocker.AsyncMock()
+    proxy_logging_obj.post_call_success_hook = mocker.AsyncMock(return_value=None)
+    proxy_logging_obj.post_call_failure_hook = mocker.AsyncMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", llm_router)
+
+    provider_list = mocker.patch.object(litellm, "afile_list", new=mocker.AsyncMock())
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        api_key="test-key",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="test-user",
+    )
+    return proxy_logging_obj, provider_list
+
+
+def test_unscoped_list_files_reads_the_store_without_any_provider_key(
+    mocker: MockerFixture, monkeypatch, llm_router: Router
+):
+    """The exact shape `client.files.list()` produces, with no target_model_names, no
+    provider and no OPENAI_API_KEY in the process, must return the caller's managed
+    files instead of falling through to a keyless provider client (#35362)."""
+    proxy_logging_obj, provider_list = _setup_unscoped_list_files_route_over_real_hook(
+        mocker, monkeypatch, llm_router, [_managed_file_row("unified-file-1")]
+    )
+
+    response = _get_unscoped_list_files("")
+
+    assert response.status_code == 200, response.text
+    assert [file["id"] for file in response.json()["data"]] == ["unified-file-1"]
+    provider_list.assert_not_awaited()
+    proxy_logging_obj.post_call_failure_hook.assert_not_called()
+
+
+def test_unscoped_list_files_returns_unified_ids_for_rows_storing_a_raw_provider_id(
+    mocker: MockerFixture, monkeypatch, llm_router: Router
+):
+    """Batch output rows store the provider's file object, whose id is a raw `file-`
+    the caller cannot act on. The listing hands back the row's unified id so
+    files.retrieve and files.content work on what it returned."""
+    _setup_unscoped_list_files_route_over_real_hook(
+        mocker,
+        monkeypatch,
+        llm_router,
+        [_managed_file_row("unified-batch-output", stored_file_id="file-raw-provider-123")],
+    )
+
+    response = _get_unscoped_list_files("")
+
+    assert response.status_code == 200, response.text
+    assert [file["id"] for file in response.json()["data"]] == ["unified-batch-output"]
+    assert response.json()["data"][0]["filename"] == "batch.jsonl"
+
+
+def test_unscoped_list_files_does_not_leak_another_callers_files(
+    mocker: MockerFixture, monkeypatch, llm_router: Router
+):
+    """Listing without a model pinned is still owner-scoped."""
+    _setup_unscoped_list_files_route_over_real_hook(
+        mocker,
+        monkeypatch,
+        llm_router,
+        [
+            _managed_file_row("unified-mine"),
+            _managed_file_row("unified-theirs", created_by="other-user"),
+        ],
+    )
+
+    response = _get_unscoped_list_files("")
+
+    assert response.status_code == 200, response.text
+    assert [file["id"] for file in response.json()["data"]] == ["unified-mine"]
+
+
+def test_scoped_list_files_still_resolves_deployment_credentials(
+    mocker: MockerFixture, monkeypatch, llm_router: Router
+):
+    """target_model_names keeps routing to the provider on deployment credentials, so
+    the unscoped path does not swallow that route."""
+    _, provider_list = _setup_unscoped_list_files_route_over_real_hook(
+        mocker, monkeypatch, llm_router, [_managed_file_row("unified-file-1")]
+    )
+    provider_list.return_value = []
+
+    response = _get_unscoped_list_files("?target_model_names=gpt-3.5-turbo")
+
+    assert response.status_code == 200, response.text
+    provider_list.assert_awaited_once()
+    assert provider_list.await_args.kwargs["custom_llm_provider"] == "openai"
+    assert provider_list.await_args.kwargs["api_key"] == "openai_api_key"
