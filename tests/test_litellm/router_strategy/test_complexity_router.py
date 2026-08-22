@@ -297,22 +297,25 @@ class TestReasoningMarkerScoring:
         assert tier == ComplexityTier.REASONING
 
     def test_floor_defaults_to_simple_medium_and_follows_it(self, mock_router_instance, basic_config):
-        """Unset tracks simple_medium, so moving that boundary moves the floor with it."""
+        """Unset tracks simple_medium, so moving that boundary moves the floor with it.
+
+        Both arms carry the fixture's other two boundaries unchanged: simple_medium is the only
+        variable, and boundaries must ascend, so the pair above it cannot be left to fill from
+        shipped defaults that sit below the value under test.
+        """
         prompt = (
             "Give me the pros and cons, step by step, of moving our checkout service to an event-driven architecture."
         )
+        boundaries = basic_config["tier_boundaries"]
         low = ComplexityRouter(
             model_name="test-complexity-router",
             litellm_router_instance=mock_router_instance,
-            complexity_router_config={**basic_config, "tier_boundaries": {"simple_medium": 0.20}},
+            complexity_router_config={**basic_config, "tier_boundaries": {**boundaries, "simple_medium": 0.20}},
         )
         high = ComplexityRouter(
             model_name="test-complexity-router",
             litellm_router_instance=mock_router_instance,
-            complexity_router_config={
-                **basic_config,
-                "tier_boundaries": {"simple_medium": 0.30, "medium_complex": 0.35, "complex_reasoning": 0.50},
-            },
+            complexity_router_config={**basic_config, "tier_boundaries": {**boundaries, "simple_medium": 0.30}},
         )
         assert low._effective_reasoning_override_min_score() == 0.20
         assert high._effective_reasoning_override_min_score() == 0.30
