@@ -968,6 +968,24 @@ describe("ComplexityRouterConfig per-model effort filtering", () => {
     expect(options).toEqual(["Default", "none", "minimal", "low", "medium", "high", "xhigh"]);
   });
 
+  it("falls back to every effort when the group intersects to nothing", async () => {
+    renderWithProviders(
+      <ComplexityRouterConfig
+        {...baseProps}
+        modelInfo={[
+          ...mockModelInfo.filter((model) => model.model_group !== "claude-3-opus"),
+          { model_group: "claude-3-opus", mode: "chat", supports_reasoning: true, supported_reasoning_efforts: [] },
+        ]}
+      />,
+    );
+    const user = userEvent.setup();
+    await user.click(
+      screen.getByRole("combobox", { name: "Reasoning effort for claude-3-opus in the Reasoning tier" }),
+    );
+    const options = (await screen.findAllByRole("option")).map((option) => option.textContent);
+    expect(options).toEqual(["Default", "none", "minimal", "low", "medium", "high", "xhigh"]);
+  });
+
   // Hand-authored configs can carry a level outside the supported set (e.g. max); it must render
   // and stay clearable rather than being masked as Default.
   it("keeps showing a stored effort outside the supported set", () => {

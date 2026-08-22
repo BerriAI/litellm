@@ -222,8 +222,8 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
                 if "reasoning_effort" in optional_params:
                     optional_params["reasoning_effort"] = normalized
 
-        if effective_effort in ("xhigh", "max", "ultra"):
-            # xhigh/max/ultra are opt-in capabilities: only allow if the model explicitly supports them.
+        if effective_effort == "xhigh":
+            # xhigh is an opt-in capability: only allow if model explicitly supports it.
             if not self._supports_reasoning_effort_level(model, effective_effort):
                 if litellm.drop_params or drop_params:
                     non_default_params.pop("reasoning_effort", None)
