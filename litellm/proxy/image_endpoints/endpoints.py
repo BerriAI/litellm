@@ -1,7 +1,11 @@
 import asyncio
+import base64
+import binascii
 import io
+import os
+import re
 import traceback
-from typing import Final
+from typing import Any, Final
 
 import orjson
 from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, UploadFile, status
@@ -19,6 +23,90 @@ from litellm.proxy.route_llm_request import route_request
 from litellm.types.llms.openai import ChatCompletionUserMessage
 
 router: Final = APIRouter()
+
+_IMAGE_DATA_URL_PATTERN: Final = re.compile(
+    r"^data:(?P<mime>image/[a-zA-Z0-9.+-]+);base64,(?P<data>.*)$",
+    re.DOTALL,
+)
+_IMAGE_MIME_EXTENSIONS: Final = {
+    "image/gif": "gif",
+    "image/jpeg": "jpg",
+    "image/png": "png",
+    "image/webp": "webp",
+}
+_DEFAULT_IMAGE_EDIT_MAX_IMAGES: Final = 10
+_DEFAULT_IMAGE_EDIT_MAX_TOTAL_BYTES: Final = 50 * 1024 * 1024
+
+
+def _positive_env_int(name: str, default: int) -> int:
+    raw_value = os.environ.get(name)
+    if raw_value is None:
+        return default
+    try:
+        value = int(raw_value)
+    except ValueError as exc:
+        raise RuntimeError(f"{name} must be an integer") from exc
+    if value <= 0:
+        raise RuntimeError(f"{name} must be greater than zero")
+    return value
+
+
+def decode_json_image_edit_images(images: Any) -> list[io.BytesIO]:
+    """Decode JSON image-edit data URLs into the file objects LiteLLM expects."""
+    if not isinstance(images, list) or not images:
+        raise ValueError("'images' must be a non-empty array")
+
+    max_images = _positive_env_int(
+        "IMAGE_EDIT_MAX_IMAGES", _DEFAULT_IMAGE_EDIT_MAX_IMAGES
+    )
+    max_total_bytes = _positive_env_int(
+        "IMAGE_EDIT_MAX_TOTAL_BYTES", _DEFAULT_IMAGE_EDIT_MAX_TOTAL_BYTES
+    )
+    if len(images) > max_images:
+        raise ValueError(f"'images' contains more than {max_images} items")
+
+    decoded_images: list[io.BytesIO] = []
+    total_bytes = 0
+    for index, item in enumerate(images):
+        image_url = item.get("image_url") if isinstance(item, dict) else item
+        if not isinstance(image_url, str):
+            raise ValueError(
+                f"images[{index}].image_url must be a data URL string"
+            )
+
+        match = _IMAGE_DATA_URL_PATTERN.fullmatch(image_url)
+        if match is None:
+            raise ValueError(
+                f"images[{index}].image_url must be a base64 image data URL"
+            )
+
+        mime_type = match.group("mime").lower()
+        try:
+            payload = base64.b64decode(match.group("data"), validate=True)
+        except (binascii.Error, ValueError) as exc:
+            raise ValueError(
+                f"images[{index}].image_url contains invalid base64 data"
+            ) from exc
+        if not payload:
+            raise ValueError(
+                f"images[{index}].image_url contains an empty image"
+            )
+
+        total_bytes += len(payload)
+        if total_bytes > max_total_bytes:
+            raise ValueError(
+                "decoded images exceed IMAGE_EDIT_MAX_TOTAL_BYTES "
+                f"({max_total_bytes})"
+            )
+
+        image_buffer = io.BytesIO(payload)
+        extension = _IMAGE_MIME_EXTENSIONS.get(
+            mime_type, mime_type.split("/", 1)[1]
+        )
+        image_buffer.name = f"image-{index + 1}.{extension}"
+        decoded_images.append(image_buffer)
+
+    return decoded_images
 
 
 async def uploadfile_to_bytesio(upload: UploadFile) -> io.BytesIO:
@@ -279,8 +367,26 @@ async def image_edit_api(
     # Read request body and convert UploadFiles to BytesIO
     #########################################################
     data: Final = await _read_request_body(request=request)
-    image_files: Final = await batch_to_bytesio(image)
+    multipart_image_files: Final = await batch_to_bytesio(image)
     mask_files: Final = await batch_to_bytesio(mask)
+
+    # OpenClaw/Codex can send JSON
+    # {"images": [{"image_url": "data:image/...;base64,..."}]} instead of
+    # multipart image/image[]. Convert it to the BytesIO values aimage_edit uses.
+    json_images = data.pop("images", None)
+    if json_images is not None:
+        if multipart_image_files:
+            raise HTTPException(
+                status_code=422,
+                detail="Cannot specify both multipart 'image' and JSON 'images'",
+            )
+        try:
+            image_files = decode_json_image_edit_images(json_images)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+    else:
+        image_files = multipart_image_files
+
     if image_files:
         data["image"] = image_files
     if mask_files:

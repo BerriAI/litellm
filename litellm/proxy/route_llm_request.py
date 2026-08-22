@@ -55,6 +55,26 @@ def _is_a2a_agent_model(model_name: Any) -> bool:
     return isinstance(model_name, str) and model_name.startswith("a2a/")
 
 
+def _should_auto_route_chatgpt_image_model(
+    data: Mapping[str, Any],
+    route_type: str,
+    llm_router: LitellmRouter | None,
+) -> bool:
+    """Use ChatGPT OAuth for unconfigured, provider-less GPT Image models."""
+    if route_type not in {"aimage_generation", "aimage_edit"}:
+        return False
+    model: Final = data.get("model")
+    if (
+        not isinstance(model, str)
+        or not model.startswith("gpt-image-")
+        or "/" in model
+    ):
+        return False
+    if llm_router is None:
+        return True
+    return not bool(llm_router.get_model_list(model_name=model))
+
+
 def _raise_if_model_fully_blocked(llm_router: LitellmRouter, model_name: Any, team_id: str | None) -> None:
     if not isinstance(model_name, str) or not model_name:
         return
@@ -487,6 +507,16 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
             return getattr(llm_router, f"{route_type}")(**data)
         else:
             return getattr(litellm, f"{route_type}")(**data)
+
+    elif _should_auto_route_chatgpt_image_model(
+        data=data,
+        route_type=route_type,
+        llm_router=llm_router,
+    ):
+        requested_model: Final = data["model"]
+        data.setdefault("_litellm_client_requested_model", requested_model)
+        data["model"] = f"chatgpt/{requested_model}"
+        return getattr(litellm, f"{route_type}")(**data)
 
     elif (
         route_type == "acompletion"

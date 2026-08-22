@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import copy
 from types import SimpleNamespace
 from typing import Any, Dict
@@ -10,6 +11,52 @@ from starlette.responses import Response
 
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.image_endpoints import endpoints
+
+
+def _image_data_url(payload: bytes, mime_type: str = "image/png") -> str:
+    encoded = base64.b64encode(payload).decode("ascii")
+    return f"data:{mime_type};base64,{encoded}"
+
+
+def test_decode_json_image_edit_images_openclaw_shape():
+    images = endpoints.decode_json_image_edit_images(
+        [{"image_url": _image_data_url(b"png-data")}]
+    )
+
+    assert images[0].read() == b"png-data"
+    assert images[0].name == "image-1.png"
+
+
+def test_decode_json_image_edit_images_supports_strings_and_multiple_formats():
+    images = endpoints.decode_json_image_edit_images(
+        [
+            _image_data_url(b"one", "image/jpeg"),
+            _image_data_url(b"two", "image/webp"),
+        ]
+    )
+
+    assert [image.name for image in images] == ["image-1.jpg", "image-2.webp"]
+    assert [image.read() for image in images] == [b"one", b"two"]
+
+
+@pytest.mark.parametrize(
+    "images, error",
+    [
+        ([{"image_url": "https://example.com/image.png"}], "base64 image data URL"),
+        ([{"image_url": "data:image/png;base64,%%%"}], "invalid base64"),
+        ([], "non-empty array"),
+    ],
+)
+def test_decode_json_image_edit_images_rejects_invalid_input(images, error):
+    with pytest.raises(ValueError, match=error):
+        endpoints.decode_json_image_edit_images(images)
+
+
+def test_decode_json_image_edit_images_enforces_total_size_limit(monkeypatch):
+    monkeypatch.setenv("IMAGE_EDIT_MAX_TOTAL_BYTES", "2")
+
+    with pytest.raises(ValueError, match="IMAGE_EDIT_MAX_TOTAL_BYTES"):
+        endpoints.decode_json_image_edit_images([_image_data_url(b"123")])
 
 
 @pytest.mark.asyncio
