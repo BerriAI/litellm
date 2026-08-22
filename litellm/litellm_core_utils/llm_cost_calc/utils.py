@@ -347,8 +347,10 @@ def _get_token_base_cost(
 
         base_key = match.group("base_key")
         selected = selected_threshold_keys.get(base_key)
+        selected_specificity = 0 if selected is None or selected[2] is None else 1
+        candidate_specificity = 0 if threshold_key_tier is None else 1
 
-        if selected is None or threshold > selected[0]:
+        if selected is None or (threshold, candidate_specificity) > (selected[0], selected_specificity):
             selected_threshold_keys[base_key] = (
                 threshold,
                 key,

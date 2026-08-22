@@ -71,6 +71,133 @@ def test_cost_types_select_thresholds_independently() -> None:
 
 
 @pytest.mark.parametrize(
+    "model_info",
+    [
+        {
+            "input_cost_per_token": 1e-6,
+            "output_cost_per_token": 2e-6,
+            "output_cost_per_token_above_200k_tokens": 1e-6,
+            "output_cost_per_token_above_200k_tokens_priority": 1.5e-6,
+        },
+        {
+            "input_cost_per_token": 1e-6,
+            "output_cost_per_token": 2e-6,
+            "output_cost_per_token_above_200k_tokens_priority": 1.5e-6,
+            "output_cost_per_token_above_200k_tokens": 1e-6,
+        },
+    ],
+    ids=["standard-first", "priority-first"],
+)
+def test_equal_threshold_matching_tier_wins_for_output(model_info):
+    """At an equal threshold the matching service-tier rate must win regardless of the
+    order the standard and tier-qualified keys appear in model_info."""
+    usage = Usage(
+        prompt_tokens=250_000,
+        completion_tokens=1_000,
+        total_tokens=251_000,
+    )
+
+    rates = _get_token_base_cost(model_info=model_info, usage=usage, service_tier="priority")
+
+    assert rates[1] == pytest.approx(1.5e-6)
+
+
+@pytest.mark.parametrize(
+    "model_info",
+    [
+        {
+            "input_cost_per_token": 1e-6,
+            "cache_read_input_token_cost": 2e-7,
+            "cache_read_input_token_cost_above_200k_tokens": 3e-7,
+            "cache_read_input_token_cost_above_200k_tokens_priority": 4e-7,
+        },
+        {
+            "input_cost_per_token": 1e-6,
+            "cache_read_input_token_cost": 2e-7,
+            "cache_read_input_token_cost_above_200k_tokens_priority": 4e-7,
+            "cache_read_input_token_cost_above_200k_tokens": 3e-7,
+        },
+    ],
+    ids=["standard-first", "priority-first"],
+)
+def test_equal_threshold_matching_tier_wins_for_cache_read(model_info):
+    usage = Usage(
+        prompt_tokens=250_000,
+        completion_tokens=1_000,
+        total_tokens=251_000,
+    )
+
+    rates = _get_token_base_cost(model_info=model_info, usage=usage, service_tier="priority")
+
+    assert rates[4] == pytest.approx(4e-7)
+
+
+def test_equal_threshold_default_tier_keeps_standard():
+    """service_tier=None must ignore the tier-qualified key and keep the standard rate."""
+    model_info = {
+        "input_cost_per_token": 1e-6,
+        "output_cost_per_token": 2e-6,
+        "output_cost_per_token_above_200k_tokens": 1e-6,
+        "output_cost_per_token_above_200k_tokens_priority": 1.5e-6,
+    }
+    usage = Usage(
+        prompt_tokens=250_000,
+        completion_tokens=1_000,
+        total_tokens=251_000,
+    )
+
+    rates = _get_token_base_cost(model_info=model_info, usage=usage)
+
+    assert rates[1] == pytest.approx(1e-6)
+
+
+def test_equal_threshold_wrong_tier_keeps_standard():
+    """A priority-qualified key must not win under a different service tier."""
+    model_info = {
+        "input_cost_per_token": 1e-6,
+        "output_cost_per_token": 2e-6,
+        "output_cost_per_token_above_200k_tokens": 1e-6,
+        "output_cost_per_token_above_200k_tokens_priority": 1.5e-6,
+    }
+    usage = Usage(
+        prompt_tokens=250_000,
+        completion_tokens=1_000,
+        total_tokens=251_000,
+    )
+
+    rates = _get_token_base_cost(
+        model_info=model_info,
+        usage=usage,
+        service_tier="flex",
+    )
+
+    assert rates[1] == pytest.approx(1e-6)
+
+
+def test_unequal_threshold_highest_standard_still_wins():
+    """A higher standard threshold governs over a lower matching-tier threshold."""
+    model_info = {
+        "input_cost_per_token": 1e-6,
+        "output_cost_per_token": 2e-6,
+        "output_cost_per_token_above_200k_tokens": 1e-6,
+        "output_cost_per_token_above_128k_tokens_priority": 1.5e-6,
+    }
+    usage = Usage(
+        prompt_tokens=250_000,
+        completion_tokens=1_000,
+        total_tokens=251_000,
+    )
+
+    rates = _get_token_base_cost(
+        model_info=model_info,
+        usage=usage,
+        service_tier="priority",
+    )
+
+    assert rates[1] == pytest.approx(1e-6)
+
+
+@pytest.mark.parametrize(
     ("tier_field", "tier_value", "rate_index"),
     [
         ("output_cost_per_token_above_200k_tokens_priority", 1.5e-6, 1),
