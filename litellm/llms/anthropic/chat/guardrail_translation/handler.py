@@ -44,10 +44,8 @@ from litellm.types.llms.anthropic import (
 )
 from litellm.types.llms.openai import (
     AllMessageValues,
-    ChatCompletionAssistantToolCall,
     ChatCompletionRequest,
     ChatCompletionToolCallChunk,
-    ChatCompletionToolCallFunctionChunk,
     ChatCompletionToolParam,
 )
 from litellm.types.utils import (
@@ -111,6 +109,17 @@ class ExtractedInput:
 
 
 EMPTY_EXTRACTED_INPUT: Final = ExtractedInput(scanned=(), images=())
+
+
+@dataclass(frozen=True, slots=True)
+class _ScopedRequestView:
+    """The request as guardrail scans see it, with the operator scoping applied."""
+
+    translated_request: ChatCompletionRequest
+    full_messages: tuple[AllMessageValues, ...]
+    scoped_indices: tuple[int, ...]
+    hoisted_system_message: AllMessageValues | None
+    has_midturn_system_message: bool
 
 
 class AnthropicMessagesHandler(BaseTranslation):
@@ -316,36 +325,57 @@ class AnthropicMessagesHandler(BaseTranslation):
         )
         return result if result else None
 
+    def _scoped_request_view(
+        self,
+        data: dict,  # mutable-ok: API request payload
+        guardrail_to_apply: "CustomGuardrail",
+    ) -> "_ScopedRequestView":
+        """
+        Translate the request the way guardrail scans see it: exclude the
+        trusted top-level prompt, hoist it back unless skip_system, keep
+        in-sequence system entries in scope. Single source of truth for the
+        request and response scans, which must not disagree.
+        """
+        skip_system: Final = effective_skip_system_message_for_guardrail(guardrail_to_apply)
+        translation_source: Final = {  # mutable-ok: API message payload
+            key: value for key, value in data.items() if key != "system"
+        }
+        translated_request: Final = self._translate_to_openai(translation_source)
+        translated_messages: Final = tuple(translated_request.get("messages") or ())
+        has_midturn_system_message: Final = any(
+            str(message.get("role") or "").lower() == "system" for message in translated_messages
+        )
+        hoisted_system_message: Final = None if skip_system else self._hoisted_top_level_system_message(data)
+        full_messages: Final = (
+            (hoisted_system_message, *translated_messages)
+            if hoisted_system_message is not None
+            else translated_messages
+        )
+        # skip_system already excluded the trusted top-level prompt (it is simply
+        # not hoisted); in-sequence system entries are untrusted and stay in scope.
+        scoped_indices: Final = scoped_structured_message_indices(
+            full_messages,
+            scan_only_tool_results=effective_scan_only_tool_results_for_guardrail(guardrail_to_apply),
+            skip_system=False,
+            skip_tool=effective_skip_tool_message_for_guardrail(guardrail_to_apply),
+        )
+        return _ScopedRequestView(
+            translated_request=translated_request,
+            full_messages=full_messages,
+            scoped_indices=scoped_indices,
+            hoisted_system_message=hoisted_system_message,
+            has_midturn_system_message=has_midturn_system_message,
+        )
+
     def scoped_request_conversation(
         self,
         request_data: dict,  # mutable-ok: API request payload
         guardrail_to_apply: "CustomGuardrail",
     ) -> tuple[AllMessageValues, ...] | None:
-        """
-        Mirror the request scan's scoping: translate without the trusted
-        top-level prompt, hoist it back unless skip_system, and keep
-        in-sequence system entries in scope.
-        """
         if request_data.get("messages") is None:
             return None
-        skip_system: Final = effective_skip_system_message_for_guardrail(guardrail_to_apply)
-        translation_source: Final = {  # mutable-ok: API message payload
-            key: value for key, value in request_data.items() if key != "system"
-        }
-        translated_messages: Final = self._translate_to_openai(translation_source).get("messages")
-        hoisted_system_message: Final = None if skip_system else self._hoisted_top_level_system_message(request_data)
-        full_structured_messages: Final = (
-            (hoisted_system_message, *(translated_messages or ()))
-            if hoisted_system_message is not None
-            else tuple(translated_messages or ())
-        )
-        scoped_indices: Final = scoped_structured_message_indices(
-            full_structured_messages,
-            scan_only_tool_results=effective_scan_only_tool_results_for_guardrail(guardrail_to_apply),
-            skip_system=False,
-            skip_tool=effective_skip_tool_message_for_guardrail(guardrail_to_apply),
-        )
-        return tuple(full_structured_messages[index] for index in scoped_indices) or None
+        view: Final = self._scoped_request_view(request_data, guardrail_to_apply)
+        return tuple(view.full_messages[index] for index in view.scoped_indices) or None
 
     def request_tools_for_guardrail(
         self,
@@ -356,10 +386,14 @@ class AnthropicMessagesHandler(BaseTranslation):
             return None
         if not request_data.get("tools"):
             return None
-        translation_source: Final = {  # mutable-ok: API message payload
-            key: value for key, value in request_data.items() if key != "system"
-        }
-        tools: Final = self._translate_to_openai(translation_source).get("tools")
+        probe: Final = self._translate_to_openai(
+            {  # mutable-ok: API message payload
+                "model": request_data.get("model") or "",
+                "messages": [],  # mutable-ok: API message payload
+                "tools": request_data["tools"],
+            }
+        )
+        tools: Final = probe.get("tools")
         return tuple(tools) if tools else None
 
     async def process_input_messages(
@@ -382,33 +416,17 @@ class AnthropicMessagesHandler(BaseTranslation):
         # Exclude only the trusted top-level prompt. In-sequence system entries are untrusted
         # and must stay aligned with texts_to_check for positional masking. When the top-level
         # prompt is included, the pre-existing count mismatch disables positional masking.
-        translation_source: Final = {  # mutable-ok: API message payload
-            key: value for key, value in data.items() if key != "system"
-        }
-        chat_completion_compatible_request: Final = self._translate_to_openai(translation_source)
+        view: Final = self._scoped_request_view(data, guardrail_to_apply)
+        full_structured_messages: Final = view.full_messages
+        has_midturn_system_message: Final = view.has_midturn_system_message
+        hoisted_system_message: Final = view.hoisted_system_message
+        scoped_message_indices: Final = view.scoped_indices
+        structured_messages: Final = [  # mutable-ok: GenericGuardrailAPIInputs takes list
+            full_structured_messages[index] for index in scoped_message_indices
+        ]
 
-        full_structured_messages: Final = cast(
-            list[AllMessageValues],
-            chat_completion_compatible_request.get("messages", []),
-        )
-        has_midturn_system_message: Final = any(
-            str(message.get("role") or "").lower() == "system" for message in full_structured_messages
-        )
-        hoisted_system_message: Final = None if skip_system else self._hoisted_top_level_system_message(data)
-        if hoisted_system_message is not None:
-            full_structured_messages.insert(0, hoisted_system_message)
-        # skip_system already excluded the trusted top-level prompt (it is simply not hoisted);
-        # in-sequence system entries are untrusted and always stay in scope.
-        scoped_message_indices: Final = scoped_structured_message_indices(
-            full_structured_messages,
-            scan_only_tool_results=scan_only_tool_results,
-            skip_system=False,
-            skip_tool=skip_tool,
-        )
-        structured_messages: Final = [full_structured_messages[index] for index in scoped_message_indices]
-
-        tools_to_check: Final[list[ChatCompletionToolParam]] = (
-            [] if scan_only_tool_results else chat_completion_compatible_request.get("tools", [])
+        tools_to_check: Final[list[ChatCompletionToolParam]] = (  # mutable-ok: GenericGuardrailAPIInputs takes list
+            [] if scan_only_tool_results else list(view.translated_request.get("tools") or ())
         )
 
         # Step 1: Extract all text content and images
@@ -944,18 +962,12 @@ class AnthropicMessagesHandler(BaseTranslation):
                 response,
             )
 
-            structured_conversation: Final = self.response_scan_conversation(
+            self.attach_response_scan_context(
+                inputs,
                 request_data,
                 guardrail_to_apply,
                 self.assistant_turn_from_extraction(texts_to_check, tool_calls_to_check),
             )
-            if structured_conversation:
-                inputs["structured_messages"] = list(
-                    structured_conversation
-                )  # mutable-ok: GenericGuardrailAPIInputs takes list
-                response_scan_tools: Final = self.request_tools_for_guardrail(request_data, guardrail_to_apply)
-                if response_scan_tools:
-                    inputs["tools"] = list(response_scan_tools)  # mutable-ok: GenericGuardrailAPIInputs takes list
 
             guardrailed_inputs: Final = await guardrail_to_apply.apply_guardrail(
                 inputs=inputs,
@@ -1024,17 +1036,15 @@ class AnthropicMessagesHandler(BaseTranslation):
                         key="response",
                     )
                     stream_tool_calls: Final = tuple(
-                        ChatCompletionAssistantToolCall(
-                            id=tool_call.id,
-                            type="function",
-                            function=ChatCompletionToolCallFunctionChunk(
-                                name=tool_call.function.name,
-                                arguments=tool_call.function.arguments,
-                            ),
+                        self.assistant_tool_call(
+                            tool_call_id=tool_call.id,
+                            name=tool_call.function.name,
+                            arguments=tool_call.function.arguments,
                         )
                         for tool_call in tool_calls_list or ()
                     )
-                    structured_conversation: Final = self.response_scan_conversation(
+                    self.attach_response_scan_context(
+                        guardrail_inputs,
                         prepared_request_data,
                         guardrail_to_apply,
                         self.assistant_turn_from_extraction(
@@ -1042,17 +1052,6 @@ class AnthropicMessagesHandler(BaseTranslation):
                             stream_tool_calls,
                         ),
                     )
-                    if structured_conversation:
-                        guardrail_inputs["structured_messages"] = list(
-                            structured_conversation
-                        )  # mutable-ok: GenericGuardrailAPIInputs takes list
-                        response_scan_tools: Final = self.request_tools_for_guardrail(
-                            prepared_request_data, guardrail_to_apply
-                        )
-                        if response_scan_tools:
-                            guardrail_inputs["tools"] = list(
-                                response_scan_tools
-                            )  # mutable-ok: GenericGuardrailAPIInputs takes list
                     _guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
                         inputs=guardrail_inputs,
                         request_data=prepared_request_data,

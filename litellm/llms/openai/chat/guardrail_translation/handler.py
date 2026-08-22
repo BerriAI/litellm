@@ -36,15 +36,12 @@ from litellm.main import stream_chunk_builder
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionAssistantMessage,
-    ChatCompletionAssistantToolCall,
-    ChatCompletionToolCallFunctionChunk,
     ChatCompletionToolParam,
 )
 from litellm.types.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
     coerce_stream_holdback_value,
 )
 from litellm.types.utils import (
-    ChatCompletionMessageToolCall,
     Choices,
     GenericGuardrailAPIInputs,
     ModelResponse,
@@ -403,16 +400,9 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             if hasattr(response, "model") and response.model:
                 inputs["model"] = response.model
 
-            structured_conversation: Final = self.response_scan_conversation(
-                request_data, guardrail_to_apply, self._build_response_turns(response)
+            self.attach_response_scan_context(
+                inputs, request_data, guardrail_to_apply, self._build_response_turns(response)
             )
-            if structured_conversation:
-                inputs["structured_messages"] = list(
-                    structured_conversation
-                )  # mutable-ok: GenericGuardrailAPIInputs takes list
-                response_scan_tools: Final = self.request_tools_for_guardrail(request_data, guardrail_to_apply)
-                if response_scan_tools:
-                    inputs["tools"] = list(response_scan_tools)  # mutable-ok: GenericGuardrailAPIInputs takes list
 
             guardrailed_inputs: Final = await guardrail_to_apply.apply_guardrail(
                 inputs=inputs,
@@ -866,16 +856,13 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
 
     def _choice_assistant_turn(self, choice: Choices) -> ChatCompletionAssistantMessage | None:
         tool_calls: Final = tuple(
-            ChatCompletionAssistantToolCall(
-                id=tool_call.id,
-                type="function",
-                function=ChatCompletionToolCallFunctionChunk(
-                    name=tool_call.function.name,
-                    arguments=tool_call.function.arguments,
-                ),
+            self.assistant_tool_call(
+                tool_call_id=converted.get("id"),
+                name=(converted.get("function") or {}).get("name"),
+                arguments=(converted.get("function") or {}).get("arguments") or "",
             )
             for tool_call in choice.message.tool_calls or ()
-            if isinstance(tool_call, ChatCompletionMessageToolCall)
+            if (converted := self._convert_tool_call_to_dict(tool_call)) is not None and converted.get("function")
         )
         content: Final = choice.message.content
         if content is None and not tool_calls:

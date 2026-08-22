@@ -1241,7 +1241,7 @@ class MockInputsRecordingGuardrail(CustomGuardrail):
 
     def __init__(self):
         super().__init__(guardrail_name="inputs-recording")
-        self.calls: list = []
+        self.calls: list[tuple[str, dict]] = []
 
     async def apply_guardrail(
         self,

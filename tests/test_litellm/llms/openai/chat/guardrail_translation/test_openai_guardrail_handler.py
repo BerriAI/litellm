@@ -1571,7 +1571,7 @@ class RecordingGuardrail(CustomGuardrail):
 
     def __init__(self):
         super().__init__(guardrail_name="recording")
-        self.calls: list = []
+        self.calls: list[tuple[str, dict]] = []
 
     async def apply_guardrail(
         self,
@@ -1775,3 +1775,13 @@ class TestResponseScanConversation:
             {"role": "user", "content": "say hi"},
             {"role": "assistant", "content": "hi there"},
         ]
+
+    @pytest.mark.asyncio
+    async def test_empty_response_turns_yield_no_conversation(self):
+        """A conversation without a response turn would shadow the tool_calls/texts
+        fallback in conversation-preferring guardrails, so none is built."""
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = RecordingGuardrail()
+        request_data = {"messages": [{"role": "user", "content": "hi"}]}
+
+        assert handler.response_scan_conversation(request_data, guardrail, []) is None

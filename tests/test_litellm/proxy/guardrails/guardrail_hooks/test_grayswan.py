@@ -897,3 +897,29 @@ def test_sanitize_json_list_drops_non_dict_items(grayswan_guardrail: GraySwanGua
     assert grayswan_guardrail._sanitize_json_list([{"role": "user", "content": "hi"}, "junk", 3]) == (
         {"role": "user", "content": "hi"},
     )
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_scans_despite_null_dynamic_extra_body(
+    monkeypatch, grayswan_guardrail: GraySwanGuardrail
+) -> None:
+    """A client-sent null extra_body must not crash payload construction, which
+    fail_open would turn into a silently skipped scan."""
+    captured: dict = {}
+
+    async def _fake_call(payload: dict):
+        captured["payload"] = payload
+        return {"violation": 0.0}
+
+    monkeypatch.setattr(grayswan_guardrail, "_call_grayswan_api", _fake_call)
+
+    await grayswan_guardrail.apply_guardrail(
+        inputs={"texts": ["hello"]},
+        request_data={
+            "model": "gpt-4",
+            "metadata": {"guardrails": [{"grayswan-test": {"extra_body": None}}]},
+        },
+        input_type="request",
+    )
+
+    assert _wire(captured["payload"])["messages"] == [{"role": "user", "content": "hello"}]

@@ -12,6 +12,7 @@ from litellm.llms.base_llm.guardrail_translation.utils import (
 from litellm.types.llms.openai import (
     ChatCompletionAssistantMessage,
     ChatCompletionAssistantToolCall,
+    ChatCompletionToolCallFunctionChunk,
 )
 
 if TYPE_CHECKING:
@@ -21,7 +22,12 @@ if TYPE_CHECKING:
     )
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.proxy._types import UserAPIKeyAuth
-    from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
+    from litellm.types.llms.openai import (
+        AllMessageValues,
+        ChatCompletionToolCallChunk,
+        ChatCompletionToolParam,
+    )
+    from litellm.types.utils import GenericGuardrailAPIInputs
 
 
 @dataclass(slots=True)
@@ -203,15 +209,38 @@ class BaseTranslation(ABC):
         with the model's response turns appended.
 
         Returns None when the request context is unavailable (SDK/direct-call
-        path fabricates request_data without messages); guardrails then fall
-        back to scanning the extracted texts.
+        path fabricates request_data without messages) or when nothing was
+        extracted from the response; guardrails then fall back to scanning the
+        extracted texts and tool calls, which must not be shadowed by a
+        conversation that lacks a response turn.
         """
-        if request_data is None:
+        if request_data is None or not response_turns:
             return None
         request_conversation: Final = self.scoped_request_conversation(request_data, guardrail_to_apply)
         if request_conversation is None:
             return None
         return (*request_conversation, *response_turns)
+
+    def attach_response_scan_context(
+        self,
+        inputs: "GenericGuardrailAPIInputs",
+        request_data: dict | None,  # mutable-ok: API request payload
+        guardrail_to_apply: "CustomGuardrail",
+        response_turns: Sequence["AllMessageValues"],
+    ) -> None:
+        """
+        Put the response-scan conversation and the request's tools on ``inputs``
+        when the request context allows building them; no-op otherwise.
+        """
+        structured_conversation: Final = self.response_scan_conversation(
+            request_data, guardrail_to_apply, response_turns
+        )
+        if structured_conversation is None or request_data is None:
+            return
+        inputs["structured_messages"] = list(structured_conversation)  # rebind-ok: out-param; field type is list
+        response_scan_tools: Final = self.request_tools_for_guardrail(request_data, guardrail_to_apply)
+        if response_scan_tools:
+            inputs["tools"] = list(response_scan_tools)  # rebind-ok: out-parameter; the field type is a list
 
     def request_tools_for_guardrail(
         self,
@@ -226,15 +255,37 @@ class BaseTranslation(ABC):
         return None
 
     @staticmethod
+    def assistant_tool_call(
+        tool_call_id: str | None,
+        name: str | None,
+        arguments: str,
+    ) -> ChatCompletionAssistantToolCall:
+        """One assistant-message tool call in the OpenAI wire shape."""
+        return ChatCompletionAssistantToolCall(
+            id=tool_call_id,
+            type="function",
+            function=ChatCompletionToolCallFunctionChunk(name=name, arguments=arguments),
+        )
+
+    @staticmethod
     def assistant_turn_from_extraction(
         texts: Sequence[str],
-        tool_calls: Sequence["ChatCompletionAssistantToolCall"] | None = None,
+        tool_calls: Sequence["ChatCompletionAssistantToolCall | ChatCompletionToolCallChunk"] | None = None,
     ) -> tuple["ChatCompletionAssistantMessage", ...]:
         """
         One OpenAI-shape assistant turn built from the texts and tool calls a
         handler's response extraction collected; empty when there is nothing.
+        Tool calls are normalized to the assistant-message shape, dropping
+        extraction-only fields such as ``index``.
         """
-        tool_call_items: Final = tuple(tool_calls or ())
+        tool_call_items: Final = tuple(
+            BaseTranslation.assistant_tool_call(
+                tool_call_id=item.get("id"),
+                name=item["function"].get("name"),
+                arguments=item["function"].get("arguments") or "",
+            )
+            for item in tool_calls or ()
+        )
         if not texts and not tool_call_items:
             return ()
         if tool_call_items:

@@ -248,6 +248,20 @@ class OpenAIResponsesHandler(BaseTranslation):
             ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(tools)
             tools_to_check.extend(cast(list[ChatCompletionToolParam], transformed_tools))
 
+    def scoped_request_conversation(
+        self,
+        request_data: dict,  # mutable-ok: API request payload
+        guardrail_to_apply: "CustomGuardrail",
+    ) -> tuple[AllMessageValues, ...] | None:
+        """
+        This surface's request scan sends its structured messages without the
+        operator scoping flags (the input path applies none), so the response
+        scan mirrors that; request and response scans must not disagree about
+        the conversation.
+        """
+        structured_messages: Final = self.get_structured_messages(request_data)
+        return tuple(structured_messages) if structured_messages else None
+
     def request_tools_for_guardrail(
         self,
         request_data: dict,  # mutable-ok: API request payload
@@ -467,18 +481,12 @@ class OpenAIResponsesHandler(BaseTranslation):
             if response_model:
                 inputs["model"] = response_model
 
-            structured_conversation: Final = self.response_scan_conversation(
+            self.attach_response_scan_context(
+                inputs,
                 request_data,
                 guardrail_to_apply,
                 self.assistant_turn_from_extraction(texts_to_check, tool_calls_to_check),
             )
-            if structured_conversation:
-                inputs["structured_messages"] = list(
-                    structured_conversation
-                )  # mutable-ok: GenericGuardrailAPIInputs takes list
-                response_scan_tools: Final = self.request_tools_for_guardrail(request_data, guardrail_to_apply)
-                if response_scan_tools:
-                    inputs["tools"] = list(response_scan_tools)  # mutable-ok: GenericGuardrailAPIInputs takes list
 
             guardrailed_inputs: Final = await guardrail_to_apply.apply_guardrail(
                 inputs=inputs,
@@ -570,18 +578,12 @@ class OpenAIResponsesHandler(BaseTranslation):
                 if response_model:
                     inputs["model"] = response_model
 
-                structured_conversation: Final = self.response_scan_conversation(
+                self.attach_response_scan_context(
+                    inputs,
                     request_data,
                     guardrail_to_apply,
                     self.assistant_turn_from_extraction(texts_to_check, tool_calls_to_check),
                 )
-                if structured_conversation:
-                    inputs["structured_messages"] = list(
-                        structured_conversation
-                    )  # mutable-ok: GenericGuardrailAPIInputs takes list
-                    response_scan_tools: Final = self.request_tools_for_guardrail(request_data, guardrail_to_apply)
-                    if response_scan_tools:
-                        inputs["tools"] = list(response_scan_tools)  # mutable-ok: GenericGuardrailAPIInputs takes list
 
                 guardrailed_inputs: Final = await guardrail_to_apply.apply_guardrail(
                     inputs=inputs,

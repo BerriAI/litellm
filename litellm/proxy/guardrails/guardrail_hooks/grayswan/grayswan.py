@@ -187,7 +187,10 @@ class GraySwanGuardrail(CustomGuardrail):
                 input_type,
             )
 
-            dynamic_body: Final = self.get_guardrail_dynamic_request_body_params(request_data)
+            dynamic_body: Final = (
+                self.get_guardrail_dynamic_request_body_params(request_data)
+                or {}  # mutable-ok: empty fallback when the client sent a null extra_body
+            )
             if dynamic_body:
                 verbose_proxy_logger.debug("Gray Swan Guardrail: dynamic extra_body=%s", safe_dumps(dynamic_body))
 
@@ -521,7 +524,7 @@ class GraySwanGuardrail(CustomGuardrail):
         if conversation:
             return conversation, self._sanitize_json_list(inputs.get("tools"))
         if input_type == "request":
-            return self._texts_fallback(inputs, "user"), None
+            return self._texts_fallback(inputs), None
         return self._build_response_turns(inputs), None
 
     def _build_response_turns(self, inputs: GenericGuardrailAPIInputs) -> tuple[Mapping[str, Any], ...]:
@@ -533,8 +536,8 @@ class GraySwanGuardrail(CustomGuardrail):
         final_turn: Final[MonitorTurn] = {**base[-1], "tool_calls": tool_calls}
         return (*base[:-1], final_turn)
 
-    def _texts_fallback(self, inputs: GenericGuardrailAPIInputs, role: str) -> tuple[MonitorTurn, ...]:
-        return tuple(self._turn(role, text) for text in inputs.get("texts", ()))
+    def _texts_fallback(self, inputs: GenericGuardrailAPIInputs) -> tuple[MonitorTurn, ...]:
+        return tuple(self._turn("user", text) for text in inputs.get("texts", ()))
 
     def _turn(self, role: str, content: str) -> MonitorTurn:
         turn: Final[MonitorTurn] = {"role": role, "content": content}

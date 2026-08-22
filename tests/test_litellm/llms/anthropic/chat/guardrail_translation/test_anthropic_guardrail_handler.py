@@ -1830,7 +1830,7 @@ class MockInputsRecordingGuardrail(CustomGuardrail):
 
     def __init__(self):
         super().__init__(guardrail_name="inputs-recording")
-        self.calls: list = []
+        self.calls: list[tuple[str, dict]] = []
 
     async def apply_guardrail(
         self,
@@ -1940,6 +1940,9 @@ class TestAnthropicResponseScanConversation:
         assert assistant_turn["role"] == "assistant"
         assert assistant_turn["content"] == "Checking."
         assert assistant_turn["tool_calls"][0]["function"]["name"] == "get_weather"
+        assert "index" not in assistant_turn["tool_calls"][0], (
+            "extraction-only fields must not leak into the assistant-message tool call shape"
+        )
         assert inputs["tools"][0]["function"]["name"] == "get_weather"
 
     @pytest.mark.asyncio

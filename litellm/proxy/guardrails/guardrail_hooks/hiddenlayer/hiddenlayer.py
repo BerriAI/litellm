@@ -211,7 +211,9 @@ class HiddenlayerGuardrail(CustomGuardrail):
         hl_request_metadata["requester_id"] = headers.get("hl-requester-id") or "LiteLLM"
         project_id: Final = headers.get("hl-project-id")
 
-        if scan_params := inputs.get("structured_messages"):
+        # Response scans keep the texts path: their structured_messages carry the
+        # whole conversation, whose last turn is not necessarily the scan target.
+        if input_type == "request" and (scan_params := inputs.get("structured_messages")):
             last_msg: Final = scan_params[-1]
             result: _HiddenlayerResponse = await self._call_hiddenlayer(
                 project_id,
