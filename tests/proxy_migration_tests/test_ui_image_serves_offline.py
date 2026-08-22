@@ -22,6 +22,7 @@ import shutil
 import subprocess
 import time
 import uuid
+from collections.abc import Iterator
 
 import pytest
 
@@ -37,12 +38,12 @@ pytestmark = [
 ]
 
 
-def _docker(*args: str, check: bool = True) -> subprocess.CompletedProcess:
+def _docker(*args: str, check: bool = True) -> "subprocess.CompletedProcess[str]":
     return subprocess.run(["docker", *args], capture_output=True, text=True, check=check)
 
 
 @pytest.fixture()
-def ui_container():
+def ui_container() -> Iterator[tuple[str, str]]:
     """The UI container as an arbitrary uid in GID 0 on a network with no egress.
 
     ``--read-only`` with a tmpfs on ``/tmp`` mirrors the strictest supported
@@ -85,7 +86,7 @@ def _is_running(container: str) -> bool:
     )
 
 
-def _probe(network: str, container: str, path: str) -> subprocess.CompletedProcess:
+def _probe(network: str, container: str, path: str) -> "subprocess.CompletedProcess[str]":
     return _docker(
         "run", "--rm", "--network", network, CURL_IMAGE,
         "--silent", "--show-error", "--max-time", "10",
@@ -95,7 +96,7 @@ def _probe(network: str, container: str, path: str) -> subprocess.CompletedProce
     )
 
 
-def test_ui_serves_as_arbitrary_uid_read_only(ui_container):
+def test_ui_serves_as_arbitrary_uid_read_only(ui_container: tuple[str, str]) -> None:
     """nginx boots and serves as an arbitrary uid with a read-only root fs.
 
     On the pre-fix config nginx exits during startup with
