@@ -17,6 +17,8 @@ on:
       - backend/Dockerfile
       - backend/main.py
       - docker/component_entrypoint.sh
+      - docker/entrypoint.sh
+      - litellm/proxy/prisma_migration.py
       - litellm-proxy-extras/**
       - tests/proxy_migration_tests/**
       - uv.lock

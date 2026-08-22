@@ -26,6 +26,7 @@ from litellm.proxy.proxy_server import (
     _scrub_guardrail_inner,
     resolve_complexity_router_plugins,
     resolve_routing_plugins,
+    validate_deployment_max_agentic_loops,
 )
 
 from .conftest import normalize
@@ -151,6 +152,71 @@ def test_resolve_complexity_router_plugins_resolves_dotted_path_to_live_instance
     assert len(config["plugins"]) == 1
     assert hasattr(config["plugins"][0], "run")
     assert type(config["plugins"][0]).__name__ == "_Plugin"
+
+
+def test_validate_deployment_max_agentic_loops_allows_a_deployment_without_the_key():
+    model = {"model_name": "gpt-4o", "litellm_params": {"model": "gpt-4o"}}
+
+    validate_deployment_max_agentic_loops(model)
+
+    assert "max_agentic_loops" not in model["litellm_params"]
+
+
+def test_validate_deployment_max_agentic_loops_leaves_a_valid_ceiling_alone():
+    model = {"model_name": "gpt-4o", "litellm_params": {"model": "gpt-4o", "max_agentic_loops": 5}}
+
+    validate_deployment_max_agentic_loops(model)
+
+    assert model["litellm_params"]["max_agentic_loops"] == 5
+
+
+def test_validate_deployment_max_agentic_loops_rejects_zero():
+    """
+    A per-deployment 0 used to be swallowed by an `or 3` and read as the default
+    ceiling of 3, handing the loosest setting to whoever asked for the tightest.
+    """
+    with pytest.raises(ValueError, match="must be at least 1, got 0"):
+        validate_deployment_max_agentic_loops(
+            {"model_name": "gpt-4o", "litellm_params": {"model": "gpt-4o", "max_agentic_loops": 0}}
+        )
+
+
+def test_validate_deployment_max_agentic_loops_rejects_a_non_integer():
+    """
+    A per-deployment non-integer used to let the proxy boot and then fail every
+    request to that model with `invalid literal for int() with base 10`.
+    """
+    with pytest.raises(TypeError, match="must be an integer"):
+        validate_deployment_max_agentic_loops(
+            {"model_name": "gpt-4o", "litellm_params": {"model": "gpt-4o", "max_agentic_loops": "three"}}
+        )
+
+
+def test_validate_deployment_max_agentic_loops_rejects_a_bool():
+    with pytest.raises(TypeError, match="must be an integer"):
+        validate_deployment_max_agentic_loops(
+            {"model_name": "gpt-4o", "litellm_params": {"model": "gpt-4o", "max_agentic_loops": True}}
+        )
+
+
+def test_validate_deployment_max_agentic_loops_accepts_a_ceiling_from_an_env_var():
+    """
+    `max_agentic_loops: os.environ/MAX_AGENTIC_LOOPS` is resolved to a string
+    before this check runs, and the old `int(... or 3)` accepted that, so
+    refusing it here would stop an already working proxy from booting.
+    """
+    model = {"model_name": "gpt-4o", "litellm_params": {"model": "gpt-4o", "max_agentic_loops": "5"}}
+
+    validate_deployment_max_agentic_loops(model)
+
+    assert model["litellm_params"]["max_agentic_loops"] == "5"
+
+
+def test_validate_deployment_max_agentic_loops_names_the_offending_model():
+    with pytest.raises(ValueError, match="on model 'claude-sonnet-4-5'"):
+        validate_deployment_max_agentic_loops(
+            {"model_name": "claude-sonnet-4-5", "litellm_params": {"max_agentic_loops": -1}}
+        )
 
 
 def test_resolve_complexity_router_plugins_rejects_non_routing_plugin_object(tmp_path):

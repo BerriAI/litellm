@@ -2,6 +2,9 @@ import asyncio
 import copy
 import json
 import os
+import time
+from datetime import datetime, timezone
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -266,6 +269,75 @@ async def test_stamped_auth_object_reflects_header_derived_identity():
 
     stamped = updated_data["metadata"]["user_api_key_auth"]
     assert stamped.end_user_id == "end-user-from-header"
+
+
+@pytest.mark.asyncio
+async def test_arrival_time_prefers_litellm_received_at_over_time_time():
+    """LIT-6012: by the time this function runs, auth has already completed, so
+    time.time() here would silently exclude the whole auth phase from the
+    queue-time window. request.state.litellm_received_at (stamped at the top of
+    user_api_key_auth, before auth work) must win when present."""
+    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+
+    request_mock = MagicMock(spec=Request)
+    request_mock.url = MagicMock()
+    request_mock.url.path = "/v1/chat/completions"
+    request_mock.url.__str__.return_value = "http://localhost/v1/chat/completions"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {"Content-Type": "application/json"}
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+    received_at = datetime(2024, 1, 1, tzinfo=timezone.utc)
+    request_mock.state = SimpleNamespace(litellm_received_at=received_at)
+
+    user_api_key_dict = UserAPIKeyAuth(api_key="hashed-key", metadata={}, team_metadata={})
+
+    updated_data = await add_litellm_data_to_request(
+        data={"model": "gpt-3.5-turbo"},
+        request=request_mock,
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    assert updated_data["proxy_server_request"]["arrival_time"] == received_at.timestamp()
+
+
+@pytest.mark.asyncio
+async def test_arrival_time_falls_back_to_time_time_without_litellm_received_at():
+    """Callers that never went through user_api_key_auth (no stamp on request.state)
+    must still get a usable arrival_time instead of erroring."""
+    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+
+    request_mock = MagicMock(spec=Request)
+    request_mock.url = MagicMock()
+    request_mock.url.path = "/v1/chat/completions"
+    request_mock.url.__str__.return_value = "http://localhost/v1/chat/completions"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {"Content-Type": "application/json"}
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+    request_mock.state = SimpleNamespace()  # no litellm_received_at attribute
+
+    user_api_key_dict = UserAPIKeyAuth(api_key="hashed-key", metadata={}, team_metadata={})
+
+    before = time.time()
+    updated_data = await add_litellm_data_to_request(
+        data={"model": "gpt-3.5-turbo"},
+        request=request_mock,
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+    after = time.time()
+
+    arrival_time = updated_data["proxy_server_request"]["arrival_time"]
+    assert isinstance(arrival_time, float)
+    assert before <= arrival_time <= after
 
 
 @pytest.mark.asyncio
@@ -708,6 +780,54 @@ async def test_add_litellm_data_to_request_body_snapshot_excludes_proxy_server_r
         "proxy_server_request must be excluded from its own body snapshot "
         "to prevent the body from self-referencing"
     )
+
+
+def test_refresh_proxy_server_request_body_snapshot_picks_up_guardrail_masking():
+    """
+    Regression: proxy_server_request['body'] is snapshotted by
+    add_litellm_data_to_request BEFORE guardrails (e.g. Presidio PII masking) run
+    in pre_call_hook. Without a refresh after pre_call_hook, the persisted body
+    silently bypasses whatever masking the guardrail applied, so raw PII/PCI
+    lands in SpendLogs when store_prompts_in_spend_logs is enabled.
+    """
+    from litellm.proxy.litellm_pre_call_utils import (
+        refresh_proxy_server_request_body_snapshot,
+    )
+
+    class _FakeLoggingObj:
+        """Stands in for the live, non-JSON-serializable Logging instance that
+        litellm.utils.function_setup stamps onto `data` between the initial
+        snapshot and pre_call_hook."""
+
+    data = {
+        "model": "gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": "my ssn is 123-45-6789"}],
+        "secret_fields": {"raw_headers": {"authorization": "Bearer sk-secret"}},
+        "litellm_logging_obj": _FakeLoggingObj(),
+        "proxy_server_request": {
+            "url": "http://localhost/v1/chat/completions",
+            "method": "POST",
+            "body": {
+                "model": "gpt-3.5-turbo",
+                "messages": [{"role": "user", "content": "my ssn is 123-45-6789"}],
+            },
+        },
+    }
+
+    # Simulate a PII-masking guardrail mutating `messages` in place, like Presidio's
+    # async_pre_call_hook does, after the initial snapshot was already taken.
+    data["messages"] = [{"role": "user", "content": "my ssn is <MASKED>"}]
+
+    refresh_proxy_server_request_body_snapshot(data)
+
+    refreshed_body = data["proxy_server_request"]["body"]
+    assert refreshed_body["messages"] == data["messages"]
+    # Still excludes secrets, self-reference, and the live logging object, same as
+    # the initial snapshot -- and proves the persisted body stays JSON-serializable.
+    assert "secret_fields" not in refreshed_body
+    assert "proxy_server_request" not in refreshed_body
+    assert "litellm_logging_obj" not in refreshed_body
+    assert "123-45-6789" not in json.dumps(refreshed_body)
 
 
 @pytest.mark.asyncio
@@ -2738,7 +2858,6 @@ def test_add_headers_to_llm_call_by_model_group_existing_headers_in_data():
         litellm.model_group_settings = original_model_group_settings
 
 
-import time
 from typing import Optional
 
 from fastapi.responses import Response
