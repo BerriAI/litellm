@@ -349,9 +349,9 @@ def get_llm_provider(
                     elif endpoint == "https://api.meta.ai/v1":
                         custom_llm_provider = "meta"
                         dynamic_api_key = get_secret_str("META_API_KEY")
-                    elif endpoint == "https://llm.wavespeed.ai/v1":
-                        custom_llm_provider = "wavespeed"
-                        dynamic_api_key = get_secret_str("WAVESPEED_API_KEY")
+                    elif (json_provider := JSONProviderRegistry.get_by_base_url(endpoint)) is not None:
+                        custom_llm_provider = json_provider.slug
+                        dynamic_api_key = api_key if api_key is not None else get_secret_str(json_provider.api_key_env)
 
                     if api_base is not None and not isinstance(api_base, str):
                         raise Exception(f"api base needs to be a string. api_base={api_base}")

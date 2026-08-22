@@ -243,7 +243,7 @@ async def test_slack_alerting_callback_registration(callback_manager):
     from litellm.caching.caching import DualCache
     from litellm.proxy.utils import ProxyLogging
     from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
-    from unittest.mock import AsyncMock, patch
+    from unittest.mock import patch
 
     # Mock the async HTTP handler
     with patch(

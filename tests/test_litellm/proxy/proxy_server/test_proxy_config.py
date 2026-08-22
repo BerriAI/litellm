@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from types import SimpleNamespace
 from typing import Any, Dict
 from unittest.mock import AsyncMock, MagicMock
@@ -28,6 +29,7 @@ from litellm.proxy.proxy_server import (
 )
 
 from .conftest import normalize
+from pydantic import ValidationError
 
 # ---------------------------------------------------------------------------
 # _is_remote_module_url
@@ -302,7 +304,7 @@ def test_resolve_routing_plugins_rejects_non_routing_plugin(tmp_path):
     plugin_file = tmp_path / "bad_rs_plugin.py"
     plugin_file.write_text("not_a_plugin = object()\n")
 
-    with pytest.raises(ValueError, match="router_settings.plugins"):
+    with pytest.raises(ValueError, match=re.escape("router_settings.plugins")):
         resolve_routing_plugins(
             plugin_paths=["bad_rs_plugin.not_a_plugin"],
             config_file_path=str(tmp_path / "config.yaml"),
@@ -393,7 +395,7 @@ def test_ProxyConfig__load_yaml_file_returns_parsed_dict(tmp_path):
 
 def test_ProxyConfig__load_yaml_file_raises_on_missing_file():
     pc = ProxyConfig()
-    with pytest.raises(Exception):
+    with pytest.raises(Exception, match="Error loading yaml file"):
         pc._load_yaml_file("/no/such/file.yaml")
 
 
@@ -418,7 +420,7 @@ async def test_ProxyConfig__get_config_from_file_loads_yaml(tmp_path):
 @pytest.mark.asyncio
 async def test_ProxyConfig__get_config_from_file_missing_path_raises():
     pc = ProxyConfig()
-    with pytest.raises(Exception):
+    with pytest.raises(Exception, match="Config file not found"):
         await pc._get_config_from_file(config_file_path="/no/such/file.yaml")
 
 
@@ -476,7 +478,7 @@ async def test_ProxyConfig_save_config_invalid_path_raises(monkeypatch):
     monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
     monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
     pc = ProxyConfig()
-    with pytest.raises(Exception):
+    with pytest.raises(FileNotFoundError):
         await pc.save_config({"x": 1})
 
 
@@ -641,7 +643,7 @@ def test_ProxyConfig__get_team_config_returns_match():
 
 def test_ProxyConfig__get_team_config_missing_team_id_raises():
     pc = ProxyConfig()
-    with pytest.raises(Exception):
+    with pytest.raises(Exception, match="team_id missing from team"):
         pc._get_team_config(team_id="t1", all_teams_config=[{"no_id_field": True}])
 
 
@@ -671,7 +673,7 @@ def test_ProxyConfig_load_team_config_no_settings_returns_empty():
     assert out == {}
     # Error-style: a misconfigured team list without team_id raises.
     pc.config = {"litellm_settings": {"default_team_settings": [{"no_id": True}]}}
-    with pytest.raises(Exception):
+    with pytest.raises(Exception, match="team_id missing from team"):
         pc.load_team_config(team_id="anything")
 
 
@@ -698,7 +700,7 @@ def test_ProxyConfig__init_cache_sets_litellm_cache(monkeypatch):
 
 def test_ProxyConfig__init_cache_invalid_params_raises():
     pc = ProxyConfig()
-    with pytest.raises(Exception):
+    with pytest.raises(AttributeError):
         pc._init_cache(cache_params={"type": "this-cache-type-does-not-exist"})
 
 
@@ -765,7 +767,7 @@ async def test_ProxyConfig_get_config_missing_file_raises(monkeypatch):
     monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
     monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
     pc = ProxyConfig()
-    with pytest.raises(Exception):
+    with pytest.raises(Exception, match="Config file not found"):
         await pc.get_config(config_file_path="/no/such/path.yaml")
 
 
@@ -1041,7 +1043,7 @@ def test_ProxyConfig_load_credential_list_returns_items():
 
 def test_ProxyConfig_load_credential_list_invalid_entry_raises():
     pc = ProxyConfig()
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         pc.load_credential_list({"credential_list": [{"missing_required": True}]})
 
 
@@ -1381,7 +1383,7 @@ async def test_ProxyConfig_load_config_missing_file_raises(monkeypatch):
     monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
     monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
     pc = ProxyConfig()
-    with pytest.raises(Exception):
+    with pytest.raises(Exception, match="Config file not found"):
         await pc.load_config(router=None, config_file_path="/no/file.yaml")
 
 
@@ -1492,7 +1494,7 @@ async def test_ProxyConfig__init_non_llm_configs_empty_config():
 async def test_ProxyConfig__init_non_llm_configs_premium_invalid_worker_registry_raises(monkeypatch):
     monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
     pc = ProxyConfig()
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         await pc._init_non_llm_configs(
             config={"worker_registry": [{"totally": "invalid"}]},
             config_file_path=None,
@@ -1503,7 +1505,7 @@ async def test_ProxyConfig__init_non_llm_configs_premium_invalid_worker_registry
 async def test_ProxyConfig__init_non_llm_configs_worker_registry_requires_premium(monkeypatch):
     monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", False)
     pc = ProxyConfig()
-    with pytest.raises(ValueError) as exc_info:
+    with pytest.raises(ValueError, match='Trying to use `worker_registry`You must be a LiteLLM') as exc_info:
         await pc._init_non_llm_configs(
             config={
                 "worker_registry": [
@@ -1572,7 +1574,7 @@ async def test_ProxyConfig__init_policy_engine_none_config_noop():
     # None config returns early without raising.
     await pc._init_policy_engine(config=None, prisma_client=None, llm_router=None)
     # Error-style: invalid policies value should raise.
-    with pytest.raises(Exception):
+    with pytest.raises(AttributeError):
         await pc._init_policy_engine(
             config={"policies": "not-a-list"},
             prisma_client=None,
@@ -1601,7 +1603,7 @@ def test_ProxyConfig__load_alerting_settings_noop_when_no_alerting():
 
 def test_ProxyConfig__load_alerting_settings_invalid_alerting_raises():
     pc = ProxyConfig()
-    with pytest.raises(Exception):
+    with pytest.raises(RuntimeError):
         # alerting must be iterable — int triggers an error.
         pc._load_alerting_settings({"alerting": 12345})
 
@@ -1768,7 +1770,7 @@ def test_ProxyConfig_initialize_secret_manager_none_noop():
 
 def test_ProxyConfig_initialize_secret_manager_invalid_kms_raises():
     pc = ProxyConfig()
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match='Invalid Key Management System selected'):
         pc.initialize_secret_manager(key_management_system="not-a-real-kms")
 
 
@@ -1823,7 +1825,7 @@ async def test_ProxyConfig__delete_deployment_invalid_models_raises(monkeypatch)
     fake_router.get_model_ids = MagicMock(return_value=[])
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", fake_router)
     pc = ProxyConfig()
-    with pytest.raises(Exception):
+    with pytest.raises(AttributeError):
         # Non-model objects without expected attrs trigger an error.
         await pc._delete_deployment(db_models=[{"not_a_model": True}])
 
@@ -2617,6 +2619,33 @@ async def test_ProxyConfig__reschedule_spend_log_cleanup_job_invalid_cron(monkey
     assert fake_scheduler.add_job.call_count == 0
 
 
+@pytest.mark.asyncio
+async def test_ProxyConfig__reschedule_spend_log_cleanup_job_health_check_retention(monkeypatch):
+    fake_scheduler = MagicMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.scheduler", fake_scheduler)
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.general_settings",
+        {"maximum_health_check_retention_period": "30d"},
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    pc = ProxyConfig()
+    await pc._reschedule_spend_log_cleanup_job()
+    assert fake_scheduler.add_job.call_count == 1
+    assert fake_scheduler.add_job.call_args.kwargs["id"] == "spend_log_cleanup_job"
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig__update_general_settings_updates_health_check_retention(monkeypatch):
+    settings = {}
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", settings)
+    pc = ProxyConfig()
+    reschedule = AsyncMock()
+    monkeypatch.setattr(pc, "_reschedule_spend_log_cleanup_job", reschedule)
+    await pc._update_general_settings({"maximum_health_check_retention_period": "30d"})
+    assert settings["maximum_health_check_retention_period"] == "30d"
+    reschedule.assert_awaited_once()
+
+
 # ---------------------------------------------------------------------------
 # ProxyConfig._update_general_settings
 # ---------------------------------------------------------------------------
@@ -2694,7 +2723,7 @@ async def test_ProxyConfig__update_general_settings_none_input_noop():
     result = await pc._update_general_settings(db_general_settings=None)
     assert result is None
     # Error-style: dict() will fail on non-mapping non-None input.
-    with pytest.raises(Exception):
+    with pytest.raises(TypeError):
         await pc._update_general_settings(db_general_settings=12345)  # type: ignore[arg-type]
 
 
@@ -2716,7 +2745,7 @@ def test_ProxyConfig__update_config_fields_merges_dict():
 
 def test_ProxyConfig__update_config_fields_invalid_param_raises():
     pc = ProxyConfig()
-    with pytest.raises(Exception):
+    with pytest.raises(TypeError):
         # Missing required arg.
         pc._update_config_fields(current_config={}, param_name="general_settings")  # type: ignore[call-arg]
 

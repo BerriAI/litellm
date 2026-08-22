@@ -951,7 +951,6 @@ def test_vertex_ai_stream(provider):
 
     load_vertex_ai_credentials()
     litellm.set_verbose = True
-    import random
 
     test_models = ["gemini-2.5-flash-lite"]
     for model in test_models:
@@ -2352,7 +2351,6 @@ def test_success_callback_streaming():
 from typing import List, Optional
 
 #### STREAMING + FUNCTION CALLING ###
-from pydantic import BaseModel
 
 
 class Function(BaseModel):
@@ -2569,7 +2567,6 @@ def test_azure_streaming_and_function_calling():
 
 @pytest.mark.asyncio
 async def test_azure_astreaming_and_function_calling():
-    from litellm._uuid import uuid
 
     tools = [
         {
@@ -2926,11 +2923,14 @@ def test_unit_test_custom_stream_wrapper_repeating_chunk(
     print(f"expected_chunk_fail: {expected_chunk_fail}")
 
     if (loop_amount > litellm.REPEATED_STREAMING_CHUNK_LIMIT) and expected_chunk_fail:
+        def _drain():
+            for chunk in response:
+                continue
+
         with pytest.raises(
             (litellm.InternalServerError, litellm.exceptions.MidStreamFallbackError)
         ):
-            for chunk in response:
-                continue
+            _drain()
     else:
         for chunk in response:
             continue

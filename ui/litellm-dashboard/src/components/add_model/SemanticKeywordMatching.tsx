@@ -43,7 +43,7 @@ const SemanticKeywordMatching: React.FC<SemanticKeywordMatchingProps> = ({
           <div className="flex items-center gap-2">
             <span className="font-medium">Semantic keyword matching</span>
             <SimpleTooltip content="Recognize related phrasing beyond exact keyword matches by comparing embeddings instead of plain text. Overrides direct keyword matching">
-              <Info className="size-4 text-muted-foreground/70" />
+              <Info className="size-4 text-muted-foreground" />
             </SimpleTooltip>
           </div>
           <span className="text-muted-foreground text-sm">

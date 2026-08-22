@@ -1584,7 +1584,7 @@ async def test_prisma_health_check_failure_redacts_database_credentials(caplog):
     client._report_health_check_failure = AsyncMock()
 
     with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
-        with pytest.raises(Exception):
+        with pytest.raises(Exception, match="could not connect to"):
             await PrismaClient.health_check(client)
 
     emitted = [record.getMessage() for record in caplog.records if record.name == "LiteLLM Proxy"]
@@ -1644,3 +1644,193 @@ async def test_post_mcp_call_hook_skips_opted_out_guardrail(restore_callbacks):
 
     assert guardrail.call_count == 0
     assert [item.text for item in returned.content] == ["jane@example.com"]
+
+
+FAILURE_USAGE_MODEL = "gpt-4o"
+ONE_USER_MESSAGE = [{"role": "user", "content": "hi"}]
+
+
+class _LoggingObj:
+    def __init__(self, model_call_details):
+        self.model_call_details = model_call_details
+
+
+@pytest.mark.parametrize(
+    "system_input, expected",
+    [
+        ("be brief", "be brief"),
+        ([{"type": "text", "text": "a"}, {"type": "text", "text": "b"}], "ab"),
+        (["a", {"text": "b"}], "ab"),
+        ([{"type": "image"}], ""),
+        (None, ""),
+        (17, ""),
+    ],
+)
+def test_a_system_prompt_reads_the_same_whatever_shape_it_arrived_in(system_input, expected):
+    from litellm.proxy.utils import _system_prompt_text
+
+    assert _system_prompt_text(system_input) == expected
+
+
+def test_a_system_prompt_is_counted_on_top_of_the_request():
+    from litellm.proxy.utils import _count_request_input_tokens
+
+    without = _count_request_input_tokens(FAILURE_USAGE_MODEL, "hello world", None)
+    with_system = _count_request_input_tokens(FAILURE_USAGE_MODEL, "hello world", "be brief")
+
+    assert without > 0
+    assert with_system > without
+
+
+def test_a_request_with_nothing_in_it_counts_zero():
+    from litellm.proxy.utils import _count_request_input_tokens
+
+    assert _count_request_input_tokens(FAILURE_USAGE_MODEL, [], None) == 0
+    assert _count_request_input_tokens(FAILURE_USAGE_MODEL, None, None) == 0
+
+
+def test_a_failed_dispatch_is_estimated_as_input_only():
+    from litellm.proxy.utils import _count_request_input_tokens, _estimate_dispatched_failure_usage
+
+    usage = _estimate_dispatched_failure_usage(FAILURE_USAGE_MODEL, ONE_USER_MESSAGE, None)
+
+    assert usage is not None
+    assert usage.prompt_tokens == _count_request_input_tokens(
+        FAILURE_USAGE_MODEL, ONE_USER_MESSAGE, None
+    )
+    assert usage.completion_tokens == 0
+    assert usage.total_tokens == usage.prompt_tokens
+
+
+@pytest.mark.parametrize("request_input", [[], object()])
+def test_nothing_is_estimated_when_there_is_nothing_to_count(request_input):
+    from litellm.proxy.utils import _estimate_dispatched_failure_usage
+
+    assert _estimate_dispatched_failure_usage(FAILURE_USAGE_MODEL, request_input, None) is None
+
+
+def test_usage_the_stream_already_recovered_beats_an_estimate():
+    from litellm.proxy.utils import _failure_usage_to_lift
+    from litellm.types.utils import Usage
+
+    recovered = Usage(prompt_tokens=5, completion_tokens=7, total_tokens=12)
+
+    lifted = _failure_usage_to_lift(
+        model_call_details={"combined_usage_object": recovered, "response_cost": 0.25},
+        request_body={},
+        dispatched=True,
+    )
+
+    assert lifted == (recovered, 0.25)
+
+
+def test_a_request_that_reached_a_provider_bills_its_input_at_no_cost():
+    from litellm.proxy.utils import _failure_usage_to_lift
+
+    lifted = _failure_usage_to_lift(
+        model_call_details={
+            "call_type": "acompletion",
+            "model": FAILURE_USAGE_MODEL,
+            "messages": ONE_USER_MESSAGE,
+        },
+        request_body={},
+        dispatched=True,
+    )
+
+    assert lifted is not None
+    usage, response_cost = lifted
+    assert usage.prompt_tokens > 0
+    assert usage.completion_tokens == 0
+    assert response_cost == 0.0
+
+
+@pytest.mark.parametrize(
+    "model_call_details, dispatched",
+    [
+        ({"call_type": "acompletion", "model": FAILURE_USAGE_MODEL, "messages": ONE_USER_MESSAGE}, False),
+        (
+            {
+                "litellm_no_upstream_llm_call": True,
+                "call_type": "acompletion",
+                "model": FAILURE_USAGE_MODEL,
+                "messages": ONE_USER_MESSAGE,
+            },
+            True,
+        ),
+        ({"call_type": "afile_content", "model": FAILURE_USAGE_MODEL, "messages": ONE_USER_MESSAGE}, True),
+    ],
+    ids=["never dispatched", "no upstream call", "call type has no input to price"],
+)
+def test_a_failure_that_cost_the_provider_nothing_lifts_nothing(model_call_details, dispatched):
+    from litellm.proxy.utils import _failure_usage_to_lift
+
+    assert _failure_usage_to_lift(
+        model_call_details=model_call_details, request_body={}, dispatched=dispatched
+    ) is None
+
+
+def test_the_no_upstream_call_key_the_module_uses_is_the_one_asserted_above():
+    from litellm.constants import LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL
+
+    assert LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL == "litellm_no_upstream_llm_call"
+
+
+def test_the_dispatched_system_prompt_wins_over_the_one_in_the_request_body():
+    from litellm.proxy.utils import _failure_usage_to_lift
+
+    def lift(model_call_details, request_body):
+        lifted = _failure_usage_to_lift(
+            model_call_details=model_call_details, request_body=request_body, dispatched=True
+        )
+        assert lifted is not None
+        return lifted[0].prompt_tokens
+
+    base = {
+        "call_type": "aanthropic_messages",
+        "model": FAILURE_USAGE_MODEL,
+        "messages": ONE_USER_MESSAGE,
+    }
+    long_system = "answer as briefly as you possibly can, in one short sentence"
+
+    from_body = lift(base, {"system": long_system})
+    from_params = lift({**base, "optional_params": {"system": "x"}}, {"system": long_system})
+    body_only_short = lift(base, {"system": "x"})
+
+    assert from_body > body_only_short
+    assert from_params == body_only_short
+
+
+def test_a_failure_with_no_logging_object_lifts_nothing():
+    from litellm.proxy.utils import _failure_fields_to_lift
+
+    assert dict(_failure_fields_to_lift({})) == {}
+    assert dict(_failure_fields_to_lift({"litellm_logging_obj": _LoggingObj({})})) == {}
+
+
+def test_a_dispatched_failure_lifts_the_four_fields_the_spend_log_needs():
+    from litellm.proxy.utils import _failure_fields_to_lift
+
+    lifted = _failure_fields_to_lift(
+        {
+            "litellm_logging_obj": _LoggingObj(
+                {
+                    "first_api_call_start_time": 1700000000.0,
+                    "call_type": "acompletion",
+                    "model": FAILURE_USAGE_MODEL,
+                    "messages": ONE_USER_MESSAGE,
+                    "standard_logging_object": {"id": "log-1"},
+                }
+            )
+        }
+    )
+
+    assert set(lifted) == {
+        "first_api_call_start_time",
+        "combined_usage_object",
+        "response_cost",
+        "standard_logging_object",
+    }
+    assert lifted["first_api_call_start_time"] == 1700000000.0
+    assert lifted["response_cost"] == 0.0
+    assert lifted["combined_usage_object"].prompt_tokens > 0
+    assert lifted["standard_logging_object"] == {"id": "log-1"}
