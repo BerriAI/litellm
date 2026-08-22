@@ -5186,12 +5186,16 @@ class BaseLLMHTTPHandler:
         """
         Whether a refused rerun can still be answered with a finalized turn.
 
-        Only the non-streaming anthropic messages path can. A streaming caller
-        has already sent the original message to the client, so a finalized one
-        would arrive as a second message rather than as a replacement, and the
-        responses surface carries a pydantic model that the finalizer does not
-        rewrite. Both keep raising, which is what every surface did before this
-        path learned to end the turn.
+        Only the anthropic messages surface can. The responses surface carries a
+        pydantic model the finalizer does not rewrite, so it keeps raising, which
+        is what every surface did before this path learned to end the turn.
+
+        Every call site passes ``stream=False`` today, because interception
+        converts an intercepted stream to non-streaming before the loop runs and
+        rebuilds the SSE stream from the finalized turn afterwards. The flag is
+        still checked so a streaming call site added later cannot replace a turn
+        already on the wire, which would reach the client as a second message
+        rather than as a replacement.
         """
         return not stream and api_surface == "anthropic_messages"
 

@@ -235,18 +235,20 @@ model_list:
 Clients cannot set it. `max_agentic_loops` is on the proxy's untrusted-field list, so a request body that
 carries it is ignored and one request can never drive an unbounded number of upstream model calls.
 
-When the ceiling is reached on a non-streaming `/v1/messages` request, the turn ends there and the client gets
-the last response back with the internal `litellm_web_search` tool call removed and `stop_reason: end_turn`.
-A streaming request the interceptor converted to non-streaming counts as one of these, since the client is
-still waiting on a single response. The client never declared that tool, so leaving the block in would hand it
-a tool call it has no way to answer. The answer can be less complete than it would have been with more loops,
+When the ceiling is reached on a `/v1/messages` request, the turn ends there and the client gets the last
+response back with the internal `litellm_web_search` tool call removed and `stop_reason: end_turn`. The client
+never declared that tool, so leaving the block in would hand it a tool call it has no way to answer. The answer can be less complete than it would have been with more loops,
 which is the tradeoff the ceiling buys, and where the refused call was the only block left the turn can come
 back with no text in it at all.
 
-Two paths do not get that treatment yet. A request that streams all the way through, meaning one the
-interceptor did not convert, has already put its message on the wire before the ceiling is checked. And
-`/v1/responses` returns its own shape that the finalizer does not rewrite, so it still hands back the internal
-call. Both are tracked separately
+Streaming is covered by the same path rather than a separate one, because interception always converts an
+intercepted `stream=True` request to non-streaming before the loop runs, then rebuilds the SSE stream from the
+finalized turn. So the ceiling is reached on a response the client has not seen yet either way.
+
+Two other surfaces do not get that treatment yet. `/v1/responses` returns its own shape that the finalizer does
+not rewrite, so it still hands back the internal call. And `/v1/chat/completions` runs its own copy of these
+rails in `litellm_core_utils/chat_completion_agentic_loop.py`, which still raises rather than ending the turn.
+Both are tracked separately
 
 ---
 
