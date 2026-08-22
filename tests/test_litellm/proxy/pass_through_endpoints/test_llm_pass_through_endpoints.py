@@ -1377,10 +1377,12 @@ async def test_is_streaming_request_fn():
         is_streaming_request_fn,
     )
 
+    from starlette.datastructures import FormData
+
     mock_request = Mock()
     mock_request.method = "POST"
     mock_request.headers = {"content-type": "multipart/form-data"}
-    mock_request.form = AsyncMock(return_value={"stream": "true"})
+    mock_request.form = AsyncMock(return_value=FormData({"stream": "true"}))
     assert await is_streaming_request_fn(mock_request) is True
 
 
