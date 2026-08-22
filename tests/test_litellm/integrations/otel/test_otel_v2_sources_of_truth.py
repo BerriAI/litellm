@@ -1,8 +1,13 @@
 """Tests for the OTel v2 sources of truth: span registry, semconv keys, config,
 and the typed StandardLoggingPayload adapter. These need no OTel SDK."""
 
+import logging
+import re
+from pathlib import Path
+
 import pytest
 
+import litellm
 from litellm.integrations.otel import (
     BAGGAGE_PROMOTED_KEYS,
     DB,
@@ -19,7 +24,11 @@ from litellm.integrations.otel import (
     resolve_provider,
 )
 from litellm.integrations.otel.model import spans as spans_mod
-from litellm.integrations.otel.model.payloads import LLMCallSpanData, RequestIdentity
+from litellm.integrations.otel.model.payloads import (
+    LLMCallSpanData,
+    RequestIdentity,
+    _upstream_address_port,
+)
 from litellm.integrations.otel.model.spans import (
     SPAN_REGISTRY,
     LiteLLMSpanKind,
@@ -172,6 +181,7 @@ def test_mcp_attribute_vocabulary_is_complete():
         "mcp.resource.uri",
         "jsonrpc.request.id",
         "jsonrpc.protocol.version",
+        "rpc.system",
         "rpc.response.status_code",
         "gen_ai.operation.name",
         "gen_ai.tool.name",
@@ -206,6 +216,103 @@ def test_operation_resolution():
     assert resolve_operation(None) is GenAIOperation.CHAT
     # An MCP tool call is an ``execute_tool`` operation, not a chat completion.
     assert resolve_operation("call_mcp_tool") is GenAIOperation.EXECUTE_TOOL
+
+
+@pytest.mark.parametrize("call_type", ["vector_store_search", "avector_store_search"])
+def test_vector_store_search_is_a_retrieval_operation(call_type):
+    """A vector-store search is a retrieval, so its duration and cost must not
+    land in the chat series that dashboards read latency off."""
+    assert resolve_operation(call_type) is GenAIOperation.RETRIEVAL
+    assert resolve_operation(call_type).value == "retrieval"
+
+
+@pytest.mark.parametrize("call_type", ["query", "aquery"])
+def test_rag_query_is_a_retrieval_operation(call_type):
+    """``/rag/query`` reaches the same recorder as a vector-store search and is the
+    same operation, so it must not be the one retrieval surface left reading as chat."""
+    assert resolve_operation(call_type) is GenAIOperation.RETRIEVAL
+
+
+@pytest.mark.parametrize(
+    "call_type",
+    [
+        f"{prefix}vector_store_{verb}"
+        for verb in ("create", "retrieve", "list", "update", "delete")
+        for prefix in ("", "a")
+    ],
+)
+def test_vector_store_management_is_not_chat(call_type):
+    """The store lifecycle calls are not GenAI client operations and the convention
+    names nothing for them, so they take a vendor value rather than defaulting into
+    the chat series."""
+    assert resolve_operation(call_type) is GenAIOperation.LITELLM_VECTOR_STORE_MANAGEMENT
+    assert resolve_operation(call_type).value == "litellm.vector_store_management"
+
+
+@pytest.mark.parametrize(
+    "call_type",
+    [
+        f"{prefix}vector_store_file_{verb}"
+        for verb in ("create", "list", "retrieve", "content", "update", "delete")
+        for prefix in ("", "a")
+    ],
+)
+def test_vector_store_file_management_is_not_chat(call_type):
+    """The file operations are a distinct REST resource from the store lifecycle, so
+    they get their own vendor value instead of sharing one bucket."""
+    assert resolve_operation(call_type) is GenAIOperation.LITELLM_VECTOR_STORE_FILE_MANAGEMENT
+    assert resolve_operation(call_type).value == "litellm.vector_store_file_management"
+
+
+def test_vendor_operation_values_are_namespaced():
+    """A vendor value must stay under the ``litellm.`` prefix: an unprefixed invented
+    name could collide with a value the convention adds later, silently changing what
+    a conformant consumer thinks it is reading."""
+    vendor = [op for op in GenAIOperation if op.name.startswith("LITELLM_")]
+    assert vendor, "no vendor operation values defined"
+    assert all(op.value.startswith("litellm.") for op in vendor)
+
+
+@pytest.mark.parametrize("call_type", ["send_message", "asend_message", "asend_message_streaming"])
+def test_agent_message_is_an_invoke_agent_operation(call_type):
+    """An agent (A2A) message send is an agent invocation, not a chat completion.
+
+    The streaming spelling counts: ``_build_streaming_logging_obj`` in
+    ``litellm/a2a_protocol/main.py`` stamps ``asend_message_streaming`` on the
+    logging object the streaming iterator dispatches success handlers with, so a
+    missing entry sends every streamed agent turn into the chat series. There is
+    no sync spelling because A2A streaming is async-only.
+    """
+    assert resolve_operation(call_type) is GenAIOperation.INVOKE_AGENT
+    assert resolve_operation(call_type).value == "invoke_agent"
+
+
+def test_every_call_type_the_a2a_package_stamps_is_an_agent_operation():
+    """Pins the map to the call types the A2A code actually stamps on its logging
+    objects. A new spelling added there without a map entry fails here instead of
+    quietly landing in the chat series, which is how the streaming one was missed."""
+    a2a_package = Path(litellm.__file__).parent / "a2a_protocol"
+    stamped = {
+        call_type
+        for source in a2a_package.rglob("*.py")
+        for call_type in re.findall(r'call_type="([^"]+)"', source.read_text())
+    }
+    assert stamped, "no call_type literals found in litellm/a2a_protocol"
+    unmapped = {
+        call_type: resolve_operation(call_type).value
+        for call_type in stamped
+        if resolve_operation(call_type) is not GenAIOperation.INVOKE_AGENT
+    }
+    assert not unmapped, f"add these to _OPERATION_BY_CALL_TYPE: {unmapped}"
+
+
+def test_unmapped_call_type_falls_back_to_chat_loudly(caplog):
+    """The fallback still labels the series ``chat`` so it is never unlabelled,
+    but it says so at debug: a silent default is how retrieval and agent calls
+    ended up in the chat charts in the first place."""
+    with caplog.at_level(logging.DEBUG, logger="LiteLLM"):
+        assert resolve_operation("some_future_call_type") is GenAIOperation.CHAT
+    assert any("some_future_call_type" in record.getMessage() for record in caplog.records)
 
 
 # --- MCP tool-call (source of truth #1/#2/#3) ------------------------------- #
@@ -706,3 +813,34 @@ def test_promoted_baggage_is_bounded_allowlist():
     # http.* is never a promoted key
     assert HTTP.ROUTE not in promoted
     assert HTTP.REQUEST_METHOD not in promoted
+
+
+@pytest.mark.parametrize(
+    "resource, expected",
+    [
+        ("https://weather.example.com", ("weather.example.com", 443)),
+        ("http://weather.example.com", ("weather.example.com", 80)),
+        ("https://weather.example.com:8443", ("weather.example.com", 8443)),
+        ("mcp://weather.example.com", ("weather.example.com", None)),
+        ("http://::1:8080", (None, None)),
+        ("http://fe80::1%25eth0:80", (None, None)),
+        (None, (None, None)),
+        ("", (None, None)),
+    ],
+    ids=[
+        "https-default",
+        "http-default",
+        "explicit-port",
+        "no-default-port",
+        "ipv6-unbracketed",
+        "ipv6-zone-scoped",
+        "none",
+        "empty",
+    ],
+)
+def test_upstream_address_port(resource, expected):
+    """The redacted MCP origin resolves to the address and port a consumer names its
+    dependency from. A scheme outside the default-port map yields no port, and an IPv6
+    origin yields nothing at all because the redactor rebuilds it without its brackets;
+    both are why the mapper gates ``rpc.system`` on the complete pair."""
+    assert _upstream_address_port(resource) == expected

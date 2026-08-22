@@ -1,7 +1,7 @@
 """Batches suite's `client` fixture.
 
-The shared lifecycle (resources/scoped_key), proxy liveness skip, and e2e marker
-live in the parent tests/e2e/conftest.py. BatchClient holds the shared Gateway, so
+The shared lifecycle (resources/scoped_key), proxy liveness gate, and e2e marker
+live in the parent tests/e2e/conftest.py. BatchClient holds the shared ProxyClient, so
 the `resources` fixture cleans up keys through it; tests register file deletes and
 batch cancels via `resources.defer(...)`.
 
@@ -19,6 +19,7 @@ import pytest
 from batch_client import BatchClient, build_client
 from capabilities import PROVIDERS
 from e2e_http import NoBody
+from proxy_client import ProxyClient
 
 
 def pytest_configure(config: pytest.Config) -> None:
@@ -29,13 +30,13 @@ def pytest_configure(config: pytest.Config) -> None:
 
 
 @pytest.fixture(scope="session")
-def client() -> BatchClient:
-    return build_client()
+def client(proxy: ProxyClient) -> BatchClient:
+    return build_client(proxy)
 
 
 @pytest.fixture(scope="session")
 def batch_deployments(client: BatchClient) -> Iterator[None]:
-    probe = client.gateway.probe("/health/liveliness", params=NoBody())
+    probe = client.proxy.probe("/health/liveliness", params=NoBody())
     if not probe.healthy:
         yield
         return

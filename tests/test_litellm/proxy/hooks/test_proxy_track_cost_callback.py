@@ -1,11 +1,6 @@
-import os
-import sys
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../..")
-)  # Adds the parent directory to the system path
 
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -17,6 +12,7 @@ from litellm.proxy.hooks.proxy_track_cost_callback import (
     _should_track_cost_callback,
     _update_database_and_spend_counters,
 )
+from litellm.types.utils import CallTypes, Usage
 
 
 @pytest.mark.asyncio
@@ -82,6 +78,137 @@ async def test_async_post_call_failure_hook():
         assert metadata["status"] == "failure"
         assert "error_information" in metadata
         assert metadata["original_key"] == "original_value"
+
+
+@pytest.mark.asyncio
+async def test_async_post_call_failure_hook_carries_guardrail_info_from_litellm_metadata():
+    """
+    LIT-5650 regression: on a pre_call guardrail block the unified guardrail
+    layer seeds request_data["litellm_metadata"], so the guardrail hook writes
+    standard_logging_guardrail_information there, while the failure spend log
+    is serialized from request_data["metadata"]. Blocked invocations still
+    consume provider usage units, so the info must be carried over or the
+    failure row logs guardrail_information: null.
+    """
+    logger = _ProxyDBLogger()
+    guardrail_info = [
+        {
+            "guardrail_name": "bedrock-guard",
+            "guardrail_status": "guardrail_intervened",
+            "guardrail_usage": {"topicPolicyUnits": 1, "contentPolicyUnits": 1},
+        }
+    ]
+    request_data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "metadata": {"original_key": "original_value"},
+        "litellm_metadata": {"standard_logging_guardrail_information": guardrail_info},
+        "proxy_server_request": {"request_id": "test_request_id"},
+    }
+
+    with patch(
+        "litellm.proxy.db.db_spend_update_writer.DBSpendUpdateWriter.update_database",
+        new_callable=AsyncMock,
+    ) as mock_update_database:
+        await logger.async_post_call_failure_hook(
+            request_data=request_data,
+            original_exception=Exception("Violated guardrail policy"),
+            user_api_key_dict=UserAPIKeyAuth(api_key="test_api_key"),
+        )
+
+        metadata = mock_update_database.call_args[1]["kwargs"]["litellm_params"]["metadata"]
+        assert metadata["standard_logging_guardrail_information"] == guardrail_info
+        assert metadata["original_key"] == "original_value"
+
+
+@pytest.mark.asyncio
+async def test_async_post_call_failure_hook_does_not_clobber_guardrail_info_in_metadata():
+    logger = _ProxyDBLogger()
+    metadata_bucket_info = [{"guardrail_name": "from-metadata-bucket"}]
+    request_data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "metadata": {"standard_logging_guardrail_information": metadata_bucket_info},
+        "litellm_metadata": {"standard_logging_guardrail_information": [{"guardrail_name": "from-litellm-bucket"}]},
+        "proxy_server_request": {"request_id": "test_request_id"},
+    }
+
+    with patch(
+        "litellm.proxy.db.db_spend_update_writer.DBSpendUpdateWriter.update_database",
+        new_callable=AsyncMock,
+    ) as mock_update_database:
+        await logger.async_post_call_failure_hook(
+            request_data=request_data,
+            original_exception=Exception("Test exception"),
+            user_api_key_dict=UserAPIKeyAuth(api_key="test_api_key"),
+        )
+
+        metadata = mock_update_database.call_args[1]["kwargs"]["litellm_params"]["metadata"]
+        assert metadata["standard_logging_guardrail_information"] == metadata_bucket_info
+
+
+@pytest.mark.asyncio
+async def test_async_post_call_failure_hook_bills_guardrail_cost_on_blocked_request():
+    """LIT-5651: a request blocked by a guardrail never reaches the LLM, but the
+    guardrail invocation itself is billed by the provider. The failure row must
+    charge that cost against the key instead of recording zero spend."""
+    logger = _ProxyDBLogger()
+    request_data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "metadata": {
+            "standard_logging_guardrail_information": [
+                {
+                    "guardrail_name": "bedrock-guard",
+                    "guardrail_status": "guardrail_intervened",
+                    "guardrail_usage": {"topicPolicyUnits": 1, "contentPolicyUnits": 1},
+                    "guardrail_cost": 0.0003,
+                }
+            ]
+        },
+        "proxy_server_request": {"request_id": "test_request_id"},
+    }
+
+    with patch(
+        "litellm.proxy.db.db_spend_update_writer.DBSpendUpdateWriter.update_database",
+        new_callable=AsyncMock,
+    ) as mock_update_database:
+        await logger.async_post_call_failure_hook(
+            request_data=request_data,
+            original_exception=Exception("Violated guardrail policy"),
+            user_api_key_dict=UserAPIKeyAuth(api_key="test_api_key"),
+        )
+
+        assert mock_update_database.call_args[1]["response_cost"] == pytest.approx(0.0003)
+
+
+@pytest.mark.asyncio
+async def test_async_post_call_failure_hook_adds_guardrail_cost_to_recovered_stream_cost():
+    logger = _ProxyDBLogger()
+    request_data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "metadata": {
+            "standard_logging_guardrail_information": [
+                {"guardrail_name": "bedrock-guard", "guardrail_status": "success", "guardrail_cost": 0.0003}
+            ]
+        },
+        "proxy_server_request": {"request_id": "test_request_id"},
+        "combined_usage_object": Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
+        "response_cost": 0.001,
+    }
+
+    with patch(
+        "litellm.proxy.db.db_spend_update_writer.DBSpendUpdateWriter.update_database",
+        new_callable=AsyncMock,
+    ) as mock_update_database:
+        await logger.async_post_call_failure_hook(
+            request_data=request_data,
+            original_exception=Exception("stream broke mid-flight"),
+            user_api_key_dict=UserAPIKeyAuth(api_key="test_api_key"),
+        )
+
+        assert mock_update_database.call_args[1]["response_cost"] == pytest.approx(0.0013)
 
 
 @pytest.mark.asyncio
@@ -605,7 +732,7 @@ async def test_track_cost_callback_skips_when_no_standard_logging_object():
 
 
 @pytest.mark.asyncio
-async def test_track_cost_callback_defers_in_progress_background_interaction():
+async def test_track_cost_callback_defers_in_progress_background_interaction():  # test-quality-ok: writing no spend row and raising no alert is the whole observable contract of the deferral path
     """
     A background=true interaction create returns in_progress with no usage
     block, so its success event has a model but no standard_logging_object.
@@ -909,6 +1036,166 @@ async def test_enrich_failure_metadata_skips_when_no_api_key():
         }
         await _ProxyDBLogger._enrich_failure_metadata_with_key_info(metadata)
         mock_get_key.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_enrich_failure_metadata_keeps_captured_identity_when_not_resolving():
+    """
+    With resolve_missing_key_identity=False the key is not read, so a null user_id,
+    team_id and org_id captured earlier stay null instead of being refilled from the
+    key as it stands now. The team_alias lookup still runs off the captured team_id.
+    """
+    mock_key_obj = MagicMock()
+    mock_key_obj.key_alias = "alias-assigned-later"
+    mock_key_obj.user_id = "user-assigned-later"
+    mock_key_obj.team_id = "team-assigned-later"
+    mock_key_obj.org_id = "org-assigned-later"
+
+    mock_team_obj = MagicMock()
+    mock_team_obj.team_alias = "captured-team-alias"
+
+    with (
+        patch(
+            "litellm.proxy.hooks.proxy_track_cost_callback.get_key_object",
+            new_callable=AsyncMock,
+            return_value=mock_key_obj,
+        ) as mock_get_key,
+        patch(
+            "litellm.proxy.hooks.proxy_track_cost_callback.get_team_object",
+            new_callable=AsyncMock,
+            return_value=mock_team_obj,
+        ),
+    ):
+        metadata = {
+            "user_api_key": "hashed_key",
+            "user_api_key_alias": None,
+            "user_api_key_user_id": None,
+            "user_api_key_team_id": "captured-team-id",
+            "user_api_key_team_alias": None,
+            "user_api_key_org_id": None,
+        }
+        result = await _ProxyDBLogger._enrich_failure_metadata_with_key_info(
+            metadata, resolve_missing_key_identity=False
+        )
+
+        mock_get_key.assert_not_called()
+        assert result["user_api_key_user_id"] is None
+        assert result["user_api_key_team_id"] == "captured-team-id"
+        assert result["user_api_key_org_id"] is None
+        assert result["user_api_key_alias"] is None
+        assert result["user_api_key_team_alias"] == "captured-team-alias"
+
+
+@pytest.mark.asyncio
+async def test_enrich_failure_metadata_ignores_flag_when_alias_present():
+    """
+    A captured alias already closes the key lookup, so resolve_missing_key_identity
+    changes nothing for a key that has one; only the alias-less key depends on it.
+    """
+    mock_team_obj = MagicMock()
+    mock_team_obj.team_alias = "captured-team-alias"
+
+    with (
+        patch(
+            "litellm.proxy.hooks.proxy_track_cost_callback.get_key_object",
+            new_callable=AsyncMock,
+        ) as mock_get_key,
+        patch(
+            "litellm.proxy.hooks.proxy_track_cost_callback.get_team_object",
+            new_callable=AsyncMock,
+            return_value=mock_team_obj,
+        ),
+    ):
+        for resolve in (True, False):
+            metadata = {
+                "user_api_key": "hashed_key",
+                "user_api_key_alias": "captured-alias",
+                "user_api_key_user_id": None,
+                "user_api_key_team_id": "captured-team-id",
+                "user_api_key_team_alias": None,
+                "user_api_key_org_id": None,
+            }
+            result = await _ProxyDBLogger._enrich_failure_metadata_with_key_info(
+                metadata, resolve_missing_key_identity=resolve
+            )
+            mock_get_key.assert_not_called()
+            assert result["user_api_key_user_id"] is None
+            assert result["user_api_key_alias"] == "captured-alias"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "call_type, expect_key_read",
+    [
+        (CallTypes.aretrieve_batch.value, False),
+        (CallTypes.aretrieve_batch, False),
+        (CallTypes.acompletion.value, True),
+    ],
+)
+async def test_track_cost_callback_reads_key_only_for_in_request_logs(call_type, expect_key_read):
+    """
+    The batch cost row is logged long after the batch was created, so it keeps the
+    identity persisted at create time. Every other call type still backfills from
+    the key.
+    """
+    logger = _ProxyDBLogger()
+
+    mock_key_obj = MagicMock()
+    mock_key_obj.key_alias = "alias-assigned-later"
+    mock_key_obj.user_id = "user-assigned-later"
+    mock_key_obj.team_id = "team-assigned-later"
+    mock_key_obj.org_id = "org-assigned-later"
+
+    kwargs = {
+        "call_type": call_type,
+        "model": None,
+        "litellm_call_id": "test-call-id",
+        "stream": False,
+        "litellm_params": {
+            "metadata": {
+                "user_api_key": "hashed_key",
+                "user_api_key_alias": None,
+                "user_api_key_user_id": None,
+                "user_api_key_team_id": None,
+                "user_api_key_org_id": None,
+            }
+        },
+    }
+
+    with (
+        patch(
+            "litellm.proxy.hooks.proxy_track_cost_callback.get_key_object",
+            new_callable=AsyncMock,
+            return_value=mock_key_obj,
+        ) as mock_get_key,
+        patch(
+            "litellm.proxy.hooks.proxy_track_cost_callback.get_team_object",
+            new_callable=AsyncMock,
+            return_value=MagicMock(team_alias=None),
+        ),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging,
+    ):
+        mock_proxy_logging.failed_tracking_alert = AsyncMock()
+        mock_proxy_logging.db_spend_update_writer = MagicMock()
+        mock_proxy_logging.db_spend_update_writer.update_database = AsyncMock()
+
+        await logger._PROXY_track_cost_callback(
+            kwargs=kwargs,
+            completion_response=None,
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+        )
+
+    assert mock_get_key.called is expect_key_read
+
+    written = kwargs["litellm_params"]["metadata"]
+    if expect_key_read:
+        assert written["user_api_key_user_id"] == "user-assigned-later"
+        assert written["user_api_key_team_id"] == "team-assigned-later"
+    else:
+        assert written["user_api_key_user_id"] is None
+        assert written["user_api_key_team_id"] is None
+        assert written["user_api_key_org_id"] is None
 
 
 @pytest.mark.asyncio
@@ -1314,6 +1601,7 @@ async def test_track_cost_callback_enriches_user_id_for_mcp_style_metadata():
         ("pass_through_endpoint", True),
         ("llm_passthrough_route", True),
         ("allm_passthrough_route", True),
+        ("aretrieve_batch", True),
         ("acompletion", False),
         ("call_mcp_tool", False),
         (None, False),
@@ -1322,7 +1610,14 @@ async def test_track_cost_callback_enriches_user_id_for_mcp_style_metadata():
 def test_should_track_cost_callback_pass_through_without_owner(call_type, expected):
     """Regression for LIT-3782: unauthenticated pass-through requests (auth=false)
     carry no key/user/team/end-user, yet must still be tracked so they land in
-    LiteLLM_SpendLogs. Other call types with no owner stay untracked."""
+    LiteLLM_SpendLogs. Other call types with no owner stay untracked.
+
+    aretrieve_batch is included for the same reason: CheckBatchCost's synthetic
+    logging_obj for a completed managed batch only ever carries
+    user_api_key_user_id/user_api_key_team_id from LiteLLM_ManagedObjectTable,
+    both of which are None for a batch created with the master key or a
+    team-less key (the table never stores the raw key hash). Before this fix,
+    such a batch's cost silently never reached LiteLLM_SpendLogs."""
     assert (
         _should_track_cost_callback(
             user_api_key=None,
@@ -1339,6 +1634,7 @@ def test_should_track_cost_callback_pass_through_without_owner(call_type, expect
     "call_type, expect_spend_log",
     [
         ("pass_through_endpoint", True),
+        ("aretrieve_batch", True),
         ("acompletion", False),
         (None, False),
     ],
@@ -1351,7 +1647,11 @@ async def test_track_cost_callback_logs_unauthenticated_pass_through_request(
     cost callback with no key/user/team/end-user. Before the fix the spend-log
     write was skipped and the request never appeared in request/usage logs. It
     must now be written for pass-through call types while other unauthenticated
-    calls remain skipped."""
+    calls remain skipped.
+
+    aretrieve_batch is included because CheckBatchCost's completed-batch cost
+    event reaches this same callback with no attributable key/user/team when
+    the batch was created with the master key or a team-less key."""
     logger = _ProxyDBLogger()
 
     kwargs = {

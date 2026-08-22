@@ -1,14 +1,14 @@
 import json
 import os
-import sys
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-sys.path.insert(0, os.path.abspath("../../../../.."))
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import litellm
 from litellm.anthropic_interface import messages
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.types.utils import Delta, ModelResponse, StreamingChoices
@@ -35,6 +35,68 @@ def test_anthropic_experimental_pass_through_messages_handler():
             print(f"Error: {e}")
         mock_responses.assert_called_once()
         assert mock_responses.call_args.kwargs["api_key"] == "test-api-key"
+
+
+@pytest.mark.asyncio
+async def test_openai_model_does_not_forward_stream_options_to_responses_api():
+    """
+    Regression test for LIT-4779. `always_include_stream_usage` injects
+    stream_options={'include_usage': True} into every streaming request, but OpenAI
+    models on /v1/messages go to the Responses API, which 400s on that param.
+    """
+    responses_payload = {
+        "id": "resp_stream_options",
+        "object": "response",
+        "created_at": 1734366691,
+        "status": "completed",
+        "model": "gpt-5.5",
+        "output": [
+            {
+                "type": "message",
+                "id": "msg_1",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "hi", "annotations": []}],
+            }
+        ],
+        "parallel_tool_calls": True,
+        "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+        "error": None,
+        "incomplete_details": None,
+        "instructions": None,
+        "metadata": None,
+        "temperature": None,
+        "tool_choice": "auto",
+        "tools": [],
+        "top_p": None,
+        "max_output_tokens": None,
+        "previous_response_id": None,
+        "reasoning": None,
+        "truncation": None,
+        "user": None,
+    }
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.text = json.dumps(responses_payload)
+    mock_response.headers = httpx.Headers({})
+    mock_response.json.return_value = responses_payload
+
+    with patch.object(AsyncHTTPHandler, "post", new_callable=AsyncMock) as mock_post:
+        mock_post.return_value = mock_response
+
+        await litellm.anthropic.messages.acreate(
+            max_tokens=100,
+            messages=[{"role": "user", "content": "Hello, how are you?"}],
+            model="openai/gpt-5.5",
+            api_key="test-api-key",
+            stream_options={"include_usage": True},
+        )
+
+    mock_post.assert_called_once()
+    post_kwargs = mock_post.call_args.kwargs
+    request_body = post_kwargs["json"] if "json" in post_kwargs else json.loads(post_kwargs["data"])
+    assert "stream_options" not in request_body
 
 
 def test_anthropic_experimental_pass_through_messages_handler_dynamic_api_key_and_api_base_and_custom_values():
@@ -153,7 +215,10 @@ async def _async_return(value):
 
 def test_anthropic_experimental_pass_through_messages_handler_custom_llm_provider():
     """
-    Test that litellm.completion is called when a custom LLM provider is given
+    Test that litellm.completion is called when a custom LLM provider is given.
+
+    Provider resolution now happens exactly once, inside litellm.completion itself
+    (BerriAI/litellm#37716), so the handler passes the original unresolved model through.
     """
     from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
         anthropic_messages_handler,
@@ -177,7 +242,7 @@ def test_anthropic_experimental_pass_through_messages_handler_custom_llm_provide
         # Verify that the custom provider was passed through
         call_kwargs = mock_completion.call_args.kwargs
         assert call_kwargs["custom_llm_provider"] == "my-custom-llm"
-        assert call_kwargs["model"] == "my-custom-llm/my-custom-model"
+        assert call_kwargs["model"] == "my-custom-model"
         assert call_kwargs["api_key"] == "test-api-key"
 
 
@@ -461,7 +526,7 @@ class TestThinkingSummaryPreservation:
         finally:
             litellm.reasoning_auto_summary = original
 
-    def test_summary_added_when_env_var_set(self):
+    def test_summary_added_when_env_var_set(self, monkeypatch):
         """When LITELLM_REASONING_AUTO_SUMMARY env var is true, summary is added."""
         import litellm
         from litellm.llms.anthropic.experimental_pass_through.adapters.handler import (
@@ -471,7 +536,7 @@ class TestThinkingSummaryPreservation:
         original = litellm.reasoning_auto_summary
         try:
             litellm.reasoning_auto_summary = False
-            os.environ["LITELLM_REASONING_AUTO_SUMMARY"] = "true"
+            monkeypatch.setenv("LITELLM_REASONING_AUTO_SUMMARY", "true")
             completion_kwargs = {
                 "model": "responses/gpt-5.2",
                 "custom_llm_provider": "openai",
@@ -587,6 +652,26 @@ class TestThinkingSummaryPreservation:
             "reasoning_effort": {"effort": "high", "summary": "concise"}
         }
 
+    def test_translate_thinking_for_model_disabled_stays_plain_string_when_auto_summary_enabled(self):
+        """Disabled thinking must stay a plain string even when reasoning_auto_summary is on."""
+        import litellm
+        from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import (
+            LiteLLMAnthropicMessagesAdapter,
+        )
+
+        original = litellm.reasoning_auto_summary
+        try:
+            litellm.reasoning_auto_summary = True
+            thinking = {"type": "disabled"}
+            result = LiteLLMAnthropicMessagesAdapter.translate_thinking_for_model(
+                thinking=thinking,
+                model="openai/gpt-5.2",
+            )
+        finally:
+            litellm.reasoning_auto_summary = original
+
+        assert result == {"reasoning_effort": "none"}
+
 
 # ---------------------------------------------------------------------------
 # Parity tests: redundant empty-text-block sanitization scan removal.
@@ -646,6 +731,61 @@ def test_handler_skips_strip_when_presanitized():
         )
     assert spy.call_count == 0  # skipped the redundant scan
     assert result is not None
+
+
+def test_handler_flattens_replayed_unencrypted_web_search_results():
+    """Synthesized search blocks replayed as history must reach the provider as text."""
+    from litellm.llms.anthropic.experimental_pass_through.messages import handler
+
+    captured = {}
+
+    def fake_base_handler(*args, **kwargs):
+        captured.update(kwargs)
+        return "stub"
+
+    with patch.object(
+        handler.base_llm_http_handler,
+        "anthropic_messages_handler",
+        side_effect=fake_base_handler,
+    ):
+        handler.anthropic_messages_handler(
+            max_tokens=10,
+            messages=[
+                {"role": "user", "content": "latest litellm version?"},
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "server_tool_use",
+                            "id": "srvtoolu_1",
+                            "name": "web_search",
+                            "input": {"query": "latest litellm version"},
+                        },
+                        {
+                            "type": "web_search_tool_result",
+                            "tool_use_id": "srvtoolu_1",
+                            "content": [
+                                {
+                                    "type": "web_search_result",
+                                    "url": "https://github.com/BerriAI/litellm/releases",
+                                    "title": "Releases",
+                                    "page_age": None,
+                                    "encrypted_content": "",
+                                    "snippet": "Latest release v1.95.0",
+                                }
+                            ],
+                        },
+                    ],
+                },
+                {"role": "user", "content": "which version?"},
+            ],
+            model="anthropic/claude-3-5-sonnet-20241022",
+            custom_llm_provider="anthropic",
+        )
+
+    replayed = captured["messages"][1]["content"]
+    assert [b["type"] for b in replayed] == ["text"]
+    assert "Snippet: Latest release v1.95.0" in replayed[0]["text"]
 
 
 def test_presanitized_flag_not_leaked_to_provider_params():
@@ -821,3 +961,145 @@ def test_gate_passthrough_skipped_when_only_chat_completions_supported(monkeypat
     assert result == "translated"
     assert translation_calls["count"] == 1
     assert "config" not in captured
+
+
+def test_first_party_claude_4_8_plus_cost_map_entries_carry_mid_conversation_system_flag():
+    """Regional and provider-prefixed Claude 4.8+/5 entries carry
+    ``supports_mid_conversation_system``, but the bare first-party keys
+    (``claude-opus-4-8``) that a plain ``custom_llm_provider="anthropic"``
+    lookup resolves were missed, so that lookup reports the capability as
+    unset. Every mapped first-party entry the fallback rule matches must
+    carry the flag."""
+    import json
+    import os
+    import re
+
+    import litellm
+
+    cost_map_path = os.path.join(
+        os.path.dirname(litellm.__file__), "model_prices_and_context_window_backup.json"
+    )
+    with open(cost_map_path) as f:
+        cost_map = json.load(f)
+    rules = cost_map["fallback_generalizations"]["rules"]
+    rule_pattern = next(
+        (r["pattern"] for r in rules if r["name"] == "claude-mid-conversation-system"),
+        None,
+    )
+    assert rule_pattern is not None, "claude-mid-conversation-system rule not found in fallback_generalizations"
+    pattern = re.compile(rule_pattern, re.IGNORECASE)
+    missing = [
+        key
+        for key, info in cost_map.items()
+        if isinstance(info, dict)
+        and info.get("litellm_provider") == "anthropic"
+        and "claude" in key
+        and pattern.search(key)
+        and info.get("supports_mid_conversation_system") is not True
+    ]
+    assert missing == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "requested_model, expected_wire_model, expected_url",
+    [
+        (
+            "perplexity/perplexity/kimi-k3",
+            "perplexity/kimi-k3",
+            "https://api.perplexity.ai/v1/responses",
+        ),
+        (
+            "perplexity/perplexity/sonar",
+            "perplexity/sonar",
+            "https://api.perplexity.ai/v1/responses",
+        ),
+        ("perplexity/sonar", "sonar", "https://api.perplexity.ai/chat/completions"),
+    ],
+)
+async def test_messages_strips_provider_prefix_exactly_once(
+    requested_model, expected_wire_model, expected_url
+):
+    """
+    BerriAI/litellm#37716: only the leading provider segment may be stripped on the way upstream.
+
+    A multi-segment id such as perplexity/perplexity/kimi-k3 must reach the provider as
+    perplexity/kimi-k3, matching what /v1/chat/completions and /v1/responses already send.
+
+    The endpoint is asserted alongside the body because perplexity/perplexity/sonar is a
+    Responses-only deployment whose bare id perplexity/sonar is an ordinary chat model, so
+    stripping the prefix must not also move the request onto chat/completions.
+
+    The subject is the outbound request, so the transport is cut at the wire rather than
+    stubbed with a response body: these ids take different bridges (chat completions
+    versus the Responses API) and would otherwise need different response shapes.
+    """
+    captured = {}
+
+    async def fake_send(self, request, **kwargs):
+        captured["body"] = json.loads(request.content)
+        captured["url"] = str(request.url)
+        raise httpx.ConnectError("cut at the wire", request=request)
+
+    with (
+        patch.object(httpx.AsyncClient, "send", fake_send),
+        pytest.raises(litellm.exceptions.InternalServerError),
+    ):
+        await litellm.anthropic.messages.acreate(
+            max_tokens=100,
+            messages=[{"role": "user", "content": "ping"}],
+            model=requested_model,
+            api_key="test-api-key",
+        )
+
+    assert captured["body"]["model"] == expected_wire_model
+    assert captured["url"] == expected_url
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "requested_model, expected_reported_model",
+    [
+        ("perplexity/perplexity/kimi-k3", "perplexity/kimi-k3"),
+        ("perplexity/sonar", "sonar"),
+    ],
+)
+async def test_messages_streaming_reports_provider_local_model(requested_model, expected_reported_model):
+    """
+    BerriAI/litellm#37716: the wire keeps every segment, so ``message_start`` must still
+    report the id the provider itself knows rather than the caller's prefixed deployment id.
+    """
+
+    class _EmptyStream:
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            raise StopAsyncIteration
+
+    with patch("litellm.acompletion", new=AsyncMock(return_value=_EmptyStream())):
+        stream = await litellm.anthropic.messages.acreate(
+            max_tokens=100,
+            messages=[{"role": "user", "content": "ping"}],
+            model=requested_model,
+            api_key="test-api-key",
+            stream=True,
+        )
+        first_event = await stream.__anext__()
+
+    assert json.loads(first_event.decode().split("data: ", 1)[1])["message"]["model"] == expected_reported_model
+
+
+def test_messages_sync_streaming_reports_provider_local_model():
+    """Same guarantee as the async bridge, at the sync call site."""
+    with patch("litellm.completion", new=MagicMock(return_value=iter(()))):
+        stream = litellm.anthropic.messages.create(
+            max_tokens=100,
+            messages=[{"role": "user", "content": "ping"}],
+            model="perplexity/perplexity/kimi-k3",
+            api_key="test-api-key",
+            stream=True,
+        )
+        first_event = next(iter(stream))
+
+    assert json.loads(first_event.decode().split("data: ", 1)[1])["message"]["model"] == "perplexity/kimi-k3"

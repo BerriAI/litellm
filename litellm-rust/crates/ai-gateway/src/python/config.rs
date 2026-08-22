@@ -7,9 +7,9 @@
 //!
 //! Compiled only under the `python-config` feature.
 
+use litellm_core::CoreResult;
 use litellm_core::error::CoreError;
 use litellm_core::router::{Deployment, Router};
-use litellm_core::CoreResult;
 use pyo3::prelude::*;
 
 use crate::gil;
@@ -17,7 +17,7 @@ use crate::gil;
 /// Load the router's `model_list` from `config_path` via the Python reader.
 pub fn load_router_from_config(config_path: &str) -> CoreResult<Router> {
     gil::record_acquisition();
-    Python::with_gil(|py| {
+    Python::attach(|py| {
         let model_list = py
             .import("litellm.proxy.read_model_list")
             .and_then(|module| module.getattr("read_model_list"))

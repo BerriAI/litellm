@@ -22,8 +22,9 @@ the interaction is billed exactly once no matter who settles first.
 """
 
 import asyncio
+from collections.abc import Awaitable, Callable, Iterator, Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Awaitable, Callable, Iterator, Optional
+from typing import TYPE_CHECKING, TypeAlias
 
 from litellm._logging import verbose_logger
 from litellm.constants import (
@@ -46,14 +47,14 @@ class BackgroundInteractionPollContext:
     interaction_id: str
     custom_llm_provider: str
     logging_obj: "LiteLLMLoggingObj"
-    api_key: Optional[str] = None
-    api_base: Optional[str] = None
+    api_key: str | None = None
+    api_base: str | None = None
     initial_interval_seconds: float = BACKGROUND_INTERACTION_COST_POLL_INITIAL_INTERVAL_SECONDS
     max_interval_seconds: float = BACKGROUND_INTERACTION_COST_POLL_MAX_INTERVAL_SECONDS
     timeout_seconds: float = BACKGROUND_INTERACTION_COST_POLL_TIMEOUT_SECONDS
 
 
-FetchInteraction = Callable[[BackgroundInteractionPollContext], Awaitable[InteractionsAPIResponse]]
+FetchInteraction: TypeAlias = Callable[[BackgroundInteractionPollContext], Awaitable[InteractionsAPIResponse]]
 
 
 async def _fetch_interaction(context: BackgroundInteractionPollContext) -> InteractionsAPIResponse:
@@ -62,7 +63,11 @@ async def _fetch_interaction(context: BackgroundInteractionPollContext) -> Inter
     return await aget(
         interaction_id=context.interaction_id,
         custom_llm_provider=context.custom_llm_provider,
-        **{"api_key": context.api_key, "api_base": context.api_base, "no-log": True},
+        api_key=context.api_key,
+        api_base=context.api_base,
+        **{
+            "no-log": True
+        },  # mutable-ok: "no-log" is not a valid identifier, so it can only be passed through a mapping
     )
 
 
@@ -90,7 +95,7 @@ def _claim_settlement(logging_obj: "LiteLLMLoggingObj") -> bool:
     """
     if _is_settled(logging_obj):
         return False
-    logging_obj.model_call_details[_SETTLED_KEY] = True
+    logging_obj.model_call_details[_SETTLED_KEY] = True  # rebind-ok: both settlers must see the same settlement flag
     return True
 
 
@@ -163,9 +168,7 @@ class _ActiveBackgroundPoll:
     context: BackgroundInteractionPollContext
 
 
-_ACTIVE_POLLS: dict[
-    str, _ActiveBackgroundPoll
-] = {}  # mutable-ok: asyncio requires strong refs to running tasks, and delete settlement looks polls up by interaction id
+_ACTIVE_POLLS: dict[str, _ActiveBackgroundPoll] = {}  # mutable-ok: asyncio needs strong refs to running poll tasks
 
 
 def _discard_poll(interaction_id: str, task: "asyncio.Task[None]") -> None:
@@ -175,10 +178,10 @@ def _discard_poll(interaction_id: str, task: "asyncio.Task[None]") -> None:
 
 
 def maybe_schedule_background_interaction_cost_polling(
-    response: Any,
-    create_kwargs: dict[str, Any],
+    response: object,
+    create_kwargs: Mapping[str, object],
     custom_llm_provider: str,
-) -> Optional["asyncio.Task[None]"]:
+) -> "asyncio.Task[None] | None":
     from litellm.litellm_core_utils.litellm_logging import Logging
 
     if not BACKGROUND_INTERACTION_COST_POLLING_ENABLED:
@@ -194,12 +197,14 @@ def maybe_schedule_background_interaction_cost_polling(
         asyncio.get_running_loop()
     except RuntimeError:
         return None
+    api_key = create_kwargs.get("api_key")
+    api_base = create_kwargs.get("api_base")
     context = BackgroundInteractionPollContext(
         interaction_id=response.id,
         custom_llm_provider=custom_llm_provider,
         logging_obj=logging_obj,
-        api_key=create_kwargs.get("api_key"),
-        api_base=create_kwargs.get("api_base"),
+        api_key=api_key if isinstance(api_key, str) else None,
+        api_base=api_base if isinstance(api_base, str) else None,
     )
     task = asyncio.create_task(poll_and_log_background_interaction_cost(context))
     _ACTIVE_POLLS[context.interaction_id] = _ActiveBackgroundPoll(task=task, context=context)

@@ -232,7 +232,7 @@ describe("CreateKeyPage auth behavior", () => {
     // Assert: we eventually redirect to SSO login with return URL (single replace, not assign/href)
     await waitFor(() => {
       expect(window.location.replace).toHaveBeenCalledWith(
-        expect.stringContaining("https://example.com/ui/login?redirect_to="),
+        expect.stringContaining("https://example.com/ui/login/?redirect_to="),
       );
     });
 

@@ -6,14 +6,11 @@ the "No model_info found" branch and the failing deployment was never added
 to the cooldown set.
 """
 
-import os
-import sys
 from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 import litellm
 from litellm.router_utils.cooldown_handlers import _async_get_cooldown_deployments

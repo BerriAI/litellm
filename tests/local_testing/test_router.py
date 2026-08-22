@@ -3,7 +3,6 @@
 
 import asyncio
 import os
-import sys
 import time
 import traceback
 
@@ -13,10 +12,6 @@ import pytest
 import litellm.types
 import litellm.types.router
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
-import os
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -120,7 +115,7 @@ async def test_router_provider_wildcard_routing():
     print("response 2 = ", response2)
 
     response3 = await router.acompletion(
-        model="groq/llama-3.1-8b-instant",
+        model="groq/openai/gpt-oss-120b",
         messages=[{"role": "user", "content": "hello"}],
     )
 
@@ -278,7 +273,8 @@ def test_router_sensitive_keys():
         )
     except Exception as e:
         print(f"error msg - {str(e)}")
-        assert "special-key" not in str(e)
+        if "special-key" in str(e):
+            pytest.fail("router error leaked the api key")
 
 
 def test_router_order():
@@ -1303,7 +1299,7 @@ def test_consistent_model_id():
     """
     - For a given model group + litellm params, assert the model id is always the same
 
-    Test on `_generate_model_id`
+    Test on `generate_model_id`
 
     Test on `set_model_list`
 
@@ -1317,11 +1313,11 @@ def test_consistent_model_id():
         "stream_timeout": 0.001,
     }
 
-    id1 = Router()._generate_model_id(
+    id1 = Router().generate_model_id(
         model_group=model_group, litellm_params=litellm_params
     )
 
-    id2 = Router()._generate_model_id(
+    id2 = Router().generate_model_id(
         model_group=model_group, litellm_params=litellm_params
     )
 
@@ -1916,21 +1912,21 @@ def test_router_context_window_pre_call_check(model, base_model, llm_provider):
 def test_router_cooldown_api_connection_error():
     from litellm.router_utils.cooldown_handlers import _is_cooldown_required
 
-    try:
+    with pytest.raises(litellm.APIConnectionError) as exc_info:
         _ = litellm.completion(
             model="vertex_ai/gemini-1.5-pro",
             messages=[{"role": "admin", "content": "Fail on this!"}],
         )
-    except litellm.APIConnectionError as e:
-        assert (
-            _is_cooldown_required(
-                litellm_router_instance=Router(),
-                model_id="",
-                exception_status=e.code,
-                exception_str=str(e),
-            )
-            is False
+    e = exc_info.value
+    assert (
+        _is_cooldown_required(
+            litellm_router_instance=Router(),
+            model_id="",
+            exception_status=e.code,
+            exception_str=str(e),
         )
+        is False
+    )
 
     router = Router(
         model_list=[
@@ -2141,25 +2137,22 @@ async def test_aaarouter_dynamic_cooldown_message_retry_time(sync_mode):
     assert len(cooldown_deployments) > 0
 
     # Verify that a subsequent call raises RouterRateLimitError with correct cooldown_time
-    exception_raised = False
-    try:
-        if sync_mode:
+    if sync_mode:
+        with pytest.raises(litellm.types.router.RouterRateLimitError) as exc_info:
             router.embedding(
                 model="text-embedding-ada-002",
                 input="Hello world!",
                 mock_response=[0.1, 0.2, 0.3],
             )
-        else:
+    else:
+        with pytest.raises(litellm.types.router.RouterRateLimitError) as exc_info:
             await router.aembedding(
                 model="text-embedding-ada-002",
                 input="Hello world!",
                 mock_response=[0.1, 0.2, 0.3],
             )
-    except litellm.types.router.RouterRateLimitError as e:
-        exception_raised = True
-        assert e.cooldown_time == cooldown_time
 
-    assert exception_raised
+    assert exc_info.value.cooldown_time == cooldown_time
 
 
 @pytest.mark.parametrize("sync_mode", [True, False])

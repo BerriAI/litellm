@@ -1,0 +1,16 @@
+{
+  "name": "litellm-ui-e2e",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "e2e": "playwright test --config playwright.config.ts",
+    "e2e:ui": "playwright test --ui --config playwright.config.ts",
+    "e2e:migration": "playwright test tests/migration/migratedPages.spec.ts --config playwright.config.ts",
+    "e2e:migration:root": "playwright test --config migration.serverRootPath.config.ts"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.58.1",
+    "@types/node": "20.19.37",
+    "typescript": "5.9.3"
+  }
+}

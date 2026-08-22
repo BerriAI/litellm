@@ -29,7 +29,7 @@ If `db.useStackgresOperator` is used (not yet implemented):
 | `masterkey`                 | The Master API Key for LiteLLM. If not specified, a random key in the `sk-...` format is generated.                                                                                                                                           | N/A                       |
 | `environmentSecrets`        | An optional array of Secret object names. The keys and values in these secrets will be presented to the LiteLLM proxy pod as environment variables. See below for an example Secret object.                                                   | `[]`                      |
 | `environmentConfigMaps`     | An optional array of ConfigMap object names. The keys and values in these configmaps will be presented to the LiteLLM proxy pod as environment variables. See below for an example Secret object.                                             | `[]`                      |
-| `image.repository`          | LiteLLM Proxy image repository                                                                                                                                                                                                                | `docker.litellm.ai/berriai/litellm` |
+| `image.repository`          | LiteLLM Proxy image repository                                                                                                                                                                                                                | `ghcr.io/berriai/litellm` |
 | `image.pullPolicy`          | LiteLLM Proxy image pull policy                                                                                                                                                                                                               | `IfNotPresent`            |
 | `image.tag`                 | Overrides the image tag whose default the latest version of LiteLLM at the time this chart was published.                                                                                                                                     | `""`                      |
 | `imagePullSecrets`          | Registry credentials for the LiteLLM and initContainer images.                                                                                                                                                                                | `[]`                      |
@@ -39,7 +39,7 @@ If `db.useStackgresOperator` is used (not yet implemented):
 | `livenessProbe.*`           | Liveness probe settings for the LiteLLM container (`path`, `periodSeconds`, `timeoutSeconds`, thresholds, and initial delay).                                                                                                                  | See `values.yaml`         |
 | `readinessProbe.*`          | Readiness probe settings for the LiteLLM container (`path`, `periodSeconds`, `timeoutSeconds`, thresholds, and initial delay).                                                                                                                 | See `values.yaml`         |
 | `startupProbe.*`            | Startup probe settings for the LiteLLM container (`path`, `periodSeconds`, `timeoutSeconds`, thresholds, and initial delay).                                                                                                                   | See `values.yaml`         |
-| `resources.*`               | CPU/memory requests and limits for the LiteLLM container.                                                                                                                                                                                       | `{}`                      |
+| `resources.*`               | CPU/memory requests and limits for the LiteLLM container. Unset by default; production deployments should set 1 CPU and 4Gi of memory per worker.                                                                                             | `{}`                      |
 | `service.loadBalancerClass` | Optional LoadBalancer implementation class (only used when `service.type` is `LoadBalancer`)                                                                                                                                                  | `""`                      |
 | `ingress.labels`            | Additional labels for the Ingress resource                                                                                                                                                                                                    | `{}`                      |
 | `ingress.*`                 | See [values.yaml](./values.yaml) for example settings                                                                                                                                                                                         | N/A                       |
@@ -53,6 +53,12 @@ If `db.useStackgresOperator` is used (not yet implemented):
 | `pdb.maxUnavailable`        | Maximum number/percentage of pods that can be unavailable during **voluntary** disruptions (choose **one** of minAvailable/maxUnavailable)                                                                                                    | `null`                    |
 | `pdb.annotations`           | Extra metadata annotations to add to the PDB                                                                                                                                                                                                  | `{}`                      |
 | `pdb.labels`                | Extra metadata labels to add to the PDB                                                                                                                                                                                                       | `{}`                      |
+
+| `billingMetrics.enabled`    | Enable enterprise billable-request metering. Requires an enterprise license.                                                                                                                                                                  | `false`                   |
+| `billingMetrics.endpoint`   | Collector that the billable-request counter is pushed to.                                                                                                                                                                                    | `https://telemetry.litellm.ai` |
+| `billingMetrics.secretName` | Name of an existing Secret holding the mTLS client certificate, under the keys `tls.crt` and `tls.key`.                                                                                                                                       | `litellm-billing-metrics-mtls` |
+| `billingMetrics.caSecretName` | Name of an existing Secret holding a CA bundle under the key `ca.crt`. Only needed for a private or test collector whose server certificate is not on the public web PKI.                                                                    | `""`                      |
+| `billingMetrics.exportIntervalMs` | How often the counter is pushed, in milliseconds. The proxy defaults to `60000` when unset.                                                                                                                                             | `""`                      |
 
 #### Example `proxy_config` ConfigMap from values (default):
 
@@ -94,6 +100,21 @@ data:
 type: Opaque
 ```
 
+#### Enterprise billable-request metering
+
+Enterprise licenses meter billable requests by pushing a counter to LiteLLM's collector over mutual TLS. The chart does not create the client certificate; it mounts one you already hold, read-only, so the private key is never exposed through the environment. Create the Secret under the name the chart expects, then turn the block on:
+
+```
+kubectl create secret tls litellm-billing-metrics-mtls --cert=client.crt --key=client.key
+```
+
+```
+billingMetrics:
+  enabled: true
+```
+
+Set `billingMetrics.caSecretName` only when the collector is a private or test one whose server certificate is not on the public web PKI; the production collector needs no CA override. The chart fails the render rather than deploying a proxy that silently never exports, so a missing `secretName` or an emptied `endpoint` surfaces at `helm install` time.
+
 ### Database Settings
 
 | Name                      | Description                                                                                                                                                                                                                                                                               | Value                                                                                      |
@@ -109,6 +130,16 @@ type: Opaque
 | `db.deployStandalone`     | Deploy a standalone, single instance deployment of Postgres, using the Bitnami postgresql chart. This is useful for getting started but doesn't provide HA or (by default) data backups.                                                                                                  | `true`                                                                                     |
 | `postgresql.*`            | If `db.deployStandalone` is `true`, configuration passed to the Bitnami postgresql chart. See the [Bitnami Documentation](https://github.com/bitnami/charts/tree/main/bitnami/postgresql) for full configuration details. See [values.yaml](./values.yaml) for the default configuration. | See [values.yaml](./values.yaml)                                                           |
 | `postgresql.auth.*`       | If `db.deployStandalone` is `true`, care should be taken to ensure the default `password` and `postgres-password` values are **NOT** used.                                                                                                                                                | `NoTaGrEaTpAsSwOrD`                                                                        |
+| `postgresql.image.*`      | If `db.deployStandalone` is `true`, the image for the bundled Postgres. Pinned to a `docker.io/bitnamilegacy` build because Bitnami retired the versioned tags under `docker.io/bitnami`.                                                                                                 | `bitnamilegacy/postgresql:16.2.0-debian-12-r6`                                             |
+| `redis.image.*`           | If `redis.enabled` is `true`, the image for the bundled Redis. Pinned to a `docker.io/bitnamilegacy` build for the same reason.                                                                                                                                                            | `bitnamilegacy/redis:7.2.4-debian-12-r9`                                                   |
+
+#### Bundled Postgres image
+
+Bitnami removed the versioned tags from `docker.io/bitnami` and republished the archived builds under `docker.io/bitnamilegacy`, so the image defaults that ship inside the `postgresql` and `redis` subcharts no longer pull. The chart pins both to the `bitnamilegacy` copies of the exact builds those subchart versions were released with, which keeps the on-disk data directory layout unchanged for existing installs.
+
+Keep `postgresql.image.tag` pinned. `docker.io/bitnami/postgresql` still publishes a floating `latest`, and pointing the bundled Postgres at a different major version starts the server against a data directory it cannot read (`database files are incompatible with server`). There is no in-place way back, so crossing a major version means dumping the database with the old image and restoring it into the new one. The chart refuses to render when the tag is empty or `latest`.
+
+Those images no longer receive updates. For anything beyond getting started, run Postgres outside the chart and point at it with `db.useExisting`.
 
 #### Example Postgres `db.useExisting` Secret
 

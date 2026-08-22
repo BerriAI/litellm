@@ -1,13 +1,9 @@
 # Create server parameters for stdio connection
 import os
-import sys
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from contextlib import asynccontextmanager
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
     MCPServerManager,
@@ -935,8 +931,8 @@ async def test_get_tools_from_mcp_servers():
                 mcp_auth_header=mock_auth_header,
                 mcp_servers=["server1"],
             )
-            assert len(result) == 1, "Should only return tools from server1"
-            assert result[0].name == "tool1", "Should return tool from server1"
+            assert len(result.tools) == 1, "Should only return tools from server1"
+            assert result.tools[0].name == "tool1", "Should return tool from server1"
 
             # Test Case 2: Without specific MCP servers
             # Create a different mock manager for the second test case
@@ -978,9 +974,9 @@ async def test_get_tools_from_mcp_servers():
                 mcp_auth_header=mock_auth_header,
                 mcp_servers=None,
             )
-            assert len(result) == 2, "Should return tools from all servers"
+            assert len(result.tools) == 2, "Should return tools from all servers"
             assert (
-                result[0].name == "tool1" and result[1].name == "tool2"
+                result.tools[0].name == "tool1" and result.tools[1].name == "tool2"
             ), "Should return tools from all servers"
 
         #
@@ -1015,8 +1011,8 @@ async def test_get_tools_from_mcp_servers():
                     mcp_auth_header=mock_auth_header,
                     mcp_servers=["group-a"],
                 )
-                assert len(result) == 1, "Should only return tools from server3"
-                assert result[0].name == "tool1", "Should return tool from server1"
+                assert len(result.tools) == 1, "Should only return tools from server3"
+                assert result.tools[0].name == "tool1", "Should return tool from server1"
 
     except AssertionError as e:
         pytest.fail(f"Test failed: {str(e)}")
@@ -2010,6 +2006,9 @@ async def test_get_tools_for_single_server_applies_disallowed_tools_without_allo
     mock_server.mcp_info = {"server_name": "zapier"}
     mock_server.name = "zapier"
     mock_server.server_id = "zapier"
+    mock_server.server_name = "zapier"
+    mock_server.alias = None
+    mock_server.short_prefix = None
     mock_server.allowed_tools = None
     mock_server.disallowed_tools = ["send_email"]
 
@@ -2034,6 +2033,65 @@ async def test_get_tools_for_single_server_applies_disallowed_tools_without_allo
         result = await _get_tools_for_single_server(mock_server, "Bearer test_token")
 
     assert [tool.name for tool in result] == ["read_email"]
+
+
+@pytest.mark.asyncio
+async def test_rest_listing_hides_key_grants_dispatch_would_refuse():
+    """REST listing must answer for exactly the key/team grants dispatch honors.
+
+    ``mcp_tool_permissions`` and toolset rows name a tool on one server, so both
+    the MCP list path and ``tools/call`` compare them bare. A wire-form entry
+    therefore grants nothing, and REST listing that matched the prefixed
+    spelling would advertise a tool the very next call refuses.
+    """
+    from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+        MCPRequestHandler,
+    )
+    from litellm.proxy._experimental.mcp_server.rest_endpoints import (
+        _get_tools_for_single_server,
+    )
+    from litellm.proxy._types import UserAPIKeyAuth
+    from mcp.types import Tool as MCPTool
+
+    server_id = "3c6f6617-d23c-4f48-bfb0-f205e3b27bab"
+    mock_server = MagicMock()
+    mock_server.mcp_info = {"server_name": server_id}
+    mock_server.name = server_id
+    mock_server.server_id = server_id
+    mock_server.server_name = None
+    mock_server.alias = None
+    mock_server.short_prefix = None
+    mock_server.allowed_tools = None
+    mock_server.disallowed_tools = None
+    mock_server.tool_name_to_display_name = None
+
+    mock_tools = [
+        MCPTool(
+            name="read_wiki_contents",
+            description="Read a wiki",
+            inputSchema={"type": "object"},
+        ),
+    ]
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.rest_endpoints.global_mcp_server_manager"
+    ) as mock_manager, patch(
+        "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager"
+    ) as mock_server_manager, patch.object(
+        MCPRequestHandler,
+        "get_allowed_tools_for_server",
+        AsyncMock(return_value=[f"{server_id}-read_wiki_contents"]),
+    ):
+        mock_manager._get_tools_from_server = AsyncMock(return_value=mock_tools)
+        mock_server_manager.get_mcp_server_by_id.return_value = mock_server
+
+        result = await _get_tools_for_single_server(
+            mock_server,
+            "Bearer test_token",
+            user_api_key_auth=UserAPIKeyAuth(api_key="sk-test"),
+        )
+
+    assert result == []
 
 
 @pytest.mark.asyncio
@@ -2436,11 +2494,12 @@ async def test_filter_tools_by_allowed_tools_integration():
             mock_client_constructor,
         ):
             # Call _get_tools_from_mcp_servers which should apply the filtering
-            filtered_tools = await _get_tools_from_mcp_servers(
+            listing = await _get_tools_from_mcp_servers(
                 user_api_key_auth=mock_user_auth,
                 mcp_auth_header="Bearer test_token",
                 mcp_servers=None,  # Get from all servers
             )
+            filtered_tools = listing.tools
 
             # Verify that only allowed tools are returned
             assert (
@@ -2549,11 +2608,12 @@ async def test_filter_tools_by_disallowed_tools_integration():
             mock_client_constructor,
         ):
             # Call _get_tools_from_mcp_servers which should apply the filtering
-            filtered_tools = await _get_tools_from_mcp_servers(
+            listing = await _get_tools_from_mcp_servers(
                 user_api_key_auth=mock_user_auth,
                 mcp_auth_header="Bearer test_token",
                 mcp_servers=None,  # Get from all servers
             )
+            filtered_tools = listing.tools
 
             # Verify that only safe tools are returned (dangerous tools filtered out)
             assert (
@@ -2650,11 +2710,12 @@ async def test_filter_tools_no_restrictions_integration():
             mock_client_constructor,
         ):
             # Call _get_tools_from_mcp_servers which should apply the filtering
-            filtered_tools = await _get_tools_from_mcp_servers(
+            listing = await _get_tools_from_mcp_servers(
                 user_api_key_auth=mock_user_auth,
                 mcp_auth_header="Bearer test_token",
                 mcp_servers=None,  # Get from all servers
             )
+            filtered_tools = listing.tools
 
             # Should return all tools when no restrictions
             assert (

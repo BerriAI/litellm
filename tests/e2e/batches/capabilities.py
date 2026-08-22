@@ -5,9 +5,31 @@ from __future__ import annotations
 import base64
 import os
 from dataclasses import dataclass
-from typing import Literal
+from typing import Final, Literal
 
+from e2e_config import provider_edge_base, unique_marker
 from models import LiteLLMParamsBody
+
+_BATCH_RUN = unique_marker()
+
+
+def batch_model_name(base: str) -> str:
+    return f"{base}-{_BATCH_RUN}"
+
+
+OPENAI_BATCH_BACKEND: Final = "gpt-4o-mini"
+
+
+def openai_batch_params() -> LiteLLMParamsBody:
+    """The OpenAI batch deployment, wired through the record/replay edge when a fixture
+    mode is active and straight at OpenAI otherwise (LIT-5974). Azure, Vertex, and
+    Bedrock stay live: none of them has an edge mount."""
+    base = provider_edge_base("openai")
+    return LiteLLMParamsBody(
+        model=f"openai/{OPENAI_BATCH_BACKEND}",
+        api_key="os.environ/OPENAI_API_KEY",
+        api_base=None if base is None else f"{base}/v1",
+    )
 
 
 def _env_ref(*names: str) -> str:
@@ -40,10 +62,7 @@ class Provider:
     def litellm_params(self) -> LiteLLMParamsBody:
         match self.name:
             case "openai":
-                return LiteLLMParamsBody(
-                    model="openai/gpt-4o-mini",
-                    api_key="os.environ/OPENAI_API_KEY",
-                )
+                return openai_batch_params()
             case "azure":
                 return LiteLLMParamsBody(
                     model="azure/gpt-5.4-mini-batch",
@@ -91,23 +110,56 @@ class Capability:
 
     @property
     def jsonl_model(self) -> str:
-        return self.model if self.scenario == "unified" else self.raw_model
+        # Always the provider deployment name. Unified routes via
+        # target_model_names; the JSONL body.model must still be a name Azure /
+        # Vertex accept. Putting the proxy alias here used to depend on a perfect
+        # rewrite, and a stale or mis-selected deployment produced model_not_found.
+        return self.raw_model
 
 
 PROVIDERS: tuple[Provider, ...] = (
-    Provider("openai", "openai-batch", "gpt-4o-mini", can_cancel=True, can_list=True),
-    Provider("azure", "azure-batch", "gpt-5.4-mini-batch", can_cancel=True, can_list=True),
     Provider(
-        "vertex_ai", "vertex-batch", "gemini-2.5-flash", can_cancel=True, can_list=True
+        "openai",
+        batch_model_name("openai-batch"),
+        OPENAI_BATCH_BACKEND,
+        can_cancel=True,
+        can_list=True,
+    ),
+    Provider(
+        "azure",
+        batch_model_name("azure-batch"),
+        "gpt-5.4-mini-batch",
+        can_cancel=True,
+        can_list=True,
+    ),
+    Provider(
+        "vertex_ai",
+        batch_model_name("vertex-batch"),
+        "gemini-2.5-flash",
+        can_cancel=True,
+        can_list=True,
     ),
     Provider(
         "bedrock",
-        "bedrock-batch",
+        batch_model_name("bedrock-batch"),
         "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
         can_cancel=False,
         can_list=False,
     ),
 )
+
+def _model_for(provider_name: str) -> str:
+    for provider in PROVIDERS:
+        if provider.name == provider_name:
+            return provider.model
+    raise ValueError(
+        f"no batch provider named {provider_name!r} in PROVIDERS; "
+        f"known={[p.name for p in PROVIDERS]}"
+    )
+
+
+OPENAI_BATCH_MODEL = _model_for("openai")
+AZURE_BATCH_MODEL = _model_for("azure")
 
 BEDROCK_SCENARIOS: tuple[Scenario, ...] = ("unified",)
 
@@ -174,9 +226,59 @@ def is_model_encoded_id(id_str: str) -> bool:
     return False
 
 
+def decoded_model_from_id(id_str: str) -> str | None:
+    """Deployment name embedded in a model-encoded file/batch id, or None."""
+    for prefix in ("file-", "batch_"):
+        if id_str.startswith(prefix):
+            decoded = _b64_decode(id_str[len(prefix) :])
+            if decoded.startswith("litellm:") and ";model," in decoded:
+                return decoded.split(";model,", 1)[1].split(";")[0]
+    return None
+
+
 def matches_id_shape(shape: IdShape, id_str: str) -> bool:
     if shape == "managed":
         return is_managed_id(id_str)
     if shape == "model_encoded":
         return is_model_encoded_id(id_str)
     return not is_managed_id(id_str) and not is_model_encoded_id(id_str)
+
+
+def coverage_cells_for_lifecycle(cap: Capability) -> tuple[str, ...]:
+    """Registry cell ids that the parametrized lifecycle test covers for one capability.
+
+    OpenAI has per-scenario cells plus granular create/retrieve/cancel/list/file
+    cells. Other providers have one basic cell each. File-upload cells for the
+    batch-backing path are included when the lifecycle uploads for that provider.
+    """
+    match cap.provider:
+        case "openai":
+            cells = (
+                f"llm.batches.openai_{cap.scenario}.basic.nonstream.works",
+                "llm.batches.openai.create.nonstream.works",
+                "llm.batches.openai.retrieve.nonstream.works",
+                "llm.batches.openai.file_lifecycle.nonstream.works",
+                "llm.files.openai.upload.nonstream.works",
+            )
+            if cap.can_cancel:
+                cells = (*cells, "llm.batches.openai.cancel.nonstream.works")
+            if cap.can_list:
+                cells = (*cells, "llm.batches.openai.list.nonstream.works")
+            return cells
+        case "azure":
+            return (
+                "llm.batches.azure_openai.basic.nonstream.works",
+                "llm.files.azure_openai.upload.nonstream.works",
+            )
+        case "vertex_ai":
+            return (
+                "llm.batches.vertex.basic.nonstream.works",
+                "llm.files.vertex.upload.nonstream.works",
+            )
+        case "bedrock":
+            return (
+                "llm.batches.bedrock.basic.nonstream.works",
+                "llm.files.bedrock.upload.nonstream.works",
+            )
+        case _:
+            return ()

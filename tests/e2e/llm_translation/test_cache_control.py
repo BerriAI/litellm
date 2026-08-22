@@ -81,9 +81,9 @@ def _cache_chat(
             RichMessage(role="user", content=[TextBlock(text="Reply with one word.")]),
         ],
     )
-    return client.gateway.transport.post(
+    return client.proxy.transport.post(
         "/chat/completions",
-        headers=client.gateway.transport.bearer(key),
+        headers=client.proxy.transport.bearer(key),
         json=body,
         response_type=ChatResponse,
     )
@@ -120,11 +120,11 @@ class TestCacheControl:
         self, client: PassthroughClient, resources: ResourceManager
     ) -> None:
         model = f"e2e-bedrock-cache-{unique_marker()}"
-        model_id = client.gateway.create_model(
+        model_id = client.proxy.create_model(
             model,
             LiteLLMParamsBody(model=BEDROCK_MODEL, aws_region_name="us-east-1"),
         )
-        resources.defer(lambda: client.gateway.delete_model(model_id))
+        resources.defer(lambda: client.proxy.delete_model(model_id))
         _assert_cache_read_on_second_call(client, resources.key(), model)
 
     @pytest.mark.covers(
@@ -135,7 +135,7 @@ class TestCacheControl:
         self, client: PassthroughClient, resources: ResourceManager
     ) -> None:
         model = f"e2e-vertex-cache-{unique_marker()}"
-        model_id = client.gateway.create_model(
+        model_id = client.proxy.create_model(
             model,
             LiteLLMParamsBody(
                 model=VERTEX_MODEL,
@@ -144,5 +144,5 @@ class TestCacheControl:
                 vertex_credentials=os.environ.get("VERTEXAI_CREDENTIALS"),
             ),
         )
-        resources.defer(lambda: client.gateway.delete_model(model_id))
+        resources.defer(lambda: client.proxy.delete_model(model_id))
         _assert_cache_read_on_second_call(client, resources.key(), model)

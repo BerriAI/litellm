@@ -1,4 +1,4 @@
-from typing import Any, Dict, List
+from typing import Any
 
 from typing_extensions import TypedDict
 
@@ -11,7 +11,7 @@ class AzurePromptShieldGuardrailRequestBody(TypedDict):
     """Configuration parameters for the Azure Prompt Shield guardrail"""
 
     userPrompt: str
-    documents: List[str]
+    documents: list[str]
 
 
 class UserPromptAnalysis(TypedDict, total=False):
@@ -22,7 +22,7 @@ class AzurePromptShieldGuardrailResponse(TypedDict):
     """Configuration parameters for the Azure Prompt Shield guardrail"""
 
     userPromptAnalysis: UserPromptAnalysis
-    documentsAnalysis: List[Dict[str, Any]]
+    documentsAnalysis: list[dict[str, Any]]
 
 
 class AzurePromptShieldGuardrailConfigModel(

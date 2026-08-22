@@ -177,6 +177,27 @@ export const parseSkillSource = (rawUrl: string, subPath?: string): SkillSourceP
 };
 
 /**
+ * Build the `~/.claude/settings.json` snippet that registers the proxy as a marketplace.
+ * Claude Code expects `extraKnownMarketplaces.<name>.source` to be a source object, not a
+ * bare `"url"` string, so the url/source pair is nested one level deeper.
+ */
+export const buildMarketplaceSettingsSnippet = (proxyOrigin: string): string =>
+  JSON.stringify(
+    {
+      extraKnownMarketplaces: {
+        "my-org": {
+          source: {
+            source: "url",
+            url: `${proxyOrigin}/claude-code/marketplace.json`,
+          },
+        },
+      },
+    },
+    null,
+    2,
+  );
+
+/**
  * Generate install command for Claude Code CLI
  * Format: /plugin marketplace add org/repo OR /plugin marketplace add url
  */

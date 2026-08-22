@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Final
 
 import httpx
 
@@ -24,9 +24,9 @@ class AzureFoundryFluxImageEditConfig(OpenAIImageEditConfig):
         self,
         headers: dict,
         model: str,
-        api_key: Optional[str] = None,
-        litellm_params: Optional[dict] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        litellm_params: dict | None = None,
+        api_base: str | None = None,
     ) -> dict:
         """
         Validate Azure AI Foundry environment and set up authentication
@@ -49,7 +49,7 @@ class AzureFoundryFluxImageEditConfig(OpenAIImageEditConfig):
     def get_complete_url(
         self,
         model: str,
-        api_base: Optional[str],
+        api_base: str | None,
         litellm_params: dict,
     ) -> str:
         """
@@ -94,6 +94,6 @@ class AzureFoundryFluxImageEditConfig(OpenAIImageEditConfig):
             )
 
         # Use the new query_params dictionary
-        final_url = httpx.URL(new_url).copy_with(params={"api-version": api_version})
+        final_url: Final = httpx.URL(new_url).copy_with(params={"api-version": api_version})
 
         return str(final_url)

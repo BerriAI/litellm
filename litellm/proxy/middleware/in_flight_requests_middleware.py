@@ -6,7 +6,7 @@ Prometheus gauge `litellm_in_flight_requests`.
 """
 
 import os
-from typing import Any, Optional
+from typing import Any, Final
 
 from starlette.types import ASGIApp, Receive, Scope, Send
 
@@ -27,7 +27,7 @@ class InFlightRequestsMiddleware:
     """
 
     _in_flight: int = 0
-    _gauge: Optional[Any] = None
+    _gauge: Any | None = None
     _gauge_init_attempted: bool = False
 
     def __init__(self, app: ASGIApp) -> None:
@@ -39,15 +39,15 @@ class InFlightRequestsMiddleware:
             return
 
         InFlightRequestsMiddleware._in_flight += 1
-        gauge = InFlightRequestsMiddleware._get_gauge()
+        gauge: Final = InFlightRequestsMiddleware._get_gauge()
         if gauge is not None:
-            gauge.inc()  # type: ignore
+            gauge.inc()
         try:
             await self.app(scope, receive, send)
         finally:
             InFlightRequestsMiddleware._in_flight -= 1
             if gauge is not None:
-                gauge.dec()  # type: ignore
+                gauge.dec()
 
     @staticmethod
     def get_count() -> int:
@@ -55,7 +55,7 @@ class InFlightRequestsMiddleware:
         return InFlightRequestsMiddleware._in_flight
 
     @staticmethod
-    def _get_gauge() -> Optional[Any]:
+    def _get_gauge() -> Any | None:
         if InFlightRequestsMiddleware._gauge_init_attempted:
             return InFlightRequestsMiddleware._gauge
         InFlightRequestsMiddleware._gauge_init_attempted = True
