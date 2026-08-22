@@ -73,7 +73,7 @@ def _find_base_model_entry(base_model: str, local_data: dict) -> Optional[str]:
 
 
 def _effort_flags(reasoning_options: list) -> dict:
-    flags: dict[str, bool] = {}
+    flags: dict[str, bool] = {flag: False for flag in EFFORT_FLAG_MAP.values()}
     for opt in reasoning_options or []:
         if opt.get("type") == "effort":
             for val in opt.get("values", []):
