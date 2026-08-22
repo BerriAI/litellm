@@ -197,12 +197,18 @@ class Markers:
         if start <= marker.start < end:
             return True
         if marker.standalone:
-            return self.only_separators(marker.end, start)
+            return self.on_the_line_below(marker.end, start)
         return self.only_separators(end, marker.start)
+
+    def on_the_line_below(self, start: int, end: int) -> bool:
+        """Whether a marker on its own line is written directly above the statement, which means
+        one line break and nothing else that carries meaning. A blank line between the two leaves
+        the marker reading as a note about the file rather than a bound on what follows it."""
+        return self.only_separators(start, end) and self.sql[start:end].count("\n") == 1
 
     def only_separators(self, start: int, end: int) -> bool:
         """Whether nothing but statement separators lie between two points, which is what makes a
-        marker and a statement adjacent whatever whitespace and line breaks sit between them."""
+        marker and the statement it follows adjacent however they are laid out."""
         return start <= end and not self.sql[start:end].strip(" \t\r\n;")
 
 
