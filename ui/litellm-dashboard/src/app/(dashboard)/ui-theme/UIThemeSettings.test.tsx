@@ -9,6 +9,7 @@ import UIThemeSettings from "./UIThemeSettings";
 const setLogoUrl = vi.fn();
 const setLogoUrlDark = vi.fn();
 const setFaviconUrl = vi.fn();
+const setCustomThemeCss = vi.fn();
 
 vi.mock("@/contexts/ThemeContext", () => ({
   useTheme: () => ({
@@ -18,6 +19,8 @@ vi.mock("@/contexts/ThemeContext", () => ({
     setLogoUrlDark,
     faviconUrl: null,
     setFaviconUrl,
+    customThemeCss: null,
+    setCustomThemeCss,
   }),
 }));
 
@@ -87,6 +90,7 @@ describe("UIThemeSettings", () => {
       logo_url: "https://a.test/logo.png",
       logo_url_dark: null,
       favicon_url: "https://a.test/fav.ico",
+      custom_theme_css: null,
     });
     await waitFor(() => expect(toast.success).toHaveBeenCalledWith("Theme settings updated successfully!"));
   });
@@ -139,13 +143,19 @@ describe("UIThemeSettings", () => {
     await user.click(screen.getByRole("button", { name: "Reset to Default" }));
 
     await waitFor(() => expect(patchCalls()).toHaveLength(1));
-    expect(bodyOf(patchCalls()[0])).toEqual({ logo_url: null, logo_url_dark: null, favicon_url: null });
+    expect(bodyOf(patchCalls()[0])).toEqual({
+      logo_url: null,
+      logo_url_dark: null,
+      favicon_url: null,
+      custom_theme_css: null,
+    });
     expect(screen.getByPlaceholderText(LOGO_PLACEHOLDER)).toHaveValue("");
     expect(screen.getByPlaceholderText(LOGO_DARK_PLACEHOLDER)).toHaveValue("");
     expect(screen.getByPlaceholderText(FAVICON_PLACEHOLDER)).toHaveValue("");
     expect(setLogoUrl).toHaveBeenLastCalledWith(null);
     expect(setLogoUrlDark).toHaveBeenLastCalledWith(null);
     expect(setFaviconUrl).toHaveBeenLastCalledWith(null);
+    expect(setCustomThemeCss).toHaveBeenLastCalledWith(null);
     await waitFor(() => expect(toast.success).toHaveBeenCalledWith("Theme settings reset to default!"));
   });
 });

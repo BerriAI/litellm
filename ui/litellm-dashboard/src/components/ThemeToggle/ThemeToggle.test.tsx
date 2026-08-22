@@ -58,11 +58,11 @@ describe("ThemeToggle", () => {
     expect(document.documentElement).not.toHaveClass("dark");
   });
 
-  it("marks dark as beta in the menu, and leaves the other choices unmarked", async () => {
+  it("leaves every theme choice unmarked in the menu", async () => {
     renderToggle();
     await openMenu();
 
-    expect(screen.getByRole("menuitemradio", { name: /^Dark/ })).toHaveTextContent("Beta");
+    expect(screen.getByRole("menuitemradio", { name: /^Dark/ })).not.toHaveTextContent("Beta");
     expect(screen.getByRole("menuitemradio", { name: "Light" })).not.toHaveTextContent("Beta");
     expect(screen.getByRole("menuitemradio", { name: "System" })).not.toHaveTextContent("Beta");
   });
