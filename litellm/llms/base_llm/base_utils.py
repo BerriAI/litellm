@@ -180,7 +180,7 @@ def _is_basemodel_class(response_format: object) -> bool:
 def _pydantic_model_json_schema(
     response_format: type[BaseModel] | type,
     ref_template: str | None = None,
-) -> dict:
+) -> dict:  # mutable-ok: pydantic JSON schema is a mutable dict
     model_json_schema = getattr(response_format, "model_json_schema", None)
     if callable(model_json_schema) and ref_template is not None:
         return model_json_schema(ref_template=ref_template)
@@ -195,7 +195,7 @@ def _pydantic_model_json_schema(
 def _response_format_json_schema(
     response_format: type[BaseModel],
     ref_template: str | None = None,
-) -> dict:
+) -> dict:  # mutable-ok: pydantic JSON schema is a mutable dict
     if ref_template is not None:
         return _pydantic_model_json_schema(response_format, ref_template=ref_template)
     try:
