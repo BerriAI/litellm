@@ -43144,6 +43144,8 @@ export interface operations {
                 provider?: string | null;
                 target_model_names?: string | null;
                 purpose?: string | null;
+                limit?: number | null;
+                after?: string | null;
             };
             header?: never;
             path?: never;
@@ -58015,6 +58017,8 @@ export interface operations {
                 provider?: string | null;
                 target_model_names?: string | null;
                 purpose?: string | null;
+                limit?: number | null;
+                after?: string | null;
             };
             header?: never;
             path?: never;
@@ -64268,6 +64272,8 @@ export interface operations {
             query?: {
                 target_model_names?: string | null;
                 purpose?: string | null;
+                limit?: number | null;
+                after?: string | null;
             };
             header?: never;
             path: {
