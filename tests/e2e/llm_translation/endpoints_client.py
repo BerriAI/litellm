@@ -74,12 +74,14 @@ class ResponsesRequest(BaseModel):
     stream: bool = False
     tools: list[ResponsesFunctionTool] | None = None
     guardrails: list[str] | None = None
+    cache: dict[str, bool] | None = {"no-cache": True}
 
 
 class MessagesRequest(BaseModel):
     model: str
     max_tokens: int
     messages: list[ChatMessage]
+    cache: dict[str, bool] | None = {"no-cache": True}
 
 
 class RichMessagesRequest(BaseModel):
@@ -87,18 +89,20 @@ class RichMessagesRequest(BaseModel):
     max_tokens: int = 64
     system: list[TextBlock]
     messages: list[RichMessage]
-    cache: dict[str, bool] = {"no-cache": True}
+    cache: dict[str, bool] | None = {"no-cache": True}
 
 
 class CompletionsRequest(BaseModel):
     model: str
     prompt: str
     max_tokens: int = 32
+    cache: dict[str, bool] | None = {"no-cache": True}
 
 
 class EmbeddingsRequest(BaseModel):
     model: str
     input: str
+    cache: dict[str, bool] | None = {"no-cache": True}
 
 
 class RerankRequest(BaseModel):
@@ -106,6 +110,7 @@ class RerankRequest(BaseModel):
     query: str
     documents: list[str]
     top_n: int
+    cache: dict[str, bool] | None = {"no-cache": True}
 
 
 class SpeechRequest(BaseModel):
