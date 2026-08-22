@@ -4166,6 +4166,66 @@ def test_batch_upload_redacts_per_record(monkeypatch, llm_router: Router):
         ProxyLogging._callback_capabilities_cache.clear()
 
 
+PLAIN_UPLOAD_RESPONSE_BODY = {
+    "id": "dummy-id",
+    "object": "file",
+    "bytes": 0,
+    "created_at": 1234567890,
+    "filename": "batch.jsonl",
+    "purpose": "batch",
+    "status": "uploaded",
+    "expires_at": None,
+    "status_details": None,
+}
+
+
+def test_create_file_omits_batch_guardrail_field_when_no_guardrail_configured(monkeypatch, llm_router: Router):
+    """An upload no guardrail is configured for serialises the plain OpenAI file shape."""
+    forwarded_calls = _setup_batch_upload_endpoint(monkeypatch, llm_router)
+    try:
+        response = client.post(
+            "/v1/files",
+            files={"file": ("batch.jsonl", VALID_BATCH_LINE, "application/jsonl")},
+            data={"purpose": "batch"},
+            headers={"Authorization": "Bearer test-key"},
+        )
+    finally:
+        _teardown_batch_upload_endpoint()
+
+    assert response.status_code == 200, response.text
+    assert len(forwarded_calls) == 1
+    assert response.json() == PLAIN_UPLOAD_RESPONSE_BODY
+
+
+def test_create_file_omits_batch_guardrail_field_when_guardrail_made_no_changes(monkeypatch, llm_router: Router):
+    """A guardrail that runs and changes nothing leaves the response the plain OpenAI file shape."""
+    import litellm
+    from litellm.integrations.custom_guardrail import CustomGuardrail
+    from litellm.proxy.utils import ProxyLogging
+
+    class _Passthrough(CustomGuardrail):
+        async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+            return data
+
+    forwarded_calls = _setup_batch_upload_endpoint(monkeypatch, llm_router)
+    monkeypatch.setattr(litellm, "callbacks", [_Passthrough(guardrail_name="noop", default_on=True)])
+    ProxyLogging._callback_capabilities_cache.clear()
+    try:
+        response = client.post(
+            "/v1/files",
+            files={"file": ("batch.jsonl", VALID_BATCH_LINE, "application/jsonl")},
+            data={"purpose": "batch"},
+            headers={"Authorization": "Bearer test-key"},
+        )
+    finally:
+        _teardown_batch_upload_endpoint()
+        ProxyLogging._callback_capabilities_cache.clear()
+
+    assert response.status_code == 200, response.text
+    assert len(forwarded_calls) == 1
+    assert response.json() == PLAIN_UPLOAD_RESPONSE_BODY
+
+
 def test_batch_upload_closes_the_spools_it_opened(monkeypatch, llm_router: Router):
     """The scan and the rewrite each open a spool; the request owns both and must not leak them."""
     import json as _json
