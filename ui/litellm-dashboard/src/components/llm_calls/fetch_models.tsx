@@ -29,9 +29,12 @@ export const fetchAvailableModelsForTeam = async (accessToken: string, teamId: s
 /**
  * Fetches available models using modelHubCall and formats them for the selection dropdown.
  */
-export const fetchAvailableModels = async (accessToken: string): Promise<ModelGroup[]> => {
+export const fetchAvailableModels = async (
+  accessToken: string,
+  suppressGlobalErrorHandler = false,
+): Promise<ModelGroup[]> => {
   try {
-    const fetchedModels = await modelHubCall(accessToken);
+    const fetchedModels = await modelHubCall(accessToken, suppressGlobalErrorHandler);
 
     if (fetchedModels?.data.length > 0) {
       const models: ModelGroup[] = fetchedModels.data

@@ -1813,16 +1813,16 @@ export const skillHubPublicCall = async () => {
   return response.json();
 };
 
-export const modelHubCall = async (accessToken: string) => {
+export const modelHubCall = async (accessToken: string, suppressGlobalErrorHandler = false) => {
   /**
    * Get all models on proxy
    */
   try {
-    const data = await apiClient.get(`/model_group/info`, { accessToken });
+    const data = await apiClient.get(`/model_group/info`, { accessToken, suppressGlobalErrorHandler });
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
-    console.error("Failed to create key:", error);
+    console.error("Failed to fetch model hub:", error);
     throw error;
   }
 };

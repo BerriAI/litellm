@@ -43,6 +43,7 @@ import { makeOpenAIChatCompletionRequest } from "@/components/llm_calls/chat_com
 import { makeOpenAIEmbeddingsRequest } from "../../llm_calls/embeddings_api";
 import { Agent, fetchAvailableAgents } from "../../llm_calls/fetch_agents";
 import { fetchAvailableModels, ModelGroup } from "@/components/llm_calls/fetch_models";
+import { extractProxyErrorMessage } from "@/lib/http/client";
 import { makeOpenAIImageEditsRequest } from "../../llm_calls/image_edits";
 import { makeOpenAIImageGenerationRequest } from "../../llm_calls/image_generation";
 import { makeOpenAIResponsesRequest } from "@/components/llm_calls/responses_api";
@@ -199,7 +200,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
   const [showCustomModelInput, setShowCustomModelInput] = useState<boolean>(false);
   const [modelInfo, setModelInfo] = useState<ModelGroup[]>([]);
   const [isLoadingModels, setIsLoadingModels] = useState(false);
-  const [modelLoadError, setModelLoadError] = useState(false);
+  const [modelLoadError, setModelLoadError] = useState<string | null>(null);
   const [agentInfo, setAgentInfo] = useState<Agent[]>([]);
   const [selectedAgent, setSelectedAgent] = useState<string | undefined>(undefined);
   const debouncedSetSelectedModel = useDebouncedCallback((value: string) => setSelectedModel(value), {
@@ -414,7 +415,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
     const userApiKey = apiKeySource === "session" ? accessToken : apiKey.trim();
     if (!userApiKey) {
       setModelInfo([]);
-      setModelLoadError(false);
+      setModelLoadError(null);
       setIsLoadingModels(false);
       return;
     }
@@ -423,9 +424,9 @@ const ChatUI: React.FC<ChatUIProps> = ({
 
     const loadModels = async () => {
       setIsLoadingModels(true);
-      setModelLoadError(false);
+      setModelLoadError(null);
       try {
-        const uniqueModels = await fetchAvailableModels(userApiKey);
+        const uniqueModels = await fetchAvailableModels(userApiKey, apiKeySource === "custom");
         if (cancelled) {
           return;
         }
@@ -441,7 +442,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
         }
         console.error("Error fetching model info:", error);
         setModelInfo([]);
-        setModelLoadError(true);
+        setModelLoadError(extractProxyErrorMessage(error));
       } finally {
         if (!cancelled) {
           setIsLoadingModels(false);
@@ -1427,6 +1428,11 @@ const ChatUI: React.FC<ChatUIProps> = ({
                         })),
                       ]}
                     />
+                    {modelLoadError && !isLoadingModels && (
+                      <p role="alert" className="mt-2 text-xs text-destructive">
+                        Unable to load models for this key: {modelLoadError}
+                      </p>
+                    )}
                     {showCustomModelInput && (
                       <Input
                         className="mt-2 h-8"

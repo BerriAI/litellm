@@ -25,6 +25,8 @@ export interface RequestOptions {
   query?: QueryParams;
   headers?: Record<string, string>;
   signal?: AbortSignal;
+  /** Skips `onError` when the token isn't the operator's own session token, so a foreign key's rejection can't log them out. */
+  suppressGlobalErrorHandler?: boolean;
 }
 
 export class ApiError extends Error {
@@ -136,7 +138,7 @@ export function createApiClient(config: ApiClientConfig): ApiClient {
   const doFetch: typeof fetch = (input, init) => (fetchImpl ?? fetch)(input, init);
 
   async function request<T = any>(method: HttpMethod, path: string, options: RequestOptions = {}): Promise<T> {
-    const { accessToken, body, rawBody, query, headers: extraHeaders, signal } = options;
+    const { accessToken, body, rawBody, query, headers: extraHeaders, signal, suppressGlobalErrorHandler } = options;
 
     const url = appendQuery(`${getBaseUrl()}${path}`, query);
 
@@ -171,7 +173,9 @@ export function createApiClient(config: ApiClientConfig): ApiClient {
       } catch {
         message = raw || `HTTP ${response.status}`;
       }
-      onError?.(message);
+      if (!suppressGlobalErrorHandler) {
+        onError?.(message);
+      }
       throw new ApiError(message, response.status, errorBody);
     }
 

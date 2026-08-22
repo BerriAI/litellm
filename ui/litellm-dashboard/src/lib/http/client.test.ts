@@ -64,6 +64,21 @@ describe("createApiClient", () => {
     expect(onError).toHaveBeenCalledWith("no access");
   });
 
+  it("still throws but skips onError when suppressGlobalErrorHandler is set, so a rejection for a foreign key cannot log the operator out", async () => {
+    const expired = "Authentication Error - Expired Key. Key Expiry time 2026-01-01 and current time 2026-01-02";
+    const fetchImpl = vi.fn(async () => errorResponse(401, { error: { message: expired } }));
+    const onError = vi.fn();
+    const client = createApiClient({ getBaseUrl: () => "", onError, fetchImpl });
+
+    const promise = client.get("/model_group/info", {
+      accessToken: "sk-someone-elses",
+      suppressGlobalErrorHandler: true,
+    });
+
+    await expect(promise).rejects.toMatchObject({ message: expired, status: 401 });
+    expect(onError).not.toHaveBeenCalled();
+  });
+
   it("unwraps an object-shaped detail ({detail:{error}}) rather than dumping the JSON envelope (FastAPI HTTPException shape)", async () => {
     const conflict = "A skill named 'gitlab' already exists. Update the existing skill instead of adding it again.";
     const fetchImpl = vi.fn(async () => errorResponse(409, { detail: { error: conflict } }));

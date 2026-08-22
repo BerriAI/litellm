@@ -663,4 +663,37 @@ describe("ChatUI", () => {
       expect(screen.getByPlaceholderText("Select a Model")).toBeEnabled();
     });
   });
+
+  it("should show why a virtual key's models failed to load instead of a generic message", async () => {
+    const user = userEvent.setup();
+    (fetchModelsModule.fetchAvailableModels as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new Error("Authentication Error, Key is blocked. Update via `/key/unblock` if you're an admin."),
+    );
+
+    render(
+      <ChatUI
+        accessToken="1234567890"
+        token="1234567890"
+        userRole="user"
+        userID="1234567890"
+        disabledPersonalKeyCreation={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Test Key")).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByLabelText("Virtual Key Source"));
+    await user.click(await screen.findByRole("option", { name: "Virtual Key" }));
+
+    fireEvent.change(await screen.findByPlaceholderText("Enter custom Virtual Key"), {
+      target: { value: "sk-blocked" },
+    });
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Unable to load models for this key: Authentication Error, Key is blocked.",
+    );
+    expect(fetchModelsModule.fetchAvailableModels).toHaveBeenCalledWith("sk-blocked", true);
+  });
 });
