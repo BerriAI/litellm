@@ -217,7 +217,10 @@ async def _async_return(value):
 
 def test_anthropic_experimental_pass_through_messages_handler_custom_llm_provider():
     """
-    Test that litellm.completion is called when a custom LLM provider is given
+    Test that litellm.completion is called when a custom LLM provider is given.
+
+    Provider resolution now happens exactly once, inside litellm.completion itself
+    (BerriAI/litellm#37716), so the handler passes the original unresolved model through.
     """
     from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
         anthropic_messages_handler,
@@ -241,7 +244,7 @@ def test_anthropic_experimental_pass_through_messages_handler_custom_llm_provide
         # Verify that the custom provider was passed through
         call_kwargs = mock_completion.call_args.kwargs
         assert call_kwargs["custom_llm_provider"] == "my-custom-llm"
-        assert call_kwargs["model"] == "my-custom-llm/my-custom-model"
+        assert call_kwargs["model"] == "my-custom-model"
         assert call_kwargs["api_key"] == "test-api-key"
 
 
@@ -997,3 +1000,108 @@ def test_first_party_claude_4_8_plus_cost_map_entries_carry_mid_conversation_sys
         and info.get("supports_mid_conversation_system") is not True
     ]
     assert missing == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "requested_model, expected_wire_model, expected_url",
+    [
+        (
+            "perplexity/perplexity/kimi-k3",
+            "perplexity/kimi-k3",
+            "https://api.perplexity.ai/v1/responses",
+        ),
+        (
+            "perplexity/perplexity/sonar",
+            "perplexity/sonar",
+            "https://api.perplexity.ai/v1/responses",
+        ),
+        ("perplexity/sonar", "sonar", "https://api.perplexity.ai/chat/completions"),
+    ],
+)
+async def test_messages_strips_provider_prefix_exactly_once(
+    requested_model, expected_wire_model, expected_url
+):
+    """
+    BerriAI/litellm#37716: only the leading provider segment may be stripped on the way upstream.
+
+    A multi-segment id such as perplexity/perplexity/kimi-k3 must reach the provider as
+    perplexity/kimi-k3, matching what /v1/chat/completions and /v1/responses already send.
+
+    The endpoint is asserted alongside the body because perplexity/perplexity/sonar is a
+    Responses-only deployment whose bare id perplexity/sonar is an ordinary chat model, so
+    stripping the prefix must not also move the request onto chat/completions.
+
+    The subject is the outbound request, so the transport is cut at the wire rather than
+    stubbed with a response body: these ids take different bridges (chat completions
+    versus the Responses API) and would otherwise need different response shapes.
+    """
+    captured = {}
+
+    async def fake_send(self, request, **kwargs):
+        captured["body"] = json.loads(request.content)
+        captured["url"] = str(request.url)
+        raise httpx.ConnectError("cut at the wire", request=request)
+
+    with (
+        patch.object(httpx.AsyncClient, "send", fake_send),
+        pytest.raises(litellm.exceptions.InternalServerError),
+    ):
+        await litellm.anthropic.messages.acreate(
+            max_tokens=100,
+            messages=[{"role": "user", "content": "ping"}],
+            model=requested_model,
+            api_key="test-api-key",
+        )
+
+    assert captured["body"]["model"] == expected_wire_model
+    assert captured["url"] == expected_url
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "requested_model, expected_reported_model",
+    [
+        ("perplexity/perplexity/kimi-k3", "perplexity/kimi-k3"),
+        ("perplexity/sonar", "sonar"),
+    ],
+)
+async def test_messages_streaming_reports_provider_local_model(requested_model, expected_reported_model):
+    """
+    BerriAI/litellm#37716: the wire keeps every segment, so ``message_start`` must still
+    report the id the provider itself knows rather than the caller's prefixed deployment id.
+    """
+
+    class _EmptyStream:
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            raise StopAsyncIteration
+
+    with patch("litellm.acompletion", new=AsyncMock(return_value=_EmptyStream())):
+        stream = await litellm.anthropic.messages.acreate(
+            max_tokens=100,
+            messages=[{"role": "user", "content": "ping"}],
+            model=requested_model,
+            api_key="test-api-key",
+            stream=True,
+        )
+        first_event = await stream.__anext__()
+
+    assert json.loads(first_event.decode().split("data: ", 1)[1])["message"]["model"] == expected_reported_model
+
+
+def test_messages_sync_streaming_reports_provider_local_model():
+    """Same guarantee as the async bridge, at the sync call site."""
+    with patch("litellm.completion", new=MagicMock(return_value=iter(()))):
+        stream = litellm.anthropic.messages.create(
+            max_tokens=100,
+            messages=[{"role": "user", "content": "ping"}],
+            model="perplexity/perplexity/kimi-k3",
+            api_key="test-api-key",
+            stream=True,
+        )
+        first_event = next(iter(stream))
+
+    assert json.loads(first_event.decode().split("data: ", 1)[1])["message"]["model"] == "perplexity/kimi-k3"
