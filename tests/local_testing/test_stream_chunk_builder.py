@@ -15,7 +15,7 @@ def check_non_streaming_response(response):
     assert isinstance(
         response.choices[0].message.audio, ChatCompletionAudioResponse
     ), "Invalid audio response type"
-    assert len(completion.choices[0].message.audio.data) > 0, "Audio data is empty"
+    assert len(response.choices[0].message.audio.data) > 0, "Audio data is empty"
 
 
 sys.path.insert(

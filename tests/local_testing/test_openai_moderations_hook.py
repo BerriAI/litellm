@@ -62,7 +62,9 @@ async def test_openai_moderation_error_raising(monkeypatch):
 
     llm_router.amoderation = mock_amoderation
 
-    setattr(litellm.proxy.proxy_server, "llm_router", llm_router)
+    import litellm.proxy.proxy_server as proxy_server
+
+    monkeypatch.setattr(proxy_server, "llm_router", llm_router)
 
     with pytest.raises(Exception, match="Violated content safety policy") as exc_info:
         await openai_mod.async_moderation_hook(
