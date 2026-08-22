@@ -5190,12 +5190,13 @@ class BaseLLMHTTPHandler:
         pydantic model the finalizer does not rewrite, so it keeps raising, which
         is what every surface did before this path learned to end the turn.
 
-        Every call site passes ``stream=False`` today, because interception
-        converts an intercepted stream to non-streaming before the loop runs and
-        rebuilds the SSE stream from the finalized turn afterwards. The flag is
-        still checked so a streaming call site added later cannot replace a turn
-        already on the wire, which would reach the client as a second message
-        rather than as a replacement.
+        The messages and responses call sites pass ``stream=False``, because
+        interception converts an intercepted stream to non-streaming before the
+        loop runs and rebuilds the SSE stream from the finalized turn
+        afterwards. ``AgenticStreamingIterator`` passes ``stream=True``, and
+        that path keeps raising: its events are already on the wire, so a
+        finalized turn would reach the client as a second message rather than
+        as a replacement.
         """
         return not stream and api_surface == "anthropic_messages"
 

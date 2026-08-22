@@ -559,3 +559,96 @@ class TestMaxAgenticLoopsConfigKnob:
         assert "max_agentic_loops" not in updated
         _, max_loops, _ = BaseLLMHTTPHandler._get_agentic_loop_settings(kwargs=updated)
         assert max_loops == 3
+
+
+def _stream_events(response: dict) -> list[dict]:
+    events: list[dict] = []
+    for chunk in FakeAnthropicMessagesStreamIterator(response=response):
+        for line in chunk.decode().splitlines():
+            if line.startswith("data: "):
+                events.append(json.loads(line[len("data: ") :]))
+    return events
+
+
+class TestRebuiltStreamIsWellFormed:
+    """
+    A capped turn is rebuilt into SSE by FakeAnthropicMessagesStreamIterator.
+
+    Anthropic's SDK accumulator appends on content_block_start and then indexes
+    content[event.index] on content_block_delta, so a block that stops without
+    ever starting shifts every later index and the accumulator raises
+    IndexError. A web search turn carries server_tool_use and
+    web_search_tool_result blocks, which is exactly where that used to happen.
+    """
+
+    @staticmethod
+    def _capped_search_turn() -> dict:
+        return {
+            "id": "msg_01",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-sonnet-4-5",
+            "stop_reason": "end_turn",
+            "content": [
+                {
+                    "type": "server_tool_use",
+                    "id": "srvtoolu_01",
+                    "name": "web_search",
+                    "input": {"query": "on-demand H100 hourly price"},
+                },
+                {
+                    "type": "web_search_tool_result",
+                    "tool_use_id": "srvtoolu_01",
+                    "content": [
+                        {
+                            "type": "web_search_result",
+                            "url": "https://example.com/h100",
+                            "title": "H100 pricing",
+                        }
+                    ],
+                },
+                {"type": "text", "text": "AWS lists the H100 at $12.29 an hour."},
+            ],
+            "usage": {"input_tokens": 100, "output_tokens": 20},
+        }
+
+    def test_every_content_block_stop_has_a_matching_start(self):
+        events = _stream_events(self._capped_search_turn())
+
+        started = [event["index"] for event in events if event["type"] == "content_block_start"]
+        stopped = [event["index"] for event in events if event["type"] == "content_block_stop"]
+
+        assert started == [0, 1, 2]
+        assert stopped == [0, 1, 2]
+
+    def test_no_delta_indexes_past_the_blocks_started_before_it(self):
+        events = _stream_events(self._capped_search_turn())
+
+        blocks_started = 0
+        for event in events:
+            if event["type"] == "content_block_start":
+                blocks_started += 1
+            elif event["type"] == "content_block_delta":
+                assert event["index"] < blocks_started
+
+    def test_search_blocks_reach_the_client(self):
+        events = _stream_events(self._capped_search_turn())
+
+        started_types = [
+            event["content_block"]["type"] for event in events if event["type"] == "content_block_start"
+        ]
+
+        assert started_types == ["server_tool_use", "web_search_tool_result", "text"]
+
+    def test_the_search_result_survives_the_rebuild_intact(self):
+        events = _stream_events(self._capped_search_turn())
+
+        result_block = next(
+            event["content_block"]
+            for event in events
+            if event["type"] == "content_block_start"
+            and event["content_block"]["type"] == "web_search_tool_result"
+        )
+
+        assert result_block["tool_use_id"] == "srvtoolu_01"
+        assert result_block["content"][0]["url"] == "https://example.com/h100"
