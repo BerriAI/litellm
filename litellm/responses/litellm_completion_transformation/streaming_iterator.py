@@ -867,9 +867,10 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                                 reasoning_content = "".join(self._accumulated_reasoning_content_parts)
 
                                 # Ensure we have a valid reasoning_item_id
-                                reasoning_item_id = (
+                                self._cached_reasoning_item_id = (
                                     self._reasoning_item_id or self._cached_reasoning_item_id or f"rs_{uuid.uuid4()}"
                                 )
+                                reasoning_item_id = self._cached_reasoning_item_id
 
                                 # Create text.done event first with its own sequence number
                                 self._sequence_number += 1
