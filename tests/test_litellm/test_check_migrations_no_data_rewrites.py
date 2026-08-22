@@ -547,6 +547,31 @@ class TestDynamicSql:
         )
         assert _keywords(tmp_path, sql) == ("UPDATE",)
 
+    def test_an_insert_target_table_is_not_read_as_an_assignment(self, tmp_path):
+        sql = (
+            "DO $$\n"
+            "DECLARE\n"
+            "    audit text := 'ALTER TABLE \"Foo\" ADD COLUMN \"b\" TEXT';\n"
+            "BEGIN\n"
+            "    INSERT INTO audit (note) VALUES ('DELETE FROM \"Foo\" is left to the app');\n"
+            "    EXECUTE audit;\n"
+            "END $$;"
+        )
+        assert _keywords(tmp_path, sql) == ()
+
+    def test_a_rewrite_returned_into_a_variable_is_flagged(self, tmp_path):
+        sql = (
+            "DO $$\n"
+            "DECLARE\n"
+            "    stmt text;\n"
+            "BEGIN\n"
+            "    INSERT INTO \"Log\" (\"sql\") VALUES ('UPDATE \"Foo\" SET \"a\" = 1')\n"
+            "        RETURNING \"sql\" INTO stmt;\n"
+            "    EXECUTE stmt;\n"
+            "END $$;"
+        )
+        assert _keywords(tmp_path, sql) == ("UPDATE",)
+
     def test_a_literal_selected_into_a_variable_nothing_runs_is_inert(self, tmp_path):
         sql = (
             "DO $$\n"
