@@ -750,6 +750,55 @@ def _redirect_to_upstream_authorize(
     return RedirectResponse(urlunparse(parsed_auth_url._replace(query=urlencode(merged_params))))
 
 
+def _bridge_access_denied_redirect(redirect_uri: str, state: str, mcp_server: MCPServer) -> RedirectResponse:
+    """RFC 6749 section 4.1.2.1 denial for the interactive bridge authorize, delivered to the
+    already-validated client redirect_uri so a DCR client surfaces the failure at connect time."""
+    server_label: Final = mcp_server.alias or mcp_server.server_name or mcp_server.server_id
+    params: Final = {
+        "error": "access_denied",
+        "error_description": (
+            f"the signed-in user has no access to MCP server '{server_label}' on this gateway; "
+            "grant it through a team or user object permission, or mark the server allow_all_keys"
+        ),
+        **({"state": state} if state else {}),
+    }
+    return RedirectResponse(_append_query_params(redirect_uri, params), status_code=302)
+
+
+async def _bridge_authorize_access_denial(
+    litellm_user_id: str,
+    mcp_server: MCPServer,
+    redirect_uri: str,
+    state: str,
+) -> RedirectResponse | None:
+    """The denial redirect for a signed-in user who cannot reach the target server, or None to proceed.
+
+    Admits the user exactly as MCP egress will (the same ``reload_admitted_user`` constructor and the
+    same ``get_allowed_mcp_servers`` resolver), so an envelope is minted only when the resulting
+    session can actually list and call the server's tools. Without this gate the flow completes, the
+    client shows connected, and every tool request fail-closes to an empty list with nothing telling
+    the operator why. An availability fault (5xx, e.g. a DB outage's 503) propagates; an unknown or
+    deactivated user denies like a missing grant, fail closed.
+    """
+    from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+        MCPRequestHandler,
+    )
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+
+    try:
+        admitted: Final = await MCPRequestHandler.reload_admitted_user(litellm_user_id)
+    except HTTPException as exc:
+        if exc.status_code >= 500:
+            raise
+        return _bridge_access_denied_redirect(redirect_uri, state, mcp_server)
+    allowed_server_ids: Final = await global_mcp_server_manager.get_allowed_mcp_servers(admitted)
+    if mcp_server.server_id in allowed_server_ids:
+        return None
+    return _bridge_access_denied_redirect(redirect_uri, state, mcp_server)
+
+
 async def authorize_with_server(
     request: Request,
     mcp_server: MCPServer,
@@ -819,6 +868,14 @@ async def authorize_with_server(
         litellm_user_id = _user_id_from_session_cookie(request)
         if litellm_user_id is None:
             return _redirect_to_litellm_login(request)
+        denial: Final = await _bridge_authorize_access_denial(
+            litellm_user_id=litellm_user_id,
+            mcp_server=mcp_server,
+            redirect_uri=redirect_uri,
+            state=state,
+        )
+        if denial is not None:
+            return denial
 
     encoded_state: Final = encode_state_with_base_url(
         base_url=base_url,

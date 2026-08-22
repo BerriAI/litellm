@@ -3,7 +3,7 @@ import traceback
 from dotenv import load_dotenv
 
 load_dotenv()
-import os, io
+import io
 
 # this file is to test litellm/proxy
 

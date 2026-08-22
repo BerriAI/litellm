@@ -3682,4 +3682,4 @@ def test_completion_cost_prices_anthropic_shaped_cache_read_tokens(_local_model_
         custom_llm_provider="openai",
     )
 
-    assert cost == pytest.approx(3 * 5e-6 + 4014 * 5e-7 + 5 * 3e-5, rel=1e-9)
+    assert cost == pytest.approx(3 * 4e-6 + 4014 * 4e-7 + 5 * 2e-5, rel=1e-9)

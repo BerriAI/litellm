@@ -60,9 +60,9 @@ class TestAgentCoreSearch:
     """
 
     @pytest.mark.asyncio
-    async def test_agentcore_search_request_payload(self):
+    async def test_agentcore_search_request_payload(self, monkeypatch):
         """Validates the MCP tools/call payload and SigV4 signing without real AWS calls."""
-        os.environ["AGENTCORE_GATEWAY_URL"] = GATEWAY_URL
+        monkeypatch.setenv("AGENTCORE_GATEWAY_URL", GATEWAY_URL)
 
         mock_response = _make_mock_response(_mcp_response_body())
 
@@ -321,11 +321,11 @@ class TestAgentCoreSearch:
         assert headers["Authorization"] == "Bearer test-jwt-token"
         assert signed_body == json.dumps(request_data).encode()
 
-    def test_sign_request_uses_bearer_token_from_env(self):
+    def test_sign_request_uses_bearer_token_from_env(self, monkeypatch):
         """Server token is attached when the request targets the configured gateway host."""
         config = AgentCoreSearchConfig()
-        os.environ["AGENTCORE_GATEWAY_TOKEN"] = "env-jwt-token"
-        os.environ["AGENTCORE_GATEWAY_URL"] = GATEWAY_URL
+        monkeypatch.setenv("AGENTCORE_GATEWAY_TOKEN", "env-jwt-token")
+        monkeypatch.setenv("AGENTCORE_GATEWAY_URL", GATEWAY_URL)
         try:
             headers, _ = config.sign_request(
                 headers={},
@@ -338,11 +338,11 @@ class TestAgentCoreSearch:
             os.environ.pop("AGENTCORE_GATEWAY_TOKEN", None)
             os.environ.pop("AGENTCORE_GATEWAY_URL", None)
 
-    def test_sign_request_refuses_server_token_to_untrusted_host(self):
+    def test_sign_request_refuses_server_token_to_untrusted_host(self, monkeypatch):
         """Server-managed token must not be sent to a caller-chosen api_base."""
         config = AgentCoreSearchConfig()
-        os.environ["AGENTCORE_GATEWAY_TOKEN"] = "env-jwt-token"
-        os.environ["AGENTCORE_GATEWAY_URL"] = GATEWAY_URL
+        monkeypatch.setenv("AGENTCORE_GATEWAY_TOKEN", "env-jwt-token")
+        monkeypatch.setenv("AGENTCORE_GATEWAY_URL", GATEWAY_URL)
         try:
             with pytest.raises(ValueError, match="Refusing to send"):
                 config.sign_request(
@@ -355,11 +355,11 @@ class TestAgentCoreSearch:
             os.environ.pop("AGENTCORE_GATEWAY_TOKEN", None)
             os.environ.pop("AGENTCORE_GATEWAY_URL", None)
 
-    def test_sign_request_uses_env_token_for_gateway_api_base_without_gateway_url(self):
+    def test_sign_request_uses_env_token_for_gateway_api_base_without_gateway_url(self, monkeypatch):
         """api_base pointing at a real gateway is a trusted destination for the env token,
         so operators configuring api_base in yaml don't also need AGENTCORE_GATEWAY_URL."""
         config = AgentCoreSearchConfig()
-        os.environ["AGENTCORE_GATEWAY_TOKEN"] = "env-jwt-token"
+        monkeypatch.setenv("AGENTCORE_GATEWAY_TOKEN", "env-jwt-token")
         os.environ.pop("AGENTCORE_GATEWAY_URL", None)
         try:
             headers, _ = config.sign_request(
@@ -380,12 +380,12 @@ class TestAgentCoreSearch:
             "https://attacker.example.com/gw.gateway.bedrock-agentcore.us-east-1.amazonaws.com/mcp",
         ],
     )
-    def test_sign_request_refuses_sigv4_to_untrusted_host(self, untrusted_api_base):
+    def test_sign_request_refuses_sigv4_to_untrusted_host(self, untrusted_api_base, monkeypatch):
         """A SigV4 signature carries the proxy's credential scope and session token, so it
         must never be sent to a host that is not the operator's gateway."""
         config = AgentCoreSearchConfig()
         os.environ.pop("AGENTCORE_GATEWAY_TOKEN", None)
-        os.environ["AGENTCORE_GATEWAY_URL"] = GATEWAY_URL
+        monkeypatch.setenv("AGENTCORE_GATEWAY_URL", GATEWAY_URL)
         try:
             with patch.object(
                 AgentCoreSearchConfig.__mro__[2],  # BaseAWSLLM
@@ -410,12 +410,12 @@ class TestAgentCoreSearch:
             "http://internal-gateway.corp/mcp",
         ],
     )
-    def test_sign_request_refuses_server_token_over_plaintext_http(self, plaintext_api_base):
+    def test_sign_request_refuses_server_token_over_plaintext_http(self, plaintext_api_base, monkeypatch):
         """A trusted hostname over plain http would expose the bearer token to
         network observers, so credentials only ride https (or localhost)."""
         config = AgentCoreSearchConfig()
-        os.environ["AGENTCORE_GATEWAY_TOKEN"] = "env-jwt-token"
-        os.environ["AGENTCORE_GATEWAY_URL"] = plaintext_api_base
+        monkeypatch.setenv("AGENTCORE_GATEWAY_TOKEN", "env-jwt-token")
+        monkeypatch.setenv("AGENTCORE_GATEWAY_URL", plaintext_api_base)
         try:
             with pytest.raises(ValueError, match="plaintext"):
                 config.sign_request(
@@ -446,11 +446,11 @@ class TestAgentCoreSearch:
                 )
             mock_base_sign.assert_not_called()
 
-    def test_sign_request_allows_plain_http_for_localhost(self):
+    def test_sign_request_allows_plain_http_for_localhost(self, monkeypatch):
         """Local development against an MCP stub on 127.0.0.1 keeps working."""
         config = AgentCoreSearchConfig()
-        os.environ["AGENTCORE_GATEWAY_TOKEN"] = "env-jwt-token"
-        os.environ["AGENTCORE_GATEWAY_URL"] = "http://127.0.0.1:8931/mcp"
+        monkeypatch.setenv("AGENTCORE_GATEWAY_TOKEN", "env-jwt-token")
+        monkeypatch.setenv("AGENTCORE_GATEWAY_URL", "http://127.0.0.1:8931/mcp")
         try:
             headers, _ = config.sign_request(
                 headers={},
@@ -483,11 +483,11 @@ class TestAgentCoreSearch:
             # AWS_BEARER_TOKEN_BEDROCK env fallback.
             assert mock_base_sign.call_args.kwargs["api_key"] == ""
 
-    def test_sign_request_custom_hostname_requires_region(self):
+    def test_sign_request_custom_hostname_requires_region(self, monkeypatch):
         """Custom hostname + empty AWS config chain → clear error, no guessed region."""
         config = AgentCoreSearchConfig()
         custom_url = "https://gateway.internal.example.com/mcp"
-        os.environ["AGENTCORE_GATEWAY_URL"] = custom_url
+        monkeypatch.setenv("AGENTCORE_GATEWAY_URL", custom_url)
 
         mock_session = MagicMock()
         mock_session.region_name = None  # nothing configured anywhere
@@ -503,11 +503,11 @@ class TestAgentCoreSearch:
         finally:
             os.environ.pop("AGENTCORE_GATEWAY_URL", None)
 
-    def test_sign_request_custom_hostname_uses_shared_config_region(self):
+    def test_sign_request_custom_hostname_uses_shared_config_region(self, monkeypatch):
         """Custom hostname + region from AWS shared config (profile) must be honored."""
         config = AgentCoreSearchConfig()
         custom_url = "https://gateway.internal.example.com/mcp"
-        os.environ["AGENTCORE_GATEWAY_URL"] = custom_url
+        monkeypatch.setenv("AGENTCORE_GATEWAY_URL", custom_url)
 
         mock_session = MagicMock()
         mock_session.region_name = "eu-west-1"  # e.g. from ~/.aws/config profile
