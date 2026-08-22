@@ -16,6 +16,7 @@ from typing import (
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from pydantic import BaseModel, ConfigDict, Field
 
 from litellm._logging import verbose_logger
 from litellm.proxy._experimental.mcp_server.exceptions import MCPUpstreamAuthError
@@ -45,6 +46,35 @@ router = APIRouter(
     prefix="/mcp-rest",
     tags=["mcp"],
 )
+
+
+class MCPToolCallRequest(BaseModel):
+    """Request body for ``POST /mcp-rest/tools/call``.
+
+    Declares the parameters the endpoint expects so they are documented in the
+    generated OpenAPI spec (issue #32121); previously the body was read as an
+    untyped dict, so the spec listed no parameters and clients generating MCP
+    tools from it could not call the endpoint.
+
+    Fields are optional and extra keys are allowed because the same route also
+    serves the built-in tool-search / tool-call helper flows, which send a
+    different set of keys.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    server_id: str | None = Field(
+        default=None,
+        description=("ID, name, or alias of the MCP server hosting the tool. Required for a standard tool call."),
+    )
+    name: str | None = Field(
+        default=None,
+        description="Name of the MCP tool to invoke. Required for a standard tool call.",
+    )
+    arguments: dict[str, Any] | None = Field(
+        default=None,
+        description="Arguments to pass to the tool, as a JSON object.",
+    )
 
 
 def _connection_error_message(exc: BaseException) -> str:
@@ -738,6 +768,7 @@ if MCP_AVAILABLE:
     @router.post("/tools/call", dependencies=[Depends(user_api_key_auth)])
     async def call_tool_rest_api(
         request: Request,
+        body: MCPToolCallRequest | None = None,
         user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     ):
         """
