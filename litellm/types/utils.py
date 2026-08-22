@@ -3365,6 +3365,7 @@ class LlmProviders(str, Enum):
     XIAOMI_MIMO = "xiaomi_mimo"
     TENSORMESH = "tensormesh"
     LIBERTAI = "libertai"
+    NEARAI = "nearai"
     PINSTRIPES = "pinstripes"
     DARKBLOOM = "darkbloom"
     LITELLM_AGENT = "litellm_agent"

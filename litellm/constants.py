@@ -714,6 +714,7 @@ openai_compatible_endpoints: List = [
     "https://api.clarifai.com/v2/ext/openai/v1",
     "https://api.libertai.io/v1",
     "https://pinstripes.io/v1",
+    "https://cloud-api.near.ai/v1",
 ]
 
 
@@ -758,6 +759,7 @@ openai_compatible_providers: List = [
     "chutes",  # Chutes - JSON-configured provider
     "parasail",  # Parasail - JSON-configured provider
     "libertai",  # LibertAI - JSON-configured provider
+    "nearai",
     "featherless_ai",
     "nscale",
     "nebius",
@@ -785,6 +787,7 @@ openai_text_completion_compatible_providers: List = [  # providers that support 
     "fireworks_ai",
     "hosted_vllm",
     "meta_llama",
+    "nearai",
     "llamafile",
     "featherless_ai",
     "nebius",
