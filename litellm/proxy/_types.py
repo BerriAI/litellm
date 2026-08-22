@@ -567,6 +567,10 @@ class LiteLLMRoutes(enum.Enum):
         "/v1/model/info",
     ]
 
+    model_group_info_routes = [
+        "/model_group/info",
+    ]
+
     llm_api_routes = (
         openai_routes
         + anthropic_routes
@@ -578,6 +582,7 @@ class LiteLLMRoutes(enum.Enum):
         + litellm_native_routes
         + list(agent_inference_routes)
         + model_info_routes
+        + model_group_info_routes
     )
     info_routes = [
         "/key/info",
