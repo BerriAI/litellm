@@ -19498,106 +19498,6 @@
         },
         "web_search_billing_unit": "per_query"
     },
-    "gemini-3.1-flash-lite-image": {
-        "input_cost_per_image": 0.00028,
-        "input_cost_per_token": 2.5e-07,
-        "litellm_provider": "vertex_ai-language-models",
-        "max_input_tokens": 65536,
-        "max_output_tokens": 4096,
-        "max_tokens": 4096,
-        "mode": "image_generation",
-        "output_cost_per_image": 0.0336,
-        "output_cost_per_image_token": 3e-05,
-        "output_cost_per_token": 1.5e-06,
-        "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing#gemini-models",
-        "supported_endpoints": [
-            "/v1/chat/completions",
-            "/v1/completions",
-            "/v1/batch"
-        ],
-        "supported_modalities": [
-            "text",
-            "image"
-        ],
-        "supported_output_modalities": [
-            "text",
-            "image"
-        ],
-        "supports_function_calling": false,
-        "supports_prompt_caching": true,
-        "supports_response_schema": false,
-        "supports_reasoning": true,
-        "supports_system_messages": true,
-        "supports_vision": true
-    },
-    "gemini/gemini-3.1-flash-lite-image": {
-        "rpm": 1000,
-        "tpm": 4000000,
-        "input_cost_per_image": 0.00028,
-        "input_cost_per_token": 2.5e-07,
-        "input_cost_per_token_batches": 1.25e-07,
-        "litellm_provider": "gemini",
-        "max_input_tokens": 65536,
-        "max_output_tokens": 4096,
-        "max_tokens": 4096,
-        "mode": "image_generation",
-        "output_cost_per_image": 0.0336,
-        "output_cost_per_image_token": 3e-05,
-        "output_cost_per_token": 1.5e-06,
-        "output_cost_per_token_batches": 7.5e-07,
-        "source": "https://ai.google.dev/gemini-api/docs/pricing#gemini-3.1-flash-lite-image",
-        "supported_endpoints": [
-            "/v1/chat/completions",
-            "/v1/completions",
-            "/v1/batch"
-        ],
-        "supported_modalities": [
-            "text",
-            "image"
-        ],
-        "supported_output_modalities": [
-            "text",
-            "image"
-        ],
-        "supports_function_calling": true,
-        "supports_prompt_caching": false,
-        "supports_response_schema": false,
-        "supports_reasoning": true,
-        "supports_system_messages": true,
-        "supports_vision": true
-    },
-    "vertex_ai/gemini-3.1-flash-lite-image": {
-        "input_cost_per_image": 0.00028,
-        "input_cost_per_token": 2.5e-07,
-        "litellm_provider": "vertex_ai-language-models",
-        "max_input_tokens": 65536,
-        "max_output_tokens": 4096,
-        "max_tokens": 4096,
-        "mode": "image_generation",
-        "output_cost_per_image": 0.0336,
-        "output_cost_per_image_token": 3e-05,
-        "output_cost_per_token": 1.5e-06,
-        "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing#gemini-models",
-        "supported_endpoints": [
-            "/v1/chat/completions",
-            "/v1/completions",
-            "/v1/batch"
-        ],
-        "supported_modalities": [
-            "text",
-            "image"
-        ],
-        "supported_output_modalities": [
-            "text",
-            "image"
-        ],
-        "supports_function_calling": false,
-        "supports_prompt_caching": true,
-        "supports_response_schema": false,
-        "supports_reasoning": true,
-        "supports_system_messages": true,
-        "supports_vision": true
-    },
     "gemini-3.1-flash-image": {
         "deprecation_date": "2027-05-28",
         "input_cost_per_image": 0.00056,
@@ -21557,7 +21457,6 @@
         "output_cost_per_token": 1.5e-06,
         "output_cost_per_token_batches": 7.5e-07,
         "rpm": 1000,
-        "tpm": 4000000,
         "source": "https://ai.google.dev/gemini-api/docs/pricing#gemini-3.1-flash-lite-image",
         "supported_endpoints": [
             "/v1/chat/completions",
@@ -21577,7 +21476,8 @@
         "supports_reasoning": false,
         "supports_response_schema": false,
         "supports_system_messages": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "tpm": 4000000
     },
     "gemini/deep-research-pro-preview-12-2025": {
         "input_cost_per_image": 0.0011,
@@ -41120,12 +41020,29 @@
         "output_cost_per_image_token": 3e-05,
         "output_cost_per_token": 1.5e-06,
         "output_cost_per_token_batches": 7.5e-07,
+        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/completions",
+            "/v1/batch"
+        ],
+        "supported_modalities": [
+            "text",
+            "image",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "text",
+            "image"
+        ],
         "supports_function_calling": false,
+        "supports_pdf_input": true,
         "supports_prompt_caching": true,
         "supports_reasoning": false,
         "supports_response_schema": false,
-        "supports_vision": true,
-        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing"
+        "supports_system_messages": true,
+        "supports_video_input": true,
+        "supports_vision": true
     },
     "vertex_ai/gemini-3.1-flash-lite-preview": {
         "cache_read_input_token_cost": 2.5e-08,
