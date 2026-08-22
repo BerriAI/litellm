@@ -319,8 +319,10 @@ class _ProxyDBLogger(CustomLogger):
                 elif budget_reservation is not None:
                     await _release_budget_reservation(budget_reservation=budget_reservation)
             else:
-                if _is_unbilled_in_progress_interaction(completion_response):
-                    if BACKGROUND_INTERACTION_COST_POLLING_ENABLED:
+                if _is_unbilled_interaction_response(completion_response):
+                    if BACKGROUND_INTERACTION_COST_POLLING_ENABLED and _is_unbilled_in_progress_interaction(
+                        completion_response
+                    ):
                         verbose_proxy_logger.debug(
                             "Cost tracking deferred for in-progress background interaction; "
                             "the budget reservation stays open until the poll task logs the final usage"
@@ -328,8 +330,8 @@ class _ProxyDBLogger(CustomLogger):
                         return
                     await _release_budget_reservation(budget_reservation=budget_reservation)
                     verbose_proxy_logger.debug(
-                        "Background interaction cost polling is disabled; released the budget "
-                        "reservation for an in-progress interaction that will not be billed"
+                        "Released the budget reservation for an interaction create with no usage "
+                        "that no poll task will settle"
                     )
                     return
                 await _release_budget_reservation(budget_reservation=budget_reservation)
@@ -475,6 +477,12 @@ def _write_spend_metadata_to_kwargs(kwargs: dict, metadata: dict) -> None:
             for key, value in patch.items():
                 if bucket.get(key) is None:
                     bucket[key] = value
+
+
+def _is_unbilled_interaction_response(completion_response: object) -> bool:
+    from litellm.types.interactions import InteractionsAPIResponse
+
+    return isinstance(completion_response, InteractionsAPIResponse) and completion_response.usage is None
 
 
 def _is_unbilled_in_progress_interaction(completion_response: object) -> bool:
