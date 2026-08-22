@@ -26,7 +26,6 @@ from litellm.proxy.guardrails.init_guardrails import init_guardrails_v2
 
 
 def test_cato_guard_config():
-    litellm.set_verbose = True
     litellm.guardrail_name_config_map = {}
 
     init_guardrails_v2(
@@ -47,7 +46,6 @@ def test_cato_guard_config():
 
 def test_cato_guard_config_no_api_key(monkeypatch):
     monkeypatch.delenv("CATO_API_KEY", raising=False)
-    litellm.set_verbose = True
     litellm.guardrail_name_config_map = {}
     with pytest.raises(CatoNetworksGuardrailMissingSecrets, match="Couldn't get Cato Networks api key"):
         init_guardrails_v2(

@@ -63,7 +63,7 @@ def test_container_files_api():
 
         # 3. Try retrieve non-existent file metadata (should raise error)
         print("3. Testing retrieve_container_file (expect error)...")
-        with pytest.raises(Exception, match="(?i)not found|invalid"):
+        with pytest.raises(Exception, match=r"(?i)not found|invalid"):
             retrieve_container_file(
                 container_id=container.id,
                 file_id="cfile_nonexistent",
