@@ -314,7 +314,6 @@ def test_openai_azure_embedding():
         pytest.fail(f"Error occurred: {e}")
 
 
-from openai.types.embedding import Embedding
 
 
 def _openai_mock_response(*args, **kwargs):
@@ -570,7 +569,6 @@ def test_hf_embedding():
 
 # test_hf_embedding()
 
-from unittest.mock import MagicMock, patch
 
 
 def tgi_mock_post(*args, **kwargs):
