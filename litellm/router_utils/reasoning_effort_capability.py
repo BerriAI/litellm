@@ -1,11 +1,18 @@
 """Resolve which reasoning_effort values a deployment, and by intersection a model group, accepts.
 
 The model-map flags carry different polarity per level, mirroring the provider gates
-(gpt_5_transformation.py restricts xhigh to explicit opt-in and treats minimal/low as opt-out;
-anthropic/chat/transformation.py rejects only xhigh/max without an explicit flag): medium and high
-are unconditional for any reasoning model, minimal/low are supported unless the map explicitly
-says false, and xhigh/max require an explicit true. Shipping the resolved list keeps that polarity
-in one place instead of re-encoding it in every consumer.
+(gpt_5_transformation.py restricts xhigh to explicit opt-in and treats minimal/low as opt-out):
+medium and high are unconditional for any reasoning model, minimal/low are supported unless the map
+explicitly says false, and xhigh/max require an explicit true. Shipping the resolved list keeps that
+polarity in one place instead of re-encoding it in every consumer.
+
+Only openai and azure gate xhigh and max on the request path. anthropic/chat/transformation.py
+gates them on the output_config path alone, so its reasoning_effort path maps every level to a
+thinking budget whatever the map says, and a claude group whose entry omits
+supports_xhigh_reasoning_effort stops offering a level litellm would have forwarded. That is the
+deliberate trade: an explicit flag is the only signal that the tier is a real one rather than
+litellm quietly rounding the level to a budget, and what gets dropped is advisory metadata rather
+than a restriction on the request path.
 
 The none level is the one flag whose polarity is provider-dependent. OpenAI never refuses it on the
 request path (azure/chat/gpt_5_transformation.py is the only caller that does, and it raises
@@ -58,9 +65,15 @@ def resolve_supported_reasoning_efforts(model_info: Mapping[str, object]) -> tup
     known model that accepts no effort level, which correctly empties the group. Keeping the two
     apart matters because the router registers a deployment absent from the model map under a
     synthesized entry, and get_model_info then answers with supports_reasoning None exactly as it
-    does for a mapped non-reasoning model. That entry carries no mode, which every real map entry for
-    a routable model does, so an unset flag with no mode is the unknown case and one custom model in
-    a group no longer wipes the levels its mapped siblings agree on."""
+    does for a mapped non-reasoning model. Mode is what separates them: every map entry for a
+    routable model declares one, so an unset flag with no mode is read as unknown and one custom
+    model in a group no longer wipes the levels its mapped siblings agree on.
+
+    The separation is only as good as that signal. An off-map deployment carrying any model_info of
+    its own is registered under its deployment id with mode defaulting to chat, so it reads as a
+    known non-reasoning model and does still empty its group, with supports_reasoning on that
+    deployment as the way out. Telling the two apart for real needs provenance that the flattened
+    ModelInfo does not carry."""
     if "supports_reasoning" not in model_info:
         return None
     supports_reasoning: Final = model_info.get("supports_reasoning")
