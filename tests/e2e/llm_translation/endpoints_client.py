@@ -87,6 +87,7 @@ class RichMessagesRequest(BaseModel):
     max_tokens: int = 64
     system: list[TextBlock]
     messages: list[RichMessage]
+    cache: dict[str, bool] = {"no-cache": True}
 
 
 class CompletionsRequest(BaseModel):

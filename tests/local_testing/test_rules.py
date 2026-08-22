@@ -2,6 +2,7 @@
 #    This tests setting rules before / after making llm api calls
 import asyncio
 import os
+import re
 import sys
 import time
 import traceback
@@ -82,7 +83,7 @@ def test_post_call_rule():
     litellm.post_call_rules = [my_post_call_rule]
 
     ### completion
-    with pytest.raises(Exception, match="This violates LiteLLM Proxy Rules. Response too short") as exc_info:
+    with pytest.raises(Exception, match=re.escape("This violates LiteLLM Proxy Rules. Response too short")) as exc_info:
         completion(
             model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": "say sorry"}],
@@ -118,7 +119,7 @@ def test_post_call_rule_streaming():
         stream=True,
     )
 
-    with pytest.raises(Exception, match="This violates LiteLLM Proxy Rules. Response too short") as exc_info:
+    with pytest.raises(Exception, match=re.escape("This violates LiteLLM Proxy Rules. Response too short")) as exc_info:
         list(response)
     assert "This violates LiteLLM Proxy Rules. Response too short" in exc_info.value.message
 
