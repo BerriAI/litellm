@@ -64,6 +64,7 @@ from litellm.proxy._types import (
     ProxyException,
     UserAPIKeyAuth,
 )
+from litellm.proxy.auth.auth_utils import request_dispatched_to_pass_through_endpoint
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import (
     ProxyBaseLLMRequestProcessing,
@@ -568,6 +569,22 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         _metadata["user_api_key"] = user_api_key_dict.api_key
         _metadata["litellm_parent_otel_span"] = user_api_key_dict.parent_otel_span
         _metadata["user_api_key_budget_reservation"] = user_api_key_dict.budget_reservation
+        # The per-model budget counters are keyed off these. get_sanitized_user_information_from_key
+        # returns StandardLoggingUserAPIKeyMetadata, which carries no budget field, so without this
+        # the post-call increment finds nothing and every passthrough request goes untracked and
+        # unenforced. Set after the client merge so a request body cannot supply its own budget.
+        #
+        # Only for the built-in provider routes. `get_model_from_request` returns
+        # None for a user-defined pass-through, deliberately: its body is forwarded
+        # verbatim, so `model` there names an UPSTREAM model rather than a
+        # LiteLLM-managed one. Enforcement is therefore skipped on those routes, and
+        # charging a counter anyway would track spend that nothing can refuse, and
+        # would attribute it to a budget the operator scoped to a LiteLLM model that
+        # merely shares the name.
+        if not request_dispatched_to_pass_through_endpoint(request):
+            _metadata["user_api_key_model_max_budget"] = user_api_key_dict.model_max_budget
+            _metadata["user_api_key_user_model_max_budget"] = user_api_key_dict.user_model_max_budget
+            _metadata["user_api_key_end_user_model_max_budget"] = user_api_key_dict.end_user_model_max_budget
         _metadata.update(
             LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(user_api_key_dict=user_api_key_dict)
         )
