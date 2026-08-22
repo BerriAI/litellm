@@ -4529,7 +4529,6 @@ async def test_new_team_org_scoped_budget_bypasses_user_limit():
     from fastapi import Request
 
     from litellm.proxy._types import (
-        LiteLLM_OrganizationTable,
         LiteLLM_UserTable,
         NewTeamRequest,
         UserAPIKeyAuth,
@@ -4674,7 +4673,6 @@ async def test_new_team_org_scoped_models_bypasses_user_limit():
     from fastapi import Request
 
     from litellm.proxy._types import (
-        LiteLLM_OrganizationTable,
         LiteLLM_UserTable,
         NewTeamRequest,
         UserAPIKeyAuth,
@@ -4964,7 +4962,6 @@ async def test_new_team_org_scoped_budget_exceeds_org_limit():
 
     from litellm.proxy._types import (
         LiteLLM_BudgetTable,
-        LiteLLM_OrganizationTable,
         NewTeamRequest,
         ProxyException,
         UserAPIKeyAuth,
@@ -5044,7 +5041,6 @@ async def test_new_team_org_scoped_models_not_in_org_models():
 
     from litellm.proxy._types import (
         LiteLLM_BudgetTable,
-        LiteLLM_OrganizationTable,
         NewTeamRequest,
         ProxyException,
         UserAPIKeyAuth,
@@ -5633,7 +5629,6 @@ async def test_update_team_org_scoped_budget_exceeds_org_limit():
 
     from litellm.proxy._types import (
         LiteLLM_BudgetTable,
-        LiteLLM_OrganizationTable,
         ProxyException,
         UpdateTeamRequest,
         UserAPIKeyAuth,
@@ -5813,7 +5808,6 @@ async def test_update_team_org_scoped_budget_bypasses_user_limit(
 
     from litellm.proxy._types import (
         LiteLLM_BudgetTable,
-        LiteLLM_OrganizationTable,
         LiteLLM_UserTable,
         UpdateTeamRequest,
         UserAPIKeyAuth,
@@ -5929,7 +5923,6 @@ async def test_update_team_org_scoped_models_bypasses_user_limit(
     from fastapi import Request
 
     from litellm.proxy._types import (
-        LiteLLM_OrganizationTable,
         UpdateTeamRequest,
         UserAPIKeyAuth,
     )
@@ -6031,7 +6024,6 @@ async def test_update_team_org_scoped_models_not_in_org_models():
     from fastapi import Request
 
     from litellm.proxy._types import (
-        LiteLLM_OrganizationTable,
         ProxyException,
         UpdateTeamRequest,
         UserAPIKeyAuth,
@@ -6120,7 +6112,6 @@ async def test_update_team_org_scoped_models_with_all_proxy_models(
     from fastapi import Request
 
     from litellm.proxy._types import (
-        LiteLLM_OrganizationTable,
         SpecialModelNames,
         UpdateTeamRequest,
         UserAPIKeyAuth,
@@ -6403,7 +6394,6 @@ async def test_new_team_org_scoped_tpm_exceeds_org_limit():
 
     from litellm.proxy._types import (
         LiteLLM_BudgetTable,
-        LiteLLM_OrganizationTable,
         NewTeamRequest,
         ProxyException,
         UserAPIKeyAuth,
@@ -6479,7 +6469,6 @@ async def test_new_team_org_scoped_rpm_exceeds_org_limit():
 
     from litellm.proxy._types import (
         LiteLLM_BudgetTable,
-        LiteLLM_OrganizationTable,
         NewTeamRequest,
         ProxyException,
         UserAPIKeyAuth,
@@ -6556,7 +6545,6 @@ async def test_new_team_org_scoped_tpm_rpm_bypasses_user_limit():
 
     from litellm.proxy._types import (
         LiteLLM_BudgetTable,
-        LiteLLM_OrganizationTable,
         LiteLLM_TeamTable,
         NewTeamRequest,
         UserAPIKeyAuth,
@@ -6665,7 +6653,6 @@ async def test_update_team_org_scoped_tpm_exceeds_org_limit():
 
     from litellm.proxy._types import (
         LiteLLM_BudgetTable,
-        LiteLLM_OrganizationTable,
         ProxyException,
         UpdateTeamRequest,
         UserAPIKeyAuth,
@@ -6752,7 +6739,6 @@ async def test_update_team_org_scoped_rpm_exceeds_org_limit():
 
     from litellm.proxy._types import (
         LiteLLM_BudgetTable,
-        LiteLLM_OrganizationTable,
         ProxyException,
         UpdateTeamRequest,
         UserAPIKeyAuth,
@@ -6842,7 +6828,6 @@ async def test_update_team_org_scoped_tpm_rpm_bypasses_user_limit(
 
     from litellm.proxy._types import (
         LiteLLM_BudgetTable,
-        LiteLLM_OrganizationTable,
         LiteLLM_TeamTable,
         UpdateTeamRequest,
         UserAPIKeyAuth,
@@ -6948,7 +6933,6 @@ async def test_update_team_guardrails_with_org_id(
     from fastapi import Request
 
     from litellm.proxy._types import (
-        LiteLLM_OrganizationTable,
         LiteLLM_TeamTable,
         UpdateTeamRequest,
         UserAPIKeyAuth,
