@@ -9007,6 +9007,46 @@ def test_model_group_info_reasoning_efforts_empty_on_a_mapped_non_reasoning_depl
     assert result.supported_reasoning_efforts == ()
 
 
+def test_model_group_info_reasoning_efforts_ignore_a_value_declared_in_model_info():
+    """The group's levels are computed from its deployments, so a value an operator left in one
+    deployment's model_info must not seed them. Seeding let the first deployment read narrow the
+    whole group while the same value on any other deployment was silently ignored."""
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "declared-group",
+                "litellm_params": {"model": "openai/first-reasoner"},
+                "model_info": {"id": "first-deployment"},
+            },
+            {
+                "model_name": "declared-group",
+                "litellm_params": {"model": "openai/second-reasoner"},
+                "model_info": {"id": "second-deployment"},
+            },
+        ]
+    )
+
+    def _model_info(model_id: str, model_name: str):
+        info = {
+            "key": model_name,
+            "litellm_provider": "openai",
+            "mode": "chat",
+            "supports_reasoning": True,
+        }
+        if model_id == "first-deployment":
+            info["supported_reasoning_efforts"] = ("high",)
+        return info
+
+    with patch.object(router, "get_deployment_model_info", side_effect=_model_info):
+        result = router._set_model_group_info(
+            model_group="declared-group",
+            user_facing_model_group_name="declared-group",
+        )
+
+    assert result is not None
+    assert result.supported_reasoning_efforts == ("none", "minimal", "low", "medium", "high")
+
+
 @pytest.mark.parametrize(
     "configured, expected",
     [
