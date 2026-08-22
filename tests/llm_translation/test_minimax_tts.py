@@ -139,7 +139,6 @@ class TestMinimaxTextToSpeechConfig:
 
         # Mock both litellm.api_key and get_secret_str to return None
         import litellm
-        from unittest.mock import patch
 
         original_api_key = litellm.api_key
         try:
@@ -274,7 +273,6 @@ class TestMinimaxSpeechIntegration:
 
     def test_speech_mock_response(self):
         """Test speech synthesis with mocked response"""
-        from unittest.mock import MagicMock, patch
 
         # Create mock audio data (hex-encoded as MiniMax returns)
         mock_audio_bytes = b"fake audio data for testing"
