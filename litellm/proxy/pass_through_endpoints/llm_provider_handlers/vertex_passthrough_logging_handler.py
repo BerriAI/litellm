@@ -8,6 +8,7 @@ import httpx
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.litellm_logging import use_custom_pricing_for_model
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     ModelResponseIterator as VertexModelResponseIterator,
 )
@@ -40,6 +41,71 @@ EndpointType = Any
 
 
 class VertexPassthroughLoggingHandler:
+    @staticmethod
+    def _has_priced_model_cost_entry(model_id: Optional[str]) -> bool:
+        """True if litellm.model_cost has a per-token/second price under this id."""
+        if not model_id:
+            return False
+        entry = litellm.model_cost.get(model_id) or {}
+        return entry.get("input_cost_per_token") is not None or entry.get("input_cost_per_second") is not None
+
+    @staticmethod
+    def _resolve_router_model_id(
+        logging_obj: LiteLLMLoggingObj,
+        model: Optional[str],
+    ) -> Optional[str]:
+        """Return the router deployment id whose model_info holds custom pricing.
+
+        Passthrough requests are matched by project/location rather than a router
+        deployment, so the id on the logging object (metadata.model_info.id) is
+        usually unset or points to a synthetic route deployment without pricing.
+        Prefer an id that maps to a priced litellm.model_cost entry: first the one
+        on the logging object, then a lookup from the router by model name.
+        Otherwise cost falls back to the built-in list price, which is wrong for
+        discounted/region prices and newly released models.
+        """
+        primary = logging_obj.get_router_model_id()
+        if VertexPassthroughLoggingHandler._has_priced_model_cost_entry(primary):
+            return primary
+        if not model:
+            return primary
+
+        from litellm.proxy.proxy_server import llm_router
+
+        if llm_router is None:
+            return primary
+        extracted_model_name = VertexPassthroughLoggingHandler.extract_model_name_from_vertex_path(model)
+        model_ids = llm_router.get_model_ids(model_name=extracted_model_name)
+        for model_id in model_ids:
+            if VertexPassthroughLoggingHandler._has_priced_model_cost_entry(model_id):
+                return model_id
+        return primary or (model_ids[0] if model_ids else None)
+
+    @staticmethod
+    def _custom_pricing_kwargs(
+        logging_obj: LiteLLMLoggingObj,
+        model: Optional[str] = None,
+    ) -> dict[str, bool | str | None]:
+        """Forward per-deployment custom pricing (model_info) to the cost calculator.
+
+        Mirrors the Anthropic passthrough handler so vertex_ai passthrough honors
+        model_info pricing (registered under the router deployment's model_info.id)
+        instead of falling back to the built-in litellm.model_cost map only.
+        """
+        router_model_id = VertexPassthroughLoggingHandler._resolve_router_model_id(logging_obj, model)
+        custom_pricing = use_custom_pricing_for_model(litellm_params=getattr(logging_obj, "litellm_params", None))
+        # The cost calculator only applies model_cost[router_model_id] pricing when
+        # custom_pricing is True (see cost_calculator._select_model_name_for_cost_calc).
+        # Passthrough requests carry no custom-pricing keys in litellm_params, so flag
+        # it here when the resolved deployment id maps to a priced entry — otherwise
+        # the resolved id is ignored and cost falls back to the list price.
+        if not custom_pricing and VertexPassthroughLoggingHandler._has_priced_model_cost_entry(router_model_id):
+            custom_pricing = True
+        return {
+            "custom_pricing": custom_pricing,
+            "router_model_id": router_model_id,
+        }
+
     @staticmethod
     def vertex_passthrough_handler(
         httpx_response: httpx.Response,
@@ -74,6 +140,7 @@ class VertexPassthroughLoggingHandler:
                 model=model,
                 custom_llm_provider="vertex_ai",
                 call_type="create_video",
+                **VertexPassthroughLoggingHandler._custom_pricing_kwargs(logging_obj, model),
             )
 
             # Set response_cost in _hidden_params to prevent recalculation
@@ -294,6 +361,7 @@ class VertexPassthroughLoggingHandler:
             completion_response=litellm_prediction_response,
             model=model,
             custom_llm_provider="vertex_ai",
+            **VertexPassthroughLoggingHandler._custom_pricing_kwargs(logging_obj, model),
         )
 
         kwargs["response_cost"] = response_cost
@@ -371,6 +439,7 @@ class VertexPassthroughLoggingHandler:
             completion_response=litellm_embedding_response,
             model=model,
             custom_llm_provider=custom_llm_provider,
+            **VertexPassthroughLoggingHandler._custom_pricing_kwargs(logging_obj, model),
         )
 
         kwargs["response_cost"] = response_cost
@@ -593,6 +662,7 @@ class VertexPassthroughLoggingHandler:
             completion_response=litellm_model_response,
             model=model,
             custom_llm_provider="vertex_ai",
+            **VertexPassthroughLoggingHandler._custom_pricing_kwargs(logging_obj, model),
         )
 
         kwargs["response_cost"] = response_cost
