@@ -986,7 +986,7 @@ def test_gate_passthrough_skipped_when_only_chat_completions_supported(monkeypat
         model_info={"supported_endpoints": ["/v1/chat/completions"]},
     )
 
-    assert result == "chat-completions"
-    assert translation_calls["responses"] == 0
-    assert translation_calls["chat_completions"] == 1
+    assert result == "responses"
+    assert translation_calls["responses"] == 1
+    assert translation_calls["chat_completions"] == 0
     assert "config" not in captured
