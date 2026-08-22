@@ -9,6 +9,7 @@ follow-up response is chained as Phase 2 of the same iterator.
 """
 
 import json
+from datetime import datetime
 from typing import Any, AsyncIterator, Dict, List, Optional, cast
 
 from litellm._logging import verbose_logger
@@ -170,6 +171,7 @@ class AgenticAnthropicStreamingIterator:
         self._stream_exhausted = False
         self._hook_processing_done = False
         self._follow_up_iterator: Optional[AsyncIterator] = None
+        self._completion_start_time_set = False
 
     def __aiter__(self):
         return self
@@ -179,6 +181,18 @@ class AgenticAnthropicStreamingIterator:
         if not self._stream_exhausted:
             try:
                 chunk = await self._inner.__anext__()
+                if not self._completion_start_time_set:
+                    self._completion_start_time_set = True
+                    _now = datetime.now()
+                    if (
+                        getattr(self._logging_obj, "completion_start_time", None)
+                        is None
+                    ):
+                        self._logging_obj.completion_start_time = _now
+                    if hasattr(self._logging_obj, "model_call_details"):
+                        self._logging_obj.model_call_details.setdefault(
+                            "completion_start_time", _now
+                        )
                 self._collected_bytes.append(chunk)
                 return chunk
             except StopAsyncIteration:

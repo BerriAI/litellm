@@ -78,6 +78,7 @@ class BaseResponsesAPIStreamingIterator:
         self._completed_response_cache_hit: Optional[bool] = None
         self._persist_completed_response_before_logging = True
         self._stream_created_time: float = time.time()
+        self._completion_start_time_set: bool = False
 
         # track request context for hooks
         self.litellm_metadata = litellm_metadata
@@ -608,6 +609,17 @@ class ResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
                 if self.finished:
                     raise StopAsyncIteration
                 elif result is not None:
+                    if not self._completion_start_time_set:
+                        self._completion_start_time_set = True
+                        _now = datetime.now()
+                        if (
+                            getattr(self.logging_obj, "completion_start_time", None)
+                            is None
+                        ):
+                            self.logging_obj.completion_start_time = _now
+                        self.logging_obj.model_call_details.setdefault(
+                            "completion_start_time", _now
+                        )
                     # Await hook directly instead of run_async_function
                     # (which spawns a thread + event loop per call)
                     result = await self._call_post_streaming_deployment_hook(
