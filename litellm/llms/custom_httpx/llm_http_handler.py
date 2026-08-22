@@ -19,6 +19,10 @@ import litellm.types.utils
 from litellm._logging import _redact_string, verbose_logger
 from litellm.anthropic_beta_headers_manager import update_headers_with_filtered_beta
 from litellm.constants import REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
+from litellm.litellm_core_utils.agentic_loop_settings import (
+    DEFAULT_MAX_AGENTIC_LOOPS,
+    validated_max_agentic_loops,
+)
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.realtime_errors import realtime_error_event, websocket_close_reason
 from litellm.litellm_core_utils.realtime_streaming import RealTimeStreaming
@@ -5078,9 +5082,12 @@ class BaseLLMHTTPHandler:
     @staticmethod
     def _get_agentic_loop_settings(kwargs: dict) -> tuple[int, int, list[str]]:
         depth: Final = int(kwargs.get("_agentic_loop_depth", 0) or 0)
-        max_loops: Final = int(kwargs.get("max_agentic_loops", 3) or 3)
+        configured: Final = validated_max_agentic_loops(
+            kwargs.get("max_agentic_loops"), field="litellm_params.max_agentic_loops"
+        )
+        max_loops: Final = DEFAULT_MAX_AGENTIC_LOOPS if configured is None else configured
         fingerprints: Final = list(kwargs.get("_agentic_loop_fingerprints", []) or [])
-        return depth, max(max_loops, 1), fingerprints
+        return depth, max_loops, fingerprints
 
     @staticmethod
     def _has_agentic_completion_hook(logging_obj: LiteLLMLoggingObj) -> bool:

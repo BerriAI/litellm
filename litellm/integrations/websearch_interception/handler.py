@@ -31,6 +31,9 @@ from litellm.integrations.websearch_interception.tools import (
 from litellm.integrations.websearch_interception.transformation import (
     WebSearchTransformation,
 )
+from litellm.litellm_core_utils.agentic_loop_settings import (
+    validated_max_agentic_loops,
+)
 from litellm.llms.base_llm.search.transformation import SearchResponse
 from litellm.types.integrations.custom_logger import (
     CHAT_COMPLETION_AGENTIC_SURFACE,
@@ -150,21 +153,8 @@ class WebSearchInterceptionLogger(CustomLogger):
     def _validated_max_agentic_loops(max_agentic_loops: object) -> int | None:
         """
         Reject loop ceilings the agentic loop cannot honor, at config load time.
-
-        ``bool`` is excluded explicitly because it is an ``int`` subclass, so
-        ``max_agentic_loops: true`` would otherwise be read as a ceiling of 1.
         """
-        if max_agentic_loops is None:
-            return None
-        if isinstance(max_agentic_loops, bool) or not isinstance(max_agentic_loops, int):
-            raise TypeError(
-                f"websearch_interception_params.max_agentic_loops must be an integer, got {max_agentic_loops!r}"
-            )
-        if max_agentic_loops < 1:
-            raise ValueError(
-                f"websearch_interception_params.max_agentic_loops must be at least 1, got {max_agentic_loops}"
-            )
-        return max_agentic_loops
+        return validated_max_agentic_loops(max_agentic_loops, field="websearch_interception_params.max_agentic_loops")
 
     async def try_short_circuit_search(
         self,
