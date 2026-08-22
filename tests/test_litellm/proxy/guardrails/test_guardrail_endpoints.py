@@ -1,9 +1,11 @@
 import json
+import marshal
 import os
+import queue
 import sys
 from datetime import datetime
 from typing import Dict, List, Optional
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -18,7 +20,9 @@ from litellm.proxy.guardrails.guardrail_endpoints import (
     CreateGuardrailRequest,
     PatchGuardrailRequest,
     RegisterGuardrailRequest,
+    TestCustomCodeGuardrailRequest,
     UpdateGuardrailRequest,
+    _exec_guardrail_in_child,
     apply_guardrail,
     approve_guardrail_submission,
     create_guardrail,
@@ -33,6 +37,10 @@ from litellm.proxy.guardrails.guardrail_endpoints import (
     reject_guardrail_submission,
     update_guardrail,
 )
+from litellm.proxy.guardrails.guardrail_endpoints import (
+    test_custom_code_guardrail as _test_custom_code_guardrail,
+)
+from litellm.proxy.guardrails.guardrail_hooks.custom_code.sandbox import compile_sandboxed
 
 MOCK_ADMIN_USER = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
 from litellm.proxy.guardrails.guardrail_registry import (
@@ -2599,3 +2607,238 @@ def test_field_type_inference_handles_pep604_unions():
     assert _get_field_type_from_annotation(list[str] | None) == "array"
     assert _get_field_type_from_annotation(bool | None) == "boolean"
     assert _unwrap_optional_type(str | None) is str
+
+
+VALID_CUSTOM_CODE = """
+def apply_guardrail(inputs, request_data, input_type):
+    return {"action": "allow"}
+"""
+
+INFINITE_LOOP_CUSTOM_CODE = """
+while True:
+    pass
+
+def apply_guardrail(inputs, request_data, input_type):
+    return {"action": "allow"}
+"""
+
+
+def _custom_code_request(
+    custom_code: str, test_input: dict[str, object] | None = None
+) -> TestCustomCodeGuardrailRequest:
+    return TestCustomCodeGuardrailRequest(
+        custom_code=custom_code,
+        test_input=test_input if test_input is not None else {"texts": ["hello"]},
+        input_type="texts",
+        request_data={},
+    )
+
+
+def _mock_guardrail_process(mocker, messages, *, empty=False):
+    result_queue = MagicMock()
+    result_queue.get.side_effect = messages
+    result_queue.empty.return_value = empty
+    process = MagicMock()
+    process.is_alive.return_value = False
+    context = MagicMock()
+    context.Queue.return_value = result_queue
+    context.Process.return_value = process
+    mocker.patch(
+        "litellm.proxy.guardrails.guardrail_endpoints.multiprocessing.get_context",
+        return_value=context,
+    )
+    return context, process
+
+
+@pytest.mark.asyncio
+async def test_custom_code_guardrail_times_out_top_level_loop():
+    result = await _test_custom_code_guardrail(
+        request=_custom_code_request(INFINITE_LOOP_CUSTOM_CODE),
+        user_api_key_dict=MOCK_ADMIN_USER,
+    )
+
+    assert result.success is False
+    assert result.error_type == "execution"
+    assert "timeout" in result.error.lower()
+
+
+@pytest.mark.asyncio
+async def test_custom_code_guardrail_runs_valid_code(mocker):
+    _mock_guardrail_process(mocker, ["ready", ("ok", {"action": "allow"})])
+
+    result = await _test_custom_code_guardrail(
+        request=_custom_code_request(VALID_CUSTOM_CODE),
+        user_api_key_dict=MOCK_ADMIN_USER,
+    )
+
+    assert result.success is True
+
+
+@pytest.mark.asyncio
+async def test_custom_code_guardrail_rejects_non_admin():
+    key = MagicMock(spec=UserAPIKeyAuth)
+    key.user_role = LitellmUserRoles.INTERNAL_USER
+
+    with pytest.raises(HTTPException) as excinfo:
+        await _test_custom_code_guardrail(
+            request=_custom_code_request(VALID_CUSTOM_CODE),
+            user_api_key_dict=key,
+        )
+
+    assert excinfo.value.status_code == 403
+
+
+@pytest.mark.parametrize(
+    ("custom_code", "expected_status"),
+    [
+        (VALID_CUSTOM_CODE, "ok"),
+        ("x = 1\n", "missing"),
+        ("raise ValueError('boom')\n", "error"),
+    ],
+)
+def test_custom_code_child_reports_execution_status(custom_code, expected_status):
+    result_queue = MagicMock()
+
+    _exec_guardrail_in_child(
+        marshal.dumps(compile_sandboxed(custom_code)),
+        {"texts": ["hello"]},
+        {},
+        "texts",
+        result_queue,
+    )
+
+    assert result_queue.put.call_args_list[0].args == ("ready",)
+    assert result_queue.put.call_args_list[1].args[0][0] == expected_status
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("status", "payload", "expected_error_type"),
+    [
+        ("missing", "apply_guardrail is missing", "compilation"),
+        ("error", "user code failed", "execution"),
+    ],
+)
+async def test_custom_code_guardrail_maps_child_errors(
+    mocker, status, payload, expected_error_type
+):
+    _mock_guardrail_process(mocker, ["ready", (status, payload)])
+
+    result = await _test_custom_code_guardrail(
+        request=_custom_code_request(VALID_CUSTOM_CODE),
+        user_api_key_dict=MOCK_ADMIN_USER,
+    )
+
+    assert result.success is False
+    assert result.error_type == expected_error_type
+    assert payload in result.error
+
+
+@pytest.mark.asyncio
+async def test_custom_code_guardrail_treats_non_dict_result_as_allow(mocker):
+    _mock_guardrail_process(mocker, ["ready", ("ok", "allow")])
+
+    result = await _test_custom_code_guardrail(
+        request=_custom_code_request(VALID_CUSTOM_CODE),
+        user_api_key_dict=MOCK_ADMIN_USER,
+    )
+
+    assert result.success is True
+    assert result.result == {
+        "action": "allow",
+        "warning": "Expected dict result, got str. Treating as allow.",
+    }
+
+
+@pytest.mark.asyncio
+async def test_custom_code_guardrail_adds_missing_texts(mocker):
+    context, _ = _mock_guardrail_process(mocker, ["ready", ("ok", {"action": "allow"})])
+
+    result = await _test_custom_code_guardrail(
+        request=_custom_code_request(VALID_CUSTOM_CODE, {}),
+        user_api_key_dict=MOCK_ADMIN_USER,
+    )
+
+    assert result.success is True
+    assert context.Process.call_args.kwargs["args"][1] == {"texts": []}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("compile_error", "expected_prefix"),
+    [
+        (SyntaxError("invalid syntax"), "Syntax error in custom code:"),
+        (RuntimeError("sandbox unavailable"), "Failed to compile custom code:"),
+    ],
+)
+async def test_custom_code_guardrail_reports_compile_errors(mocker, compile_error, expected_prefix):
+    mocker.patch(
+        "litellm.proxy.guardrails.guardrail_endpoints.compile_sandboxed",
+        side_effect=compile_error,
+    )
+
+    result = await _test_custom_code_guardrail(
+        request=_custom_code_request(VALID_CUSTOM_CODE),
+        user_api_key_dict=MOCK_ADMIN_USER,
+    )
+
+    assert result.success is False
+    assert result.error_type == "compilation"
+    assert result.error.startswith(expected_prefix)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "mode", ["startup_timeout", "unexpected_ready", "execution_timeout", "empty_result"]
+)
+async def test_custom_code_guardrail_reports_process_setup_errors(mocker, mode):
+    result_queue = MagicMock()
+    process = MagicMock()
+    process.is_alive.return_value = False
+    context = MagicMock()
+    context.Queue.return_value = result_queue
+    context.Process.return_value = process
+    mocker.patch(
+        "litellm.proxy.guardrails.guardrail_endpoints.multiprocessing.get_context",
+        return_value=context,
+    )
+
+    if mode == "startup_timeout":
+        result_queue.get.side_effect = queue.Empty
+    elif mode == "unexpected_ready":
+        result_queue.get.return_value = "unexpected"
+    elif mode == "execution_timeout":
+        result_queue.get.return_value = "ready"
+        process.is_alive.return_value = True
+    else:
+        result_queue.get.return_value = "ready"
+        result_queue.empty.return_value = True
+
+    result = await _test_custom_code_guardrail(
+        request=_custom_code_request(VALID_CUSTOM_CODE),
+        user_api_key_dict=MOCK_ADMIN_USER,
+    )
+
+    assert result.success is False
+    assert result.error_type == "execution"
+    assert "Execution" in result.error
+    if mode != "empty_result":
+        process.terminate.assert_called_once()
+        process.join.assert_called()
+
+
+@pytest.mark.asyncio
+async def test_custom_code_guardrail_reports_unexpected_outer_error(mocker):
+    mocker.patch(
+        "litellm.proxy.guardrails.guardrail_endpoints.multiprocessing.get_context",
+        side_effect=RuntimeError("process context unavailable"),
+    )
+
+    result = await _test_custom_code_guardrail(
+        request=_custom_code_request(VALID_CUSTOM_CODE),
+        user_api_key_dict=MOCK_ADMIN_USER,
+    )
+
+    assert result.success is False
+    assert result.error_type == "execution"
+    assert result.error == "Unexpected error: process context unavailable"

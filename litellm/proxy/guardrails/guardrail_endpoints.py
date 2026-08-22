@@ -2,10 +2,13 @@
 CRUD ENDPOINTS FOR GUARDRAILS
 """
 
-import concurrent.futures
 import inspect
 import json
+import marshal
+import multiprocessing
 import os
+import queue
+import sys
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import datetime, timezone
 from types import UnionType
@@ -1986,6 +1989,49 @@ class TestCustomCodeGuardrailResponse(BaseModel):
     """Type of error: 'compilation' or 'execution'."""
 
 
+def _exec_guardrail_in_child(
+    compiled_bytes: bytes,
+    test_inputs: Mapping[str, Any],
+    request_data: Mapping[str, Any],
+    input_type: str,
+    result_queue: multiprocessing.Queue,
+) -> None:
+    """Execute guardrail code inside a child process.
+
+    The caller runs this in a separate process so an infinite loop in
+    user-supplied code can be terminated at the deadline: a thread stuck
+    in a loop cannot be killed, so repeated submissions would leave
+    CPU-consuming workers behind and block graceful shutdown. Errors are
+    reported through the queue as tagged tuples instead of being raised,
+    since the missing-apply_guardrail error class is defined inside the
+    endpoint handler and cannot be pickled across processes. The compiled
+    code travels as marshal bytes: code objects themselves cannot be
+    pickled, which breaks the spawn start method on Windows.
+
+    Queue protocol: first message is "ready" (sent after dependency
+    loading, before the user code runs), second message is the result.
+    """
+    try:
+        result_queue.put("ready")
+        compiled: Final = marshal.loads(compiled_bytes)
+        exec_globals: Final = build_sandbox_globals()
+        exec(compiled, exec_globals)  # noqa: S102
+        apply_fn: Final = exec_globals.get("apply_guardrail")
+        if not callable(apply_fn):
+            result_queue.put(
+                (
+                    "missing",
+                    "Custom code must define an 'apply_guardrail' function. "
+                    "Expected signature: apply_guardrail(inputs, request_data, input_type)",
+                )
+            )
+            return
+        result: Final = apply_fn(test_inputs, request_data, input_type)
+        result_queue.put(("ok", result))
+    except Exception as e:  # noqa: BLE001 — user code may raise anything; surfaced via queue
+        result_queue.put(("error", str(e)))
+
+
 @router.post(
     "/guardrails/test_custom_code",
     tags=["Guardrails"],
@@ -2077,11 +2123,12 @@ async def test_custom_code_guardrail(
     EXECUTION_TIMEOUT_SECONDS: Final = 5
 
     try:
-        exec_globals: Final = build_sandbox_globals()
-
         try:
+            # Only compile here; module-level execution happens inside the
+            # timeout-protected scope below so a top-level infinite loop in
+            # otherwise-valid Python cannot hang the handler thread
+            # indefinitely (#28259).
             compiled: Final[CodeType] = compile_sandboxed(request.custom_code)
-            exec(compiled, exec_globals)  # noqa: S102
         except SyntaxError as e:
             return TestCustomCodeGuardrailResponse(
                 success=False,
@@ -2095,24 +2142,7 @@ async def test_custom_code_guardrail(
                 error_type="compilation",
             )
 
-        # Step 2: Verify apply_guardrail function exists
-        if "apply_guardrail" not in exec_globals:
-            return TestCustomCodeGuardrailResponse(
-                success=False,
-                error="Custom code must define an 'apply_guardrail' function. "
-                "Expected signature: apply_guardrail(inputs, request_data, input_type)",
-                error_type="compilation",
-            )
-
-        apply_fn: Final[object] = exec_globals["apply_guardrail"]
-        if not callable(apply_fn):
-            return TestCustomCodeGuardrailResponse(
-                success=False,
-                error="'apply_guardrail' must be a callable function",
-                error_type="compilation",
-            )
-
-        # Step 3: Prepare test inputs
+        # Step 2: Prepare test inputs
         test_inputs: Final = request.test_input
         if "texts" not in test_inputs:
             test_inputs["texts"] = []
@@ -2127,28 +2157,78 @@ async def test_custom_code_guardrail(
             "metadata": mock_request_data.get("metadata", {}),
         }
 
-        # Step 4: Execute the function with timeout protection
-
-        def execute_guardrail() -> object:
-            return apply_fn(test_inputs, safe_request_data, request.input_type)
-
+        # Step 4: Execute the module and the function with timeout protection
+        # (module-level exec included: RestrictedPython blocks imports/eval
+        # but not infinite loops, so compile+exec must run under the same
+        # timeout as apply_fn). Runs in a child process: a thread stuck in
+        # an infinite loop cannot be terminated, so repeated submissions
+        # would leak CPU-consuming workers and block graceful shutdown.
+        # terminate() kills the process at the deadline instead.
+        ctx: Final = multiprocessing.get_context("spawn" if sys.platform == "win32" else "fork")
+        result_queue: Final = ctx.Queue()
+        proc: Final = ctx.Process(
+            target=_exec_guardrail_in_child,
+            args=(
+                marshal.dumps(compiled),
+                test_inputs,
+                safe_request_data,
+                request.input_type,
+                result_queue,
+            ),
+        )
+        proc.start()
+        # The child sends "ready" once its dependencies are loaded and it is
+        # about to execute the user code. On Windows (spawn) importing litellm
+        # in the child takes seconds; counting that against the execution
+        # timeout would reject valid code. Only the user-code window is
+        # bounded by EXECUTION_TIMEOUT_SECONDS.
         try:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-                future: Final = executor.submit(execute_guardrail)
-                try:
-                    result: Final = future.result(timeout=EXECUTION_TIMEOUT_SECONDS)
-                except concurrent.futures.TimeoutError:
-                    return TestCustomCodeGuardrailResponse(
-                        success=False,
-                        error=f"Execution timeout: code took longer than {EXECUTION_TIMEOUT_SECONDS} seconds",
-                        error_type="execution",
-                    )
-        except Exception as e:
+            ready: Final = result_queue.get(timeout=30)
+        except queue.Empty:
+            proc.terminate()
+            proc.join()
             return TestCustomCodeGuardrailResponse(
                 success=False,
-                error=f"Execution error: {e}",
+                error="Execution error: guardrail process failed to start",
                 error_type="execution",
             )
+        if ready != "ready":
+            proc.terminate()
+            proc.join()
+            return TestCustomCodeGuardrailResponse(
+                success=False,
+                error=f"Execution error: unexpected guardrail process message: {ready!r}",
+                error_type="execution",
+            )
+        proc.join(EXECUTION_TIMEOUT_SECONDS)
+        if proc.is_alive():
+            proc.terminate()
+            proc.join()
+            return TestCustomCodeGuardrailResponse(
+                success=False,
+                error=f"Execution timeout: code took longer than {EXECUTION_TIMEOUT_SECONDS} seconds",
+                error_type="execution",
+            )
+        if result_queue.empty():
+            return TestCustomCodeGuardrailResponse(
+                success=False,
+                error="Execution error: guardrail process exited without a result",
+                error_type="execution",
+            )
+        status, payload = result_queue.get()
+        if status == "missing":
+            return TestCustomCodeGuardrailResponse(
+                success=False,
+                error=payload,
+                error_type="compilation",
+            )
+        if status == "error":
+            return TestCustomCodeGuardrailResponse(
+                success=False,
+                error=f"Execution error: {payload}",
+                error_type="execution",
+            )
+        result: Final = payload
 
         # Step 5: Validate and return result
         if not isinstance(result, dict):
