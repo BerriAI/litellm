@@ -29,23 +29,13 @@ const toModelGroup = (item: AvailableModel): ModelGroup => {
   };
 };
 
-/**
- * /models carries no capability metadata, so the team-allowed names are joined against
- * /model_group/info (one extra parallel request; the endpoint has no team filter of its own, and it
- * serves team-scoped tokens row-filtered, verified live). A name without a group entry keeps every
- * capability field absent; a failed group fetch is console.error'd by fetchAvailableModels.
- */
 export const fetchAvailableModelsForTeam = async (accessToken: string, teamId: string): Promise<ModelGroup[]> => {
-  const [response, groups] = await Promise.all([
-    modelAvailableCall(accessToken, "", "", false, teamId),
-    fetchAvailableModels(accessToken).catch(() => [] as ModelGroup[]),
-  ]);
-  const byGroup = new Map(groups.map((group) => [group.model_group, group]));
+  const response = await modelAvailableCall(accessToken, "", "", false, teamId);
   const modelNames: string[] = (response?.data ?? []).map((model: { id: string }) => model.id);
 
   return excludeProxyWideSentinel(Array.from(new Set(modelNames)))
     .sort((a, b) => a.localeCompare(b))
-    .map((model) => byGroup.get(model) ?? { model_group: model });
+    .map((model) => ({ model_group: model }));
 };
 
 /**
