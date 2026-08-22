@@ -49,16 +49,6 @@ test_paths:
     paths:
       - tests/code_coverage_tests/test_aio_http_image_conversion.py
   - reason: >-
-      The last file of a second mirror that sat beside tests/test_litellm and ran nowhere. Its
-      other 33 files landed in the real mirror during August 2026, 30 as moves and 3 by merging
-      their bodies into the live file of the same name. This one cannot follow either route yet:
-      its live twin was rewritten from 1268 lines to 9434, and of the 19 tests here 5 have no
-      counterpart while 25 assertions fail against today's code, so what survives that rewrite
-      is a judgement about the endpoints, not a merge. Revisit by deciding which of the five
-      behaviours still hold
-    paths:
-      - tests/litellm/proxy/_experimental/mcp_server/test_discoverable_endpoints.py
-  - reason: >-
       No job invokes this suite and its files mix pure transformation tests with ones driving live
       vendor vector stores, so assigning them needs a per-file decision
     paths:

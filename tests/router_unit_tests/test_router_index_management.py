@@ -2,7 +2,6 @@ import sys
 import os
 import pytest
 import ast
-import ast
 
 sys.path.insert(
     0, os.path.abspath("../..")

@@ -9,7 +9,6 @@ from fastapi.routing import APIRoute
 
 load_dotenv()
 import io
-import os
 import time
 import json
 
@@ -102,7 +101,6 @@ async def test_openai_web_search_logging_cost_tracking(
 ):
     """Test web search cost tracking with different search context sizes"""
     test_custom_logger = await _setup_web_search_test()
-    from litellm._uuid import uuid
 
     request_kwargs = {
         "model": "openai/gpt-5-search-api",

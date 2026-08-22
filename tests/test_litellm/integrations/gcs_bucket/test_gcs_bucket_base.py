@@ -8,10 +8,10 @@ from litellm.integrations.gcs_bucket.gcs_bucket_base import GCSBucketBase
 
 
 class TestGCSBucketBase:
-    def test_construct_request_headers_with_project_id(self):
+    def test_construct_request_headers_with_project_id(self, monkeypatch):
         """Test that construct_request_headers correctly uses project_id if passed from env"""
         test_project_id = "test-project"
-        os.environ["GOOGLE_SECRET_MANAGER_PROJECT_ID"] = test_project_id
+        monkeypatch.setenv("GOOGLE_SECRET_MANAGER_PROJECT_ID", test_project_id)
 
         try:
             # Create handler

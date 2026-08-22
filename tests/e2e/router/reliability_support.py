@@ -56,7 +56,7 @@ def chat_override(
         json=ReliabilityChatBody(
             model=model,
             messages=[ChatMessage(role="user", content=content)],
-            max_tokens=16,
+            max_tokens=64,
             stream=stream,
             router_settings_override=override,
         ),

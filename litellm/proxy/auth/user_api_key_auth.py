@@ -11,6 +11,7 @@ import asyncio
 import fnmatch
 import re
 import secrets
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import Any, Final, NamedTuple, Protocol, Union, cast
 
@@ -184,6 +185,62 @@ class _KeyModelBudgetLimiter(Protocol):
     async def is_key_within_model_budget(self, user_api_key_dict: UserAPIKeyAuth, model: str) -> bool: ...
 
     async def get_fallback_model_within_budget(self, user_api_key_dict: UserAPIKeyAuth, model: str) -> str | None: ...
+
+
+class _UserModelBudgetLimiter(Protocol):
+    async def is_user_within_model_budget(
+        self, user_id: str, user_model_max_budget: Mapping[str, object], model: str
+    ) -> bool: ...
+
+
+async def _read_user_model_max_budget(
+    user_id: str | None,
+    prisma_client: PrismaClient | None,
+    user_api_key_cache: UserApiKeyCache,
+    parent_otel_span: object,
+    proxy_logging_obj: ProxyLogging,
+) -> dict | None:
+    """The user row's `model_max_budget`, or None when the row cannot be read.
+
+    A user whose row is missing must not be refused: this is a budget lookup,
+    and the main auth path likewise treats an unreadable user as no user.
+    """
+    if user_id is None or prisma_client is None:
+        return None
+    try:
+        user_obj: Final = await get_user_object(
+            user_id=user_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            user_id_upsert=False,
+            parent_otel_span=parent_otel_span,  # pyright: ignore[reportArgumentType]  # Span is a runtime union, not usable in an annotation here
+            proxy_logging_obj=proxy_logging_obj,
+        )
+    except Exception as e:  # noqa: BLE001  # mirrors the main path's tolerance
+        verbose_logger.debug("Unable to read user for the per-model budget check: %s", e)
+        return None
+    return getattr(user_obj, "model_max_budget", None)
+
+
+async def _check_user_model_budget(
+    valid_token: UserAPIKeyAuth,
+    model_max_budget_limiter: _UserModelBudgetLimiter,
+    models: list[str],
+) -> None:
+    """Enforce the internal user's own `model_max_budget` across the request's models.
+
+    Separate from the key check: a user's per-model budget caps every key they
+    own, so a caller cannot escape it by minting another key.
+    """
+    user_model_max_budget: Final = valid_token.user_model_max_budget
+    if valid_token.user_id is None or not isinstance(user_model_max_budget, Mapping) or not user_model_max_budget:
+        return
+    for model_name in models:
+        await model_max_budget_limiter.is_user_within_model_budget(
+            user_id=valid_token.user_id,
+            user_model_max_budget=user_model_max_budget,
+            model=model_name,
+        )
 
 
 async def _check_key_model_budget_with_fallback(
@@ -1390,6 +1447,7 @@ async def _user_api_key_auth_builder(
                         end_user_id=end_user_id,
                         user_tpm_limit=(user_object.tpm_limit if user_object is not None else None),
                         user_rpm_limit=(user_object.rpm_limit if user_object is not None else None),
+                        user_model_max_budget=(user_object.model_max_budget if user_object is not None else None),
                         team_member_rpm_limit=(
                             team_membership.safe_get_team_member_rpm_limit() if team_membership is not None else None
                         ),
@@ -1427,6 +1485,13 @@ async def _user_api_key_auth_builder(
                         if auto_registered is not None:
                             auto_registered.jwt_claims = jwt_claims
                             auto_registered.user_email = user_email
+                            # The auto-registered token is built from the new key's
+                            # columns, which carry no user budget. Carry over the
+                            # already-loaded user row rather than re-reading it, or
+                            # the budget check below has nothing to enforce.
+                            auto_registered.user_model_max_budget = (
+                                user_object.model_max_budget if user_object is not None else None
+                            )
                             valid_token = auto_registered
                             api_key = valid_token.token or ""
 
@@ -1457,6 +1522,28 @@ async def _user_api_key_auth_builder(
                         if _jwt_project_obj is not None:
                             valid_token.project_metadata = _jwt_project_obj.metadata
                             valid_token.project_alias = _jwt_project_obj.project_alias
+
+                    # JWT auth returns here rather than falling through to the
+                    # virtual-key checks below, so the user's per-model budget
+                    # has to be enforced on this path too. Without it the
+                    # post-call increment still charges the counter and nothing
+                    # ever reads it, which is worse than not tracking at all.
+                    # Guarded by the same flag the virtual-key path uses, or a
+                    # zero-cost model would be refused here and allowed there,
+                    # while the log above claims all budget checks were skipped.
+                    if not skip_budget_checks:
+                        await _check_user_model_budget(
+                            valid_token=cast(UserAPIKeyAuth, valid_token),
+                            model_max_budget_limiter=model_max_budget_limiter,
+                            models=_get_model_names_for_budget_checks(
+                                model=_get_model_from_request_context(
+                                    request_data=request_data,
+                                    route=route,
+                                    request=request,
+                                    llm_router=llm_router,
+                                )
+                            ),
+                        )
 
                     return cast(UserAPIKeyAuth, valid_token)
 
@@ -1811,6 +1898,12 @@ async def _user_api_key_auth_builder(
                     )
                     user_obj = None
 
+                if user_obj is not None:
+                    # The joint verification-token view carries the key's columns only, so the
+                    # user's own per-model budget reaches enforcement and the post-call
+                    # increment through the row fetched here.
+                    valid_token.user_model_max_budget = user_obj.model_max_budget
+
                 if (
                     user_obj is not None
                     and isinstance(user_obj.metadata, dict)
@@ -1973,6 +2066,14 @@ async def _user_api_key_auth_builder(
                             llm_router=llm_router,
                         )
                         current_models = _get_model_names_for_budget_checks(model=current_model)
+
+                    # Check 5a. Internal user model_max_budget
+                    if current_models:
+                        await _check_user_model_budget(
+                            valid_token=valid_token,
+                            model_max_budget_limiter=model_max_budget_limiter,
+                            models=current_models,
+                        )
 
                     # Check 5b. End-user model max budget
                     end_user_mmb: Final = valid_token.end_user_model_max_budget
@@ -2757,6 +2858,7 @@ async def _return_user_api_key_auth_obj(
             user_email=user_obj.user_email,
             user_spend=getattr(user_obj, "spend", None),
             user_max_budget=getattr(user_obj, "max_budget", None),
+            user_model_max_budget=getattr(user_obj, "model_max_budget", None),
         )
     if user_obj is not None and _is_user_proxy_admin(user_obj=user_obj):
         user_api_key_kwargs.update(
@@ -3020,10 +3122,21 @@ async def _run_post_custom_auth_checks(
     )
     current_models = _get_model_names_for_budget_checks(model=current_model)
 
+    # A zero-cost model cannot move any counter, so refusing it means refusing on
+    # spend some other model accrued. The JWT and virtual-key paths already skip
+    # every budget check for these; this path did not, so the same request could
+    # be refused under custom auth and served under the other two.
+    skip_budget_checks: Final = (
+        _is_model_cost_zero(model=current_model, llm_router=llm_router)
+        if current_model is not None and llm_router is not None
+        else False
+    )
+
     # 3. Check key-level model_max_budget
     max_budget_per_model: Final = valid_token.model_max_budget
     if (
-        max_budget_per_model is not None
+        not skip_budget_checks
+        and max_budget_per_model is not None
         and isinstance(max_budget_per_model, dict)
         and len(max_budget_per_model) > 0
         and current_models
@@ -3050,10 +3163,33 @@ async def _run_post_custom_auth_checks(
         )
         current_models = _get_model_names_for_budget_checks(model=current_model)
 
+    # 3b. Attach and check the internal user's model_max_budget.
+    # Custom auth builds its own token, so unlike the main path nothing has
+    # loaded the user row yet. The attach is unconditional because the post-call
+    # spend hook reads this field off the token: gating it on the same condition
+    # as enforcement would leave the user's counter uncharged whenever this
+    # request was not itself enforceable, which is the untracked-spend bug this
+    # PR exists to fix.
+    user_budget: Final = await _read_user_model_max_budget(
+        user_id=valid_token.user_id,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        parent_otel_span=parent_otel_span,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+    valid_token.user_model_max_budget = user_budget  # rebind-ok: the spend hook reads it off this token
+    if not skip_budget_checks and current_models:
+        await _check_user_model_budget(
+            valid_token=valid_token,
+            model_max_budget_limiter=model_max_budget_limiter,
+            models=current_models,
+        )
+
     # 4. Check end-user model_max_budget
     end_user_mmb: Final = valid_token.end_user_model_max_budget
     if (
-        end_user_mmb is not None
+        not skip_budget_checks
+        and end_user_mmb is not None
         and isinstance(end_user_mmb, dict)
         and len(end_user_mmb) > 0
         and current_models
