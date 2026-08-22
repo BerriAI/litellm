@@ -4156,6 +4156,7 @@ class LlmProviders(str, Enum):
     APERTIS = "apertis"
     NANOGPT = "nano-gpt"
     POE = "poe"
+    CLINEPASS = "clinepass"
     CHUTES = "chutes"
     NEOSANTARA = "neosantara"
     PARASAIL = "parasail"

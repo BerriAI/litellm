@@ -782,6 +782,7 @@ LITELLM_CHAT_PROVIDERS: Final = [
     "lemonade",
     "docker_model_runner",
     "amazon_nova",
+    "clinepass",
 ]
 
 # Resolving these providers runs an OAuth device flow (their provider info IS the login), so any
@@ -1041,6 +1042,7 @@ openai_compatible_providers: Final[list] = [
     "scx-ai",
     "prism",
     "sail",
+    "clinepass",  # ClinePass (Cline API) - has its own module; listed here for exception mapping
 ]
 
 OPENAI_AUDIO_TRANSCRIPTION_PROVIDERS: Final = frozenset({"openai"} | frozenset(openai_compatible_providers))

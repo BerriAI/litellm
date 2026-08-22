@@ -2051,6 +2051,9 @@ if TYPE_CHECKING:
     )
     from .llms.heroku.chat.transformation import HerokuChatConfig as HerokuChatConfig
     from .llms.cometapi.chat.transformation import CometAPIConfig as CometAPIConfig
+    from .llms.clinepass.chat.transformation import (
+        ClinePassConfig as ClinePassConfig,
+    )
     from .llms.azure.chat.gpt_transformation import (
         AzureOpenAIConfig as AzureOpenAIConfig,
     )
