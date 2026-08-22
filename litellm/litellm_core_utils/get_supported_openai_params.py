@@ -159,6 +159,9 @@ def get_supported_openai_params(
     elif custom_llm_provider == "nebius":
         if request_type == "chat_completion":
             return litellm.NebiusConfig().get_supported_openai_params(model=model)
+    elif custom_llm_provider == "iflytek":
+        if request_type == "chat_completion":
+            return litellm.IFlytekConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "wandb":
         if request_type == "chat_completion":
             return litellm.WandbConfig().get_supported_openai_params(model=model)
