@@ -59,6 +59,7 @@ from litellm.llms.base_llm.guardrail_translation.utils import (
 from litellm.llms.openai.responses.guardrail_translation.tool_merge import merge_guardrailed_tools
 from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
+    ResponsesInput,
 )
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -338,10 +339,12 @@ class OpenAIResponsesHandler(BaseTranslation):
         `instructions` into chat completion messages.
         """
         input_data: Final = data.get("input")
-        if input_data is None:
+        if not isinstance(input_data, (str, dict, list, tuple)):
             return None
         messages: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
-            input=input_data,
+            input=cast(  # cast-ok: runtime container shape is validated immediately above before Responses-specific parsing enforces each nested item type.
+                "ResponsesInput", input_data
+            ),
             responses_api_request=data,
         )
         return cast(list[AllMessageValues], messages) if messages else None
@@ -357,9 +360,12 @@ class OpenAIResponsesHandler(BaseTranslation):
 
         Handles both string input and list of message objects.
         """
-        input_data: Final[str | ResponseInputParam | None] = data.get("input")
-        if not isinstance(input_data, (str, list)):
+        input_data: Final = data.get("input")
+        if not isinstance(input_data, (str, dict, list, tuple)):
             return data
+        typed_input: Final = cast(  # cast-ok: runtime container shape is validated immediately above before Responses-specific parsing enforces each nested item type.
+            "ResponsesInput", input_data
+        )
         structured_messages: Final = self.get_structured_messages(data)
         raw_tools: Final = data.get("tools")
         original_tools: Final[tuple[Mapping[str, object], ...]] = (
@@ -368,7 +374,7 @@ class OpenAIResponsesHandler(BaseTranslation):
         flattened_tool_groups: Final = tuple(
             form.chat_tools for form in LiteLLMCompletionResponsesConfig.responses_tools_to_chat_forms(original_tools)
         )
-        extracted: Final = self._extract_guardrail_inputs(data, input_data, flattened_tool_groups)
+        extracted: Final = self._extract_guardrail_inputs(data, typed_input, flattened_tool_groups)
         if not extracted.inputs.get("texts"):
             return data
         if structured_messages:
@@ -393,8 +399,9 @@ class OpenAIResponsesHandler(BaseTranslation):
             guardrailed_texts: Final = guardrailed_inputs.get("texts") or ()
             data["input"] = guardrailed_texts[0] if guardrailed_texts else input_data  # rebind-ok: data is an out-param
         else:
+            input_messages: Final = (input_data,) if isinstance(input_data, dict) else input_data
             await self._apply_guardrail_responses_to_input(
-                messages=input_data,
+                messages=input_messages,
                 responses=guardrailed_inputs.get("texts") or (),
                 task_mappings=extracted.task_mappings,
             )
@@ -404,7 +411,7 @@ class OpenAIResponsesHandler(BaseTranslation):
     def _extract_guardrail_inputs(
         self,
         data: Mapping[str, object],
-        input_data: "str | ResponseInputParam",
+        input_data: ResponsesInput,
         flattened_tool_groups: Sequence[Sequence[Mapping[str, object]]],
     ) -> _ExtractedInputs:
         texts_to_check: Final[list[str]] = []
@@ -422,7 +429,8 @@ class OpenAIResponsesHandler(BaseTranslation):
         if isinstance(input_data, str):
             texts_to_check.append(input_data)
         else:
-            for msg_idx, message in enumerate(input_data):
+            input_messages: Final = (input_data,) if isinstance(input_data, dict) else input_data
+            for msg_idx, message in enumerate(input_messages):
                 self._extract_input_text_and_images(
                     message=message,
                     msg_idx=msg_idx,
