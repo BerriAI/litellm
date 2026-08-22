@@ -3,6 +3,12 @@ from typing import Any, List, Optional, Union
 import httpx
 
 from litellm import verbose_logger
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    _extract_base64_data,
+)
+from litellm.litellm_core_utils.prompt_templates.image_handling import (
+    convert_url_to_base64,
+)
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 
 
@@ -40,6 +46,24 @@ def _convert_image(image):
     image_data.convert("RGB").save(jpeg_image, "JPEG")
     jpeg_image.seek(0)
     return base64.b64encode(jpeg_image.getvalue()).decode("utf-8")
+
+
+def prepare_ollama_images(images: list[str]) -> list[str]:
+    """
+    Ensure each image is the pure base64 data Ollama expects.
+
+    Remote http(s) URLs are downloaded and base64-encoded, because Ollama
+    cannot fetch URLs itself and would otherwise try to base64-decode the raw
+    URL (issue #30313). Data URLs and raw base64 inputs are returned unchanged.
+    """
+    prepared: list[str] = []
+    for image in images:
+        if image.startswith("http://") or image.startswith("https://"):
+            # convert_url_to_base64 returns a data URL; strip it to pure base64.
+            prepared.append(_extract_base64_data(convert_url_to_base64(image)))
+        else:
+            prepared.append(image)
+    return prepared
 
 
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo

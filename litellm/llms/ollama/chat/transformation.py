@@ -24,6 +24,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 )
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
+from litellm.llms.ollama.common_utils import prepare_ollama_images
 from litellm.types.llms.ollama import (
     OllamaChatCompletionMessage,
     OllamaToolCall,
@@ -285,7 +286,7 @@ class OllamaChatConfig(BaseConfig):
             if content_str is not None:
                 ollama_message["content"] = content_str
             if images is not None:
-                ollama_message["images"] = images
+                ollama_message["images"] = prepare_ollama_images(images)
             if new_tools is not None:
                 ollama_message["tool_calls"] = new_tools
             tool_call_id = m.get("tool_call_id")
