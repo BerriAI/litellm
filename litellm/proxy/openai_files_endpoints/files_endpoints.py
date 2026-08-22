@@ -1410,6 +1410,8 @@ async def list_files(
     provider: str | None = None,
     target_model_names: str | None = None,
     purpose: str | None = None,
+    limit: int | None = None,
+    after: str | None = None,
 ):
     """
     Returns information about a specific file. that can be used across - Assistants API, Batch API 
@@ -1507,6 +1509,8 @@ async def list_files(
                     purpose=purpose,
                     litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
                     user_api_key_dict=user_api_key_dict,
+                    limit=limit,
+                    after=after,
                 )
             else:
                 resolved_custom_llm_provider: Final = custom_llm_provider or "openai"
