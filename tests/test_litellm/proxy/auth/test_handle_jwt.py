@@ -2589,7 +2589,7 @@ async def test_find_and_validate_raises_when_required_team_not_found():
     # Token without team info
     jwt_token = {"sub": "user-1"}
 
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(Exception, match="No team found in token\\. Checked team_id field 'None' and") as exc_info:
         await JWTAuthManager.find_and_validate_specific_team_id(
             jwt_handler=jwt_handler,
             jwt_valid_token=jwt_token,
@@ -2916,7 +2916,7 @@ async def test_find_and_validate_specific_team_id_hints_bracket_notation():
     # token has roles as a list — dot-notation won't find anything
     token = {"roles": ["team1"]}
 
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(Exception, match="is not supported\\. Use 'roles' instead — LiteLLM") as exc_info:
         await JWTAuthManager.find_and_validate_specific_team_id(
             jwt_handler=handler,
             jwt_valid_token=token,
@@ -2947,7 +2947,7 @@ async def test_find_and_validate_specific_team_id_hints_bracket_index_notation()
     handler = _make_jwt_handler("roles[0]")
     token = {"roles": ["team1"]}
 
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(Exception, match="is not supported in team_id_jwt_field\\. Use 'roles' instead") as exc_info:
         await JWTAuthManager.find_and_validate_specific_team_id(
             jwt_handler=handler,
             jwt_valid_token=token,
@@ -2977,7 +2977,7 @@ async def test_find_and_validate_specific_team_id_no_hint_for_valid_field():
     handler = _make_jwt_handler("appid")
     token = {}  # no appid — triggers the "no team found" path
 
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(Exception, match="No team found in token\\. Checked team_id field 'appid' and") as exc_info:
         await JWTAuthManager.find_and_validate_specific_team_id(
             jwt_handler=handler,
             jwt_valid_token=token,
@@ -4807,7 +4807,7 @@ async def test_multi_issuer_jwt_unknown_issuer_falls_back_to_global_jwks(monkeyp
         kid="issuer-key",
     )
 
-    with pytest.raises(Exception) as exc:
+    with pytest.raises(Exception, match='Missing JWT Public Key URL from environment\\.') as exc:
         await jwt_handler.auth_jwt(token=token)
 
     assert "Missing JWT Public Key URL from environment." in str(exc.value)
@@ -4838,7 +4838,7 @@ async def test_multi_issuer_jwt_rejects_wrong_audience(monkeypatch):
         kid="issuer-key",
     )
 
-    with pytest.raises(Exception) as exc:
+    with pytest.raises(Exception, match="Validation fails: Audience doesn't match") as exc:
         await jwt_handler.auth_jwt(token=token)
 
     assert "Validation fails" in str(exc.value)
@@ -4881,7 +4881,7 @@ async def test_multi_issuer_jwt_same_kid_does_not_cross_issuer_keys(monkeypatch)
         kid=shared_kid,
     )
 
-    with pytest.raises(Exception) as exc:
+    with pytest.raises(Exception, match='Validation fails: Signature verification failed') as exc:
         await jwt_handler.auth_jwt(token=token)
 
     assert "Validation fails" in str(exc.value)
@@ -4936,7 +4936,7 @@ def test_multi_issuer_jwt_requires_audience_unless_explicitly_disabled(
     issuer = "https://issuer.example.com"
     jwks_url = f"{issuer}/keys"
 
-    with pytest.raises(Exception) as exc:
+    with pytest.raises(Exception, match='must configure audience or set') as exc:
         LiteLLM_JWTAuth(
             issuers=[
                 {
@@ -4953,7 +4953,7 @@ def test_multi_issuer_jwt_rejects_audience_with_disable_audience_validation():
     issuer = "https://issuer.example.com"
     jwks_url = f"{issuer}/keys"
 
-    with pytest.raises(Exception) as exc:
+    with pytest.raises(Exception, match='cannot set audience and disable_audience_validation=True') as exc:
         LiteLLM_JWTAuth(
             issuers=[
                 {

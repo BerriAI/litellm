@@ -9,15 +9,10 @@ See: https://github.com/BerriAI/litellm/pull/22247
 """
 
 import asyncio
-import os
-import sys
 import warnings
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 from litellm.caching.evicted_client_closer import EvictedClientCloser
 from litellm.caching.llm_caching_handler import LLMClientCache

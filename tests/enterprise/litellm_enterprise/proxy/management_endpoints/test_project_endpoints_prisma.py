@@ -1,5 +1,4 @@
 import os
-import sys
 import traceback
 from litellm._uuid import uuid
 from unittest import mock
@@ -10,7 +9,6 @@ from fastapi import Request
 load_dotenv()
 import time
 
-sys.path.insert(0, os.path.abspath("../.."))
 import logging
 
 import pytest
@@ -448,7 +446,7 @@ def test_check_team_project_limits_models_not_in_team():
         models=["gpt-5.5", "claude-3"],  # claude-3 not in team
     )
 
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(Exception, match="not in team's allowed models\\. Team allowed models") as exc_info:
         _check_team_project_limits(team_object=team, data=data)
 
     assert "claude-3" in str(exc_info.value.detail)
@@ -476,7 +474,7 @@ def test_check_team_project_limits_budget_exceeds_team():
         max_budget=150.0,  # exceeds team's 100.0
     )
 
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(Exception, match='Project max_budget') as exc_info:
         _check_team_project_limits(team_object=team, data=data)
 
     assert "exceeds team's max_budget" in str(exc_info.value.detail)
@@ -551,7 +549,7 @@ def test_check_team_project_limits_tpm_exceeds_team():
         tpm_limit=20000,  # exceeds team's 10000
     )
 
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(Exception, match='Project tpm_limit') as exc_info:
         _check_team_project_limits(team_object=team, data=data)
 
     assert "exceeds team's tpm_limit" in str(exc_info.value.detail)
@@ -577,7 +575,7 @@ def test_check_team_project_limits_negative_budget():
         max_budget=-10.0,
     )
 
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(Exception, match='max_budget cannot be negative\\. Received') as exc_info:
         _check_team_project_limits(team_object=team, data=data)
 
     assert "cannot be negative" in str(exc_info.value.detail)
@@ -604,7 +602,7 @@ def test_check_team_project_limits_soft_budget_gte_max():
         soft_budget=100.0,  # equal to max, should fail
     )
 
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(Exception, match='must be strictly lower than max_budget') as exc_info:
         _check_team_project_limits(team_object=team, data=data)
 
     assert "must be strictly lower" in str(exc_info.value.detail)

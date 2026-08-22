@@ -1,7 +1,5 @@
 import asyncio
 import json
-import os
-import sys
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -9,9 +7,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 if TYPE_CHECKING:
     from litellm.router import Router
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 from datetime import datetime, timedelta, timezone
 
@@ -268,7 +263,7 @@ def test_get_experimental_ui_login_jwt_auth_token_invalid(
     invalid_sso_user_defined_values,
 ):
     """Test generating JWT token with missing user role"""
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(Exception, match='User role is required for experimental UI login') as exc_info:
         ExperimentalUIJWTToken.get_experimental_ui_login_jwt_auth_token(
             invalid_sso_user_defined_values
         )
@@ -883,7 +878,7 @@ async def test_get_user_object_wraps_db_outage_as_valueerror_preserving_context(
     mock_cache.async_set_cache = AsyncMock()
 
     with patch("litellm.proxy.auth.auth_checks._should_check_db", return_value=True):
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(ValueError, match="User doesn't exist in db\\.") as exc_info:
             await get_user_object(
                 user_id="outage-contract-probe-user",
                 prisma_client=mock_prisma_client,
@@ -2458,6 +2453,53 @@ async def test_get_team_object_raises_404_when_not_found():
 
     assert exc_info.value.status_code == 404
     assert "Team doesn't exist in db" in str(exc_info.value.detail)
+
+
+def _mock_prisma_for_team_lookup(find_unique):
+    from unittest.mock import MagicMock
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_teamtable.find_unique = find_unique
+    return mock_prisma_client
+
+
+@pytest.mark.asyncio
+async def test_get_team_object_distinguishes_absent_team_from_unreadable_row():
+    """A deleted team and a database that would not answer both surface as a 404,
+    which leaves callers unable to tell a definitive answer from a degraded read.
+    Only the row being positively absent raises the subclass; anything else keeps
+    the plain 404 so every existing caller is unaffected."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from fastapi import HTTPException
+
+    from litellm.proxy.auth.auth_checks import TeamNotFoundError, get_team_object
+
+    mock_cache = MagicMock()
+    mock_cache.async_get_cache = AsyncMock(return_value=None)
+
+    # The database answered, and the row is not there.
+    with pytest.raises(TeamNotFoundError) as absent_info:
+        await get_team_object(
+            team_id="absent-team-lit5522",
+            prisma_client=_mock_prisma_for_team_lookup(AsyncMock(return_value=None)),
+            user_api_key_cache=mock_cache,
+            check_db_only=True,
+        )
+    assert absent_info.value.status_code == 404
+    assert "Team doesn't exist in db" in str(absent_info.value.detail)
+
+    # The database did not answer. Same status and detail, but not the subclass,
+    # so a caller keying on it does not read this as proof the team is gone.
+    with pytest.raises(HTTPException) as unreadable_info:
+        await get_team_object(
+            team_id="unreadable-team-lit5522",
+            prisma_client=_mock_prisma_for_team_lookup(AsyncMock(side_effect=ConnectionError("db unreachable"))),
+            user_api_key_cache=mock_cache,
+            check_db_only=True,
+        )
+    assert unreadable_info.value.status_code == 404
+    assert not isinstance(unreadable_info.value, TeamNotFoundError)
 
 
 # Reject Client-Side Metadata Tags Tests

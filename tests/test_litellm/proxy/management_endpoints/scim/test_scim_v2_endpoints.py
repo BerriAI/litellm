@@ -1,8 +1,13 @@
+import logging
 import time
-from unittest.mock import AsyncMock
+from collections.abc import Mapping
+from itertools import chain
+from typing import Final
+from unittest.mock import AsyncMock, MagicMock, call
 
 import pytest
 from fastapi import HTTPException
+from pytest_mock import MockerFixture
 
 from litellm.proxy._types import (
     LiteLLM_TeamTable,
@@ -53,7 +58,6 @@ from litellm.types.proxy.management_endpoints.scim_v2 import (
     SCIMUserGroup,
     SCIMUserName,
 )
-from litellm.proxy._types import ProxyException
 
 
 @pytest.mark.asyncio
@@ -72,6 +76,7 @@ async def test_create_user_existing_user_conflict(mocker):
     mock_prisma_client.db = mocker.MagicMock()
     mock_prisma_client.db.litellm_usertable = mocker.MagicMock()
     mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value={"user_id": "existing-user"})
+    mock_prisma_client.db.litellm_usertable.find_many = AsyncMock(return_value=())
 
     # Mock the _get_prisma_client_or_raise_exception to return our mock
     mocker.patch(
@@ -108,6 +113,7 @@ async def test_create_user_defaults_to_viewer(mocker, monkeypatch):
     mock_prisma_client.db = mocker.MagicMock()
     mock_prisma_client.db.litellm_usertable = mocker.MagicMock()
     mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
+    mock_prisma_client.db.litellm_usertable.find_many = AsyncMock(return_value=())
     mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(return_value=None)
 
     monkeypatch.setattr("litellm.default_internal_user_params", None, raising=False)
@@ -158,6 +164,7 @@ async def test_create_user_ingests_enterprise_extension(mocker, monkeypatch):
     mock_prisma_client.db = mocker.MagicMock()
     mock_prisma_client.db.litellm_usertable = mocker.MagicMock()
     mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
+    mock_prisma_client.db.litellm_usertable.find_many = AsyncMock(return_value=())
     mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(return_value=None)
 
     monkeypatch.setattr("litellm.default_internal_user_params", None, raising=False)
@@ -214,6 +221,7 @@ async def test_create_user_ingests_entitlements_and_roles(mocker, monkeypatch):
     mock_prisma_client.db = mocker.MagicMock()
     mock_prisma_client.db.litellm_usertable = mocker.MagicMock()
     mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
+    mock_prisma_client.db.litellm_usertable.find_many = AsyncMock(return_value=())
     mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(return_value=None)
 
     monkeypatch.setattr("litellm.default_internal_user_params", None, raising=False)
@@ -263,6 +271,7 @@ async def test_create_user_uses_default_internal_user_params_role(mocker, monkey
     mock_prisma_client.db = mocker.MagicMock()
     mock_prisma_client.db.litellm_usertable = mocker.MagicMock()
     mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
+    mock_prisma_client.db.litellm_usertable.find_many = AsyncMock(return_value=())
     mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(return_value=None)
 
     # Set default_internal_user_params with a specific role
@@ -362,6 +371,7 @@ async def test_scim_create_user_respects_default_role_set_via_ui(mocker, monkeyp
     mock_prisma_client.db = mocker.MagicMock()
     mock_prisma_client.db.litellm_usertable = mocker.MagicMock()
     mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
+    mock_prisma_client.db.litellm_usertable.find_many = AsyncMock(return_value=())
     mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(return_value=None)
 
     mocker.patch(
@@ -1282,6 +1292,7 @@ async def test_update_group_metadata_serialization_issue(mocker):
     mock_user.user_email = "user1@example.com"  # Add proper string value for user_email
     mock_user.teams = [group_id]
     mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=mock_user)
+    mock_prisma_client.db.litellm_usertable.find_many = AsyncMock(return_value=())
     mock_prisma_client.db.litellm_usertable.update = AsyncMock(return_value=mock_user)
 
     # Mock the _get_prisma_client_or_raise_exception to return our mock
@@ -1484,6 +1495,7 @@ async def test_update_group_e2e(mocker):
     mock_user = mocker.MagicMock()
     mock_user.user_id = "test-user"
     mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=mock_user)
+    mock_prisma_client.db.litellm_usertable.find_many = AsyncMock(return_value=())
 
     # Mock dependencies
     mocker.patch(
@@ -1618,6 +1630,8 @@ async def test_create_group_with_nonexistent_users_rejects(mocker, monkeypatch):
         return None  # new-user-1 and new-user-2 don't exist
 
     mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(side_effect=mock_user_lookup)
+    mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(return_value=None)
+    mock_prisma_client.db.litellm_usertable.find_many = AsyncMock(return_value=[])
 
     # Mock dependencies
     mocker.patch(
@@ -1702,6 +1716,8 @@ async def test_update_group_with_nonexistent_users_rejects(mocker, monkeypatch):
         return None  # new-user-3 and new-user-4 don't exist
 
     mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(side_effect=mock_user_lookup)
+    mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(return_value=None)
+    mock_prisma_client.db.litellm_usertable.find_many = AsyncMock(return_value=[])
 
     # Mock dependencies
     mocker.patch(
@@ -1771,6 +1787,8 @@ async def test_create_group_with_nonexistent_users_creates_when_flag_true(mocker
         return None  # new-user-1 and new-user-2 don't exist
 
     mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(side_effect=mock_user_lookup)
+    mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(return_value=None)
+    mock_prisma_client.db.litellm_usertable.find_many = AsyncMock(return_value=[])
 
     # Mock user creation
     created_user_1 = NewUserResponse(user_id="new-user-1", key="test-key-1")
@@ -1859,6 +1877,8 @@ async def test_extract_group_member_ids_with_flag_true_creates_users(mocker, mon
         return None  # new-user-1 doesn't exist
 
     mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(side_effect=mock_user_lookup)
+    mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(return_value=None)
+    mock_prisma_client.db.litellm_usertable.find_many = AsyncMock(return_value=[])
 
     # Mock user creation
     created_user = NewUserResponse(user_id="new-user-1", key="test-key-1")
@@ -1927,6 +1947,8 @@ async def test_extract_group_member_ids_with_flag_false_rejects(mocker, monkeypa
         return None  # new-user-1 doesn't exist
 
     mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(side_effect=mock_user_lookup)
+    mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(return_value=None)
+    mock_prisma_client.db.litellm_usertable.find_many = AsyncMock(return_value=[])
 
     # Mock dependencies
     mocker.patch(
@@ -1976,6 +1998,8 @@ async def test_process_group_patch_operations_with_flag_true_creates_users(mocke
 
     # Mock user lookup - new-user-1 doesn't exist
     mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
+    mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(return_value=None)
+    mock_prisma_client.db.litellm_usertable.find_many = AsyncMock(return_value=[])
     mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=None)
 
     # Mock user creation
@@ -2031,6 +2055,8 @@ async def test_process_group_patch_operations_with_flag_false_rejects(mocker, mo
 
     # Mock user lookup - new-user-1 doesn't exist
     mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
+    mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(return_value=None)
+    mock_prisma_client.db.litellm_usertable.find_many = AsyncMock(return_value=[])
     mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=None)
 
     # Execute the function - should raise HTTPException
@@ -2070,6 +2096,7 @@ async def test_create_user_grants_admin_when_in_scim_admin_group(mocker, monkeyp
     mock_prisma_client.db = mocker.MagicMock()
     mock_prisma_client.db.litellm_usertable = mocker.MagicMock()
     mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
+    mock_prisma_client.db.litellm_usertable.find_many = AsyncMock(return_value=())
     mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(return_value=None)
 
     mocker.patch(
@@ -2114,6 +2141,7 @@ async def test_create_user_keeps_default_when_not_in_scim_admin_group(mocker, mo
     mock_prisma_client.db = mocker.MagicMock()
     mock_prisma_client.db.litellm_usertable = mocker.MagicMock()
     mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
+    mock_prisma_client.db.litellm_usertable.find_many = AsyncMock(return_value=())
     mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(return_value=None)
 
     mocker.patch(
@@ -2463,6 +2491,7 @@ def _scim_admin_prisma(mocker, *, user_teams):
     prisma.db = mocker.MagicMock()
     prisma.db.litellm_usertable = mocker.MagicMock()
     prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=user)
+    prisma.db.litellm_usertable.find_many = AsyncMock(return_value=())
     prisma.db.litellm_usertable.update = AsyncMock(return_value=user)
     prisma.db.litellm_teamtable = mocker.MagicMock()
     prisma.db.litellm_teamtable.find_unique = AsyncMock(side_effect=_team_find_unique)
@@ -2561,6 +2590,7 @@ async def test_update_group_recomputes_roles_for_changed_members(mocker):
     mock_prisma_client.db.litellm_teamtable.update = AsyncMock(return_value=existing_team)
     mock_prisma_client.db.litellm_usertable = mocker.MagicMock()
     mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=mocker.MagicMock())
+    mock_prisma_client.db.litellm_usertable.find_many = AsyncMock(return_value=())
 
     mocker.patch(
         "litellm.proxy.management_endpoints.scim.scim_v2._get_prisma_client_or_raise_exception",
@@ -2618,6 +2648,7 @@ async def test_patch_group_recomputes_roles_for_changed_members(mocker):
     mock_prisma_client.db.litellm_teamtable.update = AsyncMock(return_value=existing_team)
     mock_prisma_client.db.litellm_usertable = mocker.MagicMock()
     mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=mocker.MagicMock())
+    mock_prisma_client.db.litellm_usertable.find_many = AsyncMock(return_value=())
 
     mocker.patch(
         "litellm.proxy.management_endpoints.scim.scim_v2._get_prisma_client_or_raise_exception",
@@ -2671,6 +2702,7 @@ async def test_delete_group_recomputes_roles_for_members(mocker):
     mock_prisma_client.db.litellm_teamtable.delete = AsyncMock()
     mock_prisma_client.db.litellm_usertable = mocker.MagicMock()
     mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=member)
+    mock_prisma_client.db.litellm_usertable.find_many = AsyncMock(return_value=())
     mock_prisma_client.db.litellm_usertable.update = AsyncMock()
 
     mocker.patch(
@@ -2794,6 +2826,7 @@ async def test_create_user_existing_email_upsert_demotes_when_admin_group_set(mo
     mock_prisma_client.db = mocker.MagicMock()
     mock_prisma_client.db.litellm_usertable = mocker.MagicMock()
     mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
+    mock_prisma_client.db.litellm_usertable.find_many = AsyncMock(return_value=())
     mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(return_value=existing_user)
     mock_prisma_client.db.litellm_usertable.update = AsyncMock(return_value={"user_id": "returning-user"})
 
@@ -2843,6 +2876,7 @@ async def test_create_group_recomputes_roles_for_members(mocker):
     mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=None)
     mock_prisma_client.db.litellm_usertable = mocker.MagicMock()
     mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=mocker.MagicMock())
+    mock_prisma_client.db.litellm_usertable.find_many = AsyncMock(return_value=())
 
     mocker.patch(
         "litellm.proxy.management_endpoints.scim.scim_v2._get_prisma_client_or_raise_exception",
@@ -2900,6 +2934,7 @@ async def test_update_group_rename_recomputes_retained_members(mocker):
     mock_prisma_client.db.litellm_teamtable.update = AsyncMock(return_value=existing_team)
     mock_prisma_client.db.litellm_usertable = mocker.MagicMock()
     mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=mocker.MagicMock())
+    mock_prisma_client.db.litellm_usertable.find_many = AsyncMock(return_value=())
 
     mocker.patch(
         "litellm.proxy.management_endpoints.scim.scim_v2._get_prisma_client_or_raise_exception",
@@ -2954,6 +2989,7 @@ async def test_patch_group_rename_recomputes_retained_members(mocker):
     mock_prisma_client.db.litellm_teamtable.update = AsyncMock(return_value=existing_team)
     mock_prisma_client.db.litellm_usertable = mocker.MagicMock()
     mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=mocker.MagicMock())
+    mock_prisma_client.db.litellm_usertable.find_many = AsyncMock(return_value=())
 
     mocker.patch(
         "litellm.proxy.management_endpoints.scim.scim_v2._get_prisma_client_or_raise_exception",
@@ -3019,6 +3055,7 @@ async def test_process_group_patch_operations_add_retains_existing_members(mocke
     mock_prisma_client.db.litellm_usertable = mocker.MagicMock()
     # new-user already exists in the DB
     mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=mocker.MagicMock(user_id="new-user"))
+    mock_prisma_client.db.litellm_usertable.find_many = AsyncMock(return_value=())
 
     _, final_members, _ = await _process_group_patch_operations(
         patch_ops=patch_ops,
@@ -3059,6 +3096,7 @@ async def test_process_group_patch_operations_remove_uses_members_with_roles(moc
     mock_prisma_client.db = mocker.MagicMock()
     mock_prisma_client.db.litellm_usertable = mocker.MagicMock()
     mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=mocker.MagicMock(user_id="drop-user"))
+    mock_prisma_client.db.litellm_usertable.find_many = AsyncMock(return_value=())
 
     _, final_members, _ = await _process_group_patch_operations(
         patch_ops=patch_ops,
@@ -3090,6 +3128,7 @@ async def test_get_groups_reports_members_from_members_with_roles(mocker):
     mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(
         return_value=mocker.MagicMock(user_id="member-1", user_email="member-1@example.com")
     )
+    mock_prisma_client.db.litellm_usertable.find_many = AsyncMock(return_value=())
 
     mocker.patch(
         "litellm.proxy.management_endpoints.scim.scim_v2._get_prisma_client_or_raise_exception",
@@ -3310,6 +3349,7 @@ async def test_patch_group_add_applies_delta_and_keeps_concurrent_add(mocker):
     mock_prisma_client.db.litellm_teamtable.update = AsyncMock(return_value=final_team)
     mock_prisma_client.db.litellm_usertable = mocker.MagicMock()
     mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=mocker.MagicMock())
+    mock_prisma_client.db.litellm_usertable.find_many = AsyncMock(return_value=())
 
     mocker.patch(
         "litellm.proxy.management_endpoints.scim.scim_v2._get_prisma_client_or_raise_exception",
@@ -3403,6 +3443,7 @@ async def test_patch_group_replace_stays_absolute_against_concurrent_roster(mock
     mock_prisma_client.db.litellm_teamtable.update = AsyncMock(return_value=final_team)
     mock_prisma_client.db.litellm_usertable = mocker.MagicMock()
     mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=mocker.MagicMock())
+    mock_prisma_client.db.litellm_usertable.find_many = AsyncMock(return_value=())
 
     mocker.patch(
         "litellm.proxy.management_endpoints.scim.scim_v2._get_prisma_client_or_raise_exception",
@@ -3503,6 +3544,7 @@ async def test_process_group_patch_remove_filtered_path_without_value(mocker):
     prisma_client.db = mocker.MagicMock()
     prisma_client.db.litellm_usertable = mocker.MagicMock()
     prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=LiteLLM_UserTable(user_id="user-1"))
+    prisma_client.db.litellm_usertable.find_many = AsyncMock(return_value=())
 
     _, final_members, _ = await _process_group_patch_operations(
         patch_ops=patch_ops,
@@ -3532,6 +3574,7 @@ async def test_process_group_patch_add_filtered_path_without_value(mocker):
     prisma_client.db = mocker.MagicMock()
     prisma_client.db.litellm_usertable = mocker.MagicMock()
     prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=LiteLLM_UserTable(user_id="user-3"))
+    prisma_client.db.litellm_usertable.find_many = AsyncMock(return_value=())
 
     _, final_members, _ = await _process_group_patch_operations(
         patch_ops=patch_ops,
@@ -3565,6 +3608,7 @@ async def test_process_group_patch_replace_empty_value_does_not_use_path_filter(
     prisma_client.db = mocker.MagicMock()
     prisma_client.db.litellm_usertable = mocker.MagicMock()
     prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=LiteLLM_UserTable(user_id="user-1"))
+    prisma_client.db.litellm_usertable.find_many = AsyncMock(return_value=())
 
     _, final_members, _ = await _process_group_patch_operations(
         patch_ops=patch_ops,
@@ -3575,7 +3619,16 @@ async def test_process_group_patch_replace_empty_value_does_not_use_path_filter(
     assert final_members == set()
 
 
-def _member_resolution_prisma(mocker, *, users: set, teams: set, unmanaged_teams: frozenset = frozenset()):
+def _member_resolution_prisma(
+    mocker: MockerFixture,
+    *,
+    users: set[str],
+    teams: set[str],
+    unmanaged_teams: frozenset[str] = frozenset(),
+    email_to_user_id: Mapping[str, str] | None = None,
+    email_to_user_ids: Mapping[str, tuple[str, ...]] | None = None,
+    sso_user_id_to_user_id: Mapping[str, str] | None = None,
+) -> MagicMock:
     """Prisma mock where only the given ids resolve to a user row / team row.
 
     ``teams`` are teams a SCIM group write created, so they carry provenance;
@@ -3589,14 +3642,78 @@ def _member_resolution_prisma(mocker, *, users: set, teams: set, unmanaged_teams
             return LiteLLM_TeamTable(team_id=team_id, metadata={})
         return None
 
+    def user_row(where: Mapping[str, str]) -> LiteLLM_UserTable | None:
+        user_id: Final = where["user_id"]
+        if user_id in users:
+            return LiteLLM_UserTable(user_id=user_id)
+        return None
+
     prisma_client = mocker.MagicMock()
     prisma_client.db = mocker.MagicMock()
     prisma_client.db.litellm_usertable = mocker.MagicMock()
-    prisma_client.db.litellm_usertable.find_unique = AsyncMock(
-        side_effect=lambda where: LiteLLM_UserTable(user_id=where["user_id"]) if where["user_id"] in users else None
+    prisma_client.db.litellm_usertable.find_unique = AsyncMock(side_effect=user_row)
+
+    emails_to_ids: Final[Mapping[str, tuple[str, ...]]] = (
+        dict(email_to_user_ids)
+        if email_to_user_ids is not None
+        else ({email: (user_id,) for email, user_id in email_to_user_id.items()} if email_to_user_id else {})
     )
+    ssos_to_ids: Final[Mapping[str, str]] = dict(sso_user_id_to_user_id) if sso_user_id_to_user_id else {}
+
+    def identity_rows(where: Mapping[str, object], take: int | None = None) -> tuple[LiteLLM_UserTable, ...]:
+        """Stand-in for the cross-field lookup, honouring the comparison mode
+        production actually asks for per field, so a field that stops folding case, or
+        starts folding it, fails here instead of passing.
+
+        A caller that must know which accounts match rather than merely how many
+        passes take=None, so an unbounded read returns every match.
+        """
+        clauses: Final = where["OR"]
+        assert isinstance(clauses, list)
+        fields: Final = tuple(next(iter(clause)) for clause in clauses)
+        assert fields == ("sso_user_id", "user_email"), fields
+
+        def comparison(clause: Mapping[str, object]) -> tuple[str, bool]:
+            """The needle and whether production asked for a case-insensitive compare,
+            read per field so a field that stops folding case fails here."""
+            criterion = next(iter(clause.values()))
+            if isinstance(criterion, str):
+                return criterion, False
+            assert isinstance(criterion, dict), criterion
+            return criterion["equals"], criterion.get("mode") == "insensitive"
+
+        sso_needle, sso_insensitive = comparison(clauses[0])
+        email_needle, email_insensitive = comparison(clauses[1])
+
+        def same(stored: str, needle: str, insensitive: bool) -> bool:
+            return stored.casefold() == needle.casefold() if insensitive else stored == needle
+
+        matched: Final = tuple(
+            chain(
+                (
+                    user_id
+                    for sso_user_id, user_id in ssos_to_ids.items()
+                    if same(sso_user_id, sso_needle, sso_insensitive)
+                ),
+                (
+                    user_id
+                    for email, user_ids in emails_to_ids.items()
+                    if same(email, email_needle, email_insensitive)
+                    for user_id in user_ids
+                ),
+            )
+        )
+        found: Final = tuple(dict.fromkeys(matched))
+        return tuple(LiteLLM_UserTable(user_id=user_id) for user_id in (found[:take] if take else found))
+
+    def team_lookup(where: Mapping[str, str]) -> LiteLLM_TeamTable | None:
+        team_id: Final = where["team_id"]
+        return team_row(team_id)
+
+    prisma_client.db.litellm_usertable.find_first = AsyncMock(return_value=None)
+    prisma_client.db.litellm_usertable.find_many = AsyncMock(side_effect=identity_rows)
     prisma_client.db.litellm_teamtable = mocker.MagicMock()
-    prisma_client.db.litellm_teamtable.find_unique = AsyncMock(side_effect=lambda where: team_row(where["team_id"]))
+    prisma_client.db.litellm_teamtable.find_unique = AsyncMock(side_effect=team_lookup)
     return prisma_client
 
 
@@ -4363,6 +4480,581 @@ async def test_resolve_group_member_ids_dedupes_repeated_member(mocker, scim_ups
     assert result.all_member_ids == ["dup-user"]
 
 
+def _identity_lookup(value: str) -> object:
+    """The single cross-field lookup the classifier is expected to issue."""
+    return call(
+        where={"OR": [{"sso_user_id": value}, {"user_email": {"equals": value, "mode": "insensitive"}}]},
+        take=2,
+    )
+
+
+@pytest.mark.asyncio
+async def test_resolve_group_member_ids_matches_sso_user_id(mocker, scim_upsert_user_enabled):
+    """An OIDC subject in a group payload must resolve to the existing user's
+    internal id instead of provisioning a placeholder."""
+    prisma_client = _member_resolution_prisma(
+        mocker,
+        users=set(),
+        teams=set(),
+        sso_user_id_to_user_id={"member-sub": "sso-user"},
+    )
+    create_user_mock = mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._create_user_if_not_exists",
+        AsyncMock(),
+    )
+
+    result = await _resolve_group_member_ids(
+        members=[SCIMMember(value="member-sub")],
+        created_via="scim_group_membership",
+        prisma_client=prisma_client,
+    )
+
+    create_user_mock.assert_not_called()
+    assert result.existing_member_ids == ["sso-user"]
+    assert result.created_users == []
+    assert result.all_member_ids == ["sso-user"]
+    assert prisma_client.db.litellm_usertable.find_many.await_args_list == [_identity_lookup("member-sub")]
+
+
+@pytest.mark.asyncio
+async def test_resolve_group_member_ids_matches_user_email(mocker, scim_upsert_user_enabled):
+    """A group member email must resolve to the existing user's internal id
+    when the identity provider sends email rather than the user id."""
+    prisma_client = _member_resolution_prisma(
+        mocker,
+        users=set(),
+        teams=set(),
+        email_to_user_id={"member@example.com": "email-user"},
+    )
+    create_user_mock = mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._create_user_if_not_exists",
+        AsyncMock(),
+    )
+
+    result = await _resolve_group_member_ids(
+        members=[SCIMMember(value="member@example.com")],
+        created_via="scim_group_membership",
+        prisma_client=prisma_client,
+    )
+
+    create_user_mock.assert_not_called()
+    assert result.existing_member_ids == ["email-user"]
+    assert result.created_users == []
+    assert result.all_member_ids == ["email-user"]
+    assert prisma_client.db.litellm_usertable.find_many.await_args_list == [_identity_lookup("member@example.com")]
+
+
+@pytest.mark.parametrize(
+    "pushed",
+    ["MEMBER@EXAMPLE.COM", "Member@Example.com", " member@example.com "],
+    ids=["upper", "mixed", "padded"],
+)
+@pytest.mark.asyncio
+async def test_resolve_group_member_ids_matches_user_email_as_the_write_path_would(
+    mocker, scim_upsert_user_enabled, pushed
+):
+    """The member value must be compared the way the layer that would reject a
+    placeholder compares it.
+
+    ``new_user`` refuses a duplicate email case-insensitively and after stripping, so
+    a lookup that is stricter than that resolves nothing, creates a placeholder, and
+    is refused by that same layer, which surfaces as a 500 on the whole group push.
+    """
+    prisma_client = _member_resolution_prisma(
+        mocker,
+        users=set(),
+        teams=set(),
+        email_to_user_id={"member@example.com": "email-user"},
+    )
+    create_user_mock = mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._create_user_if_not_exists",
+        AsyncMock(return_value=None),
+    )
+
+    result = await _resolve_group_member_ids(
+        members=[SCIMMember(value=pushed)],
+        created_via="scim_group_membership",
+        prisma_client=prisma_client,
+    )
+
+    create_user_mock.assert_not_called()
+    assert result.all_member_ids == ["email-user"]
+
+
+@pytest.mark.parametrize(
+    "population",
+    [
+        {"email_to_user_ids": {"duplicate@example.com": ("email-user-a", "email-user-b")}},
+        {"email_to_user_ids": {"duplicate@example.com": ("email-user-a",), "DUPLICATE@EXAMPLE.COM": ("email-user-b",)}},
+        {
+            "sso_user_id_to_user_id": {"duplicate@example.com": "sso-user"},
+            "email_to_user_id": {"duplicate@example.com": "email-user"},
+        },
+    ],
+    ids=["same-email-twice", "emails-differing-only-in-case", "one-account-by-sso-another-by-email"],
+)
+@pytest.mark.asyncio
+async def test_resolve_group_member_ids_rejects_a_value_naming_two_accounts(
+    mocker, scim_upsert_user_enabled, caplog, population
+):
+    """A value that names two accounts names a real person we cannot identify, so
+    the write is refused rather than attributed to one of them.
+
+    Every shape of collision is refused, not just two rows holding the same email
+    verbatim: rows whose emails differ only in case are one row to the layer that
+    rejects duplicates, and a value that is one account's SSO identity and another's
+    email would otherwise be handed to whichever field happened to be searched first.
+
+    It must not fall through to placeholder creation. That path can only fail: the
+    placeholder carries ``user_email`` set to the member value, which the duplicate
+    email check rejects, and the recovery lookup that follows searches by ``user_id``
+    and so misses the very rows that caused the collision. The operator's data problem
+    then surfaces as an HTTP 500 the identity provider retries forever.
+    """
+    prisma_client = _member_resolution_prisma(mocker, users=set(), teams=set(), **population)
+    create_user_mock = mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._create_user_if_not_exists",
+        AsyncMock(return_value=None),
+    )
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        with pytest.raises(HTTPException) as exc_info:
+            await _resolve_group_member_ids(
+                members=[SCIMMember(value="duplicate@example.com")],
+                created_via="scim_group_membership",
+                prisma_client=prisma_client,
+            )
+
+    assert exc_info.value.status_code == 400
+    assert "duplicate@example.com" in str(exc_info.value.detail)
+    assert "more than one" in str(exc_info.value.detail)
+    create_user_mock.assert_not_called()
+    assert any(
+        record.levelno >= logging.WARNING
+        and "duplicate@example.com" in record.getMessage()
+        and "more than one account" in record.getMessage()
+        for record in caplog.records
+    )
+
+
+@pytest.mark.asyncio
+async def test_resolve_group_member_ids_does_not_fold_case_on_the_sso_identity(mocker, scim_upsert_user_enabled):
+    """An email and an SSO identity are not comparable the same way.
+
+    OIDC defines ``sub`` as case-sensitive and nothing folds its case on the way in,
+    so two subjects differing only in case are two people. Folding it would hand the
+    group to an account the provider never named, which is the mis-grant the email
+    comparison is deliberately loose enough to avoid and this one is not.
+    """
+    prisma_client = _member_resolution_prisma(
+        mocker,
+        users=set(),
+        teams=set(),
+        sso_user_id_to_user_id={"AbC-subject": "other-user"},
+    )
+    create_user_mock = mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._create_user_if_not_exists",
+        AsyncMock(return_value=NewUserResponse(user_id="abc-subject", key="placeholder-key")),
+    )
+
+    result = await _resolve_group_member_ids(
+        members=[SCIMMember(value="abc-subject")],
+        created_via="scim_group_membership",
+        prisma_client=prisma_client,
+    )
+
+    assert result.existing_member_ids == []
+    assert result.all_member_ids == ["abc-subject"]
+    create_user_mock.assert_awaited_once_with(user_id="abc-subject", created_via="scim_group_membership")
+
+
+@pytest.mark.asyncio
+async def test_resolve_group_member_ids_ambiguous_email_outranks_upsert_rejection(mocker, scim_upsert_user_disabled):
+    """Ambiguity does not depend on scim_upsert_user, so the operator gets the
+    actionable message on either setting rather than being told to create a user that
+    already exists twice."""
+    prisma_client = _member_resolution_prisma(
+        mocker,
+        users=set(),
+        teams=set(),
+        email_to_user_ids={"duplicate@example.com": ("email-user-a", "email-user-b")},
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _resolve_group_member_ids(
+            members=[SCIMMember(value="duplicate@example.com")],
+            created_via="scim_group_membership",
+            prisma_client=prisma_client,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "more than one" in str(exc_info.value.detail)
+    assert "does not exist" not in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_create_group_rejects_ambiguous_member_email(mocker, scim_upsert_user_enabled):
+    """The refusal reaches the endpoint, so the identity provider sees a 400 on the
+    group write rather than a 500 it will retry."""
+    scim_group = SCIMGroup(
+        schemas=["urn:ietf:params:scim:schemas:core:2.0:Group"],
+        id="ambiguous-group",
+        displayName="Ambiguous Group",
+        members=[SCIMMember(value="duplicate@example.com")],
+    )
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._get_prisma_client_or_raise_exception",
+        AsyncMock(
+            return_value=_member_resolution_prisma(
+                mocker,
+                users=set(),
+                teams=set(),
+                email_to_user_ids={"duplicate@example.com": ("email-user-a", "email-user-b")},
+            )
+        ),
+    )
+    create_user_mock = mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._create_user_if_not_exists",
+        AsyncMock(return_value=None),
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
+        await create_group(group=scim_group)
+
+    assert int(exc_info.value.code) == 400
+    assert "duplicate@example.com" in str(exc_info.value.message)
+    create_user_mock.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "removed_by",
+    ["member@example.com", "member-sub"],
+    ids=["by-email", "by-sso-subject"],
+)
+@pytest.mark.asyncio
+async def test_process_group_patch_remove_by_the_id_the_directory_added_with(
+    mocker, scim_upsert_user_enabled, removed_by
+):
+    """A directory removes people by the same id it added them with.
+
+    Resolving on add and not on remove would let someone keep a team after the
+    directory took them out of the group: the roster holds the canonical user id, so
+    subtracting the email or the subject the request names would match nothing.
+    """
+    patch_ops = SCIMPatchOp(
+        schemas=["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+        Operations=[SCIMPatchOperation(op="remove", path="members", value=[{"value": removed_by}])],
+    )
+    existing_team = LiteLLM_TeamTable(
+        team_id="parent-group",
+        team_alias="Parent Group",
+        members=[],
+        members_with_roles=[Member(user_id="real-user", role="user"), Member(user_id="keep-user", role="user")],
+    )
+    create_user_mock = mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._create_user_if_not_exists",
+        AsyncMock(return_value=NewUserResponse(user_id="phantom-user", key="phantom-key")),
+    )
+
+    _, final_members, _ = await _process_group_patch_operations(
+        patch_ops=patch_ops,
+        existing_team=existing_team,
+        prisma_client=_member_resolution_prisma(
+            mocker,
+            users={"real-user", "keep-user"},
+            teams=set(),
+            email_to_user_id={"member@example.com": "real-user"},
+            sso_user_id_to_user_id={"member-sub": "real-user"},
+        ),
+    )
+
+    create_user_mock.assert_not_called()
+    assert final_members == {"keep-user"}
+
+
+@pytest.mark.asyncio
+async def test_process_group_patch_remove_still_drops_a_placeholder_by_its_literal_id(
+    mocker, scim_upsert_user_enabled
+):
+    """An earlier release put unmatched ids on the roster verbatim, so a remove has to
+    keep clearing the id as written even once it also resolves."""
+    patch_ops = SCIMPatchOp(
+        schemas=["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+        Operations=[SCIMPatchOperation(op="remove", path="members", value=[{"value": "legacy@example.com"}])],
+    )
+    existing_team = LiteLLM_TeamTable(
+        team_id="parent-group",
+        team_alias="Parent Group",
+        members=[],
+        members_with_roles=[Member(user_id="legacy@example.com", role="user"), Member(user_id="keep-user", role="user")],
+    )
+
+    _, final_members, _ = await _process_group_patch_operations(
+        patch_ops=patch_ops,
+        existing_team=existing_team,
+        prisma_client=_member_resolution_prisma(mocker, users={"keep-user"}, teams=set()),
+    )
+
+    assert final_members == {"keep-user"}
+
+
+@pytest.mark.asyncio
+async def test_process_group_patch_remove_when_the_id_turned_ambiguous_after_admission(
+    mocker, scim_upsert_user_enabled
+):
+    """Ambiguity is a property of the table as it stands, not of the value.
+
+    Someone admitted while their email was theirs alone must stay removable after a
+    second account takes that email. Resolving the removal against the whole table
+    would find two accounts, decline to pick, drop nobody, and still answer 200,
+    leaving the person the directory just removed holding the team.
+    """
+    patch_ops = SCIMPatchOp(
+        schemas=["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+        Operations=[SCIMPatchOperation(op="remove", path="members", value=[{"value": "shared@example.com"}])],
+    )
+    existing_team = LiteLLM_TeamTable(
+        team_id="parent-group",
+        team_alias="Parent Group",
+        members=[],
+        members_with_roles=[Member(user_id="admitted-user", role="user"), Member(user_id="keep-user", role="user")],
+    )
+
+    _, final_members, _ = await _process_group_patch_operations(
+        patch_ops=patch_ops,
+        existing_team=existing_team,
+        # the newcomer took the address but never joined the group
+        prisma_client=_member_resolution_prisma(
+            mocker,
+            users={"admitted-user", "keep-user"},
+            teams=set(),
+            email_to_user_ids={"shared@example.com": ("admitted-user", "newcomer")},
+        ),
+    )
+
+    assert final_members == {"keep-user"}
+
+
+@pytest.mark.asyncio
+async def test_process_group_patch_remove_refuses_a_value_naming_one_member_by_id_and_another_by_email(
+    mocker, scim_upsert_user_enabled
+):
+    """One value must never revoke two people.
+
+    A SCIM-provisioned account is keyed by its userName, so a canonical user id that
+    looks like an email is ordinary rather than exotic, and a second account can hold
+    that address as its email. Counting the id as written and the resolved accounts
+    separately makes each look singular, and the removal then takes both.
+    """
+    patch_ops = SCIMPatchOp(
+        schemas=["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+        Operations=[SCIMPatchOperation(op="remove", path="members", value=[{"value": "shared@example.com"}])],
+    )
+    existing_team = LiteLLM_TeamTable(
+        team_id="parent-group",
+        team_alias="Parent Group",
+        members=[],
+        members_with_roles=[
+            Member(user_id="shared@example.com", role="user"),
+            Member(user_id="other-account", role="user"),
+        ],
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _process_group_patch_operations(
+            patch_ops=patch_ops,
+            existing_team=existing_team,
+            prisma_client=_member_resolution_prisma(
+                mocker,
+                users={"shared@example.com", "other-account"},
+                teams=set(),
+                email_to_user_id={"shared@example.com": "other-account"},
+            ),
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "shared@example.com" in str(exc_info.value.detail)
+    assert "more than one member of this group" in str(exc_info.value.detail)
+
+
+@pytest.mark.parametrize("position", [0, 1, 2], ids=["first", "middle", "last"])
+@pytest.mark.asyncio
+async def test_process_group_patch_remove_finds_the_member_past_the_bounded_read(
+    mocker, scim_upsert_user_enabled, position
+):
+    """A removal has to know *which* accounts a value names, not merely whether it
+    names several, so it reads them all.
+
+    An add stops after two matches, which is all it needs to decide the value is
+    ambiguous. Reusing that bounded read here would silently drop the member whenever
+    the one on the roster sorted past the cap, which no fixture smaller than the cap
+    can show. The member is placed at each position so the test cannot pass by luck
+    of ordering.
+    """
+    strangers = ["stranger-one", "stranger-two"]
+    sharers = tuple(strangers[:position] + ["admitted-user"] + strangers[position:])
+    patch_ops = SCIMPatchOp(
+        schemas=["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+        Operations=[SCIMPatchOperation(op="remove", path="members", value=[{"value": "shared@example.com"}])],
+    )
+    existing_team = LiteLLM_TeamTable(
+        team_id="parent-group",
+        team_alias="Parent Group",
+        members=[],
+        members_with_roles=[Member(user_id="admitted-user", role="user"), Member(user_id="keep-user", role="user")],
+    )
+
+    _, final_members, _ = await _process_group_patch_operations(
+        patch_ops=patch_ops,
+        existing_team=existing_team,
+        prisma_client=_member_resolution_prisma(
+            mocker,
+            users={"admitted-user", "keep-user"},
+            teams=set(),
+            email_to_user_ids={"shared@example.com": sharers},
+        ),
+    )
+
+    assert final_members == {"keep-user"}
+
+
+@pytest.mark.asyncio
+async def test_process_group_patch_remove_refuses_when_two_members_share_the_id(mocker, scim_upsert_user_enabled):
+    """When both accounts a value names are on the roster the removal is genuinely
+    undecidable, so it fails rather than reporting a removal it did not perform or
+    revoking a membership the directory did not name."""
+    patch_ops = SCIMPatchOp(
+        schemas=["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+        Operations=[SCIMPatchOperation(op="remove", path="members", value=[{"value": "shared@example.com"}])],
+    )
+    existing_team = LiteLLM_TeamTable(
+        team_id="parent-group",
+        team_alias="Parent Group",
+        members=[],
+        members_with_roles=[Member(user_id="member-a", role="user"), Member(user_id="member-b", role="user")],
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _process_group_patch_operations(
+            patch_ops=patch_ops,
+            existing_team=existing_team,
+            prisma_client=_member_resolution_prisma(
+                mocker,
+                users={"member-a", "member-b"},
+                teams=set(),
+                email_to_user_ids={"shared@example.com": ("member-a", "member-b")},
+            ),
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "shared@example.com" in str(exc_info.value.detail)
+    assert "more than one member of this group" in str(exc_info.value.detail)
+
+
+
+@pytest.mark.asyncio
+async def test_resolve_group_member_ids_exact_user_id_wins_when_it_names_nobody_else(
+    mocker, scim_upsert_user_enabled
+):
+    """The canonical user id stays authoritative, including when the same account also
+    holds that value as its email, which is how a SCIM-provisioned account is keyed."""
+    prisma_client = _member_resolution_prisma(
+        mocker,
+        users={"member-id"},
+        teams=set(),
+        email_to_user_id={"member-id": "member-id"},
+    )
+    create_user_mock = mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._create_user_if_not_exists",
+        AsyncMock(),
+    )
+
+    result = await _resolve_group_member_ids(
+        members=[SCIMMember(value="member-id")],
+        created_via="scim_group_membership",
+        prisma_client=prisma_client,
+    )
+
+    create_user_mock.assert_not_called()
+    assert result.existing_member_ids == ["member-id"]
+    assert result.all_member_ids == ["member-id"]
+
+
+@pytest.mark.parametrize(
+    "population",
+    [
+        {"sso_user_id_to_user_id": {"member-id": "someone-else"}},
+        {"email_to_user_id": {"member-id": "someone-else"}},
+    ],
+    ids=["another-account-by-sso", "another-account-by-email"],
+)
+@pytest.mark.asyncio
+async def test_resolve_group_member_ids_refuses_a_user_id_that_names_another_account(
+    mocker, scim_upsert_user_enabled, caplog, population
+):
+    """An exact user id is checked for collisions like every other match.
+
+    Taking it on sight would hand the group to whichever account happened to be keyed
+    by the value. The placeholders this bug provisioned are exactly that shape, since
+    they are keyed by the very id the provider keeps pushing, so on a tenant that
+    already has them the real account can never win. Refusing names the problem
+    instead of silently landing on the placeholder again.
+    """
+    prisma_client = _member_resolution_prisma(mocker, users={"member-id"}, teams=set(), **population)
+    create_user_mock = mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._create_user_if_not_exists",
+        AsyncMock(return_value=None),
+    )
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        with pytest.raises(HTTPException) as exc_info:
+            await _resolve_group_member_ids(
+                members=[SCIMMember(value="member-id")],
+                created_via="scim_group_membership",
+                prisma_client=prisma_client,
+            )
+
+    assert exc_info.value.status_code == 400
+    assert "member-id" in str(exc_info.value.detail)
+    create_user_mock.assert_not_called()
+    assert any(
+        record.levelno >= logging.WARNING and "someone-else" in record.getMessage() for record in caplog.records
+    )
+
+
+
+@pytest.mark.asyncio
+async def test_resolve_group_member_ids_warns_before_creating_unmatched_placeholder(
+    mocker, scim_upsert_user_enabled, caplog
+):
+    """An unmatched member still follows upsert behavior, but operators receive
+    a warning before the placeholder can leave an SSO user teamless."""
+    prisma_client = _member_resolution_prisma(mocker, users=set(), teams=set())
+    create_user_mock = mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._create_user_if_not_exists",
+        AsyncMock(return_value=NewUserResponse(user_id="placeholder", key="placeholder-key")),
+    )
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        result = await _resolve_group_member_ids(
+            members=[SCIMMember(value="unmatched-id")],
+            created_via="scim_group_membership",
+            prisma_client=prisma_client,
+        )
+
+    create_user_mock.assert_awaited_once_with(user_id="unmatched-id", created_via="scim_group_membership")
+    assert result.existing_member_ids == []
+    assert result.created_users == [NewUserResponse(user_id="placeholder", key="placeholder-key")]
+    assert result.all_member_ids == ["unmatched-id"]
+    assert any(
+        record.levelno >= logging.WARNING
+        and "unmatched-id" in record.getMessage()
+        and "matched no user by user_id, sso_user_id or user_email" in record.getMessage()
+        and "real account stays teamless" in record.getMessage()
+        for record in caplog.records
+    )
+
+
 @pytest.mark.parametrize(
     "operation",
     [
@@ -4429,6 +5121,7 @@ async def test_get_groups_members_are_typed_as_users(mocker):
     mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(
         return_value=mocker.MagicMock(user_id="member-1", user_email="member-1@example.com")
     )
+    mock_prisma_client.db.litellm_usertable.find_many = AsyncMock(return_value=())
 
     mocker.patch(
         "litellm.proxy.management_endpoints.scim.scim_v2._get_prisma_client_or_raise_exception",
@@ -4663,6 +5356,7 @@ async def test_update_group_roster_failure_propagates(mocker):
     mock_prisma_client.db.litellm_teamtable.update = AsyncMock(return_value=existing_team)
     mock_prisma_client.db.litellm_usertable = mocker.MagicMock()
     mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=mocker.MagicMock())
+    mock_prisma_client.db.litellm_usertable.find_many = AsyncMock(return_value=())
 
     mocker.patch(
         "litellm.proxy.management_endpoints.scim.scim_v2._get_prisma_client_or_raise_exception",
@@ -4715,6 +5409,7 @@ async def test_resolve_group_member_ids_admits_member_created_concurrently(mocke
     prisma_client.db.litellm_usertable.find_unique = AsyncMock(
         side_effect=[None, LiteLLM_UserTable(user_id="raced-user")]
     )
+    prisma_client.db.litellm_usertable.find_many = AsyncMock(return_value=())
     mocker.patch(
         "litellm.proxy.management_endpoints.scim.scim_v2._create_user_if_not_exists",
         AsyncMock(return_value=None),

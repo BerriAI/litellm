@@ -1,11 +1,6 @@
 import json
-import os
-import sys
 from datetime import datetime
 
-sys.path.insert(
-    0, os.path.abspath("../../../")
-)  # Adds the parent directory to the system path
 
 import litellm
 import pytest
@@ -982,7 +977,7 @@ def test_convert_to_model_response_object_with_real_error():
         },
     }
 
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(Exception) as exc_info:  # noqa: PT011  # message rides on .message, str() is empty
         convert_to_model_response_object(
             model_response_object=ModelResponse(),
             response_object=response_object,
@@ -1243,7 +1238,7 @@ def test_convert_to_model_response_object_with_error_code_only():
         },
     }
 
-    with pytest.raises(Exception) as exc_info:  # noqa: B017  # bare Exception raised, so status_code is the assertion
+    with pytest.raises(Exception) as exc_info:  # noqa: B017, PT011  # bare Exception, empty message, so status_code is the assertion
         convert_to_model_response_object(
             model_response_object=ModelResponse(),
             response_object=response_object,
@@ -1423,7 +1418,7 @@ def test_error_message_includes_function_args():
         "choices": [{"index": 0}],
     }
 
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(Exception, match='in convert_to_model_response_object') as exc_info:
         convert_to_model_response_object(
             model_response_object=ModelResponse(),
             response_object=response_object,

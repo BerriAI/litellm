@@ -4,12 +4,10 @@ End-to-end test for MCP Semantic Tool Filtering
 
 import asyncio
 import os
-import sys
 from unittest.mock import Mock
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 from mcp.types import Tool as MCPTool
 

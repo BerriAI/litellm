@@ -260,18 +260,24 @@ def _describe(custom_id: str | None) -> str:
     return f" (custom_id {safe})"
 
 
-def _iter_lines(source: BinaryIO) -> Iterator[tuple[int, str]]:
-    """Yield every non-blank line with its 1-based number, so both passes number records alike."""
+def _iter_lines(source: BinaryIO) -> Iterator[tuple[int, bytes]]:
+    """
+    Yield every non-blank line with its 1-based number, so both passes number records alike.
+
+    Bytes, not text. The upload validation immediately before this parses each line as bytes,
+    where the json module sniffs the encoding itself and accepts a leading byte order mark or a
+    lone surrogate. Decoding to `str` first is stricter than that, so a file written by any of
+    the editors that emit a BOM would pass validation and then fail the scan.
+    """
     for line_number, raw_line in enumerate(source, start=1):
-        text = raw_line.decode("utf-8")
-        if text.strip():
-            yield line_number, text
+        if raw_line.strip():
+            yield line_number, raw_line
 
 
 def _iter_records(source: BinaryIO) -> Iterator[_ParsedRecord]:
     """Yield one record per line, relying on the upload validation that already ran."""
-    for line_number, text in _iter_lines(source):
-        yield _ParsedRecord(line_number=line_number, payload=json.loads(text))
+    for line_number, raw_line in _iter_lines(source):
+        yield _ParsedRecord(line_number=line_number, payload=json.loads(raw_line))
 
 
 def _call_type_from_url(url: str) -> CallTypesLiteral | None:
@@ -282,7 +288,13 @@ def _call_type_from_url(url: str) -> CallTypesLiteral | None:
     ``/v1/responses`` in full would fall through to its body, where ``input`` reads as an
     embedding and the record gets scanned as the wrong call type rather than the right one.
     """
-    path: Final = urlsplit(url).path.split("?")[0].rstrip("/")
+    try:
+        path: Final = urlsplit(url).path.split("?")[0].rstrip("/")
+    except ValueError:
+        # urlsplit rejects a few malformed authorities outright, and the validation that ran
+        # before this only checks the key is present. An unreadable url is one we do not
+        # recognize, which is what falling back to the body shape already handles.
+        return None
     call_types: Final = get_call_types_for_route(path)
     if call_types is None:
         return None
@@ -308,8 +320,18 @@ def _scannable_call_type(url: object, body: Mapping[str, object]) -> CallTypesLi
 
 
 def _custom_id_of(payload: Mapping[str, object]) -> str | None:
+    """
+    The record's identifier, rendered as text.
+
+    The batch spec asks for a string, but callers do send numbers, and reporting those as null
+    would leave the one field a caller reconciles on empty for exactly the records it needs.
+    """
     custom_id: Final = payload.get("custom_id")
-    return custom_id if isinstance(custom_id, str) else None
+    if isinstance(custom_id, str):
+        # A lone surrogate parses out of the file but cannot be encoded back out, and this value
+        # is echoed in the response, so rendering it would fail the whole upload with a 500.
+        return custom_id.encode("utf-8", "replace").decode("utf-8")
+    return str(custom_id) if isinstance(custom_id, (int, float)) and not isinstance(custom_id, bool) else None
 
 
 def _fingerprint(body: Mapping[str, object], keys: frozenset[str]) -> str:
@@ -507,9 +529,9 @@ async def scan_batch_input_file(
     )
 
 
-def _read_spooled(redactions: BinaryIO, change: RecordRedacted) -> str:
+def _read_spooled(redactions: BinaryIO, change: RecordRedacted) -> bytes:
     redactions.seek(change.offset)
-    return redactions.read(change.length).decode("utf-8")
+    return redactions.read(change.length)
 
 
 def rewrite_batch_input_file(file_source: BinaryIO, result: BatchScanResult) -> BinaryIO:
@@ -532,12 +554,12 @@ def rewrite_batch_input_file(file_source: BinaryIO, result: BatchScanResult) -> 
     )
     wrote_any = False  # rebind-ok: tracks whether a separator is needed
     try:
-        for line_number, text in _iter_lines(file_source):
+        for line_number, raw_line in _iter_lines(file_source):
             if line_number in dropped:
                 continue
             change = redacted.get(line_number)
-            line = text.rstrip("\n") if change is None else _read_spooled(result.redactions, change)
-            output.write((("\n" if wrote_any else "") + line).encode("utf-8"))
+            line = raw_line.rstrip(b"\n") if change is None else _read_spooled(result.redactions, change)
+            output.write(b"\n" + line if wrote_any else line)
             wrote_any = True
     except BaseException:
         output.close()

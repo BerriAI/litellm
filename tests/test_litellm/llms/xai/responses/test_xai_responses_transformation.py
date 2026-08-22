@@ -7,11 +7,8 @@ transformations for the Responses API.
 Source: litellm/llms/xai/responses/transformation.py
 """
 
-import os
-import sys
 from unittest.mock import MagicMock
 
-sys.path.insert(0, os.path.abspath("../../../../.."))
 
 import pytest
 
