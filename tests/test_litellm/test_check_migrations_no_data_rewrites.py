@@ -572,6 +572,97 @@ class TestDynamicSql:
         )
         assert _keywords(tmp_path, sql) == ("UPDATE",)
 
+    def test_a_rewrite_assigned_past_an_earlier_comparison_is_flagged(self, tmp_path):
+        sql = (
+            "DO $$\n"
+            "DECLARE\n"
+            "    stmt text;\n"
+            "    total int := 1;\n"
+            "BEGIN\n"
+            "    IF total = 1 THEN stmt = 'DELETE FROM \"Foo\" WHERE true'; END IF;\n"
+            "    EXECUTE stmt;\n"
+            "END $$;"
+        )
+        assert _keywords(tmp_path, sql) == ("DELETE",)
+        assert _scan(tmp_path, sql)[0].line == 6
+
+    def test_a_rewrite_assigned_past_a_loop_comparison_is_flagged(self, tmp_path):
+        sql = (
+            "DO $$\n"
+            "DECLARE\n"
+            "    stmt text;\n"
+            "    total int := 3;\n"
+            "BEGIN\n"
+            "    WHILE total >= 1 LOOP stmt = 'UPDATE \"Foo\" SET \"a\" = 1'; END LOOP;\n"
+            "    EXECUTE stmt;\n"
+            "END $$;"
+        )
+        assert _keywords(tmp_path, sql) == ("UPDATE",)
+
+    def test_a_rewrite_selected_into_a_target_a_line_down_is_flagged(self, tmp_path):
+        sql = (
+            "DO $$\n"
+            "DECLARE\n"
+            "    stmt text;\n"
+            "BEGIN\n"
+            "    SELECT 'UPDATE \"Foo\" SET \"a\" = 1'\n"
+            "        INTO\n"
+            "        stmt;\n"
+            "    EXECUTE stmt;\n"
+            "END $$;"
+        )
+        assert _keywords(tmp_path, sql) == ("UPDATE",)
+
+    def test_a_rewrite_selected_into_a_strict_target_a_line_down_is_flagged(self, tmp_path):
+        sql = (
+            "DO $$\n"
+            "DECLARE\n"
+            "    stmt text;\n"
+            "BEGIN\n"
+            "    SELECT 'DELETE FROM \"Foo\"' INTO STRICT\n"
+            "        stmt;\n"
+            "    EXECUTE stmt;\n"
+            "END $$;"
+        )
+        assert _keywords(tmp_path, sql) == ("DELETE",)
+
+    def test_a_rewrite_executed_by_a_name_a_line_down_is_flagged(self, tmp_path):
+        sql = (
+            "DO $$\n"
+            "DECLARE\n"
+            "    stmt text := 'UPDATE \"Foo\" SET \"a\" = 1';\n"
+            "BEGIN\n"
+            "    EXECUTE\n"
+            "        stmt;\n"
+            "END $$;"
+        )
+        assert _keywords(tmp_path, sql) == ("UPDATE",)
+
+    def test_a_rewrite_compared_against_is_not_an_assignment(self, tmp_path):
+        sql = (
+            "DO $$\n"
+            "DECLARE\n"
+            "    stmt text := 'ALTER TABLE \"Foo\" ADD COLUMN \"b\" TEXT';\n"
+            "BEGIN\n"
+            "    IF stmt = 'UPDATE \"Foo\" SET \"a\" = 1' THEN\n"
+            "        RAISE NOTICE 'the application owns that one';\n"
+            "    END IF;\n"
+            "    EXECUTE stmt;\n"
+            "END $$;"
+        )
+        assert _keywords(tmp_path, sql) == ()
+
+    def test_a_rewrite_passed_to_execute_as_a_parameter_is_not_run(self, tmp_path):
+        sql = (
+            "DO $$\n"
+            "DECLARE\n"
+            "    stmt text := 'UPDATE \"Foo\" SET \"a\" = 1';\n"
+            "BEGIN\n"
+            "    EXECUTE 'INSERT INTO \"Log\" (\"sql\") VALUES ($1)' USING stmt;\n"
+            "END $$;"
+        )
+        assert _keywords(tmp_path, sql) == ()
+
     def test_a_literal_selected_into_a_variable_nothing_runs_is_inert(self, tmp_path):
         sql = (
             "DO $$\n"
