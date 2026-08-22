@@ -7207,7 +7207,6 @@ class ProxyStartupEvent:
         Returns None when the buffer is disabled, or when no Redis host or url
         is set in the environment.
         """
-        from litellm._redis import _redis_kwargs_from_environment
         from litellm.secret_managers.main import str_to_bool
 
         _use_redis_transaction_buffer: bool | str | None = general_settings.get("use_redis_transaction_buffer", False)
@@ -7216,6 +7215,8 @@ class ProxyStartupEvent:
 
         if not _use_redis_transaction_buffer:
             return None
+
+        from litellm._redis import _redis_kwargs_from_environment
 
         redis_env_kwargs = _redis_kwargs_from_environment()
         if "host" not in redis_env_kwargs and "url" not in redis_env_kwargs:
