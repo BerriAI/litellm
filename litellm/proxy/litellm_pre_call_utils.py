@@ -1622,6 +1622,32 @@ class LiteLLMProxyRequestSetup:
         )
 
 
+def refresh_proxy_server_request_body_snapshot(
+    data: dict,  # mutable-ok: mutates proxy_server_request.body in place on the shared request dict
+) -> None:
+    """
+    Re-snapshot ``data["proxy_server_request"]["body"]`` from the current state of ``data``.
+
+    ``add_litellm_data_to_request`` takes the initial snapshot before guardrails
+    (pre_call_hook) run. A guardrail that masks PII/PCI in place (e.g. Presidio)
+    mutates ``data`` afterward, so callers that persist ``proxy_server_request.body``
+    for audit/spend-tracking purposes must call this again post-guardrail, or the
+    persisted body silently bypasses whatever masking the guardrail applied.
+
+    By the time a caller refreshes post-guardrail, ``litellm.utils.function_setup``
+    has already stamped ``data["litellm_logging_obj"]`` with a live (non-serializable)
+    ``Logging`` instance, so it must be excluded here the same way ``secret_fields``
+    and ``proxy_server_request`` are.
+    """
+    proxy_server_request = data.get("proxy_server_request")
+    if not isinstance(proxy_server_request, dict):
+        return
+    _body_snapshot_exclude = (
+        frozenset({"secret_fields", "proxy_server_request", "litellm_logging_obj"}) | _TRANSPORT_ONLY_CREDENTIAL_KEYS
+    )
+    proxy_server_request["body"] = {k: v for k, v in data.items() if k not in _body_snapshot_exclude}
+
+
 async def add_litellm_data_to_request(
     data: dict,
     request: Request,
@@ -1802,8 +1828,6 @@ async def add_litellm_data_to_request(
         cache_dict: Final = parse_cache_control(cache_control_header)
         data["ttl"] = cache_dict.get("s-maxage")
 
-    verbose_proxy_logger.debug("receiving data: %s", data)
-
     # requester_metadata is snapshotted AFTER the strip below so
     # downstream consumers (e.g. PANW guardrail reading user_ip /
     # profile_id) don't see attacker-injected admin slots preserved in
@@ -1863,9 +1887,7 @@ async def add_litellm_data_to_request(
     #     self-reference — body.proxy_server_request.body would be the same
     #     dict as body, producing an infinite traversal loop for any consumer
     #     that walks the structure.
-    _body_snapshot_exclude = frozenset({"secret_fields", "proxy_server_request"}) | _TRANSPORT_ONLY_CREDENTIAL_KEYS
-    _body_snapshot: Final = {k: v for k, v in data.items() if k not in _body_snapshot_exclude}
-    data["proxy_server_request"]["body"] = _body_snapshot
+    refresh_proxy_server_request_body_snapshot(data)
 
     # Snapshot the requester-supplied metadata for downstream consumers.
     # Taking the deepcopy after the user_api_key_* / _pipeline_managed_guardrails
