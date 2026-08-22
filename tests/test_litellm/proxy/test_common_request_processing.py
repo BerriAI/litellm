@@ -1336,11 +1336,25 @@ class TestProxyBaseLLMRequestProcessing:
             route_type=route_type,
         )
 
-        # Verify queue_time_seconds is set and non-negative
+        # Verify queue_time_seconds is set and non-negative. Ends at start_time
+        # (captured before this mock runs, so it can precede the mock's own
+        # time.time() by a handful of microseconds) rather than a freshly
+        # captured time.time(), so a tiny tolerance below 0.5 is expected and
+        # correct -- see LIT-6012.
         metadata = returned_data.get("metadata", {})
         assert "queue_time_seconds" in metadata, "queue_time_seconds should be set in metadata"
-        assert metadata["queue_time_seconds"] >= 0.5, (
-            f"queue_time_seconds should be at least 0.5, got {metadata['queue_time_seconds']}"
+        assert metadata["queue_time_seconds"] >= 0.49, (
+            f"queue_time_seconds should be at least ~0.5, got {metadata['queue_time_seconds']}"
+        )
+
+        # queue_time_seconds must end exactly where logging_obj.start_time begins
+        # (the same start_time litellm_request_total_latency_metric's window
+        # starts from) so the two windows share a boundary, not an overlap.
+        # A mutant that reintroduces a separately-captured processing_start_time
+        # would make this assertion fail.
+        arrival_time = returned_data["proxy_server_request"]["arrival_time"]
+        assert arrival_time + metadata["queue_time_seconds"] == pytest.approx(
+            logging_obj.start_time.timestamp(), abs=1e-6
         )
 
 

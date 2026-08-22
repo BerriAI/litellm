@@ -1718,11 +1718,17 @@ async def add_litellm_data_to_request(
     # Init - Proxy Server Request
     # we do this as soon as entering so we track the original request
     ##########################################################
-    # Track arrival time for queue time metric. The body snapshot is filled
-    # in after the admin-injection strip below so the audit / spend-tracking
-    # consumers of proxy_server_request["body"] see the cleaned metadata
-    # rather than attacker-forged user_api_key_* fields.
-    arrival_time: Final = time.time()
+    # Track arrival time for queue time metric. Prefer the timestamp stamped at
+    # the top of user_api_key_auth (request.state.litellm_received_at): by the
+    # time this function runs, auth has already completed, so time.time() here
+    # would silently exclude the entire auth phase from the queue-time window.
+    # Falls back to time.time() for callers that never went through
+    # user_api_key_auth. The body snapshot is filled in after the
+    # admin-injection strip below so the audit / spend-tracking consumers of
+    # proxy_server_request["body"] see the cleaned metadata rather than
+    # attacker-forged user_api_key_* fields.
+    _litellm_received_at: Final = getattr(request.state, "litellm_received_at", None)
+    arrival_time: Final = _litellm_received_at.timestamp() if _litellm_received_at is not None else time.time()
     data["proxy_server_request"] = {
         "url": str(request.url),
         "method": request.method,

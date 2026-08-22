@@ -2,6 +2,9 @@ import asyncio
 import copy
 import json
 import os
+import time
+from datetime import datetime, timezone
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -266,6 +269,75 @@ async def test_stamped_auth_object_reflects_header_derived_identity():
 
     stamped = updated_data["metadata"]["user_api_key_auth"]
     assert stamped.end_user_id == "end-user-from-header"
+
+
+@pytest.mark.asyncio
+async def test_arrival_time_prefers_litellm_received_at_over_time_time():
+    """LIT-6012: by the time this function runs, auth has already completed, so
+    time.time() here would silently exclude the whole auth phase from the
+    queue-time window. request.state.litellm_received_at (stamped at the top of
+    user_api_key_auth, before auth work) must win when present."""
+    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+
+    request_mock = MagicMock(spec=Request)
+    request_mock.url = MagicMock()
+    request_mock.url.path = "/v1/chat/completions"
+    request_mock.url.__str__.return_value = "http://localhost/v1/chat/completions"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {"Content-Type": "application/json"}
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+    received_at = datetime(2024, 1, 1, tzinfo=timezone.utc)
+    request_mock.state = SimpleNamespace(litellm_received_at=received_at)
+
+    user_api_key_dict = UserAPIKeyAuth(api_key="hashed-key", metadata={}, team_metadata={})
+
+    updated_data = await add_litellm_data_to_request(
+        data={"model": "gpt-3.5-turbo"},
+        request=request_mock,
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    assert updated_data["proxy_server_request"]["arrival_time"] == received_at.timestamp()
+
+
+@pytest.mark.asyncio
+async def test_arrival_time_falls_back_to_time_time_without_litellm_received_at():
+    """Callers that never went through user_api_key_auth (no stamp on request.state)
+    must still get a usable arrival_time instead of erroring."""
+    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+
+    request_mock = MagicMock(spec=Request)
+    request_mock.url = MagicMock()
+    request_mock.url.path = "/v1/chat/completions"
+    request_mock.url.__str__.return_value = "http://localhost/v1/chat/completions"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {"Content-Type": "application/json"}
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+    request_mock.state = SimpleNamespace()  # no litellm_received_at attribute
+
+    user_api_key_dict = UserAPIKeyAuth(api_key="hashed-key", metadata={}, team_metadata={})
+
+    before = time.time()
+    updated_data = await add_litellm_data_to_request(
+        data={"model": "gpt-3.5-turbo"},
+        request=request_mock,
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+    after = time.time()
+
+    arrival_time = updated_data["proxy_server_request"]["arrival_time"]
+    assert isinstance(arrival_time, float)
+    assert before <= arrival_time <= after
 
 
 @pytest.mark.asyncio
@@ -2738,7 +2810,6 @@ def test_add_headers_to_llm_call_by_model_group_existing_headers_in_data():
         litellm.model_group_settings = original_model_group_settings
 
 
-import time
 from typing import Optional
 
 from fastapi.responses import Response
