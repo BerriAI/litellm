@@ -3991,9 +3991,15 @@ class PrometheusLogger(CustomLogger):
         """
         if isinstance(start_time, datetime) and isinstance(end_time, datetime):
             normalized_start: Final = (
-                start_time if start_time.tzinfo is not None else start_time.replace(tzinfo=timezone.utc)
+                start_time
+                if start_time.tzinfo is not None
+                else start_time.replace(tzinfo=timezone.utc)
             )
-            normalized_end: Final = end_time if end_time.tzinfo is not None else end_time.replace(tzinfo=timezone.utc)
+            normalized_end: Final = (
+                end_time
+                if end_time.tzinfo is not None
+                else end_time.replace(tzinfo=timezone.utc)
+            )
             return (normalized_end - normalized_start).total_seconds()
         return None
 
