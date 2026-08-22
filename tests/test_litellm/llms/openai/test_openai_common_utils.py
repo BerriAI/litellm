@@ -1,14 +1,9 @@
-import os
-import sys
 from unittest.mock import MagicMock, call, patch
 
 import httpx
 import openai
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 import litellm
 from litellm.litellm_core_utils.token_counter import token_counter

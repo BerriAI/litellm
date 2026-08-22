@@ -1,10 +1,7 @@
-import os
-import sys
 from typing import Final
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 from litellm.types.utils import HiddenParams, all_litellm_params
 

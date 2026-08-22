@@ -1,6 +1,4 @@
 import json
-import os
-import sys
 from typing import Final, List
 from unittest.mock import ANY, AsyncMock
 
@@ -10,9 +8,6 @@ import httpx
 from fastapi.testclient import TestClient
 from pytest_mock import MockerFixture
 
-sys.path.insert(
-    0, os.path.abspath("../../../..")
-)  # Adds the parent directory to the system path
 
 import litellm
 from litellm import Router

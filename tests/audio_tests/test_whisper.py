@@ -4,7 +4,6 @@
 import asyncio
 import logging
 import os
-import sys
 import time
 import traceback
 from typing import Optional
@@ -41,9 +40,6 @@ def _audio_file2():
 
 load_dotenv()
 
-sys.path.insert(
-    0, os.path.abspath("../")
-)  # Adds the parent directory to the system path
 from litellm import Router
 
 

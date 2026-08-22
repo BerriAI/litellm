@@ -1,10 +1,7 @@
 """Per-request multi-tenant credential routing (V1 parity)."""
 
 import base64
-import os
-import sys
 
-sys.path.insert(0, os.path.abspath("../../../.."))
 
 from opentelemetry.trace import NoOpTracer
 

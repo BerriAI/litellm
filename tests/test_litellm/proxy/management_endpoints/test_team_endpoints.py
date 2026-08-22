@@ -1,7 +1,5 @@
 import asyncio
 import json
-import os
-import sys
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -14,9 +12,6 @@ from fastapi.testclient import TestClient
 
 from litellm._uuid import uuid
 
-sys.path.insert(
-    0, os.path.abspath("../../../")
-)  # Adds the parent directory to the system path
 from litellm.proxy._types import UserAPIKeyAuth  # Import UserAPIKeyAuth
 from litellm.proxy._types import (
     LiteLLM_BudgetTableFull,

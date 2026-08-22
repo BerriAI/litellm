@@ -29,8 +29,6 @@ added to this layer raises instead of silently passing - the inventory of seams
 cannot drift without a test failure.
 """
 
-import os
-import sys
 from contextlib import ExitStack
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
@@ -38,7 +36,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../.."))
 
 import litellm
 import litellm.proxy.batches_endpoints.endpoints as endpoints

@@ -1,13 +1,8 @@
-import os
-import sys
 from copy import deepcopy
 from unittest.mock import patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
 
 from unittest.mock import MagicMock
 

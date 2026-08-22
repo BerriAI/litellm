@@ -1,5 +1,4 @@
 import json
-import os
 import sys
 import types
 from types import SimpleNamespace
@@ -7,7 +6,6 @@ from unittest.mock import MagicMock
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../../.."))  # Adds the parent directory to the system path
 
 from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.llms.bedrock.realtime.handler import BedrockRealtime

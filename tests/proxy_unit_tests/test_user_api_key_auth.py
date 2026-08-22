@@ -1,13 +1,10 @@
 # What is this?
 ## Unit tests for user_api_key_auth helper functions
 
-import os
-import sys
 
 import litellm.proxy
 import litellm.proxy.proxy_server
 
-sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 from typing import Dict, List, Optional
 from unittest.mock import MagicMock, patch, AsyncMock
 

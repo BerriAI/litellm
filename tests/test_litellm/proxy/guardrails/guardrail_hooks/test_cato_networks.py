@@ -1,8 +1,6 @@
 import asyncio
 import json
-import os
 import ssl
-import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -18,9 +16,6 @@ from litellm.proxy.guardrails.guardrail_hooks.cato_networks.cato_networks import
 from litellm.proxy.proxy_server import UserAPIKeyAuth
 from litellm.types.utils import ModelResponse, ResponsesAPIResponse
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 import litellm
 from litellm.proxy.guardrails.init_guardrails import init_guardrails_v2
 

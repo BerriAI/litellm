@@ -1,14 +1,10 @@
 import json
 import os
-import sys
 from unittest.mock import MagicMock, patch
 import httpx
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 import litellm
 from litellm.llms.openai.containers.transformation import OpenAIContainerConfig

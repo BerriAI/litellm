@@ -1,7 +1,5 @@
 import asyncio
 import json
-import os
-import sys
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -9,9 +7,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 if TYPE_CHECKING:
     from litellm.router import Router
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 from datetime import datetime, timedelta, timezone
 
