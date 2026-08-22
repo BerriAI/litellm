@@ -1261,7 +1261,9 @@ def _is_pydantic_basemodel_type(response_format: object) -> bool:
         return False
 
 
-def process_response_format(response_format: object) -> dict[str, object] | None:
+def process_response_format(
+    response_format: object,
+) -> dict[str, object] | None:  # noqa: LIT001  # mutable-ok: schema normalization
     if response_format is None or isinstance(response_format, bool):
         return None
     if isinstance(response_format, dict):
@@ -1269,6 +1271,9 @@ def process_response_format(response_format: object) -> dict[str, object] | None
     if _is_pydantic_basemodel_type(response_format):
         return type_to_response_format_param(response_format)
     return None
+
+
+_is_basemodel_class: Final = _is_pydantic_basemodel_type
 
 
 _PRESERVE_PYDANTIC_RESPONSE_FORMAT_PROVIDERS: Final = frozenset(
@@ -1311,7 +1316,9 @@ def _deserialize_pydantic_response_format(
         parser(model_response)
 
 
-def _response_format_as_json_schema(response_format: object) -> dict[str, object] | None:
+def _response_format_as_json_schema(
+    response_format: object,
+) -> dict[str, object] | None:  # noqa: LIT001  # mutable-ok: schema normalization
     if _is_pydantic_basemodel_type(response_format):
         return process_response_format(response_format)
     if not isinstance(response_format, dict):
@@ -1323,7 +1330,7 @@ def _response_format_as_json_schema(response_format: object) -> dict[str, object
 
 def _json_schema_from_response_format(
     response_format: object,
-) -> dict[str, object] | None:
+) -> dict[str, object] | None:  # noqa: LIT001  # mutable-ok: schema normalization
     envelope: Final = _response_format_as_json_schema(response_format)
     if envelope is None:
         return None
@@ -1376,7 +1383,6 @@ def _apply_response_format_validation(
         JsonschemaValidationError,
         TypeError,
         KeyError,
-        litellm.JSONSchemaValidationError,
     ) as e:
         _raise_structured_output_api_error(e, model)
 

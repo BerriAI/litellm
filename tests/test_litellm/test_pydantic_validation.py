@@ -6,7 +6,6 @@ from pydantic import BaseModel, field_validator
 
 import litellm
 from litellm.llms.base_llm.base_utils import (
-    _is_basemodel_class,
     _pydantic_model_json_schema,
     type_to_response_format_param,
 )
@@ -15,6 +14,7 @@ from litellm.utils import (
     ProviderConfigManager,
     Rules,
     _apply_response_format_validation,
+    _is_basemodel_class,
     _is_pydantic_basemodel_type,
     _should_preserve_pydantic_response_format,
     normalize_completion_response_format,
@@ -256,7 +256,7 @@ def test_field_validator_typeerror_becomes_apierror():
 
 
 def test_invalid_json_jsonschema_validation_becomes_apierror():
-    with pytest.raises(litellm.APIError, match="Structured output") as exc:
+    with pytest.raises(litellm.JSONSchemaValidationError) as exc:
         post_call_processing(
             _make_response("not-json"),
             "gpt-4o",
@@ -267,13 +267,14 @@ def test_invalid_json_jsonschema_validation_becomes_apierror():
             _mock_completion,
             Rules(),
         )
-    assert exc.value.status_code == 422
+    assert exc.value.raw_response == "not-json"
 
 
 def test_jsonschema_mismatch_becomes_apierror():
-    with pytest.raises(litellm.APIError, match="Structured output") as exc:
+    payload: Final = json.dumps({"name": "test", "age": 25})
+    with pytest.raises(litellm.JSONSchemaValidationError) as exc:
         post_call_processing(
-            _make_response(json.dumps({"name": "test", "age": 25})),
+            _make_response(payload),
             "gpt-4o",
             {
                 "response_format": STRICT_SCHEMA,
@@ -282,7 +283,7 @@ def test_jsonschema_mismatch_becomes_apierror():
             _mock_completion,
             Rules(),
         )
-    assert exc.value.status_code == 422
+    assert exc.value.raw_response == payload
 
 
 def test_post_call_processing_accepts_valid_pydantic_response():
@@ -449,10 +450,10 @@ def test_apply_response_format_validation_raw_json_schema_dict():
 
 
 def test_apply_response_format_validation_non_json_text_raises_apierror():
-    with pytest.raises(litellm.APIError, match="Structured output") as exc:
+    with pytest.raises(litellm.JSONSchemaValidationError) as exc:
         _apply_response_format_validation(
             response_format=STRICT_SCHEMA,
             model_response="the movie was great",
             model="gpt-4o",
         )
-    assert exc.value.status_code == 422
+    assert exc.value.raw_response == "the movie was great"
