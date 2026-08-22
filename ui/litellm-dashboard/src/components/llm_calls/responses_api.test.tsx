@@ -400,4 +400,16 @@ describe("responses_api prompt cache usage", () => {
     expect(usageData).not.toHaveProperty("cacheCreationTokens");
     expect(usageData.promptTokens).toBe(5000);
   });
+
+  it("surfaces reasoning tokens from Responses-shape output_tokens_details", async () => {
+    await expect(captureUsage({ output_tokens_details: { reasoning_tokens: 42 } })).resolves.toMatchObject({
+      reasoningTokens: 42,
+    });
+  });
+
+  it("falls back to completion_tokens_details reasoning tokens when output_tokens_details is absent", async () => {
+    await expect(captureUsage({ completion_tokens_details: { reasoning_tokens: 17 } })).resolves.toMatchObject({
+      reasoningTokens: 17,
+    });
+  });
 });
