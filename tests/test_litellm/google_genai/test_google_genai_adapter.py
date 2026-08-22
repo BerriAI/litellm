@@ -10,9 +10,7 @@ import pytest
 from litellm.google_genai.main import agenerate_content
 
 
-import json
 
-import pytest
 
 import litellm
 

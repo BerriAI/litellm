@@ -11,13 +11,7 @@ from litellm.types.utils import ModelResponse, StandardBuiltInToolsParams
 
 
 
-@pytest.fixture
-def local_model_cost_map(monkeypatch):
-    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
 
-
-# Test basic web search cost calculations
 def test_web_search_cost_low():
     web_search_options = WebSearchOptions(search_context_size="low")
     model_info = litellm.get_model_info("gpt-4o-search-preview")
@@ -379,12 +373,12 @@ def test_get_cost_for_vertex_ai_gemini_web_search(model, custom_llm_provider):
     assert cost == 0.035, f"Expected $0.035 grounding cost, got ${cost}"
 
 
-def test_azure_assistant_features_integrated_cost_tracking():
+def test_azure_assistant_features_integrated_cost_tracking(monkeypatch):
     """
     Test integrated cost tracking for Azure assistant features.
     """
     # Force use of local model cost map for CI/CD consistency
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
     model = "azure/gpt-4o"

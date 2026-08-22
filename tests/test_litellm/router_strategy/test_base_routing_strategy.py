@@ -7,7 +7,6 @@ import pytest
 import asyncio
 from unittest.mock import MagicMock, patch
 
-import pytest
 
 from litellm.caching.caching import DualCache
 from litellm.caching.redis_cache import RedisPipelineIncrementOperation

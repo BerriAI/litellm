@@ -36,9 +36,9 @@ class TestGenerateIAMToken:
         # Verify get_secret_str was called with correct keys in order
         # Note: get_watsonx_iam_url() also calls get_secret_str("WATSONX_IAM_URL")
         calls = [
-            call[0][0]
-            for call in mock_get_secret_str.call_args_list
-            if call[0][0] != "WATSONX_IAM_URL"
+            recorded[0][0]
+            for recorded in mock_get_secret_str.call_args_list
+            if recorded[0][0] != "WATSONX_IAM_URL"
         ]
         assert "WX_API_KEY" in calls
         assert "WATSONX_API_KEY" in calls
@@ -150,9 +150,9 @@ class TestGenerateIAMToken:
             # Verify get_secret_str was called with expected keys (checking short-circuit behavior)
             # Note: get_watsonx_iam_url() also calls get_secret_str("WATSONX_IAM_URL"), so we filter that out
             actual_calls = [
-                call[0][0]
-                for call in mock_get_secret_str.call_args_list
-                if call[0][0] != "WATSONX_IAM_URL"
+                recorded[0][0]
+                for recorded in mock_get_secret_str.call_args_list
+                if recorded[0][0] != "WATSONX_IAM_URL"
             ]
             assert (
                 actual_calls == expected_calls
@@ -184,9 +184,9 @@ class TestGenerateIAMToken:
         # Verify get_secret_str was NOT called for API keys (since api_key was provided)
         # Note: get_watsonx_iam_url() calls get_secret_str("WATSONX_IAM_URL"), which is expected
         api_key_calls = [
-            call[0][0]
-            for call in mock_get_secret_str.call_args_list
-            if call[0][0] not in ["WATSONX_IAM_URL"]
+            recorded[0][0]
+            for recorded in mock_get_secret_str.call_args_list
+            if recorded[0][0] not in ["WATSONX_IAM_URL"]
         ]
         assert (
             len(api_key_calls) == 0
@@ -214,9 +214,9 @@ class TestGenerateIAMToken:
         # Verify get_secret_str was called for all possible API keys
         # Note: get_watsonx_iam_url() also calls get_secret_str("WATSONX_IAM_URL")
         calls = [
-            call[0][0]
-            for call in mock_get_secret_str.call_args_list
-            if call[0][0] != "WATSONX_IAM_URL"
+            recorded[0][0]
+            for recorded in mock_get_secret_str.call_args_list
+            if recorded[0][0] != "WATSONX_IAM_URL"
         ]
         assert "WX_API_KEY" in calls
         assert "WATSONX_API_KEY" in calls

@@ -7,9 +7,7 @@ import logging
 import tempfile
 from litellm._uuid import uuid
 
-import json
 from datetime import datetime, timedelta, timezone
-from datetime import datetime
 
 import pytest
 

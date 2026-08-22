@@ -153,7 +153,6 @@ class TestTextFormatConversion:
             new=mock_handler,
         ):
             litellm._turn_on_debug()
-            litellm.set_verbose = True
 
             # Call aresponses with text_format parameter
             response = await litellm.aresponses(

@@ -15,7 +15,7 @@ from dotenv import load_dotenv
 load_dotenv()
 import os
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 

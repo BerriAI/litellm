@@ -437,9 +437,6 @@ class TestVertexAILivePassthroughIntegration:
 
     def test_vertex_ai_live_route_detection(self):
         """Test that the route detection works correctly"""
-        from litellm.proxy.pass_through_endpoints.success_handler import (
-            PassThroughEndpointLogging,
-        )
 
         handler = PassThroughEndpointLogging()
 
@@ -461,9 +458,6 @@ class TestVertexAILivePassthroughIntegration:
         self, mock_handler_class, mock_logging_obj
     ):
         """Test the success handler integration with Vertex AI Live"""
-        from litellm.proxy.pass_through_endpoints.success_handler import (
-            PassThroughEndpointLogging,
-        )
 
         # Mock the handler
         mock_handler = MagicMock()

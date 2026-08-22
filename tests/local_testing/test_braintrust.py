@@ -12,7 +12,6 @@ from fastapi import Request
 
 load_dotenv()
 
-import asyncio
 import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -23,7 +22,6 @@ from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
 
 def test_braintrust_logging():
-    import litellm
 
     litellm.set_verbose = True
 
@@ -47,7 +45,6 @@ def test_braintrust_logging():
 
 
 def test_braintrust_logging_specific_project_id():
-    import litellm
 
     litellm.set_verbose = True
 

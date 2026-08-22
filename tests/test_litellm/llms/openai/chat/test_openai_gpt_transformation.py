@@ -13,7 +13,6 @@ from litellm.llms.openai.chat.gpt_transformation import (
     OpenAIChatCompletionStreamingHandler,
     OpenAIGPTConfig,
 )
-from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
 
 
 class TestOpenAIGPTConfig:

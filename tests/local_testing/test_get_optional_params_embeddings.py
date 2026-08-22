@@ -5,7 +5,7 @@ import traceback
 from dotenv import load_dotenv
 
 load_dotenv()
-import os, io
+import io
 
 import pytest
 import litellm

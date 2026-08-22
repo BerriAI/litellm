@@ -458,7 +458,6 @@ async def test_post_call_stream__all_chunks_are_valid(monkeypatch, length: int):
 
 @pytest.mark.asyncio
 async def test_post_call_stream__blocked_chunks(monkeypatch):
-    from litellm.proxy.proxy_server import StreamingCallbackError
 
     init_guardrails_v2(
         all_guardrails=[

@@ -1,4 +1,5 @@
 import json
+import re
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -153,7 +154,7 @@ def test_bitbucket_client_get_file_content_access_denied(mock_get):
 
     client = BitBucketClient(config)
 
-    with pytest.raises(Exception, match="Access denied to file 'test.prompt'"):
+    with pytest.raises(Exception, match=re.escape("Access denied to file 'test.prompt'")):
         client.get_file_content("test.prompt")
 
 

@@ -10,7 +10,19 @@ from unittest.mock import MagicMock, patch, AsyncMock
 
 
 import httpx
+import math
+from litellm.constants import SPEND_LOG_WRITE_BATCH_MAX_ROWS
 from litellm.proxy.utils import update_spend
+
+# The flush chunks the queue by BATCH_SIZE and then splits each chunk by the row
+# budget, so statement counts below are derived from both rather than hardcoded.
+_OUTER_BATCH_SIZE = 1000
+
+
+def _statements_for(rows: int) -> int:
+    full, remainder = divmod(rows, _OUTER_BATCH_SIZE)
+    chunks = [_OUTER_BATCH_SIZE] * full + ([remainder] if remainder else [])
+    return sum(math.ceil(chunk / SPEND_LOG_WRITE_BATCH_MAX_ROWS) for chunk in chunks)
 
 
 class MockPrismaClient:
@@ -237,25 +249,16 @@ async def test_update_spend_logs_multiple_batches_success():
     await update_spend(prisma_client, None, proxy_logging_obj)
 
     # Verify
-    assert create_many_mock.call_count == 2  # Should have made 2 batch calls
+    assert create_many_mock.call_count == _statements_for(1500)
 
-    # Get the actual data from each batch call
-    first_batch = create_many_mock.call_args_list[0][1]["data"]
-    second_batch = create_many_mock.call_args_list[1][1]["data"]
+    # No statement may exceed the row budget, which is what bounds the query
+    # engine's resident memory.
+    batches = [call[1]["data"] for call in create_many_mock.call_args_list]
+    assert all(len(batch) <= SPEND_LOG_WRITE_BATCH_MAX_ROWS for batch in batches)
 
-    # Verify batch sizes
-    assert len(first_batch) == 1000
-    assert len(second_batch) == 500
-
-    # Verify exact IDs in each batch
-    expected_first_batch_ids = {str(i) for i in range(1000)}
-    expected_second_batch_ids = {str(i) for i in range(1000, 1500)}
-
-    actual_first_batch_ids = {item["id"] for item in first_batch}
-    actual_second_batch_ids = {item["id"] for item in second_batch}
-
-    assert actual_first_batch_ids == expected_first_batch_ids
-    assert actual_second_batch_ids == expected_second_batch_ids
+    # Every row is written exactly once and in order, whatever the split.
+    written_ids = [item["id"] for batch in batches for item in batch]
+    assert written_ids == [str(i) for i in range(1500)]
 
     # Verify all logs were processed
     assert len(prisma_client.spend_log_transactions) == 0
@@ -293,8 +296,9 @@ async def test_update_spend_logs_multiple_batches_with_failure():
     # Execute
     await update_spend(prisma_client, None, proxy_logging_obj)
 
-    # Verify
-    assert create_many_mock.call_count == 6  # 4 batches + 2 retries for failed batch
+    # The first attempt aborts on its second statement, then the whole flush
+    # replays, so the total is those two calls plus one complete pass.
+    assert create_many_mock.call_count == 2 + _statements_for(4000)
 
     # Verify all batches were processed
     all_processed_logs = []

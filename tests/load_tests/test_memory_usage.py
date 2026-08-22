@@ -8,7 +8,6 @@ from dotenv import load_dotenv
 
 load_dotenv()
 import io
-import os
 
 
 
@@ -18,13 +17,11 @@ from litellm.router import Router
 from typing import Optional
 from unittest.mock import MagicMock, patch
 
-import asyncio
 import pytest
 import os
 import litellm
 from typing import Callable, Any
 
-import tracemalloc
 import gc
 from typing import Type
 from pydantic import BaseModel

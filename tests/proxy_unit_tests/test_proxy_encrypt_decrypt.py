@@ -5,7 +5,6 @@ from dotenv import load_dotenv
 
 load_dotenv()
 import io
-import os
 
 
 from litellm.proxy import proxy_server

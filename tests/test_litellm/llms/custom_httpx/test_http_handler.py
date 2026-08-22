@@ -127,79 +127,62 @@ def test_sync_post_streaming_status_error_should_not_wait_forever_for_body(
 @pytest.mark.asyncio
 async def test_ssl_security_level(monkeypatch):
     # Ensure aiohttp transport is enabled for this test
-    original_disable = litellm.disable_aiohttp_transport
-    litellm.disable_aiohttp_transport = False
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", False)
 
-    try:
-        with patch.dict(os.environ, clear=True):
-            # Set environment variable for SSL security level
-            monkeypatch.setenv("SSL_SECURITY_LEVEL", "DEFAULT@SECLEVEL=1")
+    with patch.dict(os.environ, clear=True):
+        # Set environment variable for SSL security level
+        monkeypatch.setenv("SSL_SECURITY_LEVEL", "DEFAULT@SECLEVEL=1")
 
-            # Create async client with SSL verification disabled to isolate SSL context testing
-            client = AsyncHTTPHandler()
+        # Create async client with SSL verification disabled to isolate SSL context testing
+        client = AsyncHTTPHandler()
 
-            try:
-                # Get the transport (should be LiteLLMAiohttpTransport)
-                transport = client.client._transport
-                assert isinstance(transport, LiteLLMAiohttpTransport)
+        try:
+            # Get the transport (should be LiteLLMAiohttpTransport)
+            transport = client.client._transport
+            assert isinstance(transport, LiteLLMAiohttpTransport)
 
-                # Get the aiohttp ClientSession
-                client_session = transport._get_valid_client_session()
+            # Get the aiohttp ClientSession
+            client_session = transport._get_valid_client_session()
 
-                # Get the connector from the session
-                connector = client_session.connector
-                assert isinstance(connector, TCPConnector)
+            # Get the connector from the session
+            connector = client_session.connector
+            assert isinstance(connector, TCPConnector)
 
-                # Get the SSL context from the connector
-                ssl_context = connector._ssl
+            # Get the SSL context from the connector
+            ssl_context = connector._ssl
 
-                # Verify that the SSL context exists and has the correct cipher string
-                assert isinstance(ssl_context, ssl.SSLContext)
-            finally:
-                await client.close()
-    finally:
-        # Restore original setting
-        litellm.disable_aiohttp_transport = original_disable
+            # Verify that the SSL context exists and has the correct cipher string
+            assert isinstance(ssl_context, ssl.SSLContext)
+        finally:
+            await client.close()
 
 
 @pytest.mark.asyncio
-async def test_force_ipv4_transport():
+async def test_force_ipv4_transport(monkeypatch: pytest.MonkeyPatch):
     """Test transport creation with force_ipv4 enabled"""
-    original_force_ipv4 = litellm.force_ipv4
-    original_disable = litellm.disable_aiohttp_transport
-    litellm.force_ipv4 = True
-    litellm.disable_aiohttp_transport = True
+    monkeypatch.setattr(litellm, "force_ipv4", True)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
 
-    try:
-        transport = AsyncHTTPHandler._create_async_transport()
+    transport = AsyncHTTPHandler._create_async_transport()
 
-        # Should get an AsyncHTTPTransport (no real HTTP call — avoids CI hangs)
-        assert isinstance(transport, httpx.AsyncHTTPTransport)
-    finally:
-        litellm.force_ipv4 = original_force_ipv4
-        litellm.disable_aiohttp_transport = original_disable
+    # Should get an AsyncHTTPTransport (no real HTTP call — avoids CI hangs)
+    assert isinstance(transport, httpx.AsyncHTTPTransport)
 
 
 @pytest.mark.asyncio
-async def test_aiohttp_disabled_transport():
+async def test_aiohttp_disabled_transport(monkeypatch: pytest.MonkeyPatch):
     """Test transport creation with aiohttp disabled"""
-    original_disable = litellm.disable_aiohttp_transport
-    original_force_ipv4 = litellm.force_ipv4
-    litellm.disable_aiohttp_transport = True
-    litellm.force_ipv4 = False
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "force_ipv4", False)
 
-    try:
-        transport = AsyncHTTPHandler._create_async_transport()
+    transport = AsyncHTTPHandler._create_async_transport()
 
-        # Should get None when both aiohttp is disabled and force_ipv4 is False
-        assert transport is None
-    finally:
-        litellm.disable_aiohttp_transport = original_disable
-        litellm.force_ipv4 = original_force_ipv4
+    # Should get None when both aiohttp is disabled and force_ipv4 is False
+    assert transport is None
 
 
 @pytest.mark.asyncio
-async def test_ssl_verification_with_aiohttp_transport():
+async def test_ssl_verification_with_aiohttp_transport(monkeypatch: pytest.MonkeyPatch):
     """
     Test aiohttp respects ssl_verify=False
 
@@ -209,38 +192,33 @@ async def test_ssl_verification_with_aiohttp_transport():
     import aiohttp
 
     # Ensure aiohttp transport is enabled for this test
-    original_disable = litellm.disable_aiohttp_transport
-    litellm.disable_aiohttp_transport = False
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", False)
+
+    litellm_async_client = AsyncHTTPHandler(ssl_verify=False)
 
     try:
-        litellm_async_client = AsyncHTTPHandler(ssl_verify=False)
+        transport = litellm_async_client.client._transport
+        assert isinstance(transport, LiteLLMAiohttpTransport)
+        transport_connector = transport._get_valid_client_session().connector
+        assert isinstance(transport_connector, TCPConnector)
 
+        aiohttp_session = aiohttp.ClientSession(
+            connector=aiohttp.TCPConnector(ssl=False)
+        )
         try:
-            transport = litellm_async_client.client._transport
-            assert isinstance(transport, LiteLLMAiohttpTransport)
-            transport_connector = transport._get_valid_client_session().connector
-            assert isinstance(transport_connector, TCPConnector)
+            aiohttp_connector = aiohttp_session.connector
+            assert isinstance(aiohttp_connector, aiohttp.TCPConnector)
 
-            aiohttp_session = aiohttp.ClientSession(
-                connector=aiohttp.TCPConnector(ssl=False)
-            )
-            try:
-                aiohttp_connector = aiohttp_session.connector
-                assert isinstance(aiohttp_connector, aiohttp.TCPConnector)
-
-                # assert both litellm transport and aiohttp session have ssl_verify=False
-                assert transport_connector._ssl == aiohttp_connector._ssl
-            finally:
-                await aiohttp_session.close()
+            # assert both litellm transport and aiohttp session have ssl_verify=False
+            assert transport_connector._ssl == aiohttp_connector._ssl
         finally:
-            await litellm_async_client.close()
+            await aiohttp_session.close()
     finally:
-        # Restore original setting
-        litellm.disable_aiohttp_transport = original_disable
+        await litellm_async_client.close()
 
 
 @pytest.mark.asyncio
-async def test_ssl_verification_with_shared_session():
+async def test_ssl_verification_with_shared_session(monkeypatch: pytest.MonkeyPatch):
     """
     Test that ssl_verify=False is respected even with shared sessions.
 
@@ -253,67 +231,55 @@ async def test_ssl_verification_with_shared_session():
     import aiohttp
 
     # Ensure aiohttp transport is enabled for this test
-    original_disable = litellm.disable_aiohttp_transport
-    litellm.disable_aiohttp_transport = False
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", False)
+
+    shared_session = aiohttp.ClientSession()
 
     try:
-        # Create a shared session (simulating what happens in production)
-        shared_session = aiohttp.ClientSession()
+        # Create transport with shared session and ssl_verify=False
+        transport = AsyncHTTPHandler._create_aiohttp_transport(
+            ssl_verify=False,
+            shared_session=shared_session,
+        )
 
-        try:
-            # Create transport with shared session and ssl_verify=False
-            transport = AsyncHTTPHandler._create_aiohttp_transport(
-                ssl_verify=False,
-                shared_session=shared_session,
-            )
+        # Verify the transport uses the shared session
+        assert transport.client is shared_session
 
-            # Verify the transport uses the shared session
-            assert transport.client is shared_session
-
-            # Verify the SSL setting is stored in the transport for per-request use
-            assert transport._ssl_verify is False
-        finally:
-            await shared_session.close()
+        # Verify the SSL setting is stored in the transport for per-request use
+        assert transport._ssl_verify is False
     finally:
-        # Restore original setting
-        litellm.disable_aiohttp_transport = original_disable
+        await shared_session.close()
 
 
 @pytest.mark.asyncio
-async def test_ssl_context_with_shared_session():
+async def test_ssl_context_with_shared_session(monkeypatch: pytest.MonkeyPatch):
     """
     Test that ssl_context is respected even with shared sessions.
     """
     import aiohttp
 
     # Ensure aiohttp transport is enabled for this test
-    original_disable = litellm.disable_aiohttp_transport
-    litellm.disable_aiohttp_transport = False
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", False)
+
+    custom_ssl_context = ssl.create_default_context()
+
+    # Create a shared session
+    shared_session = aiohttp.ClientSession()
 
     try:
-        # Create a custom SSL context
-        custom_ssl_context = ssl.create_default_context()
+        # Create transport with shared session and custom ssl_context
+        transport = AsyncHTTPHandler._create_aiohttp_transport(
+            ssl_context=custom_ssl_context,
+            shared_session=shared_session,
+        )
 
-        # Create a shared session
-        shared_session = aiohttp.ClientSession()
+        # Verify the transport uses the shared session
+        assert transport.client is shared_session
 
-        try:
-            # Create transport with shared session and custom ssl_context
-            transport = AsyncHTTPHandler._create_aiohttp_transport(
-                ssl_context=custom_ssl_context,
-                shared_session=shared_session,
-            )
-
-            # Verify the transport uses the shared session
-            assert transport.client is shared_session
-
-            # Verify the SSL context is stored in the transport for per-request use
-            assert transport._ssl_verify is custom_ssl_context
-        finally:
-            await shared_session.close()
+        # Verify the SSL context is stored in the transport for per-request use
+        assert transport._ssl_verify is custom_ssl_context
     finally:
-        # Restore original setting
-        litellm.disable_aiohttp_transport = original_disable
+        await shared_session.close()
 
 
 def test_get_ssl_configuration():
@@ -559,26 +525,22 @@ def test_ssl_ecdh_curve(
         if env_curve:
             monkeypatch.setenv("SSL_ECDH_CURVE", env_curve)
 
-        original_value = litellm.ssl_ecdh_curve
-        try:
-            litellm.ssl_ecdh_curve = litellm_curve
+        monkeypatch.setattr(litellm, "ssl_ecdh_curve", litellm_curve)
 
-            # Create a real SSL context and patch set_ecdh_curve on it
-            # We need a real SSLContext instance (not a MagicMock) because _create_ssl_context
-            # calls methods like set_ciphers() and minimum_version that require a real context.
-            # We patch set_ecdh_curve specifically to verify it's called with the correct curve.
-            real_ssl_context = ssl.create_default_context()
-            with patch("ssl.create_default_context", return_value=real_ssl_context):
-                with patch.object(real_ssl_context, "set_ecdh_curve") as mock_set_curve:
-                    ssl_context = get_ssl_configuration()
+        # Create a real SSL context and patch set_ecdh_curve on it
+        # We need a real SSLContext instance (not a MagicMock) because _create_ssl_context
+        # calls methods like set_ciphers() and minimum_version that require a real context.
+        # We patch set_ecdh_curve specifically to verify it's called with the correct curve.
+        real_ssl_context = ssl.create_default_context()
+        with patch("ssl.create_default_context", return_value=real_ssl_context):
+            with patch.object(real_ssl_context, "set_ecdh_curve") as mock_set_curve:
+                ssl_context = get_ssl_configuration()
 
-                    if should_call:
-                        mock_set_curve.assert_called_once_with(expected_curve)
-                    else:
-                        mock_set_curve.assert_not_called()
-                    assert isinstance(ssl_context, ssl.SSLContext)
-        finally:
-            litellm.ssl_ecdh_curve = original_value
+                if should_call:
+                    mock_set_curve.assert_called_once_with(expected_curve)
+                else:
+                    mock_set_curve.assert_not_called()
+                assert isinstance(ssl_context, ssl.SSLContext)
 
 
 def test_default_user_agent_is_litellm_version(monkeypatch):
@@ -749,46 +711,38 @@ class TestDefaultCachedClientTimeoutHonorsRequestTimeout:
     no per-model timeout (e.g. Bedrock) hung for 600s.
     """
 
-    @pytest.fixture
-    def restore_request_timeout(self):
-        original_value = litellm.request_timeout
-        original_flag = litellm.request_timeout_explicitly_set
-        try:
-            yield
-        finally:
-            litellm.request_timeout = original_value
-            litellm.request_timeout_explicitly_set = original_flag
-
-    def test_default_when_request_timeout_unset(self, restore_request_timeout):
+    def test_default_when_request_timeout_unset(self, monkeypatch: pytest.MonkeyPatch):
         from litellm.llms.custom_httpx.http_handler import (
             _DEFAULT_TIMEOUT,
             _default_cached_client_timeout,
         )
 
-        litellm.request_timeout = litellm.constants.DEFAULT_REQUEST_TIMEOUT_SECONDS
-        litellm.request_timeout_explicitly_set = False
+        monkeypatch.setattr(
+            litellm, "request_timeout", litellm.constants.DEFAULT_REQUEST_TIMEOUT_SECONDS
+        )
+        monkeypatch.setattr(litellm, "request_timeout_explicitly_set", False)
         assert _default_cached_client_timeout() is _DEFAULT_TIMEOUT
 
-    def test_uses_explicit_request_timeout(self, restore_request_timeout):
+    def test_uses_explicit_request_timeout(self, monkeypatch: pytest.MonkeyPatch):
         from litellm.llms.custom_httpx.http_handler import (
             _default_cached_client_timeout,
         )
 
-        litellm.request_timeout = 300
-        litellm.request_timeout_explicitly_set = True
+        monkeypatch.setattr(litellm, "request_timeout", 300)
+        monkeypatch.setattr(litellm, "request_timeout_explicitly_set", True)
         resolved = _default_cached_client_timeout()
         assert resolved.read == 300.0
         assert resolved.connect == 5.0
 
     def test_cached_async_client_built_with_explicit_request_timeout(
-        self, restore_request_timeout
+        self, monkeypatch: pytest.MonkeyPatch
     ):
         from litellm.caching.llm_caching_handler import LLMClientCache
         from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
         from litellm.types.utils import LlmProviders
 
-        litellm.request_timeout = 300
-        litellm.request_timeout_explicitly_set = True
+        monkeypatch.setattr(litellm, "request_timeout", 300)
+        monkeypatch.setattr(litellm, "request_timeout_explicitly_set", True)
         litellm.in_memory_llm_clients_cache = LLMClientCache()
         client = get_async_httpx_client(llm_provider=LlmProviders.BEDROCK)
         assert client.timeout.read == 300.0

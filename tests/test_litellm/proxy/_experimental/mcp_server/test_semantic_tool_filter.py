@@ -1894,20 +1894,21 @@ def test_is_context_window_error_detection_variants():
     )
     assert _is_context_window_error(cwe)
 
-    try:
+    with pytest.raises(ValueError, match="Internal_litellm_router API call failed") as explicitly_chained:
         raise ValueError("Internal_litellm_router API call failed") from cwe
-    except ValueError as explicitly_chained:
-        assert _is_context_window_error(explicitly_chained)
+    assert _is_context_window_error(explicitly_chained.value)
 
-    try:
+    def wrap_without_explicit_chaining():
         try:
             raise litellm.ContextWindowExceededError(
                 message="overflow", model="m", llm_provider="openai"
             )
         except litellm.ContextWindowExceededError:
             raise ValueError("wrapper without explicit chaining")
-    except ValueError as implicitly_chained:
-        assert _is_context_window_error(implicitly_chained)
+
+    with pytest.raises(ValueError, match="wrapper without explicit chaining") as implicitly_chained:
+        wrap_without_explicit_chaining()
+    assert _is_context_window_error(implicitly_chained.value)
 
     assert _is_context_window_error(ValueError("Invalid 'input[0]': maximum input length is 8192 tokens."))
     assert not _is_context_window_error(ValueError("A generic API error occurred."))

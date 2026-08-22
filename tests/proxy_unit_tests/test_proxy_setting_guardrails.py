@@ -7,7 +7,6 @@ from dotenv import load_dotenv
 load_dotenv()
 import asyncio
 import io
-import os
 
 import openai
 import pytest

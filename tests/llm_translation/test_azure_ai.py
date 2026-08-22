@@ -18,7 +18,6 @@ from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
 load_dotenv()
 import io
-import os
 
 from typing import Optional
 from unittest.mock import MagicMock, patch

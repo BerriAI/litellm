@@ -9,7 +9,7 @@ import respx
 from fastapi.testclient import TestClient
 
 from datetime import datetime
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 from litellm.caching.caching_handler import LLMCachingHandler
 

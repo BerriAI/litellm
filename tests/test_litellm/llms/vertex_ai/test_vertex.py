@@ -28,7 +28,6 @@ def test_completion_pydantic_obj_2():
 
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
-    litellm.set_verbose = True
 
     class CalendarEvent(BaseModel):
         name: str
@@ -254,7 +253,6 @@ def test_vertex_tool_type_field_removal():
 def test_function_calling_with_gemini():
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
-    litellm.set_verbose = True
     client = HTTPHandler()
     with patch.object(client, "post", new=MagicMock()) as mock_post:
         try:
@@ -305,7 +303,6 @@ def test_function_calling_with_gemini():
 
 
 def test_multiple_function_call():
-    litellm.set_verbose = True
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
     client = HTTPHandler()
@@ -415,7 +412,6 @@ def test_multiple_function_call():
 
 
 def test_multiple_function_call_changed_text_pos():
-    litellm.set_verbose = True
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
     client = HTTPHandler()
@@ -523,7 +519,6 @@ def test_multiple_function_call_changed_text_pos():
 
 
 def test_function_calling_with_gemini_multiple_results():
-    litellm.set_verbose = True
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
     client = HTTPHandler()
@@ -1098,7 +1093,6 @@ def test_logprobs_unit_test():
 
 
 def test_logprobs():
-    litellm.set_verbose = True
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
     client = HTTPHandler()

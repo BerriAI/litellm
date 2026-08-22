@@ -6,14 +6,11 @@ from unittest.mock import AsyncMock
 
 import litellm
 
-import json
-from datetime import datetime
-from unittest.mock import patch, MagicMock, AsyncMock
+from unittest.mock import patch, MagicMock
 
 import pytest
 
 from test_rerank import assert_response_shape
-import litellm
 
 from base_embedding_unit_tests import BaseLLMEmbeddingTest
 from litellm.llms.custom_httpx.http_handler import HTTPHandler, AsyncHTTPHandler

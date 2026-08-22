@@ -13,7 +13,6 @@ from litellm._uuid import uuid
 from dotenv import load_dotenv
 
 load_dotenv()
-import os
 
 from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch

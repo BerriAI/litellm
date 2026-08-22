@@ -1961,7 +1961,6 @@ async def test_model_armor_guardrail_status_intervened_vs_failed():
 
 def mock_open(read_data=""):
     """Helper to create a mock file object"""
-    import io
     from unittest.mock import MagicMock
 
     file_object = io.StringIO(read_data)

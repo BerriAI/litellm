@@ -24,10 +24,6 @@ from litellm.router_utils.router_callbacks.track_deployment_metrics import (
     increment_deployment_successes_for_current_minute,
 )
 
-import pytest
-from unittest.mock import patch
-from litellm import Router
-from litellm.router_utils.cooldown_handlers import _should_cooldown_deployment
 
 load_dotenv()
 

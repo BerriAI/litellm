@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 
 
 from datetime import datetime, timezone
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import litellm
 from litellm.types.vector_stores import LiteLLM_ManagedVectorStore

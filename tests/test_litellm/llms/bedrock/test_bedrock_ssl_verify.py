@@ -38,12 +38,12 @@ class TestBedrockSSLVerify:
         ssl_verify = base_aws._get_ssl_verify()
         assert ssl_verify is True
 
-    def test_base_aws_llm_get_ssl_verify_false(self):
+    def test_base_aws_llm_get_ssl_verify_false(self, monkeypatch):
         """Test that _get_ssl_verify returns False when SSL verification is disabled."""
         base_aws = BaseAWSLLM()
 
         # Set SSL_VERIFY to False via environment
-        os.environ["SSL_VERIFY"] = "False"
+        monkeypatch.setenv("SSL_VERIFY", "False")
 
         ssl_verify = base_aws._get_ssl_verify()
         assert ssl_verify is False
@@ -51,7 +51,7 @@ class TestBedrockSSLVerify:
         # Clean up
         os.environ.pop("SSL_VERIFY", None)
 
-    def test_base_aws_llm_get_ssl_verify_custom_ca_bundle(self):
+    def test_base_aws_llm_get_ssl_verify_custom_ca_bundle(self, monkeypatch):
         """Test that _get_ssl_verify returns custom CA bundle path when SSL_CERT_FILE is set."""
         base_aws = BaseAWSLLM()
 
@@ -64,7 +64,7 @@ class TestBedrockSSLVerify:
 
         try:
             # Set SSL_CERT_FILE environment variable
-            os.environ["SSL_CERT_FILE"] = ca_bundle_path
+            monkeypatch.setenv("SSL_CERT_FILE", ca_bundle_path)
             os.environ.pop("SSL_VERIFY", None)
             litellm.ssl_verify = True
 
@@ -325,7 +325,7 @@ class TestBedrockSSLVerify:
             os.environ.pop("SSL_CERT_FILE", None)
             os.unlink(ca_bundle_path)
 
-    def test_ssl_verify_priority_env_over_litellm_config(self):
+    def test_ssl_verify_priority_env_over_litellm_config(self, monkeypatch):
         """Test that SSL_VERIFY environment variable takes priority over litellm.ssl_verify."""
         base_aws = BaseAWSLLM()
 
@@ -333,7 +333,7 @@ class TestBedrockSSLVerify:
         litellm.ssl_verify = True
 
         # Set SSL_VERIFY environment variable to False
-        os.environ["SSL_VERIFY"] = "False"
+        monkeypatch.setenv("SSL_VERIFY", "False")
 
         try:
             ssl_verify = base_aws._get_ssl_verify()
@@ -343,7 +343,7 @@ class TestBedrockSSLVerify:
             os.environ.pop("SSL_VERIFY", None)
             litellm.ssl_verify = True
 
-    def test_ssl_cert_file_priority_over_default(self):
+    def test_ssl_cert_file_priority_over_default(self, monkeypatch):
         """Test that SSL_CERT_FILE takes priority when ssl_verify is True."""
         base_aws = BaseAWSLLM()
 
@@ -356,7 +356,7 @@ class TestBedrockSSLVerify:
 
         try:
             # Set SSL_CERT_FILE environment variable
-            os.environ["SSL_CERT_FILE"] = ca_bundle_path
+            monkeypatch.setenv("SSL_CERT_FILE", ca_bundle_path)
             os.environ.pop("SSL_VERIFY", None)
             litellm.ssl_verify = True
 

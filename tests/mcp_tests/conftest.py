@@ -26,7 +26,6 @@ def setup_and_teardown():
     """
     curr_dir = os.getcwd()  # Get the current working directory
 
-    import litellm
     from litellm import Router
 
     importlib.reload(litellm)

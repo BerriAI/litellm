@@ -843,14 +843,14 @@ class TestTranslateThinkingToReasoning:
         finally:
             litellm.reasoning_auto_summary = original
 
-    def test_summary_added_when_env_var_set(self):
+    def test_summary_added_when_env_var_set(self, monkeypatch):
         """When LITELLM_REASONING_AUTO_SUMMARY env var is true, summary is included."""
         import litellm
 
         original = litellm.reasoning_auto_summary
         try:
             litellm.reasoning_auto_summary = False
-            os.environ["LITELLM_REASONING_AUTO_SUMMARY"] = "true"
+            monkeypatch.setenv("LITELLM_REASONING_AUTO_SUMMARY", "true")
             result = _ADAPTER.translate_thinking_to_reasoning(
                 {
                     "type": "enabled",

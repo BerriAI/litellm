@@ -14,8 +14,6 @@ from litellm._service_logger import ServiceLogging
 import asyncio
 
 
-from litellm.litellm_core_utils.litellm_logging import Logging
-import litellm
 
 service_logger = ServiceLogging()
 

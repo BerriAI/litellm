@@ -9,7 +9,6 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 
 
 
-from unittest.mock import MagicMock, patch
 
 import litellm
 from litellm.passthrough.main import allm_passthrough_route, llm_passthrough_route

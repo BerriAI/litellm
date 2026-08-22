@@ -479,7 +479,6 @@ class TestAutoRouterBenchmarks:
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock
 
-from fastapi import HTTPException
 
 from litellm.proxy.management_endpoints.auto_router_endpoints import (
     get_shadow_eval_job,

@@ -28,7 +28,6 @@ class TestVolcEngineEmbedding(BaseLLMEmbeddingTest):
     @pytest.mark.parametrize("sync_mode", [True, False])
     async def test_basic_embedding(self, sync_mode):
         """Test basic embedding functionality with realistic response"""
-        litellm.set_verbose = True
         embedding_call_args = self.get_base_embedding_call_args()
 
         # Mock the embedding functions to avoid actual API calls

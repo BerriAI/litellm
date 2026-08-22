@@ -10,7 +10,6 @@ import base64
 import litellm
 from abc import ABC, abstractmethod
 from litellm.integrations.custom_logger import CustomLogger
-import json
 from litellm.types.utils import StandardLoggingPayload
 
 

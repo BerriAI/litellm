@@ -4,7 +4,7 @@ import traceback
 from dotenv import load_dotenv
 
 load_dotenv()
-import os, copy
+import copy
 
 import pytest
 from litellm import Router

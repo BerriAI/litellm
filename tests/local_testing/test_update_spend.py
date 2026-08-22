@@ -13,9 +13,7 @@ from dotenv import load_dotenv
 from fastapi import Request
 
 load_dotenv()
-import os
 
-import asyncio
 import logging
 
 import pytest
@@ -50,7 +48,6 @@ verbose_proxy_logger.setLevel(level=logging.DEBUG)
 
 from starlette.datastructures import URL
 
-from litellm.caching.caching import DualCache
 from litellm.proxy._types import (
     BlockUsers,
     DynamoDBArgs,

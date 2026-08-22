@@ -203,7 +203,6 @@ async def test_responses_retry_on_auth_error(sync_mode):
     This validates that the @client decorator properly handles responses/aresponses retries.
     """
     from unittest.mock import patch
-    import openai
 
     num_retries = 2
 

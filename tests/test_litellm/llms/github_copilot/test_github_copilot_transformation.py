@@ -8,7 +8,6 @@ import pytest
 
 
 import httpx
-import pytest
 from respx import MockRouter
 
 import litellm

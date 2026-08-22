@@ -28,7 +28,6 @@ from litellm_enterprise.enterprise_callbacks.secret_detection import (
 )
 from litellm.proxy.proxy_server import chat_completion
 from litellm.proxy.utils import ProxyLogging, hash_token
-from litellm.router import Router
 
 from tests.fake_openai_endpoint import FAKE_OPENAI_API_BASE
 

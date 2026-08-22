@@ -11,7 +11,6 @@ from litellm._uuid import uuid
 from dotenv import load_dotenv
 
 load_dotenv()
-import os
 
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -448,7 +447,7 @@ async def test_azure_ava_tts_with_custom_voice():
     Test that when using a custom Azure voice (en-US-AndrewNeural),
     the SSML request body contains the selected voice.
     """
-    from unittest.mock import AsyncMock, MagicMock, patch
+    from unittest.mock import AsyncMock, patch
     import httpx
 
     # Mock response
@@ -493,7 +492,7 @@ async def test_azure_ava_tts_fable_voice_mapping():
     Test that when using OpenAI voice 'fable',
     it gets mapped to Azure voice 'en-GB-RyanNeural' in the SSML.
     """
-    from unittest.mock import AsyncMock, MagicMock, patch
+    from unittest.mock import AsyncMock, patch
     import httpx
 
     # Mock response
@@ -540,7 +539,7 @@ async def test_aws_polly_tts_with_native_voice():
     Verifies the request is formatted correctly for the Polly API.
     """
     import json
-    from unittest.mock import MagicMock, patch
+    from unittest.mock import patch
     import httpx
 
     # Mock response - Polly returns audio bytes directly
@@ -588,7 +587,7 @@ async def test_aws_polly_tts_with_openai_voice_mapping():
     Verifies that OpenAI voices are correctly mapped to Polly voices.
     """
     import json
-    from unittest.mock import MagicMock, patch
+    from unittest.mock import patch
     import httpx
 
     mock_response_content = b"fake_audio_data"
@@ -630,7 +629,7 @@ async def test_aws_polly_tts_with_ssml():
     Verifies that SSML is detected and TextType is set correctly.
     """
     import json
-    from unittest.mock import MagicMock, patch
+    from unittest.mock import patch
     import httpx
 
     mock_response_content = b"fake_audio_data"

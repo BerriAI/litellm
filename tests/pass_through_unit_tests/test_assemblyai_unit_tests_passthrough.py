@@ -10,15 +10,8 @@ import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 
-import json
-from datetime import datetime
-from unittest.mock import AsyncMock, Mock, patch
 
 
-import httpx
-import pytest
-import litellm
-from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.assembly_passthrough_logging_handler import (
     AssemblyAIPassthroughLoggingHandler,
     AssemblyAITranscriptResponse,

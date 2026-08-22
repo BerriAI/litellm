@@ -61,17 +61,13 @@ def test_container_files_api():
 
         # 3. Try retrieve non-existent file metadata (should raise error)
         print("3. Testing retrieve_container_file (expect error)...")
-        try:
+        with pytest.raises(Exception, match=r"(?i)not found|invalid"):
             retrieve_container_file(
                 container_id=container.id,
                 file_id="cfile_nonexistent",
                 custom_llm_provider="openai",
                 api_key=api_key,
             )
-            pytest.fail("Should have raised error for non-existent file")
-        except Exception as e:
-            assert "not found" in str(e).lower() or "invalid" in str(e).lower()
-            print(f"   Got expected error ✓")
 
         # 3b. Try retrieve non-existent file content (should raise error)
         print("3b. Testing retrieve_container_file_content (expect error)...")

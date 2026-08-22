@@ -40,7 +40,6 @@ def setup_and_teardown():
     This fixture reloads litellm before every function. To speed up testing by removing callbacks being chained.
     """
 
-    import litellm
 
     from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 

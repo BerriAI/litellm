@@ -6,7 +6,6 @@ import traceback
 import pytest
 
 
-import asyncio
 import logging
 
 import litellm

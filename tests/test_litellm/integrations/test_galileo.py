@@ -109,7 +109,6 @@ def test_galileo_input_text_from_messages():
 
 
 def test_galileo_get_output_str_responses_api(galileo_v2_env):
-    from litellm.types.llms.openai import ResponsesAPIResponse
 
     logger = GalileoObserve()
     resp_dict = {

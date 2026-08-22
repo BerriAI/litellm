@@ -5,7 +5,6 @@ from unittest.mock import AsyncMock, Mock, patch, MagicMock
 
 
 import unittest
-from unittest.mock import patch
 from litellm.proxy.pass_through_endpoints.passthrough_endpoint_router import (
     PassthroughEndpointRouter,
 )

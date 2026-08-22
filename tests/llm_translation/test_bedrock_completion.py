@@ -12,7 +12,6 @@ import litellm.types
 
 load_dotenv()
 import io
-import os
 import json
 
 from unittest.mock import AsyncMock, Mock, patch

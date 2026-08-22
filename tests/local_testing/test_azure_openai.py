@@ -6,7 +6,6 @@ from dotenv import load_dotenv
 
 load_dotenv()
 import io
-import os
 
 
 import os

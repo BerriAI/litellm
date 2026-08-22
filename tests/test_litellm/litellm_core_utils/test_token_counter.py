@@ -8,7 +8,7 @@ from unittest.mock import MagicMock
 import pytest
 import tiktoken
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import litellm
 from litellm import create_pretrained_tokenizer, decode, encode, get_modified_max_tokens
@@ -629,7 +629,6 @@ def test_token_counter():
 
 
 import unittest
-from unittest.mock import MagicMock, patch
 
 from litellm.utils import _select_tokenizer_helper, claude_json_str, encoding
 
@@ -1020,13 +1019,12 @@ def test_token_counter_with_image_url():
         }
     ]
 
-    try:
+    with pytest.raises(ValueError, match="Invalid detail value") as exc_info:
         token_counter(model="gpt-3.5-turbo", messages=messages_invalid)
-        pytest.fail("Expected ValueError for invalid detail value")
-    except ValueError as e:
-        assert "Invalid detail value" in str(
-            e
-        ), f"Expected detail validation error, got: {e}"
+    e = exc_info.value
+    assert "Invalid detail value" in str(
+        e
+    ), f"Expected detail validation error, got: {e}"
 
 
 def test_token_counter_with_thinking_content():

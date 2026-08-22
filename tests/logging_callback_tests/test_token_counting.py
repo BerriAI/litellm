@@ -8,7 +8,6 @@ from fastapi.routing import APIRoute
 
 load_dotenv()
 import io
-import os
 import time
 import json
 

@@ -130,7 +130,6 @@ def test_litellm_responses():
     """
     ensures that type of completion_tokens_details is correctly handled / returned
     """
-    from litellm import ModelResponse
     from litellm.types.utils import CompletionTokensDetails
 
     response = ModelResponse(

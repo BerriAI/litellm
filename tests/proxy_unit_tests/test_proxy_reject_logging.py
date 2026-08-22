@@ -39,7 +39,6 @@ from litellm.proxy.proxy_server import (
     embeddings,
 )
 from litellm.proxy.utils import ProxyLogging, hash_token
-from litellm.router import Router
 
 
 class testLogger(CustomLogger):

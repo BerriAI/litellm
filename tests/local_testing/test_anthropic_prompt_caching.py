@@ -6,7 +6,6 @@ from dotenv import load_dotenv
 
 load_dotenv()
 import io
-import os
 
 from test_streaming import streaming_format_tests
 
@@ -206,7 +205,6 @@ def anthropic_messages():
 @pytest.mark.asyncio
 async def test_anthropic_vertex_ai_prompt_caching(anthropic_messages, sync_mode):
     litellm._turn_on_debug()
-    from litellm.llms.custom_httpx.http_handler import HTTPHandler, AsyncHTTPHandler
 
     load_vertex_ai_credentials()
 

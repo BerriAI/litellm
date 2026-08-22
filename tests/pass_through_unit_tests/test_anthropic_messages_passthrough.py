@@ -131,6 +131,7 @@ async def test_anthropic_messages_streaming_with_bad_request():
     """
     Test the anthropic_messages with streaming request
     """
+    error = None
     try:
         response = await litellm.anthropic.messages.acreate(
             messages=[{"role": "user", "content": "hi"}],
@@ -144,12 +145,10 @@ async def test_anthropic_messages_streaming_with_bad_request():
             async for chunk in response:
                 print("chunk=", chunk)
     except Exception as e:
-        print("got exception", e)
-        print("vars", vars(e))
-        if hasattr(e, "status_code"):
-            assert getattr(e, "status_code") == 400
-        else:
-            assert isinstance(e, Exception)
+        error = e
+
+    if error is not None:
+        assert getattr(error, "status_code", 400) == 400, f"got {vars(error)}"
 
 
 @pytest.mark.asyncio
@@ -157,6 +156,7 @@ async def test_anthropic_messages_router_streaming_with_bad_request():
     """
     Test the anthropic_messages with streaming request
     """
+    error = None
     try:
         router = Router(
             model_list=[
@@ -181,12 +181,10 @@ async def test_anthropic_messages_router_streaming_with_bad_request():
             async for chunk in response:
                 print("chunk=", chunk)
     except Exception as e:
-        print("got exception", e)
-        print("vars", vars(e))
-        if hasattr(e, "status_code"):
-            assert getattr(e, "status_code") == 400
-        else:
-            assert isinstance(e, Exception)
+        error = e
+
+    if error is not None:
+        assert getattr(error, "status_code", 400) == 400, f"got {vars(error)}"
 
 
 @pytest.mark.asyncio

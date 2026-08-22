@@ -7,7 +7,6 @@ from dotenv import load_dotenv
 
 load_dotenv()
 import io
-import os
 from typing import Optional, Dict
 
 

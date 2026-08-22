@@ -148,7 +148,6 @@ class TestBedrockAsyncInvokeEmbedding:
 
     def test_async_invoke_twelvelabs_embedding_with_mock(self):
         """Test async invoke embedding with mocked HTTP calls."""
-        litellm.set_verbose = True
         client = HTTPHandler()
         test_api_key = "test-bearer-token-12345"
         model = "bedrock/async_invoke/twelvelabs.marengo-embed-2-7-v1:0"
@@ -188,7 +187,6 @@ class TestBedrockAsyncInvokeEmbedding:
     @pytest.mark.asyncio
     async def test_async_invoke_twelvelabs_embedding_async_with_mock(self):
         """Test async invoke embedding with async calls."""
-        litellm.set_verbose = True
         client = AsyncHTTPHandler()
         test_api_key = "test-bearer-token-12345"
         model = "bedrock/async_invoke/twelvelabs.marengo-embed-2-7-v1:0"

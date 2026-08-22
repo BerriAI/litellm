@@ -62,7 +62,6 @@ def setup_and_teardown():
     asyncio.set_event_loop(loop)
 
     # Set up litellm state
-    litellm.set_verbose = True
     litellm.guardrail_name_config_map = {}
 
     yield

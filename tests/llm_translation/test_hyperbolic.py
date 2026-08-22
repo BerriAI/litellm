@@ -19,17 +19,13 @@ def test_get_llm_provider_hyperbolic():
 def test_hyperbolic_completion_call():
     """Test basic completion call structure for Hyperbolic"""
     # This is primarily a structure test since we don't have actual API keys
-    try:
-        litellm.set_verbose = True
-        response = litellm.completion(
-            model="hyperbolic/qwen-2.5-72b",
-            messages=[{"role": "user", "content": "Hello!"}],
-            mock_response="Hi there!",
-        )
-        assert response is not None
-    except Exception as e:
-        # Expected to fail without valid API key, but should recognize the provider
-        assert "hyperbolic" in str(e).lower() or "api" in str(e).lower()
+    litellm.set_verbose = True
+    response = litellm.completion(
+        model="hyperbolic/qwen-2.5-72b",
+        messages=[{"role": "user", "content": "Hello!"}],
+        mock_response="Hi there!",
+    )
+    assert response is not None
 
 
 def test_hyperbolic_config_initialization():

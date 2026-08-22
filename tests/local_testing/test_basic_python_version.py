@@ -211,9 +211,7 @@ def test_locked_aiohttp_version_is_not_pool_poisoning():
 
 import os
 import subprocess
-import time
 
-import pytest
 import requests
 
 
