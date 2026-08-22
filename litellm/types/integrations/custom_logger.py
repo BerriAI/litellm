@@ -23,6 +23,16 @@ def is_interception_internal_key(
     return any(key.startswith(prefix) for prefix in prefixes)
 
 
+class AgenticLoopSafetyError(ValueError):
+    """
+    Raised when an agentic-loop safety rail refuses a rerun.
+
+    Covers both rails: the bounded-loop cap (``max_agentic_loops``) and the
+    repeated tool-call fingerprint cycle break. Subclasses ``ValueError`` so
+    callers that already catch the broader type keep working.
+    """
+
+
 class StandardCustomLoggerInitParams(BaseModel):
     """
     Params for initializing a CustomLogger.

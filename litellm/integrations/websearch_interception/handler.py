@@ -122,6 +122,7 @@ class WebSearchInterceptionLogger(CustomLogger):
         self,
         enabled_providers: list[LlmProviders | str] | None = None,
         search_tool_name: str | None = None,
+        max_agentic_loops: int | None = None,
     ):
         """
         Args:
@@ -131,6 +132,9 @@ class WebSearchInterceptionLogger(CustomLogger):
                               Default: None (all providers enabled)
             search_tool_name: Name of search tool configured in router's search_tools.
                              If None, will attempt to use first available search tool.
+            max_agentic_loops: How many follow-up model calls one intercepted request
+                              may chain before the loop is refused and the turn ends.
+                              If None, LiteLLM's default of 3 applies.
         """
         super().__init__()
         # Convert enum values to strings for comparison
@@ -139,7 +143,28 @@ class WebSearchInterceptionLogger(CustomLogger):
         else:
             self.enabled_providers = [p.value if isinstance(p, LlmProviders) else p for p in enabled_providers]
         self.search_tool_name = search_tool_name
+        self.max_agentic_loops = self._validated_max_agentic_loops(max_agentic_loops)
         self._request_has_websearch = False  # Track if current request has web search
+
+    @staticmethod
+    def _validated_max_agentic_loops(max_agentic_loops: object) -> int | None:
+        """
+        Reject loop ceilings the agentic loop cannot honor, at config load time.
+
+        ``bool`` is excluded explicitly because it is an ``int`` subclass, so
+        ``max_agentic_loops: true`` would otherwise be read as a ceiling of 1.
+        """
+        if max_agentic_loops is None:
+            return None
+        if isinstance(max_agentic_loops, bool) or not isinstance(max_agentic_loops, int):
+            raise TypeError(
+                f"websearch_interception_params.max_agentic_loops must be an integer, got {max_agentic_loops!r}"
+            )
+        if max_agentic_loops < 1:
+            raise ValueError(
+                f"websearch_interception_params.max_agentic_loops must be at least 1, got {max_agentic_loops}"
+            )
+        return max_agentic_loops
 
     async def try_short_circuit_search(
         self,
@@ -398,6 +423,7 @@ class WebSearchInterceptionLogger(CustomLogger):
                   websearch_interception_params:
                     enabled_providers: ["bedrock"]
                     search_tool_name: "my-perplexity-search"
+                    max_agentic_loops: 5
 
             Usage:
                 config = litellm_settings.get("websearch_interception_params", {})
@@ -406,6 +432,7 @@ class WebSearchInterceptionLogger(CustomLogger):
         # Extract parameters from config
         enabled_providers_str: Final = config.get("enabled_providers", None)
         search_tool_name: Final = config.get("search_tool_name", None)
+        max_agentic_loops: Final = config.get("max_agentic_loops", None)
 
         # Convert string provider names to LlmProviders enum values
         enabled_providers: list[LlmProviders | str] | None = None
@@ -423,6 +450,7 @@ class WebSearchInterceptionLogger(CustomLogger):
         return cls(
             enabled_providers=enabled_providers,
             search_tool_name=search_tool_name,
+            max_agentic_loops=max_agentic_loops,
         )
 
     @staticmethod
@@ -492,6 +520,10 @@ class WebSearchInterceptionLogger(CustomLogger):
             return None
 
         verbose_logger.debug("WebSearchInterception: Pre-request hook triggered for provider=%s", custom_llm_provider)
+
+        deployment_max_agentic_loops: Final = kwargs.get("max_agentic_loops")
+        if self.max_agentic_loops is not None and deployment_max_agentic_loops is None:
+            kwargs["max_agentic_loops"] = self.max_agentic_loops  # rebind-ok: this hook returns the kwargs it edits
 
         # If the client sent an Anthropic-native web_search_* tool, mark the
         # request so the agentic loop emits native web_search_tool_result

@@ -207,6 +207,41 @@ response = await litellm.messages.acreate(
 
 ---
 
+## Loop Ceiling
+
+One intercepted request can chain several follow-up model calls, since the model often searches again after
+reading the first set of results. `max_agentic_loops` caps how many of those follow-ups run, and it defaults
+to 3. LiteLLM also breaks the loop early when the model asks for the exact same tool call twice in a row.
+
+Set the ceiling on the feature, which the interceptor applies to `/v1/messages` requests:
+
+```yaml
+litellm_settings:
+  websearch_interception_params:
+    enabled_providers: ["bedrock"]
+    max_agentic_loops: 5
+```
+
+Or per deployment, which wins over the feature-level setting:
+
+```yaml
+model_list:
+  - model_name: claude-sonnet-4-5
+    litellm_params:
+      model: bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0
+      max_agentic_loops: 5
+```
+
+Clients cannot set it. `max_agentic_loops` is on the proxy's untrusted-field list, so a request body that
+carries it is ignored and one request can never drive an unbounded number of upstream model calls.
+
+When the ceiling is reached, the turn ends there and the client gets the last response back with the internal
+`litellm_web_search` tool call removed and `stop_reason: end_turn`. The client never declared that tool, so
+leaving the block in would hand it a tool call it has no way to answer. The answer can be less complete than
+it would have been with more loops, which is the tradeoff the ceiling buys
+
+---
+
 ## Streaming Support
 
 WebSearch interception works transparently with both streaming and non-streaming requests.
