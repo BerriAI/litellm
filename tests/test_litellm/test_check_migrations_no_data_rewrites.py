@@ -113,6 +113,18 @@ class TestInsert:
         sql = 'INSERT INTO "Foo" ("id") SELECT "id" FROM (VALUES (1), (2)) AS "v"("id");'
         assert _keywords(tmp_path, sql) == ("INSERT ... SELECT",)
 
+    def test_values_after_a_set_operation_does_not_bound_an_insert_select(self, tmp_path):
+        sql = 'INSERT INTO "Foo" ("id") SELECT "id" FROM "Bar" UNION ALL VALUES (1);'
+        assert _keywords(tmp_path, sql) == ("INSERT ... SELECT",)
+
+    def test_values_after_an_except_does_not_bound_an_insert_select(self, tmp_path):
+        sql = 'INSERT INTO "Foo" ("id") SELECT "id" FROM "Bar" EXCEPT VALUES (1);'
+        assert _keywords(tmp_path, sql) == ("INSERT ... SELECT",)
+
+    def test_a_select_term_after_a_values_list_is_still_flagged(self, tmp_path):
+        sql = 'INSERT INTO "Foo" ("id") VALUES (1), (2) UNION ALL SELECT "id" FROM "Bar";'
+        assert _keywords(tmp_path, sql) == ("INSERT ... SELECT",)
+
 
 class TestCommonTableExpressions:
     def test_cte_led_update_is_flagged(self, tmp_path):
@@ -272,6 +284,11 @@ class TestEscapeHatch:
         sql = 'UPDATE "Foo" SET "a" = 1;\n-- data-migration-ok: bounded\nALTER TABLE "Bar" ADD COLUMN "b" TEXT;'
         assert _keywords(tmp_path, sql) == ("UPDATE",)
 
+    def test_a_marker_written_below_its_statement_leaves_that_statement_flagged(self, tmp_path):
+        sql = 'UPDATE "Foo" SET "a" = 1;\n-- data-migration-ok: bounded\nUPDATE "Bar" SET "b" = 2;'
+        assert _keywords(tmp_path, sql) == ("UPDATE",)
+        assert _scan(tmp_path, sql)[0].line == 1
+
     def test_marker_inside_a_do_block_below_the_first_line_exempts(self, tmp_path):
         sql = (
             "-- AlterTable\n"
@@ -332,6 +349,47 @@ class TestDynamicSql:
 
     def test_a_literal_that_is_not_executed_is_still_inert(self, tmp_path):
         sql = "INSERT INTO \"Foo\" (\"note\") VALUES ('UPDATE \"Bar\" SET \"a\" = 1');"
+        assert _keywords(tmp_path, sql) == ()
+
+    def test_a_rewrite_declared_into_a_variable_is_flagged(self, tmp_path):
+        sql = (
+            "DO $$\n"
+            "DECLARE\n"
+            "    stmt text := 'UPDATE \"Foo\" SET \"a\" = 1';\n"
+            "BEGIN\n"
+            "    EXECUTE stmt;\n"
+            "END $$;"
+        )
+        assert _keywords(tmp_path, sql) == ("UPDATE",)
+        assert _scan(tmp_path, sql)[0].line == 3
+
+    def test_a_rewrite_assigned_in_the_body_is_flagged(self, tmp_path):
+        sql = (
+            "DO $$\n"
+            "DECLARE\n"
+            "    stmt text;\n"
+            "BEGIN\n"
+            "    stmt := 'DELETE FROM \"Foo\" WHERE \"a\" = 1';\n"
+            "    EXECUTE stmt;\n"
+            "END $$;"
+        )
+        assert _keywords(tmp_path, sql) == ("DELETE",)
+        assert _scan(tmp_path, sql)[0].line == 5
+
+    def test_ddl_assigned_to_a_variable_passes(self, tmp_path):
+        sql = "DO $$\nDECLARE\n    stmt text := 'ALTER TABLE \"Foo\" ADD COLUMN \"b\" TEXT';\nBEGIN\n    EXECUTE stmt;\nEND $$;"
+        assert _keywords(tmp_path, sql) == ()
+
+    def test_a_marker_exempts_a_rewrite_held_in_a_variable(self, tmp_path):
+        sql = (
+            "DO $$\n"
+            "DECLARE\n"
+            "    -- data-migration-ok: one config row, keyed by its primary key\n"
+            "    stmt text := 'UPDATE \"Config\" SET \"v\" = 1 WHERE \"k\" = ''rev''';\n"
+            "BEGIN\n"
+            "    EXECUTE stmt;\n"
+            "END $$;"
+        )
         assert _keywords(tmp_path, sql) == ()
 
 
