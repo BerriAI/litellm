@@ -2754,3 +2754,50 @@ def test_completion_default_api_base_sends_prompt_cache_breakpoint_for_gpt_5_6()
         {"type": "text", "text": "sys", "prompt_cache_breakpoint": {"mode": "explicit"}}
     ]
     assert request_body["extra_body"]["prompt_cache_options"] == {"mode": "explicit"}
+
+
+_SUBSCRIPTION_OAUTH_CREDENTIAL = "Bearer sk-ant-oat01-fake-subscription-token-for-testing-0123456789"
+
+
+def _scoped_headers_for_oauth_request():
+    from litellm.types.utils import ProviderSpecificHeader
+
+    return [
+        ProviderSpecificHeader(
+            custom_llm_provider="anthropic,bedrock,vertex_ai",
+            extra_headers={"anthropic-version": "2023-06-01"},
+        ),
+        ProviderSpecificHeader(
+            custom_llm_provider="anthropic",
+            extra_headers={"authorization": _SUBSCRIPTION_OAUTH_CREDENTIAL},
+        ),
+    ]
+
+
+def _run_anthropic_hop_with_shared_headers(shared_headers):
+    litellm.completion(
+        model="anthropic/claude-3-5-sonnet-20240620",
+        messages=[{"role": "user", "content": "Say OK"}],
+        extra_headers=shared_headers,
+        provider_specific_header=_scoped_headers_for_oauth_request(),
+        api_key="sk-fake-anthropic-key",
+        mock_response="OK",
+    )
+
+
+def test_completion_does_not_mutate_caller_supplied_headers():
+    shared_headers = {"x-tenant": "acme"}
+
+    _run_anthropic_hop_with_shared_headers(shared_headers)
+
+    assert shared_headers == {"x-tenant": "acme"}
+
+
+def test_anthropic_oauth_credential_does_not_persist_into_next_provider_hop():
+    shared_headers = {"x-tenant": "acme"}
+
+    _run_anthropic_hop_with_shared_headers(shared_headers)
+
+    leaked = [name for name, value in shared_headers.items() if value == _SUBSCRIPTION_OAUTH_CREDENTIAL]
+    assert leaked == []
+    assert "anthropic-version" not in shared_headers
