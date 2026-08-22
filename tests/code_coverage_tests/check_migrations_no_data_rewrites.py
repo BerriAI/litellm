@@ -33,8 +33,10 @@ below line up with the statements they exempt.
 
 Add a column and let the application populate it, or run the rewrite as an opt-in
 batched job outside boot. When a rewrite is genuinely bounded and must ship inside
-the migration, put `-- data-migration-ok: <reason>` on the statement, naming what
-bounds it. The reason is required.
+the migration, put `-- data-migration-ok: <reason>` on the statement or on the line
+above it, naming what bounds it. The reason is required. A marker sharing a line
+with the statement it follows exempts that statement alone, so the next statement
+down is still checked rather than picking the marker up as its own.
 
 `GRANDFATHERED` freezes the violations that predate this check. Prisma records a
 checksum for every applied migration and this repo treats applied files as
@@ -115,6 +117,19 @@ class Violation:
     def render(self) -> str:
         location = f"{MIGRATIONS_DIR.relative_to(REPO_ROOT)}/{self.migration}/migration.sql"
         return f"{location}:{self.line}: {self.keyword} rewrites existing rows at boot"
+
+
+@dataclass(frozen=True, slots=True)
+class Markers:
+    lines: frozenset[int]
+    standalone: frozenset[int]
+
+    def exempt(self, first: int, last: int) -> bool:
+        """Whether a statement spanning `first` to `last` carries a marker. A marker alone on
+        its line speaks for the statement below it, which is how one written above a rewrite
+        exempts it. A marker sharing its line with the statement it follows speaks for that
+        statement only, so the next statement down does not inherit the exemption."""
+        return any(line in self.lines for line in range(first, last + 1)) or first - 1 in self.standalone
 
 
 def blank(text: str) -> str:
@@ -273,16 +288,25 @@ def contains(statement: str, keyword: str) -> bool:
     return re.search(rf"\b{keyword}\b", statement, re.IGNORECASE) is not None
 
 
-def exempt_lines(sql: str) -> frozenset[int]:
-    return frozenset(sql.count("\n", 0, match.start()) + 1 for match in MARKER.finditer(sql))
+def read_markers(sql: str) -> Markers:
+    lines: set[int] = set()
+    standalone: set[int] = set()
+
+    for match in MARKER.finditer(sql):
+        line = sql.count("\n", 0, match.start()) + 1
+        lines.add(line)
+        if not sql[sql.rfind("\n", 0, match.start()) + 1 : match.start()].strip():
+            standalone.add(line)
+
+    return Markers(frozenset(lines), frozenset(standalone))
 
 
-def scan(sql: str, migration: str, exempt: frozenset[int]) -> Iterator[Violation]:
-    yield from scan_region(sql, sql, migration, exempt, 0)
+def scan(sql: str, migration: str, markers: Markers) -> Iterator[Violation]:
+    yield from scan_region(sql, sql, migration, markers, 0)
 
 
 def scan_region(
-    document: str, region: str, migration: str, exempt: frozenset[int], offset: int
+    document: str, region: str, migration: str, markers: Markers, offset: int
 ) -> Iterator[Violation]:
     """Violations in one region of `document`, whose text begins at `offset`. Lines are
     always counted against the whole document, so a statement nested in a dollar-quoted
@@ -293,18 +317,18 @@ def scan_region(
         if hands_off_sql(match.group()):
             for start, end in literals:
                 if match.start() <= start and end <= match.end():
-                    yield from scan_region(document, region[start:end], migration, exempt, offset + start)
+                    yield from scan_region(document, region[start:end], migration, markers, offset + start)
         keyword = offending_keyword(match.group())
         if keyword is None:
             continue
         first = line_of(document, offset + keyword_start(match))
         last = line_of(document, offset + match.end())
-        if any(line in exempt for line in range(first - 1, last + 1)):
+        if markers.exempt(first, last):
             continue
         yield Violation(migration, first, keyword)
 
     for start, end in bodies:
-        yield from scan_region(document, region[start:end], migration, exempt, offset + start)
+        yield from scan_region(document, region[start:end], migration, markers, offset + start)
 
 
 def keyword_start(statement: re.Match[str]) -> int:
@@ -318,7 +342,7 @@ def line_of(sql: str, offset: int) -> int:
 
 def scan_migration(directory: Path) -> tuple[Violation, ...]:
     sql = (directory / "migration.sql").read_text(encoding="utf-8")
-    return tuple(scan(sql, directory.name, exempt_lines(sql)))
+    return tuple(scan(sql, directory.name, read_markers(sql)))
 
 
 def stale_grandfathers(found: Mapping[str, tuple[Violation, ...]]) -> tuple[str, ...]:

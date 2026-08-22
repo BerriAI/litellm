@@ -302,6 +302,29 @@ class TestEscapeHatch:
         )
         assert _keywords(tmp_path, sql) == ()
 
+    def test_a_marker_trailing_a_statement_exempts_that_statement(self, tmp_path):
+        sql = 'UPDATE "Foo" SET "a" = 1; -- data-migration-ok: one row\nALTER TABLE "Bar" ADD COLUMN "b" TEXT;'
+        assert _keywords(tmp_path, sql) == ()
+
+    def test_a_marker_trailing_a_statement_does_not_exempt_the_next_one(self, tmp_path):
+        sql = 'UPDATE "Foo" SET "a" = 1; -- data-migration-ok: one row\nUPDATE "Bar" SET "b" = 2;'
+        assert _keywords(tmp_path, sql) == ("UPDATE",)
+        assert _scan(tmp_path, sql)[0].line == 2
+
+    def test_a_marker_trailing_a_multiline_statement_does_not_exempt_the_next_one(self, tmp_path):
+        sql = (
+            'UPDATE "Foo"\n'
+            '   SET "a" = 1; -- data-migration-ok: one row\n'
+            'UPDATE "Bar" SET "b" = 2;'
+        )
+        assert _keywords(tmp_path, sql) == ("UPDATE",)
+        assert _scan(tmp_path, sql)[0].line == 3
+
+    def test_a_marker_alone_between_two_statements_belongs_to_the_one_below_it(self, tmp_path):
+        sql = 'UPDATE "Foo" SET "a" = 1;\n-- data-migration-ok: one row\nUPDATE "Bar" SET "b" = 2;'
+        assert _keywords(tmp_path, sql) == ("UPDATE",)
+        assert _scan(tmp_path, sql)[0].line == 1
+
     def test_marker_above_a_do_block_does_not_exempt_a_rewrite_inside_it(self, tmp_path):
         sql = (
             "-- data-migration-ok: bounded, this belongs to the insert below\n"
