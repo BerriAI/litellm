@@ -1,3 +1,5 @@
+import pytest
+
 from litellm.router_utils.reasoning_effort_capability import (
     intersect_supported_reasoning_efforts,
     resolve_supported_reasoning_efforts,
@@ -62,6 +64,48 @@ class TestResolveSupportedReasoningEfforts:
         )
         assert resolved is not None
         assert "xhigh" not in resolved
+
+
+class TestNoneLevelPolarity:
+    def test_none_stays_opt_out_off_azure(self):
+        resolved = resolve_supported_reasoning_efforts(
+            {"supports_reasoning": True, "litellm_provider": "openai", "key": "gpt-5-mini"}
+        )
+        assert resolved is not None and "none" in resolved
+
+    def test_azure_without_the_flag_does_not_advertise_none(self):
+        resolved = resolve_supported_reasoning_efforts(
+            {"supports_reasoning": True, "litellm_provider": "azure", "key": "azure/unmapped-deployment"}
+        )
+        assert resolved == ("minimal", "low", "medium", "high")
+
+    def test_azure_with_the_flag_advertises_none(self):
+        resolved = resolve_supported_reasoning_efforts(
+            {
+                "supports_reasoning": True,
+                "litellm_provider": "azure",
+                "supports_none_reasoning_effort": True,
+                "key": "azure/unmapped-deployment",
+            }
+        )
+        assert resolved is not None and "none" in resolved
+
+    @pytest.mark.parametrize(
+        "model_key",
+        ["azure/gpt-5", "azure/gpt-5-mini", "azure/gpt-5-nano", "azure/gpt-5.2", "azure/gpt-5.6"],
+    )
+    def test_azure_advertisement_matches_the_azure_request_gate(self, model_key):
+        """AzureOpenAIGPT5Config raises UnsupportedParamsError on reasoning_effort='none' for models
+        it does not flag, so advertising the level there would offer routing a 400."""
+        from litellm.llms.azure.chat.gpt_5_transformation import AzureOpenAIGPT5Config
+        from litellm.utils import _get_model_info_helper
+
+        model_info = dict(_get_model_info_helper(model=model_key.split("/", 1)[1], custom_llm_provider="azure"))
+        resolved = resolve_supported_reasoning_efforts(model_info)
+
+        assert resolved is not None
+        gate_accepts_none = AzureOpenAIGPT5Config._supports_reasoning_effort_level(model_key, "none")
+        assert ("none" in resolved) is gate_accepts_none
 
 
 class TestIntersectSupportedReasoningEfforts:
