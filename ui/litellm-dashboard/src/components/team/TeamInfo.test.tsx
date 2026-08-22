@@ -319,6 +319,34 @@ describe("TeamInfoView", () => {
       expect(screen.getByText(/of \$1,000\.00/)).toBeInTheDocument();
     });
 
+    it("renders a tpm/rpm/budget limit of 0 as 0 in the overview and settings tabs, never as Unlimited or No Limit", async () => {
+      vi.mocked(networking.teamInfoCall).mockResolvedValue(
+        createMockTeamData({
+          tpm_limit: 0,
+          rpm_limit: 0,
+          team_member_budget_table: { max_budget: 0, budget_duration: null, tpm_limit: 0, rpm_limit: 0 },
+        }),
+      );
+
+      renderWithProviders(<TeamInfoView {...defaultProps} />);
+
+      const overview = await screen.findByRole("tabpanel", { name: "Overview" });
+      expect(within(overview).getByText("TPM: 0")).toBeInTheDocument();
+      expect(within(overview).getByText("RPM: 0")).toBeInTheDocument();
+
+      await userEvent.setup({ delay: null }).click(screen.getByRole("tab", { name: "Settings" }));
+      const settings = await screen.findByRole("tabpanel", { name: "Settings" });
+      expect(within(settings).getByText("TPM: 0")).toBeInTheDocument();
+      expect(within(settings).getByText("RPM: 0")).toBeInTheDocument();
+      expect(within(settings).getByText("TPM Limit: 0")).toBeInTheDocument();
+      expect(within(settings).getByText("RPM Limit: 0")).toBeInTheDocument();
+      expect(within(settings).getByText("Max Budget: 0")).toBeInTheDocument();
+      expect(screen.queryByText("TPM: Unlimited")).not.toBeInTheDocument();
+      expect(screen.queryByText("RPM: Unlimited")).not.toBeInTheDocument();
+      expect(screen.queryByText("TPM Limit: No Limit")).not.toBeInTheDocument();
+      expect(screen.queryByText("RPM Limit: No Limit")).not.toBeInTheDocument();
+    });
+
     it("should display guardrails in overview when present", async () => {
       vi.mocked(networking.teamInfoCall).mockResolvedValue(
         createMockTeamData({
