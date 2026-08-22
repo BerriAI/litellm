@@ -42,8 +42,10 @@ from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionImageObject,
     ChatCompletionImageUrlObject,
+    ChatCompletionRedactedThinkingBlock,
     ChatCompletionResponseMessage,
     ChatCompletionSystemMessage,
+    ChatCompletionThinkingBlock,
     ChatCompletionToolCallChunk,
     ChatCompletionToolCallFunctionChunk,
     ChatCompletionToolMessage,
@@ -560,6 +562,25 @@ class LiteLLMCompletionResponsesConfig:
         return LiteLLMCompletionResponsesConfig._merge_reasoning_only_assistant_messages(messages)
 
     @staticmethod
+    def _reasoning_only_assistant_message(
+        reasoning_text: str | None,
+        thinking_blocks: Sequence[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock] | None,
+    ) -> ChatCompletionResponseMessage:
+        """
+        Build the assistant message that carries a prior turn's reasoning and
+        nothing else, so a reasoning item never reaches the provider as visible
+        assistant ``content``.
+        """
+        message: Final = ChatCompletionResponseMessage(role="assistant", content=None)
+        if reasoning_text:
+            message["reasoning_content"] = reasoning_text
+        if thinking_blocks:
+            message["thinking_blocks"] = list(  # mutable-ok: thinking_blocks is a list on the message contract
+                thinking_blocks
+            )
+        return message
+
+    @staticmethod
     def _merge_reasoning_only_assistant_messages(
         messages: list[  # mutable-ok: input sequence
             AllMessageValues
@@ -579,6 +600,11 @@ class LiteLLMCompletionResponsesConfig:
         merges standalone reasoning-only assistant messages into the
         immediately following assistant message.
 
+        Signed ``thinking_blocks`` decoded from ``encrypted_content`` travel the
+        same way and are placed ahead of any thinking blocks the target message
+        already carries, because Anthropic and Bedrock verify signatures against
+        the original block order.
+
         If the reasoning item is not followed by an assistant message (e.g. a
         stateless chain replays ``reasoning`` + ``user``), the standalone
         reasoning message is preserved so the reasoning is still passed back.
@@ -596,6 +622,15 @@ class LiteLLMCompletionResponsesConfig:
                 value = getattr(msg, "reasoning_content", None)  # rebind-ok: branch lookup
             return value if isinstance(value, str) and value else None
 
+        def _thinking_blocks(
+            msg: object,
+        ) -> tuple[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock, ...] | None:
+            if isinstance(msg, dict):
+                value = msg.get("thinking_blocks")  # rebind-ok: branch lookup
+            else:
+                value = getattr(msg, "thinking_blocks", None)  # rebind-ok: branch lookup
+            return tuple(value) if isinstance(value, list) and value else None
+
         def _content(msg: object) -> object | None:
             if isinstance(msg, dict):
                 return msg.get("content")
@@ -606,60 +641,73 @@ class LiteLLMCompletionResponsesConfig:
                 return msg.get("tool_calls")
             return getattr(msg, "tool_calls", None)
 
+        def _apply_pending(
+            msg: object,
+            pending_items: Sequence[
+                tuple[
+                    str | None,
+                    tuple[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock, ...] | None,
+                ]
+            ],
+        ) -> None:
+            pending_texts: Final = tuple(text for text, _ in pending_items if text)
+            pending_blocks: Final = tuple(block for _, blocks in pending_items for block in blocks or ())
+            if pending_texts:
+                existing_text: Final = _reasoning_text(msg)
+                combined: Final = "\n".join(pending_texts + ((existing_text,) if existing_text else ()))
+                if isinstance(msg, dict):
+                    cast(dict[str, Any], msg)["reasoning_content"] = combined  # cast-ok: mutable reasoning carrier
+                else:
+                    setattr(msg, "reasoning_content", combined)  # noqa: B010  # attribute name is fixed, not dynamic
+            if pending_blocks:
+                replayed: Final = list(  # mutable-ok: thinking_blocks is a list on the message contract
+                    pending_blocks + (_thinking_blocks(msg) or ())
+                )
+                if isinstance(msg, dict):
+                    cast(dict[str, Any], msg)["thinking_blocks"] = replayed  # cast-ok: mutable reasoning carrier
+                else:
+                    setattr(msg, "thinking_blocks", replayed)  # noqa: B010  # attribute name is fixed, not dynamic
+
+        _standalone: Final = LiteLLMCompletionResponsesConfig._reasoning_only_assistant_message
+
         merged: list[  # mutable-ok: accumulator  # rebind-ok: accumulator
             AllMessageValues
             | GenericChatCompletionMessage
             | ChatCompletionMessageToolCall
             | ChatCompletionResponseMessage
         ] = []  # mutable-ok: accumulator
-        pending_reasoning: list[str] = []  # mutable-ok: accumulator  # rebind-ok: accumulator
+        pending: list[  # mutable-ok: accumulator  # rebind-ok: accumulator
+            tuple[
+                str | None,
+                tuple[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock, ...] | None,
+            ]
+        ] = []  # mutable-ok: accumulator
 
         for msg in messages:
             if (
                 _role(msg) == "assistant"
                 and _content(msg) is None
                 and not _tool_calls(msg)
-                and _reasoning_text(msg) is not None
+                and (_reasoning_text(msg) is not None or _thinking_blocks(msg) is not None)
             ):
-                pending_reasoning.append(_reasoning_text(msg) or "")
+                pending.append((_reasoning_text(msg), _thinking_blocks(msg)))
                 continue
 
-            if pending_reasoning and _role(msg) == "assistant":
-                combined = "\n".join(pending_reasoning)
-                existing = _reasoning_text(msg)
-                if existing:
-                    combined = combined + "\n" + existing
-                if isinstance(msg, dict):
-                    cast(dict[str, Any], msg)["reasoning_content"] = combined  # cast-ok: mutable reasoning carrier
-                else:
-                    setattr(msg, "reasoning_content", combined)  # noqa: B010
-                pending_reasoning = []  # mutable-ok: reset accumulator
-            elif pending_reasoning:
+            if pending and _role(msg) == "assistant":
+                _apply_pending(msg, pending)
+                pending = []  # mutable-ok: reset accumulator
+            elif pending:
                 # Not followed by an assistant message — keep the reasoning
                 # standalone instead of dropping it.
                 merged.extend(  # mutable-ok: append reasoning messages
-                    [  # mutable-ok: append reasoning messages
-                        ChatCompletionResponseMessage(
-                            role="assistant",
-                            content=None,
-                            reasoning_content=text,
-                        )
-                        for text in pending_reasoning
-                    ]
+                    [_standalone(text, blocks) for text, blocks in pending]  # mutable-ok: append reasoning messages
                 )
-                pending_reasoning = []  # mutable-ok: reset accumulator
+                pending = []  # mutable-ok: reset accumulator
 
             merged.append(msg)
 
         merged.extend(  # mutable-ok: append trailing reasoning
-            [  # mutable-ok: append trailing reasoning
-                ChatCompletionResponseMessage(
-                    role="assistant",
-                    content=None,
-                    reasoning_content=text,
-                )
-                for text in pending_reasoning
-            ]
+            [_standalone(text, blocks) for text, blocks in pending]  # mutable-ok: append trailing reasoning
         )
 
         return merged
@@ -1140,16 +1188,15 @@ class LiteLLMCompletionResponsesConfig:
             reasoning_text = LiteLLMCompletionResponsesConfig._extract_reasoning_text_from_input_item(  # rebind-ok: extraction result
                 input_item
             )
-            if not reasoning_text:
-                # No plaintext reasoning is available (e.g. encrypted_content only).
-                # Chat-completions providers cannot consume opaque encrypted blobs,
-                # so skip the item instead of polluting the prompt.
+            thinking_blocks = LiteLLMCompletionResponsesConfig._decode_thinking_blocks_from_input_item(  # rebind-ok: extraction result
+                input_item
+            )
+            if not reasoning_text and not thinking_blocks:
                 return []  # mutable-ok: empty drop result
             return [  # mutable-ok: single message result
-                ChatCompletionResponseMessage(
-                    role="assistant",
-                    content=None,
-                    reasoning_content=reasoning_text,
+                LiteLLMCompletionResponsesConfig._reasoning_only_assistant_message(
+                    reasoning_text=reasoning_text,
+                    thinking_blocks=thinking_blocks,
                 )
             ]
         else:
@@ -1210,6 +1257,57 @@ class LiteLLMCompletionResponsesConfig:
             if text_parts:
                 return "\n".join(text_parts)
         return None
+
+    @staticmethod
+    def _decode_thinking_blocks_from_input_item(
+        input_item: Mapping[str, object],
+    ) -> tuple[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock, ...] | None:
+        """
+        Decode ``encrypted_content`` written by ``_encode_thinking_blocks`` back
+        into the signed thinking blocks it serialized.
+
+        LiteLLM writes this field itself for providers whose reasoning is signed
+        (Anthropic, Bedrock converse): it is a JSON array of the provider's own
+        ``thinking`` / ``redacted_thinking`` blocks, not an opaque OpenAI blob.
+        Replaying the blocks on the assistant message is what lets the provider
+        verify the signature and keep the prior chain-of-thought.
+
+        Returns None for anything this deployment did not write, so a genuinely
+        opaque blob is still skipped rather than forwarded as garbage.
+        """
+        encrypted_content: Final[object] = input_item.get("encrypted_content")
+        if not isinstance(encrypted_content, str) or not encrypted_content.strip():
+            return None
+        try:
+            decoded: Final[object] = json.loads(encrypted_content)
+        except ValueError:
+            return None
+        if not isinstance(decoded, list):
+            return None
+
+        blocks: Final = tuple(
+            cast(  # cast-ok: shape validated by _is_replayable_thinking_block
+                ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock,
+                block,
+            )
+            for block in decoded
+            if isinstance(block, Mapping) and LiteLLMCompletionResponsesConfig._is_replayable_thinking_block(block)
+        )
+        return blocks or None
+
+    @staticmethod
+    def _is_replayable_thinking_block(block: Mapping[str, object]) -> bool:
+        """
+        A thinking block is only worth replaying when the provider can verify
+        it: a ``thinking`` block needs its signature, a ``redacted_thinking``
+        block needs its opaque data.
+        """
+        block_type: Final[object] = block.get("type")
+        if block_type == "thinking":
+            return bool(block.get("signature"))
+        if block_type == "redacted_thinking":
+            return bool(block.get("data"))
+        return False
 
     @staticmethod
     def _is_input_item_tool_call_output(input_item: Mapping[str, object]) -> bool:

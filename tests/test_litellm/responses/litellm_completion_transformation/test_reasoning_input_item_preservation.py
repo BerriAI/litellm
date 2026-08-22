@@ -7,11 +7,18 @@ generic message branch, polluting the prompt as visible assistant ``content``
 or being silently dropped. Chat-completions providers such as DeepSeek V4 and
 Kimi K2.6 require the chain-of-thought to be replayed as ``reasoning_content``
 on an assistant message.
+
+Providers whose reasoning is signed (Anthropic, Bedrock converse) get their
+blocks back through ``encrypted_content``, which LiteLLM itself writes as a
+JSON array of thinking blocks on the response side.
 """
+
+import json
 
 from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
 )
+from litellm.types.utils import Message
 
 
 def _transform_item(item):
@@ -59,8 +66,8 @@ class TestReasoningInputItemHandler:
         messages = _transform_item(item)
         assert messages[0]["reasoning_content"] == "..."
 
-    def test_reasoning_item_with_encrypted_content_only_dropped(self):
-        """Opaque encrypted reasoning cannot be forwarded to chat completions."""
+    def test_reasoning_item_with_opaque_encrypted_content_dropped(self):
+        """An encrypted blob LiteLLM did not write cannot be forwarded."""
         item = {"type": "reasoning", "id": "rs_3", "encrypted_content": "opaque-blob"}
         assert _transform_item(item) == []
 
@@ -140,6 +147,123 @@ class TestReasoningInputItemMerging:
         assert len(messages) == 1
         assert messages[0]["content"] == "The answer."
         assert messages[0]["reasoning_content"] == "old reasoning\nnew reasoning"
+
+
+class TestEncryptedReasoningRoundTrip:
+    """``encrypted_content`` LiteLLM wrote decodes back into thinking blocks."""
+
+    def test_encoded_thinking_blocks_decode_back(self):
+        """The decoder is the inverse of the encoder the response side uses."""
+        blocks = [
+            {"type": "thinking", "thinking": "step one", "signature": "sig-one"},
+            {"type": "redacted_thinking", "data": "redacted-payload"},
+        ]
+        message = Message(role="assistant", content="answer", thinking_blocks=blocks)
+        encoded = LiteLLMCompletionResponsesConfig._encode_thinking_blocks(message)
+        decoded = LiteLLMCompletionResponsesConfig._decode_thinking_blocks_from_input_item(
+            {"type": "reasoning", "encrypted_content": encoded}
+        )
+        assert list(decoded) == blocks
+
+    def test_signed_thinking_blocks_replayed_on_assistant_message(self):
+        """A signed block survives the bridge instead of vanishing."""
+        item = {
+            "type": "reasoning",
+            "id": "rs_1",
+            "encrypted_content": json.dumps(
+                [{"type": "thinking", "thinking": "hidden", "signature": "sig-one"}]
+            ),
+        }
+        messages = _transform_item(item)
+        assert len(messages) == 1
+        assert messages[0]["content"] is None
+        assert messages[0]["thinking_blocks"] == [
+            {"type": "thinking", "thinking": "hidden", "signature": "sig-one"}
+        ]
+
+    def test_unsigned_blocks_dropped(self):
+        """Blocks without a signature or redacted payload are not replayed."""
+        item = {
+            "type": "reasoning",
+            "id": "rs_2",
+            "encrypted_content": json.dumps([{"type": "thinking", "thinking": "unsigned"}]),
+        }
+        assert _transform_item(item) == []
+
+    def test_json_object_encrypted_content_dropped(self):
+        """A JSON payload that is not a block array is treated as opaque."""
+        item = {
+            "type": "reasoning",
+            "id": "rs_3",
+            "encrypted_content": json.dumps({"ciphertext": "abc"}),
+        }
+        assert _transform_item(item) == []
+
+    def test_thinking_blocks_merged_onto_tool_call_assistant(self):
+        """Signed reasoning lands on the assistant turn carrying the tool call."""
+        messages = _transform_input(
+            [
+                {
+                    "type": "reasoning",
+                    "id": "rs_1",
+                    "summary": [{"type": "summary_text", "text": "look it up"}],
+                    "encrypted_content": json.dumps(
+                        [{"type": "thinking", "thinking": "hidden", "signature": "sig-one"}]
+                    ),
+                },
+                {
+                    "type": "function_call",
+                    "call_id": "call_1",
+                    "name": "lookup",
+                    "arguments": '{"cwe": "79"}',
+                },
+            ]
+        )
+        assert len(messages) == 1
+        assert messages[0]["reasoning_content"] == "look it up"
+        assert messages[0]["thinking_blocks"] == [
+            {"type": "thinking", "thinking": "hidden", "signature": "sig-one"}
+        ]
+        assert len(messages[0]["tool_calls"]) == 1
+
+    def test_replayed_blocks_precede_existing_blocks(self):
+        """Signature verification depends on the original block order."""
+        messages = LiteLLMCompletionResponsesConfig._merge_reasoning_only_assistant_messages(
+            [
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "thinking_blocks": [{"type": "thinking", "thinking": "older", "signature": "a"}],
+                },
+                {
+                    "role": "assistant",
+                    "content": "answer",
+                    "thinking_blocks": [{"type": "thinking", "thinking": "newer", "signature": "b"}],
+                },
+            ]
+        )
+        assert len(messages) == 1
+        assert [block["thinking"] for block in messages[0]["thinking_blocks"]] == ["older", "newer"]
+
+    def test_encrypted_only_reasoning_preserved_before_user_turn(self):
+        """A signed item with no plaintext still survives a stateless replay."""
+        messages = _transform_input(
+            [
+                {
+                    "type": "reasoning",
+                    "id": "rs_1",
+                    "encrypted_content": json.dumps(
+                        [{"type": "thinking", "thinking": "hidden", "signature": "sig-one"}]
+                    ),
+                },
+                {"role": "user", "content": "and now?"},
+            ]
+        )
+        assert len(messages) == 2
+        assert messages[0]["role"] == "assistant"
+        assert "reasoning_content" not in messages[0]
+        assert messages[0]["thinking_blocks"][0]["signature"] == "sig-one"
+        assert messages[1]["role"] == "user"
 
 
 class TestNonReasoningInputItemUnchanged:
