@@ -51,6 +51,7 @@ from capabilities import (
     decoded_model_from_id,
     is_managed_id,
     matches_id_shape,
+    openai_batch_params,
     raw_id_matches_provider,
 )
 from e2e_http import (
@@ -506,13 +507,7 @@ class TestBatchFileContent:
         self, client: BatchClient, resources: ResourceManager
     ) -> None:
         proxy_name = f"e2e-file-content-{unique_marker()}"
-        model_id = client.create_model(
-            proxy_name,
-            LiteLLMParamsBody(
-                model=f"openai/{OPENAI_FILE_CONTENT_BACKEND}",
-                api_key="os.environ/OPENAI_API_KEY",
-            ),
-        )
+        model_id = client.create_model(proxy_name, openai_batch_params())
         resources.defer(lambda: client.delete_model(model_id))
         key = resources.key()
 

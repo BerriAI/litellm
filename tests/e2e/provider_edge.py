@@ -20,10 +20,9 @@ headers must never touch disk. An unmatched replay call returns HTTP
 proxy relays as a provider error the failing test surfaces.
 
 v1 limits: only the mounts in ``EDGE_MOUNTS`` (SigV4 providers like Bedrock
-sign the Host header, so a forwarding edge breaks their signatures), JSON and
-opaque single-part bodies (multipart boundaries are random per request),
-streaming fidelity is LIT-5742, and CI wiring is LIT-5748. Suites that do not
-wire the edge keep hitting providers live in every mode.
+sign the Host header, so a forwarding edge breaks their signatures), streaming
+fidelity is LIT-5742, and CI wiring is LIT-5748. Suites that do not wire the
+edge keep hitting providers live in every mode.
 """
 
 from __future__ import annotations
@@ -32,6 +31,7 @@ import base64
 import difflib
 import functools
 import hashlib
+import re
 import threading
 from collections import deque
 from collections.abc import Mapping
@@ -103,26 +103,194 @@ _RESPONSE_DROPPED_HEADERS: Final[frozenset[str]] = _HOP_BY_HOP_HEADERS | {
 _JSON: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
 
 
-def _edge_request(method: str, path: str, query: str, body: bytes | None) -> RecordedRequest:
-    """The identity replay matches on: the edge path (mount included), the query
-    as params, and the body as parsed JSON, or as a canonicalized content digest
-    when it is not JSON so opaque uploads still match across runs."""
-    params: Final = dict(parse_qsl(query, keep_blank_values=True))
-    if not body:
-        return RecordedRequest(method=method.lower(), path=path, headers={}, params=params)
-    decoded: Final = body.decode("utf-8", errors="replace")
+_BOUNDARY_PATTERN: Final = re.compile(
+    r'boundary=(?:"([^"]*)"|([^;,\s]+))', re.IGNORECASE
+)
+_DISPOSITION_NAME_PATTERN: Final = re.compile(r'(?:^|;)\s*name="([^"]*)"')
+_DISPOSITION_FILENAME_PATTERN: Final = re.compile(r'(?:^|;)\s*filename="([^"]*)"')
+_UNPARSED_MULTIPART: Final = "<unparsed-multipart>"
+_BOUNDARY_PLACEHOLDER: Final = b"--<boundary>"
+
+
+@dataclass(frozen=True)
+class _MultipartPart:
+    field_name: str
+    filename: str | None
+    content: bytes
+
+
+def _header_value(headers: Mapping[str, str], name: str) -> str:
+    wanted: Final = name.lower()
+    return next((value for key, value in headers.items() if key.lower() == wanted), "")
+
+
+def _multipart_boundary(content_type: str) -> str | None:
+    if "multipart/form-data" not in content_type.lower():
+        return None
+    match: Final = _BOUNDARY_PATTERN.search(content_type)
+    return None if match is None else match.group(1) or match.group(2)
+
+
+def _parse_multipart_part(segment: bytes) -> _MultipartPart | None:
+    head, separator, content = segment.partition(b"\r\n\r\n")
+    if not separator:
+        return None
+    disposition: Final = "".join(
+        value
+        for line in head.decode("utf-8", errors="replace").split("\r\n")
+        for name, _, value in [line.partition(":")]
+        if name.strip().lower() == "content-disposition"
+    )
+    name_match: Final = _DISPOSITION_NAME_PATTERN.search(disposition)
+    if name_match is None:
+        return None
+    filename_match: Final = _DISPOSITION_FILENAME_PATTERN.search(disposition)
+    return _MultipartPart(
+        field_name=name_match.group(1),
+        filename=None if filename_match is None else filename_match.group(1),
+        content=content,
+    )
+
+
+def _multipart_parts(body: bytes, boundary: str) -> tuple[_MultipartPart, ...] | None:
+    """The wire body split back into its parts, or None when it does not parse as the
+    declared envelope so the caller can fall back to the opaque content digest."""
+    segments: Final = body.split(b"--" + boundary.encode())
+    if len(segments) < 3 or not segments[-1].startswith(b"--"):
+        return None
+    parsed: Final = tuple(
+        _parse_multipart_part(segment.removeprefix(b"\r\n").removesuffix(b"\r\n"))
+        for segment in segments[1:-1]
+    )
+    if any(part is None for part in parsed):
+        return None
+    return tuple(part for part in parsed if part is not None)
+
+
+def _content_digest(content: bytes) -> str:
+    """Text is canonicalized before hashing so a per-run marker inside an uploaded JSONL
+    does not move the key; anything that is not UTF-8 is hashed byte for byte, since a
+    lossy decode collapses every binary payload of one length onto one digest."""
     try:
-        parsed: Final[JsonValue] = _JSON.validate_json(decoded)
-    except ValueError:
-        return RecordedRequest(
-            method=method.lower(),
-            path=path,
-            headers={},
-            params=params,
-            file_sha256=hashlib.sha256(canonical_string(decoded).encode()).hexdigest(),
-            file_bytes=len(body),
+        text: Final = content.decode("utf-8")
+    except UnicodeDecodeError:
+        return hashlib.sha256(content).hexdigest()
+    return hashlib.sha256(canonical_string(text).encode()).hexdigest()
+
+
+def _form_fields(fields: tuple[_MultipartPart, ...]) -> dict[str, str]:
+    """The ordinary field parts, flattened into the mapping the bundle format stores. A
+    name sent more than once takes an index instead of overwriting the earlier value, so
+    nothing an upload said is dropped from its key."""
+    form: dict[str, str] = {}
+    for part in fields:
+        name = part.field_name
+        occurrence = 1
+        while name in form:
+            name = f"{part.field_name}[{occurrence}]"
+            occurrence += 1
+        form[name] = part.content.decode("utf-8", errors="replace")
+    return form
+
+
+def _file_identity(files: tuple[_MultipartPart, ...]) -> tuple[str | None, str | None, int | None]:
+    """Name, content digest, and total length for the uploaded file parts. The name
+    carries each part's field name as well as its filename, so two uploads sending the
+    same bytes under different field names stay apart. A lone file keeps its own content
+    digest; several fold into one digest over the per-part identities, which is ordered,
+    so parts arriving in a different order key differently."""
+    if not files:
+        return None, None, None
+    names: Final = ", ".join(f"{part.field_name}:{part.filename}" for part in files)
+    total: Final = sum(len(part.content) for part in files)
+    if len(files) == 1:
+        return names, _content_digest(files[0].content), total
+    folded: Final = _JSON.dump_json(
+        [
+            [part.field_name, part.filename, _content_digest(part.content), len(part.content)]
+            for part in files
+        ]
+    )
+    return names, hashlib.sha256(folded).hexdigest(), total
+
+
+def _multipart_request(
+    method: str, path: str, params: dict[str, str], parts: tuple[_MultipartPart, ...]
+) -> RecordedRequest:
+    """A multipart upload keyed by what it says rather than by its wire bytes: every
+    ordinary field, plus the identity of the uploaded file. The random per-request
+    boundary is envelope, never content, so it never reaches the digest."""
+    form: Final = _form_fields(tuple(part for part in parts if part.filename is None))
+    file_name, file_sha256, file_bytes = _file_identity(
+        tuple(part for part in parts if part.filename is not None)
+    )
+    return RecordedRequest(
+        method=method,
+        path=path,
+        headers={},
+        params=params,
+        form=form,
+        file_name=file_name,
+        file_sha256=file_sha256,
+        file_bytes=file_bytes,
+    )
+
+
+def _opaque_request(
+    method: str,
+    path: str,
+    params: dict[str, str],
+    body: bytes,
+    digested: bytes,
+    file_name: str | None = None,
+) -> RecordedRequest:
+    """A body kept out of the bundle and matched on its digest alone. ``digested`` is
+    what the digest runs over, which is the body itself unless something in it has to be
+    normalized away first."""
+    return RecordedRequest(
+        method=method,
+        path=path,
+        headers={},
+        params=params,
+        file_name=file_name,
+        file_sha256=_content_digest(digested),
+        file_bytes=len(body),
+    )
+
+
+def _edge_request(
+    method: str, path: str, query: str, body: bytes | None, content_type: str = ""
+) -> RecordedRequest:
+    """The identity replay matches on: the edge path (mount included), the query as
+    params, and the body as parsed JSON, as parsed multipart fields and file identity
+    when the content type declares an envelope, or as a content digest otherwise so
+    opaque uploads still match across runs. A multipart body that does not parse still
+    has its boundary normalized away, because that boundary is fresh every request and
+    would otherwise guarantee a miss."""
+    params: Final = dict(parse_qsl(query, keep_blank_values=True))
+    lowered_method: Final = method.lower()
+    if not body:
+        return RecordedRequest(method=lowered_method, path=path, headers={}, params=params)
+    boundary: Final = _multipart_boundary(content_type)
+    if boundary is not None:
+        parts = _multipart_parts(body, boundary)
+        if parts is not None:
+            return _multipart_request(lowered_method, path, params, parts)
+        return _opaque_request(
+            lowered_method,
+            path,
+            params,
+            body,
+            body.replace(b"--" + boundary.encode(), _BOUNDARY_PLACEHOLDER),
+            _UNPARSED_MULTIPART,
         )
-    return RecordedRequest(method=method.lower(), path=path, headers={}, params=params, body=parsed)
+    try:
+        parsed: Final[JsonValue] = _JSON.validate_json(body)
+    except ValueError:
+        return _opaque_request(lowered_method, path, params, body, body)
+    return RecordedRequest(
+        method=lowered_method, path=path, headers={}, params=params, body=parsed
+    )
 
 
 def _build_pool(recorded: tuple[Interaction, ...]) -> dict[str, deque[Interaction]]:
@@ -351,7 +519,9 @@ def handle_edge_request(
         return _text_reply(
             404, f"unknown provider mount {mount!r}; known mounts: {', '.join(sorted(mounts))}"
         )
-    request: Final = _edge_request(method, split.path, split.query, body)
+    request: Final = _edge_request(
+        method, split.path, split.query, body, _header_value(headers, "content-type")
+    )
     match backend:
         case RecordEdge():
             return _handle_record(
