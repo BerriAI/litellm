@@ -1,4 +1,6 @@
+import json
 from collections.abc import Iterator
+from pathlib import Path
 from typing import Final
 
 import pytest
@@ -6,6 +8,17 @@ import pytest
 import litellm
 from litellm.llms.databricks.cost_calculator import cost_per_token
 from litellm.types.utils import ModelInfo, Usage
+
+REPO_ROOT: Final = Path(__file__).parents[4]
+MAIN_PRICES: Final = REPO_ROOT / "model_prices_and_context_window.json"
+BACKUP_PRICES: Final = REPO_ROOT / "litellm" / "model_prices_and_context_window_backup.json"
+NEW_MODELS: Final = (
+    "databricks/databricks-claude-opus-4-7",
+    "databricks/databricks-claude-opus-4-8",
+    "databricks/databricks-claude-opus-5",
+    "databricks/databricks-claude-sonnet-5",
+    "databricks/databricks-claude-fable-5",
+)
 
 
 @pytest.fixture
@@ -89,6 +102,43 @@ def test_new_models_carry_cache_pricing(local_model_cost_map: None, model: str) 
     assert info["cache_creation_input_token_cost"] == pytest.approx(1.25 * info["input_cost_per_token"], rel=1e-4)
     assert info["cache_read_input_token_cost"] == pytest.approx(0.1 * info["input_cost_per_token"], rel=1e-4)
     assert info["supports_prompt_caching"] is True
+
+
+def test_every_priced_databricks_model_declares_cache_rates(local_model_cost_map: None) -> None:
+    undeclared: Final = [
+        model
+        for model, info in litellm.model_cost.items()
+        if model.startswith("databricks/")
+        and info.get("input_cost_per_token") is not None
+        and info.get("cache_read_input_token_cost") is None
+    ]
+
+    assert undeclared == []
+
+
+def test_models_without_a_cache_discount_bill_cache_tokens_at_the_input_rate(
+    local_model_cost_map: None,
+) -> None:
+    model: Final = "databricks/databricks-meta-llama-3-3-70b-instruct"
+    info: Final = _model_info(model)
+    usage: Final = Usage(
+        prompt_tokens=10000,
+        completion_tokens=100,
+        total_tokens=10100,
+        cache_read_input_tokens=8000,
+    )
+
+    prompt_cost, _ = cost_per_token(model=model, usage=usage)
+
+    assert prompt_cost == pytest.approx(10000 * info["input_cost_per_token"])
+
+
+@pytest.mark.parametrize("model", NEW_MODELS)
+def test_backup_price_map_matches_main(model: str) -> None:
+    main_cost: Final = json.loads(MAIN_PRICES.read_text())
+    backup_cost: Final = json.loads(BACKUP_PRICES.read_text())
+
+    assert backup_cost.get(model) == main_cost.get(model)
 
 
 def test_sonnet_5_ships_standard_rates_not_introductory(local_model_cost_map: None) -> None:
