@@ -28,6 +28,7 @@ from litellm.types.proxy.management_endpoints.model_management_endpoints import 
 )
 from litellm.types.proxy.public_endpoints.public_endpoints import (
     AgentCreateInfo,
+    ComplexityScorerDefaults,
     ProviderCreateInfo,
     PublicModelHubInfo,
     SupportedEndpointsResponse,
@@ -396,6 +397,28 @@ async def get_provider_fields() -> list[ProviderCreateInfo]:
         provider_create_fields: Final = json.load(f)
 
     return provider_create_fields
+
+
+@router.get(
+    "/public/complexity_router/scorer_defaults",
+    tags=["public", "auto router"],
+    response_model=ComplexityScorerDefaults,
+)
+async def get_complexity_scorer_defaults() -> ComplexityScorerDefaults:
+    """
+    Return the complexity router's shipped heuristic scorer defaults, for the dashboard to prefill with.
+    """
+    from litellm.router_strategy.complexity_router.config import (
+        DEFAULT_DIMENSION_WEIGHTS,
+        DEFAULT_TIER_BOUNDARIES,
+        DEFAULT_TOKEN_THRESHOLDS,
+    )
+
+    return ComplexityScorerDefaults(
+        tier_boundaries=DEFAULT_TIER_BOUNDARIES,
+        token_thresholds=DEFAULT_TOKEN_THRESHOLDS,
+        dimension_weights=DEFAULT_DIMENSION_WEIGHTS,
+    )
 
 
 @router.get(

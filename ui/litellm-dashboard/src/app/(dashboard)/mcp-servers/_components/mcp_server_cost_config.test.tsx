@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi } from "vitest";
 import MCPServerCostConfig from "./mcp_server_cost_config";
@@ -20,7 +20,7 @@ describe("MCPServerCostConfig", () => {
     const onChange = vi.fn();
     render(<MCPServerCostConfig value={{}} tools={[]} onChange={onChange} />);
 
-    await userEvent.type(screen.getByPlaceholderText("0.0000"), "0.5");
+    fireEvent.change(screen.getByPlaceholderText("0.0000"), { target: { value: "0.5" } });
 
     expect(onChange).toHaveBeenLastCalledWith({ default_cost_per_query: 0.5 });
   });
@@ -59,7 +59,7 @@ describe("MCPServerCostConfig", () => {
     );
 
     await userEvent.click(screen.getByText("Available Tools"));
-    await userEvent.type(screen.getAllByPlaceholderText("Use default")[0], "3");
+    fireEvent.change(screen.getAllByPlaceholderText("Use default")[0], { target: { value: "3" } });
 
     expect(onChange).toHaveBeenLastCalledWith({
       default_cost_per_query: 0.01,

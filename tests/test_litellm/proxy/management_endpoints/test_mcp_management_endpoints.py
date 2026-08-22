@@ -2325,7 +2325,7 @@ class TestTemporaryMCPSessionEndpoints:
             "litellm.proxy.management_endpoints.mcp_management_endpoints.validate_and_normalize_mcp_server_payload",
             MagicMock(),
         ):
-            with pytest.raises(Exception) as exc_info:
+            with pytest.raises(Exception, match='User does not have permission to create temporary mcp') as exc_info:
                 await add_session_mcp_server(
                     payload=payload,
                     user_api_key_dict=non_admin,
@@ -6560,7 +6560,7 @@ class TestConnectedAppViewAnnotation:
                 AsyncMock(return_value=[caller_auth]),
             ),
             patch(
-                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler._reload_admitted_user",
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.reload_admitted_user",
                 reload_mock,
             ),
         ):
@@ -6592,7 +6592,7 @@ class TestConnectedAppViewAnnotation:
                 mock_manager,
             ),
             patch(
-                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler._reload_admitted_user",
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.reload_admitted_user",
                 AsyncMock(return_value=UserAPIKeyAuth(user_id="test_user_id")),
             ),
         ):
@@ -6635,7 +6635,7 @@ class TestConnectedAppViewAnnotation:
                 AsyncMock(return_value=[]),
             ),
             patch(
-                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler._reload_admitted_user",
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.reload_admitted_user",
                 AsyncMock(return_value=admitted_auth),
             ),
         ):
@@ -6663,7 +6663,7 @@ class TestConnectedAppViewAnnotation:
                 AsyncMock(return_value=[caller_auth]),
             ),
             patch(
-                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler._reload_admitted_user",
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.reload_admitted_user",
                 AsyncMock(side_effect=HTTPException(status_code=401, detail="expired")),
             ),
         ):
@@ -6691,7 +6691,7 @@ class TestConnectedAppViewAnnotation:
                 AsyncMock(return_value=[caller_auth]),
             ),
             patch(
-                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler._reload_admitted_user",
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.reload_admitted_user",
                 reload_mock,
             ),
         ):
@@ -6725,7 +6725,7 @@ class TestConnectedAppViewAnnotation:
                 AsyncMock(return_value=[caller_auth]),
             ),
             patch(
-                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler._reload_admitted_user",
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.reload_admitted_user",
                 reload_mock,
             ),
         ):
@@ -6756,7 +6756,7 @@ class TestConnectedAppViewAnnotation:
                 AsyncMock(return_value=[caller_auth]),
             ),
             patch(
-                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler._reload_admitted_user",
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.reload_admitted_user",
                 reload_mock,
             ),
         ):
