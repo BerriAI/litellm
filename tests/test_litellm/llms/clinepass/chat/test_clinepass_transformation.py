@@ -17,6 +17,7 @@ import litellm
 from litellm.llms.clinepass.chat.transformation import (
     ClinePassConfig,
     _apply_model_prefix,
+    _correct_truncated_finish_reason,
     _unwrap_response_envelope,
 )
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
@@ -123,7 +124,14 @@ def test_get_complete_url(api_base, expected):
 
 
 def test_model_prefix_restored_on_bare_id():
-    assert _apply_model_prefix({"model": "deepseek-v4-flash"})["model"] == "clinepass/deepseek-v4-flash"
+    """The restored qualifier is the catalog namespace ``cline-pass/`` (hyphenated),
+    NOT LiteLLM's own ``clinepass/`` routing prefix.
+
+    The API validates only the *shape* of a model id, so a wrong namespace still
+    returns HTTP 200 -- but it does not always resolve to the same underlying
+    model, which makes a wrong value silent rather than harmless.
+    """
+    assert _apply_model_prefix({"model": "deepseek-v4-flash"})["model"] == "cline-pass/deepseek-v4-flash"
 
 
 def test_model_prefix_left_alone_when_qualifier_present():
@@ -208,7 +216,7 @@ def test_completion_unwraps_envelope_and_prefixes_model():
         )
 
     assert captured["url"] == "https://api.cline.bot/api/v1/chat/completions"
-    assert captured["body"]["model"] == "clinepass/deepseek-v4-flash"
+    assert captured["body"]["model"] == "cline-pass/deepseek-v4-flash"
     assert response.choices[0].message.content == "pong"
     assert response.choices[0].message.reasoning_content == "the user asked for pong"
 
@@ -230,7 +238,7 @@ async def test_acompletion_unwraps_envelope_and_prefixes_model():
         )
 
     assert captured["url"] == "https://api.cline.bot/api/v1/chat/completions"
-    assert captured["body"]["model"] == "clinepass/deepseek-v4-flash"
+    assert captured["body"]["model"] == "cline-pass/deepseek-v4-flash"
     assert response.choices[0].message.content == "pong"
 
 
@@ -293,3 +301,182 @@ def test_upstream_401_maps_to_authentication_error():
             )
 
     assert excinfo.value.status_code == 401
+
+
+# --------------------------------------------------------------------------
+# Truncation reporting
+#
+# ClinePass was once observed returning finish_reason "stop" on a completion cut
+# off by max_tokens. Re-probing the live API on 2026-08-22 could not reproduce
+# it (see _correct_truncated_finish_reason's docstring), so the correction is a
+# conservative safety net: single-choice only, upstream "stop" only, and only
+# when usage shows the cap was actually reached.
+# --------------------------------------------------------------------------
+
+
+def _truncated_envelope(completion_tokens: int, finish_reason: str = "stop") -> dict:
+    payload = json.loads(json.dumps(ENVELOPED_COMPLETION))
+    payload["data"]["choices"][0]["finish_reason"] = finish_reason
+    payload["data"]["usage"]["completion_tokens"] = completion_tokens
+    return payload
+
+
+def _complete(payload: dict, **kwargs):
+    def fake_post(self, url, *args, **post_kwargs):
+        return _response(payload)
+
+    with patch.object(HTTPHandler, "post", fake_post):
+        return litellm.completion(
+            model="clinepass/deepseek-v4-flash",
+            messages=[{"role": "user", "content": "ping"}],
+            **kwargs,
+        )
+
+
+def test_completion_at_the_cap_is_reported_as_length_not_stop():
+    response = _complete(_truncated_envelope(4000), max_tokens=4000)
+    assert response.choices[0].finish_reason == "length"
+
+
+def test_completion_over_the_cap_is_reported_as_length():
+    response = _complete(_truncated_envelope(4001), max_tokens=4000)
+    assert response.choices[0].finish_reason == "length"
+
+
+def test_completion_below_the_cap_keeps_stop():
+    response = _complete(_truncated_envelope(3999), max_tokens=4000)
+    assert response.choices[0].finish_reason == "stop"
+
+
+def test_upstream_length_is_left_alone():
+    response = _complete(_truncated_envelope(4000, finish_reason="length"), max_tokens=4000)
+    assert response.choices[0].finish_reason == "length"
+
+
+def test_no_max_tokens_means_no_rewrite():
+    response = _complete(_truncated_envelope(4000))
+    assert response.choices[0].finish_reason == "stop"
+
+
+def test_max_completion_tokens_also_detects_truncation():
+    response = _complete(_truncated_envelope(4000), max_completion_tokens=4000)
+    assert response.choices[0].finish_reason == "length"
+
+
+@pytest.mark.parametrize("bad", [None, "4000", 0, -1, True, False])
+def test_unusable_cap_is_ignored(bad):
+    """Non-numeric, zero, negative and bool caps carry no truncation signal.
+
+    ``bool`` matters because it subclasses ``int``: ``True`` would otherwise be
+    read as a cap of 1 and relabel every response as truncated.
+    """
+
+    class _Choice:
+        finish_reason = "stop"
+
+    class _Usage:
+        completion_tokens = 9999
+
+    class _Response:
+        choices = [_Choice()]
+        usage = _Usage()
+
+    result = _correct_truncated_finish_reason(_Response(), {"max_tokens": bad})
+    assert result.choices[0].finish_reason == "stop"
+
+
+def test_missing_usage_is_ignored():
+    class _Choice:
+        finish_reason = "stop"
+
+    class _Response:
+        choices = [_Choice()]
+        usage = None
+
+    result = _correct_truncated_finish_reason(_Response(), {"max_tokens": 4000})
+    assert result.choices[0].finish_reason == "stop"
+
+
+def _stub_response(finish_reasons, completion_tokens):
+    """Minimal ModelResponse-shaped stub for the truncation helper."""
+
+    class _Choice:
+        def __init__(self, reason):
+            self.finish_reason = reason
+
+    class _Usage:
+        pass
+
+    usage = _Usage()
+    usage.completion_tokens = completion_tokens
+
+    class _Response:
+        pass
+
+    response = _Response()
+    response.choices = [_Choice(r) for r in finish_reasons]
+    response.usage = usage
+    return response
+
+
+def test_multi_choice_response_is_never_rewritten():
+    """`usage.completion_tokens` is an aggregate across choices while `max_tokens`
+    is per choice, so the aggregate cannot say WHICH choice was truncated.
+
+    Two naturally-finished 60-token choices under a cap of 100 aggregate to 120,
+    which would otherwise relabel both as `length`.
+    """
+    response = _stub_response(["stop", "stop"], completion_tokens=120)
+    result = _correct_truncated_finish_reason(response, {"max_tokens": 100})
+    assert [c.finish_reason for c in result.choices] == ["stop", "stop"]
+
+
+def test_single_choice_at_the_cap_is_still_rewritten():
+    """The n>1 guard must not disable the correction for the normal n=1 case."""
+    response = _stub_response(["stop"], completion_tokens=100)
+    result = _correct_truncated_finish_reason(response, {"max_tokens": 100})
+    assert result.choices[0].finish_reason == "length"
+
+
+def test_float_usage_and_cap_are_honoured():
+    """A gateway that reports usage as JSON floats must still be understood."""
+    response = _stub_response(["stop"], completion_tokens=4000.0)
+    result = _correct_truncated_finish_reason(response, {"max_tokens": 4000.0})
+    assert result.choices[0].finish_reason == "length"
+
+
+# --------------------------------------------------------------------------
+# Model catalog
+# --------------------------------------------------------------------------
+
+
+def test_get_models_returns_empty_without_calling_the_api():
+    """ClinePass has no /models endpoint (404), and the inherited OpenAI
+    implementation would ask for it at the wrong path. It must not make the
+    request at all."""
+
+    def explode(*args, **kwargs):  # pragma: no cover - must never run
+        raise AssertionError("get_models() must not perform an HTTP request")
+
+    with patch.object(litellm.module_level_client, "get", explode):
+        assert ClinePassConfig().get_models(api_key=API_KEY) == []
+
+
+# --------------------------------------------------------------------------
+# httpx internals
+# --------------------------------------------------------------------------
+
+
+def test_unwrap_envelope_survives_a_response_with_no_request_attached():
+    """`httpx.Response.request` RAISES RuntimeError rather than returning None
+    when no request is attached, so the unwrap must ask for it defensively."""
+    raw = httpx.Response(200, json=ENVELOPED_COMPLETION)
+    unwrapped = _unwrap_response_envelope(raw)
+    assert unwrapped.json() == ENVELOPED_COMPLETION["data"]
+
+
+def test_clinepass_config_has_no_async_transform_request_override():
+    """BaseLLMHTTPHandler builds the body with the sync transform_request on both
+    paths, so an async override would be dead code -- the shape of bug this
+    provider already shipped once."""
+    assert "async_transform_request" not in ClinePassConfig.__dict__

@@ -9,13 +9,13 @@ ClinePass is OpenAI-compatible apart from two quirks, both handled here:
    inherited SSE handling needs no change.
 2. A bare model id is rejected with HTTP 400 ``invalid model format. Expected
    format: modelType/model``, but LiteLLM strips its own ``clinepass/`` routing
-   prefix before the request is built, so it has to be restored.
+   prefix before the request is built, so a qualifier has to be restored.
 
 Documentation: https://docs.cline.bot/
 """
 
 import json
-from typing import Any, List, Tuple, Union
+from typing import Any, List, Optional, Tuple, Union
 
 import httpx
 
@@ -32,12 +32,88 @@ CLINEPASS_API_BASE = "https://api.cline.bot/api/v1"
 # ClinePass nests the completion under this key on non-streaming responses.
 CLINEPASS_RESPONSE_ENVELOPE_KEY = "data"
 
-# The qualifier ClinePass requires on outbound model ids.
-CLINEPASS_MODEL_PREFIX = "clinepass/"
+# The qualifier ClinePass expects on outbound model ids.
+#
+# Note the hyphen: the catalog namespace is ``cline-pass/``, not ``clinepass/``
+# (the latter is LiteLLM's own routing prefix, which is stripped before the
+# request is built). The API only validates the *shape* of a model id -- any
+# ``<segment>/<model>`` is accepted with HTTP 200 -- so an incorrect namespace
+# fails silently rather than loudly. It is not inert, though: for at least one
+# model an unrecognised namespace resolves to a different, date-pinned snapshot
+# (``cline-pass/deepseek-v4-flash`` -> ``deepseek/deepseek-v4-flash``, while
+# ``clinepass/deepseek-v4-flash`` -> ``deepseek/deepseek-v4-flash-0731``).
+CLINEPASS_MODEL_PREFIX = "cline-pass/"
 
 # Headers that describe the original byte stream and would be wrong once the
 # body is rewritten by _unwrap_response_envelope().
 _BODY_SPECIFIC_HEADERS = ("content-length", "content-encoding")
+
+
+def _as_positive_number(value: Any) -> Optional[float]:
+    """Return ``value`` as a positive number, or ``None`` if it is not one.
+
+    ``bool`` is rejected explicitly: it is a subclass of ``int``, and ``True``
+    would otherwise read as a cap of 1.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    if value <= 0:
+        return None
+    return float(value)
+
+
+def _correct_truncated_finish_reason(response: ModelResponse, request_data: dict) -> ModelResponse:
+    """Report a truncated ClinePass completion as ``length``, not ``stop``.
+
+    This is a defensive correction for an upstream bug in which ClinePass
+    returned ``finish_reason: "stop"`` on a completion that had actually been
+    cut off by ``max_tokens``: a request capped at 4000 came back with
+    ``completion_tokens == 4000`` and still claimed a natural stop. Callers that
+    trust ``finish_reason`` -- the documented way to detect truncation -- cannot
+    then distinguish a complete answer from a guillotined one.
+
+    Re-probing the live API later (2026-08-22, both streaming and non-streaming,
+    caps of 2000 and 4000, across both the ``cline-pass/`` and the fallback
+    namespace) did *not* reproduce the misreport: every capped response
+    correctly returned ``length``. The upstream bug appears to have been fixed,
+    or to be intermittent. This correction is therefore kept as a cheap safety
+    net rather than as a workaround for a currently-observable defect, and it is
+    deliberately conservative:
+
+    - only an upstream ``stop`` is ever rewritten; ``length`` is already right,
+    - only when usage shows the cap was actually reached,
+    - and only for single-choice responses. ``usage.completion_tokens`` is an
+      aggregate across all choices while ``max_tokens`` is a per-choice limit,
+      so with ``n > 1`` the aggregate cannot identify *which* choice was
+      truncated -- two naturally-finished 60-token choices under a cap of 100
+      would otherwise both be relabelled ``length``.
+
+    Streaming is deliberately not covered: chunks are assembled by the inherited
+    SSE iterator, the terminal ``finish_reason`` arrives before the usage chunk
+    that would justify rewriting it, and callers that omit
+    ``stream_options.include_usage`` never receive usage at all. Since the
+    misreport no longer reproduces, buffering the stream to correct it is not
+    worth the latency and complexity.
+    """
+    if len(response.choices) != 1:
+        return response
+
+    max_tokens = _as_positive_number(request_data.get("max_tokens"))
+    if max_tokens is None:
+        max_tokens = _as_positive_number(request_data.get("max_completion_tokens"))
+    if max_tokens is None:
+        return response
+
+    usage = getattr(response, "usage", None)
+    completion_tokens = _as_positive_number(getattr(usage, "completion_tokens", None))
+    if completion_tokens is None or completion_tokens < max_tokens:
+        return response
+
+    for choice in response.choices:
+        if getattr(choice, "finish_reason", None) == "stop":
+            choice.finish_reason = "length"
+
+    return response
 
 
 def _unwrap_response_envelope(raw_response: httpx.Response) -> httpx.Response:
@@ -66,11 +142,19 @@ def _unwrap_response_envelope(raw_response: httpx.Response) -> httpx.Response:
 
     headers = {k: v for k, v in raw_response.headers.items() if k.lower() not in _BODY_SPECIFIC_HEADERS}
 
+    # httpx.Response.request raises RuntimeError rather than returning None when
+    # no request is attached, so ask for it defensively instead of reaching for
+    # the private attribute behind it.
+    try:
+        original_request = raw_response.request
+    except RuntimeError:
+        original_request = None
+
     return httpx.Response(
         status_code=raw_response.status_code,
         headers=headers,
         content=json.dumps(inner).encode("utf-8"),
-        request=getattr(raw_response, "_request", None),
+        request=original_request,
     )
 
 
@@ -119,6 +203,17 @@ class ClinePassConfig(OpenAIGPTConfig):
 
         return f"{api_base}/chat/completions"
 
+    def get_models(self, api_key: Optional[str] = None, api_base: Optional[str] = None) -> List[str]:
+        """ClinePass exposes no model catalog.
+
+        ``GET https://api.cline.bot/api/v1/models`` returns HTTP 404, and the
+        inherited OpenAI implementation would additionally ask for it at the
+        wrong path -- it rewrites the base URL down to scheme+host and appends
+        ``/v1/models``. Return an empty catalog rather than making a request
+        that is known to fail.
+        """
+        return []
+
     def map_openai_params(
         self,
         non_default_params: dict,
@@ -145,24 +240,10 @@ class ClinePassConfig(OpenAIGPTConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
+        # BaseLLMHTTPHandler builds the body with this synchronous method on
+        # both the sync and the async path, so there is deliberately no
+        # async_transform_request() override -- it would never be called.
         data = super().transform_request(
-            model=model,
-            messages=messages,
-            optional_params=optional_params,
-            litellm_params=litellm_params,
-            headers=headers,
-        )
-        return _apply_model_prefix(data)
-
-    async def async_transform_request(
-        self,
-        model: str,
-        messages: List[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
-    ) -> dict:
-        data = await super().async_transform_request(
             model=model,
             messages=messages,
             optional_params=optional_params,
@@ -185,7 +266,7 @@ class ClinePassConfig(OpenAIGPTConfig):
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
-        return super().transform_response(
+        response = super().transform_response(
             model=model,
             raw_response=_unwrap_response_envelope(raw_response),
             model_response=model_response,
@@ -198,6 +279,7 @@ class ClinePassConfig(OpenAIGPTConfig):
             api_key=api_key,
             json_mode=json_mode,
         )
+        return _correct_truncated_finish_reason(response, request_data)
 
     def get_error_class(
         self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
