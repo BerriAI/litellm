@@ -32,7 +32,7 @@ The weighted sum is mapped to tiers using configurable boundaries:
 | SIMPLE | < 0.10 | - | Basic questions, greetings |
 | MEDIUM | 0.10 - 0.25 | `simple_medium` | Standard queries |
 | COMPLEX | 0.25 - 0.50 | `medium_complex` | Technical, multi-part requests |
-| REASONING | > 0.50 | `complex_reasoning` | Chain-of-thought, analysis |
+| REASONING | >= 0.50 | `complex_reasoning` | Chain-of-thought, analysis |
 
 The three boundaries must ascend, and any key you leave out is filled from the shipped default, so setting one boundary without the others can put them out of order. A set that decreases would strand the tier between the inverted pair and silently route its traffic to a costlier one, so it is rejected at config load with a message naming the resolved values. Set every boundary you need to move, not just one.
 
