@@ -244,8 +244,9 @@ buys. Where the refused call was the only block left, the turn comes back with n
 Non-streaming is not a limitation on the client here, because a client that asked for a stream gets the same
 treatment. Interception converts an intercepted `stream=True` request to non-streaming before the loop runs and
 rebuilds the SSE stream from the finalized turn afterwards, so the ceiling is always reached on a response the
-client has not seen yet. The guard is written against the flag anyway, so a caller added later that reaches the
-loop with a stream already open keeps raising rather than replacing a turn that is halfway to the client.
+client has not seen yet. `AgenticStreamingIterator` is the one caller that reaches the loop with its events
+already on the wire, and it keeps raising, because a finalized turn would arrive there as a second message
+rather than as a replacement.
 
 Two other surfaces do not get that treatment yet. `/v1/responses` returns its own shape that the finalizer does
 not rewrite, so it still hands back the internal call. And `/v1/chat/completions` runs its own copy of these
