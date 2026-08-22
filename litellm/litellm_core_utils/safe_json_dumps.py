@@ -47,7 +47,7 @@ def safe_dumps(
         result: dict | list | tuple | set | str
         if isinstance(obj, dict):
             result = {}
-            for k, v in obj.items():
+            for k, v in list(obj.items()):
                 if isinstance(k, (str)):
                     clean_k = k.replace("\x00", "") if "\x00" in k else k
                     result[clean_k] = _serialize(v, seen, depth + 1, clean_k)
