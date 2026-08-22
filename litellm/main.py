@@ -4846,6 +4846,13 @@ def completion(  # type: ignore
     # validate messages
     messages = validate_and_fix_openai_messages(messages=messages)
     tools = validate_and_fix_openai_tools(tools=tools)
+    # An empty tools array is invalid per the OpenAI spec ("provide at least one
+    # tool or omit the field entirely") and strict OpenAI-compatible backends
+    # (e.g. vLLM) 422 on it. Normalize to no tools so the field (and the
+    # now-meaningless tool_choice) is omitted from the upstream request.
+    if tools is not None and len(tools) == 0:
+        tools = None
+        tool_choice = None
     # validate tool_choice
     tool_choice = validate_chat_completion_tool_choice(tool_choice=tool_choice)
     # validate optional params
