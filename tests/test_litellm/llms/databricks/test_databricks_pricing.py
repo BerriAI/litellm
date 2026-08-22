@@ -3,9 +3,9 @@ import os
 from types import MappingProxyType
 from typing import Final
 
-# (cache write, cache read) multipliers on the input rate, per model vendor, from
-# https://www.databricks.com/product/pricing/proprietary-foundation-model-serving
-CACHE_RATIOS: Final = MappingProxyType({"claude": (1.25, 0.1), "gemini": (1.0, 0.1), "gpt-5": (1.0, 0.1)})
+CACHE_WRITE_AND_READ_RATIOS_ON_INPUT_RATE: Final = MappingProxyType(
+    {"claude": (1.25, 0.1), "gemini": (1.0, 0.1), "gpt-5": (1.0, 0.1)}
+)
 
 
 def _load_cost_map() -> dict:
@@ -80,7 +80,7 @@ def test_databricks_proprietary_models_have_cache_pricing():
         if vendor is None or info.get("mode") != "chat":
             continue
         priced.append(model)
-        write_ratio, read_ratio = CACHE_RATIOS[vendor]
+        write_ratio, read_ratio = CACHE_WRITE_AND_READ_RATIOS_ON_INPUT_RATE[vendor]
         input_usd = info["input_cost_per_token"]
         for field, ratio in (
             ("cache_creation_input_token_cost", write_ratio),
