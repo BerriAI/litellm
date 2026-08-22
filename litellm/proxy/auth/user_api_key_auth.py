@@ -1150,13 +1150,8 @@ async def _resolve_object_permission_for_unresolvable_team(
     parent_otel_span: Span | None,
     proxy_logging_obj: ProxyLogging,
 ) -> LiteLLM_ObjectPermissionTable | None:
-    """Resolve a team's object permission by id when the team row itself cannot be read.
-
-    The token-derived team fallback reconstructs the team from the token's own cached
-    fields, which carry the object_permission id but not the resolved row. Leaving it
-    unset would silently drop any vector-store/MCP restriction the team carried,
-    granting more than the token's own object_permission_id vouches for.
-    """
+    """Re-resolve a team's object permission by id when the team row itself is unreadable, so the
+    token-derived fallback doesn't silently drop it."""
     if object_permission_id is None or prisma_client is None:
         return None
     return await get_object_permission(

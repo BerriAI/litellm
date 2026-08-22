@@ -3576,20 +3576,8 @@ async def test_auth_flow_never_persists_fallback_team_object_lit_4391():
 
 
 @pytest.mark.asyncio
-async def test_auth_flow_fallback_team_keeps_object_permission_lit_5539():
-    """
-    Regression test for LIT-5539 (team fallback drops team_object_permission).
-
-    When `get_team_object` fails at the "Check 6" team-auth step, the builder
-    reconstructs a team from the token's own cached fields, including
-    `team_object_permission_id`, but historically left `object_permission`
-    itself unset (None). Since the token's own id still names a real,
-    independently-resolvable restriction (e.g. a vector-store/MCP allowlist),
-    dropping it granted more than the credential itself carries.
-
-    Pins: the fallback resolves `team_object_permission` by its id, so the
-    restriction survives an unresolvable team row.
-    """
+async def test_auth_flow_fallback_team_resolves_object_permission_by_id():
+    """The unresolvable-team fallback resolves team_object_permission by its own id instead of leaving it unset."""
     from starlette.datastructures import URL
     from starlette.requests import Request
     from fastapi import HTTPException
@@ -3601,17 +3589,17 @@ async def test_auth_flow_fallback_team_keeps_object_permission_lit_5539():
     )
     from litellm.proxy.auth.user_api_key_auth import _user_api_key_auth_builder
 
-    api_key = "sk-test-lit-5539-object-permission"
+    api_key = "sk-test-fallback-team-object-permission"
     valid_token = UserAPIKeyAuth(
         api_key=api_key,
         token=api_key,
         user_role=LitellmUserRoles.INTERNAL_USER,
-        team_id="team-lit-5539",
-        team_object_permission_id="op-lit-5539",
+        team_id="team-fallback-object-permission",
+        team_object_permission_id="op-fallback-object-permission",
     )
 
     restricted_object_permission = LiteLLM_ObjectPermissionTable(
-        object_permission_id="op-lit-5539",
+        object_permission_id="op-fallback-object-permission",
         vector_stores=["vs-allowed-only"],
         mcp_servers=["mcp-allowed-only"],
     )
@@ -3681,7 +3669,7 @@ async def test_auth_flow_fallback_team_keeps_object_permission_lit_5539():
             )
 
         mock_get_object_permission.assert_awaited_once()
-        assert mock_get_object_permission.await_args.kwargs["object_permission_id"] == "op-lit-5539"
+        assert mock_get_object_permission.await_args.kwargs["object_permission_id"] == "op-fallback-object-permission"
         assert result.team_object_permission == restricted_object_permission
         assert result.team_object_permission.vector_stores == ["vs-allowed-only"]
         assert result.team_object_permission.mcp_servers == ["mcp-allowed-only"]
@@ -3692,15 +3680,9 @@ async def test_auth_flow_fallback_team_keeps_object_permission_lit_5539():
 
 
 @pytest.mark.asyncio
-async def test_auth_flow_fallback_team_object_permission_degrades_to_none_lit_5539():
-    """
-    Counterpart to the resolution test above: when the object_permission row
-    itself cannot be read either (e.g. a total DB outage, not merely the team
-    row being gone), the fallback must not raise and must not fabricate a
-    permission it never read. `team_object_permission` degrades to None,
-    matching the scope every other object_permission reader already treats
-    as "unknown, not evidence of an unrestricted grant".
-    """
+async def test_auth_flow_fallback_team_object_permission_none_when_unreadable():
+    """When the object_permission row is also unreadable, the fallback leaves team_object_permission as None
+    instead of raising or fabricating a grant."""
     from starlette.datastructures import URL
     from starlette.requests import Request
     from fastapi import HTTPException
@@ -3708,13 +3690,13 @@ async def test_auth_flow_fallback_team_object_permission_degrades_to_none_lit_55
     from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
     from litellm.proxy.auth.user_api_key_auth import _user_api_key_auth_builder
 
-    api_key = "sk-test-lit-5539-object-permission-unreadable"
+    api_key = "sk-test-fallback-team-object-permission-unreadable"
     valid_token = UserAPIKeyAuth(
         api_key=api_key,
         token=api_key,
         user_role=LitellmUserRoles.INTERNAL_USER,
-        team_id="team-lit-5539-unreadable",
-        team_object_permission_id="op-lit-5539-unreadable",
+        team_id="team-fallback-object-permission-unreadable",
+        team_object_permission_id="op-fallback-object-permission-unreadable",
     )
 
     mock_cache = AsyncMock()
