@@ -6334,7 +6334,17 @@ async def test_add_litellm_data_to_request_redacts_oauth_header_from_logging_cop
 
     assert updated["proxy_server_request"]["headers"] is updated[metadata_variable_name]["headers"]
 
-    assert updated["provider_specific_header"]["extra_headers"]["Authorization"] == _OAUTH_TOKEN
+    from litellm.litellm_core_utils.get_provider_specific_headers import (
+        ProviderSpecificHeaderUtils,
+    )
+
+    assert (
+        ProviderSpecificHeaderUtils.get_provider_specific_headers(
+            provider_specific_header=updated["provider_specific_header"],
+            custom_llm_provider="anthropic",
+        )["Authorization"]
+        == _OAUTH_TOKEN
+    )
 
 
 @pytest.mark.asyncio

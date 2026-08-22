@@ -5091,7 +5091,10 @@ def completion(
     model_info: Final = kwargs.get("model_info", None)
     proxy_server_request: Final = kwargs.get("proxy_server_request", None)
     fallbacks = kwargs.get("fallbacks", None)
-    provider_specific_header: Final = cast(ProviderSpecificHeader | None, kwargs.get("provider_specific_header", None))
+    provider_specific_header: Final = cast(
+        ProviderSpecificHeader | Sequence[ProviderSpecificHeader] | None,
+        kwargs.get("provider_specific_header", None),
+    )
     headers = kwargs.get("headers", None) or extra_headers
 
     ensure_alternating_roles: Final[bool | None] = kwargs.get("ensure_alternating_roles", None)
