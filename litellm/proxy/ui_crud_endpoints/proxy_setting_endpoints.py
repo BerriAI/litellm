@@ -2,13 +2,14 @@
 import asyncio
 import json
 import os
+import re
 from collections import Counter
 from collections.abc import Mapping
 from typing import Any, Final, Protocol, TypeVar
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Body, Depends, File, HTTPException, UploadFile
-from pydantic import ConfigDict, JsonValue, ValidationError, create_model
+from pydantic import ConfigDict, JsonValue, ValidationError, create_model, field_validator
 from pydantic.fields import FieldInfo
 
 import litellm
@@ -148,6 +149,45 @@ class IPAddress(BaseModel):
     ip: str
 
 
+_ALLOWED_THEME_VARS: Final[frozenset[str]] = frozenset({
+    "radius", "background", "foreground", "card", "card-foreground",
+    "popover", "popover-foreground", "primary", "primary-foreground",
+    "secondary", "secondary-foreground", "muted", "muted-foreground",
+    "accent", "accent-foreground", "destructive", "destructive-foreground",
+    "success", "success-foreground", "warning", "warning-foreground",
+    "info", "info-foreground", "border", "input", "ring",
+    "chart-1", "chart-2", "chart-3", "chart-4", "chart-5",
+    "sidebar", "sidebar-foreground", "sidebar-primary",
+    "sidebar-primary-foreground", "sidebar-accent",
+    "sidebar-accent-foreground", "sidebar-border", "sidebar-ring",
+    "neutral-border",
+})
+
+_THEME_BLOCK_RE: Final = re.compile(r"(?::root|\.dark)\s*\{([^}]*)\}")
+
+
+def _validate_theme_css(css: str) -> None:
+    stripped = re.sub(r"/\*.*?\*/", "", css, flags=re.DOTALL).strip()
+    if not stripped:
+        return
+    if "@" in stripped:
+        raise ValueError("Custom theme CSS must not contain @-rules")
+    if re.search(r"\burl\s*\(", stripped, re.IGNORECASE):
+        raise ValueError("Custom theme CSS must not contain url()")
+    if _THEME_BLOCK_RE.sub("", stripped).strip():
+        raise ValueError("Custom theme CSS may only contain :root and .dark blocks")
+    for block in _THEME_BLOCK_RE.finditer(stripped):
+        for decl in block.group(1).split(";"):
+            decl = decl.strip()
+            if not decl:
+                continue
+            m = re.match(r"^--([\w-]+)\s*:\s*\S", decl)
+            if not m:
+                raise ValueError(f"Only --custom-property declarations allowed in theme blocks, got: {decl[:60]}")
+            if m.group(1) not in _ALLOWED_THEME_VARS:
+                raise ValueError(f"Unknown theme variable --{m.group(1)}")
+
+
 class UIThemeConfig(BaseModel):
     """Configuration for UI theme customization"""
 
@@ -181,6 +221,12 @@ class UIThemeConfig(BaseModel):
         ),
         max_length=65536,
     )
+
+    @field_validator("custom_theme_css")
+    def check_custom_theme_css(cls, value: str | None) -> str | None:
+        if value:
+            _validate_theme_css(value)
+        return value
 
 
 class SettingsResponse(BaseModel):

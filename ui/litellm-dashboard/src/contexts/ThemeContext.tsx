@@ -1,6 +1,27 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from "react";
 import { getProxyBaseUrl } from "@/components/networking";
 
+const _BLOCK_RE = /(?::root|\.dark)\s*\{([^}]*)\}/g;
+const _DECL_RE = /^--([\w-]+)\s*:\s*(\S[^;]*)$/;
+
+function sanitizeThemeCss(css: string): string | null {
+  const stripped = css.replace(/\/\*[\s\S]*?\*\//g, "").trim();
+  if (!stripped || stripped.includes("@") || /\burl\s*\(/i.test(stripped)) return null;
+  if (stripped.replace(_BLOCK_RE, "").trim()) return null;
+  const parts: string[] = [];
+  for (const m of stripped.matchAll(_BLOCK_RE)) {
+    const selector = m[0].split("{")[0].trim();
+    const decls = m[1].split(";").map((d) => d.trim()).filter(Boolean);
+    const safe: string[] = [];
+    for (const decl of decls) {
+      const dm = decl.match(_DECL_RE);
+      if (dm) safe.push(`--${dm[1]}: ${dm[2].trim()}`);
+    }
+    if (safe.length) parts.push(`${selector} { ${safe.join("; ")}; }`);
+  }
+  return parts.length ? parts.join("\n") : null;
+}
+
 interface ThemeContextType {
   logoUrl: string | null;
   setLogoUrl: (url: string | null) => void;
@@ -55,7 +76,7 @@ export const ThemeProvider: React.FC<ThemeProviderProps> = ({ children, accessTo
             setFaviconUrl(data.values.favicon_url);
           }
           if (data.values?.custom_theme_css) {
-            setCustomThemeCss(data.values.custom_theme_css);
+            setCustomThemeCss(sanitizeThemeCss(data.values.custom_theme_css));
           }
         }
       } catch (error) {
@@ -84,13 +105,14 @@ export const ThemeProvider: React.FC<ThemeProviderProps> = ({ children, accessTo
 
   useEffect(() => {
     const existing = document.getElementById("litellm-custom-theme");
-    if (customThemeCss) {
+    const safe = customThemeCss ? sanitizeThemeCss(customThemeCss) : null;
+    if (safe) {
       if (existing) {
-        existing.textContent = customThemeCss;
+        existing.textContent = safe;
       } else {
         const style = document.createElement("style");
         style.id = "litellm-custom-theme";
-        style.textContent = customThemeCss;
+        style.textContent = safe;
         document.head.appendChild(style);
       }
     } else {
