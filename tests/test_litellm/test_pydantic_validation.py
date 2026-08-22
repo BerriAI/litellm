@@ -14,6 +14,7 @@ from litellm.types.utils import LlmProviders, ModelResponse
 from litellm.utils import (
     ProviderConfigManager,
     Rules,
+    _apply_response_format_validation,
     _is_pydantic_basemodel_type,
     _should_preserve_pydantic_response_format,
     normalize_completion_response_format,
@@ -127,9 +128,13 @@ def test_process_response_format_passthrough_none_and_dict():
     assert process_response_format(existing)["json_schema"]["name"] == "MovieReview"
 
 
-def test_process_response_format_rejects_unsupported_type():
-    with pytest.raises(TypeError, match="Unsupported response_format type"):
-        process_response_format("json")
+def test_process_response_format_exits_early_for_none_bool_and_raw_dict():
+    raw: Final = {"type": "json_object"}
+    assert process_response_format(None) is None
+    assert process_response_format(True) is None
+    assert process_response_format(False) is None
+    assert process_response_format("json") is None
+    assert process_response_format(raw) == raw
 
 
 def test_pydantic_v2_model_json_schema_helper():
@@ -400,3 +405,54 @@ def test_vertex_pre_process_keeps_compact_pydantic_schema():
     schema: Final = processed["response_format"]["json_schema"]["schema"]
     serialized: Final = json.dumps(schema)
     assert "$ref" in serialized or "$defs" in schema
+
+
+def test_apply_response_format_validation_none_is_noop():
+    _apply_response_format_validation(
+        response_format=None,
+        model_response="not-json",
+        model="gpt-4o",
+    )
+    _apply_response_format_validation(
+        response_format=True,
+        model_response="not-json",
+        model="gpt-4o",
+    )
+
+
+def test_apply_response_format_validation_matching_pydantic_schema():
+    payload: Final = json.dumps({"title": "Inception", "rating": 9})
+    _apply_response_format_validation(
+        response_format=MovieReview,
+        model_response=payload,
+        model="gpt-4o",
+    )
+
+
+def test_apply_response_format_validation_raw_json_schema_dict():
+    payload: Final = json.dumps({"title": "Inception", "rating": 9})
+    _apply_response_format_validation(
+        response_format=STRICT_SCHEMA,
+        model_response=payload,
+        model="gpt-4o",
+    )
+    _apply_response_format_validation(
+        response_format={"type": "json_object"},
+        model_response="plain text",
+        model="gpt-4o",
+    )
+    _apply_response_format_validation(
+        response_format={"json_schema": "not-a-dict"},
+        model_response="plain text",
+        model="gpt-4o",
+    )
+
+
+def test_apply_response_format_validation_non_json_text_raises_apierror():
+    with pytest.raises(litellm.APIError, match="Structured output") as exc:
+        _apply_response_format_validation(
+            response_format=STRICT_SCHEMA,
+            model_response="the movie was great",
+            model="gpt-4o",
+        )
+    assert exc.value.status_code == 422

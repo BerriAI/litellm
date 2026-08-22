@@ -235,7 +235,7 @@ except (ImportError, AttributeError, TypeError):
 claude_json_str = json.dumps(json_data)
 import importlib.metadata
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional, TypeGuard, Union, cast, get_args
+from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Union, cast, get_args
 
 from litellm import utils as litellm_utils
 
@@ -1252,7 +1252,7 @@ async def async_post_call_success_deployment_hook(
     return response
 
 
-def _is_pydantic_basemodel_type(response_format: object) -> TypeGuard[type[BaseModel]]:
+def _is_pydantic_basemodel_type(response_format: object) -> bool:
     if not isinstance(response_format, type):
         return False
     try:
@@ -1261,16 +1261,14 @@ def _is_pydantic_basemodel_type(response_format: object) -> TypeGuard[type[BaseM
         return False
 
 
-def process_response_format(
-    response_format: type[BaseModel] | dict[str, object] | None,
-) -> dict[str, object] | None:
-    if response_format is None:
+def process_response_format(response_format: object) -> dict[str, object] | None:
+    if response_format is None or isinstance(response_format, bool):
         return None
     if isinstance(response_format, dict):
         return type_to_response_format_param(response_format)
     if _is_pydantic_basemodel_type(response_format):
         return type_to_response_format_param(response_format)
-    raise TypeError(f"Unsupported response_format type - {response_format}")
+    return None
 
 
 _PRESERVE_PYDANTIC_RESPONSE_FORMAT_PROVIDERS: Final = frozenset(
@@ -1282,42 +1280,66 @@ def _should_preserve_pydantic_response_format(
     custom_llm_provider: str | None,
     model: str,
 ) -> bool:
-    if custom_llm_provider is not None:
-        if custom_llm_provider in _PRESERVE_PYDANTIC_RESPONSE_FORMAT_PROVIDERS:
-            return True
-        if _provider_supports_vertex_params(custom_llm_provider):
-            return True
+    if custom_llm_provider in _PRESERVE_PYDANTIC_RESPONSE_FORMAT_PROVIDERS:
+        return True
+    if custom_llm_provider is not None and _provider_supports_vertex_params(
+        custom_llm_provider
+    ):
+        return True
     lowered: Final = model.lower()
     return lowered.startswith(("gemini/", "vertex_ai/", "vertex_ai_beta/", "gemini-"))
 
 
 def normalize_completion_response_format(
-    response_format: type[BaseModel] | dict[str, object] | None,
+    response_format: object,
     model: str,
     custom_llm_provider: str | None = None,
-) -> type[BaseModel] | dict[str, object] | None:
+) -> object:
+    if isinstance(response_format, bool):
+        return None
     if _should_preserve_pydantic_response_format(custom_llm_provider, model):
         return response_format
-    processed: Final = process_response_format(response_format)
-    return processed if processed is not None else response_format
+    return process_response_format(response_format)
 
 
 def _deserialize_pydantic_response_format(
-    response_format: type[BaseModel],
+    response_format: object,
     model_response: str,
 ) -> None:
-    response_format.model_validate_json(model_response)
+    parser: Final = getattr(response_format, "model_validate_json", None)
+    if callable(parser):
+        parser(model_response)
 
 
 def _response_format_as_json_schema(response_format: object) -> dict[str, object] | None:
     if _is_pydantic_basemodel_type(response_format):
         return process_response_format(response_format)
-    if isinstance(response_format, dict) and response_format.get("json_schema") is not None:
-        return response_format
-    return None
+    if not isinstance(response_format, dict):
+        return None
+    if response_format.get("json_schema") is None:
+        return None
+    return response_format
 
 
-def _raise_structured_output_api_error(error: BaseException, model: str | None) -> None:
+def _json_schema_from_response_format(
+    response_format: object,
+) -> dict[str, object] | None:
+    envelope: Final = _response_format_as_json_schema(response_format)
+    if envelope is None:
+        return None
+    json_schema: Final = envelope.get("json_schema")
+    if not isinstance(json_schema, dict):
+        return None
+    schema: Final = json_schema.get("schema")
+    if not isinstance(schema, dict):
+        return None
+    return schema
+
+
+def _raise_structured_output_api_error(
+    error: BaseException,
+    model: str | None,
+) -> None:
     raise litellm.APIError(
         status_code=422,
         message=f"Structured output did not match response_format: {error}",
@@ -1333,23 +1355,27 @@ def _apply_response_format_validation(
 ) -> None:
     from jsonschema.exceptions import ValidationError as JsonschemaValidationError
 
+    if response_format is None or isinstance(response_format, bool):
+        return
     try:
         if _is_pydantic_basemodel_type(response_format):
             _deserialize_pydantic_response_format(
                 response_format=response_format,
                 model_response=model_response,
             )
-        json_response_format: Final = _response_format_as_json_schema(response_format)
-        if json_response_format is not None:
-            litellm.litellm_core_utils.json_validation_rule.validate_schema(
-                schema=json_response_format["json_schema"]["schema"],
-                response=model_response,
-            )
+        schema: Final = _json_schema_from_response_format(response_format)
+        if schema is None:
+            return
+        litellm.litellm_core_utils.json_validation_rule.validate_schema(
+            schema=schema,
+            response=model_response,
+        )
     except (
         ValidationError,
         json.JSONDecodeError,
         JsonschemaValidationError,
         TypeError,
+        KeyError,
         litellm.JSONSchemaValidationError,
     ) as e:
         _raise_structured_output_api_error(e, model)
