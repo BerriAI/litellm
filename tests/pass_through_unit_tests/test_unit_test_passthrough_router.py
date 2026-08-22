@@ -7,7 +7,6 @@ from unittest.mock import AsyncMock, Mock, patch, MagicMock
 sys.path.insert(0, os.path.abspath("../.."))  #
 
 import unittest
-from unittest.mock import patch
 from litellm.proxy.pass_through_endpoints.passthrough_endpoint_router import (
     PassthroughEndpointRouter,
 )

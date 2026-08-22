@@ -7,7 +7,6 @@ import traceback
 from dotenv import load_dotenv
 
 load_dotenv()
-import os
 
 sys.path.insert(
     0, os.path.abspath("../..")

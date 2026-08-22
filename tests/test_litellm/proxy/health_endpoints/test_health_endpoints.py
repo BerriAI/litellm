@@ -1321,7 +1321,6 @@ def test_get_callback_identifier_string_and_object_with_callback_name():
     - Object with callback_name attribute
     - Object with empty/None callback_name (should fall through to other checks)
     """
-    from litellm.proxy.health_endpoints._health_endpoints import get_callback_identifier
 
     # Test 1: String callback should be returned as-is
     assert get_callback_identifier("datadog") == "datadog"
@@ -1353,7 +1352,6 @@ def test_get_callback_identifier_custom_logger_registry_and_fallback():
     - Object with callback_name that matches registry entry
     - Fallback to callback_name() helper function
     """
-    from litellm.proxy.health_endpoints._health_endpoints import get_callback_identifier
     from litellm.litellm_core_utils.custom_logger_registry import CustomLoggerRegistry
 
     # Test 1: Object registered in CustomLoggerRegistry (without callback_name attribute)

@@ -154,6 +154,7 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_web_search: bool | None
     supports_reasoning: bool | None
     supports_adaptive_thinking: bool | None
+    thinking_always_on: ReadOnly[bool | None]
     supports_tool_search: bool | None
     supports_mid_conversation_system: bool | None
     supports_url_context: bool | None
@@ -3192,6 +3193,7 @@ class StandardLoggingPayload(TypedDict):
     stream: bool | None
     response_cost: float
     cost_breakdown: CostBreakdown | None  # Detailed cost breakdown
+    autorouter_savings: ReadOnly[float | None]  # None = not an auto-routed caller request; 0.0 is a real figure
     response_cost_failure_debug_info: StandardLoggingModelCostFailureDebugInformation | None
     status: StandardLoggingPayloadStatus
     status_fields: StandardLoggingPayloadStatusFields
@@ -3788,6 +3790,7 @@ class LlmProviders(str, Enum):
     LIBERTAI = "libertai"
     PINSTRIPES = "pinstripes"
     COGNITION = "cognition"
+    SCX_AI = "scx-ai"
     DARKBLOOM = "darkbloom"
     META = "meta"
     LITELLM_AGENT = "litellm_agent"

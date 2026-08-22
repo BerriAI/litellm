@@ -13,7 +13,6 @@ import json
 sys.path.insert(0, os.path.abspath("../.."))
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
-import json
 from litellm.types.utils import StandardLoggingPayload
 from litellm.types.llms.openai import (
     ResponseCompletedEvent,

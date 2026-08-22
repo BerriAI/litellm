@@ -15,7 +15,6 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-import litellm
 from litellm import completion
 from litellm._logging import verbose_logger
 from litellm.integrations.gcs_pubsub.pub_sub import *
@@ -43,6 +42,7 @@ ignored_keys = [
     "metadata.cold_storage_object_key",
     "metadata.litellm_overhead_time_ms",
     "metadata.cost_breakdown",
+    "metadata.autorouter_savings",
     "metadata.eval_information",
 ]
 
