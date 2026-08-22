@@ -2588,25 +2588,3 @@ def test_gemini_reasoning_content_fallback_when_thinking_blocks_empty():
         f"got {len(plain_thought_parts)} plain thought part(s)"
     )
     assert plain_thought_parts[0]["text"] == reasoning_text
-
-
-def test_gemini_reasoning_content_fallback_when_thinking_blocks_empty():
-    """
-    When thinking_blocks is non-null but empty, reasoning_content must still be emitted.
-    """
-    reasoning_text = "I reasoned carefully."
-    messages = [
-        {"role": "user", "content": "Hello."},
-        {
-            "role": "assistant",
-            "content": "Hi.",
-            "reasoning_content": reasoning_text,
-            "thinking_blocks": [],
-        },
-        {"role": "user", "content": "How are you?"},
-    ]
-    contents = _gemini_convert_messages_with_history(messages=messages)
-    parts = contents[1]["parts"]
-    plain_thought_parts = [p for p in parts if p.get("thought") is True]
-    assert len(plain_thought_parts) == 1
-    assert plain_thought_parts[0]["text"] == reasoning_text
