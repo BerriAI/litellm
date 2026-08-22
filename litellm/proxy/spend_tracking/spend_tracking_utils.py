@@ -367,10 +367,21 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogs
             additional_usage_values.update({k: v})
     clean_metadata["additional_usage_values"] = additional_usage_values
 
-    if litellm.cache is not None:
+    # Only compute a cache key when the current call type is actually cacheable.
+    # A cache backend may be configured with `supported_call_types` that excludes
+    # this call type (e.g. Redis used only for routing state with
+    # `supported_call_types: []`). In that case `litellm.cache` is not None but
+    # nothing is ever cached, so calling `get_cache_key` is wasted work on the
+    # logging hot-path and pollutes the SpendLogs `cache_key` column with a
+    # meaningless hash. Mirror the three-part guard already used by
+    # `CachingHandler._is_call_type_supported_by_cache`.
+    cache_key = "Cache OFF"
+    if (
+        litellm.cache is not None
+        and litellm.cache.supported_call_types is not None
+        and call_type in litellm.cache.supported_call_types
+    ):
         cache_key = litellm.cache.get_cache_key(**kwargs)
-    else:
-        cache_key = "Cache OFF"
     if cache_hit is True:
         import time
 

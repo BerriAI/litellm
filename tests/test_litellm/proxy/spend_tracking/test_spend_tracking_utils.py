@@ -2229,3 +2229,91 @@ def test_get_logging_payload_cache_hit_keeps_raw_litellm_call_id():
     assert json.loads(payload["metadata"])["litellm_call_id"] == trace_call_id
     assert "_cache_hit" in payload["request_id"]
     assert json.loads(payload["metadata"])["litellm_call_id"] != payload["request_id"]
+
+
+def _make_counting_cache(supported_call_types):
+    """Build a litellm Cache whose get_cache_key invocations are counted."""
+    from litellm.caching.caching import Cache
+
+    cache = Cache(type="local", supported_call_types=supported_call_types)
+    counter = {"calls": 0}
+    original_get_cache_key = cache.get_cache_key
+
+    def _counting_get_cache_key(**kwargs):
+        counter["calls"] += 1
+        return original_get_cache_key(**kwargs)
+
+    cache.get_cache_key = _counting_get_cache_key
+    return cache, counter
+
+
+@pytest.mark.parametrize(
+    "supported_call_types, call_type, expect_cache_key, expect_calls",
+    [
+        # Cache backend present but this call type is NOT cacheable
+        # (e.g. Redis configured for routing state with supported_call_types: []).
+        ([], "acompletion", "Cache OFF", 0),
+        # Cache backend present and this call type is explicitly supported.
+        (["acompletion"], "acompletion", "HASH", 1),
+        # Cache backend present but a different call type is requested.
+        (["completion"], "acompletion", "Cache OFF", 0),
+        (["acompletion"], None, "Cache OFF", 0),
+    ],
+)
+def test_get_logging_payload_cache_key_respects_supported_call_types(
+    supported_call_types, call_type, expect_cache_key, expect_calls
+):
+    """
+    Regression test for issue #31862.
+
+    `get_logging_payload` must only invoke `litellm.cache.get_cache_key` when the
+    current call type is actually cacheable. Previously it computed a cache key
+    for every request whenever any cache backend existed, wasting CPU on the
+    logging hot-path and polluting the SpendLogs `cache_key` column with a
+    meaningless SHA-256 hash. This mirrors the three-part guard already used by
+    `CachingHandler._is_call_type_supported_by_cache`.
+    """
+    cache, counter = _make_counting_cache(supported_call_types)
+    original_cache = litellm.cache
+    litellm.cache = cache
+    try:
+        kwargs = {
+            "model": "openai/gpt-4o",
+            "messages": [{"role": "user", "content": "hello"}],
+            "call_type": call_type,
+            "litellm_params": {"metadata": {"user_api_key": "sk-test"}},
+        }
+        now = datetime.datetime.now(timezone.utc)
+        payload = get_logging_payload(
+            kwargs=kwargs, response_obj={}, start_time=now, end_time=now
+        )
+    finally:
+        litellm.cache = original_cache
+
+    assert counter["calls"] == expect_calls
+    if expect_cache_key == "HASH":
+        assert payload["cache_key"] != "Cache OFF"
+        assert len(payload["cache_key"]) == 64  # SHA-256 hex digest
+    else:
+        assert payload["cache_key"] == "Cache OFF"
+
+
+def test_get_logging_payload_cache_key_off_when_cache_is_none():
+    """When no cache backend is configured, cache_key must be the 'Cache OFF' sentinel."""
+    original_cache = litellm.cache
+    litellm.cache = None
+    try:
+        kwargs = {
+            "model": "openai/gpt-4o",
+            "messages": [{"role": "user", "content": "hello"}],
+            "call_type": "acompletion",
+            "litellm_params": {"metadata": {"user_api_key": "sk-test"}},
+        }
+        now = datetime.datetime.now(timezone.utc)
+        payload = get_logging_payload(
+            kwargs=kwargs, response_obj={}, start_time=now, end_time=now
+        )
+    finally:
+        litellm.cache = original_cache
+
+    assert payload["cache_key"] == "Cache OFF"
