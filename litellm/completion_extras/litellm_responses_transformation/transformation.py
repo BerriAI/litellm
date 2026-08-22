@@ -94,13 +94,14 @@ def _reasoning_input_items(msg: "AllMessageValues") -> list[dict[str, object]]: 
     Stored reasoning items win because they carry an id the Responses API minted; thinking
     blocks are the fallback for turns that arrived over another API surface.
     """
-    stored: Final = [_reasoning_item_to_response_input(r_item) for r_item in _get_reasoning_items(msg)]
+    items: Final = _get_reasoning_items(msg)
+    stored: Final = [_reasoning_item_to_response_input(item) for item in items]  # mutable-ok: API message payload
     if stored:
         return stored
     raw_blocks: Final = msg.get("thinking_blocks") or ()
     blocks: Final = cast("Iterable[ChatCompletionThinkingBlock]", raw_blocks)  # cast-ok: untyped client json
     from_thinking: Final = responses_reasoning_item_from_thinking_blocks(blocks)
-    return [] if from_thinking is None else [dict(from_thinking)]
+    return [] if from_thinking is None else [dict(from_thinking)]  # mutable-ok: API message payload
 
 
 def _build_reasoning_item(
@@ -393,7 +394,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 input_items.extend(_reasoning_input_items(msg))
                 if content:
                     input_items.append(
-                        {
+                        {  # mutable-ok: API message payload
                             "type": "message",
                             "role": "assistant",
                             "content": self._convert_content_to_responses_format(content, "assistant"),
