@@ -5091,14 +5091,16 @@ def completion(
     model_info: Final = kwargs.get("model_info", None)
     proxy_server_request: Final = kwargs.get("proxy_server_request", None)
     fallbacks = kwargs.get("fallbacks", None)
-    provider_specific_header: Final = cast(ProviderSpecificHeader | None, kwargs.get("provider_specific_header", None))
+    provider_specific_header: Final = cast(
+        ProviderSpecificHeader | Sequence[ProviderSpecificHeader] | None,
+        kwargs.get("provider_specific_header", None),
+    )
     headers = kwargs.get("headers", None) or extra_headers
 
     ensure_alternating_roles: Final[bool | None] = kwargs.get("ensure_alternating_roles", None)
     user_continue_message: Final[ChatCompletionUserMessage | None] = kwargs.get("user_continue_message", None)
     assistant_continue_message: ChatCompletionAssistantMessage | None = kwargs.get("assistant_continue_message", None)
-    if headers is None:
-        headers = {}
+    headers = {} if headers is None else dict(headers)
     if extra_headers is not None:
         headers.update(extra_headers)
     # Inject proxy auth headers if configured
