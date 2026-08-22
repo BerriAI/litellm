@@ -42,9 +42,8 @@ import openai
 import tiktoken
 from httpx import Proxy
 from httpx._utils import get_environment_proxies
-from openai.lib import _parsing, _pydantic
 from openai.types.chat.completion_create_params import ResponseFormat
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 from tiktoken import Encoding
 from tokenizers import Tokenizer
 
@@ -1253,6 +1252,93 @@ async def async_post_call_success_deployment_hook(
     return response
 
 
+def process_response_format(
+    response_format: type[BaseModel] | dict | None,
+) -> dict | None:
+    if response_format is None:
+        return None
+    if isinstance(response_format, dict):
+        return type_to_response_format_param(response_format)
+    if isinstance(response_format, type) and issubclass(response_format, BaseModel):
+        return type_to_response_format_param(response_format)
+    raise TypeError(f"Unsupported response_format type - {response_format}")
+
+
+def normalize_completion_response_format(
+    response_format: type[BaseModel] | dict | None,
+    model: str,
+) -> dict | type[BaseModel] | None:
+    try:
+        processed: Final = process_response_format(response_format)
+    except (ValidationError, json.JSONDecodeError) as e:
+        raise litellm.APIError(
+            status_code=400,
+            message=f"Invalid Pydantic response_format: {e}",
+            llm_provider="",
+            model=model,
+        ) from e
+    return processed if processed is not None else response_format
+
+
+def _deserialize_pydantic_response_format(
+    response_format: type[BaseModel],
+    model_response: str,
+    model: str | None,
+) -> None:
+    try:
+        model_validate_json = getattr(response_format, "model_validate_json", None)
+        if callable(model_validate_json):
+            model_validate_json(model_response)
+            return
+        parse_raw = getattr(response_format, "parse_raw", None)
+        if callable(parse_raw):
+            parse_raw(model_response)
+            return
+        json.loads(model_response)
+    except (ValidationError, json.JSONDecodeError) as e:
+        raise litellm.APIError(
+            status_code=500,
+            message=f"Structured output did not match the Pydantic response_format: {e}",
+            llm_provider="",
+            model=model or "",
+        ) from e
+
+
+def _response_format_as_json_schema(response_format: object) -> dict | None:
+    if isinstance(response_format, type) and issubclass(response_format, BaseModel):
+        return process_response_format(response_format)
+    if isinstance(response_format, dict) and response_format.get("json_schema") is not None:
+        return response_format
+    return None
+
+
+def _apply_response_format_validation(
+    response_format: object,
+    model_response: str,
+    model: str | None,
+) -> None:
+    try:
+        if isinstance(response_format, type) and issubclass(response_format, BaseModel):
+            _deserialize_pydantic_response_format(
+                response_format=response_format,
+                model_response=model_response,
+                model=model,
+            )
+        json_response_format: Final = _response_format_as_json_schema(response_format)
+        if json_response_format is not None:
+            litellm.litellm_core_utils.json_validation_rule.validate_schema(
+                schema=json_response_format["json_schema"]["schema"],
+                response=model_response,
+            )
+    except (ValidationError, json.JSONDecodeError) as e:
+        raise litellm.APIError(
+            status_code=500,
+            message=f"Structured output did not match the Pydantic response_format: {e}",
+            llm_provider="",
+            model=model or "",
+        ) from e
+
+
 def post_call_processing(
     original_response,
     model,
@@ -1294,26 +1380,11 @@ def post_call_processing(
                                         and "response_format" in optional_params
                                         and optional_params["response_format"] is not None
                                     ):
-                                        json_response_format: dict | None = None
-                                        if (
-                                            isinstance(
-                                                optional_params["response_format"],
-                                                dict,
-                                            )
-                                            and optional_params["response_format"].get("json_schema") is not None
-                                        ):
-                                            json_response_format = optional_params["response_format"]
-                                        elif _parsing._completions.is_basemodel_type(
-                                            optional_params["response_format"]
-                                        ):
-                                            json_response_format = type_to_response_format_param(
-                                                response_format=optional_params["response_format"]
-                                            )
-                                        if json_response_format is not None:
-                                            litellm.litellm_core_utils.json_validation_rule.validate_schema(
-                                                schema=json_response_format["json_schema"]["schema"],
-                                                response=model_response,
-                                            )
+                                        _apply_response_format_validation(
+                                            response_format=optional_params["response_format"],
+                                            model_response=model_response,
+                                            model=model,
+                                        )
                                 except TypeError:
                                     pass
                             if (
@@ -3817,8 +3888,8 @@ def pre_process_non_default_params(
                 response_format=non_default_params["response_format"]
             )
         else:
-            non_default_params["response_format"] = type_to_response_format_param(
-                response_format=non_default_params["response_format"]
+            non_default_params["response_format"] = process_response_format(
+                non_default_params["response_format"]
             )
 
     if "tools" in non_default_params and isinstance(
