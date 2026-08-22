@@ -9,9 +9,11 @@ Ref: https://docs.snowflake.com/en/user-guide/snowflake-cortex/cortex-rest-api
 """
 
 import json
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from collections.abc import Mapping, Sequence
+from typing import TYPE_CHECKING, Any, Final, Protocol, TypedDict
 
 import httpx
+from typing_extensions import ReadOnly
 
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolCallChunk
 from litellm.types.utils import (
@@ -36,17 +38,58 @@ if TYPE_CHECKING:
 else:
     LiteLLMLoggingObj = Any
 
-ANTHROPIC_VERSION = "2023-06-01"
+ANTHROPIC_VERSION: Final = "2023-06-01"
 
-_CLAUDE_MODEL_PREFIXES = (
+_CLAUDE_MODEL_PREFIXES: Final = (
     "claude-",
     "claude_",
 )
 
 
+class _AnthropicContentBlock(TypedDict, total=False):
+    type: ReadOnly[str]
+    text: ReadOnly[str]
+    id: ReadOnly[str]
+    name: ReadOnly[str]
+    input: ReadOnly[Mapping[str, object]]
+
+
+class _AnthropicUsageBlock(TypedDict, total=False):
+    input_tokens: ReadOnly[int]
+    output_tokens: ReadOnly[int]
+
+
+class _AnthropicMessagesResponse(TypedDict, total=False):
+    id: ReadOnly[str]
+    model: ReadOnly[str]
+    stop_reason: ReadOnly[str]
+    content: ReadOnly[Sequence[_AnthropicContentBlock]]
+    usage: ReadOnly[_AnthropicUsageBlock]
+
+
+class _ChatCompletionsResponse(Protocol):
+    """Response view that decodes the Cortex chat-completions body as a field mapping."""
+
+    def json(self) -> Mapping[str, object]: ...
+
+
+class _MessagesResponse(Protocol):
+    """Response view that decodes the Cortex messages body in Anthropic shape."""
+
+    def json(self) -> _AnthropicMessagesResponse: ...
+
+
+def _decoded_chat_completions(response: _ChatCompletionsResponse) -> Mapping[str, object]:
+    return response.json()
+
+
+def _decoded_messages(response: _MessagesResponse) -> _AnthropicMessagesResponse:
+    return response.json()
+
+
 def _is_claude_model(model: str) -> bool:
     """Return True if model name (after stripping snowflake/ prefix) is a Claude model."""
-    name = model.lower().removeprefix("snowflake/")
+    name: Final = model.lower().removeprefix("snowflake/")
     return any(name.startswith(p) for p in _CLAUDE_MODEL_PREFIXES)
 
 
@@ -67,8 +110,8 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
     def get_config(cls):
         return super().get_config()
 
-    def get_supported_openai_params(self, model: str) -> List[str]:
-        params = [
+    def get_supported_openai_params(self, model: str) -> list[str]:
+        params: Final = [
             "temperature",
             "max_tokens",
             "max_completion_tokens",
@@ -83,12 +126,12 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         api_base = self._get_api_base(api_base, optional_params)
         if _is_claude_model(model):
@@ -99,11 +142,11 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
         self,
         headers: dict,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
         headers = super().validate_environment(
             headers=headers,
@@ -118,18 +161,18 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
             headers["anthropic-version"] = ANTHROPIC_VERSION
         return headers
 
-    def _transform_tools_to_anthropic(self, tools: List[Dict]) -> List[Dict]:
+    def _transform_tools_to_anthropic(self, tools: list[dict]) -> list[dict]:
         """
         Convert tools from OpenAI format to Anthropic format.
 
         OpenAI: {"type": "function", "function": {"name": ..., "parameters": {...}}}
         Anthropic: {"name": ..., "description": ..., "input_schema": {...}}
         """
-        anthropic_tools = []
+        anthropic_tools: Final = []
         for tool in tools:
             if tool.get("type") == "function" and "function" in tool:
                 func = tool["function"]
-                anthropic_tool: Dict[str, Any] = {
+                anthropic_tool: dict[str, object] = {
                     "name": func.get("name", ""),
                 }
                 if "description" in func:
@@ -146,7 +189,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
                 anthropic_tools.append(tool)
         return anthropic_tools
 
-    def _extract_system_and_messages(self, messages: List[AllMessageValues]) -> tuple[Optional[str], List[Dict]]:
+    def _extract_system_and_messages(self, messages: list[AllMessageValues]) -> tuple[str | None, list[dict]]:
         """
         Split messages into system prompt and conversation turns for Anthropic format.
 
@@ -154,8 +197,8 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
         - assistant messages with tool_calls → tool_use content blocks
         - tool role messages → user role with tool_result content blocks
         """
-        system_parts: List[str] = []
-        conversation: List[Dict] = []
+        system_parts: Final[list[str]] = []
+        conversation: Final[list[dict]] = []
 
         for msg in messages:
             if isinstance(msg, dict):
@@ -172,11 +215,11 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
                     system_parts.append("\n".join(b.get("text", "") for b in content if b.get("type") == "text"))
             elif role == "assistant":
                 tool_calls = msg.get("tool_calls") if isinstance(msg, dict) else getattr(msg, "tool_calls", None)
-                if tool_calls:  # type: ignore[truthy-bool]
-                    content_blocks: List[Dict[str, Any]] = []
+                if tool_calls:
+                    content_blocks: list[dict[str, object]] = []
                     if content:
                         content_blocks.append({"type": "text", "text": content})
-                    for tc in tool_calls:  # type: ignore[attr-defined]
+                    for tc in tool_calls:
                         func = tc.get("function", {}) if isinstance(tc, dict) else getattr(tc, "function", {})
                         tc_id = tc.get("id", "") if isinstance(tc, dict) else getattr(tc, "id", "")
                         func_name = func.get("name", "") if isinstance(func, dict) else getattr(func, "name", "")
@@ -221,19 +264,19 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
             else:
                 conversation.append({"role": role, "content": content})
 
-        system: Optional[str] = "\n\n".join(system_parts) if system_parts else None
+        system: Final[str | None] = "\n\n".join(system_parts) if system_parts else None
         return system, conversation
 
     def transform_request(
         self,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
     ) -> dict:
-        stream: bool = optional_params.pop("stream", False) or False
-        extra_body = optional_params.pop("extra_body", {})
+        stream: Final[bool] = optional_params.pop("stream", False) or False
+        extra_body: Final = optional_params.pop("extra_body", {})
 
         if _is_claude_model(model):
             return self._transform_request_anthropic(model, messages, optional_params, stream, extra_body)
@@ -242,17 +285,17 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
     def _transform_request_openai(
         self,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         stream: bool,
         extra_body: dict,
     ) -> dict:
         """OpenAI format for /chat/completions endpoint."""
-        max_tokens = optional_params.pop("max_tokens", None)
-        max_completion_tokens = optional_params.pop("max_completion_tokens", None)
-        resolved_max = max_completion_tokens or max_tokens
+        max_tokens: Final = optional_params.pop("max_tokens", None)
+        max_completion_tokens: Final = optional_params.pop("max_completion_tokens", None)
+        resolved_max: Final = max_completion_tokens or max_tokens
 
-        body: dict = {
+        body: Final[dict] = {
             "model": model.removeprefix("snowflake/"),
             "messages": messages,
             "stream": stream,
@@ -265,7 +308,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
 
         return body
 
-    def _transform_tool_choice_to_anthropic(self, tool_choice: Any) -> Dict[str, Any]:
+    def _transform_tool_choice_to_anthropic(self, tool_choice: Any) -> dict[str, Any]:
         """
         Convert tool_choice from OpenAI format to Anthropic format.
 
@@ -274,7 +317,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
         Anthropic: {"type": "auto"}, {"type": "any"}, {"type": "tool", "name": "..."}
         """
         if isinstance(tool_choice, str):
-            mapping = {
+            mapping: Final = {
                 "auto": {"type": "auto"},
                 "required": {"type": "any"},
                 "none": {"type": "none"},
@@ -282,7 +325,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
             return mapping.get(tool_choice, {"type": "auto"})
         elif isinstance(tool_choice, dict):
             if tool_choice.get("type") == "function":
-                func = tool_choice.get("function", {})
+                func: Final = tool_choice.get("function", {})
                 return {"type": "tool", "name": func.get("name", "")}
             return tool_choice
         return {"type": "auto"}
@@ -290,7 +333,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
     def _transform_request_anthropic(
         self,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         stream: bool,
         extra_body: dict,
@@ -304,13 +347,13 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
         if "tool_choice" in optional_params:
             optional_params["tool_choice"] = self._transform_tool_choice_to_anthropic(optional_params["tool_choice"])
 
-        max_completion_tokens = optional_params.pop("max_completion_tokens", None)
+        max_completion_tokens: Final = optional_params.pop("max_completion_tokens", None)
         if max_completion_tokens and "max_tokens" not in optional_params:
             optional_params["max_tokens"] = max_completion_tokens
 
-        model_name = model.removeprefix("snowflake/")
+        model_name: Final = model.removeprefix("snowflake/")
 
-        body: Dict[str, Any] = {
+        body: Final[dict[str, object]] = {
             "model": model_name,
             "messages": conversation,
             "stream": stream,
@@ -333,12 +376,12 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
         request_data: dict,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
-        api_key: Optional[str] = None,
-        json_mode: Optional[bool] = None,
+        encoding: object,
+        api_key: str | None = None,
+        json_mode: bool | None = None,
     ) -> ModelResponse:
         if _is_claude_model(model):
             return self._transform_response_anthropic(
@@ -353,10 +396,10 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
         request_data: dict,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
     ) -> ModelResponse:
         """Parse standard OpenAI chat completions response."""
-        response_json = raw_response.json()
+        response_json: Final = _decoded_chat_completions(raw_response)
 
         logging_obj.post_call(
             input=messages,
@@ -365,7 +408,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
             additional_args={"complete_input_dict": request_data},
         )
 
-        returned_response = ModelResponse(**response_json)
+        returned_response: Final = ModelResponse(**response_json)
         returned_response.model = "snowflake/" + (returned_response.model or "")
 
         if model is not None:
@@ -380,10 +423,10 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
         request_data: dict,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
     ) -> ModelResponse:
         """Parse Anthropic Messages response into OpenAI format."""
-        response_json = raw_response.json()
+        response_json: Final = _decoded_messages(raw_response)
 
         logging_obj.post_call(
             input=messages,
@@ -393,7 +436,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
         )
 
         text_content = ""
-        tool_calls = []
+        tool_calls: Final = []
 
         for block in response_json.get("content", []):
             if block.get("type") == "text":
@@ -410,33 +453,33 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
                     )
                 )
 
-        _stop_reason_map = {
+        _stop_reason_map: Final = {
             "end_turn": "stop",
             "max_tokens": "length",
             "tool_use": "tool_calls",
             "stop_sequence": "stop",
         }
-        finish_reason = _stop_reason_map.get(response_json.get("stop_reason", "end_turn"), "stop")
+        finish_reason: Final = _stop_reason_map.get(response_json.get("stop_reason", "end_turn"), "stop")
 
-        message = Message(content=text_content or None, role="assistant")
+        message: Final = Message(content=text_content or None, role="assistant")
         if tool_calls:
             message.tool_calls = tool_calls
 
-        choice = Choices(
+        choice: Final = Choices(
             finish_reason=finish_reason,
             index=0,
             message=message,
         )
 
-        usage_data = response_json.get("usage", {})
-        usage = Usage(
+        usage_data: Final = response_json.get("usage", {})
+        usage: Final = Usage(
             prompt_tokens=usage_data.get("input_tokens", 0),
             completion_tokens=usage_data.get("output_tokens", 0),
             total_tokens=usage_data.get("input_tokens", 0) + usage_data.get("output_tokens", 0),
         )
 
         model_response.choices = [choice]
-        model_response.usage = usage  # type: ignore[attr-defined]
+        model_response.usage = usage
         model_response.model = "snowflake/" + response_json.get("model", model)
         model_response.id = response_json.get("id", "")
 
@@ -447,10 +490,10 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
 
     def get_model_response_iterator(
         self,
-        streaming_response: Any,
+        streaming_response: object,
         sync_stream: bool,
-        json_mode: Optional[bool] = False,
-    ) -> Any:
+        json_mode: bool | None = False,
+    ) -> "SnowflakeStreamingHandler":
         return SnowflakeStreamingHandler(
             streaming_response=streaming_response,
             sync_stream=sync_stream,
@@ -468,9 +511,9 @@ class SnowflakeStreamingHandler(BaseModelResponseIterator):
 
     def __init__(
         self,
-        streaming_response: Any,
+        streaming_response: object,
         sync_stream: bool,
-        json_mode: Optional[bool] = False,
+        json_mode: bool | None = False,
     ):
         super().__init__(streaming_response=streaming_response, sync_stream=sync_stream)
         self._tool_index = 0
@@ -484,7 +527,7 @@ class SnowflakeStreamingHandler(BaseModelResponseIterator):
         return self._parse_anthropic_chunk(chunk)
 
     def _parse_openai_chunk(self, chunk: dict) -> GenericStreamingChunk:
-        choices = chunk.get("choices", [])
+        choices: Final = chunk.get("choices", [])
         if not choices:
             return GenericStreamingChunk(
                 text="",
@@ -495,16 +538,16 @@ class SnowflakeStreamingHandler(BaseModelResponseIterator):
                 tool_use=None,
             )
 
-        choice = choices[0]
-        delta = choice.get("delta", {})
-        finish_reason = choice.get("finish_reason") or ""
-        text = delta.get("content") or ""
+        choice: Final = choices[0]
+        delta: Final = choice.get("delta", {})
+        finish_reason: Final = choice.get("finish_reason") or ""
+        text: Final = delta.get("content") or ""
 
         tool_use = None
-        tool_calls = delta.get("tool_calls")
+        tool_calls: Final = delta.get("tool_calls")
         if tool_calls:
-            tc = tool_calls[0]
-            func = tc.get("function", {})
+            tc: Final = tool_calls[0]
+            func: Final = tc.get("function", {})
             tool_use = ChatCompletionToolCallChunk(
                 id=tc.get("id", ""),
                 type="function",
@@ -525,10 +568,10 @@ class SnowflakeStreamingHandler(BaseModelResponseIterator):
         )
 
     def _parse_anthropic_chunk(self, chunk: dict) -> GenericStreamingChunk:
-        event_type = chunk.get("type", "")
+        event_type: Final = chunk.get("type", "")
 
         if event_type == "message_start":
-            message = chunk.get("message", {})
+            message: Final = chunk.get("message", {})
             usage_data = message.get("usage", {})
             self._input_tokens = usage_data.get("input_tokens", 0)
             return GenericStreamingChunk(
@@ -542,7 +585,7 @@ class SnowflakeStreamingHandler(BaseModelResponseIterator):
 
         elif event_type == "content_block_delta":
             delta = chunk.get("delta", {})
-            delta_type = delta.get("type", "")
+            delta_type: Final = delta.get("type", "")
 
             if delta_type == "text_delta":
                 return GenericStreamingChunk(
@@ -572,7 +615,7 @@ class SnowflakeStreamingHandler(BaseModelResponseIterator):
                 )
 
         elif event_type == "content_block_start":
-            content_block = chunk.get("content_block", {})
+            content_block: Final = chunk.get("content_block", {})
             if content_block.get("type") == "tool_use":
                 self._tool_id = content_block.get("id", "")
                 self._tool_name = content_block.get("name", "")
@@ -593,9 +636,9 @@ class SnowflakeStreamingHandler(BaseModelResponseIterator):
 
         elif event_type == "message_delta":
             delta = chunk.get("delta", {})
-            stop_reason = delta.get("stop_reason", "")
+            stop_reason: Final = delta.get("stop_reason", "")
             usage_data = chunk.get("usage", {})
-            _stop_map = {
+            _stop_map: Final = {
                 "end_turn": "stop",
                 "max_tokens": "length",
                 "tool_use": "tool_calls",
@@ -603,8 +646,8 @@ class SnowflakeStreamingHandler(BaseModelResponseIterator):
             }
             usage = None
             if usage_data or self._input_tokens:
-                output_t = usage_data.get("output_tokens", 0)
-                input_t = self._input_tokens or usage_data.get("input_tokens", 0)
+                output_t: Final = usage_data.get("output_tokens", 0)
+                input_t: Final = self._input_tokens or usage_data.get("input_tokens", 0)
                 usage = ChatCompletionUsageBlock(
                     prompt_tokens=input_t,
                     completion_tokens=output_t,

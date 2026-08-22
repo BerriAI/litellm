@@ -32,6 +32,37 @@ def _transform(model, params, litellm_params=None):
     )
 
 
+def test_adaptive_thinking_only_translated_to_legacy_for_haiku_4_5():
+    """The minimal autoroute repro: Claude Code sends bare ``thinking={type: adaptive}``
+    (no ``output_config``) and the complexity router picks Haiku 4.5, which does not
+    support adaptive thinking. Anthropic 400s with "adaptive thinking is not supported on
+    this model" unless the flag is dropped, so it must be translated to the legacy extended
+    thinking the model does support rather than forwarded raw."""
+    result = _transform("claude-haiku-4-5", {"max_tokens": 8192, "thinking": {"type": "adaptive"}})
+
+    assert result["thinking"] == {
+        "type": "enabled",
+        "budget_tokens": DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
+    }
+    assert "output_config" not in result
+
+
+def test_adaptive_thinking_only_dropped_for_non_reasoning_model():
+    """Bare adaptive thinking on a model with no reasoning support at all is silently
+    dropped so the request still succeeds instead of being rejected."""
+    result = _transform("claude-3-5-haiku-latest", {"max_tokens": 8192, "thinking": {"type": "adaptive"}})
+
+    assert "thinking" not in result
+
+
+def test_adaptive_thinking_only_preserved_for_4_6():
+    """A 4.6+ model natively supports adaptive thinking, so a bare adaptive flag must not
+    be rewritten even without output_config."""
+    result = _transform("claude-sonnet-4-6", {"max_tokens": 8192, "thinking": {"type": "adaptive"}})
+
+    assert result["thinking"] == {"type": "adaptive"}
+
+
 def test_effort_translated_to_legacy_thinking_for_haiku_4_5():
     """Core regression: Claude Code sends adaptive thinking + effort to Haiku 4.5
     (thinking-capable, pre-4.6). Effort must be translated to legacy extended

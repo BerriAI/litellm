@@ -5,8 +5,6 @@ Tests for LiteLLM proxy realtime WebRTC HTTP endpoints:
 """
 
 import json
-import os
-import sys
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -14,7 +12,6 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-sys.path.insert(0, os.path.abspath("../../../.."))
 
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -816,6 +813,114 @@ async def test_realtime_transcription_websocket_default_model_checks_team_scope(
     _, close_kwargs = websocket.close.call_args
     assert close_kwargs["code"] == 1008
     assert "not allowed to access model" in close_kwargs["reason"]
+
+
+@pytest.mark.asyncio
+async def test_realtime_websocket_phase2_failure_sends_error_event_and_reasoned_close():
+    """Regression for the realtime accept-then-silence hang: a phase-2 failure
+    (routing / upstream credential resolution) used to close 1011 with the bare
+    reason "Internal server error" and no error event, leaving the client with
+    no clue what happened. The client must get an OpenAI-style error event and
+    a close reason naming the failure."""
+    from litellm.proxy import proxy_server
+
+    events = []
+
+    websocket = MagicMock()
+    websocket.headers = {}
+    websocket.scope = {"headers": []}
+    websocket.accept = AsyncMock()
+    websocket.send_text = AsyncMock(side_effect=lambda payload: events.append(("send_text", payload)))
+    websocket.close = AsyncMock(side_effect=lambda **kwargs: events.append(("close", kwargs)))
+
+    mock_processor = MagicMock()
+    mock_processor.common_processing_pre_call_logic = AsyncMock(
+        return_value=({"model": "gpt-4o-realtime-preview"}, MagicMock())
+    )
+
+    with (
+        patch(
+            "litellm.proxy.proxy_server.can_key_call_resolved_model",
+            new=AsyncMock(return_value=None),
+        ),
+        patch(
+            "litellm.proxy.proxy_server.ProxyBaseLLMRequestProcessing",
+            return_value=mock_processor,
+        ),
+        patch(
+            "litellm.proxy.proxy_server.route_request",
+            new=AsyncMock(side_effect=RuntimeError("vertex token refresh exploded")),
+        ),
+    ):
+        await proxy_server.realtime_websocket_endpoint(
+            websocket=websocket,
+            model="gpt-4o-realtime-preview",
+            intent=None,
+            guardrails=None,
+            user_api_key_dict=UserAPIKeyAuth(models=["*"]),
+        )
+
+    websocket.accept.assert_awaited_once()
+    assert [name for name, _ in events] == ["send_text", "close"]
+
+    error_event = json.loads(events[0][1])
+    assert error_event["type"] == "error"
+    assert error_event["error"]["type"] == "server_error"
+    assert "vertex token refresh exploded" in error_event["error"]["message"]
+
+    close_kwargs = events[1][1]
+    assert close_kwargs["code"] == 1011
+    assert "vertex token refresh exploded" in close_kwargs["reason"]
+    assert len(close_kwargs["reason"].encode("utf-8")) <= 123
+
+
+@pytest.mark.asyncio
+async def test_realtime_websocket_phase2_failure_on_closed_socket_does_not_escape():
+    """The lower handler layer may have already closed the client socket before
+    the phase-2 handler runs (it closes on backend failures itself, then can
+    re-raise). Send and close must each be guarded: the close is still
+    attempted after a failed send, and neither failure escapes to the ASGI
+    layer."""
+    from litellm.proxy import proxy_server
+
+    websocket = MagicMock()
+    websocket.headers = {}
+    websocket.scope = {"headers": []}
+    websocket.accept = AsyncMock()
+    websocket.send_text = AsyncMock(side_effect=RuntimeError('Cannot call "send" once a close message has been sent.'))
+    websocket.close = AsyncMock(side_effect=RuntimeError('Cannot call "send" once a close message has been sent.'))
+
+    mock_processor = MagicMock()
+    mock_processor.common_processing_pre_call_logic = AsyncMock(
+        return_value=({"model": "gpt-4o-realtime-preview"}, MagicMock())
+    )
+
+    with (
+        patch(
+            "litellm.proxy.proxy_server.can_key_call_resolved_model",
+            new=AsyncMock(return_value=None),
+        ),
+        patch(
+            "litellm.proxy.proxy_server.ProxyBaseLLMRequestProcessing",
+            return_value=mock_processor,
+        ),
+        patch(
+            "litellm.proxy.proxy_server.route_request",
+            new=AsyncMock(side_effect=RuntimeError("vertex token refresh exploded")),
+        ),
+    ):
+        await proxy_server.realtime_websocket_endpoint(
+            websocket=websocket,
+            model="gpt-4o-realtime-preview",
+            intent=None,
+            guardrails=None,
+            user_api_key_dict=UserAPIKeyAuth(models=["*"]),
+        )
+
+    websocket.close.assert_awaited_once()
+    _, close_kwargs = websocket.close.call_args
+    assert close_kwargs["code"] == 1011
+    assert "vertex token refresh exploded" in close_kwargs["reason"]
 
 
 @pytest.mark.asyncio

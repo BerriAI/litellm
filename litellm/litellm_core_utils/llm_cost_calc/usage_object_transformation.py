@@ -1,4 +1,6 @@
-from typing import Any, Mapping, Optional, Sequence, Union
+from collections.abc import Mapping, Sequence
+from types import MappingProxyType
+from typing import Any
 
 from litellm.types.utils import (
     CompletionTokensDetailsWrapper,
@@ -20,8 +22,8 @@ class TranscriptionUsageObjectTransformation:
 
     @staticmethod
     def transform_transcription_usage_object(
-        usage_object: Union[TranscriptionUsageDurationObject, TranscriptionUsageTokensObject],
-    ) -> Optional[Usage]:
+        usage_object: TranscriptionUsageDurationObject | TranscriptionUsageTokensObject,
+    ) -> Usage | None:
         if isinstance(usage_object, TranscriptionUsageDurationObject):
             return None
         elif isinstance(usage_object, TranscriptionUsageTokensObject):
@@ -37,36 +39,40 @@ class TranscriptionUsageObjectTransformation:
         return None
 
 
-_INTERACTIONS_MODALITY_FIELDS: Mapping[str, str] = {
-    "text": "text_tokens",
-    "audio": "audio_tokens",
-    "image": "image_tokens",
-    "video": "video_tokens",
-    "document": "text_tokens",
-}
+_INTERACTIONS_MODALITY_FIELDS: Mapping[str, str] = MappingProxyType(
+    {
+        "text": "text_tokens",
+        "audio": "audio_tokens",
+        "image": "image_tokens",
+        "video": "video_tokens",
+        "document": "text_tokens",
+    }
+)
 
 
 def _modality_field(entry: Mapping[str, Any]) -> str | None:
     return _INTERACTIONS_MODALITY_FIELDS.get(str(entry.get("modality", "")).lower())
 
 
-def _token_count(value: Any) -> int:
+def _token_count(value: object) -> int:
     return value if isinstance(value, int) else 0
 
 
 def _modality_token_sums(entries: Sequence[Mapping[str, Any]]) -> Mapping[str, int]:
-    fields = {field for entry in entries if (field := _modality_field(entry)) is not None}
-    return {
-        field: sum(_token_count(entry.get("tokens")) for entry in entries if _modality_field(entry) == field)
-        for field in fields
-    }
+    fields = frozenset(field for entry in entries if (field := _modality_field(entry)) is not None)
+    return MappingProxyType(
+        {
+            field: sum(_token_count(entry.get("tokens")) for entry in entries if _modality_field(entry) == field)
+            for field in fields
+        }
+    )
 
 
 def _google_search_query_count(usage_object: Mapping[str, Any]) -> int:
     return sum(
         _token_count(entry.get("count"))
         for entry in tuple(usage_object.get("grounding_tool_count") or ())
-        if isinstance(entry, Mapping) and entry.get("type") == "google_search"
+        if isinstance(entry, Mapping) and entry.get("type") == "google_search"  # pyright: ignore[reportUnnecessaryIsInstance]  # provider JSON, not the empty tuple inferred from `or ()`
     )
 
 
@@ -76,12 +82,16 @@ def _subtract_cached_from_input(
     total_cached_tokens: int,
 ) -> Mapping[str, int]:
     if cached_sums:
-        return {field: max(0, tokens - cached_sums.get(field, 0)) for field, tokens in input_sums.items()}
+        return MappingProxyType(
+            {field: max(0, tokens - cached_sums.get(field, 0)) for field, tokens in input_sums.items()}
+        )
     if total_cached_tokens and "text_tokens" in input_sums:
-        return {
-            **input_sums,
-            "text_tokens": max(0, input_sums["text_tokens"] - total_cached_tokens),
-        }
+        return MappingProxyType(
+            {
+                **input_sums,
+                "text_tokens": max(0, input_sums["text_tokens"] - total_cached_tokens),
+            }
+        )
     return input_sums
 
 
@@ -93,7 +103,7 @@ class InteractionsUsageObjectTransformation:
     """
 
     @staticmethod
-    def is_interactions_usage_object(usage_object: Any) -> bool:
+    def is_interactions_usage_object(usage_object: object) -> bool:
         if not isinstance(usage_object, dict):
             return False
         if "prompt_tokens" in usage_object or "input_tokens" in usage_object:

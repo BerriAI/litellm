@@ -60,13 +60,13 @@ async def test_normalize_teams_with_details_with_aliases():
 
 @patch("litellm.proxy.client.cli.commands.auth.requests.post")
 def test_start_cli_sso_flow_rejects_invalid_response(request_mock):
-    """Test CLI SSO start rejects malformed server responses"""
+    """Test CLI SSO start rejects malformed server responses and names the missing fields"""
     response = Mock()
-    response.raise_for_status = Mock()
+    response.status_code = 200
     response.json.return_value = {"login_id": "cli-session", "user_code": "ABCD-EFGH"}
     request_mock.return_value = response
 
-    with pytest.raises(ValueError, match="Invalid CLI SSO start response"):
+    with pytest.raises(ValueError, match="missing required field\\(s\\): poll_secret"):
         _start_cli_sso_flow("https://litellm.com")
 
 
@@ -75,15 +75,13 @@ def test_start_cli_sso_flow_rejects_invalid_response(request_mock):
     "litellm.proxy.client.cli.commands.auth.requests.get",
     side_effect=[Mock(status_code=404)],
 )
-@patch("litellm.proxy.client.cli.commands.auth.click.echo")
 @patch("litellm.proxy.client.cli.commands.auth.time.sleep")
-async def test_poll_for_ready_404(sleep_mock, click_mock, request_mock):
-    """Test poll_for_ready function"""
-    actual = _poll_for_ready_data(
-        "https://litellm.com", poll_interval=1, total_timeout=1, request_timeout=42
-    )
-    assert actual is None
-    click_mock.assert_called_once_with("Polling error: HTTP 404")
+async def test_poll_for_ready_404(sleep_mock, request_mock):
+    """Test polling treats HTTP 404 as a permanent error and raises instead of retrying"""
+    with pytest.raises(ValueError, match="rejected the login session with HTTP 404"):
+        _poll_for_ready_data(
+            "https://litellm.com", poll_interval=1, total_timeout=1, request_timeout=42
+        )
     request_mock.assert_called_once_with("https://litellm.com", timeout=42)
 
 

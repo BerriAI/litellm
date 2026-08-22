@@ -665,6 +665,192 @@ async def test_per_user_oauth_missing_stored_token_returns_preemptive_401():
 
 
 @pytest.mark.asyncio
+async def test_admitted_subject_missing_stored_token_challenged_with_resource_metadata():
+    """
+    LIT-4864: a keyless gateway-session subject (mcp_admitted_user_subject) with no stored
+    per-user token must be challenged with the per-server resource_metadata, whose
+    authorization server is the gateway itself, so the client re-runs the gateway sign-in
+    flow and vaults the upstream token through the authorize interlude. The keyed
+    authorization_uri challenge points at the per-server relay, which cannot vault a token
+    for a keyless client (its token request carries no litellm credential), so sending an
+    admitted subject there would dead-end the flow on a raw upstream token.
+    """
+    from fastapi import HTTPException
+
+    try:
+        from litellm.proxy._experimental.mcp_server.server import (
+            handle_streamable_http_mcp,
+            session_manager_stateless,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/mcp/repro_oauth_server",
+        "scheme": "http",
+        "query_string": b"",
+        "root_path": "",
+        "server": ("localhost", 8000),
+        "headers": [
+            (b"content-type", b"application/json"),
+            (b"host", b"localhost:8000"),
+        ],
+    }
+    receive = AsyncMock()
+    send = AsyncMock()
+    user_auth = MagicMock()
+    user_auth.user_id = "sso-user-42"
+    user_auth.mcp_admitted_user_subject = True
+    oauth_server = MagicMock()
+    oauth_server.auth_type = MCPAuth.oauth2
+    oauth_server.needs_user_oauth_token = True
+    oauth_server.delegate_auth_to_upstream = False
+
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
+            new_callable=AsyncMock,
+            return_value=(user_auth, None, ["repro_oauth_server"], None, None, None),
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.set_auth_context",
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED",
+            True,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._handle_stale_mcp_session",
+            new_callable=AsyncMock,
+            return_value=False,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager.has_user_oauth_token",
+            new_callable=AsyncMock,
+            return_value=False,
+        ) as mock_has_token,
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager.get_mcp_server_by_name",
+            return_value=oauth_server,
+        ),
+        patch.object(
+            session_manager_stateless,
+            "handle_request",
+            new_callable=AsyncMock,
+        ) as mock_handle_request,
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await handle_streamable_http_mcp(scope, receive, send)
+
+    assert mock_has_token.await_count == 1
+    assert mock_handle_request.await_count == 0
+    assert exc_info.value.status_code == 401
+    challenge = exc_info.value.headers["www-authenticate"]
+    assert "authorization_uri=" not in challenge
+    assert challenge == (
+        'Bearer resource_metadata="http://localhost:8000'
+        '/.well-known/oauth-protected-resource/mcp/repro_oauth_server"'
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "m2m_fields",
+    [
+        {"oauth2_flow": "client_credentials"},
+        {"client_id": "cid", "client_secret": "csec", "token_url": "https://idp.example.com/token"},
+    ],
+    ids=["stamped", "unstamped_m2m_shape"],
+)
+async def test_client_credentials_server_is_not_preemptively_challenged(m2m_fields):
+    """
+    An OAuth2 client_credentials (M2M) server mints its own upstream token;
+    there is no user OAuth flow to bootstrap. The connect-time gate must let
+    the request through to the session manager rather than pushing the client
+    into an interactive OAuth flow it can never complete (the per-user token
+    store is never even consulted for M2M). Covers both a stamped row and a
+    legacy null-flow row with the M2M field shape: the gate must classify the
+    flow through the same request-time chokepoint egress uses, or the two
+    disagree and the unstamped server is challenged for a token egress would
+    never look for.
+    """
+    try:
+        from litellm.proxy._experimental.mcp_server.server import (
+            handle_streamable_http_mcp,
+            session_manager_stateless,
+        )
+        from litellm.proxy._types import MCPTransport
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/mcp",
+        "scheme": "http",
+        "query_string": b"",
+        "root_path": "",
+        "server": ("localhost", 8000),
+        "headers": [
+            (b"content-type", b"application/json"),
+            (b"host", b"localhost:8000"),
+        ],
+    }
+    receive = AsyncMock(
+        return_value={
+            "type": "http.request",
+            "body": b'{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}',
+            "more_body": False,
+        }
+    )
+    send = AsyncMock()
+    user_auth = MagicMock()
+    user_auth.user_id = "test-user-id"
+    m2m_server = MCPServer(
+        server_id="m2m-server-id",
+        name="m2m_server",
+        server_name="m2m_server",
+        alias="m2m_server",
+        url="https://upstream.example.com/mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        **m2m_fields,
+    )
+
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
+            new_callable=AsyncMock,
+            return_value=(user_auth, None, ["m2m_server"], None, None, None),
+        ),
+        patch("litellm.proxy._experimental.mcp_server.server.set_auth_context"),
+        patch("litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED", True),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._handle_stale_mcp_session",
+            new_callable=AsyncMock,
+            return_value=False,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager.has_user_oauth_token",
+            new_callable=AsyncMock,
+        ) as mock_has_token,
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager.get_mcp_server_by_name",
+            return_value=m2m_server,
+        ),
+        patch.object(session_manager_stateless, "handle_request", new_callable=AsyncMock) as mock_handle_request,
+        patch.object(session_manager_stateless, "_server_instances", {}),
+    ):
+        await handle_streamable_http_mcp(scope, receive, send)
+
+    assert mock_handle_request.await_count == 1
+    assert mock_has_token.await_count == 0
+
+
+@pytest.mark.asyncio
 async def test_handle_streamable_http_mcp_delegated_server_surfaces_upstream_challenge():
     """
     OAuth2 server with ``delegate_auth_to_upstream=True`` where the client
@@ -1225,6 +1411,8 @@ async def _run_passthrough_connect(
 ):
     """Drive handle_streamable_http_mcp through the preemptive-401 gate and report whether it
     challenged (raised) or forwarded to the session manager. Returns (challenged, www_authenticate)."""
+    from fastapi import HTTPException
+
     from litellm.proxy._experimental.mcp_server.server import (
         handle_streamable_http_mcp,
         session_manager_stateless,

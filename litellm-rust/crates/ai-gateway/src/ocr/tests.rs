@@ -3,12 +3,12 @@ use std::time::Duration;
 
 use litellm_core::error::CoreError;
 use litellm_core::ocr::transformation::OcrResponseHandling;
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
 use super::common_utils::{has_header, ocr_provider_config, string_headers, truncate_error_body};
-use super::{ocr, OcrRequest};
+use super::{OcrRequest, ocr};
 use crate::integrations::custom_guardrail::{
     CustomGuardrail, GuardrailContext, GuardrailDecision, GuardrailError, GuardrailEventHook,
     GuardrailFuture, GuardrailRequest,
@@ -228,19 +228,23 @@ fn truncate_error_body_does_not_split_multibyte_chars() {
 #[test]
 fn ocr_dispatch_supports_migrated_providers() {
     assert!(ocr_provider_config("mistral", "mistral-ocr-latest").is_some());
-    assert!(ocr_provider_config("azure_ai", "pixtral-12b-2409")
-        .expect("azure ai config resolves")
-        .requires_data_uri_document());
+    assert!(
+        ocr_provider_config("azure_ai", "pixtral-12b-2409")
+            .expect("azure ai config resolves")
+            .requires_data_uri_document()
+    );
     assert_eq!(
         ocr_provider_config("azure_ai", "doc-intelligence/prebuilt-read")
             .expect("document intelligence config resolves")
             .response_handling(),
         OcrResponseHandling::AzureDocumentIntelligencePoll
     );
-    assert!(ocr_provider_config("vertex_ai", "deepseek-ocr-maas")
-        .expect("vertex deepseek config resolves")
-        .supported_ocr_params()
-        .contains(&"temperature"));
+    assert!(
+        ocr_provider_config("vertex_ai", "deepseek-ocr-maas")
+            .expect("vertex deepseek config resolves")
+            .supported_ocr_params()
+            .contains(&"temperature")
+    );
     assert!(ocr_provider_config("openai", "gpt-4o").is_none());
 }
 

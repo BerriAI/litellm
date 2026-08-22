@@ -1,11 +1,8 @@
-import os
-import sys
-from typing import Optional
+from typing import Final, Optional
 from unittest.mock import Mock
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 from litellm.completion_extras.litellm_responses_transformation.handler import (
     ResponsesToCompletionBridgeHandler,
@@ -192,6 +189,32 @@ def test_transform_usage_with_cached_tokens_only():
     print("✓ Transformation works with cached_tokens only")
 
 
+def test_transform_usage_maps_nested_cache_creation_input_tokens():
+    """
+    Regression (LIT-5757): DashScope nests cache_creation_input_tokens inside
+    prompt_tokens_details; the bridge must surface it as cache_write_tokens.
+    """
+    usage: Final = Usage(
+        prompt_tokens=2059,
+        completion_tokens=31,
+        total_tokens=2090,
+        prompt_tokens_details={
+            "cached_tokens": 0,
+            "text_tokens": 2059,
+            "cache_type": "ephemeral",
+            "cache_creation_input_tokens": 2048,
+            "cache_creation": {"ephemeral_5m_input_tokens": 2048},
+        },
+    )
+
+    responses_usage: Final = LiteLLMCompletionResponsesConfig._transform_chat_completion_usage_to_responses_usage(
+        usage
+    )
+
+    assert responses_usage.input_tokens_details is not None
+    assert responses_usage.input_tokens_details.cache_write_tokens == 2048
+
+
 def test_transform_usage_with_reasoning_tokens_only():
     """
     Test transformation when only reasoning_tokens is provided (no cached_tokens).
@@ -271,7 +294,8 @@ def test_transform_usage_with_zero_values():
 
     cached_tokens=0 is preserved (cache was available; nothing was cached).
     reasoning_tokens=0 is preserved the same way: an explicit provider-reported
-    zero passes through, while an absent value (None) is omitted.
+    zero passes through, while an absent value (None) falls back to 0 because the
+    Responses API wire contract requires reasoning_tokens as an int.
     """
     completion_response = create_mock_completion_response(
         model="gpt-4",
@@ -293,6 +317,32 @@ def test_transform_usage_with_zero_values():
     assert responses_usage.output_tokens_details.reasoning_tokens == 0
 
     print("✓ Transformation preserves explicit reasoning_tokens=0 and omits absent values")
+
+
+def test_transform_usage_unknown_reasoning_split_keeps_output_tokens_details():
+    """
+    An unknown reasoning split (reasoning_tokens=None, text_tokens=None) must still
+    emit output_tokens_details with an integer reasoning_tokens: the OpenAI SDK's
+    ResponseUsage requires the field, so omitting it breaks /v1/responses clients.
+    """
+    from openai.types.responses.response_usage import (
+        OutputTokensDetails as OpenAISDKOutputTokensDetails,
+    )
+
+    from litellm.types.utils import CompletionTokensDetailsWrapper
+
+    usage = Usage(
+        prompt_tokens=100,
+        completion_tokens=500,
+        total_tokens=600,
+        completion_tokens_details=CompletionTokensDetailsWrapper(reasoning_tokens=None, text_tokens=None),
+    )
+
+    responses_usage = LiteLLMCompletionResponsesConfig._transform_chat_completion_usage_to_responses_usage(usage)
+
+    assert responses_usage.output_tokens_details is not None
+    assert responses_usage.output_tokens_details.reasoning_tokens == 0
+    OpenAISDKOutputTokensDetails.model_validate(responses_usage.output_tokens_details.model_dump(exclude_none=True))
 
 
 def test_input_tokens_details_requires_cached_tokens():

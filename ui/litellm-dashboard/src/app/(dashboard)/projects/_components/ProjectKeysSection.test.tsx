@@ -35,7 +35,7 @@ describe("ProjectKeysSection", () => {
       isLoading: false,
     });
     renderWithProviders(<ProjectKeysSection projectId="proj-1" />);
-    expect(screen.getByText("42 keys")).toBeInTheDocument();
+    expect(screen.getByTestId("pagination-range")).toHaveTextContent("of 42");
   });
 
   it("should show 'No keys found' when the project has no keys", () => {

@@ -3,7 +3,7 @@ Base model class for domain models.
 """
 
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict
 
@@ -17,8 +17,8 @@ class DomainModel(BaseModel):
         extra="ignore",
     )
 
-    created_at: Optional[datetime] = None
-    updated_at: Optional[datetime] = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
 
     @classmethod
     def from_db_record(cls, record: Any) -> "DomainModel":
@@ -33,6 +33,6 @@ class DomainModel(BaseModel):
             return cls(**record.dict())
         return cls(**dict(record))
 
-    def to_db_dict(self, exclude_unset: bool = False) -> Dict[str, Any]:
+    def to_db_dict(self, exclude_unset: bool = False) -> dict[str, Any]:
         """Convert domain model to a dictionary for database operations."""
         return self.model_dump(exclude_none=True, exclude_unset=exclude_unset)
