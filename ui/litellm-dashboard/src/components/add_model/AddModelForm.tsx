@@ -476,7 +476,6 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
             />
           )}
           <DialogFooter>
-            {" "}
             <Button
               variant="outline"
               onClick={() => {
@@ -486,7 +485,6 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
             >
               Close
             </Button>
-            , ]
           </DialogFooter>
         </DialogContent>
       </Dialog>

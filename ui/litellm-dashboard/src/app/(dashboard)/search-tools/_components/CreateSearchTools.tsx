@@ -343,7 +343,6 @@ const CreateSearchTool: React.FC<CreateSearchToolProps> = ({
               >
                 Close
               </Button>
-              , ]
             </DialogFooter>
           </DialogContent>
         </Dialog>

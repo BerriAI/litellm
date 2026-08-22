@@ -703,11 +703,9 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
             />
           )}
           <DialogFooter>
-            {" "}
             <Button variant="outline" onClick={() => setIsRoutingTestVisible(false)}>
               Close
             </Button>
-            , ]
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -734,7 +732,6 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
             />
           )}
           <DialogFooter>
-            {" "}
             <Button
               variant="outline"
               onClick={() => {
@@ -744,7 +741,6 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
             >
               Close
             </Button>
-            , ]
           </DialogFooter>
         </DialogContent>
       </Dialog>
