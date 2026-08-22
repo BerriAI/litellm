@@ -15,9 +15,7 @@ sys.path.insert(
 import pytest
 import litellm
 
-import pytest
 from litellm.llms.triton.embedding.transformation import TritonEmbeddingConfig
-import litellm
 
 from tests.fake_openai_endpoint import FAKE_OPENAI_API_BASE
 

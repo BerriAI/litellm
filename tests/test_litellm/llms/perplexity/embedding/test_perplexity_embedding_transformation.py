@@ -239,17 +239,16 @@ class TestPerplexityEmbeddingConfig:
         mock_response.status_code = 500
 
         model_response = EmbeddingResponse()
-        try:
+        with pytest.raises(PerplexityEmbeddingError) as exc_info:
             self.config.transform_embedding_response(
                 model=self.model,
                 raw_response=mock_response,
                 model_response=model_response,
                 logging_obj=self.logging_obj,
             )
-            pytest.fail("Should have raised PerplexityEmbeddingError")
-        except PerplexityEmbeddingError as e:
-            assert e.status_code == 500
-            assert "Server error" in e.message
+        e = exc_info.value
+        assert e.status_code == 500
+        assert "Server error" in e.message
 
     def test_get_error_class(self):
         """Test that get_error_class returns the correct error type."""

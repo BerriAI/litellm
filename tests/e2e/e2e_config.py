@@ -150,6 +150,15 @@ ANOMALY_SPEND_SETTLE_SECONDS = float(
 )
 
 
+def ws_base_url() -> str:
+    """PROXY_BASE_URL with its scheme swapped for the websocket one, so a suite
+    opening a socket points at the same proxy every HTTP suite uses."""
+    for scheme, ws_scheme in (("https://", "wss://"), ("http://", "ws://")):
+        if PROXY_BASE_URL.startswith(scheme):
+            return ws_scheme + PROXY_BASE_URL[len(scheme) :]
+    return PROXY_BASE_URL
+
+
 def datadog_mcp_url(*, toolsets: str = "core") -> str:
     """Regional Datadog remote MCP endpoint for this process's DD_SITE.
 
