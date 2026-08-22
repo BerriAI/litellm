@@ -472,3 +472,29 @@ def test_retires_the_old_alias_when_the_limit_is_removed_after_a_rename():
     assert registry.get_sample_value("litellm_team_rpm_limit", TEAM_LABELS) is None
     renamed = {**TEAM_LABELS, "team_alias": "ml-research"}
     assert registry.get_sample_value("litellm_team_rpm_limit", renamed) is None
+
+
+def test_rename_survives_a_tracked_series_that_is_already_gone():
+    """
+    The tracked labelset can outlive the child series it names, for instance
+    when a cardinality cap evicts it. Retiring it must not break the emission
+    that triggered the retirement.
+    """
+    registry = CollectorRegistry()
+    gauge = Gauge("litellm_team_rpm_limit", "doc", labelnames=list(ORIGINAL_LABELNAMES), registry=registry)
+    logger = _logger_with_real_gauge("litellm_team_rpm_limit", gauge)
+    headers = {"x-ratelimit-model_per_team-limit-requests": 60}
+
+    _set_team_metrics(logger, _payload_with_headers(headers))
+    gauge.remove(*(TEAM_LABELS[name] for name in ORIGINAL_LABELNAMES))
+    assert registry.get_sample_value("litellm_team_rpm_limit", TEAM_LABELS) is None
+
+    logger._set_team_rate_limit_metrics(
+        user_api_team="team-abc",
+        user_api_team_alias="ml-research",
+        model_group="gpt-4o-mini",
+        standard_logging_payload=_payload_with_headers(headers),
+    )
+
+    renamed = {**TEAM_LABELS, "team_alias": "ml-research"}
+    assert registry.get_sample_value("litellm_team_rpm_limit", renamed) == 60
