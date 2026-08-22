@@ -1549,6 +1549,38 @@ def _extract_reasoning_content(message: dict) -> tuple[str | None, str | None]:
     return None, message_content
 
 
+def reasoning_content_from_thinking_blocks(
+    thinking_blocks: Iterable[Mapping[str, Any]],
+) -> str:
+    """Flatten Anthropic thinking blocks into the `reasoning_content` string chat models expect.
+
+    Redacted blocks carry no readable text, so they contribute nothing.
+    """
+    return "\n".join(
+        text
+        for block in thinking_blocks
+        if block.get("type") == "thinking" and (text := str(block.get("thinking") or ""))
+    )
+
+
+def responses_reasoning_item_from_thinking_blocks(
+    thinking_blocks: Iterable[Mapping[str, Any]],
+) -> dict[str, Any] | None:  # mutable-ok: API message payload
+    """Build a Responses API `reasoning` input item from Anthropic thinking blocks.
+
+    The item carries no `id`: the Responses API rejects an empty one and 404s on any id it
+    did not mint itself, while an item without an id is always accepted.
+    """
+    summary: Final[list[dict[str, Any]]] = [  # mutable-ok: API message payload
+        {"type": "summary_text", "text": text}  # mutable-ok: API message payload
+        for block in thinking_blocks
+        if block.get("type") == "thinking" and (text := str(block.get("thinking") or ""))
+    ]
+    if not summary:
+        return None
+    return {"type": "reasoning", "summary": summary}  # mutable-ok: API message payload
+
+
 def _parse_content_for_reasoning(
     message_text: str | None,
 ) -> tuple[str | None, str | None]:
