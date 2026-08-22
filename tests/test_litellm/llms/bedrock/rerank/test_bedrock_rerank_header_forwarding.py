@@ -439,3 +439,33 @@ def test_bedrock_rerank_forwarded_headers_excluded_from_sigv4_signature():
         f"x-forwarded-for must not be part of the SigV4 signature, got SignedHeaders={signed_headers}"
     )
     assert headers["x-forwarded-for"] == "203.0.113.5", "forwarded header must still reach Bedrock, unsigned"
+
+
+def test_bedrock_rerank_signs_with_sigv4_even_when_bedrock_api_key_is_set(monkeypatch):
+    """
+    Bedrock API keys are only valid for Bedrock and Bedrock Runtime actions, not for
+    Agents for Amazon Bedrock Runtime ones. Rerank is served by bedrock-agent-runtime,
+    so it has to keep signing with SigV4 even when AWS_BEARER_TOKEN_BEDROCK is set.
+    """
+    monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "test-bedrock-api-key")
+
+    handler = BedrockRerankHandler()
+
+    prepared_request = handler._prepare_request(
+        model="cohere.rerank-v3-5:0",
+        api_base=None,
+        extra_headers=None,
+        data={"query": test_query, "documents": test_documents},
+        optional_params={
+            "aws_access_key_id": "test-access-key",
+            "aws_secret_access_key": "test-secret-key",
+            "aws_region_name": "us-east-1",
+        },
+    )
+
+    assert prepared_request["endpoint_url"].startswith("https://bedrock-agent-runtime.")
+
+    authorization = prepared_request["prepped"].headers["Authorization"]
+    assert authorization.startswith("AWS4-HMAC-SHA256"), (
+        f"rerank must sign with SigV4, got Authorization={authorization[:30]}"
+    )
