@@ -1004,27 +1004,43 @@ def test_first_party_claude_4_8_plus_cost_map_entries_carry_mid_conversation_sys
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "requested_model, expected_wire_model",
+    "requested_model, expected_wire_model, expected_url",
     [
-        ("perplexity/perplexity/kimi-k3", "perplexity/kimi-k3"),
-        ("perplexity/sonar", "sonar"),
+        (
+            "perplexity/perplexity/kimi-k3",
+            "perplexity/kimi-k3",
+            "https://api.perplexity.ai/v1/responses",
+        ),
+        (
+            "perplexity/perplexity/sonar",
+            "perplexity/sonar",
+            "https://api.perplexity.ai/v1/responses",
+        ),
+        ("perplexity/sonar", "sonar", "https://api.perplexity.ai/chat/completions"),
     ],
 )
-async def test_messages_strips_provider_prefix_exactly_once(requested_model, expected_wire_model):
+async def test_messages_strips_provider_prefix_exactly_once(
+    requested_model, expected_wire_model, expected_url
+):
     """
     BerriAI/litellm#37716: only the leading provider segment may be stripped on the way upstream.
 
     A multi-segment id such as perplexity/perplexity/kimi-k3 must reach the provider as
     perplexity/kimi-k3, matching what /v1/chat/completions and /v1/responses already send.
 
+    The endpoint is asserted alongside the body because perplexity/perplexity/sonar is a
+    Responses-only deployment whose bare id perplexity/sonar is an ordinary chat model, so
+    stripping the prefix must not also move the request onto chat/completions.
+
     The subject is the outbound request, so the transport is cut at the wire rather than
-    stubbed with a response body: these two ids take different bridges (chat completions
+    stubbed with a response body: these ids take different bridges (chat completions
     versus the Responses API) and would otherwise need different response shapes.
     """
     captured = {}
 
     async def fake_send(self, request, **kwargs):
         captured["body"] = json.loads(request.content)
+        captured["url"] = str(request.url)
         raise httpx.ConnectError("cut at the wire", request=request)
 
     with (
@@ -1039,6 +1055,7 @@ async def test_messages_strips_provider_prefix_exactly_once(requested_model, exp
         )
 
     assert captured["body"]["model"] == expected_wire_model
+    assert captured["url"] == expected_url
 
 
 @pytest.mark.asyncio
