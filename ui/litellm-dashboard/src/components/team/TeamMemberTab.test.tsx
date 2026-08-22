@@ -325,12 +325,17 @@ describe("TeamMembersComponent", () => {
   it("keeps a member's stored 0 limits as 0 in the table and in the edit payload, never unlimited", async () => {
     const user = userEvent.setup();
     vi.mocked(isProxyAdminRole).mockReturnValue(true);
-    const teamData = createMockTeamData();
-    teamData.team_memberships[0].litellm_budget_table = {
-      ...teamData.team_memberships[0].litellm_budget_table,
-      max_budget: 0,
-      tpm_limit: 0,
-      rpm_limit: 0,
+    const baseTeamData = createMockTeamData();
+    const teamData = {
+      ...baseTeamData,
+      team_memberships: baseTeamData.team_memberships.map((membership, index) =>
+        index === 0
+          ? {
+              ...membership,
+              litellm_budget_table: { ...membership.litellm_budget_table, max_budget: 0, tpm_limit: 0, rpm_limit: 0 },
+            }
+          : membership,
+      ),
     };
 
     renderWithProviders(
