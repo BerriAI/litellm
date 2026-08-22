@@ -128,3 +128,29 @@ async def test_disconnect_idempotent():
 
     await cache.disconnect()
     await cache.disconnect()  # should not raise
+
+
+@pytest.mark.asyncio
+async def test_disconnect_when_async_pool_is_none():
+    """Regression: disconnect() must not raise AttributeError when
+    async_redis_conn_pool is None (cluster-mode path sets it to None)."""
+    cache, mock_sync_client, _ = _make_redis_cache()
+    # Simulate cluster mode: connection pool is None after construction
+    cache.async_redis_conn_pool = None
+
+    # Should complete without raising AttributeError
+    await cache.disconnect()
+
+    # Sync client cleanup is still attempted
+    mock_sync_client.close.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_disconnect_with_pool_calls_pool_disconnect():
+    """Happy path: when async_redis_conn_pool is present, disconnect()
+    forwards the call with inuse_connections=True."""
+    cache, mock_sync_client, mock_async_pool = _make_redis_cache()
+    await cache.disconnect()
+
+    mock_async_pool.disconnect.assert_awaited_once_with(inuse_connections=True)
+    mock_sync_client.close.assert_called_once()
