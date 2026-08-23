@@ -6,7 +6,8 @@ AmazonAnthropicClaudeMessagesConfig. Overrides only the URL and model-prefix
 stripping that are specific to the bedrock-mantle endpoint.
 """
 
-from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, List, Optional, Tuple
+from collections.abc import AsyncIterator
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
@@ -16,6 +17,10 @@ from litellm.llms.anthropic.experimental_pass_through.messages.transformation im
 from litellm.llms.bedrock.common_utils import build_mantle_messages_url
 from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
     AmazonAnthropicClaudeMessagesConfig,
+)
+from litellm.types.llms.anthropic_messages.anthropic_response import (
+    AnthropicMessagesResponse,
+    AnthropicUsage,
 )
 from litellm.types.router import GenericLiteLLMParams
 
@@ -37,14 +42,14 @@ class AmazonMantleMessagesConfig(AmazonAnthropicClaudeMessagesConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
-        region = self._get_aws_region_name(optional_params=optional_params, model=model)
+        region: Final = self._get_aws_region_name(optional_params=optional_params, model=model)
         return build_mantle_messages_url(
             api_base=api_base,
             aws_bedrock_runtime_endpoint=optional_params.get("aws_bedrock_runtime_endpoint"),
@@ -55,12 +60,12 @@ class AmazonMantleMessagesConfig(AmazonAnthropicClaudeMessagesConfig):
         self,
         headers: dict,
         model: str,
-        messages: List[Any],
+        messages: list[Any],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
-    ) -> Tuple[dict, Optional[str]]:
+        api_key: str | None = None,
+        api_base: str | None = None,
+    ) -> tuple[dict, str | None]:
         headers, api_base = super().validate_anthropic_messages_environment(
             headers=headers,
             model=model,
@@ -70,7 +75,7 @@ class AmazonMantleMessagesConfig(AmazonAnthropicClaudeMessagesConfig):
             api_key=api_key,
             api_base=api_base,
         )
-        project_id = litellm_params.get("aws_bedrock_project_id")
+        project_id: Final = litellm_params.get("aws_bedrock_project_id")
         if project_id:
             headers["anthropic-workspace"] = project_id
         return headers, api_base
@@ -78,15 +83,15 @@ class AmazonMantleMessagesConfig(AmazonAnthropicClaudeMessagesConfig):
     def transform_anthropic_messages_request(
         self,
         model: str,
-        messages: List[Dict],
-        anthropic_messages_optional_request_params: Dict,
+        messages: list[dict],
+        anthropic_messages_optional_request_params: dict,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> Dict:
+    ) -> dict:
         # Strip "mantle/" routing prefix to get the real model ID
-        model_id = model.replace("mantle/", "", 1)
+        model_id: Final = model.replace("mantle/", "", 1)
 
-        request = super().transform_anthropic_messages_request(
+        request: Final = super().transform_anthropic_messages_request(
             model=model_id,
             messages=messages,
             anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
@@ -98,10 +103,29 @@ class AmazonMantleMessagesConfig(AmazonAnthropicClaudeMessagesConfig):
         # "stream" from the body (Bedrock Invoke puts the model in the URL and
         # streams via a dedicated endpoint). The mantle endpoint (Messages API)
         # requires both in the request body.
-        stream_fields: dict[str, bool] = (
+        stream_fields: Final[dict[str, bool]] = (
             {"stream": True} if anthropic_messages_optional_request_params.get("stream") is True else {}
         )
         return {**request, "model": model_id, **stream_fields}
+
+    def transform_anthropic_messages_response(
+        self,
+        model: str,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> AnthropicMessagesResponse:
+        response: Final = super().transform_anthropic_messages_response(
+            model=model,
+            raw_response=raw_response,
+            logging_obj=logging_obj,
+        )
+        existing_usage: Final[AnthropicUsage] = response.get("usage") or AnthropicUsage()
+        normalized_usage: Final[AnthropicUsage] = {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            **existing_usage,
+        }
+        return {**response, "usage": normalized_usage}
 
     def get_async_streaming_response_iterator(
         self,

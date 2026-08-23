@@ -219,8 +219,7 @@ def _gate(**overrides):
     kwargs = {
         "custom_llm_provider": "azure_ai",
         "litellm_params": GenericLiteLLMParams(api_key="sk-azure", rust=True),
-        "stream": False,
-        "rust_stream_eligible": False,
+        "has_agentic_hook": False,
         "model": "claude-sonnet-4-5",
         "api_key": "sk-azure",
         "api_base": "https://resource.services.ai.azure.com/anthropic",
@@ -345,11 +344,11 @@ async def test_gate_skips_rust_for_unsupported_provider():
 
 
 @pytest.mark.asyncio
-async def test_gate_skips_rust_when_streaming_but_not_eligible():
+async def test_gate_skips_rust_for_agentic_hook():
     bridge = ExplodingAsyncMessages()
     litellm.use_litellm_rust(True, amessages=bridge)
 
-    response = await _gate(stream=True, rust_stream_eligible=False)
+    response = await _gate(has_agentic_hook=True)
 
     assert response is None
     assert bridge.calls == 0
@@ -362,8 +361,7 @@ async def test_gate_streams_through_rust_when_eligible_and_strips_stream_flag():
 
     streaming_body = {**REQUEST_BODY, "stream": True}
     response = await _gate(
-        stream=True,
-        rust_stream_eligible=True,
+        has_agentic_hook=False,
         request_body=streaming_body,
     )
 

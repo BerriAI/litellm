@@ -10,7 +10,7 @@ InteractionsHTTPHandler).
 """
 
 from abc import ABC, abstractmethod
-from typing import Any, Dict, Optional, Tuple, Union
+from typing import Any
 
 import httpx
 
@@ -34,25 +34,25 @@ class BaseAgentsAPIConfig(ABC):
     @abstractmethod
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        litellm_params: Dict[str, Any],
+        api_base: str | None,
+        litellm_params: dict[str, Any],
     ) -> str:
         """Return the full URL for POST /agents (create)."""
 
     @abstractmethod
     def validate_environment(
         self,
-        headers: Dict[str, str],
-        litellm_params: Dict[str, Any],
-    ) -> Dict[str, str]:
+        headers: dict[str, str],
+        litellm_params: dict[str, Any],
+    ) -> dict[str, str]:
         """Validate credentials and return auth headers."""
 
     @abstractmethod
     def transform_create_request(
         self,
         name: str,
-        litellm_params: Dict[str, Any],
-    ) -> Dict[str, Any]:
+        litellm_params: dict[str, Any],
+    ) -> dict[str, Any]:
         """Map name + litellm_params to the provider's create-agent body."""
 
     @abstractmethod
@@ -70,9 +70,9 @@ class BaseAgentsAPIConfig(ABC):
     @abstractmethod
     def transform_list_request(
         self,
-        api_base: Optional[str],
-        litellm_params: Dict[str, Any],
-    ) -> Tuple[str, Dict[str, Any]]:
+        api_base: str | None,
+        litellm_params: dict[str, Any],
+    ) -> tuple[str, dict[str, Any]]:
         """Return (url, query_params) for GET /agents."""
 
     @abstractmethod
@@ -90,9 +90,9 @@ class BaseAgentsAPIConfig(ABC):
     def transform_get_request(
         self,
         name: str,
-        api_base: Optional[str],
-        litellm_params: Dict[str, Any],
-    ) -> Tuple[str, Dict[str, Any]]:
+        api_base: str | None,
+        litellm_params: dict[str, Any],
+    ) -> tuple[str, dict[str, Any]]:
         """Return (url, query_params) for GET /agents/{name}."""
 
     @abstractmethod
@@ -111,8 +111,8 @@ class BaseAgentsAPIConfig(ABC):
     def transform_delete_request(
         self,
         name: str,
-        api_base: Optional[str],
-        litellm_params: Dict[str, Any],
+        api_base: str | None,
+        litellm_params: dict[str, Any],
     ) -> str:
         """Return the URL for DELETE /agents/{name}."""
 
@@ -132,9 +132,9 @@ class BaseAgentsAPIConfig(ABC):
     def transform_list_versions_request(
         self,
         name: str,
-        api_base: Optional[str],
-        litellm_params: Dict[str, Any],
-    ) -> Tuple[str, Dict[str, Any]]:
+        api_base: str | None,
+        litellm_params: dict[str, Any],
+    ) -> tuple[str, dict[str, Any]]:
         """Return (url, query_params) for GET /agents/{name}/versions."""
 
     @abstractmethod
@@ -153,7 +153,7 @@ class BaseAgentsAPIConfig(ABC):
         self,
         error_message: str,
         status_code: int,
-        headers: Union[dict, httpx.Headers],
+        headers: dict | httpx.Headers,
     ) -> Exception:
         """Map HTTP error status codes to provider-specific exceptions."""
         from litellm.llms.base_llm.chat.transformation import BaseLLMException

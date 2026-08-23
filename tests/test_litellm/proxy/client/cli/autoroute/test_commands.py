@@ -1,4 +1,5 @@
 import json
+import socket
 import stat
 from typing import Optional
 
@@ -62,6 +63,7 @@ class TestUpCommand:
         generated-config model raises a raw pydantic.ValidationError if uncaught."""
         config_path, _log_path, _settings_path, _backup_path, _pid_record_path = _patch_paths(monkeypatch, tmp_path)
         config_path.write_text("")
+        monkeypatch.setattr(commands_module, "is_port_available", lambda port: True)
 
         result = self.runner.invoke(up)
 
@@ -134,7 +136,7 @@ class TestUpCommand:
         terminate_calls = []
         monkeypatch.setattr(commands_module, "launch_proxy", lambda *a, **k: fake_process)
         monkeypatch.setattr(commands_module, "poll_liveliness", lambda *a, **k: None)
-        monkeypatch.setattr(commands_module, "allocate_free_port", lambda: 54321)
+        monkeypatch.setattr(commands_module, "is_port_available", lambda port: True)
         monkeypatch.setattr(commands_module, "terminate", lambda pid, **k: terminate_calls.append(pid))
         monkeypatch.setattr(commands_module.secrets, "token_urlsafe", lambda n: "fixed-master-key")
 
@@ -153,7 +155,7 @@ class TestUpCommand:
         assert result.exit_code == 0, result.output
         assert captured["backup_existed"] is True
         assert captured["settings"]["theme"] == "dark"
-        assert captured["settings"]["env"]["ANTHROPIC_BASE_URL"] == "http://127.0.0.1:54321"
+        assert captured["settings"]["env"]["ANTHROPIC_BASE_URL"] == "http://127.0.0.1:5483"
         assert captured["settings"]["env"]["ANTHROPIC_AUTH_TOKEN"] == "fixed-master-key"
         assert "apiKeyHelper" not in captured["settings"]
         assert captured["settings_mode"] == 0o600
@@ -179,7 +181,7 @@ class TestUpCommand:
         fake_process = FakeProcess(pid=11111)
         monkeypatch.setattr(commands_module, "launch_proxy", lambda *a, **k: fake_process)
         monkeypatch.setattr(commands_module, "poll_liveliness", lambda *a, **k: None)
-        monkeypatch.setattr(commands_module, "allocate_free_port", lambda: 65432)
+        monkeypatch.setattr(commands_module, "is_port_available", lambda port: True)
         monkeypatch.setattr(commands_module, "terminate", lambda pid, **k: None)
         monkeypatch.setattr(commands_module.secrets, "token_urlsafe", lambda n: "fixed-master-key")
 
@@ -209,7 +211,7 @@ class TestUpCommand:
 
         monkeypatch.setattr(commands_module, "launch_proxy", lambda *a, **k: fake_process)
         monkeypatch.setattr(commands_module, "poll_liveliness", _raise_launch_error)
-        monkeypatch.setattr(commands_module, "allocate_free_port", lambda: 12345)
+        monkeypatch.setattr(commands_module, "is_port_available", lambda port: True)
         monkeypatch.setattr(commands_module, "terminate", lambda pid, **k: terminate_calls.append(pid))
         monkeypatch.setattr(commands_module.secrets, "token_urlsafe", lambda n: "fixed-master-key")
 
@@ -234,7 +236,7 @@ class TestUpCommand:
         terminate_calls = []
         monkeypatch.setattr(commands_module, "launch_proxy", lambda *a, **k: fake_process)
         monkeypatch.setattr(commands_module, "poll_liveliness", lambda *a, **k: None)
-        monkeypatch.setattr(commands_module, "allocate_free_port", lambda: 23456)
+        monkeypatch.setattr(commands_module, "is_port_available", lambda port: True)
         monkeypatch.setattr(commands_module, "terminate", lambda pid, **k: terminate_calls.append(pid))
         monkeypatch.setattr(commands_module.secrets, "token_urlsafe", lambda n: "fixed-master-key")
 
@@ -245,6 +247,197 @@ class TestUpCommand:
         assert terminate_calls == [777]
         assert not pid_record_path.exists()
         assert not backup_path.exists()
+
+    def test_up_uses_the_same_port_and_master_key_across_runs(self, monkeypatch, tmp_path):
+        """The LIT-4607/LIT-4608 regression: a client configured against one session must keep
+        working in the next, so consecutive runs must patch settings with an identical base URL
+        and auth token, and the key must be minted exactly once."""
+        config_path, _log_path, claude_settings_path, _backup_path, _pid_record_path = _patch_paths(
+            monkeypatch, tmp_path
+        )
+        config_path.write_text(yaml.safe_dump({"model_list": []}))
+        claude_settings_path.write_text(json.dumps({"theme": "dark"}))
+        _silence_signal_handling(monkeypatch)
+
+        monkeypatch.setattr(commands_module, "launch_proxy", lambda *a, **k: FakeProcess(pid=42424))
+        monkeypatch.setattr(commands_module, "poll_liveliness", lambda *a, **k: None)
+        monkeypatch.setattr(commands_module, "is_port_available", lambda port: True)
+        monkeypatch.setattr(commands_module, "terminate", lambda pid, **k: None)
+
+        mint_calls = []
+
+        def _mint(n):
+            mint_calls.append(n)
+            return f"minted-key-{len(mint_calls)}"
+
+        monkeypatch.setattr(commands_module.secrets, "token_urlsafe", _mint)
+
+        run_index = {"current": 0}
+        captured = {}
+
+        def fake_wait(self, timeout=None):
+            captured[run_index["current"]] = json.loads(claude_settings_path.read_text())["env"]
+            return True
+
+        monkeypatch.setattr("threading.Event.wait", fake_wait)
+
+        first = self.runner.invoke(up)
+        run_index["current"] = 1
+        second = self.runner.invoke(up)
+
+        assert first.exit_code == 0, first.output
+        assert second.exit_code == 0, second.output
+        assert sorted(captured) == [0, 1]
+        assert captured[0]["ANTHROPIC_BASE_URL"] == captured[1]["ANTHROPIC_BASE_URL"]
+        assert captured[0]["ANTHROPIC_AUTH_TOKEN"] == captured[1]["ANTHROPIC_AUTH_TOKEN"]
+        assert mint_calls == [32]
+
+    def test_up_reuses_a_master_key_already_persisted_in_the_config(self, monkeypatch, tmp_path):
+        config_path, _log_path, claude_settings_path, _backup_path, _pid_record_path = _patch_paths(
+            monkeypatch, tmp_path
+        )
+        original_config = yaml.safe_dump({"model_list": [], "general_settings": {"master_key": "persisted-key"}})
+        config_path.write_text(original_config)
+        claude_settings_path.write_text(json.dumps({"theme": "dark"}))
+        _silence_signal_handling(monkeypatch)
+
+        monkeypatch.setattr(commands_module, "launch_proxy", lambda *a, **k: FakeProcess(pid=31313))
+        monkeypatch.setattr(commands_module, "poll_liveliness", lambda *a, **k: None)
+        monkeypatch.setattr(commands_module, "is_port_available", lambda port: True)
+        monkeypatch.setattr(commands_module, "terminate", lambda pid, **k: None)
+
+        def _fail_mint(n):
+            raise AssertionError("a persisted master key must be reused, never re-minted")
+
+        monkeypatch.setattr(commands_module.secrets, "token_urlsafe", _fail_mint)
+
+        captured = {}
+
+        def fake_wait(self, timeout=None):
+            captured["env"] = json.loads(claude_settings_path.read_text())["env"]
+            captured["config_text"] = config_path.read_text()
+            return True
+
+        monkeypatch.setattr("threading.Event.wait", fake_wait)
+
+        result = self.runner.invoke(up)
+
+        assert result.exit_code == 0, result.output
+        assert captured["env"]["ANTHROPIC_AUTH_TOKEN"] == "persisted-key"
+        assert captured["config_text"] == original_config
+
+    def test_up_mints_a_fresh_key_when_the_persisted_master_key_is_blank(self, monkeypatch, tmp_path):
+        config_path, _log_path, claude_settings_path, _backup_path, _pid_record_path = _patch_paths(
+            monkeypatch, tmp_path
+        )
+        config_path.write_text(yaml.safe_dump({"model_list": [], "general_settings": {"master_key": "   "}}))
+        claude_settings_path.write_text(json.dumps({"theme": "dark"}))
+        _silence_signal_handling(monkeypatch)
+
+        monkeypatch.setattr(commands_module, "launch_proxy", lambda *a, **k: FakeProcess(pid=21212))
+        monkeypatch.setattr(commands_module, "poll_liveliness", lambda *a, **k: None)
+        monkeypatch.setattr(commands_module, "is_port_available", lambda port: True)
+        monkeypatch.setattr(commands_module, "terminate", lambda pid, **k: None)
+        monkeypatch.setattr(commands_module.secrets, "token_urlsafe", lambda n: "fresh-minted-key")
+
+        captured = {}
+
+        def fake_wait(self, timeout=None):
+            captured["env"] = json.loads(claude_settings_path.read_text())["env"]
+            return True
+
+        monkeypatch.setattr("threading.Event.wait", fake_wait)
+
+        result = self.runner.invoke(up)
+
+        assert result.exit_code == 0, result.output
+        assert captured["env"]["ANTHROPIC_AUTH_TOKEN"] == "fresh-minted-key"
+        written_config = yaml.safe_load(config_path.read_text())
+        assert written_config["general_settings"]["master_key"] == "fresh-minted-key"
+
+    def test_port_override_reaches_settings_launch_and_pid_record(self, monkeypatch, tmp_path):
+        """A --port override must flow to every consumer of the port; a hardcoded default in any
+        one of them would leave the patched settings pointing somewhere the proxy is not."""
+        config_path, _log_path, claude_settings_path, _backup_path, pid_record_path = _patch_paths(
+            monkeypatch, tmp_path
+        )
+        config_path.write_text(yaml.safe_dump({"model_list": []}))
+        claude_settings_path.write_text(json.dumps({"theme": "dark"}))
+        _silence_signal_handling(monkeypatch)
+
+        launched_ports = []
+
+        def _fake_launch(config, port, log):
+            launched_ports.append(port)
+            return FakeProcess(pid=61616)
+
+        monkeypatch.setattr(commands_module, "launch_proxy", _fake_launch)
+        monkeypatch.setattr(commands_module, "poll_liveliness", lambda *a, **k: None)
+        monkeypatch.setattr(commands_module, "is_port_available", lambda port: True)
+        monkeypatch.setattr(commands_module, "terminate", lambda pid, **k: None)
+        monkeypatch.setattr(commands_module.secrets, "token_urlsafe", lambda n: "fixed-master-key")
+
+        captured = {}
+
+        def fake_wait(self, timeout=None):
+            captured["env"] = json.loads(claude_settings_path.read_text())["env"]
+            captured["pid_record"] = json.loads(pid_record_path.read_text())
+            return True
+
+        monkeypatch.setattr("threading.Event.wait", fake_wait)
+
+        result = self.runner.invoke(up, ["--port", "6111"])
+
+        assert result.exit_code == 0, result.output
+        assert captured["env"]["ANTHROPIC_BASE_URL"] == "http://127.0.0.1:6111"
+        assert launched_ports == [6111]
+        assert captured["pid_record"]["port"] == 6111
+
+    def test_up_rejects_port_4000_which_the_child_proxy_rebinds_unpredictably(self, monkeypatch, tmp_path):
+        """proxy_cli special-cases a busy port 4000 by silently rebinding to a random port,
+        which would desync base_url from the child; up must refuse 4000 outright."""
+        config_path, _log_path, _settings_path, backup_path, _pid_record_path = _patch_paths(monkeypatch, tmp_path)
+        config_path.write_text(yaml.safe_dump({"model_list": []}))
+
+        def _fail_launch(*args, **kwargs):
+            raise AssertionError("launch_proxy must not run for port 4000")
+
+        monkeypatch.setattr(commands_module, "launch_proxy", _fail_launch)
+
+        result = self.runner.invoke(up, ["--port", "4000"])
+
+        assert result.exit_code != 0
+        assert "4000" in result.output
+        assert not backup_path.exists()
+
+    def test_up_refuses_when_the_port_is_busy_without_touching_any_state(self, monkeypatch, tmp_path):
+        """A busy port must fail loudly before anything is minted, launched, or patched --
+        never silently move to another port (the pre-fix behavior this ticket removes)."""
+        config_path, _log_path, claude_settings_path, backup_path, _pid_record_path = _patch_paths(
+            monkeypatch, tmp_path
+        )
+        original_config = yaml.safe_dump({"model_list": []})
+        config_path.write_text(original_config)
+        claude_settings_path.write_text(json.dumps({"theme": "dark"}))
+
+        def _fail_launch(*args, **kwargs):
+            raise AssertionError("launch_proxy must not run when the port is busy")
+
+        monkeypatch.setattr(commands_module, "launch_proxy", _fail_launch)
+
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.bind(("127.0.0.1", 0))
+            sock.listen(1)
+            busy_port = sock.getsockname()[1]
+            result = self.runner.invoke(up, ["--port", str(busy_port)])
+
+        assert result.exit_code != 0
+        assert str(busy_port) in result.output
+        assert "lite autoroute down" in result.output
+        assert "--port" in result.output
+        assert config_path.read_text() == original_config
+        assert not backup_path.exists()
+        assert json.loads(claude_settings_path.read_text()) == {"theme": "dark"}
 
 
 class TestDownCommand:

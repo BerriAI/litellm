@@ -12,12 +12,11 @@ Schema versioning:
   litellm.use_legacy_interactions_schema = True. Remove flag after June 8, 2026.
 """
 
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
 import litellm
-
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.core_helpers import process_response_headers
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment
@@ -57,7 +56,7 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
     def api_version(self) -> str:
         return "v1beta"
 
-    def get_supported_params(self, model: str) -> List[str]:
+    def get_supported_params(self, model: str) -> list[str]:
         """Per OpenAPI spec CreateModelInteractionParams."""
         return [
             "model",
@@ -80,13 +79,13 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
         self,
         headers: dict,
         model: str,
-        litellm_params: Optional[GenericLiteLLMParams],
+        litellm_params: GenericLiteLLMParams | None,
     ) -> dict:
         """Google AI Studio uses x-goog-api-key header for authentication."""
         headers = headers or {}
         headers["Content-Type"] = "application/json"
         if litellm_params:
-            api_key = GeminiModelInfo.get_api_key(litellm_params.get("api_key"))
+            api_key: Final = GeminiModelInfo.get_api_key(litellm_params.get("api_key"))
             if api_key:
                 headers["x-goog-api-key"] = api_key
 
@@ -102,16 +101,16 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        model: Optional[str],
-        agent: Optional[str] = None,
-        litellm_params: Optional[dict] = None,
-        stream: Optional[bool] = None,
+        api_base: str | None,
+        model: str | None,
+        agent: str | None = None,
+        litellm_params: dict | None = None,
+        stream: bool | None = None,
     ) -> str:
         """POST /{api_version}/interactions"""
         litellm_params = litellm_params or {}
         api_base = GeminiModelInfo.get_api_base(api_base)
-        api_key = GeminiModelInfo.get_api_key(litellm_params.get("api_key"))
+        api_key: Final = GeminiModelInfo.get_api_key(litellm_params.get("api_key"))
 
         if not api_key:
             raise ValueError("Google API key is required. Set GOOGLE_API_KEY or GEMINI_API_KEY environment variable.")
@@ -123,13 +122,13 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
 
     def transform_request(
         self,
-        model: Optional[str],
-        agent: Optional[str],
-        input: Optional[InteractionInput],
+        model: str | None,
+        agent: str | None,
+        input: InteractionInput | None,
         optional_params: InteractionsAPIOptionalRequestParams,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> Dict:
+    ) -> dict:
         """
         Build request body per OpenAPI spec.
 
@@ -142,9 +141,9 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
         When on the legacy schema (use_legacy_interactions_schema=True):
         - All fields are forwarded as-is.
         """
-        use_legacy: bool = litellm.use_legacy_interactions_schema
+        use_legacy: Final[bool] = litellm.use_legacy_interactions_schema
 
-        request_body: Dict[str, Any] = {}
+        request_body: Final[dict[str, Any]] = {}
 
         # Model or Agent (one required)
         if model:
@@ -159,7 +158,7 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
             request_body["input"] = input
 
         # Pass through optional params — legacy schema keeps all fields as-is.
-        optional_keys = [
+        optional_keys: Final = [
             "tools",
             "system_instruction",
             "stream",
@@ -182,7 +181,7 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
             # New schema (Api-Revision: 2026-05-20):
             # response_mime_type is removed — fold it into response_format.
             response_format = optional_params.get("response_format")
-            response_mime_type = optional_params.get("response_mime_type")
+            response_mime_type: Final = optional_params.get("response_mime_type")
 
             if (
                 response_mime_type
@@ -190,7 +189,7 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
                 and (not isinstance(response_format, dict) or "mime_type" not in response_format)
             ):
                 # Wrap the legacy schema into the new polymorphic format.
-                new_rf: Dict[str, Any] = {
+                new_rf: Final[dict[str, Any]] = {
                     "type": "text",
                     "mime_type": response_mime_type,
                 }
@@ -202,7 +201,7 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
                 request_body["response_format"] = response_format
 
             # image_config moves out of generation_config into response_format.
-            generation_config: Optional[Dict[str, Any]] = optional_params.get("generation_config")
+            generation_config: dict[str, Any] | None = optional_params.get("generation_config")
             if generation_config is not None:
                 image_config = None
                 if isinstance(generation_config, dict):
@@ -216,8 +215,8 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
 
                 if image_config is not None:
                     # Move image_config to response_format with type=image.
-                    image_rf: Dict[str, Any] = {"type": "image", **image_config}
-                    existing_rf = request_body.get("response_format")
+                    image_rf: Final[dict[str, Any]] = {"type": "image", **image_config}
+                    existing_rf: Final = request_body.get("response_format")
                     if existing_rf is None:
                         request_body["response_format"] = image_rf
                     elif isinstance(existing_rf, list):
@@ -230,7 +229,7 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
 
     def transform_response(
         self,
-        model: Optional[str],
+        model: str | None,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
     ) -> InteractionsAPIResponse:
@@ -240,7 +239,7 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
                 original_response=raw_response.text,
                 additional_args={"complete_input_dict": {}},
             )
-            raw_json = raw_response.json()
+            raw_json: Final = raw_response.json()
         except Exception:
             raise GeminiError(
                 message=raw_response.text,
@@ -250,7 +249,7 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
 
         verbose_logger.debug("Google AI Interactions response: %s", raw_json)
 
-        response = InteractionsAPIResponse(**raw_json)
+        response: Final = InteractionsAPIResponse(**raw_json)
         response._hidden_params["headers"] = dict(raw_response.headers)
         response._hidden_params["additional_headers"] = process_response_headers(dict(raw_response.headers))
 
@@ -258,7 +257,7 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
 
     def transform_streaming_response(
         self,
-        model: Optional[str],
+        model: str | None,
         parsed_chunk: dict,
         logging_obj: LiteLLMLoggingObj,
     ) -> InteractionsAPIStreamingResponse:
@@ -274,12 +273,12 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> Tuple[str, Dict]:
+    ) -> tuple[str, dict]:
         """GET /{api_version}/interactions/{interaction_id}"""
-        resolved_api_base = GeminiModelInfo.get_api_base(api_base)
+        resolved_api_base: Final = GeminiModelInfo.get_api_base(api_base)
         if not GeminiModelInfo.get_api_key(litellm_params.api_key):
             raise ValueError("Google API key is required")
-        encoded_interaction_id = encode_url_path_segment(interaction_id, field_name="interaction_id")
+        encoded_interaction_id: Final = encode_url_path_segment(interaction_id, field_name="interaction_id")
         return (
             f"{resolved_api_base}/{self.api_version}/interactions/{encoded_interaction_id}",
             {},
@@ -291,14 +290,14 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
         logging_obj: LiteLLMLoggingObj,
     ) -> InteractionsAPIResponse:
         try:
-            raw_json = raw_response.json()
+            raw_json: Final = raw_response.json()
         except Exception:
             raise GeminiError(
                 message=raw_response.text,
                 status_code=raw_response.status_code,
                 headers=dict(raw_response.headers),
             )
-        response = InteractionsAPIResponse(**raw_json)
+        response: Final = InteractionsAPIResponse(**raw_json)
         response._hidden_params["headers"] = dict(raw_response.headers)
         return response
 
@@ -308,12 +307,12 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> Tuple[str, Dict]:
+    ) -> tuple[str, dict]:
         """DELETE /{api_version}/interactions/{interaction_id}"""
-        resolved_api_base = GeminiModelInfo.get_api_base(api_base)
+        resolved_api_base: Final = GeminiModelInfo.get_api_base(api_base)
         if not GeminiModelInfo.get_api_key(litellm_params.api_key):
             raise ValueError("Google API key is required")
-        encoded_interaction_id = encode_url_path_segment(interaction_id, field_name="interaction_id")
+        encoded_interaction_id: Final = encode_url_path_segment(interaction_id, field_name="interaction_id")
         return (
             f"{resolved_api_base}/{self.api_version}/interactions/{encoded_interaction_id}",
             {},
@@ -339,12 +338,12 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> Tuple[str, Dict]:
+    ) -> tuple[str, dict]:
         """POST /{api_version}/interactions/{interaction_id}:cancel (if supported)"""
-        resolved_api_base = GeminiModelInfo.get_api_base(api_base)
+        resolved_api_base: Final = GeminiModelInfo.get_api_base(api_base)
         if not GeminiModelInfo.get_api_key(litellm_params.api_key):
             raise ValueError("Google API key is required")
-        encoded_interaction_id = encode_url_path_segment(interaction_id, field_name="interaction_id")
+        encoded_interaction_id: Final = encode_url_path_segment(interaction_id, field_name="interaction_id")
         return (
             f"{resolved_api_base}/{self.api_version}/interactions/{encoded_interaction_id}:cancel",
             {},
@@ -356,7 +355,7 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
         logging_obj: LiteLLMLoggingObj,
     ) -> CancelInteractionResult:
         try:
-            raw_json = raw_response.json()
+            raw_json: Final = raw_response.json()
         except Exception:
             raise GeminiError(
                 message=raw_response.text,

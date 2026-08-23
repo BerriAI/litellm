@@ -6,17 +6,20 @@ response validates without mirroring every proxy field. No untyped dicts.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, RootModel, model_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, RootModel, model_validator
 
 # ---------- keys ----------
 
 
 class ModelBudgetEntry(BaseModel):
-    budget_limit: float
-    time_period: str
+    budget_limit: float = Field(validation_alias=AliasChoices("budget_limit", "max_budget"))
+    time_period: str = Field(validation_alias=AliasChoices("time_period", "budget_duration"))
+    rpm_limit: int | None = None
+    tpm_limit: int | None = None
 
 
 class BudgetWindow(BaseModel):
@@ -42,10 +45,13 @@ class KeyLoggingCallback(BaseModel):
 
 class KeyMetadata(BaseModel):
     logging: list[KeyLoggingCallback] | None = None
+    priority: str | None = None
+    batch_enqueued_token_limit: int | None = None
 
 
 class ObjectPermission(BaseModel):
     mcp_servers: list[str] | None = None
+    mcp_access_groups: list[str] | None = None
 
 
 class KeyGenerateBody(BaseModel):
@@ -65,11 +71,17 @@ class KeyGenerateBody(BaseModel):
     tpm_limit: int | None = None
     rpm_limit: int | None = None
     allowed_routes: list[str] | None = None
+    allowed_passthrough_routes: list[str] | None = None
     metadata: KeyMetadata | None = None
     object_permission: ObjectPermission | None = None
+    router_settings: "RouterSettingsOverride | None" = None
 
 
 class KeyGenerateResponse(BaseModel):
+    key: str
+
+
+class KeyRegenerateBody(BaseModel):
     key: str
 
 
@@ -90,10 +102,12 @@ class LiteLLMBudgetTable(BaseModel):
 
 class KeyInfo(BaseModel):
     key_alias: str | None = None
+    metadata: KeyMetadata | None = None
     models: list[str] = []
     tpm_limit: int | None = None
     rpm_limit: int | None = None
     team_id: str | None = None
+    blocked: bool | None = None
     spend: float | None = None
     max_budget: float | None = None
     budget_reset_at: str | None = None
@@ -109,6 +123,18 @@ class KeyInfoResponse(BaseModel):
 # ---------- customers ----------
 
 
+class CustomerNewBody(BaseModel):
+    user_id: str
+
+
+class CustomerResponse(BaseModel):
+    user_id: str | None = None
+
+
+class CustomerInfoParams(BaseModel):
+    end_user_id: str
+
+
 class CustomerDeleteBody(BaseModel):
     user_ids: list[str]
 
@@ -120,9 +146,41 @@ class ChatMetadata(BaseModel):
     tags: list[str] | None = None
 
 
+class ImageUrl(BaseModel):
+    url: str
+
+
+class TextContentPart(BaseModel):
+    type: str = "text"
+    text: str
+
+
+class ImageContentPart(BaseModel):
+    type: str = "image_url"
+    image_url: ImageUrl
+
+
+ContentPart = TextContentPart | ImageContentPart
+
+
 class ChatMessage(BaseModel):
     role: str
-    content: str
+    content: str | list[ContentPart]
+
+
+class CacheControl(BaseModel):
+    type: str = "ephemeral"
+
+
+class TextBlock(BaseModel):
+    type: str = "text"
+    text: str
+    cache_control: CacheControl | None = None
+
+
+class RichMessage(BaseModel):
+    role: str
+    content: list[TextBlock]
 
 
 class ThinkingParam(BaseModel):
@@ -146,24 +204,111 @@ class ChatTool(BaseModel):
     function: ChatToolFunction
 
 
+class McpChatTool(BaseModel):
+    """An MCP server attached to a chat completion (OpenAI `type: "mcp"` tool).
+    `server_url` selects the gateway-registered server by its alias suffix; with
+    `require_approval="never"` the gateway lists, calls, and feeds the server's
+    tools back to the model in one agentic turn."""
+
+    type: Literal["mcp"] = "mcp"
+    server_url: str
+    require_approval: str
+    server_label: str | None = None
+    allowed_tools: list[str] | None = None
+
+
 class ChatBody(BaseModel):
     model: str
     messages: list[ChatMessage]
     stream: bool = False
     max_tokens: int | None = None
+    max_completion_tokens: int | None = None
+    temperature: float | None = None
     user: str | None = None
     metadata: ChatMetadata | None = None
     reasoning_effort: str | None = None
     thinking: ThinkingParam | None = None
     service_tier: str | None = None
-    tools: list[ChatTool] | None = None
+    tools: Sequence[ChatTool | McpChatTool] | None = None
     tool_choice: str | None = None
     guardrails: list[str] | None = None
+    response_format: dict[str, object] | None = None
+    cache: dict[str, bool] | None = {"no-cache": True}
+
+
+class RouterSettingsOverride(BaseModel):
+    """Router settings a test scopes below the global config: sent per request as
+    `router_settings_override` in a /chat/completions body (the reliability suite's
+    fallback and retry knobs) or stored on a key as `router_settings` at
+    /key/generate (the auto-router suite's tag filtering switch). Serialized
+    exclude_none, so an override sets only the knobs a test exercises. Each
+    fallbacks map is model_name -> the ordered fallback model_names to try."""
+
+    fallbacks: list[dict[str, list[str]]] | None = None
+    context_window_fallbacks: list[dict[str, list[str]]] | None = None
+    content_policy_fallbacks: list[dict[str, list[str]]] | None = None
+    num_retries: int | None = None
+    enable_tag_filtering: bool | None = None
+
+
+class ReliabilityChatBody(ChatBody):
+    """A /chat/completions body carrying a per-request router_settings_override.
+    Composes ChatBody (no attribute repetition) and adds the override; serialized
+    exclude_none so an absent override never leaks into the request."""
+
+    router_settings_override: RouterSettingsOverride | None = None
+
+
+class ToolCallFunction(BaseModel):
+    name: str | None = None
+    arguments: str | None = None
+
+
+class ToolCall(BaseModel):
+    function: ToolCallFunction = ToolCallFunction()
+
+
+class McpToolFunctionRef(BaseModel):
+    name: str
+
+
+class McpListedTool(BaseModel):
+    """One entry of `mcp_list_tools`: a tool the gateway listed from the
+    attached MCP server and exposed to the model, in OpenAI function shape."""
+
+    function: McpToolFunctionRef | None = None
+
+
+class McpToolCall(BaseModel):
+    """One entry of `mcp_tool_calls`: a tool the model asked the gateway to run."""
+
+    function: McpToolFunctionRef | None = None
+
+
+class McpCallResult(BaseModel):
+    """One entry of `mcp_call_results`: what the gateway got back from executing
+    a tool upstream on the caller's behalf."""
+
+    name: str | None = None
+    result: str | None = None
+
+
+class McpResponseMetadata(BaseModel):
+    """`choices[].message.provider_specific_fields` MCP section: which tools the
+    gateway listed from the attached server, which the model called, and their
+    results. Populated only when the completion drove an MCP server."""
+
+    mcp_list_tools: list[McpListedTool] | None = None
+    mcp_tool_calls: list[McpToolCall] | None = None
+    mcp_call_results: list[McpCallResult] | None = None
 
 
 class OutMessage(BaseModel):
+    role: str | None = None
     content: str | None = None
     reasoning_content: str | None = None
+    tool_calls: list[ToolCall] | None = None
+    provider_specific_fields: McpResponseMetadata | None = None
 
 
 class ChatChoice(BaseModel):
@@ -174,6 +319,10 @@ class PromptTokensDetails(BaseModel):
     cached_tokens: int | None = None
 
 
+class CompletionTokensDetails(BaseModel):
+    reasoning_tokens: int | None = None
+
+
 class Usage(BaseModel):
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
@@ -181,10 +330,12 @@ class Usage(BaseModel):
     cache_read_input_tokens: int | None = None
     cache_creation_input_tokens: int | None = None
     prompt_tokens_details: PromptTokensDetails | None = None
+    completion_tokens_details: CompletionTokensDetails | None = None
 
 
 class ChatResponse(BaseModel):
     id: str | None = None
+    object: str | None = None
     model: str | None = None
     choices: list[ChatChoice] = []
     usage: Usage | None = None
@@ -207,14 +358,26 @@ class ToolInputSchema(BaseModel):
     required: list[str] = []
 
 
-class AnthropicToolSearchTool(BaseModel):
-    """The tool_search discovery tool. `type` carries the SDK-version-pinned
-    suffix (e.g. ``tool_search_tool_regex_20251119``) that LiteLLM keys its
-    per-provider beta-header translation on; `name` is the unsuffixed
-    canonical name the upstream accepts."""
+class AnthropicServerTool(BaseModel):
+    """An Anthropic-managed tool the upstream executes itself. It carries no
+    `input_schema`; `type` is the SDK-version-pinned identifier LiteLLM keys its
+    per-provider translation on, and `name` is the unsuffixed canonical name the
+    upstream accepts."""
 
     type: str
     name: str
+
+
+class AnthropicToolSearchTool(AnthropicServerTool):
+    """The tool_search discovery tool, e.g. ``tool_search_tool_regex_20251119``."""
+
+
+class AnthropicWebSearchTool(AnthropicServerTool):
+    """The web_search server tool, e.g. ``web_search_20250305``. Distinct from
+    Claude Code's client-side ``WebSearch`` tool, which is an ordinary custom
+    tool the CLI executes and feeds back as a tool_result."""
+
+    max_uses: int | None = None
 
 
 class AnthropicCustomTool(BaseModel):
@@ -223,15 +386,53 @@ class AnthropicCustomTool(BaseModel):
     input_schema: ToolInputSchema
 
 
-type AnthropicTool = AnthropicToolSearchTool | AnthropicCustomTool
+type AnthropicTool = AnthropicToolSearchTool | AnthropicWebSearchTool | AnthropicCustomTool
+
+
+class AnthropicContentBlock(BaseModel):
+    """One block of a `content` array. Only the fields a test reads are
+    declared; `extra="allow"` keeps the rest (a `server_tool_use` block's
+    `input`, a `tool_search_tool_result` block's nested `content`) so an
+    assistant turn read off the wire can be replayed into history verbatim
+    instead of being silently flattened to its text."""
+
+    model_config = ConfigDict(extra="allow")
+    type: str | None = None
+    text: str | None = None
+    id: str | None = None
+
+
+class AnthropicToolResultBlock(BaseModel):
+    """The user-turn answer to a client-side `tool_use`. `tool_use_id` must be
+    the id the model actually emitted; an invented one is rejected by
+    Anthropic's own schema validator, which Bedrock inherits."""
+
+    type: Literal["tool_result"] = "tool_result"
+    tool_use_id: str
+    content: str
+
+
+class AnthropicAssistantTurn(BaseModel):
+    role: Literal["assistant"] = "assistant"
+    content: list[AnthropicContentBlock]
+
+
+class AnthropicToolResultTurn(BaseModel):
+    role: Literal["user"] = "user"
+    content: list[AnthropicToolResultBlock]
+
+
+type AnthropicMessage = ChatMessage | AnthropicAssistantTurn | AnthropicToolResultTurn
 
 
 class AnthropicMessagesBody(BaseModel):
     model: str
-    messages: list[ChatMessage]
+    messages: list[AnthropicMessage]
     max_tokens: int
     stream: bool | None = None
     tools: list[AnthropicTool] | None = None
+    guardrails: list[str] | None = None
+    cache: dict[str, bool] | None = {"no-cache": True}
 
 
 class CountTokensBody(BaseModel):
@@ -240,10 +441,6 @@ class CountTokensBody(BaseModel):
 
     model: str
     messages: list[ChatMessage]
-
-
-class AnthropicContentBlock(BaseModel):
-    type: str | None = None
 
 
 class AnthropicMessagesResponse(BaseModel):
@@ -258,6 +455,7 @@ class AnthropicMessagesResponse(BaseModel):
     model: str | None = None
     content: list[AnthropicContentBlock] | None = None
     choices: list[ChatChoice] | None = None
+    usage: Usage | None = None
 
 
 class CountTokensResponse(BaseModel):
@@ -267,9 +465,40 @@ class CountTokensResponse(BaseModel):
     input_tokens: int
 
 
+# ---------- mcp servers ----------
+
+
+class McpServerCreateBody(BaseModel):
+    """POST /v1/mcp/server. For a gateway-managed OAuth server, `auth_type` is
+    `oauth2` and `oauth2_flow` is `authorization_code`; the upstream endpoints
+    are discovered and registered via DCR when left unset. `allow_all_keys`
+    false scopes the server to keys granted it through object_permission."""
+
+    alias: str
+    url: str
+    transport: str = "http"
+    allow_all_keys: bool = True
+    auth_type: str | None = None
+    oauth2_flow: Literal["client_credentials", "authorization_code"] | None = None
+    authorization_url: str | None = None
+    token_url: str | None = None
+
+
+class McpServerInfo(BaseModel):
+    """Response of POST /v1/mcp/server and GET /v1/mcp/server/{server_id}."""
+
+    server_id: str
+    alias: str | None = None
+    url: str | None = None
+    auth_type: str | None = None
+    oauth2_flow: str | None = None
+    allow_all_keys: bool | None = None
+
+
 class EmbedBody(BaseModel):
     model: str
     input: str
+    cache: dict[str, bool] | None = {"no-cache": True}
 
 
 class EmbedResponse(BaseModel):
@@ -492,8 +721,10 @@ class FineTuningJobsResponse(BaseModel):
 class LiteLLMParamsBody(BaseModel):
     """POST /model/new litellm_params: `model` is the only required field; `api_key`
     et al may be an `os.environ/FOO` reference the proxy resolves at call time.
-    `input_cost_per_token`/`output_cost_per_token` register a per-deployment custom
-    pricing override; left None (and dropped from the body) the deployment keeps the
+    The `*_cost_per_token` / `*_token_cost` fields register a per-deployment custom
+    pricing override (the cache and `_priority` rates only apply when both base
+    rates are set, which is what makes the proxy register the deployment's full
+    pricing entry); left None (and dropped from the body) the deployment keeps the
     backend's canonical rate."""
 
     model: str
@@ -515,12 +746,25 @@ class LiteLLMParamsBody(BaseModel):
     s3_access_key_id: str | None = None
     s3_secret_access_key: str | None = None
     aws_batch_role_arn: str | None = None
+    aws_role_name: str | None = None
+    aws_session_name: str | None = None
+    aws_external_id: str | None = None
     input_cost_per_token: float | None = None
     output_cost_per_token: float | None = None
+    cache_read_input_token_cost: float | None = None
+    cache_creation_input_token_cost: float | None = None
+    input_cost_per_token_priority: float | None = None
+    output_cost_per_token_priority: float | None = None
     extra_headers: dict[str, str] | None = None
     use_in_pass_through: bool | None = None
     complexity_router_config: dict[str, object] | None = None
+    auto_router_config: str | None = None
+    auto_router_default_model: str | None = None
+    auto_router_embedding_model: str | None = None
+    tags: list[str] | None = None
     mock_response: str | None = None
+    timeout: float | None = None
+    tpm: int | None = None
 
 
 ModelMode = Literal["batch", "realtime", "image_generation"]
@@ -533,6 +777,8 @@ class ModelInfoBody(BaseModel):
     # constraint when a prior run's teardown had not removed the row.
     id: str | None = None
     mode: ModelMode | None = None
+    access_groups: list[str] | None = None
+    team_id: str | None = None
 
 
 class ModelNewBody(BaseModel):
@@ -545,6 +791,17 @@ class ModelNewBody(BaseModel):
 class ModelNewResponse(BaseModel):
     model_config = ConfigDict(protected_namespaces=())
     model_id: str
+
+
+class ModelUpdateBody(BaseModel):
+    """POST /model/update body: the target deployment (`model_info.id`) plus the
+    `litellm_params` to merge over its stored params. The handler overlays only the
+    non-null fields, so a body carrying `input_cost_per_token` re-prices the
+    deployment while leaving its other params intact."""
+
+    model_config = ConfigDict(protected_namespaces=())
+    litellm_params: LiteLLMParamsBody
+    model_info: ModelInfoBody
 
 
 class ModelListEntry(BaseModel):
@@ -581,6 +838,10 @@ class KeyUpdateBody(BaseModel):
     models: list[str]
 
 
+class KeyBlockBody(BaseModel):
+    key: str
+
+
 class KeyListParams(BaseModel):
     key_alias: str
 
@@ -594,15 +855,26 @@ class TeamMemberEntry(BaseModel):
     user_id: str
 
 
+class TeamMetadata(BaseModel):
+    disable_global_guardrails: bool | None = None
+
+
 class TeamNewBody(BaseModel):
     team_alias: str
     models: list[str] = []
     team_id: str | None = None
     organization_id: str | None = None
+    metadata: TeamMetadata | None = None
 
 
 class TeamNewResponse(BaseModel):
     team_id: str
+
+
+class TeamUpdateBody(BaseModel):
+    team_id: str
+    team_alias: str
+    models: list[str] | None = None
 
 
 class TeamInfoParams(BaseModel):
@@ -634,6 +906,15 @@ class TeamDeleteBody(BaseModel):
     team_ids: list[str]
 
 
+class TeamListEntry(BaseModel):
+    team_id: str
+
+
+class TeamListResponse(RootModel[list[TeamListEntry]]):
+    """GET /team/list answers with a bare array of team objects (not an object
+    wrapping them). Only team_id is read; pydantic ignores the rest."""
+
+
 UserRole = Literal["proxy_admin", "proxy_admin_viewer", "internal_user", "internal_user_viewer"]
 
 
@@ -645,6 +926,11 @@ class UserNewBody(BaseModel):
 
 class UserNewResponse(BaseModel):
     user_id: str
+
+
+class UserUpdateBody(BaseModel):
+    user_id: str
+    user_role: UserRole
 
 
 class UserInfoParams(BaseModel):
@@ -666,11 +952,20 @@ class UserDeleteBody(BaseModel):
     user_ids: list[str]
 
 
+class UserDeleteResponse(RootModel[int]):
+    pass
+
+
 class UserListParams(BaseModel):
     user_ids: str
 
 
+class UserListRow(BaseModel):
+    user_id: str
+
+
 class UserListResponse(BaseModel):
+    users: list[UserListRow]
     total: int
 
 
@@ -681,6 +976,11 @@ class OrgNewBody(BaseModel):
 
 class OrgNewResponse(BaseModel):
     organization_id: str
+
+
+class OrgUpdateBody(BaseModel):
+    organization_id: str
+    organization_alias: str
 
 
 class OrgInfoParams(BaseModel):
@@ -695,3 +995,46 @@ class OrgInfoResponse(BaseModel):
 
 class OrgDeleteBody(BaseModel):
     organization_ids: list[str]
+
+
+# ---------- tags (management) ----------
+
+
+class TagNewBody(BaseModel):
+    name: str
+    description: str | None = None
+
+
+class TagDeleteBody(BaseModel):
+    name: str
+
+
+class TagListEntry(BaseModel):
+    name: str
+    description: str | None = None
+
+
+class TagListResponse(RootModel[list[TagListEntry]]):
+    """GET /tag/list answers with a bare array of tag configs (the stored tags plus
+    any dynamically-seen spend tags), not an object wrapping them. Read the rows off
+    .root."""
+
+
+# ---------- health / lifecycle ----------
+
+
+class ReadinessResponse(BaseModel):
+    """GET /health/readiness (public probe). The low-detail payload a load
+    balancer sees: `status` plus the resolved DB state (`connected`,
+    `disconnected`, or `Not connected`)."""
+
+    status: str
+    db: str | None = None
+
+
+class ReadinessDetailsResponse(ReadinessResponse):
+    """GET /health/readiness/details (authenticated). Extends the public payload
+    with the diagnostics only an authenticated caller may read."""
+
+    litellm_version: str | None = None
+    success_callbacks: list[str] = []

@@ -1,9 +1,6 @@
-import os
-import sys
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../.."))
 
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
     initialize_standard_callback_dynamic_params,
@@ -110,7 +107,7 @@ def test_top_level_kwargs_overrides_metadata_slots():
 def test_env_reference_at_top_level_raises_with_guidance():
     kwargs = {"langfuse_public_key": "os.environ/LANGFUSE_PUBLIC_KEY"}
 
-    with pytest.raises(ValueError) as exc_info:
+    with pytest.raises(ValueError, match="Callback param 'langfuse_public_key' \\(from request body\\)") as exc_info:
         initialize_standard_callback_dynamic_params(kwargs)
 
     message = str(exc_info.value)
@@ -127,7 +124,7 @@ def test_env_reference_in_metadata_raises_with_guidance():
         }
     }
 
-    with pytest.raises(ValueError) as exc_info:
+    with pytest.raises(ValueError, match="Callback param 'langsmith_api_key' \\(from metadata\\) contains") as exc_info:
         initialize_standard_callback_dynamic_params(kwargs)
 
     message = str(exc_info.value)
@@ -190,3 +187,49 @@ def test_empty_kwargs_returns_empty_params():
 
     params = initialize_standard_callback_dynamic_params({})
     assert dict(params) == {}
+
+
+def test_newrelic_callback_params_are_not_extracted_from_request_kwargs():
+    kwargs = {
+        "newrelic_api_key": "caller-key",
+        "metadata": {"newrelic_api_key": "caller-key-2", "newrelic_region": "eu"},
+        "litellm_params": {"metadata": {"newrelic_region": "eu"}},
+    }
+
+    params = initialize_standard_callback_dynamic_params(kwargs)
+
+    assert params.get("newrelic_api_key") is None
+    assert params.get("newrelic_region") is None
+
+
+def test_newrelic_trusted_vars_overlay_reaches_standard_params():
+    from litellm.types.utils import TRUSTED_CALLBACK_VARS_FIELD
+
+    kwargs = {
+        # A caller-supplied copy must lose to the proxy-stamped trusted value.
+        "newrelic_api_key": "caller-key",
+        TRUSTED_CALLBACK_VARS_FIELD: {
+            "newrelic_api_key": "team-key",
+            "newrelic_region": "eu",
+            # Non-overlay trusted vars must not be copied by the overlay.
+            "langfuse_public_key": "pk-team",
+        },
+    }
+
+    params = initialize_standard_callback_dynamic_params(kwargs)
+
+    assert params.get("newrelic_api_key") == "team-key"
+    assert params.get("newrelic_region") == "eu"
+    assert params.get("langfuse_public_key") is None
+
+
+def test_trusted_vars_overlay_uses_shared_parser_semantics():
+    # The overlay rides get_trusted_callback_params, the same parser the
+    # datadog handler consumes, so values are str()-coerced identically.
+    from litellm.types.utils import TRUSTED_CALLBACK_VARS_FIELD
+
+    params = initialize_standard_callback_dynamic_params(
+        {TRUSTED_CALLBACK_VARS_FIELD: {"newrelic_api_key": 12345}}
+    )
+
+    assert params.get("newrelic_api_key") == "12345"

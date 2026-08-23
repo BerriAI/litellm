@@ -1,6 +1,5 @@
 import base64
 import os
-import sys
 import time
 import traceback
 from litellm._uuid import uuid
@@ -9,17 +8,14 @@ from dotenv import load_dotenv
 import json
 
 load_dotenv()
-import os
 import tempfile
 from uuid import uuid4
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 import pytest
 import litellm
 from litellm.llms.azure.azure import get_azure_ad_token_from_oidc
-from litellm.llms.bedrock.chat import BedrockConverseLLM, BedrockLLM
+from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+from litellm.llms.bedrock.chat import BedrockConverseLLM
 from litellm.secret_managers.aws_secret_manager_v2 import AWSSecretsManagerV2
 from litellm.secret_managers.main import (
     get_secret,
@@ -160,7 +156,7 @@ def test_oidc_circle_v1_with_amazon():
     aws_role_name = "arn:aws:iam::335785316107:role/litellm-github-unit-tests-circleci-v1-assume-only"
     aws_web_identity_token = "oidc/circleci/"
 
-    bllm = BedrockLLM()
+    bllm = BaseAWSLLM()
     creds = bllm.get_credentials(
         aws_region_name="ca-west-1",
         aws_web_identity_token=aws_web_identity_token,

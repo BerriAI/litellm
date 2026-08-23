@@ -11,13 +11,19 @@ Python-compatible dictionaries.
 ## Bridge Shape
 
 - Prefer one stable method per top-level LiteLLM route, for example
-  `ocr(payload)`.
+  `messages(...)`, calling the matching `litellm-core` entrypoint.
 - Do not add one exported PyO3 function per provider helper unless there is a
   measured reason.
-- Provider dispatch belongs in Rust route modules such as
-  `litellm_providers::ocr`, not in this PyO3 crate.
+- Provider dispatch belongs in the `litellm-core` route module (e.g.
+  `litellm_core::messages`), not in this PyO3 crate.
 - Python owns rollout state and fallback. Rust should return errors; Python
-  decides whether to raise or fall back.
+  decides whether to raise or fall back. For a rust-only provider/route (no
+  Python reference), the Python side is a thin dispatch that calls Rust and
+  raises when the bridge is unavailable, with no fallback.
+- Keep the Python interface minimal (well under 100 lines per route): it only
+  marshals inputs and calls Rust. Do not add per-route feature flags, and do
+  not put provider dispatch in `litellm/main.py`; it lives in a thin dispatch
+  class under `litellm/llms/<provider>/<route>/`.
 
 ## Data Handling
 

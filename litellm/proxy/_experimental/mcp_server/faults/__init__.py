@@ -15,6 +15,7 @@ from litellm.proxy._experimental.mcp_server.faults.render_oauth import (
     dcr_fault_detail,
     render_token_fault,
 )
+from litellm.proxy._experimental.mcp_server.faults.traversal import iter_exception_tree
 from litellm.proxy._experimental.mcp_server.faults.types import (
     CallerRejected,
     CredentialSource,
@@ -34,5 +35,6 @@ __all__ = [
     "classify_upstream_dcr_rejection",
     "classify_upstream_token_rejection",
     "dcr_fault_detail",
+    "iter_exception_tree",
     "render_token_fault",
 ]

@@ -33,3 +33,15 @@ export const resolveApiBase = ({ explicitBase, serverRootPath }: ApiBaseInputs):
   if (rootPath === "" || base.endsWith(rootPath)) return base;
   return `${base}${rootPath}`;
 };
+
+export interface RequestUrlInputs {
+  /** Base registered at runtime (a split-origin proxy or worker URL); empty means none. */
+  registeredBase?: string | null;
+  /** Origin of the page issuing the request; the same-origin fallback. */
+  pageOrigin?: string | null;
+}
+
+export const resolveRequestUrl = (path: string, { registeredBase, pageOrigin }: RequestUrlInputs): string => {
+  const base = (registeredBase || pageOrigin || "").replace(/\/+$/, "");
+  return `${base}${path}`;
+};
