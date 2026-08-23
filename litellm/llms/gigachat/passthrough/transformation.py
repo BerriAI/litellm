@@ -161,8 +161,7 @@ class GigaChatPassthroughConfig(BasePassthroughConfig):
                 chunk = chunk.strip()
                 if not chunk or chunk == "[DONE]":
                     continue
-                if chunk.startswith("data: "):
-                    chunk = chunk[6:]
+                chunk = chunk.removeprefix("data: ")
                 try:
                     message = json.loads(chunk)
                 except json.JSONDecodeError:

@@ -6,9 +6,9 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
-from collections.abc import AsyncGenerator, Coroutine, Generator
+from collections.abc import AsyncGenerator, AsyncIterator, Coroutine, Generator, Iterator
 from functools import partial
-from typing import Any, AsyncIterator, Iterator, Final, cast
+from typing import Any, Final, cast
 
 import httpx
 from httpx._types import CookieTypes, QueryParamTypes, RequestFiles
@@ -171,7 +171,7 @@ class PassthroughStreamingResponse(Generator[Any, Any, Any]):
         self._litellm_logging_obj = litellm_logging_obj
         self._provider_config = provider_config
         self._iterator: Generator[bytes, Any, Any] = _as_generator(response.iter_bytes())
-        self._raw_bytes: List[bytes] = []
+        self._raw_bytes: list[bytes] = []
         self._flush_scheduled = False
 
     def _start_flush(self) -> None:

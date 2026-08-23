@@ -1544,26 +1544,24 @@ class Logging(LiteLLMLoggingBaseClass):
 
     def _response_cost_calculator(
         self,
-        result: Union[
-            ModelResponse,
-            ModelResponseStream,
-            EmbeddingResponse,
-            ImageResponse,
-            TranscriptionResponse,
-            TextCompletionResponse,
-            HttpxBinaryResponseContent,
-            RerankResponse,
-            Batch,
-            FineTuningJob,
-            ResponsesAPIResponse,
-            ResponseCompletedEvent,
-            OpenAIFileObject,
-            LiteLLMRealtimeStreamLoggingObject,
-            OpenAIModerationResponse,
-            SearchResponse,
-            dict,
-            list,
-        ],
+        result: ModelResponse
+        | ModelResponseStream
+        | EmbeddingResponse
+        | ImageResponse
+        | TranscriptionResponse
+        | TextCompletionResponse
+        | HttpxBinaryResponseContent
+        | RerankResponse
+        | Batch
+        | FineTuningJob
+        | ResponsesAPIResponse
+        | ResponseCompletedEvent
+        | OpenAIFileObject
+        | LiteLLMRealtimeStreamLoggingObject
+        | OpenAIModerationResponse
+        | SearchResponse
+        | dict
+        | list,
         cache_hit: bool | None = None,
         litellm_model_name: str | None = None,
         router_model_id: str | None = None,
@@ -5896,7 +5894,7 @@ def emit_standard_logging_payload(payload: StandardLoggingPayload):
         try:
             print(json.dumps(payload, indent=4, default=str), flush=True)  # noqa: T201
         except Exception as e:  # noqa: BLE001 # Safe catch-all for verbose logging
-            verbose_logger.exception("Error serializing standard logging payload for debug output: {}".format(str(e)))
+            verbose_logger.exception("Error serializing standard logging payload for debug output: %s", e)
 
 
 def get_standard_logging_metadata(
