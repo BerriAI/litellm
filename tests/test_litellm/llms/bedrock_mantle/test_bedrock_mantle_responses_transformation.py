@@ -373,25 +373,6 @@ def _function_tool() -> dict[str, object]:
     return {"type": "function", "name": "exec_command"}
 
 
-def _output_item_type(item: object) -> object:
-    return item.get("type") if isinstance(item, dict) else getattr(item, "type", None)
-
-
-def _annotations_of_first_message(response: object) -> list[object]:
-    """Annotations off the first output_text block, tolerating dict or model output items."""
-    for item in getattr(response, "output", []):
-        if _output_item_type(item) != "message":
-            continue
-        blocks = item.get("content", []) if isinstance(item, dict) else getattr(item, "content", [])
-        for block in blocks:
-            annotations = (
-                block.get("annotations") if isinstance(block, dict) else getattr(block, "annotations", None)
-            )
-            if annotations is not None:
-                return [a if isinstance(a, dict) else a.model_dump() for a in annotations]
-    return []
-
-
 def _codex_additional_tools_input(tools: list[dict[str, object]]) -> list[dict[str, object]]:
     return [
         {"type": "additional_tools", "role": "developer", "tools": tools},
@@ -534,9 +515,9 @@ class TestBedrockMantleResponsesNativeWebSearch:
             ),
         )
 
-        search_calls = [item for item in out.output if _output_item_type(item) == "web_search_call"]
-        assert len(search_calls) == 1, f"web_search_call item was dropped: {out.output}"
-        assert _annotations_of_first_message(out) == [citation]
+        dumped = out.model_dump()
+        assert [item["type"] for item in dumped["output"]] == ["web_search_call", "message"]
+        assert dumped["output"][1]["content"][0]["annotations"] == [citation]
 
 
 def _codex_exec_tool():

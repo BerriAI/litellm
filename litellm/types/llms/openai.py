@@ -1306,12 +1306,13 @@ class WebSearchToolUsage(BaseModel):
     model_config = ConfigDict(extra="allow")
 
 
-class ProviderToolUsage(BaseModel):
+class ResponsesToolUsage(BaseModel):
     """A Responses payload's own `tool_usage`, used to bill server-side tools off the provider's
     count rather than off the returned items. Bedrock populates `web_search.num_requests`.
 
-    Extra keys are allowed on both models so a payload that also reports other server-side tools
-    still validates and the web search count is still read.
+    Deliberately not a declared field on ``ResponsesAPIResponse``: it arrives as an extra and is
+    validated only where the cost path reads it, so a payload reporting a tool we do not model, or
+    a shape we do not expect, still parses instead of failing the whole response.
     """
 
     web_search: WebSearchToolUsage

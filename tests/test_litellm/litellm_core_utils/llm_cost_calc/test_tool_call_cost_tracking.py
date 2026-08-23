@@ -620,9 +620,9 @@ def _openai_responses_with_web_search_calls(model, num_calls):
     )
 
 
-def _responses_with_reported_web_search(model, num_requests, search_items, fetch_items):
+def _responses_with_reported_web_search(model, search_items, fetch_items, tool_usage):
     """A Bedrock-shaped Responses payload: `web_search_call` items for both operations, plus the
-    `tool_usage.web_search.num_requests` count Bedrock reports for the searches it charges for."""
+    raw `tool_usage` block, which Bedrock populates with the count it charges for."""
     from litellm.types.llms.openai import ResponsesAPIResponse
 
     output = [
@@ -651,7 +651,7 @@ def _responses_with_reported_web_search(model, num_requests, search_items, fetch
         parallel_tool_calls=False,
         tool_choice="auto",
         tools=[],
-        tool_usage={"web_search": {"num_requests": num_requests}},
+        tool_usage=tool_usage,
     )
 
 
@@ -668,8 +668,21 @@ def test_bedrock_mantle_web_search_bills_the_count_bedrock_reports(local_model_c
     per_query = litellm.get_model_info(model)["search_context_cost_per_query"]["search_context_size_medium"]
     usage = Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15)
 
-    for num_requests, search_items, fetch_items in ((5, 5, 1), (1, 1, 1), (2, 2, 1)):
-        response = _responses_with_reported_web_search(model, num_requests, search_items, fetch_items)
+    cases = (
+        {"searches": 5, "fetches": 1, "reported": 5},
+        {"searches": 1, "fetches": 1, "reported": 1},
+        {"searches": 2, "fetches": 1, "reported": 2},
+        # A follow-up turn can fetch a cached page without searching, and Bedrock then charges
+        # nothing. The item path floors at one search; a reported count must not be floored.
+        {"searches": 0, "fetches": 2, "reported": 0},
+    )
+    for case in cases:
+        response = _responses_with_reported_web_search(
+            model,
+            search_items=case["searches"],
+            fetch_items=case["fetches"],
+            tool_usage={"web_search": {"num_requests": case["reported"]}},
+        )
         cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
             model=model,
             response_object=response,
@@ -677,9 +690,9 @@ def test_bedrock_mantle_web_search_bills_the_count_bedrock_reports(local_model_c
             custom_llm_provider="bedrock_mantle",
             standard_built_in_tools_params=None,
         )
-        assert cost == pytest.approx(num_requests * per_query), (
-            f"{search_items + fetch_items} items reporting {num_requests} requests must bill "
-            f"{num_requests} x ${per_query}, got ${cost}"
+        assert cost == pytest.approx(case["reported"] * per_query), (
+            f"{case['searches'] + case['fetches']} items reporting {case['reported']} requests must "
+            f"bill {case['reported']} x ${per_query}, got ${cost}"
         )
 
 
@@ -692,13 +705,62 @@ def test_web_search_falls_back_to_counting_items_when_no_count_is_reported(local
     assert StandardBuiltInToolCostTracking._count_web_search_calls(response) == 3
 
 
-def test_malformed_reported_web_search_count_falls_back_to_items(local_model_cost_map):
-    """A tool_usage payload that does not carry an integer count must not raise or bill zero."""
-    response = _responses_with_reported_web_search("bedrock_mantle/openai.gpt-5.6-terra", 2, 2, 1)
-    response.tool_usage = {"web_search": {"num_requests": "not-a-number"}}
-    assert StandardBuiltInToolCostTracking._count_web_search_calls(response) == 3
+def test_streamed_web_search_bills_the_reported_count(local_model_cost_map):
+    """On the streaming path the cost calculator is handed the response unwrapped out of the
+    terminal `ResponseCompletedEvent`, not the event. Pin that: the reported count has to survive
+    the unwrap, because the event itself carries no output items and would floor the bill at one
+    search instead of charging what Bedrock reported."""
+    import datetime
 
-    response.tool_usage = {"unexpected_shape": True}
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.types.llms.openai import ResponseCompletedEvent
+    from litellm.types.utils import Usage
+
+    model = "bedrock_mantle/openai.gpt-5.6-terra"
+    per_query = litellm.get_model_info(model)["search_context_cost_per_query"]["search_context_size_medium"]
+    response = _responses_with_reported_web_search(
+        model, search_items=2, fetch_items=3, tool_usage={"web_search": {"num_requests": 2}}
+    )
+
+    logging_obj = LiteLLMLoggingObj(
+        model=model, messages=[], stream=True, call_type="aresponses",
+        start_time=0, litellm_call_id="1", function_id="1",
+    )
+    now = datetime.datetime.now()
+    assembled = logging_obj._get_assembled_streaming_response(
+        result=ResponseCompletedEvent(type="response.completed", response=response),
+        start_time=now, end_time=now, is_async=True, streaming_chunks=[],
+    )
+    assert assembled is response, "the completed event must be unwrapped to the response itself"
+
+    cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model=model,
+        response_object=assembled,
+        usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
+        custom_llm_provider="bedrock_mantle",
+        standard_built_in_tools_params=None,
+    )
+    assert cost == pytest.approx(2 * per_query), (
+        f"5 items reporting 2 requests must bill 2 x ${per_query} after the stream is assembled, got ${cost}"
+    )
+
+
+@pytest.mark.parametrize(
+    "tool_usage",
+    [
+        {"web_search": {"num_requests": "not-a-number"}},
+        {"unexpected_shape": True},
+        "not-an-object",
+        None,
+    ],
+)
+def test_unreadable_reported_web_search_count_falls_back_to_items(tool_usage, local_model_cost_map):
+    """A tool_usage block we cannot read must neither raise nor bill zero: fall back to the items.
+    Reading it defensively here, rather than declaring it on the response model, is what keeps a
+    payload that reports an unmodelled tool from failing the whole response."""
+    response = _responses_with_reported_web_search(
+        "bedrock_mantle/openai.gpt-5.6-terra", search_items=2, fetch_items=1, tool_usage=tool_usage
+    )
     assert StandardBuiltInToolCostTracking._count_web_search_calls(response) == 3
 
 

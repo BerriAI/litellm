@@ -12,8 +12,8 @@ from litellm.constants import OPENAI_FILE_SEARCH_COST_PER_1K_CALLS
 from litellm.litellm_core_utils.llm_cost_calc.utils import _get_web_search_requests
 from litellm.types.llms.openai import (
     FileSearchTool,
-    ProviderToolUsage,
     ResponsesAPIResponse,
+    ResponsesToolUsage,
     WebSearchOptions,
 )
 from litellm.types.utils import (
@@ -152,7 +152,7 @@ class StandardBuiltInToolCostTracking:
         if tool_usage is None:
             return None
         try:
-            return ProviderToolUsage.model_validate(tool_usage).web_search.num_requests
+            return ResponsesToolUsage.model_validate(tool_usage).web_search.num_requests
         except ValidationError:
             return None
 
