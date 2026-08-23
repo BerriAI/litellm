@@ -3,6 +3,7 @@ Tests for backend domain models.
 """
 
 from datetime import datetime
+from typing import Final
 
 import pytest
 
@@ -91,9 +92,7 @@ class TestCredentials:
         assert item.credential_values is None
 
     def test_create_credential_item_requires_values_or_model_id(self):
-        with pytest.raises(
-            ValueError, match="Either credential_values or model_id must be set"
-        ):
+        with pytest.raises(ValueError, match="Either credential_values or model_id must be set"):
             CreateCredentialItem(credential_name="bad", credential_info={})
 
 
@@ -111,12 +110,8 @@ class TestModel:
         assert model.team_public_model_name == "my-gpt4"
 
     def test_is_blocked(self):
-        model_blocked = LiteLLM_ProxyModelTable(
-            model_id="m1", model_name="test", litellm_params={}, blocked=True
-        )
-        model_unblocked = LiteLLM_ProxyModelTable(
-            model_id="m2", model_name="test", litellm_params={}, blocked=False
-        )
+        model_blocked = LiteLLM_ProxyModelTable(model_id="m1", model_name="test", litellm_params={}, blocked=True)
+        model_unblocked = LiteLLM_ProxyModelTable(model_id="m2", model_name="test", litellm_params={}, blocked=False)
         assert model_blocked.is_blocked
         assert not model_unblocked.is_blocked
 
@@ -131,9 +126,7 @@ class TestModel:
         assert model.model_info == {"team_id": "t1"}
 
     def test_team_helpers_none_when_no_model_info(self):
-        model = LiteLLM_ProxyModelTable(
-            model_id="m1", model_name="gpt-4", litellm_params={}, model_info=None
-        )
+        model = LiteLLM_ProxyModelTable(model_id="m1", model_name="gpt-4", litellm_params={}, model_info=None)
         assert model.team_id is None
         assert model.team_public_model_name is None
 
@@ -235,9 +228,7 @@ class TestTeam:
         assert team.model_max_budget == {"gpt-4": 5.0}
 
     def test_cached_team(self):
-        cached = LiteLLM_TeamTableCachedObj(
-            team_id="t1", last_refreshed_at=1234567890.0
-        )
+        cached = LiteLLM_TeamTableCachedObj(team_id="t1", last_refreshed_at=1234567890.0)
         assert cached.last_refreshed_at == 1234567890.0
 
     def test_deleted_team(self):
@@ -288,9 +279,7 @@ class TestUser:
         assert "password" not in user.model_dump()
         assert "password" not in user.model_dump_json()
 
-        with_keys = LiteLLM_UserTableWithKeyCount(
-            user_id="u1", user_email="a@b.c", password=secret, key_count=2
-        )
+        with_keys = LiteLLM_UserTableWithKeyCount(user_id="u1", user_email="a@b.c", password=secret, key_count=2)
         assert with_keys.password == secret
         assert "password" not in with_keys.model_dump()
         assert "password" not in with_keys.model_dump_json()
@@ -414,9 +403,7 @@ class TestEndUserTable:
 class TestBudgetTableFull:
     def test_full_adds_server_managed_fields(self):
         now = datetime.now()
-        budget = LiteLLM_BudgetTableFull(
-            budget_id="b1", max_budget=10.0, created_at=now, budget_reset_at=now
-        )
+        budget = LiteLLM_BudgetTableFull(budget_id="b1", max_budget=10.0, created_at=now, budget_reset_at=now)
         assert budget.created_at == now
         assert budget.budget_reset_at == now
         assert budget.max_budget == 10.0
@@ -428,9 +415,7 @@ class TestBudgetTableFull:
 
 class TestTeamMemberTable:
     def test_tracks_user_within_team(self):
-        member = LiteLLM_TeamMemberTable(
-            user_id="u1", team_id="t1", spend=3.0, budget_id="b1", max_budget=5.0
-        )
+        member = LiteLLM_TeamMemberTable(user_id="u1", team_id="t1", spend=3.0, budget_id="b1", max_budget=5.0)
         assert member.user_id == "u1"
         assert member.team_id == "t1"
         assert member.spend == 3.0
@@ -520,9 +505,7 @@ class TestSpendLogs:
         assert log.updated_at == updated_at
 
     def test_error_logs_creation(self):
-        log = LiteLLM_ErrorLogs(
-            request_id="r1", startTime=None, endTime=None, status_code="500"
-        )
+        log = LiteLLM_ErrorLogs(request_id="r1", startTime=None, endTime=None, status_code="500")
         assert log.request_id == "r1"
         assert log.status_code == "500"
 
@@ -540,9 +523,7 @@ class TestManagedTables:
 
     def test_managed_object_table_requires_purpose(self):
         with pytest.raises(ValidationError):
-            LiteLLM_ManagedObjectTable(
-                unified_object_id="o1", model_object_id="m1", file_object={}
-            )
+            LiteLLM_ManagedObjectTable(unified_object_id="o1", model_object_id="m1", file_object={})
 
     def test_managed_vector_stores_table(self):
         table = LiteLLM_ManagedVectorStoresTable(
@@ -560,3 +541,40 @@ class TestManagedTables:
         )
         assert table.vector_store_id == "vs1"
         assert table.custom_llm_provider == "openai"
+
+
+class TestProxyModelTableResponseSerialization:
+    """FastAPI validates an endpoint's return value against its response model with
+    ``from_attributes``, so an endpoint that returns an already-built row reaches the
+    ``mode="before"`` validator as the object itself rather than as a mapping."""
+
+    def test_validates_from_an_existing_instance(self):
+        from pydantic import TypeAdapter
+
+        built: Final = LiteLLM_ProxyModelTable(
+            model_id="m-1",
+            model_name="claude-sonnet-5-provider",
+            litellm_params={"model": "anthropic/claude-sonnet-5"},
+            blocked=True,
+        )
+
+        serialized = TypeAdapter(LiteLLM_ProxyModelTable | None).validate_python(built, from_attributes=True)
+
+        assert serialized is not None
+        assert serialized.model_id == "m-1"
+        assert serialized.blocked is True
+        assert serialized.litellm_params == {"model": "anthropic/claude-sonnet-5"}
+
+    def test_still_parses_json_string_columns(self):
+        """The DB stores these columns as JSON strings, which is why the validator exists."""
+        parsed: Final = LiteLLM_ProxyModelTable.model_validate(
+            {
+                "model_id": "m-2",
+                "model_name": "n",
+                "litellm_params": '{"model": "anthropic/claude-haiku-4-5"}',
+                "model_info": '{"id": "m-2"}',
+            }
+        )
+
+        assert parsed.litellm_params == {"model": "anthropic/claude-haiku-4-5"}
+        assert parsed.model_info == {"id": "m-2"}

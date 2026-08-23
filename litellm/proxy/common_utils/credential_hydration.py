@@ -27,10 +27,12 @@ async def hydrate_named_credential(
     db_credential: Final = await CredentialsRepository(prisma_client).find_by_name(credential_name)
     if db_credential is None:
         return None
-    decrypted_values: Final = MappingProxyType({
-        key: decrypt_value_helper(value=value, key=key) or value
-        for key, value in db_credential.credential_values.items()
-    })
+    decrypted_values: Final = MappingProxyType(
+        {
+            key: decrypt_value_helper(value=value, key=key) or value
+            for key, value in db_credential.credential_values.items()
+        }
+    )
     return CredentialItem(
         credential_name=db_credential.credential_name,
         credential_values=decrypted_values,
