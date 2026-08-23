@@ -1,5 +1,5 @@
 import * as useAuthorizedModule from "@/app/(dashboard)/hooks/useAuthorized";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -11,10 +11,6 @@ const mockModelPatchUpdateCall = vi.fn().mockResolvedValue({});
 vi.mock("@/components/networking", () => ({
   modelDeleteCall: (...args: unknown[]) => mockModelDeleteCall(...args),
   modelPatchUpdateCall: (...args: unknown[]) => mockModelPatchUpdateCall(...args),
-}));
-
-vi.mock("@/components/molecules/notifications_manager", () => ({
-  default: { success: vi.fn(), fromBackend: vi.fn() },
 }));
 
 vi.mock("@/components/model_dashboard/ModelSettingsModal/ModelSettingsModal", () => ({
@@ -233,7 +229,7 @@ describe("AllModelsTab", () => {
     const user = userEvent.setup();
     render(<AllModelsTab {...defaultProps} />);
 
-    await user.type(screen.getByTestId("datatable-search"), "claude");
+    fireEvent.change(screen.getByTestId("datatable-search"), { target: { value: "claude" } });
 
     await waitFor(() => {
       expect(lastModelsInfoCall().search).toBe("claude");

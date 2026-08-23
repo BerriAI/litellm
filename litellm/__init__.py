@@ -221,7 +221,7 @@ overwrite_user_with_key_hash: bool = (
 bedrock_request_metadata_fields: Optional[Sequence[str]] = (
     None  # allow-list of `user_api_key_*` fields (+ `spend_logs_metadata`) sent as Bedrock `requestMetadata`
 )
-store_audit_logs = False  # Enterprise feature, allow users to see audit logs
+store_audit_logs: bool | None = None
 skip_system_message_in_guardrail: bool = False
 skip_tool_message_in_guardrail: bool = False
 ### end of callbacks #############
@@ -453,6 +453,7 @@ max_end_user_budget_id: Optional[str] = None
 # backwards compatibility — arbitrary client-supplied identifiers still
 # pass through unchanged.
 validate_end_user_id_in_db: bool = False
+block_requests_for_models_without_pricing: bool = False
 disable_end_user_cost_tracking: Optional[bool] = None
 disable_end_user_cost_tracking_prometheus_only: Optional[bool] = None
 enable_end_user_cost_tracking_prometheus_only: Optional[bool] = None
@@ -792,6 +793,8 @@ def _populate_provider_model_sets(model_cost_map: Dict) -> None:
             nlp_cloud_models.add(key)
         elif value.get("litellm_provider") == "aleph_alpha":
             aleph_alpha_models.add(key)
+        elif value.get("litellm_provider") == "bedrock" and value.get("mode") == "guardrail":
+            pass
         elif value.get("litellm_provider") == "bedrock" and not is_bedrock_pricing_only_model(key):
             bedrock_models.add(key)
         elif value.get("litellm_provider") == "bedrock_converse":

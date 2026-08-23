@@ -295,7 +295,7 @@ async def test_responses_streaming_failure_triggers_failure_handlers():
         call_type=CallTypes.responses.value,
     )
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="boom"):
         iterator._process_chunk('{"delta": "chunk"}')
 
     # allow failure callbacks to run

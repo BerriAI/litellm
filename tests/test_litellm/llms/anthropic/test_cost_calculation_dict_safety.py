@@ -5,12 +5,9 @@ being either a ``dict`` or a ``ServerToolUse`` pydantic instance.
 See https://github.com/BerriAI/litellm/issues/26153.
 """
 
-import os
-import sys
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../.."))
 
 from litellm.llms.anthropic.cost_calculation import (
     _get_web_search_requests,

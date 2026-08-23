@@ -6,9 +6,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 import time
 
@@ -64,7 +61,7 @@ def test_post_call_serializes_dict_with_datetime(logging_obj):
     assert "2026-05-11" in serialized
 
 
-def test_sentry_sample_rate():
+def test_sentry_sample_rate(monkeypatch):
     existing_sample_rate = os.getenv("SENTRY_API_SAMPLE_RATE")
     try:
         # test with default value by removing the environment variable
@@ -76,7 +73,7 @@ def test_sentry_sample_rate():
         assert os.environ.get("SENTRY_API_SAMPLE_RATE") == "1.0"
 
         # test with custom value
-        os.environ["SENTRY_API_SAMPLE_RATE"] = "0.5"
+        monkeypatch.setenv("SENTRY_API_SAMPLE_RATE", "0.5")
 
         set_callbacks(["sentry"])
         # Check if the custom sample rate is set correctly
@@ -86,13 +83,13 @@ def test_sentry_sample_rate():
     finally:
         # Restore the original environment variable
         if existing_sample_rate:
-            os.environ["SENTRY_API_SAMPLE_RATE"] = existing_sample_rate
+            monkeypatch.setenv("SENTRY_API_SAMPLE_RATE", existing_sample_rate)
         else:
             if "SENTRY_API_SAMPLE_RATE" in os.environ:
                 del os.environ["SENTRY_API_SAMPLE_RATE"]
 
 
-def test_sentry_environment():
+def test_sentry_environment(monkeypatch):
     """Test that SENTRY_ENVIRONMENT is properly handled during Sentry initialization"""
     existing_environment = os.getenv("SENTRY_ENVIRONMENT")
     existing_dsn = os.getenv("SENTRY_DSN")
@@ -115,7 +112,7 @@ def test_sentry_environment():
 
     try:
         # Set a mock DSN to allow Sentry initialization
-        os.environ["SENTRY_DSN"] = "https://test@sentry.io/123456"
+        monkeypatch.setenv("SENTRY_DSN", "https://test@sentry.io/123456")
 
         # Test with default value (no environment set)
         if existing_environment:
@@ -129,7 +126,7 @@ def test_sentry_environment():
         assert call_kwargs["environment"] == "production"
 
         # Test with custom environment value
-        os.environ["SENTRY_ENVIRONMENT"] = "development"
+        monkeypatch.setenv("SENTRY_ENVIRONMENT", "development")
 
         mock_init.reset_mock()
         set_callbacks(["sentry"])
@@ -139,7 +136,7 @@ def test_sentry_environment():
         assert call_kwargs["environment"] == "development"
 
         # Test with staging environment
-        os.environ["SENTRY_ENVIRONMENT"] = "staging"
+        monkeypatch.setenv("SENTRY_ENVIRONMENT", "staging")
 
         mock_init.reset_mock()
         set_callbacks(["sentry"])
@@ -154,13 +151,13 @@ def test_sentry_environment():
     finally:
         # Restore the original environment variables
         if existing_environment:
-            os.environ["SENTRY_ENVIRONMENT"] = existing_environment
+            monkeypatch.setenv("SENTRY_ENVIRONMENT", existing_environment)
         else:
             if "SENTRY_ENVIRONMENT" in os.environ:
                 del os.environ["SENTRY_ENVIRONMENT"]
 
         if existing_dsn:
-            os.environ["SENTRY_DSN"] = existing_dsn
+            monkeypatch.setenv("SENTRY_DSN", existing_dsn)
         else:
             if "SENTRY_DSN" in os.environ:
                 del os.environ["SENTRY_DSN"]
@@ -4826,3 +4823,458 @@ async def test_restore_correlation_context_works_across_asyncio_task_boundary():
     finally:
         trace_id_var.set("")
         session_id_var.set("")
+
+
+def _build_success_payload(logging_obj, kwargs):
+    import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import (
+        get_standard_logging_object_payload,
+    )
+
+    now = datetime.datetime.now()
+    return get_standard_logging_object_payload(
+        kwargs=kwargs,
+        init_response_obj={},
+        start_time=now,
+        end_time=now,
+        logging_obj=logging_obj,
+        status="success",
+    )
+
+
+def _guardrail_kwargs(response_cost):
+    return {
+        "litellm_call_id": "guardrail-cost-call",
+        "model": "gpt-4o",
+        "messages": [],
+        "response_cost": response_cost,
+        "litellm_params": {
+            "metadata": {
+                "standard_logging_guardrail_information": [
+                    {
+                        "guardrail_name": "bedrock-pre",
+                        "guardrail_status": "success",
+                        "guardrail_usage": {"topicPolicyUnits": 1, "contentPolicyUnits": 1},
+                        "guardrail_cost": 0.0003,
+                    },
+                    {"guardrail_name": "no-usage-guardrail", "guardrail_status": "success"},
+                ]
+            }
+        },
+    }
+
+
+def test_payload_response_cost_includes_guardrail_cost(logging_obj):
+    """LIT-5651: provider-billed guardrail cost must count in response_cost."""
+    payload = _build_success_payload(logging_obj, _guardrail_kwargs(response_cost=0.0000429))
+
+    assert payload is not None
+    assert payload["response_cost"] == pytest.approx(0.0003429)
+    assert payload["cost_breakdown"] is not None
+    assert payload["cost_breakdown"]["guardrail_cost"] == pytest.approx(0.0003)
+    assert payload["cost_breakdown"]["total_cost"] == pytest.approx(0.0003)
+    assert payload["hidden_params"]["response_cost"] == pytest.approx(0.0000429)
+
+
+def test_payload_guardrail_cost_merges_into_existing_cost_breakdown(logging_obj):
+    logging_obj.set_cost_breakdown(
+        input_cost=0.00003,
+        output_cost=0.0000129,
+        total_cost=0.0000429,
+        cost_for_built_in_tools_cost_usd_dollar=0.0,
+    )
+    payload = _build_success_payload(logging_obj, _guardrail_kwargs(response_cost=0.0000429))
+
+    assert payload is not None
+    assert payload["response_cost"] == pytest.approx(0.0003429)
+    assert payload["cost_breakdown"]["guardrail_cost"] == pytest.approx(0.0003)
+    assert payload["cost_breakdown"]["total_cost"] == pytest.approx(0.0003429)
+    assert payload["cost_breakdown"]["input_cost"] == pytest.approx(0.00003)
+    assert logging_obj.cost_breakdown["total_cost"] == pytest.approx(0.0000429)
+
+
+def test_payload_without_guardrail_cost_is_unchanged(logging_obj):
+    kwargs = {
+        "litellm_call_id": "no-guardrail-call",
+        "model": "gpt-4o",
+        "messages": [],
+        "response_cost": 0.0000429,
+        "litellm_params": {"metadata": {}},
+    }
+    payload = _build_success_payload(logging_obj, kwargs)
+
+    assert payload is not None
+    assert payload["response_cost"] == pytest.approx(0.0000429)
+    assert payload["cost_breakdown"] is None
+
+
+_AWS_SECRET = "wJalrXUtnFEMIK7MDENGbPxRfiCYEXAMPLEKEY"
+_GEMINI_KEY = "AIzaSyC0000000000000000000000000000000"
+
+
+def test_empty_api_base_does_not_dump_call_state(logging_obj):
+    """Direct (non-HTTP) providers pass api_base='', which used to echo model_call_details."""
+    logging_obj.model_call_details["litellm_params"] = {
+        "api_key": "sk-proj-hunter2hunter2hunter2hunter2",
+        "aws_secret_access_key": _AWS_SECRET,
+    }
+
+    curl_command = logging_obj._get_request_curl_command(
+        api_base="",
+        headers={},
+        additional_args={},
+        data={"model": "some-model"},
+    )
+
+    assert "litellm_call_id" not in curl_command
+    assert _AWS_SECRET not in curl_command
+    assert "hunter2" not in curl_command
+
+
+def test_pre_call_redacts_and_masks_raw_request(logging_obj):
+    """log_raw_request_response echoes the request body and api_base back to loggers/UI."""
+    metadata = {"user_api_key_alias": "qa-key"}
+    logging_obj.model_call_details["litellm_params"] = {"metadata": metadata}
+    logging_obj.log_raw_request_response = True
+
+    logging_obj.pre_call(
+        input="hi",
+        api_key="",
+        additional_args={
+            "api_base": f"https://generativelanguage.googleapis.com/v1beta/models/x:generateContent?key={_GEMINI_KEY}",
+            "headers": {},
+            "complete_input_dict": {"aws_secret_access_key": _AWS_SECRET},
+        },
+    )
+
+    raw_request = metadata["raw_request"]
+    assert _AWS_SECRET not in raw_request
+    assert "REDACTED" in raw_request
+
+    raw_api_base = logging_obj.model_call_details["raw_request_typed_dict"]["raw_request_api_base"]
+    assert _GEMINI_KEY not in raw_api_base
+    assert "key=*****" in raw_api_base
+
+
+def _resolve(custom_llm_provider, litellm_params, optional_params, model):
+    from litellm.litellm_core_utils.litellm_logging import (
+        _resolve_vertex_location_for_cost,
+    )
+
+    return _resolve_vertex_location_for_cost(
+        custom_llm_provider=custom_llm_provider,
+        litellm_params=litellm_params,
+        optional_params=optional_params,
+        model=model,
+    )
+
+
+def test_resolve_vertex_location_for_cost():
+    """Vertex requests resolve the serving location the way dispatch does; other providers get None."""
+    assert _resolve("openai", {"vertex_location": "us-east5"}, None, "gpt-4o") is None
+    assert _resolve(None, {}, None, "gemini-3.5-flash") is None
+    assert _resolve("vertex_ai", {"vertex_location": "us-east5"}, None, "gemini-3.5-flash") == "us-east5"
+    assert _resolve("vertex_ai", {"vertex_location": "global"}, None, "gemini-3.5-flash") == "global"
+    assert (
+        _resolve("vertex_ai_beta", {"vertex_ai_location": "europe-west1"}, None, "claude-haiku-4-5@20251001")
+        == "europe-west1"
+    )
+
+
+def test_resolve_vertex_location_for_cost_reads_optional_params(monkeypatch):
+    """
+    On the proxy the logging object predates deployment selection, so the deployment's
+    configured location only reaches it through optional_params. A configured global
+    location must beat the environment fallback, or every proxy call gets the regional uplift.
+    """
+    monkeypatch.setenv("VERTEXAI_LOCATION", "us-east5")
+    monkeypatch.setattr(litellm, "vertex_location", None)
+
+    assert _resolve("vertex_ai", {}, {"vertex_location": "global"}, "gemini-3.5-flash") == "global"
+    assert _resolve("vertex_ai", None, {"vertex_location": "europe-west1"}, "gemini-3.5-flash") == "europe-west1"
+    assert (
+        _resolve(
+            "vertex_ai",
+            {"vertex_location": "us-east5"},
+            {"vertex_location": "global"},
+            "gemini-3.5-flash",
+        )
+        == "global"
+    )
+    assert _resolve("vertex_ai", {"vertex_location": "global"}, {}, "gemini-3.5-flash") == "global"
+    assert _resolve("vertex_ai", {}, {}, "gemini-3.5-flash") == "us-east5"
+
+
+def test_resolve_vertex_location_for_cost_default_region(monkeypatch):
+    """With no location configured anywhere, resolution lands on the dispatch default us-central1."""
+    monkeypatch.delenv("VERTEXAI_LOCATION", raising=False)
+    monkeypatch.delenv("VERTEX_LOCATION", raising=False)
+    monkeypatch.setattr(litellm, "vertex_location", None)
+
+    assert _resolve("vertex_ai", {}, None, "gemini-3.5-flash") == "us-central1"
+    assert _resolve("vertex_ai", None, None, "gemini-3.5-flash") == "us-central1"
+
+
+def test_response_cost_calculator_prices_proxy_vertex_calls_on_the_configured_location(monkeypatch):
+    """
+    Proxy-shaped logging objects (created before the router picks a deployment) carry the
+    deployment's vertex_location only in optional_params. A global deployment must price at
+    base rates even when the environment points at a regional location, and a regional one
+    must price with the uplift.
+    """
+    from datetime import datetime
+
+    from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map
+
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", get_model_cost_map(url=""))
+    monkeypatch.setenv("VERTEXAI_LOCATION", "us-east5")
+    monkeypatch.setattr(litellm, "vertex_location", None)
+
+    def cost_at(location):
+        logging_obj = LitellmLogging(
+            model="gemini-3.5-flash",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=False,
+            call_type="completion",
+            start_time=datetime.now(),
+            litellm_call_id=f"vertex-loc-{location}",
+            function_id="f",
+        )
+        logging_obj.update_environment_variables(
+            model="gemini-3.5-flash",
+            user="",
+            optional_params={"vertex_location": location},
+            litellm_params={"api_base": ""},
+            custom_llm_provider="vertex_ai",
+        )
+        response = ModelResponse(
+            id="resp-1",
+            model="gemini-3.5-flash",
+            choices=[{"message": {"role": "assistant", "content": "hello"}, "index": 0, "finish_reason": "stop"}],
+            usage={"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+        )
+        return logging_obj._response_cost_calculator(result=response)
+
+    info = litellm.model_cost["vertex_ai/gemini-3.5-flash"]
+    expected_global = 10 * info["input_cost_per_token"] + 5 * info["output_cost_per_token"]
+
+    assert cost_at("global") == pytest.approx(expected_global)
+    assert cost_at("us-east5") == pytest.approx(info["regional_endpoint_uplift_multiplier"] * expected_global)
+
+
+def test_set_cost_breakdown_stores_vertex_location():
+    """vertex_location is recorded in the pricing basis, None for non-vertex requests."""
+    from datetime import datetime
+
+    logging_obj = LitellmLogging(
+        model="vertex_ai/claude-haiku-4-5@20251001",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="completion",
+        start_time=datetime.now(),
+        litellm_call_id="vertex-location-set",
+        function_id="f",
+    )
+    logging_obj.set_cost_breakdown(
+        input_cost=0.001,
+        output_cost=0.002,
+        total_cost=0.003,
+        cost_for_built_in_tools_cost_usd_dollar=0.0,
+        vertex_location="us-east5",
+    )
+    assert logging_obj.cost_breakdown["vertex_location"] == "us-east5"
+
+    no_location = LitellmLogging(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="completion",
+        start_time=datetime.now(),
+        litellm_call_id="vertex-location-absent",
+        function_id="f",
+    )
+    no_location.set_cost_breakdown(
+        input_cost=0.001,
+        output_cost=0.002,
+        total_cost=0.003,
+        cost_for_built_in_tools_cost_usd_dollar=0.0,
+    )
+    assert no_location.cost_breakdown.get("vertex_location") is None
+
+
+def test_prompt_hooks_skip_prompt_managers_when_no_prompt_id(logging_obj, tmp_path, monkeypatch):
+    """
+    Regression for UI-injected `vector_store_ids: []` and always-on non-empty `vector_store_ids`
+    with a registered prompt manager (e.g. dotprompt): requests without a prompt_id 500'd with
+    "prompt_id is required for Prompt Management Base class" instead of completing normally.
+    """
+    from litellm.integrations.arize.arize_phoenix_prompt_manager import ArizePhoenixPromptManager
+    from litellm.integrations.dotprompt.dotprompt_manager import DotpromptManager
+    from litellm.integrations.vector_store_integrations.base_vector_store import BaseVectorStore
+    from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook import (
+        VectorStorePreCallHook,
+    )
+    from litellm.types.vector_stores import LiteLLM_ManagedVectorStore
+    from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
+
+    (tmp_path / "stem.prompt").write_text("---\nmodel: gemini-2.5-flash\n---\nyou are a stem tutor\n")
+    dotprompt_manager = DotpromptManager(prompt_directory=str(tmp_path))
+    arize_manager = ArizePhoenixPromptManager(api_key="fake-key", api_base="http://127.0.0.1:9")
+    litellm.logging_callback_manager.add_litellm_callback(dotprompt_manager)
+    litellm.logging_callback_manager.add_litellm_callback(arize_manager)
+    monkeypatch.setattr(
+        litellm,
+        "vector_store_registry",
+        VectorStoreRegistry(
+            vector_stores=[LiteLLM_ManagedVectorStore(vector_store_id="vs_123", custom_llm_provider="openai")]
+        ),
+    )
+
+    messages = [{"role": "user", "content": "hi"}]
+    try:
+        assert not logging_obj.should_run_prompt_management_hooks(
+            prompt_id=None, non_default_params={"vector_store_ids": []}
+        )
+
+        assert logging_obj.get_chat_completion_prompt(
+            model="gemini-2.5-flash",
+            messages=messages,
+            non_default_params={"vector_store_ids": []},
+            prompt_variables=None,
+            prompt_id=None,
+        ) == ("gemini-2.5-flash", messages, {"vector_store_ids": []})
+
+        assert dotprompt_manager.get_chat_completion_prompt(
+            model="gemini-2.5-flash",
+            messages=messages,
+            non_default_params={},
+            prompt_id=None,
+            prompt_variables=None,
+            dynamic_callback_params={},
+        ) == ("gemini-2.5-flash", messages, {})
+
+        assert not arize_manager.should_run_prompt_management(
+            prompt_id=None, prompt_spec=None, dynamic_callback_params={}
+        )
+
+        assert logging_obj.should_run_prompt_management_hooks(
+            prompt_id=None, non_default_params={"vector_store_ids": ["vs_123"]}
+        )
+        selected_logger = logging_obj.get_custom_logger_for_prompt_management(
+            model="gemini-2.5-flash",
+            non_default_params={"vector_store_ids": ["vs_123"]},
+            prompt_id=None,
+            dynamic_callback_params={},
+        )
+        assert isinstance(selected_logger, VectorStorePreCallHook)
+
+        assert logging_obj._prompt_manager_runs_without_prompt_id(
+            logger=BaseVectorStore(), prompt_spec=None, dynamic_callback_params=None
+        )
+        assert not logging_obj._prompt_manager_runs_without_prompt_id(
+            logger=selected_logger, prompt_spec=None, dynamic_callback_params=None
+        )
+        assert not logging_obj._prompt_manager_runs_without_prompt_id(
+            logger=dotprompt_manager, prompt_spec=None, dynamic_callback_params=None
+        )
+        assert not logging_obj._prompt_manager_runs_without_prompt_id(
+            logger=arize_manager, prompt_spec=None, dynamic_callback_params=None
+        )
+
+        assert isinstance(
+            logging_obj.get_custom_logger_for_prompt_management(
+                model="gemini-2.5-flash",
+                non_default_params={},
+                prompt_id="stem",
+                dynamic_callback_params={},
+            ),
+            DotpromptManager,
+        )
+    finally:
+        for manager in (dotprompt_manager, arize_manager):
+            litellm.logging_callback_manager.remove_callback_from_list_by_object(litellm.callbacks, manager)
+            litellm.logging_callback_manager.remove_callback_from_list_by_object(
+                litellm._async_success_callback, manager
+            )
+        for hook in [cb for cb in litellm.callbacks if isinstance(cb, VectorStorePreCallHook)]:
+            litellm.logging_callback_manager.remove_callback_from_list_by_object(litellm.callbacks, hook)
+def test_newrelic_dispatch_prefers_otel_v2_when_flag_on(monkeypatch):
+    """With LITELLM_OTEL_V2 on, the "newrelic" callback builds the OTel v2
+    logger (per-team credential routing); with the flag off (default) it keeps
+    the legacy agent-based logger, so existing deployments are untouched."""
+    from litellm.integrations.otel.logger import OpenTelemetryV2
+    from litellm.integrations.otel.model.config import is_otel_v2_enabled
+    from litellm.litellm_core_utils import litellm_logging as logging_module
+
+    logging_module._in_memory_loggers.clear()
+    monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+    is_otel_v2_enabled.cache_clear()
+    try:
+        v2_logger = logging_module._init_custom_logger_compatible_class(
+            logging_integration="newrelic",
+            internal_usage_cache=None,
+            llm_router=None,
+            custom_logger_init_args={},
+        )
+        assert isinstance(v2_logger, OpenTelemetryV2)
+        assert v2_logger.callback_name == "newrelic"
+        # Same name resolves to the same instance, not a second logger.
+        again = logging_module._init_custom_logger_compatible_class(
+            logging_integration="newrelic",
+            internal_usage_cache=None,
+            llm_router=None,
+            custom_logger_init_args={},
+        )
+        assert again is v2_logger
+    finally:
+        logging_module._in_memory_loggers.clear()
+        monkeypatch.delenv("LITELLM_OTEL_V2", raising=False)
+        is_otel_v2_enabled.cache_clear()
+
+
+def test_newrelic_dispatch_keeps_legacy_agent_when_flag_off(monkeypatch):
+    from litellm.integrations.newrelic import NewRelicLogger
+    from litellm.integrations.otel.model.config import is_otel_v2_enabled
+    from litellm.litellm_core_utils import litellm_logging as logging_module
+
+    logging_module._in_memory_loggers.clear()
+    monkeypatch.delenv("LITELLM_OTEL_V2", raising=False)
+    is_otel_v2_enabled.cache_clear()
+    try:
+        legacy = logging_module._init_custom_logger_compatible_class(
+            logging_integration="newrelic",
+            internal_usage_cache=None,
+            llm_router=None,
+            custom_logger_init_args={},
+        )
+        assert isinstance(legacy, NewRelicLogger)
+    finally:
+        logging_module._in_memory_loggers.clear()
+        is_otel_v2_enabled.cache_clear()
+
+
+def test_get_custom_logger_compatible_class_finds_v2_newrelic(monkeypatch):
+    """Under LITELLM_OTEL_V2 the "newrelic" instance is an OpenTelemetryV2; the
+    cached-lookup must find it or hook resolution (post-call failure/success
+    hooks) silently skips the callback."""
+    from litellm.integrations.otel.model.config import is_otel_v2_enabled
+    from litellm.litellm_core_utils import litellm_logging as logging_module
+
+    logging_module._in_memory_loggers.clear()
+    monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+    is_otel_v2_enabled.cache_clear()
+    try:
+        created = logging_module._init_custom_logger_compatible_class(
+            logging_integration="newrelic",
+            internal_usage_cache=None,
+            llm_router=None,
+            custom_logger_init_args={},
+        )
+        found = logging_module.get_custom_logger_compatible_class("newrelic")
+        assert found is created
+    finally:
+        logging_module._in_memory_loggers.clear()
+        monkeypatch.delenv("LITELLM_OTEL_V2", raising=False)
+        is_otel_v2_enabled.cache_clear()

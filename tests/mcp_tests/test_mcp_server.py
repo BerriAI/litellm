@@ -1,13 +1,9 @@
 # Create server parameters for stdio connection
 import os
-import sys
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from contextlib import asynccontextmanager
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
     MCPServerManager,

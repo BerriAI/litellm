@@ -7,8 +7,6 @@ We patch the endpoint module's `_require_prisma` helper so we never need the
 real proxy_server import chain (which pulls heavy optional deps).
 """
 
-import os
-import sys
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from unittest.mock import MagicMock, patch
@@ -16,7 +14,6 @@ from unittest.mock import MagicMock, patch
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-sys.path.insert(0, os.path.abspath("../../.."))
 
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.memory.memory_endpoints import _visibility_filter, router

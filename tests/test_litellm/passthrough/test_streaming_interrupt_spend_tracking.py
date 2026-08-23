@@ -181,13 +181,16 @@ async def test_asyncpassthroughstreamingresponse_flushes_on_upstream_exception_w
     provider_config = MagicMock()
 
     received = []
-    with pytest.raises(httpx.ReadError):
+    async def _drain():
         async for chunk in AsyncPassthroughStreamingResponse(
             response=response_coro(),
             litellm_logging_obj=mock_logging_obj,
             provider_config=provider_config,
         ):
             received.append(chunk)
+
+    with pytest.raises(httpx.ReadError):
+        await _drain()
 
     assert received == partial_chunks
 
