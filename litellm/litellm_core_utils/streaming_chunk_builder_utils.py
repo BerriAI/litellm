@@ -798,9 +798,7 @@ class ChunkProcessor:
                 usage_chunk_dict = self._usage_chunk_calculation_helper(usage_chunk)
                 if "prompt_tokens" in usage_chunk:
                     prompt_tokens_provided = True
-                if "prompt_tokens" in usage_chunk and (
-                    usage_chunk_dict["prompt_tokens"] > 0 or prompt_tokens == 0
-                ):
+                if "prompt_tokens" in usage_chunk and (usage_chunk_dict["prompt_tokens"] > 0 or prompt_tokens == 0):
                     prompt_tokens = usage_chunk_dict["prompt_tokens"]
                 if "completion_tokens" in usage_chunk:
                     completion_tokens_provided = True
@@ -965,9 +963,7 @@ class ChunkProcessor:
 
         try:
             returned_usage.prompt_tokens = (
-                prompt_tokens
-                if prompt_tokens_provided
-                else token_counter(model=model, messages=messages)
+                prompt_tokens if prompt_tokens_provided else token_counter(model=model, messages=messages)
             )
         except Exception:  # don't allow this failing to block a complete streaming response from being returned
             print_verbose("token_counter failed, assuming prompt tokens is 0")
