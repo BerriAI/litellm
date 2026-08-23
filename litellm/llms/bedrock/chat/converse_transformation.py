@@ -293,7 +293,9 @@ class AmazonConverseConfig(BaseConfig):
         - amazon.nova-2-pro-preview-20251202-v1:0
         - us.amazon.nova-2-lite-v1:0
         - eu.amazon.nova-2-lite-v1:0
-        - apac.amazon.nova-2-lite-v1:0
+        - jp.amazon.nova-2-lite-v1:0
+        - global.amazon.nova-2-lite-v1:0
+        - (legacy apac. prefix still stripped)
         - (and other regional variants)
 
         Args:
@@ -323,7 +325,7 @@ class AmazonConverseConfig(BaseConfig):
                 break
 
         # Remove regional prefix if present (us., eu., apac.)
-        for prefix in ["us.", "eu.", "apac."]:
+        for prefix in ["us.", "eu.", "apac.", "jp.", "global."]:
             if model_without_region.startswith(prefix):
                 model_without_region = model_without_region[len(prefix) :]
                 break
