@@ -1,91 +1,131 @@
 """Resolve which reasoning_effort values a deployment, and by intersection a model group, accepts.
 
-The model-map flags carry different polarity per level, mirroring the provider gates
-(gpt_5_transformation.py restricts xhigh to explicit opt-in and treats minimal/low as opt-out):
-medium and high are unconditional for any reasoning model, minimal/low are supported unless the map
-explicitly says false, and xhigh/max require an explicit true. Shipping the resolved list keeps that
-polarity in one place instead of re-encoding it in every consumer.
+The model map's supports_*_reasoning_effort flags are the only signal, and each level's polarity
+mirrors how a request path reads that same flag. medium and high are unconditional for a reasoning
+model. minimal and low are opt-out: openai/chat/gpt_5_transformation.py refuses them only when the
+map says false. xhigh and max are opt-in. none is opt-out everywhere except the azure gpt-5 family,
+whose config raises UnsupportedParamsError without an explicit true.
 
-Only openai and azure gate xhigh and max on the request path. anthropic/chat/transformation.py
-gates them on the output_config path alone, so its reasoning_effort path maps every level to a
-thinking budget whatever the map says, and a claude group whose entry omits
-supports_xhigh_reasoning_effort stops offering a level litellm would have forwarded. That is the
-deliberate trade: an explicit flag is the only signal that the tier is a real one rather than
-litellm quietly rounding the level to a budget, and what gets dropped is advisory metadata rather
-than a restriction on the request path.
+xhigh is gated on the request path by the openai and azure gpt-5 configs. max is not gated there at
+all: every entry carrying supports_max_reasoning_effort is Claude-family, and
+anthropic/chat/transformation.py gates max on the output_config path while its reasoning_effort
+path maps any level to a thinking budget. Making max opt-in is a deliberate trade, then, since an
+explicit flag is the only signal that the tier is a real one rather than litellm rounding the level
+to a budget, and a missing flag costs advisory metadata rather than a rejected request.
 
-The none level is the one flag whose polarity is provider-dependent. OpenAI never refuses it on the
-request path (azure/chat/gpt_5_transformation.py is the only caller that does, and it raises
-UnsupportedParamsError unless supports_none_reasoning_effort is explicitly true), so none is opt-out
-everywhere except azure, where it is opt-in. Resolving it the other way for azure would advertise a
-level litellm itself rejects, which is the failure this module exists to prevent.
+A deployment the map describes with no effort flags at all resolves to None rather than to the
+opt-out defaults. 689 of the map's 854 reasoning entries carry no flag, and the o-series, xai and
+bedrock nova entries among them take neither none nor minimal, so composing a set out of the
+defaults alone would advertise levels those providers reject.
+
+The advertisement order is the REASONING_EFFORT declaration order, which is presentation only. It
+is not a strength scale and does not reconcile with bedrock's output_config ceiling order in
+llms/bedrock/common_utils.py, which ranks max below xhigh while the thinking-budget constants rank
+it above.
 """
 
 from collections.abc import Mapping, Sequence
-from typing import Final
+from typing import Final, get_args
 
-REASONING_EFFORT_CAPABILITY_ORDER: Final = ("none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra")
+import litellm
+from litellm.types.llms.openai import REASONING_EFFORT
 
-_OPT_OUT_FLAGS: Final = (
+REASONING_EFFORT_ADVERTISEMENT_ORDER: Final = get_args(REASONING_EFFORT)
+
+_EFFORT_FLAGS: Final = (
+    ("none", "supports_none_reasoning_effort"),
     ("minimal", "supports_minimal_reasoning_effort"),
     ("low", "supports_low_reasoning_effort"),
-)
-_OPT_IN_FLAGS: Final = (
     ("xhigh", "supports_xhigh_reasoning_effort"),
     ("max", "supports_max_reasoning_effort"),
-    ("ultra", "supports_ultra_reasoning_effort"),
 )
+_OPT_OUT_EFFORTS: Final = ("minimal", "low")
+_OPT_IN_EFFORTS: Final = ("xhigh", "max")
 _UNCONDITIONAL_EFFORTS: Final = frozenset(("medium", "high"))
-_NONE_FLAG: Final = "supports_none_reasoning_effort"
-_NONE_OPT_IN_PROVIDERS: Final = frozenset(("azure",))
 
 
-def _supports_none_reasoning_effort(model_info: Mapping[str, object]) -> bool:
-    """Opt-in on azure, whose gpt-5 config raises on reasoning_effort='none' without an explicit
-    true; opt-out elsewhere, where no request path refuses the level. A missing azure flag defers to
-    _supports_factory, the same resolver the azure gate calls, so its bare-model-name fallback
-    (azure/gpt-5.2 inheriting the flag from gpt-5.2) reaches both sides alike."""
-    flag: Final = model_info.get(_NONE_FLAG)
-    if model_info.get("litellm_provider") not in _NONE_OPT_IN_PROVIDERS:
+def _bare_model_entry(model_info: Mapping[str, object]) -> Mapping[str, object]:
+    """The unprefixed twin of a provider-prefixed map entry, which is where the flags often live:
+    azure/gpt-5-mini carries none of them while gpt-5-mini carries all three. The request-path
+    gates resolve through the same twin (_supports_factory, #20885), so reading it here is what
+    keeps the advertisement and the gate on the same answer."""
+    key: Final = model_info.get("key")
+    provider: Final = model_info.get("litellm_provider")
+    if not isinstance(key, str) or not isinstance(provider, str) or not key.startswith(f"{provider}/"):
+        return {}
+    entry: Final[Mapping[str, object] | None] = litellm.model_cost.get(key.removeprefix(f"{provider}/"))
+    return entry if entry is not None else {}
+
+
+def _declared_effort_flags(model_info: Mapping[str, object]) -> Mapping[str, object]:
+    bare: Final = _bare_model_entry(model_info)
+    return {
+        effort: model_info.get(flag) if model_info.get(flag) is not None else bare.get(flag)
+        for effort, flag in _EFFORT_FLAGS
+    }
+
+
+def _supports_none_reasoning_effort(model_info: Mapping[str, object], flag: object) -> bool:
+    """Opt-in only where a request path refuses the level. AzureOpenAIGPT5Config raises
+    UnsupportedParamsError on reasoning_effort='none' without an explicit true, and it is selected
+    only for the gpt-5 family, so every other azure deployment keeps the opt-out default."""
+    if model_info.get("litellm_provider") != "azure":
         return flag is not False
-    if flag is not None:
-        return flag is True
-    model_key: Final = model_info.get("key")
-    if not isinstance(model_key, str):
+
+    from litellm.llms.azure.chat.gpt_5_transformation import AzureOpenAIGPT5Config
+
+    key: Final = model_info.get("key")
+    if not isinstance(key, str) or not AzureOpenAIGPT5Config.is_model_gpt_5_model(key):
+        return flag is not False
+    return flag is True
+
+
+def deployment_is_catalog_mapped(
+    resolved_model_info: Mapping[str, object] | None,
+    operator_model_info: Mapping[str, object],
+) -> bool:
+    """Whether the model map described this deployment, as opposed to the operator describing it.
+
+    Every deployment is registered in the cost map under its own id, so a mode the operator wrote
+    on an off-map deployment reads back here exactly like one the catalog supplied. Excluding it is
+    what stops such a deployment from claiming to be a known non-reasoning model and emptying the
+    levels its mapped siblings agree on.
+    """
+    if resolved_model_info is None or resolved_model_info.get("mode") is None:
         return False
-    from litellm.utils import (
-        _supports_factory,  # pyright: ignore[reportPrivateUsage]  # the resolver the azure gate itself calls; a public wrapper would fork the fallback
-    )
-
-    return _supports_factory(model=model_key, custom_llm_provider=None, key=_NONE_FLAG)
+    return operator_model_info.get("mode") is None
 
 
-def resolve_supported_reasoning_efforts(model_info: Mapping[str, object]) -> tuple[str, ...] | None:
-    """None = nothing is known about this deployment, so it must not narrow its group; () = this is a
-    known model that accepts no effort level, which correctly empties the group. Keeping the two
-    apart matters because the router registers a deployment absent from the model map under a
-    synthesized entry, and get_model_info then answers with supports_reasoning None exactly as it
-    does for a mapped non-reasoning model. Mode is what separates them: every map entry for a
-    routable model declares one, so an unset flag with no mode is read as unknown and one custom
-    model in a group no longer wipes the levels its mapped siblings agree on.
+def resolve_supported_reasoning_efforts(
+    model_info: Mapping[str, object],
+    *,
+    deployment_is_mapped: bool,
+) -> tuple[str, ...] | None:
+    """None = nothing is known about this deployment, so it must not narrow its group; () = a known
+    model that accepts no effort level, which correctly empties the group.
 
-    The separation is only as good as that signal. An off-map deployment carrying any model_info of
-    its own is registered under its deployment id with mode defaulting to chat, so it reads as a
-    known non-reasoning model and does still empty its group, with supports_reasoning on that
-    deployment as the way out. Telling the two apart for real needs provenance that the flattened
-    ModelInfo does not carry."""
-    if "supports_reasoning" not in model_info:
-        return None
+    Telling those apart needs provenance the flattened ModelInfo does not carry. A deployment the
+    map does not describe arrives with supports_reasoning None, exactly like a mapped non-reasoning
+    model: 2273 of the map's 3165 entries omit the key rather than setting it false, so reading an
+    unset flag as () would let one custom deployment empty every level its mapped siblings agree
+    on. deployment_is_mapped is that provenance, and an operator who wants either answer for an
+    off-map deployment gets it by setting supports_reasoning explicitly.
+    """
     supports_reasoning: Final = model_info.get("supports_reasoning")
-    if supports_reasoning is None and model_info.get("mode") is None:
-        return None
     if supports_reasoning is not True:
-        return ()
-    opt_out: Final = frozenset(effort for effort, flag in _OPT_OUT_FLAGS if model_info.get(flag) is not False)
-    opt_in: Final = frozenset(effort for effort, flag in _OPT_IN_FLAGS if model_info.get(flag) is True)
-    none_level: Final = frozenset(("none",)) if _supports_none_reasoning_effort(model_info) else frozenset()
+        return () if supports_reasoning is False or deployment_is_mapped else None
+
+    flags: Final = _declared_effort_flags(model_info)
+    if all(value is None for value in flags.values()):
+        return None
+
+    opt_out: Final = frozenset(effort for effort in _OPT_OUT_EFFORTS if flags[effort] is not False)
+    opt_in: Final = frozenset(effort for effort in _OPT_IN_EFFORTS if flags[effort] is True)
+    none_level: Final = (
+        frozenset(("none",)) if _supports_none_reasoning_effort(model_info, flags["none"]) else frozenset()
+    )
     allowed: Final = opt_out | _UNCONDITIONAL_EFFORTS | opt_in | none_level
-    return tuple(effort for effort in REASONING_EFFORT_CAPABILITY_ORDER if effort in allowed)
+    return tuple(effort for effort in REASONING_EFFORT_ADVERTISEMENT_ORDER if effort in allowed)
 
 
 def intersect_supported_reasoning_efforts(
@@ -99,4 +139,4 @@ def intersect_supported_reasoning_efforts(
     if current is None:
         return tuple(resolved)
     keep: Final = frozenset(current) & frozenset(resolved)
-    return tuple(effort for effort in REASONING_EFFORT_CAPABILITY_ORDER if effort in keep)
+    return tuple(effort for effort in REASONING_EFFORT_ADVERTISEMENT_ORDER if effort in keep)

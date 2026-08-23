@@ -168,6 +168,7 @@ from litellm.router_utils.pre_call_checks.prompt_caching_deployment_check import
     PromptCachingDeploymentCheck,
 )
 from litellm.router_utils.reasoning_effort_capability import (
+    deployment_is_catalog_mapped,
     intersect_supported_reasoning_efforts,
     resolve_supported_reasoning_efforts,
 )
@@ -9443,6 +9444,8 @@ class Router:
             except Exception:
                 model_info = None
 
+            deployment_is_mapped = deployment_is_catalog_mapped(model_info, model_info_dict)
+
             # get llm provider
             litellm_model, llm_provider = "", ""
             try:
@@ -9565,7 +9568,7 @@ class Router:
 
             model_group_info.supported_reasoning_efforts = intersect_supported_reasoning_efforts(
                 model_group_info.supported_reasoning_efforts,
-                resolve_supported_reasoning_efforts(model_info),
+                resolve_supported_reasoning_efforts(model_info, deployment_is_mapped=deployment_is_mapped),
             )
 
             if _deployment_tpm is not None:

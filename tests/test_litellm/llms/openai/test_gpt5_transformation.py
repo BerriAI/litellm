@@ -1334,7 +1334,7 @@ def test_gpt5_6_never_advertises_reasoning_effort_max(model: str):
     gpt-5.6 entry asserts supports_max_reasoning_effort and the advertised set stops at xhigh."""
     from litellm.router_utils.reasoning_effort_capability import resolve_supported_reasoning_efforts
 
-    resolved = resolve_supported_reasoning_efforts(litellm.get_model_info(model))
+    resolved = resolve_supported_reasoning_efforts(litellm.get_model_info(model), deployment_is_mapped=True)
     assert resolved is not None
     assert "max" not in resolved
     assert "xhigh" in resolved
@@ -1355,28 +1355,16 @@ def test_gpt5_6_keeps_reasoning_effort_max_on_the_responses_api(
     assert params["reasoning"] == {"effort": "max"}
 
 
-def test_gpt5_6_never_advertises_reasoning_effort_ultra():
-    """ultra is plumbed as an opt-in level but no map entry asserts it: OpenAI's model guidance
-    documents effort values only up to max, and /v1/responses answers ultra with a 400. A verified
-    supports_ultra_reasoning_effort flag lights it up with no code change."""
-    from litellm.router_utils.reasoning_effort_capability import resolve_supported_reasoning_efforts
-
-    resolved = resolve_supported_reasoning_efforts(litellm.get_model_info("gpt-5.6"))
-    assert resolved is not None
-    assert "ultra" not in resolved
-
-
-@pytest.mark.parametrize("effort", ["max", "ultra"])
-def test_gpt5_forwards_levels_the_chat_gate_does_not_own(config: OpenAIConfig, effort: str):
-    """Only xhigh is gated on this surface. max and ultra reach the provider (or the responses
-    bridge) and are answered there, which is what happened before per-group capabilities existed."""
+def test_gpt5_forwards_levels_the_chat_gate_does_not_own(config: OpenAIConfig):
+    """Only xhigh is gated on this surface. max reaches the provider (or the responses bridge) and
+    is answered there, which is what happened before per-group capabilities existed."""
     params = config.map_openai_params(
-        non_default_params={"reasoning_effort": effort},
+        non_default_params={"reasoning_effort": "max"},
         optional_params={},
         model="gpt-5.1",
         drop_params=False,
     )
-    assert params["reasoning_effort"] == effort
+    assert params["reasoning_effort"] == "max"
 
 
 def test_gpt5_rejects_xhigh_for_models_without_the_flag(config: OpenAIConfig):

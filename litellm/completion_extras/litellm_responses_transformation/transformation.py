@@ -5,7 +5,7 @@ Handler for transforming /chat/completions api requests to litellm.responses req
 import json
 import os
 from collections.abc import AsyncIterator, Callable, Iterable, Iterator, Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Final, Literal, TypedDict, Union, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, TypedDict, Union, cast, get_args
 
 from openai.types.responses.custom_tool_param import CustomToolParam
 from openai.types.responses.response_input_param import (
@@ -35,6 +35,7 @@ from litellm.responses.sse_output_recovery import (
 )
 from litellm.responses.utils import normalize_responses_api_stream_options
 from litellm.types.llms.openai import (
+    REASONING_EFFORT,
     ChatCompletionAnnotation,
     ChatCompletionReasoningItem,
     ChatCompletionToolCallChunk,
@@ -1113,10 +1114,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             litellm.reasoning_auto_summary or os.getenv("LITELLM_REASONING_AUTO_SUMMARY", "false").lower() == "true"
         )
 
-        # Level-agnostic: providers own effort validation, so an unknown level (max, ultra, future
-        # ones) passes through instead of being silently dropped here. "default" means no override,
-        # so it maps to nothing rather than reaching a provider as a literal effort value.
-        if reasoning_effort and reasoning_effort != "default":
+        if reasoning_effort in get_args(REASONING_EFFORT):
             return (
                 Reasoning(effort=reasoning_effort, summary="detailed")
                 if auto_summary_enabled

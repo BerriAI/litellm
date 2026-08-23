@@ -8,7 +8,8 @@ const PROVIDER_DEFAULT = "__provider_default__";
 
 const storedEffort = (params: TierModelParams | undefined): ReasoningEffort | undefined => {
   const stored = params?.reasoning_effort;
-  return typeof stored === "string" && stored ? stored : undefined;
+  if (stored === undefined || stored === null || stored === "") return undefined;
+  return typeof stored === "string" ? stored : String(stored);
 };
 
 interface TierModelEffortRowsProps {
@@ -19,6 +20,31 @@ interface TierModelEffortRowsProps {
   onEffortChange: (model: string, effort: ReasoningEffort | undefined) => void;
 }
 
+export interface TierEffortRow {
+  model: string;
+  effort: ReasoningEffort | undefined;
+  options: string[];
+}
+
+/**
+ * A stored effort outside the model's supported set (hand-authored, or capabilities changed since
+ * it was saved) is listed anyway, so the row renders with its value selected and can be cleared.
+ * Only a model with no supported level and nothing stored drops out.
+ */
+export const tierEffortRows = ({
+  models,
+  effortOptionsByModel,
+  paramsByModel,
+}: Pick<TierModelEffortRowsProps, "models" | "effortOptionsByModel" | "paramsByModel">): TierEffortRow[] =>
+  models
+    .map((model) => {
+      const effort = storedEffort(paramsByModel?.[model]);
+      const supported = effortOptionsByModel[model] ?? [];
+      const listed = effort !== undefined && !supported.includes(effort) ? [...supported, effort] : supported;
+      return { model, effort, options: Array.from(new Set(listed)) };
+    })
+    .filter(({ options }) => options.length > 0);
+
 const TierModelEffortRows: React.FC<TierModelEffortRowsProps> = ({
   tierLabel,
   models,
@@ -26,16 +52,7 @@ const TierModelEffortRows: React.FC<TierModelEffortRowsProps> = ({
   paramsByModel,
   onEffortChange,
 }) => {
-  const rows = models
-    .map((model) => {
-      const effort = storedEffort(paramsByModel?.[model]);
-      const supported = effortOptionsByModel[model] ?? [];
-      // A stored effort outside the supported set (hand-authored, or capabilities changed since it
-      // was saved) stays listed so it renders and can be cleared.
-      const options = effort !== undefined && !supported.includes(effort) ? [...supported, effort] : supported;
-      return { model, effort, options };
-    })
-    .filter(({ model, options }) => options.length > 0 || Object.keys(paramsByModel?.[model] ?? {}).length > 0);
+  const rows = tierEffortRows({ models, effortOptionsByModel, paramsByModel });
   if (rows.length === 0) return null;
   return (
     <div className="mt-2 space-y-1">
