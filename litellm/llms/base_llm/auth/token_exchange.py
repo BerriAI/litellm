@@ -214,7 +214,9 @@ class _HttpxSyncTokenPoster:
 
         with self._lock:
             if self._handler is None:
-                self._handler = HTTPHandler(timeout=httpx.Timeout(timeout=30.0, connect=5.0))
+                handler: Final = HTTPHandler(timeout=httpx.Timeout(timeout=30.0, connect=5.0))
+                handler.client.follow_redirects = False
+                self._handler = handler
             return self._handler
 
     def post(self, url: str, *, content: bytes, headers: Mapping[str, str], timeout: float) -> httpx.Response:

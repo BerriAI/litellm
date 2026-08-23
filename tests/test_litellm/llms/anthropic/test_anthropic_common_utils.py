@@ -2328,7 +2328,7 @@ class TestWifResolvedApiKeyThreading:
         for name, value in WIF_ENV.items():
             monkeypatch.setenv(name, value)
 
-        result = await AnthropicModelInfo.aget_auth_header()
+        result = await AnthropicModelInfo.aget_auth_header(allow_workload_identity=True)
 
         assert result is not None
         assert result["authorization"] not in (None, "Bearer None")
@@ -2355,7 +2355,7 @@ class TestGetAuthHeaderBetas:
         for name, value in WIF_ENV.items():
             monkeypatch.setenv(name, value)
 
-        result = AnthropicModelInfo.get_auth_header()
+        result = AnthropicModelInfo.get_auth_header(allow_workload_identity=True)
 
         assert result == {
             "authorization": f"Bearer {FAKE_MINTED_TOKEN}",
@@ -2552,7 +2552,7 @@ class TestWifTokenUrlParity:
             api_key=None,
             api_base=None,
         )
-        AnthropicModelInfo.get_auth_header(api_base=configured_base)
+        AnthropicModelInfo.get_auth_header(api_base=configured_base, allow_workload_identity=True)
 
         assert [url for (url, _, _) in poster.requests] == ["https://gw.example.com/v1/oauth/token"]
 
@@ -2569,7 +2569,7 @@ class TestWifAsyncSeam:
         for name, value in WIF_ENV.items():
             monkeypatch.setenv(name, value)
 
-        result = await AnthropicModelInfo.aget_auth_header()
+        result = await AnthropicModelInfo.aget_auth_header(allow_workload_identity=True)
 
         assert result == {
             "authorization": f"Bearer {FAKE_MINTED_TOKEN}",
@@ -2842,6 +2842,7 @@ class TestWifRespxEndToEnd:
                 )
             )
             result = AnthropicModelInfo.get_auth_header(
+                allow_workload_identity=True,
                 litellm_params={
                     "anthropic_federation_rule_id": "fdrl_e2e",
                     "anthropic_organization_id": "org-e2e",
@@ -2856,3 +2857,119 @@ class TestWifRespxEndToEnd:
         assert token_route.call_count == 1
         exchange_body = json.loads(token_route.calls[0].request.content)
         assert exchange_body["federation_rule_id"] == "fdrl_e2e"
+
+
+class TestWifProviderAllowlist:
+    """A federation token is an Anthropic-org credential, and the exchange POSTs the workload's OIDC
+    assertion to the deployment's own api_base host. Providers that subclass the Anthropic config for
+    their own endpoints must therefore never reach the WIF tier, even when it is configured purely
+    through ANTHROPIC_* environment variables."""
+
+    @staticmethod
+    def _env_only_wif(monkeypatch) -> None:  # noqa: D401
+        monkeypatch.setenv("ANTHROPIC_FEDERATION_RULE_ID", "fdrl_prod")
+        monkeypatch.setenv("ANTHROPIC_ORGANIZATION_ID", "org-prod-uuid")
+        monkeypatch.setenv("ANTHROPIC_IDENTITY_TOKEN", "oidc/env/WIF_TEST_JWT")
+        monkeypatch.setenv("WIF_TEST_JWT", "jwt-assertion-value")
+
+    def test_vertex_anthropic_never_mints_or_sends_the_assertion(self, monkeypatch, wif_engine):
+        from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation import (
+            VertexAIAnthropicConfig,
+        )
+
+        import litellm
+
+        poster, calls = wif_engine
+        self._env_only_wif(monkeypatch)
+
+        with pytest.raises(litellm.AuthenticationError):
+            VertexAIAnthropicConfig().validate_environment(
+                headers={},
+                model="claude-sonnet-4-5",
+                messages=[{"role": "user", "content": "hi"}],
+                optional_params={},
+                litellm_params={},
+                api_key=None,
+                api_base="https://us-east5-aiplatform.googleapis.com/v1/projects/p/locations/us-east5",
+            )
+
+        assert calls == []
+        assert poster.requests == []
+
+    def test_anthropic_itself_still_mints(self, monkeypatch, wif_engine):
+        from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+
+        poster, calls = wif_engine
+        self._env_only_wif(monkeypatch)
+
+        headers = AnthropicConfig().validate_environment(
+            headers={},
+            model="claude-sonnet-4-5",
+            messages=[{"role": "user", "content": "hi"}],
+            optional_params={},
+            litellm_params={},
+            api_key=None,
+            api_base=None,
+        )
+
+        assert headers["authorization"] == f"Bearer {FAKE_MINTED_TOKEN}"
+        assert len(poster.requests) == 1
+
+    def test_auth_header_facade_defaults_to_refusing_to_mint(self, monkeypatch, clean_anthropic_env):
+        """The facade is reachable from provider code that has nothing to do with Anthropic, so a
+        caller must state that it authenticates against Anthropic's own API."""
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        self._env_only_wif(monkeypatch)
+
+        assert AnthropicModelInfo.get_auth_header(None) is None
+        assert AnthropicModelInfo.get_auth_header(None, allow_workload_identity=False) is None
+
+    def test_eligibility_is_not_inherited_by_a_new_subclass(self):
+        """A provider added later by subclassing the Anthropic config must not inherit the right to
+        mint an Anthropic-org credential against its own host."""
+        from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+        from litellm.llms.anthropic.common_utils import config_allows_workload_identity
+
+        class NewCompatibleProvider(AnthropicConfig):
+            pass
+
+        assert config_allows_workload_identity(AnthropicConfig()) is True
+        assert config_allows_workload_identity(NewCompatibleProvider()) is False
+
+    def test_model_discovery_gates_on_the_instance(self, monkeypatch, wif_engine):
+        """get_models is inherited, so it must consult the instance rather than trusting its caller."""
+        from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation import (
+            VertexAIAnthropicConfig,
+        )
+
+        poster, calls = wif_engine
+        self._env_only_wif(monkeypatch)
+
+        with pytest.raises(ValueError, match="ANTHROPIC_API_KEY"):
+            VertexAIAnthropicConfig().get_models(
+                api_base="https://us-east5-aiplatform.googleapis.com/v1/projects/p/locations/us-east5"
+            )
+
+        assert poster.requests == []
+
+
+class TestWifExchangeTransportHardening:
+    def test_token_exchange_client_does_not_follow_redirects(self):
+        """Only the initial token URL is validated, so a 3xx must not be allowed to replay the
+        assertion to an origin that was never checked."""
+        from litellm.llms.base_llm.auth.token_exchange import _HttpxSyncTokenPoster
+
+        handler = _HttpxSyncTokenPoster()._handler_instance()
+
+        assert handler.client.follow_redirects is False
+
+
+class TestWifParamsAreNotClientSettable:
+    def test_every_wif_param_is_banned_from_request_bodies(self):
+        """These fields choose which server-side secret is read and, with api_base, where it is sent,
+        so a caller-supplied value would be an exfiltration primitive."""
+        from litellm.proxy.auth.auth_utils import _BANNED_REQUEST_BODY_PARAMS
+        from litellm.types.utils import anthropic_wif_litellm_params
+
+        assert set(anthropic_wif_litellm_params) <= set(_BANNED_REQUEST_BODY_PARAMS)

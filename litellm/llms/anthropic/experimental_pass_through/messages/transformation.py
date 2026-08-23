@@ -1,5 +1,5 @@
 from collections.abc import AsyncIterator, Mapping, Sequence
-from typing import Any, Final
+from typing import Any, ClassVar, Final
 
 import httpx
 
@@ -42,6 +42,8 @@ DROP_UNSUPPORTED_ADAPTIVE_EFFORT_WARNING: Final = (
 
 
 class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
+    _workload_identity_eligible: ClassVar[bool] = True
+
     @property
     def custom_llm_provider(self) -> str | None:
         return "anthropic"
@@ -314,7 +316,8 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
                 AnthropicModelInfo.get_auth_header(
                     api_key,
                     api_base=api_base,
-                    litellm_params=self._wif_litellm_params(litellm_params),
+                    litellm_params=litellm_params,
+                    allow_workload_identity=self._allows_workload_identity,
                 ),
             )
         return self._finalize_messages_headers(headers, optional_params), api_base
@@ -350,7 +353,8 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
                 await AnthropicModelInfo.aget_auth_header(
                     oauth_api_key,
                     api_base=api_base,
-                    litellm_params=self._wif_litellm_params(litellm_params),
+                    litellm_params=litellm_params,
+                    allow_workload_identity=self._allows_workload_identity,
                 ),
             )
         return self._finalize_messages_headers(oauth_headers, optional_params), api_base
@@ -366,12 +370,13 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         if merged_beta:
             headers["anthropic-beta"] = merged_beta
 
-    def _wif_litellm_params(self, litellm_params: dict) -> Mapping[str, object] | None:  # mutable-ok: sync-contract mirror
-        """Subclasses reuse this validate step for their own /v1/messages-compatible providers,
-        so an Anthropic federation token is only ever minted for Anthropic itself."""
-        if self._resolved_provider != "anthropic":
-            return None
-        return litellm_params if isinstance(litellm_params, dict) else None
+    @property
+    def _allows_workload_identity(self) -> bool:
+        """Subclasses reuse this validate step for their own /v1/messages-compatible providers, so
+        eligibility is declared per class and never inherited."""
+        from litellm.llms.anthropic.common_utils import config_allows_workload_identity
+
+        return config_allows_workload_identity(self)
 
     def _finalize_messages_headers(self, headers: dict, optional_params: dict) -> dict:  # mutable-ok: out-param
         if "anthropic-version" not in headers:

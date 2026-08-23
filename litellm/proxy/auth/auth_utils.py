@@ -31,7 +31,7 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_ENDPOINT_MARKER,
 )
 from litellm.types.router import CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS
-from litellm.types.utils import CustomPricingLiteLLMParams
+from litellm.types.utils import CustomPricingLiteLLMParams, anthropic_wif_litellm_params
 
 
 def _get_request_ip_address(request: Request, use_x_forwarded_for: bool | None = False) -> str | None:
@@ -317,6 +317,11 @@ _BANNED_REQUEST_BODY_PARAMS: Final[tuple[str, ...]] = (
     # so a caller-supplied value picks a transport and a callback surface the
     # admin did not choose.
     "rust",
+    # Anthropic workload-identity federation. These select which server-side secret is read
+    # (``anthropic_identity_token`` resolves an ``oidc/...`` reference against the proxy's own
+    # environment and filesystem) and, together with ``api_base``, where that secret is sent, so a
+    # caller-supplied value is an exfiltration primitive for any env var or mounted token file.
+    *sorted(anthropic_wif_litellm_params),
     # SDK-only field; also rejected outright in is_request_body_safe.
     "model_list",
     "vertex_ai_credentials",

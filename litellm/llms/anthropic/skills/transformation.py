@@ -43,6 +43,7 @@ class AnthropicSkillsConfig(BaseSkillsAPIConfig):
             api_key=litellm_params.api_key if litellm_params is not None else None,
             api_base=litellm_params.api_base if litellm_params is not None else None,
             litellm_params=MappingProxyType(dict(litellm_params)) if litellm_params is not None else None,
+            allow_workload_identity=True,
         )
         if auth_header is None:
             raise ValueError("ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN is required for Skills API")

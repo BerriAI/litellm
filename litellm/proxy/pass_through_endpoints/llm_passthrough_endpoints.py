@@ -617,7 +617,9 @@ async def anthropic_proxy_route(
     is_streaming_request: Final = await is_streaming_request_fn(request)
 
     ## CREATE PASS-THROUGH
-    auth_header: Final = await AnthropicModelInfo.aget_auth_header(anthropic_api_key or None)
+    auth_header: Final = await AnthropicModelInfo.aget_auth_header(
+        anthropic_api_key or None, allow_workload_identity=True
+    )
     endpoint_func: Final = create_pass_through_route(
         endpoint=endpoint,
         target=str(updated_url),

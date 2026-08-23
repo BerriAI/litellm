@@ -24,16 +24,16 @@ _WIF_PARAMS: Final[dict] = {
 }
 
 
-def test_wif_litellm_params_passthrough_for_anthropic() -> None:
-    assert AnthropicMessagesConfig()._wif_litellm_params(_WIF_PARAMS) == _WIF_PARAMS
+def test_workload_identity_allowed_for_anthropic() -> None:
+    assert AnthropicMessagesConfig()._allows_workload_identity is True
 
 
-def test_wif_litellm_params_blocked_for_minimax() -> None:
-    assert MinimaxMessagesConfig()._wif_litellm_params(_WIF_PARAMS) is None
+def test_workload_identity_blocked_for_minimax() -> None:
+    assert MinimaxMessagesConfig()._allows_workload_identity is False
 
 
-def test_wif_litellm_params_blocked_for_tencent() -> None:
-    assert TencentAnthropicMessagesConfig()._wif_litellm_params(_WIF_PARAMS) is None
+def test_workload_identity_blocked_for_tencent() -> None:
+    assert TencentAnthropicMessagesConfig()._allows_workload_identity is False
 
 
 def test_minimax_validate_environment_never_attaches_anthropic_wif_credential(
@@ -74,20 +74,16 @@ def test_tencent_validate_environment_never_attaches_anthropic_wif_credential(
     token_file = write_token_file(tmp_path, "jwt-assertion-value")
     litellm_params = {"anthropic_identity_token_file": str(token_file)}
 
-    original_api_key: Final = litellm.api_key
-    litellm.api_key = None
-    try:
-        headers, _ = TencentAnthropicMessagesConfig().validate_anthropic_messages_environment(
-            headers={},
-            model="deepseek-v4-pro",
-            messages=[],
-            optional_params={},
-            litellm_params=litellm_params,
-            api_key=None,
-            api_base="https://tokenhub-intl.tencentcloudmaas.com",
-        )
-    finally:
-        litellm.api_key = original_api_key
+    monkeypatch.setattr(litellm, "api_key", None)
+    headers, _ = TencentAnthropicMessagesConfig().validate_anthropic_messages_environment(
+        headers={},
+        model="deepseek-v4-pro",
+        messages=[],
+        optional_params={},
+        litellm_params=litellm_params,
+        api_key=None,
+        api_base="https://tokenhub-intl.tencentcloudmaas.com",
+    )
 
     assert "authorization" not in headers
     assert "x-api-key" not in headers
@@ -110,7 +106,7 @@ def test_wif_token_exchange_reaches_only_anthropic_not_minimax_or_tencent(
     engine = make_engine(poster)
 
     minted: Final = get_anthropic_wif_token(
-        AnthropicMessagesConfig()._wif_litellm_params(litellm_params),
+        litellm_params,
         "https://api.anthropic.com",
         "claude-sonnet-4-5",
         engine,
@@ -119,14 +115,6 @@ def test_wif_token_exchange_reaches_only_anthropic_not_minimax_or_tencent(
     assert len(poster.requests) == 1
 
     for config in (MinimaxMessagesConfig(), TencentAnthropicMessagesConfig()):
-        assert (
-            get_anthropic_wif_token(
-                config._wif_litellm_params(litellm_params),
-                "https://api.minimax.io/anthropic",
-                "MiniMax-M2.1",
-                engine,
-            )
-            is None
-        )
+        assert config._allows_workload_identity is False
 
     assert len(poster.requests) == 1

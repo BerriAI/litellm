@@ -97,7 +97,9 @@ class AnthropicFilesConfig(BaseFilesConfig):
         params_mapping: Final = litellm_params if isinstance(litellm_params, dict) else None
         if api_base is None and params_mapping is not None:
             api_base = params_mapping.get("api_base")
-        auth_header: Final = AnthropicModelInfo.get_auth_header(api_key, api_base, litellm_params=params_mapping)
+        auth_header: Final = AnthropicModelInfo.get_auth_header(
+            api_key, api_base, litellm_params=params_mapping, allow_workload_identity=True
+        )
         if auth_header is None:
             raise ValueError(
                 "Anthropic API key is required. Set ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN environment variable or pass api_key parameter."

@@ -2,7 +2,7 @@ import json
 import re
 import time
 from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Final, NoReturn, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Final, NoReturn, cast
 
 import httpx
 from pydantic import ValidationError
@@ -230,6 +230,8 @@ DROP_UNSUPPORTED_SPEED_WARNING: Final = (
 
 
 class AnthropicConfig(AnthropicModelInfo, BaseConfig):
+    _workload_identity_eligible: ClassVar[bool] = True
+
     """
     Reference: https://docs.anthropic.com/claude/reference/messages_post
 

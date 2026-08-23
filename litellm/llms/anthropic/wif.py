@@ -30,6 +30,7 @@ _JWT_BEARER_GRANT_TYPE: Final = "urn:ietf:params:oauth:grant-type:jwt-bearer"
 _DEFAULT_API_BASE: Final = "https://api.anthropic.com"
 _INLINE_ENV_VAR: Final = "ANTHROPIC_IDENTITY_TOKEN"
 _ACCEPTED_REF_PREFIX: Final = "oidc/"
+_CHAT_BASE_SUFFIXES: Final = ("/v1/messages", "/v1")
 _REJECTED_REF_PREFIX: Final = "oidc/env_path/"
 _WORKSPACE_HINT: Final = (
     " If the federation rule is scoped to a workspace, set ANTHROPIC_WORKSPACE_ID"
@@ -151,8 +152,11 @@ def _resolve_default_api_base() -> str:
 
 def _strip_chat_suffix(base: str) -> str:
     trimmed: Final = base.rstrip("/")
-    stripped: Final = trimmed.removesuffix("/v1/messages")
-    return stripped if stripped == trimmed else _strip_chat_suffix(stripped)
+    stripped: Final = next(
+        (trimmed.removesuffix(suffix) for suffix in _CHAT_BASE_SUFFIXES if trimmed.endswith(suffix)),
+        trimmed,
+    )
+    return trimmed if stripped == trimmed else _strip_chat_suffix(stripped)
 
 
 def _config_value(litellm_params: Mapping[str, object] | None, param_key: str, env_name: str) -> str | None:

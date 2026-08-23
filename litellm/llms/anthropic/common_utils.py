@@ -7,7 +7,7 @@ import re
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from types import MappingProxyType
-from typing import Any, Final, Literal
+from typing import Any, ClassVar, Final, Literal
 
 import httpx
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
@@ -58,6 +58,14 @@ def _strip_bedrock_id_suffixes(model: str) -> str:
 
 
 _SERVER_OWNED_AUTH_HEADERS: Final = frozenset({"x-api-key", "authorization"})
+_WIF_ELIGIBILITY_ATTR: Final = "_workload_identity_eligible"
+
+
+def config_allows_workload_identity(config: object) -> bool:
+    """A federation token is an Anthropic-org credential and its exchange POSTs the workload's OIDC
+    assertion to the deployment's own host, so eligibility is declared per class and read from that
+    class's own ``__dict__``: a subclass written for another provider inherits nothing."""
+    return type(config).__dict__.get(_WIF_ELIGIBILITY_ATTR, False) is True
 
 
 def is_anthropic_oauth_key(value: str | None) -> bool:
@@ -121,6 +129,8 @@ class AnthropicError(BaseLLMException):
 
 
 class AnthropicModelInfo(BaseLLMModelInfo):
+    _workload_identity_eligible: ClassVar[bool] = True
+
     def is_cache_control_set(self, messages: list[AllMessageValues]) -> bool:
         """
         Return if {"cache_control": ..} in message content block
@@ -723,7 +733,9 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         if api_key is None:
             auth_token = AnthropicModelInfo.get_auth_token()
         wif_token: Final = (
-            get_anthropic_wif_token(params_mapping, api_base, model) if api_key is None and auth_token is None else None
+            get_anthropic_wif_token(params_mapping, api_base, model)
+            if api_key is None and auth_token is None and config_allows_workload_identity(self)
+            else None
         )
         wif_minted: Final = wif_token is not None
         resolved_api_key: Final = wif_token if wif_token is not None else api_key
@@ -821,6 +833,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         api_base: str | None = None,
         use_bearer_for_custom_base: bool = False,
         litellm_params: Mapping[str, object] | None = None,
+        allow_workload_identity: bool = False,
     ) -> Mapping[str, str] | None:
         """Resolve Anthropic credentials and return the appropriate auth header dict.
 
@@ -834,6 +847,8 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         static_header: Final = AnthropicModelInfo._static_auth_header(api_key, api_base, use_bearer_for_custom_base)
         if static_header is not None:
             return static_header
+        if not allow_workload_identity:
+            return None
         wif_token: Final = get_anthropic_wif_token(litellm_params, api_base, "")
         if wif_token is not None:
             return AnthropicModelInfo._oauth_bearer_header(wif_token)
@@ -845,12 +860,15 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         api_base: str | None = None,
         use_bearer_for_custom_base: bool = False,
         litellm_params: Mapping[str, object] | None = None,
+        allow_workload_identity: bool = False,
     ) -> Mapping[str, str] | None:
         """Async counterpart of get_auth_header: the WIF tier can block on a token
         exchange POST, so async callers await it off the event loop."""
         static_header: Final = AnthropicModelInfo._static_auth_header(api_key, api_base, use_bearer_for_custom_base)
         if static_header is not None:
             return static_header
+        if not allow_workload_identity:
+            return None
         wif_token: Final = await aget_anthropic_wif_token(litellm_params, api_base, "")
         if wif_token is not None:
             return AnthropicModelInfo._oauth_bearer_header(wif_token)
@@ -882,7 +900,9 @@ class AnthropicModelInfo(BaseLLMModelInfo):
 
     def get_models(self, api_key: str | None = None, api_base: str | None = None) -> list[str]:
         api_base = AnthropicModelInfo.get_api_base(api_base)
-        auth_header: Final = AnthropicModelInfo.get_auth_header(api_key, api_base)
+        auth_header: Final = AnthropicModelInfo.get_auth_header(
+            api_key, api_base, allow_workload_identity=config_allows_workload_identity(self)
+        )
         if api_base is None or auth_header is None:
             raise ValueError(
                 "ANTHROPIC_API_BASE/ANTHROPIC_BASE_URL or ANTHROPIC_API_KEY/ANTHROPIC_AUTH_TOKEN (or workload "

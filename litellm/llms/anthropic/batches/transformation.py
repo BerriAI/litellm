@@ -48,7 +48,9 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
         params_mapping: Final = litellm_params if isinstance(litellm_params, dict) else None
         if api_base is None and params_mapping is not None:
             api_base = params_mapping.get("api_base")
-        auth_header: Final = self.anthropic_model_info.get_auth_header(api_key, api_base, litellm_params=params_mapping)
+        auth_header: Final = self.anthropic_model_info.get_auth_header(
+            api_key, api_base, litellm_params=params_mapping, allow_workload_identity=True
+        )
         if auth_header is None:
             raise ValueError(
                 "Missing Anthropic API Key - A call is being made to anthropic but no key is set either in the environment variables or via params"
