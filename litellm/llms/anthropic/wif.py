@@ -275,13 +275,17 @@ def _strip_chat_suffix(base: str) -> str:
 
 def _strip_path_suffixes(path: str) -> str:
     """Drop the chat-surface suffixes a deployment base may carry, so every tier derives the same
-    token URL. Recursion depth is bounded by the path's own segment count."""
-    trimmed: Final = path.rstrip("/")
-    shortened: Final = next(
-        (trimmed.removesuffix(suffix) for suffix in _CHAT_BASE_SUFFIXES if trimmed.endswith(suffix)),
-        trimmed,
-    )
-    return trimmed if shortened == trimmed else _strip_path_suffixes(shortened)
+    token URL. Each pass removes at most one suffix, so the loop is bounded by the segment count."""
+    trimmed = path.rstrip("/")  # rebind-ok: fixed-point strip, one suffix per pass
+    while True:
+        shortened: Final = next(
+            (trimmed.removesuffix(suffix) for suffix in _CHAT_BASE_SUFFIXES if trimmed.endswith(suffix)),
+            trimmed,
+        )
+        if shortened == trimmed:
+            return trimmed
+        # Re-strip: a doubled suffix leaves a trailing slash that would stop the next match.
+        trimmed = shortened.rstrip("/")
 
 
 def _config_value(litellm_params: Mapping[str, object] | None, param_key: str, env_name: str) -> str | None:

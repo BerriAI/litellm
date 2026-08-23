@@ -186,13 +186,15 @@ def _fetch_anthropic_models_page(
 def _fetch_anthropic_model_ids(
     api_base: str, headers: Mapping[str, str], after_id: str | None, pages_left: int
 ) -> tuple[str, ...]:
-    if pages_left <= 0:
-        raise Exception(f"Anthropic /v1/models did not terminate within {_MODEL_LIST_PAGE_CAP} pages.")
-    page: Final = _fetch_anthropic_models_page(api_base, headers, after_id)
-    page_ids: Final = tuple(entry.id for entry in page.data)
-    if not page.has_more or page.last_id is None:
-        return page_ids
-    return page_ids + _fetch_anthropic_model_ids(api_base, headers, page.last_id, pages_left - 1)
+    collected: tuple[str, ...] = ()  # rebind-ok: accumulates one page of ids per iteration
+    cursor: str | None = after_id  # rebind-ok: advances to each page's last_id
+    for _ in range(max(pages_left, 0)):
+        page: Final = _fetch_anthropic_models_page(api_base, headers, cursor)
+        collected += tuple(entry.id for entry in page.data)
+        if not page.has_more or page.last_id is None:
+            return collected
+        cursor = page.last_id
+    raise Exception(f"Anthropic /v1/models did not terminate within {_MODEL_LIST_PAGE_CAP} pages.")
 
 
 class AnthropicModelInfo(BaseLLMModelInfo):

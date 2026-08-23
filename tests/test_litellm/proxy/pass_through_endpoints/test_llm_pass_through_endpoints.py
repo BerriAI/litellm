@@ -3967,6 +3967,11 @@ class TestAnthropicProxyRouteCallerAuthHeaders:
         ):
             monkeypatch.delenv(name, raising=False)
 
+        # A sibling test leaving SERVER_ROOT_PATH set re-prefixes the passthrough route, so
+        # /anthropic/... stops resolving and the request 404s before any header is built.
+        # Pin it so this class asserts on headers rather than on ambient state.
+        monkeypatch.delenv("SERVER_ROOT_PATH", raising=False)
+
     def _enable_wif(self, monkeypatch) -> None:
         from litellm.llms.anthropic import common_utils as anthropic_common_utils
         from litellm.llms.anthropic.wif import aget_anthropic_wif_token
