@@ -21,10 +21,14 @@ def _as_admin():
     return UserAPIKeyAuth(api_key="test-key", user_role="proxy_admin")
 
 
-def _patch_credential(name: str, body: dict):
+def _as_non_admin():
+    return UserAPIKeyAuth(api_key="test-key", user_role="internal_user")
+
+
+def _patch_credential(name: str, body: dict, auth=_as_admin):
     missing = object()
     previous_override = app.dependency_overrides.get(user_api_key_auth, missing)
-    app.dependency_overrides[user_api_key_auth] = _as_admin
+    app.dependency_overrides[user_api_key_auth] = auth
     try:
         return client.patch(
             f"/credentials/{name}",
@@ -38,10 +42,10 @@ def _patch_credential(name: str, body: dict):
             app.dependency_overrides[user_api_key_auth] = previous_override
 
 
-def _post_credential(body: dict):
+def _post_credential(body: dict, auth=_as_admin):
     missing = object()
     previous_override = app.dependency_overrides.get(user_api_key_auth, missing)
-    app.dependency_overrides[user_api_key_auth] = _as_admin
+    app.dependency_overrides[user_api_key_auth] = auth
     try:
         return client.post("/credentials", json=body, headers={"Authorization": "Bearer test-key"})
     finally:
@@ -57,9 +61,15 @@ def test_create_credential_write_omits_the_patch_only_deletion_field():
     exclude_none) on the create path put a `credential_values_to_delete: null` key into the
     Prisma write, which litellm_credentialstable has no column for."""
     with (
-        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
-        patch("litellm.proxy.proxy_server.master_key", "sk-test-master"),
-        patch("litellm.proxy.credential_endpoints.endpoints.CredentialsRepository") as repository,
+        patch(  # test-quality-ok: the proxy wiring under test is what this patches
+            "litellm.proxy.proxy_server.prisma_client", MagicMock()
+        ),
+        patch(  # test-quality-ok: the proxy wiring under test is what this patches
+            "litellm.proxy.proxy_server.master_key", "sk-test-master"
+        ),
+        patch(  # test-quality-ok: the proxy wiring under test is what this patches
+            "litellm.proxy.credential_endpoints.endpoints.CredentialsRepository"
+        ) as repository,  # test-quality-ok: the proxy wiring under test is what this patches
     ):
         create_mock = AsyncMock(return_value=None)
         repository.return_value.create = create_mock
@@ -83,8 +93,12 @@ def test_update_credential_answers_404_when_the_credential_does_not_exist():
     rejected read as a success to every caller that checks the status. The dashboard's API
     client branches on the status, so it reported a failed edit as applied."""
     with (
-        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
-        patch("litellm.proxy.credential_endpoints.endpoints.CredentialsRepository") as repository,
+        patch(  # test-quality-ok: the proxy wiring under test is what this patches
+            "litellm.proxy.proxy_server.prisma_client", MagicMock()
+        ),
+        patch(  # test-quality-ok: the proxy wiring under test is what this patches
+            "litellm.proxy.credential_endpoints.endpoints.CredentialsRepository"
+        ) as repository,  # test-quality-ok: the proxy wiring under test is what this patches
     ):
         repository.return_value.find_by_name = AsyncMock(return_value=None)
 
@@ -121,9 +135,15 @@ def test_update_credential_still_answers_200_on_a_successful_write():
         credential_info={"custom_llm_provider": "openai"},
     )
     with (
-        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
-        patch("litellm.proxy.proxy_server.master_key", "sk-test-master"),
-        patch("litellm.proxy.credential_endpoints.endpoints.CredentialsRepository") as repository,
+        patch(  # test-quality-ok: the proxy wiring under test is what this patches
+            "litellm.proxy.proxy_server.prisma_client", MagicMock()
+        ),
+        patch(  # test-quality-ok: the proxy wiring under test is what this patches
+            "litellm.proxy.proxy_server.master_key", "sk-test-master"
+        ),
+        patch(  # test-quality-ok: the proxy wiring under test is what this patches
+            "litellm.proxy.credential_endpoints.endpoints.CredentialsRepository"
+        ) as repository,  # test-quality-ok: the proxy wiring under test is what this patches
     ):
         repository.return_value.find_by_name = AsyncMock(return_value=stored)
         repository.return_value.update_by_name = AsyncMock(return_value=None)
@@ -181,8 +201,12 @@ def test_update_credential_deletion_removes_the_key_from_the_db_write(restore_cr
         credential_info={"custom_llm_provider": "anthropic"},
     )
     with (
-        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
-        patch("litellm.proxy.credential_endpoints.endpoints.CredentialsRepository") as repository,
+        patch(  # test-quality-ok: the proxy wiring under test is what this patches
+            "litellm.proxy.proxy_server.prisma_client", MagicMock()
+        ),
+        patch(  # test-quality-ok: the proxy wiring under test is what this patches
+            "litellm.proxy.credential_endpoints.endpoints.CredentialsRepository"
+        ) as repository,  # test-quality-ok: the proxy wiring under test is what this patches
     ):
         repository.return_value.find_by_name = AsyncMock(return_value=stored)
         update_mock = AsyncMock(return_value=None)
@@ -227,8 +251,12 @@ def test_update_credential_deletion_updates_in_memory_credential_list(restore_cr
         credential_info={"custom_llm_provider": "anthropic"},
     )
     with (
-        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
-        patch("litellm.proxy.credential_endpoints.endpoints.CredentialsRepository") as repository,
+        patch(  # test-quality-ok: the proxy wiring under test is what this patches
+            "litellm.proxy.proxy_server.prisma_client", MagicMock()
+        ),
+        patch(  # test-quality-ok: the proxy wiring under test is what this patches
+            "litellm.proxy.credential_endpoints.endpoints.CredentialsRepository"
+        ) as repository,  # test-quality-ok: the proxy wiring under test is what this patches
     ):
         repository.return_value.find_by_name = AsyncMock(return_value=stored)
         repository.return_value.update_by_name = AsyncMock(return_value=None)
@@ -259,9 +287,15 @@ def test_update_credential_leaves_untouched_fields_alone():
         credential_info={"custom_llm_provider": "anthropic"},
     )
     with (
-        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
-        patch("litellm.proxy.proxy_server.master_key", "sk-test-master"),
-        patch("litellm.proxy.credential_endpoints.endpoints.CredentialsRepository") as repository,
+        patch(  # test-quality-ok: the proxy wiring under test is what this patches
+            "litellm.proxy.proxy_server.prisma_client", MagicMock()
+        ),
+        patch(  # test-quality-ok: the proxy wiring under test is what this patches
+            "litellm.proxy.proxy_server.master_key", "sk-test-master"
+        ),
+        patch(  # test-quality-ok: the proxy wiring under test is what this patches
+            "litellm.proxy.credential_endpoints.endpoints.CredentialsRepository"
+        ) as repository,  # test-quality-ok: the proxy wiring under test is what this patches
     ):
         repository.return_value.find_by_name = AsyncMock(return_value=stored)
         update_mock = AsyncMock(return_value=None)
@@ -353,7 +387,9 @@ class TestCredentialJwksExport:
         assert response.status_code == 404, response.text
 
     def test_jwks_export_404s_for_an_unknown_credential(self, restore_credential_list):
-        with patch("litellm.proxy.proxy_server.prisma_client", None):
+        with patch(  # test-quality-ok: the proxy wiring under test is what this patches
+            "litellm.proxy.proxy_server.prisma_client", None
+        ):  # test-quality-ok: the proxy wiring under test is what this patches
             response = _get_jwks("does-not-exist")
 
         assert response.status_code == 404, response.text
@@ -387,3 +423,157 @@ class TestCredentialJwksExport:
             app.dependency_overrides.pop(user_api_key_auth, None)
 
         assert response.status_code == 403, response.text
+
+
+class TestNonAdminCannotPersistWifFieldsOnCredential:
+    """A credential's ``credential_values`` feeds the same WIF resolution as a deployment's own
+    ``litellm_params`` when referenced by ``litellm_credential_name``. A non-admin must not be
+    able to create or update a credential carrying a server-owned WIF field such as
+    ``anthropic_keycloak_token_url`` (destination) or ``anthropic_keycloak_client_secret_ref``
+    (which secret to read and send there)."""
+
+    def test_non_admin_cannot_create_a_credential_with_a_wif_destination(self):
+        with patch(  # test-quality-ok: the proxy wiring under test is what this patches
+            "litellm.proxy.proxy_server.prisma_client", MagicMock()
+        ):  # test-quality-ok: the proxy wiring under test is what this patches
+            response = _post_credential(
+                {
+                    "credential_name": "attacker-cred",
+                    "credential_values": {"anthropic_keycloak_token_url": "https://evil.example.com/token"},
+                    "credential_info": {"custom_llm_provider": "anthropic"},
+                },
+                auth=_as_non_admin,
+            )
+
+        assert response.status_code == 403, response.text
+        assert "anthropic_keycloak_token_url" in response.json()["error"]["message"]
+
+    def test_non_admin_cannot_create_a_credential_with_a_wif_secret_ref(self):
+        with patch(  # test-quality-ok: the proxy wiring under test is what this patches
+            "litellm.proxy.proxy_server.prisma_client", MagicMock()
+        ):  # test-quality-ok: the proxy wiring under test is what this patches
+            response = _post_credential(
+                {
+                    "credential_name": "attacker-cred",
+                    "credential_values": {"anthropic_keycloak_client_secret_ref": "os.environ/LITELLM_MASTER_KEY"},
+                    "credential_info": {"custom_llm_provider": "anthropic"},
+                },
+                auth=_as_non_admin,
+            )
+
+        assert response.status_code == 403, response.text
+
+    def test_non_admin_can_create_a_credential_without_wif_fields(self):
+        with (
+            patch(  # test-quality-ok: the proxy wiring under test is what this patches
+                "litellm.proxy.proxy_server.prisma_client", MagicMock()
+            ),
+            patch(  # test-quality-ok: the proxy wiring under test is what this patches
+                "litellm.proxy.proxy_server.master_key", "sk-test-master"
+            ),
+            patch(  # test-quality-ok: the proxy wiring under test is what this patches
+                "litellm.proxy.credential_endpoints.endpoints.CredentialsRepository"
+            ) as repository,  # test-quality-ok: the proxy wiring under test is what this patches
+        ):
+            repository.return_value.create = AsyncMock(return_value=None)
+
+            response = _post_credential(
+                {
+                    "credential_name": "ordinary-cred",
+                    "credential_values": {"api_key": "sk-new"},
+                    "credential_info": {"custom_llm_provider": "openai"},
+                },
+                auth=_as_non_admin,
+            )
+
+        assert response.status_code == 200, response.text
+
+    def test_proxy_admin_can_create_a_credential_with_a_wif_destination(self):
+        with (
+            patch(  # test-quality-ok: the proxy wiring under test is what this patches
+                "litellm.proxy.proxy_server.prisma_client", MagicMock()
+            ),
+            patch(  # test-quality-ok: the proxy wiring under test is what this patches
+                "litellm.proxy.proxy_server.master_key", "sk-test-master"
+            ),
+            patch(  # test-quality-ok: the proxy wiring under test is what this patches
+                "litellm.proxy.credential_endpoints.endpoints.CredentialsRepository"
+            ) as repository,  # test-quality-ok: the proxy wiring under test is what this patches
+        ):
+            repository.return_value.create = AsyncMock(return_value=None)
+
+            response = _post_credential(
+                {
+                    "credential_name": "admin-cred",
+                    "credential_values": {"anthropic_keycloak_token_url": "https://keycloak.internal/token"},
+                    "credential_info": {"custom_llm_provider": "anthropic"},
+                },
+                auth=_as_admin,
+            )
+
+        assert response.status_code == 200, response.text
+
+    def test_non_admin_cannot_update_a_credential_to_add_a_wif_destination(self):
+        stored = CredentialItem(
+            credential_name="existing",
+            credential_values={"api_key": "sk-old"},
+            credential_info={"custom_llm_provider": "anthropic"},
+        )
+        with (
+            patch(  # test-quality-ok: the proxy wiring under test is what this patches
+                "litellm.proxy.proxy_server.prisma_client", MagicMock()
+            ),
+            patch(  # test-quality-ok: the proxy wiring under test is what this patches
+                "litellm.proxy.credential_endpoints.endpoints.CredentialsRepository"
+            ) as repository,  # test-quality-ok: the proxy wiring under test is what this patches
+        ):
+            repository.return_value.find_by_name = AsyncMock(return_value=stored)
+            update_mock = AsyncMock(return_value=None)
+            repository.return_value.update_by_name = update_mock
+
+            response = _patch_credential(
+                "existing",
+                {
+                    "credential_name": "existing",
+                    "credential_values": {"anthropic_keycloak_token_url": "https://evil.example.com/token"},
+                    "credential_info": {},
+                },
+                auth=_as_non_admin,
+            )
+
+        assert response.status_code == 403, response.text
+        update_mock.assert_not_awaited()
+
+    def test_proxy_admin_can_update_a_credential_to_add_a_wif_destination(self):
+        stored = CredentialItem(
+            credential_name="existing",
+            credential_values={"api_key": "sk-old"},
+            credential_info={"custom_llm_provider": "anthropic"},
+        )
+        with (
+            patch(  # test-quality-ok: the proxy wiring under test is what this patches
+                "litellm.proxy.proxy_server.prisma_client", MagicMock()
+            ),
+            patch(  # test-quality-ok: the proxy wiring under test is what this patches
+                "litellm.proxy.proxy_server.master_key", "sk-test-master"
+            ),
+            patch(  # test-quality-ok: the proxy wiring under test is what this patches
+                "litellm.proxy.credential_endpoints.endpoints.CredentialsRepository"
+            ) as repository,  # test-quality-ok: the proxy wiring under test is what this patches
+        ):
+            repository.return_value.find_by_name = AsyncMock(return_value=stored)
+            update_mock = AsyncMock(return_value=None)
+            repository.return_value.update_by_name = update_mock
+
+            response = _patch_credential(
+                "existing",
+                {
+                    "credential_name": "existing",
+                    "credential_values": {"anthropic_keycloak_token_url": "https://keycloak.internal/token"},
+                    "credential_info": {},
+                },
+                auth=_as_admin,
+            )
+
+        assert response.status_code == 200, response.text
+        update_mock.assert_awaited_once()

@@ -24,6 +24,10 @@ from .utils import (
     ModelResponse,
     StandardLoggingRoutingDecision,
 )
+from .utils import (
+    # private alias: `from .types.router import *` would rebind a public Final in litellm/__init__.py
+    anthropic_wif_litellm_params as _anthropic_wif_litellm_params,
+)
 
 
 class ConfigurableClientsideParamsCustomAuth(TypedDict):
@@ -293,6 +297,17 @@ class CredentialLiteLLMParams(BaseModel):
     anthropic_keycloak_auth_method: str | None = None
     anthropic_keycloak_client_secret_ref: str | None = None
     anthropic_keycloak_scope: str | None = None
+
+
+def anthropic_wif_fields_present(fields: Mapping[str, object]) -> tuple[str, ...]:
+    """Server-owned Anthropic workload identity federation field names set in ``fields``.
+
+    ``fields`` is a ``litellm_params`` dict (or a credential's ``credential_values`` mapping,
+    which feeds the same resolution when referenced by name). Derived from
+    ``anthropic_wif_litellm_params`` rather than hand-copied, so a persistence gate built on
+    this stays correct when a new WIF field is added there.
+    """
+    return tuple(name for name in _anthropic_wif_litellm_params if fields.get(name) is not None)
 
 
 _RESERVED_INIT_KEYS: Final = frozenset({"self", "params", "__class__"})

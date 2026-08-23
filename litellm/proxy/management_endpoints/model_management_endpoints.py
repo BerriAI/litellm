@@ -100,6 +100,7 @@ from litellm.types.router import (
     Deployment,
     GenericLiteLLMParams,
     ModelInfo,
+    anthropic_wif_fields_present,
     updateDeployment,
 )
 from litellm.types.utils import LlmProviders
@@ -251,6 +252,47 @@ def _raise_on_strategy_router_write_violation(
         code=status.HTTP_400_BAD_REQUEST,
         param="litellm_params.model",
     )
+
+
+def _reject_non_admin_wif_persistence(
+    litellm_params: GenericLiteLLMParams | None,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> None:
+    """Anthropic workload identity federation fields choose which server-side secret is read
+    and where it is sent. Only proxy admins may persist them on a deployment, mirroring the
+    ``blocked``-flag gate below: a team admin who otherwise manages a team-scoped deployment
+    must not be able to set these.
+    """
+    if litellm_params is None or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
+        return
+    wif_fields: Final = anthropic_wif_fields_present(litellm_params.model_dump(exclude_none=True))
+    if not wif_fields:
+        return
+    raise ProxyException(
+        message=(
+            f"Only proxy admins can set {wif_fields[0]!r}, a server-owned workload identity federation parameter."
+        ),
+        type=ProxyErrorTypes.auth_error.value,
+        code=status.HTTP_403_FORBIDDEN,
+        param=wif_fields[0],
+    )
+
+
+def _reject_non_admin_blocked_flag_on_create(
+    blocked: bool | None,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> None:
+    """Same proxy-admin-only rule patch_model applies to the blocked flag: a team admin passed
+    the team-scoped auth check above, but must not be able to create a model already paused
+    (or explicitly unpaused) out from under the proxy admin.
+    """
+    if blocked is not None and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        raise ProxyException(
+            message="Only proxy admins can set a model's blocked flag.",
+            type=ProxyErrorTypes.auth_error.value,
+            code=status.HTTP_403_FORBIDDEN,
+            param="blocked",
+        )
 
 
 _PTU_PRICED_PAIR: Final = frozenset({"ptu_count", "cost_per_ptu_per_hour"})
@@ -658,6 +700,8 @@ async def patch_model(
                 code=status.HTTP_403_FORBIDDEN,
                 param="blocked",
             )
+
+        _reject_non_admin_wif_persistence(patch_data.litellm_params, user_api_key_dict)
 
         _raise_on_strategy_router_write_violation(
             incoming_params=patch_data.litellm_params,
@@ -1845,16 +1889,9 @@ async def add_new_model(
             premium_user=premium_user,
         )
 
-        # Same proxy-admin-only rule patch_model applies to the blocked flag: a team admin
-        # passed the check above for a team-scoped model, but must not be able to create it
-        # already paused (or explicitly unpaused) out from under the proxy admin.
-        if model_params.blocked is not None and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
-            raise ProxyException(
-                message="Only proxy admins can set a model's blocked flag.",
-                type=ProxyErrorTypes.auth_error.value,
-                code=status.HTTP_403_FORBIDDEN,
-                param="blocked",
-            )
+        _reject_non_admin_blocked_flag_on_create(model_params.blocked, user_api_key_dict)
+
+        _reject_non_admin_wif_persistence(model_params.litellm_params, user_api_key_dict)
 
         _raise_on_strategy_router_write_violation(
             incoming_params=model_params.litellm_params,
@@ -2034,6 +2071,8 @@ async def update_model(
 
             if model_params.litellm_params is None:
                 raise Exception("litellm_params not provided")
+
+            _reject_non_admin_wif_persistence(model_params.litellm_params, user_api_key_dict)
 
             _new_litellm_params_dict: Final = model_params.litellm_params.dict(exclude_none=True)
 

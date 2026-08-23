@@ -5,7 +5,7 @@ These are the canonical credential types for the proxy. They live in the model
 layer; ``litellm.types.utils`` re-exports them for backwards compatibility.
 """
 
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, Field, model_validator
 
 
 class CredentialBase(BaseModel):
@@ -15,8 +15,10 @@ class CredentialBase(BaseModel):
 
 class CredentialItem(CredentialBase):
     credential_values: dict
-    # PATCH-only: keys to drop from the stored credential_values.
-    credential_values_to_delete: tuple[str, ...] | None = None
+    # PATCH-only instruction naming keys to drop from the stored credential_values. It describes an
+    # edit rather than the credential, so it stays out of dumps: those feed config loading, the DB
+    # write, and the in-memory list, none of which have a place for it.
+    credential_values_to_delete: tuple[str, ...] | None = Field(default=None, exclude=True)
 
 
 class CreateCredentialItem(CredentialBase):

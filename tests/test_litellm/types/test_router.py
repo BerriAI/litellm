@@ -6,6 +6,7 @@ from litellm.types.router import (
     Deployment,
     LiteLLM_Params,
     ModelInfo,
+    anthropic_wif_fields_present,
 )
 from litellm.types.utils import (
     CustomPricingLiteLLMParams,
@@ -92,7 +93,7 @@ def test_pricing_strings_are_coerced_to_float():
 
 
 def test_invalid_pricing_is_rejected():
-    with pytest.raises(ValueError, match='validation error for ModelInfo'):
+    with pytest.raises(ValueError, match="validation error for ModelInfo"):
         ModelInfo(id="x", input_cost_per_token="free")
 
 
@@ -112,3 +113,19 @@ def test_anthropic_wif_fields_round_trip_through_model_dump():
 
     for field, value in values.items():
         assert dumped[field] == value, field
+
+
+def test_anthropic_wif_fields_present_reports_only_set_fields():
+    assert anthropic_wif_fields_present({}) == ()
+    assert anthropic_wif_fields_present({"model": "gpt-4o"}) == ()
+    assert anthropic_wif_fields_present(
+        {"anthropic_keycloak_token_url": "https://idp.example/token", "model": "gpt-4o"}
+    ) == ("anthropic_keycloak_token_url",)
+
+
+def test_anthropic_wif_fields_present_is_derived_from_the_shared_list():
+    """A non-admin persistence gate built on this must automatically cover a field added
+    later to anthropic_wif_litellm_params, not just the fields known when the gate was
+    written -- so this must read the shared list rather than a hand-copied one."""
+    values = {field: "set" for field in anthropic_wif_litellm_params}
+    assert set(anthropic_wif_fields_present(values)) == set(anthropic_wif_litellm_params)

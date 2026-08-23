@@ -2,6 +2,7 @@
 CRUD endpoints for storing reusable credentials.
 """
 
+from collections.abc import Mapping
 from typing import Final
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Request, Response
@@ -26,9 +27,74 @@ from litellm.proxy.common_utils.credential_hydration import hydrate_named_creden
 from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
 from litellm.proxy.utils import handle_exception_on_proxy, jsonify_object
 from litellm.repositories.credentials_repository import CredentialsRepository
+from litellm.types.router import anthropic_wif_fields_present
 from litellm.types.utils import CreateCredentialItem, CredentialItem
 
 router: Final = APIRouter()
+
+
+def _reject_non_admin_wif_credential(
+    credential_values: Mapping[str, object] | None,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> None:
+    """A credential referenced by ``litellm_credential_name`` feeds its values into the same
+    workload identity federation resolution as a deployment's own ``litellm_params``. Only
+    proxy admins may create or update a credential that carries a server-owned WIF field.
+    """
+    if credential_values is None or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
+        return
+    wif_fields: Final = anthropic_wif_fields_present(credential_values)
+    if not wif_fields:
+        return
+    raise HTTPException(
+        status_code=403,
+        detail={  # mutable-ok: starlette json.dumps()s HTTPException.detail raw, needs a real dict
+            "error": (
+                f"Only proxy admins can set {wif_fields[0]!r}, a server-owned workload identity federation parameter."
+            )
+        },
+    )
+
+
+def _reject_overlapping_credential_values(credential: CredentialItem) -> None:
+    overlap: Final = frozenset(credential.credential_values) & frozenset(credential.credential_values_to_delete or ())
+    if overlap:
+        raise HTTPException(
+            status_code=400,
+            detail=f"credential_values_to_delete overlaps credential_values for key(s): {sorted(overlap)}",
+        )
+
+
+def _sync_in_memory_credential(credential: CredentialItem, credential_name: str, new_name: str) -> None:
+    """Mirror a DB credential update into the in-memory ``credential_list`` used by request-time
+    resolution; a no-op if the credential isn't loaded in memory (e.g. proxy restarted since boot).
+    """
+    existing_in_memory: CredentialItem | None = None
+    for cred in litellm.credential_list:
+        if cred.credential_name == credential_name:
+            existing_in_memory = cred
+            break
+
+    if existing_in_memory is None:
+        return
+
+    in_memory_values: Final = dict(existing_in_memory.credential_values or {})
+    if credential.credential_values:
+        in_memory_values.update(credential.credential_values)
+    for key in credential.credential_values_to_delete or ():
+        in_memory_values.pop(key, None)
+    in_memory_info: Final = dict(existing_in_memory.credential_info or {})
+    if credential.credential_info:
+        in_memory_info.update(credential.credential_info)
+    updated_in_memory: Final = CredentialItem(
+        credential_name=new_name,
+        credential_values=in_memory_values,
+        credential_info=in_memory_info,
+    )
+    # Remove old entry if renamed, then use upsert_credentials to handle duplicates
+    if new_name != credential_name:
+        litellm.credential_list = [c for c in litellm.credential_list if c.credential_name != credential_name]
+    CredentialAccessor.upsert_credentials([updated_in_memory])
 
 
 class CredentialHelperUtils:
@@ -92,6 +158,7 @@ async def create_credential(
                 status_code=400,
                 detail="Credential values are required. Unable to infer credential values from model ID.",
             )
+        _reject_non_admin_wif_credential(credential.credential_values, user_api_key_dict)
         processed_credential: Final = CredentialItem(
             credential_name=credential.credential_name,
             credential_values=credential.credential_values,
@@ -378,14 +445,8 @@ async def update_credential(
     from litellm.proxy.proxy_server import prisma_client
 
     try:
-        overlap: Final = frozenset(credential.credential_values) & frozenset(
-            credential.credential_values_to_delete or ()
-        )
-        if overlap:
-            raise HTTPException(
-                status_code=400,
-                detail=f"credential_values_to_delete overlaps credential_values for key(s): {sorted(overlap)}",
-            )
+        _reject_overlapping_credential_values(credential)
+        _reject_non_admin_wif_credential(credential.credential_values, user_api_key_dict)
         if prisma_client is None:
             raise HTTPException(
                 status_code=500,
@@ -406,31 +467,7 @@ async def update_credential(
         )
 
         # Sync in-memory credential_list (skip if not in memory - e.g., proxy restarted)
-        new_name: Final = merged_credential.credential_name
-        existing_in_memory: CredentialItem | None = None
-        for cred in litellm.credential_list:
-            if cred.credential_name == credential_name:
-                existing_in_memory = cred
-                break
-
-        if existing_in_memory is not None:
-            in_memory_values: Final = dict(existing_in_memory.credential_values or {})
-            if credential.credential_values:
-                in_memory_values.update(credential.credential_values)
-            for key in credential.credential_values_to_delete or ():
-                in_memory_values.pop(key, None)
-            in_memory_info: Final = dict(existing_in_memory.credential_info or {})
-            if credential.credential_info:
-                in_memory_info.update(credential.credential_info)
-            updated_in_memory: Final = CredentialItem(
-                credential_name=new_name,
-                credential_values=in_memory_values,
-                credential_info=in_memory_info,
-            )
-            # Remove old entry if renamed, then use upsert_credentials to handle duplicates
-            if new_name != credential_name:
-                litellm.credential_list = [c for c in litellm.credential_list if c.credential_name != credential_name]
-            CredentialAccessor.upsert_credentials([updated_in_memory])
+        _sync_in_memory_credential(credential, credential_name, merged_credential.credential_name)
 
         return {"success": True, "message": "Credential updated successfully"}
     except Exception as e:
