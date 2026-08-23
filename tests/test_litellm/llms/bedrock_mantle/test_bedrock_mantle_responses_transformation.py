@@ -330,7 +330,7 @@ class TestBedrockMantleResponsesTools:
         params = cfg.map_openai_params(
             response_api_optional_params={
                 "tools": [
-                    {"type": "web_search"},
+                    {"type": "file_search"},
                     {"type": "function", "name": "exec_command"},
                 ]
             },
@@ -342,7 +342,7 @@ class TestBedrockMantleResponsesTools:
     def test_map_openai_params_removes_tools_when_all_unsupported(self):
         cfg = BedrockMantleResponsesAPIConfig()
         params = cfg.map_openai_params(
-            response_api_optional_params={"tools": [{"type": "web_search"}]},
+            response_api_optional_params={"tools": [{"type": "file_search"}]},
             model="openai.gpt-5.5",
             drop_params=False,
         )
@@ -356,12 +356,104 @@ class TestBedrockMantleResponsesTools:
             "litellm.llms.bedrock_mantle.responses.transformation.verbose_logger.warning"
         ) as mock_warning:
             cfg.map_openai_params(
-                response_api_optional_params={"tools": [{"type": "web_search"}]},
+                response_api_optional_params={"tools": [{"type": "file_search"}]},
                 model="openai.gpt-5.5",
                 drop_params=False,
             )
         assert mock_warning.call_count == 1
-        assert "web_search" in str(mock_warning.call_args)
+        assert "file_search" in str(mock_warning.call_args)
+
+
+class TestBedrockMantleResponsesNativeWebSearch:
+    """Bedrock serves Web Search server-side on the bedrock-mantle Responses API for the
+    GPT families AWS enables (verified against bedrock-mantle.us-east-1.api.aws: sol,
+    terra, luna, gpt-5.5 and gpt-5.4 all return `web_search_call` items and
+    `url_citation` annotations). Other Mantle models reject the tool outright, so the
+    filter has to gate on the model's `supports_web_search` flag rather than forward it
+    for the whole provider."""
+
+    _WEB_SEARCH_TOOL = {"type": "web_search", "external_web_access": False}
+    _FUNCTION_TOOL = {"type": "function", "name": "exec_command"}
+
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "openai.gpt-5.6-sol",
+            "openai.gpt-5.6-terra",
+            "openai.gpt-5.6-luna",
+            "openai.gpt-5.5",
+            "openai.gpt-5.4",
+            "bedrock_mantle/openai.gpt-5.6-terra",
+        ],
+    )
+    def test_web_search_survives_for_capable_models(self, model, local_model_cost_map):
+        cfg = BedrockMantleResponsesAPIConfig()
+        params = cfg.map_openai_params(
+            response_api_optional_params={"tools": [self._WEB_SEARCH_TOOL, self._FUNCTION_TOOL]},
+            model=model,
+            drop_params=False,
+        )
+        assert params["tools"] == [self._WEB_SEARCH_TOOL, self._FUNCTION_TOOL]
+
+    def test_external_web_access_true_is_forwarded_verbatim(self, local_model_cost_map):
+        cfg = BedrockMantleResponsesAPIConfig()
+        params = cfg.map_openai_params(
+            response_api_optional_params={"tools": [{"type": "web_search", "external_web_access": True}]},
+            model="openai.gpt-5.6-terra",
+            drop_params=False,
+        )
+        assert params["tools"] == [{"type": "web_search", "external_web_access": True}]
+
+    @pytest.mark.parametrize("model", ["google.gemma-4-31b", "openai.gpt-oss-120b"])
+    def test_web_search_still_dropped_for_models_without_the_capability(self, model, local_model_cost_map):
+        cfg = BedrockMantleResponsesAPIConfig()
+        params = cfg.map_openai_params(
+            response_api_optional_params={"tools": [self._WEB_SEARCH_TOOL, self._FUNCTION_TOOL]},
+            model=model,
+            drop_params=False,
+        )
+        assert params["tools"] == [self._FUNCTION_TOOL]
+
+    def test_web_search_hoisted_out_of_codex_additional_tools(self, local_model_cost_map):
+        cfg = BedrockMantleResponsesAPIConfig()
+        body = cfg.transform_responses_api_request(
+            model="openai.gpt-5.6-terra",
+            input=[
+                {"type": "additional_tools", "role": "developer", "tools": [self._WEB_SEARCH_TOOL]},
+                {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]},
+            ],
+            response_api_optional_request_params={},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+        assert body["tools"] == [self._WEB_SEARCH_TOOL]
+
+    def test_web_search_hoisted_from_codex_is_dropped_for_incapable_model(self, local_model_cost_map):
+        cfg = BedrockMantleResponsesAPIConfig()
+        body = cfg.transform_responses_api_request(
+            model="google.gemma-4-31b",
+            input=[
+                {"type": "additional_tools", "role": "developer", "tools": [self._WEB_SEARCH_TOOL]},
+                {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]},
+            ],
+            response_api_optional_request_params={},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+        assert "tools" not in body
+
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "bedrock_mantle/openai.gpt-5.6-sol",
+            "bedrock_mantle/openai.gpt-5.6-terra",
+            "bedrock_mantle/openai.gpt-5.6-luna",
+            "bedrock_mantle/openai.gpt-5.5",
+            "bedrock_mantle/openai.gpt-5.4",
+        ],
+    )
+    def test_cost_map_advertises_web_search(self, model, local_model_cost_map):
+        assert litellm.supports_web_search(model=model, custom_llm_provider="bedrock_mantle") is True
 
 
 def _codex_exec_tool():
@@ -549,7 +641,7 @@ class TestBedrockMantleCodexAdditionalTools:
                     "type": "additional_tools",
                     "role": "developer",
                     "tools": [
-                        {"type": "web_search"},
+                        {"type": "file_search"},
                         {"type": "function", "name": "wait"},
                     ],
                 },
@@ -561,7 +653,7 @@ class TestBedrockMantleCodexAdditionalTools:
     def test_item_stripped_even_when_no_hoisted_tool_survives(self):
         body = self._transform(
             input=[
-                {"type": "additional_tools", "role": "developer", "tools": [{"type": "web_search"}]},
+                {"type": "additional_tools", "role": "developer", "tools": [{"type": "file_search"}]},
                 self._USER_MESSAGE,
             ]
         )
