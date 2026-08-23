@@ -2586,12 +2586,16 @@ class SafeRouteAdder:
         Builds the reordered list in one expression and reassigns app.router.routes
         wholesale, rather than mutating the existing list in place with pop()/insert().
         """
-        routes = app.routes
-        new_route = routes[-1]
+        routes: Final = app.routes
+        new_route: Final = routes[-1]
         for index, route in enumerate(routes[:-1]):
             route_path = getattr(route, "path", None)
             if route_path and SafeRouteAdder._GENERIC_PROVIDER_PATH_MARKER in route_path:
-                app.router.routes = [*routes[:index], new_route, *routes[index:-1]]
+                app.router.routes = [  # mutable-ok: framework's list  # rebind-ok: reordering is the fix
+                    *routes[:index],
+                    new_route,
+                    *routes[index:-1],
+                ]
                 return
 
     @staticmethod
