@@ -13,6 +13,7 @@ import pytest
 from pydantic import SecretStr
 
 from litellm.llms.base_llm.auth.token_exchange import (
+    _METRICS_QUEUE_LIMIT,
     _REDACTION_CAP,
     ADVISORY_REFRESH_BACKOFF_SECONDS,
     CALL_TYPE_CACHE_HIT,
@@ -125,6 +126,18 @@ class InlineExecutor(concurrent.futures.Executor):
         future: concurrent.futures.Future = concurrent.futures.Future()
         future.set_result(fn(*args, **kwargs))
         return future
+
+
+class NeverRunsExecutor(concurrent.futures.Executor):
+    """Accepts work and never runs it, standing in for a telemetry backend that has stalled, so a
+    test can show the backlog stops growing instead of consuming memory for as long as traffic lasts."""
+
+    def __init__(self) -> None:
+        self.submitted = 0  # mutable-ok: a test spy counting accepted work
+
+    def submit(self, fn, /, *args, **kwargs):
+        self.submitted += 1
+        return concurrent.futures.Future()
 
 
 def token_response(token: str = "sk-ant-oat01-minted", expires_in: int | None = 3600) -> httpx.Response:
@@ -1496,6 +1509,28 @@ class TestServiceLoggingMetricsSink:
         self._sink(hooks).exchange_success(call_type="cold_mint", duration_seconds=0.2)
 
         assert hooks.successes == [(ServiceTypes.ANTHROPIC_WIF, "cold_mint", 0.2)]
+
+    def test_a_stalled_backend_stops_accepting_work_instead_of_queueing_without_bound(self):
+        stalled: Final = NeverRunsExecutor()
+        sink: Final = ServiceLoggingMetricsSink(service_logging_factory=RecordingServiceHooks, executor=stalled)
+
+        for _ in range(_METRICS_QUEUE_LIMIT + 500):
+            sink.cache_hit()
+
+        assert stalled.submitted == _METRICS_QUEUE_LIMIT, (
+            "once the backlog is full further events are dropped, so request volume cannot grow it"
+        )
+
+    def test_a_drained_backlog_accepts_work_again(self):
+        hooks: Final = RecordingServiceHooks()
+        sink: Final = ServiceLoggingMetricsSink(service_logging_factory=lambda: hooks, executor=InlineExecutor())
+
+        for _ in range(_METRICS_QUEUE_LIMIT + 10):
+            sink.cache_hit()
+
+        assert len(hooks.successes) == _METRICS_QUEUE_LIMIT + 10, (
+            "an executor that actually runs releases each slot, so nothing is dropped"
+        )
 
     def test_failure_maps_variant_and_redacted_summary(self):
         hooks = RecordingServiceHooks()

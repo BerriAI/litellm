@@ -56,6 +56,9 @@ ADVISORY_REFRESH_LIFETIME_FRACTION: Final = 0.5
 MANDATORY_REFRESH_LIFETIME_FRACTION: Final = 0.125
 ADVISORY_REFRESH_BACKOFF_SECONDS: Final = 5.0
 FALLBACK_TOKEN_TTL_SECONDS: Final = 60.0
+# Metrics are best-effort, so the backlog is capped and further events are dropped. Request volume
+# must not be able to grow this queue without bound when a telemetry backend stalls.
+_METRICS_QUEUE_LIMIT: Final = 1000
 MAX_ASSERTION_BYTES: Final = 16 * 1024
 MAX_RESPONSE_BYTES: Final = 1024 * 1024
 
@@ -379,6 +382,7 @@ class ServiceLoggingMetricsSink:
         self._service_logging_factory: Final = service_logging_factory
         self._service_logging: _ServiceLoggingHooks | None = None
         self._executor: Executor | None = executor
+        self._queued: int = 0  # rebind-ok: backlog depth, guarded by _lock
 
     def _service_logging_instance(self) -> _ServiceLoggingHooks:
         with self._lock:
@@ -399,7 +403,27 @@ class ServiceLoggingMetricsSink:
             verbose_logger.debug("token exchange metrics emission failed: %s", e)
 
     def _submit(self, coro_factory: _HooksCoroFactory) -> None:
-        self._executor_instance().submit(self._emit, coro_factory)
+        """Drop the event rather than queue it once the backlog is full. A stalled telemetry
+        backend must not let request volume grow an unbounded queue in the proxy: losing a
+        metric sample is always cheaper than losing the process."""
+        with self._lock:
+            if self._queued >= _METRICS_QUEUE_LIMIT:
+                verbose_logger.debug("token exchange metrics queue full, dropping event")
+                return
+            self._queued += 1
+        try:
+            self._executor_instance().submit(self._emit_and_release, coro_factory)
+        except Exception as e:  # noqa: BLE001  # a rejected submit must not surface to the mint
+            with self._lock:
+                self._queued -= 1
+            verbose_logger.debug("token exchange metrics submit failed: %s", e)
+
+    def _emit_and_release(self, coro_factory: _HooksCoroFactory) -> None:
+        try:
+            self._emit(coro_factory)
+        finally:
+            with self._lock:
+                self._queued -= 1
 
     def exchange_success(self, *, call_type: ExchangeCallType, duration_seconds: float) -> None:
         def start(hooks: _ServiceLoggingHooks) -> Coroutine[object, object, None]:
@@ -534,26 +558,30 @@ class JwtBearerTokenExchangeEngine:
         self._entries: Final[dict[str, _Entry]] = {}  # mutable-ok: engine-owned map guarded by _lock
 
     def get_token(self, spec: TokenExchangeSpec) -> ExchangeResult:
-        with self._lock:
-            entry: Final = self._get_or_create_entry_locked(spec)
-            decision: Final = self._classify_and_arm_locked(entry)
-        match decision:
-            case _Serve(token=token):
-                self._report_cache_hit()
-                return token
-            case _ServeAndRefresh(token=token):
-                self._report_cache_hit()
-                self._executor_instance().submit(self._advisory_refresh, spec, entry)
-                return token
-            case _Fail(error=error):
-                return error
-            case _Lead(call_type=call_type):
-                return self._lead(spec, entry, call_type)
-            case _Follow():
-                followed: Final = self._await_leader(spec, entry)
-                return followed if followed is not None else self.get_token(spec)
-            case _:
-                assert_never(decision)
+        """A follower whose leader published nothing re-classifies rather than recursing, so a
+        contended entry cannot grow the stack one frame per failed leader."""
+        while True:
+            with self._lock:
+                entry = self._get_or_create_entry_locked(spec)  # rebind-ok: re-read per follower round
+                decision = self._classify_and_arm_locked(entry)  # rebind-ok: re-read per follower round
+            match decision:
+                case _Serve(token=token):
+                    self._report_cache_hit()
+                    return token
+                case _ServeAndRefresh(token=token):
+                    self._report_cache_hit()
+                    self._executor_instance().submit(self._advisory_refresh, spec, entry)
+                    return token
+                case _Fail(error=error):
+                    return error
+                case _Lead(call_type=call_type):
+                    return self._lead(spec, entry, call_type)
+                case _Follow():
+                    followed: Final = self._await_leader(spec, entry)
+                    if followed is not None:
+                        return followed
+                case _:
+                    assert_never(decision)
 
     async def aget_token(self, spec: TokenExchangeSpec) -> ExchangeResult:
         return await asyncio.to_thread(self.get_token, spec)
