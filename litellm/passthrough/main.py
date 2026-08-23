@@ -50,9 +50,9 @@ class AsyncPassthroughStreamingResponse(AsyncGenerator[Any, Any]):
         self._iterator: AsyncGenerator[bytes, Any]
         self._litellm_logging_obj = litellm_logging_obj
         self._provider_config = provider_config
-        self._raw_bytes: list[bytes] = []
+        self._raw_bytes: list[bytes] = []  # mutable-ok: instance buffer for streaming chunks
         self._flush_scheduled = False
-        self._background_tasks: set[asyncio.Task] = set()
+        self._background_tasks: set[asyncio.Task] = set()  # mutable-ok: instance set for background task tracking
 
     @property
     def status_code(self) -> int:
@@ -176,7 +176,7 @@ class PassthroughStreamingResponse(Generator[Any, Any, Any]):
         self._litellm_logging_obj = litellm_logging_obj
         self._provider_config = provider_config
         self._iterator: Generator[bytes, Any, Any] = _as_generator(response.iter_bytes())
-        self._raw_bytes: list[bytes] = []
+        self._raw_bytes: list[bytes] = []  # mutable-ok: instance buffer for streaming chunks
         self._flush_scheduled = False
 
     def _start_flush(self) -> None:

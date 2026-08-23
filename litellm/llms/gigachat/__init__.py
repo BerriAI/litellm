@@ -17,9 +17,9 @@ from .chat.transformation import GigaChatConfig, GigaChatError
 from .embedding.transformation import GigaChatEmbeddingConfig
 from .passthrough.transformation import GigaChatPassthroughConfig
 
-__all__ = [
+__all__ = (
     "GigaChatConfig",
     "GigaChatEmbeddingConfig",
     "GigaChatError",
     "GigaChatPassthroughConfig",
-]
+)
