@@ -343,7 +343,7 @@ class _ProxyDBLogger(CustomLogger):
                     # blocking shared counters until TTL. Settle at the
                     # admission estimate instead. No spend-log row — there is
                     # no real cost to write.
-                    reserved_cost = float((budget_reservation or {}).get("reserved_cost") or 0.0)
+                    reserved_cost = float(budget_reservation.get("reserved_cost") or 0.0) if budget_reservation else 0.0
                     try:
                         await _reconcile_budget_reservation(
                             budget_reservation=budget_reservation,
@@ -632,7 +632,7 @@ async def _release_budget_reservation(budget_reservation: dict | None) -> None:
 
 
 async def _reconcile_budget_reservation(
-    budget_reservation: dict | None,
+    budget_reservation: dict | None,  # mutable-ok: same reservation payload _release_budget_reservation takes
     actual_cost: float,
 ) -> None:
     if budget_reservation is None:
