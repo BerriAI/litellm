@@ -35,7 +35,7 @@ from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     vertex_proxy_route,
     vllm_proxy_route,
 )
-from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy._types import LitellmUserRoles, SpecialHeaders, UserAPIKeyAuth
 from litellm.types.passthrough_endpoints.vertex_ai import VertexPassThroughCredentials
 
 
@@ -2345,7 +2345,6 @@ class TestMilvusProxyRoute:
         """
         from fastapi import HTTPException
 
-
         mock_request = MagicMock(spec=Request)
         mock_response = MagicMock(spec=Response)
         mock_user_api_key_dict = MagicMock()
@@ -2379,7 +2378,6 @@ class TestMilvusProxyRoute:
         """
         from fastapi import HTTPException
 
-
         mock_request = MagicMock(spec=Request)
         mock_response = MagicMock(spec=Response)
         mock_user_api_key_dict = MagicMock()
@@ -2405,7 +2403,6 @@ class TestMilvusProxyRoute:
         Test that missing index registry raises HTTPException
         """
         from fastapi import HTTPException
-
 
         collection_name = "test-collection"
 
@@ -2442,7 +2439,6 @@ class TestMilvusProxyRoute:
         Test that non-managed vector store index raises HTTPException
         """
         from fastapi import HTTPException
-
 
         collection_name = "unmanaged-collection"
 
@@ -3946,3 +3942,229 @@ class TestAnthropicProxyRoute:
         assert custom_headers["anthropic-beta"] == "oauth-2025-04-20"
         assert sync_calls == []
         assert thread_ids and thread_ids[0] != threading.get_ident()
+
+
+class TestAnthropicProxyRouteCallerAuthHeaders:
+    """Regression for a caller credential riding upstream next to a server-owned one.
+
+    /anthropic forwards the caller's headers, so a caller-supplied ``x-api-key`` used to reach
+    Anthropic alongside the server-minted ``Authorization: Bearer``. These drive the real relay
+    (only the httpx client is stubbed) and assert on the bytes actually handed to the upstream.
+    """
+
+    _MINTED: Final = "sk-ant-oat01-plan-minted"
+
+    def _clear_anthropic_env(self, monkeypatch) -> None:
+        for name in (
+            "ANTHROPIC_API_KEY",
+            "ANTHROPIC_AUTH_TOKEN",
+            "ANTHROPIC_API_BASE",
+            "ANTHROPIC_BASE_URL",
+            "ANTHROPIC_FEDERATION_RULE_ID",
+            "ANTHROPIC_ORGANIZATION_ID",
+            "ANTHROPIC_IDENTITY_TOKEN_FILE",
+            "ANTHROPIC_IDENTITY_TOKEN",
+        ):
+            monkeypatch.delenv(name, raising=False)
+
+    def _enable_wif(self, monkeypatch) -> None:
+        from litellm.llms.anthropic import common_utils as anthropic_common_utils
+        from litellm.llms.anthropic.wif import aget_anthropic_wif_token
+        from litellm.llms.base_llm.auth.token_exchange import JwtBearerTokenExchangeEngine
+
+        monkeypatch.setenv("ANTHROPIC_FEDERATION_RULE_ID", "fdrl_plan")
+        monkeypatch.setenv("ANTHROPIC_ORGANIZATION_ID", "org-plan")
+        monkeypatch.setenv("ANTHROPIC_IDENTITY_TOKEN", "plan-inline-jwt")
+
+        minted: Final = self._MINTED
+
+        class StubPoster:
+            def post(self, url, *, content, headers, timeout):
+                return httpx.Response(
+                    200,
+                    json={"access_token": minted, "token_type": "Bearer", "expires_in": 3600},
+                )
+
+        engine: Final = JwtBearerTokenExchangeEngine(poster=StubPoster())
+
+        async def async_shim(litellm_params, api_base, model):
+            return await aget_anthropic_wif_token(litellm_params, api_base, model, engine)
+
+        monkeypatch.setattr(anthropic_common_utils, "aget_anthropic_wif_token", async_shim)
+
+    def _request(self, headers: Mapping[str, str]) -> Request:
+        body: Final = b'{"model":"claude-sonnet-4-5","messages":[]}'
+        scope: Final = {
+            "type": "http",
+            "http_version": "1.1",
+            "method": "POST",
+            "scheme": "https",
+            "path": "/anthropic/v1/messages",
+            "raw_path": b"/anthropic/v1/messages",
+            "root_path": "",
+            "query_string": b"",
+            "headers": [(name.lower().encode(), value.encode()) for name, value in headers.items()],
+            "client": ("127.0.0.1", 51234),
+            "server": ("proxy.local", 4000),
+            "state": {},
+        }
+
+        async def receive() -> dict:
+            return {"type": "http.request", "body": body, "more_body": False}
+
+        return Request(scope, receive)
+
+    async def _upstream_headers(self, request: Request) -> dict:
+        from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+            anthropic_proxy_route,
+        )
+
+        upstream_response: Final = MagicMock()
+        upstream_response.status_code = 200
+        upstream_response.headers = {"content-type": "application/json"}
+        upstream_response.aread = AsyncMock(return_value=b'{"ok": true}')
+        upstream_response.aiter_bytes = AsyncMock(return_value=[b'{"ok": true}'])
+
+        httpx_client: Final = MagicMock()
+        httpx_client.build_request = MagicMock(return_value=MagicMock())
+        httpx_client.send = AsyncMock(return_value=upstream_response)
+        client_wrapper: Final = MagicMock()
+        client_wrapper.client = httpx_client
+
+        with (
+            patch(
+                "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_async_httpx_client",
+                return_value=client_wrapper,
+            ),
+            patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_logging_obj,
+        ):
+            mock_logging_obj.pre_call_hook = AsyncMock(return_value={"model": "claude-sonnet-4-5", "messages": []})
+            mock_logging_obj.post_call_success_hook = AsyncMock()
+            mock_logging_obj.post_call_failure_hook = AsyncMock()
+            mock_logging_obj.post_call_response_headers_hook = AsyncMock(return_value={})
+
+            await anthropic_proxy_route(
+                endpoint="v1/messages",
+                request=request,
+                fastapi_response=MagicMock(spec=Response),
+                user_api_key_dict=UserAPIKeyAuth(api_key="sk-caller-virtual-key"),
+            )
+
+        assert httpx_client.send.called
+        return {name.lower(): value for name, value in dict(httpx_client.build_request.call_args[1]["headers"]).items()}
+
+    @pytest.mark.asyncio
+    async def test_wif_credential_drops_caller_supplied_api_key(self, monkeypatch):
+        self._clear_anthropic_env(monkeypatch)
+        self._enable_wif(monkeypatch)
+
+        sent: Final = await self._upstream_headers(
+            self._request(
+                {
+                    "content-type": "application/json",
+                    "x-api-key": "sk-caller-virtual-key",
+                    "user-agent": "caller/1.0",
+                }
+            )
+        )
+
+        assert sent["authorization"] == f"Bearer {self._MINTED}"
+        assert "x-api-key" not in sent
+        assert sent["user-agent"] == "caller/1.0"
+
+    @pytest.mark.asyncio
+    async def test_wif_credential_drops_caller_supplied_authorization(self, monkeypatch):
+        self._clear_anthropic_env(monkeypatch)
+        self._enable_wif(monkeypatch)
+
+        sent: Final = await self._upstream_headers(
+            self._request(
+                {
+                    "content-type": "application/json",
+                    "authorization": "Bearer sk-caller-virtual-key",
+                }
+            )
+        )
+
+        assert sent["authorization"] == f"Bearer {self._MINTED}"
+        assert all("sk-caller-virtual-key" not in value for value in sent.values())
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("header_name", sorted(SpecialHeaders.litellm_credential_header_names()))
+    async def test_wif_credential_drops_every_proxy_key_header(self, monkeypatch, header_name: str):
+        """The proxy accepts a LiteLLM key in any SpecialHeaders slot, so the caller's virtual
+        key must not reach Anthropic from any of them once the server owns the credential."""
+        self._clear_anthropic_env(monkeypatch)
+        self._enable_wif(monkeypatch)
+
+        sent: Final = await self._upstream_headers(
+            self._request(
+                {
+                    "content-type": "application/json",
+                    header_name: "sk-caller-virtual-key",
+                    "user-agent": "caller/1.0",
+                }
+            )
+        )
+
+        assert sent["authorization"] == f"Bearer {self._MINTED}"
+        assert header_name == "authorization" or header_name not in sent
+        assert all("sk-caller-virtual-key" not in value for value in sent.values())
+        assert sent["user-agent"] == "caller/1.0"
+
+    @pytest.mark.asyncio
+    async def test_wif_credential_drops_configured_custom_key_header(self, monkeypatch):
+        self._clear_anthropic_env(monkeypatch)
+        self._enable_wif(monkeypatch)
+
+        with patch.dict("litellm.proxy.proxy_server.general_settings", {"litellm_key_header_name": "X-Tenant-Key"}):
+            sent: Final = await self._upstream_headers(
+                self._request(
+                    {
+                        "content-type": "application/json",
+                        "x-tenant-key": "sk-caller-virtual-key",
+                        "x-tenant-region": "eu",
+                    }
+                )
+            )
+
+        assert sent["authorization"] == f"Bearer {self._MINTED}"
+        assert "x-tenant-key" not in sent
+        assert all("sk-caller-virtual-key" not in value for value in sent.values())
+        assert sent["x-tenant-region"] == "eu"
+
+    @pytest.mark.asyncio
+    async def test_server_api_key_drops_caller_supplied_authorization(self, monkeypatch):
+        self._clear_anthropic_env(monkeypatch)
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-server-owned")
+
+        sent: Final = await self._upstream_headers(
+            self._request(
+                {
+                    "content-type": "application/json",
+                    "authorization": "Bearer sk-caller-virtual-key",
+                    "x-api-key": "sk-caller-virtual-key",
+                }
+            )
+        )
+
+        assert sent["x-api-key"] == "sk-ant-server-owned"
+        assert "authorization" not in sent
+
+    @pytest.mark.asyncio
+    async def test_byok_caller_key_still_reaches_upstream(self, monkeypatch):
+        self._clear_anthropic_env(monkeypatch)
+
+        sent: Final = await self._upstream_headers(
+            self._request(
+                {
+                    "content-type": "application/json",
+                    "x-api-key": "sk-ant-caller-owned",
+                    "anthropic-version": "2023-06-01",
+                }
+            )
+        )
+
+        assert sent["x-api-key"] == "sk-ant-caller-owned"
+        assert sent["anthropic-version"] == "2023-06-01"
+        assert "authorization" not in sent

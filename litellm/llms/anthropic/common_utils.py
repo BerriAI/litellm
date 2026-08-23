@@ -23,6 +23,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
 from litellm.llms.anthropic.wif import aget_anthropic_wif_token, get_anthropic_wif_token
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.proxy._types import SpecialHeaders
 from litellm.types.llms.anthropic import (
     ANTHROPIC_HOSTED_TOOLS,
     ANTHROPIC_OAUTH_BETA_HEADER,
@@ -57,7 +58,7 @@ def _strip_bedrock_id_suffixes(model: str) -> str:
     )
 
 
-_SERVER_OWNED_AUTH_HEADERS: Final = frozenset({"x-api-key", "authorization"})
+_SERVER_OWNED_AUTH_HEADERS: Final = SpecialHeaders.litellm_credential_header_names()
 _WIF_ELIGIBILITY_ATTR: Final = "_workload_identity_eligible"
 
 

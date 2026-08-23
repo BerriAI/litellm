@@ -25,7 +25,11 @@ from litellm.constants import (
     ALLOWED_VERTEX_AI_PASSTHROUGH_HEADERS,
     BEDROCK_AGENT_RUNTIME_PASS_THROUGH_ROUTES,
 )
-from litellm.llms.anthropic.common_utils import AnthropicModelInfo, merge_anthropic_beta_headers
+from litellm.llms.anthropic.common_utils import (
+    _SERVER_OWNED_AUTH_HEADERS,  # pyright: ignore[reportPrivateUsage]  # canonical set, must not be duplicated here
+    AnthropicModelInfo,
+    merge_anthropic_beta_headers,
+)
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.proxy._types import *
 from litellm.proxy.auth.route_checks import RouteChecks
@@ -579,6 +583,46 @@ def _anthropic_passthrough_headers(auth_header: Mapping[str, str] | None, client
     return MappingProxyType({**auth_header, "anthropic-beta": merge_anthropic_beta_headers(client_beta, auth_beta)})
 
 
+def _configured_litellm_key_header_name() -> str | None:
+    from litellm.proxy.proxy_server import (
+        general_settings,  # pyright: ignore[reportUnknownVariableType]  # proxy_server declares it as a bare dict
+    )
+
+    configured: Final = general_settings.get(  # pyright: ignore[reportUnknownMemberType]  # proxy_server general_settings is a bare dict
+        "litellm_key_header_name"
+    )
+    return configured if isinstance(configured, str) else None
+
+
+def _anthropic_passthrough_header_plan(
+    request: Request, auth_header: Mapping[str, str] | None, litellm_key_header_name: str | None
+) -> tuple[Mapping[str, str], bool]:
+    """Returns the headers to send upstream plus whether the relay should still forward the
+    caller's own headers. Once the server owns the Anthropic credential, none of the headers
+    the proxy accepts a LiteLLM key in (``SpecialHeaders`` plus the configured custom name)
+    may ride upstream beside it, so the forward merge runs here with those stripped and the
+    relay is told not to merge again. With no server credential the caller's key is the only
+    one there is, so forwarding stays on (BYOK)."""
+    server_headers: Final = _anthropic_passthrough_headers(auth_header, request.headers.get("anthropic-beta"))
+    if auth_header is None:
+        return server_headers, True
+    caller_owned: Final = _SERVER_OWNED_AUTH_HEADERS | frozenset(
+        (litellm_key_header_name.lower(),) if litellm_key_header_name else ()
+    )
+    caller_headers: Final[dict[str, str]] = {  # mutable-ok: forward_headers_from_request takes a concrete dict
+        name: value for name, value in request.headers.items() if name.lower() not in caller_owned
+    }
+    merged: Final = cast(  # cast-ok: forward_headers_from_request is untyped upstream, its result is a header dict
+        "dict[str, str]",
+        HttpPassThroughEndpointHelpers.forward_headers_from_request(  # pyright: ignore[reportUnknownMemberType]  # untyped upstream
+            request_headers=caller_headers,
+            headers=dict(server_headers),  # mutable-ok: forward_headers_from_request takes a concrete dict
+            forward_headers=True,
+        ),
+    )
+    return MappingProxyType(merged), False
+
+
 @router.api_route(
     "/anthropic/{endpoint:path}",
     methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
@@ -620,11 +664,14 @@ async def anthropic_proxy_route(
     auth_header: Final = await AnthropicModelInfo.aget_auth_header(
         anthropic_api_key or None, allow_workload_identity=True
     )
+    upstream_headers, forward_caller_headers = _anthropic_passthrough_header_plan(
+        request, auth_header, _configured_litellm_key_header_name()
+    )
     endpoint_func: Final = create_pass_through_route(
         endpoint=endpoint,
         target=str(updated_url),
-        custom_headers=_anthropic_passthrough_headers(auth_header, request.headers.get("anthropic-beta")),
-        _forward_headers=True,
+        custom_headers=upstream_headers,
+        _forward_headers=forward_caller_headers,
         is_streaming_request=is_streaming_request,
     )  # dynamically construct pass-through endpoint based on incoming path
     received_value: Final = await endpoint_func(

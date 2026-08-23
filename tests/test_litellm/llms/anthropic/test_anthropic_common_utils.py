@@ -19,9 +19,9 @@ from unittest.mock import patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../.."))
-)
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../..")))
+
+from litellm.proxy._types import SpecialHeaders  # noqa: E402  # sys.path must be patched before importing litellm
 
 # Fake tokens for testing (not real secrets)
 FAKE_OAUTH_TOKEN = "sk-ant-oat01-fake-token-for-testing-123456789abcdef"
@@ -2069,6 +2069,8 @@ WIF_ENV = {
     "ANTHROPIC_IDENTITY_TOKEN": "inline-wire-jwt",
 }
 
+PROXY_CREDENTIAL_HEADER_NAMES = sorted(SpecialHeaders.litellm_credential_header_names())
+
 
 class RecordingPoster:
     def __init__(self, response):
@@ -2280,6 +2282,39 @@ class TestWifServerOwnedAuthHeaderStrip:
         assert "x-api-key" not in headers
         assert caller_key not in headers.values()
         assert len(poster.requests) == 1
+
+    def test_server_owned_set_is_every_proxy_credential_header(self):
+        """The strip list must track the proxy's own key-header list, not a hand-rolled
+        pair: every header user_api_key_auth accepts a LiteLLM key in must be here."""
+        from litellm.llms.anthropic.common_utils import _SERVER_OWNED_AUTH_HEADERS
+
+        assert _SERVER_OWNED_AUTH_HEADERS == SpecialHeaders.litellm_credential_header_names()
+        assert {"x-litellm-api-key", "api-key", "x-goog-api-key"} < _SERVER_OWNED_AUTH_HEADERS
+
+    @pytest.mark.parametrize("header_name", PROXY_CREDENTIAL_HEADER_NAMES)
+    def test_mint_strips_every_proxy_credential_header(self, monkeypatch, wif_engine, header_name):
+        """A LiteLLM virtual key arrives in any of the proxy's accepted key headers; once
+        a mint happened none of them may reach Anthropic in any header slot."""
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        for name, value in WIF_ENV.items():
+            monkeypatch.setenv(name, value)
+        caller_key = "sk-litellm-CALLER-VIRTUAL-KEY"
+
+        headers = AnthropicModelInfo().validate_environment(
+            headers={header_name.title(): caller_key, "user-agent": "caller/1.0"},
+            model="claude-sonnet-4-5",
+            messages=[{"role": "user", "content": "Hello"}],
+            optional_params={},
+            litellm_params={},
+            api_key=None,
+            api_base=None,
+        )
+
+        assert headers["authorization"] == f"Bearer {FAKE_MINTED_TOKEN}"
+        assert header_name == "authorization" or header_name not in {name.lower() for name in headers}
+        assert all(caller_key not in value for value in headers.values())
+        assert headers["user-agent"] == "caller/1.0"
 
     def test_no_mint_preserves_caller_supplied_authorization(self, monkeypatch, clean_anthropic_env):
         """No-regression: LiteLLM deliberately lets a caller-forwarded credential
