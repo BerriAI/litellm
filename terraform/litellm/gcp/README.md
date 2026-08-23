@@ -315,6 +315,25 @@ The `migration_run_command` output is preserved for break-glass manual re-runs.
 required APIs must be enabled (run, sqladmin, redis, secretmanager,
 vpcaccess, compute, servicenetworking, storage, artifactregistry).
 
+If the organization enforces
+`constraints/compute.managed.requireOsConfig`, existing projects also
+need VM Manager (OS Config) enabled in project metadata before apply.
+The Serverless VPC Access connector creates GCE VMs; without this
+metadata the connector operation fails, Terraform's error is vague,
+and Cloud operation logs report an org-policy violation. New projects
+created after the constraint is already on are usually fine. Existing
+projects are not. Set it once per project:
+
+```bash
+gcloud compute project-info add-metadata \
+  --project PROJECT_ID \
+  --metadata=enable-osconfig=TRUE
+```
+
+Do not manage this from the module: project-wide metadata is often
+owned by another Terraform root. Google's setup notes:
+https://docs.cloud.google.com/compute/vm-manager/docs/setup#set_metadata_values
+
 ## TLS
 
 `terraform plan` refuses to provision an HTTP-only LB by default — TLS
