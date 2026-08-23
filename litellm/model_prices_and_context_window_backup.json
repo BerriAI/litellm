@@ -3720,6 +3720,7 @@
     "azure/eu/gpt-4o-2024-11-20": {
         "deprecation_date": "2027-04-14",
         "cache_creation_input_token_cost": 1.38e-06,
+        "cache_read_input_token_cost": 1.375e-06,
         "input_cost_per_token": 2.75e-06,
         "litellm_provider": "azure",
         "max_input_tokens": 128000,
@@ -8534,6 +8535,7 @@
     "azure/us/gpt-4o-2024-11-20": {
         "deprecation_date": "2027-04-14",
         "cache_creation_input_token_cost": 1.38e-06,
+        "cache_read_input_token_cost": 1.375e-06,
         "input_cost_per_token": 2.75e-06,
         "litellm_provider": "azure",
         "max_input_tokens": 128000,
