@@ -34,7 +34,8 @@ See https://github.com/crp4222/PrivAiTe for the package.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
+import copy
+from collections.abc import Callable, Iterator
 from typing import Any, cast
 
 from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -114,6 +115,144 @@ def _obj_set(obj: Any, key: str, value: Any) -> None:
         obj[key] = value
     else:
         setattr(obj, key, value)
+
+
+def _append_nested(delta: object, carrier: str, field: str, remaining: str) -> None:
+    """Append text to delta.<carrier>.<field>, creating the carrier as a plain
+    dict when the delta has none (a bare finish delta carries no function_call
+    or audio object)."""
+    holder = _obj_get(delta, carrier)
+    if holder is None:
+        _obj_set(delta, carrier, {field: remaining})
+    else:
+        _obj_set(holder, field, (_obj_get(holder, field) or "") + remaining)
+
+
+def _append_tool_remainder(delta: object, tc_index: int, remaining: str) -> None:
+    """Append a held argument fragment under its tool_call index, creating the
+    slot when the delta has none: the client reassembles arguments per index."""
+    calls = _obj_get(delta, "tool_calls")
+    if calls is None:
+        calls = []
+        _obj_set(delta, "tool_calls", calls)
+    for call in calls:
+        if (_obj_get(call, "index") or 0) == tc_index:
+            _append_nested(call, "function", "arguments", remaining)
+            return
+    calls.append({"index": tc_index, "function": {"arguments": remaining}})
+
+
+def _append_remainder(delta: object, key: tuple, remaining: str) -> None:
+    """Append a restore buffer's held tail onto a streamed delta. The key is
+    (kind, choice index[, tool_call index]) as built by the streaming hook."""
+    kind = key[0]
+    if kind == "tool":
+        _append_tool_remainder(delta, key[2], remaining)
+    elif kind == "fc":
+        _append_nested(delta, "function_call", "arguments", remaining)
+    elif kind == "audio":
+        _append_nested(delta, "audio", "transcript", remaining)
+    else:
+        # content and the text fields (reasoning_content, reasoning, refusal)
+        _obj_set(delta, kind, (_obj_get(delta, kind) or "") + remaining)
+
+
+_DELTA_CHANNELS = (
+    "content",
+    "reasoning_content",
+    "reasoning",
+    "refusal",
+    "audio",
+    "tool_calls",
+    "function_call",
+)
+
+
+def _drain_chunk(template: object, key: tuple, remaining: str) -> object:
+    """A trailing chunk carrying one held tail after the provider closed the
+    stream without a finish_reason: a clone of the last chunk of that choice
+    (same id, model and object as the rest of the stream) reduced to that one
+    choice, its delta cleared, no finish_reason and no usage."""
+    chunk = copy.deepcopy(template)
+    index = key[1]
+    choice = next(c for c in _obj_get(chunk, "choices") or [] if (_obj_get(c, "index") or 0) == index)
+    _obj_set(chunk, "choices", [choice])
+    if _obj_get(chunk, "usage") is not None:
+        _obj_set(chunk, "usage", None)
+    _obj_set(choice, "finish_reason", None)
+    delta = _obj_get(choice, "delta")
+    for field in _DELTA_CHANNELS:
+        if _obj_get(delta, field) is not None:
+            _obj_set(delta, field, None)
+    _append_remainder(delta, key, remaining)
+    return chunk
+
+
+class _StreamRestorer:
+    """Restore state for one streamed response.
+
+    One de-anonymizer buffer per streamed segment, keyed by (kind, choice
+    index, ...): with n>1 the provider interleaves chunks for different
+    choices, and tool-call arguments stream as fragments per tool_call index;
+    each segment keeps its own boundary buffer so a placeholder split across
+    chunks reassembles without mixing segments. The buffer holds back partial
+    placeholders that span chunk boundaries; whatever remains is flushed onto
+    the chunk that carries finish_reason (by the channel's own restore when
+    the finish delta carries it, by the sweep in restore_chunk when it does
+    not: the common finish shape is a bare `delta: {}`), or, when the provider
+    closes the stream without a finish_reason, drained as trailing chunks
+    cloned from the last chunk seen for that choice. A held tail is never
+    dropped."""
+
+    def __init__(self, mapping: object, make_buffer: Callable[[object], object]) -> None:
+        self._mapping = mapping
+        self._make_buffer = make_buffer
+        self._buffers: dict = {}
+        self._last_chunk: dict = {}
+
+    def restore(self, key: tuple, text: str, finished: bool) -> str:
+        if key not in self._buffers:
+            self._buffers[key] = self._make_buffer(self._mapping)
+        deanon = self._buffers[key]
+        out = deanon.feed(text) if text else ""
+        if finished:
+            # The channel is closed: drop its buffer so a sweep never flushes
+            # it a second time.
+            out += self._buffers.pop(key).flush()
+        return out
+
+    def close_open(self, index: int | None) -> tuple[tuple[tuple, str], ...]:
+        """Flush and drop every buffer still open for this choice (every choice
+        when index is None); returns the non-empty tails."""
+        tails = []
+        for key in [k for k in self._buffers if index is None or k[1] == index]:
+            remaining = self._buffers.pop(key).flush()
+            if remaining:
+                tails.append((key, remaining))
+        return tuple(tails)
+
+    def restore_chunk(self, chunk: object, restore_delta: Callable[..., None]) -> None:
+        """Restore every choice of one chunk in place; on a finished choice,
+        append the tails of the channels its finish delta does not carry."""
+        for choice in getattr(chunk, "choices", None) or []:
+            delta = getattr(choice, "delta", None)
+            if delta is None:
+                continue
+            index = getattr(choice, "index", 0) or 0
+            self._last_chunk[index] = chunk
+            finished = getattr(choice, "finish_reason", None) is not None
+            restore_delta(delta, index, finished, self.restore)
+            if finished:
+                for key, remaining in self.close_open(index):
+                    _append_remainder(delta, key, remaining)
+
+    def drain(self) -> Iterator[object]:
+        """Trailing chunks for the tails still held after the provider closed
+        the stream without a finish_reason for their choice."""
+        for key, remaining in self.close_open(None):
+            template = self._last_chunk.get(key[1])
+            if template is not None:
+                yield _drain_chunk(template, key, remaining)
 
 
 class PrivaiteGuardrail(CustomGuardrail):
@@ -639,33 +778,12 @@ class PrivaiteGuardrail(CustomGuardrail):
         for fake, original in fakes.items():
             mapping.add(original, fake, "PII")
 
-        # One de-anonymizer buffer per streamed segment, keyed by (kind, choice
-        # index, ...). With n>1 the provider interleaves chunks for different
-        # choices, and tool-call arguments stream as fragments per tool_call
-        # index; each segment keeps its own boundary buffer so a placeholder split
-        # across chunks reassembles without mixing segments.
-        buffers: dict = {}
-
-        def _restore(key: tuple, text: str, finished: bool) -> str:
-            deanon = buffers.get(key)
-            if deanon is None:
-                deanon = buffers[key] = StreamingDeAnonymizer(mapping)
-            out = deanon.feed(text) if text else ""
-            if finished:
-                out += deanon.flush()
-            return out
-
-        # The buffer holds back partial placeholders that span chunk boundaries.
-        # Whatever remains is flushed onto the chunk that carries finish_reason.
+        restorer = _StreamRestorer(mapping, StreamingDeAnonymizer)
         async for chunk in response:
-            for choice in getattr(chunk, "choices", None) or []:
-                delta = getattr(choice, "delta", None)
-                if delta is None:
-                    continue
-                index = getattr(choice, "index", 0) or 0
-                finished = getattr(choice, "finish_reason", None) is not None
-                self._restore_delta(delta, index, finished, _restore)
+            restorer.restore_chunk(chunk, self._restore_delta)
             yield chunk
+        for drained in restorer.drain():
+            yield drained
 
     async def async_post_call_failure_hook(
         self,
