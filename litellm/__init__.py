@@ -377,6 +377,7 @@ enable_key_alias_format_validation: bool = (
 enable_gemini_default_thinking_level_low: bool = (
     False  # opt-in: force thinkingLevel low/minimal for Gemini 3 thinking param mapping
 )
+gemini_include_thoughts_default: bool = True  # set False to keep Gemini thinking on while dropping thought summaries
 ####################
 logging: bool = True
 enable_loadbalancing_on_batch_endpoints: Optional[bool] = None

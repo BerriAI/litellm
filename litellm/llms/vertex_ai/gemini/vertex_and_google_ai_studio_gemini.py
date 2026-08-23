@@ -794,6 +794,16 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 optional_params["response_schema"] = self._map_response_schema(value=schema)
 
     @staticmethod
+    def _include_thoughts() -> bool:
+        """Whether to ask Gemini for thought summaries when thinking is on.
+
+        Thought summaries are the narration, not the reasoning: turning them off leaves
+        thinkingBudget/thinkingLevel untouched and the model still reasons, the response
+        just does not carry the summary back.
+        """
+        return litellm.gemini_include_thoughts_default
+
+    @staticmethod
     def _map_reasoning_effort_to_thinking_budget(
         reasoning_effort: str,
         model: str | None = None,
@@ -812,22 +822,22 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
             return {
                 "thinkingBudget": budget,
-                "includeThoughts": True,
+                "includeThoughts": VertexGeminiConfig._include_thoughts(),
             }
         elif reasoning_effort == "low":
             return {
                 "thinkingBudget": DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
-                "includeThoughts": True,
+                "includeThoughts": VertexGeminiConfig._include_thoughts(),
             }
         elif reasoning_effort == "medium":
             return {
                 "thinkingBudget": DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
-                "includeThoughts": True,
+                "includeThoughts": VertexGeminiConfig._include_thoughts(),
             }
         elif reasoning_effort == "high":
             return {
                 "thinkingBudget": DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
-                "includeThoughts": True,
+                "includeThoughts": VertexGeminiConfig._include_thoughts(),
             }
         elif reasoning_effort == "disable":
             return {
@@ -863,18 +873,18 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         is_gemini31pro: Final = model and ("gemini-3.1-pro-preview" in model.lower())
         if reasoning_effort == "minimal":
             if is_gemini3flash:
-                return {"thinkingLevel": "minimal", "includeThoughts": True}
+                return {"thinkingLevel": "minimal", "includeThoughts": VertexGeminiConfig._include_thoughts()}
             else:
-                return {"thinkingLevel": "low", "includeThoughts": True}
+                return {"thinkingLevel": "low", "includeThoughts": VertexGeminiConfig._include_thoughts()}
         elif reasoning_effort == "low":
-            return {"thinkingLevel": "low", "includeThoughts": True}
+            return {"thinkingLevel": "low", "includeThoughts": VertexGeminiConfig._include_thoughts()}
         elif reasoning_effort == "medium":
             if is_gemini31pro or is_gemini3flash:
-                return {"thinkingLevel": "medium", "includeThoughts": True}
+                return {"thinkingLevel": "medium", "includeThoughts": VertexGeminiConfig._include_thoughts()}
             else:
-                return {"thinkingLevel": "high", "includeThoughts": True}
+                return {"thinkingLevel": "high", "includeThoughts": VertexGeminiConfig._include_thoughts()}
         elif reasoning_effort == "high":
-            return {"thinkingLevel": "high", "includeThoughts": True}
+            return {"thinkingLevel": "high", "includeThoughts": VertexGeminiConfig._include_thoughts()}
         elif reasoning_effort == "disable":
             # Gemini 3 cannot fully disable thinking, so we use "minimal" for gemini-3-flash-preview, "low" for others
             if is_gemini3flash:
@@ -950,7 +960,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 if thinking_budget is None or thinking_budget == 0:
                     params["includeThoughts"] = False
                 else:
-                    params["includeThoughts"] = True
+                    params["includeThoughts"] = VertexGeminiConfig._include_thoughts()
                     # Follow provider defaults unless explicitly opted into legacy behavior.
                     if litellm.enable_gemini_default_thinking_level_low is True:
                         is_gemini3flash: Final = "gemini-3" in model.lower() and "flash" in model.lower()
@@ -961,7 +971,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         else:
             # For older Gemini models, use thinkingBudget
             if thinking_enabled and not VertexGeminiConfig._is_thinking_budget_zero(thinking_budget):
-                params["includeThoughts"] = True
+                params["includeThoughts"] = VertexGeminiConfig._include_thoughts()
             if thinking_budget is not None and isinstance(thinking_budget, int):
                 params["thinkingBudget"] = thinking_budget
 

@@ -5552,3 +5552,64 @@ def test_accumulated_json_skips_non_dict_leading_value():
 
     assert len(out) == 1
     assert out[0].choices[0].delta.content == "a"
+
+
+@pytest.fixture
+def gemini_thought_summaries_off():
+    original = litellm.gemini_include_thoughts_default
+    litellm.gemini_include_thoughts_default = False
+    try:
+        yield
+    finally:
+        litellm.gemini_include_thoughts_default = original
+
+
+@pytest.mark.parametrize("reasoning_effort", ["minimal", "low", "medium", "high"])
+def test_thinking_budget_includes_thoughts_by_default(reasoning_effort):
+    config = VertexGeminiConfig._map_reasoning_effort_to_thinking_budget(
+        reasoning_effort=reasoning_effort, model="gemini-2.5-pro"
+    )
+    assert config["includeThoughts"] is True
+
+
+@pytest.mark.parametrize("reasoning_effort", ["minimal", "low", "medium", "high"])
+def test_thinking_budget_can_drop_thought_summaries_while_still_thinking(
+    reasoning_effort, gemini_thought_summaries_off
+):
+    config = VertexGeminiConfig._map_reasoning_effort_to_thinking_budget(
+        reasoning_effort=reasoning_effort, model="gemini-2.5-pro"
+    )
+    assert config["includeThoughts"] is False
+    assert config["thinkingBudget"] > 0
+
+
+@pytest.mark.parametrize("reasoning_effort", ["minimal", "low", "medium", "high"])
+def test_thinking_level_can_drop_thought_summaries_while_still_thinking(
+    reasoning_effort, gemini_thought_summaries_off
+):
+    config = VertexGeminiConfig._map_reasoning_effort_to_thinking_level(
+        reasoning_effort=reasoning_effort, model="gemini-3-pro-preview"
+    )
+    assert config["includeThoughts"] is False
+    assert config["thinkingLevel"] in ("minimal", "low", "medium", "high")
+
+
+@pytest.mark.parametrize("reasoning_effort", ["disable", "none"])
+def test_disabling_thinking_still_disables_thought_summaries(reasoning_effort):
+    budget_config = VertexGeminiConfig._map_reasoning_effort_to_thinking_budget(
+        reasoning_effort=reasoning_effort, model="gemini-2.5-pro"
+    )
+    level_config = VertexGeminiConfig._map_reasoning_effort_to_thinking_level(
+        reasoning_effort=reasoning_effort, model="gemini-3-pro-preview"
+    )
+    assert budget_config["includeThoughts"] is False
+    assert level_config["includeThoughts"] is False
+
+
+def test_thinking_param_can_drop_thought_summaries(gemini_thought_summaries_off):
+    config = VertexGeminiConfig._map_thinking_param(
+        thinking_param={"type": "enabled", "budget_tokens": 2048},
+        model="gemini-2.5-pro",
+    )
+    assert config["includeThoughts"] is False
+    assert config["thinkingBudget"] == 2048
