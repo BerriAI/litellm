@@ -9,7 +9,13 @@ have been aggregated across models.
 """
 
 from collections.abc import Callable, Mapping
-from typing import TYPE_CHECKING, Final, NamedTuple
+from typing import (
+    TYPE_CHECKING,
+    Final,
+    NamedTuple,
+    TypeGuard,  # noqa: TID251  # TypeGuard narrows optional ModelInfo after the input-rate check
+    cast,  # noqa: TID251  # model_cost dicts are ModelInfo-shaped after the input-rate check
+)
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -108,6 +114,142 @@ def _effective_model_info(router: "Router | None", deployment_id: str | None, mo
     except Exception as e:  # noqa: BLE001  # a dashboard metric must not fail the spend write
         verbose_proxy_logger.debug("savings: no deployment pricing for %s (%s)", model, e)
         return None
+
+
+def _has_input_price(
+    info: ModelInfo | None,
+) -> TypeGuard[ModelInfo]:  # guard-ok: ModelInfo | None is priced iff input_cost_per_token is present
+    """True when ``info`` carries a real input rate, including an explicit ``0``.
+
+    Router registers two keys per deployment: the deployment id keeps custom prices,
+    and the shared ``{provider}/{model}`` key has every cost field stripped so two
+    deployments of the same backend cannot clobber each other. ``get_model_info``
+    prefers that shared key, so a custom model absent from the built-in map resolves
+    to a dict that looks like a hit and then prices at ``0.0``. Treating a missing
+    rate as "no info" lets the caller keep looking at the deployment id.
+    """
+    return info is not None and info.get("input_cost_per_token") is not None
+
+
+def _savings_rate_fingerprint(info: ModelInfo) -> tuple[float, float, float]:
+    """The effective rates savings uses, after applying cache-price defaults."""
+    return _input_cache_read_and_write_cost(info)
+
+
+def _input_rate_fingerprint(info: ModelInfo) -> float:
+    """The input rate only. Compression does not care about cache prices."""
+    input_cost, _, _ = _savings_rate_fingerprint(info)
+    return input_cost
+
+
+def _cost_map_deployment_info(deployment_id: str | None) -> ModelInfo | None:
+    """Pricing registered under a deployment id, without needing a live Router.
+
+    Daily spend writes pass ``model_id`` but look the router up lazily. When that
+    lookup returns ``None``, falling through to the stripped shared key reports
+    ``$0.00`` savings even though the deployment's rate is already in ``model_cost``.
+    """
+    if not deployment_id:
+        return None
+    info = litellm.model_cost.get(deployment_id)
+    if isinstance(info, dict) and info.get("input_cost_per_token") is not None:
+        return cast(
+            ModelInfo, info
+        )  # cast-ok: model_cost dict already checked for input_cost_per_token; same shape router uses
+    return None
+
+
+def _deployment_matches_logged_model(
+    dep_model: str,
+    dep_provider: object,
+    public_name: object,
+    identity: _ModelIdentity | None,
+    logged_model: str,
+) -> bool:
+    """True when this router row is the deployment a spend log row is talking about."""
+    if logged_model and logged_model == public_name:
+        return True
+    dep_identity = _resolve_model(dep_model, dep_provider if isinstance(dep_provider, str) else None)
+    if identity is not None and dep_identity is not None:
+        return identity == dep_identity
+    return bool(logged_model) and logged_model == dep_model
+
+
+def _matching_priced_deployments(
+    router: "Router | None",
+    identity: _ModelIdentity | None,
+    logged_model: str,
+) -> list[ModelInfo]:
+    """Priced router rows that could be this spend log, or empty if we cannot tell."""
+    if router is None:
+        return []
+    try:
+        deployments = router.get_model_list() or []
+    except Exception as e:  # noqa: BLE001  # a dashboard metric must not fail the spend write
+        verbose_proxy_logger.debug("savings: cannot list deployments (%s)", e)
+        return []
+
+    priced: list[ModelInfo] = []
+    seen_ids: set[str] = set()
+    for dep in deployments:
+        if not isinstance(dep, dict):
+            continue
+        dep_id = (dep.get("model_info") or {}).get("id")
+        if not isinstance(dep_id, str) or dep_id in seen_ids:
+            continue
+        params = dep.get("litellm_params") or {}
+        if not _deployment_matches_logged_model(
+            dep_model=str(params.get("model") or ""),
+            dep_provider=params.get("custom_llm_provider"),
+            public_name=dep.get("model_name"),
+            identity=identity,
+            logged_model=logged_model,
+        ):
+            continue
+        seen_ids.add(dep_id)
+        info = _cost_map_deployment_info(dep_id) or _effective_model_info(router, dep_id, logged_model)
+        if _has_input_price(info):
+            priced.append(info)
+    return priced
+
+
+def _unique_by_rate(
+    priced: list[ModelInfo],
+    rate_key: Callable[[ModelInfo], object],
+) -> ModelInfo | None:
+    if not priced:
+        return None
+    fingerprints = {rate_key(info) for info in priced}
+    return priced[0] if len(fingerprints) == 1 else None
+
+
+def _pricing_for_savings(
+    router: "Router | None",
+    model_id: str | None,
+    identity: _ModelIdentity | None,
+    model: str | None,
+    rate_key: Callable[[ModelInfo], object] = _savings_rate_fingerprint,
+) -> ModelInfo | None:
+    """Deployment rate first, public rate only when it actually has a price."""
+    logged = model or ""
+    candidates: list[ModelInfo | None] = [
+        _cost_map_deployment_info(model_id),
+        _effective_model_info(router, model_id, logged),
+    ]
+    if not model_id:
+        priced = _matching_priced_deployments(router, identity, logged)
+        if priced:
+            unique = _unique_by_rate(priced, rate_key)
+            if unique is None:
+                # Matching deployments disagree. The public list price is not a
+                # substitute — it can match none of them.
+                return None
+            candidates.append(unique)
+    candidates.append(_model_info(identity) if identity else None)
+    for candidate in candidates:
+        if _has_input_price(candidate):
+            return candidate
+    return None
 
 
 def _model_info(model: _ModelIdentity) -> ModelInfo | None:
@@ -588,15 +730,23 @@ def compute_savings_spend(
     nothing and recompute, mirroring ``_recorded_token_cost``.
     """
     # Deployment rates when the request came through one, public rates otherwise --
-    # `_effective_model_info` merges a deployment's configured prices over the built-in
-    # map, so a negotiated price is not silently replaced by the list rate.
+    # `_pricing_for_savings` prefers the deployment-id cost-map entry (even with no
+    # live Router) so a custom model whose shared `{provider}/{model}` key had its
+    # prices stripped is not silently billed at $0.
+    # Without model_id, compression can still use a unique input rate when cache
+    # rates differ; prompt-caching needs the full fingerprint or it would pick
+    # the first deployment's cache price.
     router_instance: Router | None = llm_router() if llm_router else None
     identity: Final = _resolve_model(model, custom_llm_provider)
-    pricing: Final = _effective_model_info(router_instance, model_id, model or "") or (
-        _model_info(identity) if identity else None
+    cache_pricing: Final = _pricing_for_savings(router_instance, model_id, identity, model)
+    compression_pricing: Final = (
+        cache_pricing
+        if model_id
+        else _pricing_for_savings(router_instance, model_id, identity, model, rate_key=_input_rate_fingerprint)
     )
-    input_cost, cache_read_cost, cache_write_cost = _input_cache_read_and_write_cost(pricing)
-    compression: Final = max(compression_saved_tokens, 0) * input_cost
+    compression_input, _, _ = _input_cache_read_and_write_cost(compression_pricing)
+    input_cost, cache_read_cost, cache_write_cost = _input_cache_read_and_write_cost(cache_pricing)
+    compression: Final = max(compression_saved_tokens, 0) * compression_input
     cache_read_input_tokens: Final = extract_cache_read_tokens(usage_object)
     cache_creation_input_tokens: Final = extract_cache_creation_tokens(usage_object)
     read_discount: Final = max(cache_read_input_tokens, 0) * max(input_cost - cache_read_cost, 0.0)

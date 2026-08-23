@@ -1,5 +1,3 @@
-
-
 import pytest
 
 import litellm
@@ -1008,6 +1006,242 @@ def test_a_recorded_baseline_deployment_prices_at_its_configured_rate():
         llm_router=lambda: router,
     )
     assert with_deployment_rate.autorouter > at_public_rate.autorouter
+
+
+def _custom_unmapped_router():
+    """A self-hosted model that is not in the built-in cost map."""
+    return Router(
+        model_list=[
+            {
+                "model_name": "muse-glimmer-30b",
+                "litellm_params": {
+                    "model": "muse-glimmer-30b",
+                    "custom_llm_provider": "openai",
+                    "api_base": "https://example.invalid/v1",
+                    "api_key": "sk-test",
+                    "input_cost_per_token": 3.5e-07,
+                    "output_cost_per_token": 1.5e-06,
+                    "cache_read_input_token_cost": 3.5e-08,
+                },
+            },
+        ]
+    )
+
+
+def test_custom_unmapped_model_compression_savings_use_deployment_id_without_router():
+    """A custom model's rate lives on the deployment-id cost-map key.
+
+    The spend writer always has ``model_id``; it does not always have a live Router.
+    Looking the rate up only through ``get_model_info`` hits the stripped shared
+    backend key and reports $0.00 next to a non-zero token count.
+    """
+    router = _custom_unmapped_router()
+    deployment_id = router.get_model_list(model_name="muse-glimmer-30b")[0]["model_info"]["id"]
+
+    result = compute_savings_spend(
+        model="muse-glimmer-30b",
+        custom_llm_provider="openai",
+        compression_saved_tokens=2642007,
+        model_id=deployment_id,
+    )
+    assert result.compression == pytest.approx(2642007 * 3.5e-07)
+    assert result.compression > 0
+
+
+def test_custom_unmapped_model_compression_savings_without_model_id_use_unique_deployment():
+    """A single custom deployment can still be priced when the log omitted model_id."""
+    router = _custom_unmapped_router()
+    result = compute_savings_spend(
+        model="muse-glimmer-30b",
+        custom_llm_provider="openai",
+        compression_saved_tokens=100000,
+        llm_router=lambda: router,
+    )
+    assert result.compression == pytest.approx(100000 * 3.5e-07)
+
+
+def test_custom_unmapped_model_prompt_caching_savings_use_deployment_rate():
+    router = _custom_unmapped_router()
+    deployment_id = router.get_model_list(model_name="muse-glimmer-30b")[0]["model_info"]["id"]
+    result = compute_savings_spend(
+        model="muse-glimmer-30b",
+        custom_llm_provider="openai",
+        compression_saved_tokens=0,
+        usage_object={"cache_read_input_tokens": 500000},
+        model_id=deployment_id,
+    )
+    assert result.prompt_caching == pytest.approx(500000 * (3.5e-07 - 3.5e-08))
+    assert result.prompt_caching > 0
+
+
+def test_two_custom_deployments_at_different_rates_need_model_id():
+    """The public model_name is shared; without model_id the rate cannot be guessed."""
+    router = Router(
+        model_list=[
+            {
+                "model_name": "deepseek-v4-pro",
+                "litellm_params": {
+                    "model": "openrouter/deepseek/deepseek-v4-pro",
+                    "api_key": "sk-openrouter",
+                    "input_cost_per_token": 4.225e-07,
+                    "output_cost_per_token": 8.45e-07,
+                    "cache_read_input_token_cost": 3.5e-08,
+                },
+            },
+            {
+                "model_name": "deepseek-v4-pro",
+                "litellm_params": {
+                    "model": "openai/deepseek-v4-pro",
+                    "custom_llm_provider": "openai",
+                    "api_base": "https://example.invalid/zen",
+                    "api_key": "sk-zen",
+                    "input_cost_per_token": 1.74e-06,
+                    "output_cost_per_token": 3.84e-06,
+                    "cache_read_input_token_cost": 1.74e-07,
+                },
+            },
+        ]
+    )
+    openrouter_id = router.get_model_list(model_name="deepseek-v4-pro")[0]["model_info"]["id"]
+    without_id = compute_savings_spend(
+        model="deepseek-v4-pro",
+        custom_llm_provider="openai",
+        compression_saved_tokens=100000,
+        llm_router=lambda: router,
+    )
+    with_id = compute_savings_spend(
+        model="deepseek/deepseek-v4-pro",
+        custom_llm_provider="openrouter",
+        compression_saved_tokens=100000,
+        model_id=openrouter_id,
+    )
+    assert without_id.compression == 0.0
+    assert with_id.compression == pytest.approx(100000 * 4.225e-07)
+
+
+def test_same_input_rate_different_cache_rates_still_price_compression():
+    """Compression only needs the input rate; prompt-caching still needs model_id.
+
+    Prompt-caching savings are ``tokens * (input - cache_read)``. Two deployments
+    at the same input price but different cache-read prices cannot share a cache
+    rate, but compression can still be priced from the unique input rate.
+    """
+    router = Router(
+        model_list=[
+            {
+                "model_name": "muse-glimmer-30b",
+                "litellm_params": {
+                    "model": "muse-glimmer-30b",
+                    "custom_llm_provider": "openai",
+                    "api_base": "https://example.invalid/v1",
+                    "api_key": "sk-a",
+                    "input_cost_per_token": 3.5e-07,
+                    "output_cost_per_token": 1.5e-06,
+                    "cache_read_input_token_cost": 3.5e-08,
+                },
+            },
+            {
+                "model_name": "muse-glimmer-30b",
+                "litellm_params": {
+                    "model": "muse-glimmer-30b",
+                    "custom_llm_provider": "openai",
+                    "api_base": "https://example.invalid/v2",
+                    "api_key": "sk-b",
+                    "input_cost_per_token": 3.5e-07,
+                    "output_cost_per_token": 1.5e-06,
+                    "cache_read_input_token_cost": 1.0e-07,
+                },
+            },
+        ]
+    )
+    without_id = compute_savings_spend(
+        model="muse-glimmer-30b",
+        custom_llm_provider="openai",
+        compression_saved_tokens=100000,
+        usage_object={"cache_read_input_tokens": 500000},
+        llm_router=lambda: router,
+    )
+    assert without_id.compression == pytest.approx(100000 * 3.5e-07)
+    assert without_id.prompt_caching == 0.0
+
+
+def test_omitted_cache_rate_matches_explicit_mirror_of_input():
+    """A missing cache price is the same effective rate as cache_read == input."""
+    router = Router(
+        model_list=[
+            {
+                "model_name": "muse-glimmer-30b",
+                "litellm_params": {
+                    "model": "muse-glimmer-30b",
+                    "custom_llm_provider": "openai",
+                    "api_base": "https://example.invalid/v1",
+                    "api_key": "sk-a",
+                    "input_cost_per_token": 3.5e-07,
+                    "output_cost_per_token": 1.5e-06,
+                },
+            },
+            {
+                "model_name": "muse-glimmer-30b",
+                "litellm_params": {
+                    "model": "muse-glimmer-30b",
+                    "custom_llm_provider": "openai",
+                    "api_base": "https://example.invalid/v2",
+                    "api_key": "sk-b",
+                    "input_cost_per_token": 3.5e-07,
+                    "output_cost_per_token": 1.5e-06,
+                    "cache_read_input_token_cost": 3.5e-07,
+                    "cache_creation_input_token_cost": 3.5e-07,
+                },
+            },
+        ]
+    )
+    result = compute_savings_spend(
+        model="muse-glimmer-30b",
+        custom_llm_provider="openai",
+        compression_saved_tokens=100000,
+        llm_router=lambda: router,
+    )
+    assert result.compression == pytest.approx(100000 * 3.5e-07)
+
+
+def test_ambiguous_cache_rates_do_not_fall_back_to_public_prompt_caching():
+    """Disagreeing deployment cache rates must not be replaced by the public map."""
+    public_input, public_cache_read = _anthropic_costs("claude-sonnet-5")
+    router = Router(
+        model_list=[
+            {
+                "model_name": "claude-sonnet-5",
+                "litellm_params": {
+                    "model": "claude-sonnet-5",
+                    "custom_llm_provider": "anthropic",
+                    "api_key": "sk-a",
+                    "input_cost_per_token": public_input,
+                    "cache_read_input_token_cost": 1.0e-08,
+                },
+            },
+            {
+                "model_name": "claude-sonnet-5",
+                "litellm_params": {
+                    "model": "claude-sonnet-5",
+                    "custom_llm_provider": "anthropic",
+                    "api_key": "sk-b",
+                    "input_cost_per_token": public_input,
+                    "cache_read_input_token_cost": 5.0e-08,
+                },
+            },
+        ]
+    )
+    result = compute_savings_spend(
+        model="claude-sonnet-5",
+        custom_llm_provider="anthropic",
+        compression_saved_tokens=100000,
+        usage_object={"cache_read_input_tokens": 500000},
+        llm_router=lambda: router,
+    )
+    public_prompt_caching = 500000 * max(public_input - public_cache_read, 0.0)
+    assert result.compression == pytest.approx(100000 * public_input)
+    assert result.prompt_caching == 0.0
+    assert public_prompt_caching != 0.0
 
 
 def _routed_decision() -> dict:
