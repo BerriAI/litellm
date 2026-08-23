@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { ArrowLeftOutlined, CopyOutlined, CheckOutlined, LinkOutlined } from "@ant-design/icons";
+import { ArrowLeft, Check, Copy, Link2 } from "lucide-react";
 import { buildMarketplaceSettingsSnippet, formatInstallCommand } from "./helpers";
 import { Plugin } from "./types";
 
@@ -64,7 +64,7 @@ const SkillDetail: React.FC<SkillDetailProps> = ({ skill, onBack }) => {
           marginBottom: 24,
         }}
       >
-        <ArrowLeftOutlined style={{ fontSize: 11 }} />
+        <ArrowLeft className="size-3" />
         <span>Skills</span>
       </div>
 
@@ -163,7 +163,7 @@ const SkillDetail: React.FC<SkillDetailProps> = ({ skill, onBack }) => {
                   }}
                 >
                   {sourceUrl.replace("https://", "")}
-                  <LinkOutlined style={{ fontSize: 11, flexShrink: 0 }} />
+                  <Link2 className="size-3 shrink-0" />
                 </a>
               </div>
             )}
@@ -243,7 +243,7 @@ const SkillDetail: React.FC<SkillDetailProps> = ({ skill, onBack }) => {
                   padding: 0,
                 }}
               >
-                {copiedKey === "install" ? <CheckOutlined /> : <CopyOutlined />}
+                {copiedKey === "install" ? <Check className="size-3" /> : <Copy className="size-3" />}
                 {copiedKey === "install" ? "Copied" : "Copy"}
               </button>
             </div>
@@ -315,7 +315,7 @@ const SkillDetail: React.FC<SkillDetailProps> = ({ skill, onBack }) => {
                   padding: 0,
                 }}
               >
-                {copiedKey === "settings" ? <CheckOutlined /> : <CopyOutlined />}
+                {copiedKey === "settings" ? <Check className="size-3" /> : <Copy className="size-3" />}
                 {copiedKey === "settings" ? "Copied" : "Copy"}
               </button>
             </div>

@@ -1,6 +1,6 @@
 import React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { renderWithProviders } from "@/../tests/test-utils";
 import TemplateParameterModal from "./template_parameter_modal";
@@ -93,7 +93,7 @@ describe("TemplateParameterModal", () => {
     await screen.findByText("Basic Redaction");
     expect(screen.getByRole("button", { name: "Continue" })).toBeDisabled();
 
-    await user.type(screen.getByPlaceholderText("e.g. Contoso"), "Contoso");
+    fireEvent.change(screen.getByPlaceholderText("e.g. Contoso"), { target: { value: "Contoso" } });
 
     expect(screen.getByRole("button", { name: "Continue" })).toBeEnabled();
   });
@@ -104,7 +104,7 @@ describe("TemplateParameterModal", () => {
     renderModal({ onConfirm });
 
     await screen.findByText("Basic Redaction");
-    await user.type(screen.getByPlaceholderText("e.g. Contoso"), "Contoso");
+    fireEvent.change(screen.getByPlaceholderText("e.g. Contoso"), { target: { value: "Contoso" } });
     await user.click(screen.getByRole("button", { name: "Continue" }));
 
     expect(onConfirm).toHaveBeenCalledTimes(1);
@@ -157,7 +157,7 @@ describe("TemplateParameterModal", () => {
     renderModal({ template: enrichmentTemplate });
 
     await screen.findByText("Competitor Discovery");
-    await user.type(screen.getByPlaceholderText("e.g. Acme Airlines"), "Contoso");
+    fireEvent.change(screen.getByPlaceholderText("e.g. Acme Airlines"), { target: { value: "Contoso" } });
 
     expect(screen.getByRole("button", { name: "Continue" })).toBeDisabled();
   });
@@ -172,7 +172,7 @@ describe("TemplateParameterModal", () => {
     renderModal({ template: enrichmentTemplate });
 
     await screen.findByText("Competitor Discovery");
-    await user.type(screen.getByPlaceholderText("e.g. Acme Airlines"), "Contoso");
+    fireEvent.change(screen.getByPlaceholderText("e.g. Acme Airlines"), { target: { value: "Contoso" } });
     await user.click(screen.getAllByRole("combobox")[0]);
     const options = await screen.findAllByText("gpt-5.1");
     await user.click(options[options.length - 1]);
@@ -195,7 +195,7 @@ describe("TemplateParameterModal", () => {
     renderModal({ template: enrichmentTemplate, onConfirm });
 
     await screen.findByText("Competitor Discovery");
-    await user.type(screen.getByPlaceholderText("e.g. Acme Airlines"), "Contoso");
+    fireEvent.change(screen.getByPlaceholderText("e.g. Acme Airlines"), { target: { value: "Contoso" } });
     await user.click(screen.getAllByRole("combobox")[0]);
     const options = await screen.findAllByText("gpt-5.1");
     await user.click(options[options.length - 1]);

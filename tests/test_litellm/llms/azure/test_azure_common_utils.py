@@ -1,15 +1,11 @@
 import json
 import os
-import sys
 import traceback
 from typing import Callable, Optional
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../..")
-)  # Adds the parent directory to the system path
 import litellm
 from litellm.llms.azure.common_utils import BaseAzureLLM, get_azure_ad_token
 from litellm.secret_managers.get_azure_ad_token_provider import (
@@ -812,7 +808,6 @@ async def test_azure_client_reuse(function_name, is_async, args):
     """
     Test that multiple Azure API calls reuse the same Azure OpenAI client
     """
-    litellm.set_verbose = True
 
     # Determine which client class to mock based on whether the test is async
     client_path = (

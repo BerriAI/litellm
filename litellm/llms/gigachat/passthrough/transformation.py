@@ -191,11 +191,10 @@ class GigaChatPassthroughConfig(BasePassthroughConfig):
             all_translated_chunks.append(chunk_obj)
 
         if len(all_translated_chunks) > 0:
-            model_response = stream_chunk_builder(
+            return stream_chunk_builder(
                 chunks=all_translated_chunks,
                 logging_obj=litellm_logging_obj,
             )
-            return model_response
         return None
 
     @staticmethod

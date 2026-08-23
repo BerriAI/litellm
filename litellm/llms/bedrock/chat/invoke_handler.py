@@ -163,7 +163,7 @@ async def make_call(
     json_mode: bool | None = False,
     bedrock_invoke_provider: litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL | None = None,
     stream_chunk_size: int | None = None,
-):
+) -> tuple[Any, httpx.Headers]:
     try:
         if client is None:
             client = get_async_httpx_client(
@@ -225,7 +225,7 @@ async def make_call(
             additional_args={"complete_input_dict": data},
         )
 
-        return completion_stream
+        return completion_stream, response.headers
     except httpx.HTTPStatusError as err:
         error_code: Final = err.response.status_code
         raise BedrockError(status_code=error_code, message=err.response.text)
@@ -248,7 +248,7 @@ def make_sync_call(
     json_mode: bool | None = False,
     bedrock_invoke_provider: litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL | None = None,
     stream_chunk_size: int | None = None,
-):
+) -> tuple[Any, httpx.Headers]:
     try:
         if client is None:
             client = _get_httpx_client(
@@ -309,7 +309,7 @@ def make_sync_call(
             additional_args={"complete_input_dict": data},
         )
 
-        return completion_stream
+        return completion_stream, response.headers
     except httpx.HTTPStatusError as err:
         error_code: Final = err.response.status_code
         raise BedrockError(status_code=error_code, message=err.response.text)
@@ -330,6 +330,7 @@ class AWSEventStreamDecoder:
         self.response_id: str | None = None
         self.json_mode = json_mode
         self._current_tool_name: str | None = None
+        self._thinking_ran = False
 
     def check_empty_tool_call_args(self) -> bool:
         """
@@ -559,7 +560,12 @@ class AWSEventStreamDecoder:
             elif "stopReason" in chunk_data:
                 finish_reason = map_finish_reason(chunk_data.get("stopReason", "stop"))
             elif "usage" in chunk_data:
-                usage = converse_config.transform_usage(chunk_data.get("usage", {}))
+                usage = converse_config.transform_usage(
+                    chunk_data.get("usage", {}),
+                    thinking_ran=self._thinking_ran,
+                )
+            if thinking_blocks:
+                self._thinking_ran = True
 
             model_response_provider_specific_fields: Final = {}
             if "trace" in chunk_data:

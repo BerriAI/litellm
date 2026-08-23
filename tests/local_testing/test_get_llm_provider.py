@@ -1,5 +1,4 @@
 import os
-import sys
 import traceback
 
 from dotenv import load_dotenv
@@ -9,9 +8,6 @@ import io
 
 from unittest.mock import patch
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 import pytest
 import litellm
 from litellm.types.router import LiteLLM_Params
@@ -569,5 +565,5 @@ class TestClaudeModelPatternMatching:
         )
 
         set_fallback_generalizations([])
-        with pytest.raises(Exception):
+        with pytest.raises(litellm.BadRequestError):
             litellm.get_llm_provider(model="claude-opus-4-9")

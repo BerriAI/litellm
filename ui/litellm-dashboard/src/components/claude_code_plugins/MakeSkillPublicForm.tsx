@@ -6,7 +6,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { cn } from "@/lib/cva.config";
 import { enableClaudeCodePlugin, disableClaudeCodePlugin } from "../networking";
-import NotificationsManager from "../molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { Plugin } from "./types";
 
 const STEP_TITLES = ["Select Skills", "Confirm"];
@@ -38,7 +38,7 @@ const MakeSkillPublicForm: React.FC<MakeSkillPublicFormProps> = ({
 
   const handleNext = () => {
     if (selectedSkills.size === 0) {
-      NotificationsManager.fromBackend("Please select at least one skill");
+      toast.fromError("Please select at least one skill");
       return;
     }
     setCurrentStep(1);
@@ -71,7 +71,7 @@ const MakeSkillPublicForm: React.FC<MakeSkillPublicFormProps> = ({
 
   const handleSubmit = async () => {
     if (selectedSkills.size === 0) {
-      NotificationsManager.fromBackend("Please select at least one skill");
+      toast.fromError("Please select at least one skill");
       return;
     }
 
@@ -91,12 +91,12 @@ const MakeSkillPublicForm: React.FC<MakeSkillPublicFormProps> = ({
         }),
       );
 
-      NotificationsManager.success(`Skill Hub updated — ${selectedSkills.size} skill(s) published`);
+      toast.success(`Skill Hub updated — ${selectedSkills.size} skill(s) published`);
       handleClose();
       onSuccess();
     } catch (error) {
       console.error("Error publishing skills:", error);
-      NotificationsManager.fromBackend("Failed to update skills. Please try again.");
+      toast.fromError("Failed to update skills. Please try again.");
     } finally {
       setLoading(false);
     }
@@ -120,19 +120,19 @@ const MakeSkillPublicForm: React.FC<MakeSkillPublicFormProps> = ({
         </label>
       </div>
 
-      <p className="text-sm text-gray-600">
+      <p className="text-sm text-muted-foreground">
         Selected skills will be visible to all users in the Skill Hub. Deselected skills will be unpublished.
       </p>
 
       <div className="max-h-96 overflow-y-auto border rounded-lg p-4">
         <div className="space-y-3">
           {skillsList.length === 0 ? (
-            <div className="text-center py-8 text-gray-500">
+            <div className="text-center py-8 text-muted-foreground">
               <p>No skills registered yet.</p>
             </div>
           ) : (
             skillsList.map((skill) => (
-              <div key={skill.name} className="flex items-center space-x-3 p-3 border rounded-lg hover:bg-gray-50">
+              <div key={skill.name} className="flex items-center space-x-3 p-3 border rounded-lg hover:bg-accent">
                 <Checkbox
                   aria-label={skill.name}
                   checked={selectedSkills.has(skill.name)}
@@ -143,7 +143,9 @@ const MakeSkillPublicForm: React.FC<MakeSkillPublicFormProps> = ({
                     <p className="font-medium font-mono text-sm break-words">{skill.name}</p>
                     {skill.enabled && <Badge variant="secondary">Public</Badge>}
                   </div>
-                  {skill.description && <p className="text-xs text-gray-500 truncate max-w-sm">{skill.description}</p>}
+                  {skill.description && (
+                    <p className="text-xs text-muted-foreground truncate max-w-sm">{skill.description}</p>
+                  )}
                 </div>
                 {skill.domain && <Badge variant="outline">{skill.domain}</Badge>}
               </div>
@@ -153,8 +155,8 @@ const MakeSkillPublicForm: React.FC<MakeSkillPublicFormProps> = ({
       </div>
 
       {selectedSkills.size > 0 && (
-        <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
-          <p className="text-sm text-blue-800">
+        <div className="bg-info/10 border border-info/20 rounded-lg p-3">
+          <p className="text-sm text-info">
             <strong>{selectedSkills.size}</strong> skill{selectedSkills.size !== 1 ? "s" : ""} will be published
           </p>
         </div>
@@ -166,8 +168,8 @@ const MakeSkillPublicForm: React.FC<MakeSkillPublicFormProps> = ({
     <div className="space-y-4">
       <h3 className="text-lg font-semibold">Confirm Publish to Skill Hub</h3>
 
-      <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
-        <p className="text-sm text-yellow-800">
+      <div className="bg-warning/10 border border-warning/20 rounded-lg p-4">
+        <p className="text-sm text-warning">
           <strong>Note:</strong> Published skills will be visible to all users in the Skill Hub tab. Skills not in the
           list below will be unpublished.
         </p>
@@ -180,7 +182,7 @@ const MakeSkillPublicForm: React.FC<MakeSkillPublicFormProps> = ({
             {Array.from(selectedSkills).map((name) => {
               const skill = skillsList.find((s) => s.name === name);
               return (
-                <div key={name} className="flex items-center justify-between gap-2 p-2 bg-gray-50 rounded-sm">
+                <div key={name} className="flex items-center justify-between gap-2 p-2 bg-muted rounded-sm">
                   <p className="font-mono text-sm min-w-0 break-words">{name}</p>
                   {skill?.domain && <Badge variant="outline">{skill.domain}</Badge>}
                 </div>
@@ -190,8 +192,8 @@ const MakeSkillPublicForm: React.FC<MakeSkillPublicFormProps> = ({
         </div>
       </div>
 
-      <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
-        <p className="text-sm text-blue-800">
+      <div className="bg-info/10 border border-info/20 rounded-lg p-3">
+        <p className="text-sm text-info">
           Total: <strong>{selectedSkills.size}</strong> skill{selectedSkills.size !== 1 ? "s" : ""} will be published
         </p>
       </div>

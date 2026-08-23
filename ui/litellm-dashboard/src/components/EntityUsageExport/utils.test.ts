@@ -1,3 +1,5 @@
+// @vitest-environment jsdom
+
 import type { DateRangePickerValue } from "@/components/shared/date_picker_types";
 import Papa from "papaparse";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";

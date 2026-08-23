@@ -1,6 +1,5 @@
 import json
 import os
-import sys
 from datetime import datetime
 from unittest.mock import AsyncMock, Mock, patch, MagicMock
 from typing import Optional
@@ -8,9 +7,6 @@ from fastapi import Request
 import pytest
 import asyncio
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 
 import litellm
 from litellm.proxy._types import UserAPIKeyAuth

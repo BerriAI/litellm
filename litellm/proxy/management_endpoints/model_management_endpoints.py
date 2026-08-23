@@ -24,6 +24,15 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.constants import LITELLM_PROXY_ADMIN_NAME
+from litellm.litellm_core_utils.ptu_pricing import (
+    CUSTOM_PRICING_FIELDS,
+    PTU_EMPTIED_PRICING_FIELDS,
+    PTU_MODEL_INFO_FIELDS,
+    PTU_ZEROED_PRICING_FIELDS,
+    PTU_ZEROED_TABLE_FIELDS,
+    SEARCH_CONTEXT_SIZES,
+    ptu_config_error,
+)
 from litellm.proxy._types import (
     BlockModelRequest,
     CommonProxyErrors,
@@ -89,7 +98,6 @@ from litellm.types.router import (
     ModelInfo,
     updateDeployment,
 )
-from litellm.types.utils import CustomPricingLiteLLMParams
 from litellm.utils import get_utc_datetime
 
 router: Final = APIRouter()
@@ -114,13 +122,14 @@ class UpdatePublicModelGroupsRequest(BaseModel):
 class _ProxyModelRow(Protocol):
     model_id: str
     model_name: str
+    litellm_params: Mapping[str, object]
     model_info: Mapping[str, object] | None
 
     def model_dump_json(self, *, exclude_none: bool = False) -> str: ...
 
 
 class _ProxyModelTable(Protocol):
-    def find_unique(self, *, where: Mapping[str, object]) -> Awaitable[_ProxyModelRow | None]: ...
+    def find_unique(self, *, where: Mapping[str, object]) -> Awaitable[BaseModel | None]: ...
 
     def find_many(self, *, where: Mapping[str, object]) -> Awaitable[Sequence[_ProxyModelRow]]: ...
 
@@ -182,10 +191,7 @@ def _model_alias_table(prisma_client: PrismaClient) -> _ModelAliasTable:
 
 
 async def get_db_model(model_id: str, prisma_client: PrismaClient) -> Deployment | None:
-    db_model: Final = cast(
-        BaseModel | None,
-        await _proxy_model_table(prisma_client).find_unique(where={"model_id": model_id}),
-    )
+    db_model: Final = await _proxy_model_table(prisma_client).find_unique(where={"model_id": model_id})
 
     if not db_model:
         return None
@@ -242,7 +248,6 @@ def _raise_on_strategy_router_write_violation(
     )
 
 
-_PTU_MODEL_INFO_FIELDS: Final = ("ptu_count", "cost_per_ptu_per_hour", "ptu_effective_from", "ptu_effective_to")
 _PTU_PRICED_PAIR: Final = frozenset({"ptu_count", "cost_per_ptu_per_hour"})
 
 
@@ -256,7 +261,7 @@ def _explicitly_cleared_ptu_fields(model_info: ModelInfo | None) -> frozenset[st
         return frozenset()
     return frozenset(
         field
-        for field in _PTU_MODEL_INFO_FIELDS
+        for field in PTU_MODEL_INFO_FIELDS
         if field in model_info.model_fields_set and getattr(model_info, field) is None
     )
 
@@ -289,7 +294,7 @@ def _raise_if_ptu_cost_attribution_disabled(incoming_model_info: Mapping[str, ob
     """
     if is_ptu_cost_attribution_enabled():
         return
-    supplied: Final = tuple(field for field in _PTU_MODEL_INFO_FIELDS if incoming_model_info.get(field) is not None)
+    supplied: Final = tuple(field for field in PTU_MODEL_INFO_FIELDS if incoming_model_info.get(field) is not None)
     if not supplied:
         return
     raise HTTPException(
@@ -304,42 +309,17 @@ def _raise_if_ptu_cost_attribution_disabled(incoming_model_info: Mapping[str, ob
 def _validate_ptu_model_info(model_info: Mapping[str, object]) -> None:
     """Enforce the PTU cross-field invariant on the effective model_info.
 
-    ptu_count and cost_per_ptu_per_hour must be set together, and a team_id and a
-    ptu_effective_from are required when they are. The start is mandatory rather than
-    defaulted because flat cost accrues from it: inferring one would let a deployment
-    configured today be billed for days it did not exist. Per-field bounds (positive
-    count, non-negative rate) are enforced by ModelInfo itself.
+    The rules live in litellm_core_utils.ptu_pricing so that config.yaml registration
+    refuses the same deployments this endpoint does, for the same reason. Per-field bounds
+    (positive count, non-negative rate) are enforced by ModelInfo itself.
 
-    Window ordering is checked before the count/rate gate. A patch that touches only one
-    end of the window carries no count or rate, and ModelInfo sees one field at a time, so
-    leaving it to either would let an inverted window reach the row; the next load then
-    fails to parse it and drops the deployment out of the router, where no further patch
-    can repair it because each one re-parses the stored value first.
+    Registration additionally requires an operator-declared ``model_info.id``, which this
+    endpoint does not: a stored deployment already holds a stable primary key, where a
+    config-declared one is otherwise keyed by a hash of its own parameters.
     """
-    effective_from: Final = _coerce_ptu_datetime(model_info.get("ptu_effective_from"))
-    effective_to: Final = _coerce_ptu_datetime(model_info.get("ptu_effective_to"))
-    if effective_from is not None and effective_to is not None and effective_to <= effective_from:
-        raise HTTPException(status_code=400, detail="ptu_effective_to must be after ptu_effective_from")
-
-    has_count: Final = model_info.get("ptu_count") is not None
-    has_rate: Final = model_info.get("cost_per_ptu_per_hour") is not None
-    if not has_count and not has_rate:
-        return
-    if has_count != has_rate:
-        raise HTTPException(status_code=400, detail="ptu_count and cost_per_ptu_per_hour must be set together")
-    if effective_from is None:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "ptu_effective_from is required when PTU fields are set. Flat cost accrues from that "
-                "instant, so without it the start would have to be inferred and a deployment configured "
-                "today could be billed for days it did not exist"
-            ),
-        )
-    if not model_info.get("team_id"):
-        raise HTTPException(
-            status_code=400, detail="team_id is required when PTU fields are set (one model maps to one team)"
-        )
+    error: Final = ptu_config_error(model_info)
+    if error is not None:
+        raise HTTPException(status_code=400, detail=error)
 
 
 # The mirrored per-token pricing fields plus the three remaining fields
@@ -348,12 +328,8 @@ def _validate_ptu_model_info(model_info: Mapping[str, object]) -> None:
 # tiered_pricing is the one mirrored field that is a table of ranges, not a rate, so it is stored
 # empty (see _PTU_EMPTIED_PRICING_FIELDS): its tiers outrank the zeros written beside them, so
 # dropping it would leave the cost map's tiers billing the traffic the reserved capacity covers.
-_PTU_ZEROED_PRICING_FIELDS: Final = tuple(f for f in SPECIAL_MODEL_INFO_PARAMS if f != "tiered_pricing") + (
-    "cache_creation_input_token_cost_above_1hr",
-    "cache_creation_input_token_cost_above_200k_tokens",
-    "cache_read_input_token_cost_above_200k_tokens",
-)
-_PTU_EMPTIED_PRICING_FIELDS: Final = frozenset({"tiered_pricing"})
+_PTU_ZEROED_PRICING_FIELDS: Final = PTU_ZEROED_PRICING_FIELDS
+_PTU_EMPTIED_PRICING_FIELDS: Final = PTU_EMPTIED_PRICING_FIELDS
 _PTU_ZEROED_PRICING: Final[Mapping[str, float | tuple[()]]] = MappingProxyType(
     {
         **dict.fromkeys(_PTU_ZEROED_PRICING_FIELDS, 0.0),
@@ -365,13 +341,13 @@ _EMPTY_MODEL_INFO: Final[Mapping[str, object]] = _NO_PRICING_OVERRIDE
 # Rate fields only. CustomPricingLiteLLMParams also carries settings that are not charges
 # (an embedding's output_vector_size, the regional uplift multipliers), and zeroing one of
 # those would destroy the deployment's configuration rather than stop a charge.
-_CUSTOM_PRICING_FIELDS: Final = frozenset(f for f in CustomPricingLiteLLMParams.model_fields if "cost" in f)
+_CUSTOM_PRICING_FIELDS: Final = CUSTOM_PRICING_FIELDS
 # search_context_cost_per_query holds its rates in a table keyed by context size, and an absent
 # table means the provider's own default rate rather than free (litellm/llms/gemini/cost_calculator
 # falls back to $0.035), so it is zeroed in place rather than emptied like tiered_pricing, and
 # written on every PTU deployment rather than only where a table is already stored.
-_PTU_ZEROED_TABLE_FIELDS: Final = frozenset({"search_context_cost_per_query"})
-_SEARCH_CONTEXT_SIZES: Final = ("search_context_size_low", "search_context_size_medium", "search_context_size_high")
+_PTU_ZEROED_TABLE_FIELDS: Final = PTU_ZEROED_TABLE_FIELDS
+_SEARCH_CONTEXT_SIZES: Final = SEARCH_CONTEXT_SIZES
 
 
 def _is_nonzero_rate(value: object) -> bool:
@@ -513,28 +489,6 @@ def _ptu_priced_deployment(model_params: Deployment) -> Deployment:
             }
         )
     )
-
-
-def _parse_ptu_datetime(value: object) -> datetime.datetime | None:
-    """``value`` as a datetime, parsing an ISO string, else None."""
-    if isinstance(value, datetime.datetime):
-        return value
-    if not isinstance(value, str):
-        return None
-    try:
-        return datetime.datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError:
-        return None
-
-
-def _coerce_ptu_datetime(value: object) -> datetime.datetime | None:
-    """Coerce a model_info effective-window value (datetime or ISO string) to UTC, else None."""
-    parsed: Final = _parse_ptu_datetime(value)
-    if parsed is None:
-        return None
-    if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=datetime.timezone.utc)
-    return parsed.astimezone(datetime.timezone.utc)
 
 
 def update_db_model(db_model: Deployment, updated_patch: updateDeployment) -> PrismaCompatibleUpdateDBModel:
@@ -1577,7 +1531,7 @@ async def delete_model(
                 },
             )
 
-        model_in_db: Final = await ModelRepository(prisma_client).table.find_unique(where={"model_id": model_info.id})
+        model_in_db: Final = await _proxy_model_table(prisma_client).find_unique(where={"model_id": model_info.id})
         if model_in_db is None:
             raise HTTPException(
                 status_code=400,
@@ -1914,7 +1868,7 @@ async def update_model(
             )
 
         _model_id: str | None = None
-        _model_info: Final = getattr(model_params, "model_info", None)
+        _model_info: Final[ModelInfo | None] = getattr(model_params, "model_info", None)
         if _model_info is None:
             raise Exception("model_info not provided")
 

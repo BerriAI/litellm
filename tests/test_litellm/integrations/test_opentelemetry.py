@@ -1,15 +1,19 @@
 import asyncio
+import concurrent.futures
+import gc
 import json
 import os
 import sys
+import threading
 import time
 import unittest
+import weakref
 from datetime import datetime, timedelta, timezone
+from types import MappingProxyType
 from parameterized import parameterized
 from unittest.mock import MagicMock, patch
 
 # Adds the grandparent directory to sys.path to allow importing project modules
-sys.path.insert(0, os.path.abspath("../.."))
 from opentelemetry import trace
 from opentelemetry.sdk._logs import LoggerProvider as OTLoggerProvider
 from opentelemetry.sdk._logs.export import InMemoryLogExporter, SimpleLogRecordProcessor
@@ -20,6 +24,7 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 import litellm
+from litellm.integrations import opentelemetry as otel_module
 from litellm.integrations.opentelemetry import (
     OpenTelemetry,
     OpenTelemetryConfig,
@@ -28,6 +33,7 @@ from litellm.integrations.opentelemetry import (
     _normalize_team_metadata_keys,
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+from litellm.types.services import ServiceLoggerPayload, ServiceTypes
 
 
 class TestOpenTelemetryGuardrails(unittest.TestCase):
@@ -1839,6 +1845,22 @@ class TestOpenTelemetryHeaderSplitting(unittest.TestCase):
         self.assertEqual(
             result, {"api-key": "value1=part2", "config": "setting=enabled"}
         )
+
+    def test_accepts_any_mapping_not_only_dict(self):
+        """The parameter is typed Mapping, so a non-dict Mapping must not silently drop
+        every header and leave the exporter unauthenticated."""
+        otel = OpenTelemetry()
+        headers = MappingProxyType({"authorization": "Basic abc"})
+        self.assertEqual(otel._get_headers_dictionary(headers), {"authorization": "Basic abc"})
+
+    def test_returns_a_copy_so_the_exporter_never_aliases_the_caller(self):
+        """The result is handed to a long-lived exporter, so it must not be the caller's
+        own dict."""
+        otel = OpenTelemetry()
+        headers = {"authorization": "Basic abc"}
+        result = otel._get_headers_dictionary(headers)
+        self.assertIsNot(result, headers)
+        self.assertEqual(result, headers)
 
 
 class TestOpenTelemetryEndpointNormalization(unittest.TestCase):
@@ -6007,3 +6029,319 @@ class TestOTELServiceTierAttributes(unittest.TestCase):
             response_obj,
         )
         self.assertEqual(attributes[self.RESPONSE_KEY], "tier-added-by-provider-later")
+
+
+class TestDynamicTracerProviderCache(unittest.TestCase):
+    """Every credential-scoped TracerProvider that owns its exporter also owns a
+    BatchSpanProcessor worker thread that only stops on shutdown, so the cache holding them
+    must be bounded and must shut down whatever it drops (LIT-5437: threads accumulated
+    until pods were OOMKilled)."""
+
+    BSP_THREAD_NAME = "OtelBatchSpanProcessor"
+
+    def _logger(self, cap=3, exporter="console"):
+        logger = OpenTelemetry(
+            config=OpenTelemetryConfig(exporter=exporter, skip_set_global=True),
+            max_dynamic_tracer_providers=cap,
+        )
+        self.addCleanup(logger._tracer_provider.shutdown)
+        self.addCleanup(self._drain, logger)
+        return logger
+
+    def _drain(self, logger):
+        for entry in list(logger._tracer_provider_cache.values()):
+            entry.provider.shutdown()
+        logger._tracer_provider_cache.clear()
+
+    def _live_exporter_threads(self):
+        return [t for t in threading.enumerate() if t.name == self.BSP_THREAD_NAME]
+
+    def _wait_for_exporter_threads(self, expected, timeout=10.0):
+        """Dropped providers are shut down off-thread, so poll instead of sleeping."""
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            count = len(self._live_exporter_threads())
+            if count <= expected:
+                return count
+            time.sleep(0.05)
+        return len(self._live_exporter_threads())
+
+    def test_distinct_credential_sets_stay_bounded(self):
+        """One tenant per credential set must not mean one live thread per credential set."""
+        logger = self._logger(cap=3)
+        before = len(self._live_exporter_threads())
+
+        for i in range(25):
+            logger._get_tracer_with_dynamic_headers({"authorization": f"Basic tenant-{i}"})
+
+        self.assertEqual(len(logger._tracer_provider_cache), 3)
+        # Guards the thread-name constant: a rename upstream would make this read 0 and the
+        # bound assertion below would pass while measuring nothing.
+        self.assertGreaterEqual(len(self._live_exporter_threads()), 1)
+        self.assertLessEqual(self._wait_for_exporter_threads(before + 3) - before, 3)
+
+    def test_evicted_provider_is_shut_down(self):
+        """An evicted provider is stopped, not silently dropped with its thread running."""
+        logger = self._logger(cap=3)
+        before = len(self._live_exporter_threads())
+        with patch.object(otel_module, "_shutdown_tracer_provider") as mock_shutdown:
+            logger._get_tracer_with_dynamic_headers({"authorization": "Basic evict-me"})
+            evicted = next(iter(logger._tracer_provider_cache.values()))
+
+            for i in range(3):
+                logger._get_tracer_with_dynamic_headers({"authorization": f"Basic keep-{i}"})
+
+            self.assertNotIn(evicted, logger._tracer_provider_cache.values())
+            self._wait_for_call(mock_shutdown)
+            mock_shutdown.assert_called_once_with(evicted.provider)
+
+        # The patch stopped the real shutdown, so stop the victim here; leaving its
+        # exporter thread alive would perturb the thread-census assertions elsewhere.
+        evicted.provider.shutdown()
+        still_cached = len(logger._tracer_provider_cache)
+        self.assertEqual(self._wait_for_exporter_threads(before + still_cached), before + still_cached)
+
+    def _wait_for_call(self, mock_fn, timeout=10.0):
+        """The shutdown runs on a worker thread, so give it a moment to land."""
+        deadline = time.time() + timeout
+        while time.time() < deadline and not mock_fn.call_args_list:
+            time.sleep(0.05)
+
+    def test_concurrent_first_requests_build_one_provider(self):
+        """Concurrent misses on one credential set race to build; only the winner may survive,
+        and the losers must be shut down rather than orphaned with their threads running."""
+        logger = self._logger(cap=3)
+        before = len(self._live_exporter_threads())
+        headers = {"authorization": "Basic same-tenant"}
+        barrier = threading.Barrier(16)
+
+        def _request_tracer(_):
+            barrier.wait()
+            return logger._get_tracer_with_dynamic_headers(headers)
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=16) as pool:
+            list(pool.map(_request_tracer, range(16)))
+
+        self.assertEqual(len(logger._tracer_provider_cache), 1)
+        self.assertEqual(self._wait_for_exporter_threads(before + 1) - before, 1)
+
+    def test_shared_exporter_instance_survives_dropped_providers(self):
+        """A caller-supplied SpanExporter is shared with the logger's own provider, so a
+        dropped provider must not shut it down and silence the whole process."""
+        shared = InMemorySpanExporter()
+        logger = self._logger(cap=1, exporter=shared)
+        with logger.tracer.start_as_current_span("before"):
+            pass
+
+        for i in range(4):
+            logger._get_tracer_with_dynamic_headers({"authorization": f"Basic tenant-{i}"})
+
+        with logger.tracer.start_as_current_span("after"):
+            pass
+
+        self.assertEqual(
+            [span.name for span in shared.get_finished_spans()], ["before", "after"]
+        )
+
+    def test_mixed_ownership_cache_shuts_down_only_the_victims_that_own_their_exporter(self):
+        """Both dynamic entry points share one cache, so it can hold providers of mixed
+        ownership. Whether an evicted provider may be shut down is a property of that
+        provider, not of the request that evicted it."""
+        shared = InMemorySpanExporter()
+        logger = self._logger(cap=1, exporter=shared)
+        with logger.tracer.start_as_current_span("before"):
+            pass
+
+        # Cached by the headers path, so its processor wraps the SHARED exporter.
+        logger._get_tracer_with_dynamic_headers({"authorization": "Basic shared-owner"})
+        # Evicted by the config path, which builds its OWN exporter from a named kind.
+        logger._get_tracer_with_dynamic_config(
+            OpenTelemetryConfig(exporter="console", skip_set_global=True)
+        )
+
+        with logger.tracer.start_as_current_span("after"):
+            pass
+
+        self.assertFalse(shared._stopped)
+        self.assertEqual(
+            [span.name for span in shared.get_finished_spans()], ["before", "after"]
+        )
+
+    def test_mixed_ownership_cache_still_reclaims_a_thread_owning_victim(self):
+        """The other direction of the same defect: a victim that owns a real exporter
+        thread must still be shut down even when the evicting request does not."""
+        shared = InMemorySpanExporter()
+        logger = self._logger(cap=1, exporter=shared)
+        before = len(self._live_exporter_threads())
+
+        # Cached by the config path with a named kind, so it owns a BatchSpanProcessor thread.
+        logger._get_tracer_with_dynamic_config(
+            OpenTelemetryConfig(exporter="console", skip_set_global=True)
+        )
+        self.assertEqual(len(self._live_exporter_threads()) - before, 1)
+
+        # Evicted by the headers path, whose own exporter is the shared instance.
+        logger._get_tracer_with_dynamic_headers({"authorization": "Basic shared-owner"})
+
+        self.assertEqual(self._wait_for_exporter_threads(before) - before, 0)
+
+    def test_dropped_shared_exporter_provider_is_not_retained_by_an_exit_hook(self):
+        """A provider we may never shut down must not register an interpreter-exit hook.
+        The hook holds a strong reference, so the provider would be pinned for the life of
+        the process (the very leak this fixes) and would stop the shared exporter at exit."""
+        shared = InMemorySpanExporter()
+        logger = self._logger(cap=1, exporter=shared)
+
+        logger._get_tracer_with_dynamic_headers({"authorization": "Basic a"})
+        entry = next(iter(logger._tracer_provider_cache.values()))
+        self.assertFalse(entry.owns_exporter)
+        victim = weakref.ref(entry.provider)
+
+        logger._get_tracer_with_dynamic_headers({"authorization": "Basic b"})
+        del entry
+        gc.collect()
+
+        self.assertIsNone(victim(), "evicted shared-exporter provider is still referenced")
+
+    def test_provider_that_owns_its_exporter_keeps_its_exit_flush(self):
+        """The counterpart: a provider that owns a buffering processor must keep its exit
+        hook so its last batch still flushes when the process stops."""
+        logger = self._logger(cap=3)
+        logger._get_tracer_with_dynamic_headers({"authorization": "Basic owned"})
+        entry = next(iter(logger._tracer_provider_cache.values()))
+
+        self.assertTrue(entry.owns_exporter)
+        self.assertIsNotNone(entry.provider._atexit_handler)
+
+    def test_dynamic_providers_share_one_resource(self):
+        """Building the Resource scans every installed distribution's entry points, and the
+        dynamic providers reach it from the async logging path, so one logger builds it once."""
+        logger = self._logger(cap=8)
+
+        for i in range(4):
+            logger._get_tracer_with_dynamic_headers({"authorization": f"Basic tenant-{i}"})
+
+        entries = list(logger._tracer_provider_cache.values())
+        self.assertEqual(len(entries), 4)
+        self.assertEqual(len({id(entry.provider.resource) for entry in entries}), 1)
+        self.assertIs(entries[0].provider.resource, logger._litellm_resource())
+
+    def test_resource_is_memoized_per_logger_not_shared(self):
+        """Two loggers must not share a Resource; the second's service.name would be wrong."""
+        first = self._logger()
+        second = OpenTelemetry(
+            config=OpenTelemetryConfig(exporter="console", skip_set_global=True, service_name="svc-second")
+        )
+        self.addCleanup(second._tracer_provider.shutdown)
+
+        self.assertIsNot(first._litellm_resource(), second._litellm_resource())
+        self.assertEqual(second._litellm_resource().attributes.get("service.name"), "svc-second")
+
+
+class TestOpenTelemetryDatabaseSemconvAttributes(unittest.TestCase):
+    """A Postgres service span must name the PostgreSQL server it reached.
+
+    Without ``db.system`` and ``server.address``, the only host in the trace is
+    the loopback address of Prisma's local query engine, so the backend
+    attributes the wait to ``localhost`` and it cannot be correlated with the
+    database's own metrics.
+    """
+
+    DSN = "postgresql://llmproxy:dbpassword9090@litellm-prod.abc123.us-east-1.rds.amazonaws.com:6432/litellm?schema=reporting"
+    REPLICA_DSN = "postgresql://reader:r3ad0nly@litellm-prod-ro.abc123.us-east-1.rds.amazonaws.com/litellm"
+
+    def _service_span(self, service, call_type, dsn, error=None, replica_dsn=None):
+        exporter = InMemorySpanExporter()
+        provider = TracerProvider()
+        provider.add_span_processor(SimpleSpanProcessor(exporter))
+        otel = OpenTelemetry()
+        otel.tracer = provider.get_tracer(__name__)
+        parent = otel.tracer.start_span("Received Proxy Server Request")
+        payload = ServiceLoggerPayload(
+            is_error=error is not None,
+            error=error,
+            service=service,
+            duration=0.25,
+            call_type=call_type,
+            event_metadata=None,
+        )
+        hook = otel.async_service_failure_hook if error else otel.async_service_success_hook
+        kwargs = {"error": error} if error else {}
+        env = {k: v for k, v in (("DATABASE_URL", dsn), ("DATABASE_URL_READ_REPLICA", replica_dsn)) if v}
+        with patch.dict(os.environ, env, clear=False):
+            for absent in {"DATABASE_URL", "DATABASE_URL_READ_REPLICA"} - set(env):
+                os.environ.pop(absent, None)
+            asyncio.run(
+                hook(
+                    payload=payload,
+                    parent_otel_span=parent,
+                    start_time=datetime.now(),
+                    end_time=datetime.now(),
+                    **kwargs,
+                )
+            )
+        parent.end()
+        return next(s for s in exporter.get_finished_spans() if s.name == service.value)
+
+    def test_postgres_span_names_the_database_server(self):
+        span = self._service_span(ServiceTypes.DB, "get_data", self.DSN)
+        self.assertEqual(span.attributes["db.system.name"], "postgresql")
+        self.assertEqual(span.attributes["db.operation.name"], "get_data")
+        self.assertEqual(
+            span.attributes["server.address"],
+            "litellm-prod.abc123.us-east-1.rds.amazonaws.com",
+        )
+        self.assertEqual(span.attributes["server.port"], 6432)
+        self.assertEqual(span.attributes["db.namespace"], "litellm|reporting")
+
+    def test_datastore_span_is_a_client_span_carrying_the_legacy_db_system(self):
+        """Datadog types a span as a database call from CLIENT kind plus
+        ``db.system``; an INTERNAL span is classified as custom work."""
+        span = self._service_span(ServiceTypes.DB, "get_data", self.DSN)
+        self.assertEqual(span.kind, trace.SpanKind.CLIENT)
+        self.assertEqual(span.attributes["db.system"], "postgresql")
+
+    def test_internal_service_span_stays_internal(self):
+        span = self._service_span(ServiceTypes.RESET_BUDGET_JOB, "reset_budget", self.DSN)
+        self.assertEqual(span.kind, trace.SpanKind.INTERNAL)
+        self.assertNotIn("db.system.name", span.attributes)
+        self.assertNotIn("server.address", span.attributes)
+
+    def test_existing_service_and_call_type_attributes_are_unchanged(self):
+        span = self._service_span(ServiceTypes.DB, "get_data", self.DSN)
+        self.assertEqual(span.attributes["service"], "postgres")
+        self.assertEqual(span.attributes["call_type"], "get_data")
+
+    def test_failed_postgres_span_also_names_the_database_server(self):
+        span = self._service_span(ServiceTypes.DB, "get_data", self.DSN, error="connection refused")
+        self.assertEqual(span.attributes["db.system.name"], "postgresql")
+        self.assertEqual(span.kind, trace.SpanKind.CLIENT)
+        self.assertEqual(
+            span.attributes["server.address"],
+            "litellm-prod.abc123.us-east-1.rds.amazonaws.com",
+        )
+        self.assertEqual(span.attributes["error"], "connection refused")
+
+    def test_no_credential_from_the_dsn_lands_on_the_span(self):
+        span = self._service_span(ServiceTypes.DB, "get_data", self.DSN)
+        exported = " ".join(str(value) for value in span.attributes.values())
+        self.assertIn("litellm-prod.abc123.us-east-1.rds.amazonaws.com", exported)
+        self.assertNotIn("dbpassword9090", exported)
+        self.assertNotIn("llmproxy", exported)
+
+    def test_redis_span_does_not_borrow_the_postgres_endpoint(self):
+        span = self._service_span(ServiceTypes.REDIS, "async_set_cache", self.DSN)
+        self.assertEqual(span.attributes["db.system.name"], "redis")
+        self.assertEqual(span.kind, trace.SpanKind.CLIENT)
+        self.assertNotIn("server.address", span.attributes)
+
+    def test_configured_read_replica_suppresses_the_endpoint(self):
+        span = self._service_span(ServiceTypes.DB, "get_data", self.DSN, replica_dsn=self.REPLICA_DSN)
+        self.assertEqual(span.attributes["db.system.name"], "postgresql")
+        self.assertNotIn("server.address", span.attributes)
+        self.assertNotIn("db.namespace", span.attributes)
+
+    def test_unset_database_url_leaves_the_span_without_endpoint_attributes(self):
+        span = self._service_span(ServiceTypes.DB, "get_data", None)
+        self.assertEqual(span.attributes["db.system.name"], "postgresql")
+        self.assertNotIn("server.address", span.attributes)
