@@ -2966,10 +2966,109 @@ class TestWifExchangeTransportHardening:
 
 
 class TestWifParamsAreNotClientSettable:
-    def test_every_wif_param_is_banned_from_request_bodies(self):
-        """These fields choose which server-side secret is read and, with api_base, where it is sent,
-        so a caller-supplied value would be an exfiltration primitive."""
-        from litellm.proxy.auth.auth_utils import _BANNED_REQUEST_BODY_PARAMS
+    def test_every_minting_param_is_server_owned(self):
+        """Each of these selects which server-side secret is read; only the inert workspace id is
+        left settable, because Bedrock Claude Platform already accepts that spelling."""
+        from litellm.proxy.auth.auth_utils import _ANTHROPIC_WIF_UNCONDITIONAL_BANNED
         from litellm.types.utils import anthropic_wif_litellm_params
 
-        assert set(anthropic_wif_litellm_params) <= set(_BANNED_REQUEST_BODY_PARAMS)
+        assert set(_ANTHROPIC_WIF_UNCONDITIONAL_BANNED) == set(anthropic_wif_litellm_params) - {
+            "anthropic_workspace_id"
+        }
+
+
+class TestWifServerOwnedParamsAreUnconditional:
+    """The minting fields choose which server-side secret is read and, with api_base, where it goes,
+    so no client-side credential opt-in may re-enable them."""
+
+    @staticmethod
+    def _body(param: str) -> dict:
+        return {"model": "claude-sonnet-5", param: "oidc/env/SOME_SERVER_SECRET"}
+
+    @pytest.mark.parametrize(
+        "param",
+        [
+            "anthropic_identity_token",
+            "anthropic_identity_token_file",
+            "anthropic_federation_rule_id",
+            "anthropic_organization_id",
+            "anthropic_service_account_id",
+        ],
+    )
+    def test_rejected_even_with_proxy_wide_opt_in(self, param: str):
+        from litellm.proxy.auth.auth_utils import is_request_body_safe
+
+        with pytest.raises(ValueError, match="server-owned workload identity federation"):
+            is_request_body_safe(
+                request_body=self._body(param),
+                general_settings={"allow_client_side_credentials": True},
+                llm_router=None,
+                model="claude-sonnet-5",
+            )
+
+    def test_rejected_inside_nested_litellm_params(self):
+        from litellm.proxy.auth.auth_utils import is_request_body_safe
+
+        with pytest.raises(ValueError, match="server-owned workload identity federation"):
+            is_request_body_safe(
+                request_body={"model": "claude-sonnet-5", "litellm_params": self._body("anthropic_identity_token")},
+                general_settings={"allow_client_side_credentials": True},
+                llm_router=None,
+                model="claude-sonnet-5",
+            )
+
+    def test_workspace_id_stays_allowed(self):
+        """It cannot mint anything on its own, and Bedrock Claude Platform already accepts the
+        spelling in a request body."""
+        from litellm.proxy.auth.auth_utils import is_request_body_safe
+
+        assert (
+            is_request_body_safe(
+                request_body={"model": "claude-sonnet-5", "anthropic_workspace_id": "wrkspc_abc"},
+                general_settings={},
+                llm_router=None,
+                model="claude-sonnet-5",
+            )
+            is True
+        )
+
+
+class TestWifDisabledOnClientRedirectedBase:
+    def test_base_override_clears_wif_and_sets_the_sentinel(self):
+        """A federation token minted for a client-chosen api_base would send the workload's assertion,
+        and then the minted bearer, to that host."""
+        from litellm.llms.anthropic.wif import resolve_anthropic_wif_params
+        from litellm.router_utils.clientside_credential_handler import (
+            DISABLE_WORKLOAD_IDENTITY_PARAM,
+            get_dynamic_litellm_params,
+        )
+
+        admin_deployment = {
+            "model": "anthropic/claude-sonnet-5",
+            "anthropic_federation_rule_id": "fdrl_admin",
+            "anthropic_organization_id": "org-admin",
+            "anthropic_identity_token": "oidc/env/WIF_TEST_JWT",
+        }
+
+        redirected = get_dynamic_litellm_params(
+            litellm_params=dict(admin_deployment),
+            request_kwargs={"api_base": "https://not-anthropic.example"},
+        )
+
+        assert redirected[DISABLE_WORKLOAD_IDENTITY_PARAM] is True
+        assert "anthropic_federation_rule_id" not in redirected
+        assert resolve_anthropic_wif_params(redirected) is None
+
+    def test_sentinel_blocks_env_var_configured_federation(self, monkeypatch):
+        """Environment-configured federation cannot be cleared out of a dict, so the sentinel is what
+        stops it on a redirected deployment."""
+        from litellm.llms.anthropic.wif import resolve_anthropic_wif_params
+        from litellm.router_utils.clientside_credential_handler import DISABLE_WORKLOAD_IDENTITY_PARAM
+
+        monkeypatch.setenv("ANTHROPIC_FEDERATION_RULE_ID", "fdrl_env")
+        monkeypatch.setenv("ANTHROPIC_ORGANIZATION_ID", "org-env")
+        monkeypatch.setenv("ANTHROPIC_IDENTITY_TOKEN", "oidc/env/WIF_TEST_JWT")
+        monkeypatch.setenv("WIF_TEST_JWT", "jwt-assertion-value")
+
+        assert resolve_anthropic_wif_params({}) is not None
+        assert resolve_anthropic_wif_params({DISABLE_WORKLOAD_IDENTITY_PARAM: True}) is None

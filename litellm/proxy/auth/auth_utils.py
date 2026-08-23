@@ -187,6 +187,23 @@ def _allow_model_level_clientside_configurable_parameters(
 # ``extra_body.aws_web_identity_token``) without re-validating, so the
 # banned-key check has to descend into it the same way it descends into
 # ``litellm_embedding_config``.
+_ANTHROPIC_WIF_UNCONDITIONAL_BANNED: Final[tuple[str, ...]] = tuple(
+    sorted(p for p in anthropic_wif_litellm_params if p != "anthropic_workspace_id")
+)
+
+
+def reject_server_owned_wif_params(body: Mapping[str, object]) -> None:
+    """Raise ``ValueError`` if a request-supplied mapping carries a server-owned workload-identity
+    federation field. These are never client-settable, on any surface, with or without a client-side
+    credential opt-in."""
+    for param in _ANTHROPIC_WIF_UNCONDITIONAL_BANNED:
+        if param in body:
+            raise ValueError(
+                f"Rejected Request: {param} is a server-owned workload identity federation parameter "
+                "and cannot be set in a request body; configure it on the deployment instead."
+            )
+
+
 _NESTED_CONFIG_KEYS: Final[tuple[str, ...]] = ("litellm_embedding_config", "extra_body")
 
 # Metadata containers that carry per-request configuration consumed by the
@@ -317,11 +334,6 @@ _BANNED_REQUEST_BODY_PARAMS: Final[tuple[str, ...]] = (
     # so a caller-supplied value picks a transport and a callback surface the
     # admin did not choose.
     "rust",
-    # Anthropic workload-identity federation. These select which server-side secret is read
-    # (``anthropic_identity_token`` resolves an ``oidc/...`` reference against the proxy's own
-    # environment and filesystem) and, together with ``api_base``, where that secret is sent, so a
-    # caller-supplied value is an exfiltration primitive for any env var or mounted token file.
-    *sorted(anthropic_wif_litellm_params),
     # SDK-only field; also rejected outright in is_request_body_safe.
     "model_list",
     "vertex_ai_credentials",
@@ -345,6 +357,7 @@ def _check_banned_params(
     Shared between the root-level check and the nested-config check so a
     new banned param only needs to be added in one place.
     """
+    reject_server_owned_wif_params(body)
     for param in _BANNED_REQUEST_BODY_PARAMS:
         if param not in body:
             continue
@@ -485,6 +498,7 @@ def is_request_body_safe(request_body: dict, general_settings: dict, llm_router:
             _reject_url_valued_fallback_target(target)
     litellm_params: Final = _coerce_metadata_to_dict(request_body.get("litellm_params"))
     if litellm_params is not None:
+        reject_server_owned_wif_params(litellm_params)
         litellm_params_metadata: Final = _coerce_metadata_to_dict(litellm_params.get("metadata"))
         if litellm_params_metadata is not None:
             _check_banned_params(

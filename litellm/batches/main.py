@@ -490,6 +490,7 @@ def _handle_retrieve_batch_providers_without_provider_config(
             api_key=api_key,
             timeout=timeout,
             max_retries=optional_params.max_retries,
+            litellm_params=dict(litellm_params),
         )
     else:
         raise litellm.exceptions.BadRequestError(

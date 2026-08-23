@@ -57,6 +57,10 @@ _CONTENT_TYPES: Final = MappingProxyType({"json": "application/json", "form": "a
 _OVERSIZED_BODY_MESSAGE: Final = "oversized error response omitted"
 _NON_OBJECT_BODY_MESSAGE: Final = "non-object error response omitted"
 _NO_OAUTH_FIELDS_MESSAGE: Final = "error response carried no RFC 6749 fields"
+_UNSTRUCTURED_BODY_MESSAGE: Final = "non-JSON error response omitted"
+_REFLECTED_VALUE_MESSAGE: Final = "<redacted: response echoed the request>"
+_REFLECTION_PROBE_LENGTH: Final = 24
+_SENTINEL_BODY_MESSAGES: Final = frozenset({_OVERSIZED_BODY_MESSAGE, _NON_OBJECT_BODY_MESSAGE})
 
 
 class _TokenExchangeResponse(BaseModel):
@@ -78,20 +82,36 @@ def validate_token_endpoint_url(url: str) -> str | InsecureTokenUrl:
     return InsecureTokenUrl(host=parsed.hostname or "")
 
 
-def redact_oauth_error_body(status_code: int, body_text: str) -> TokenEndpointError:
-    return TokenEndpointError(status_code=status_code, redacted_body=_redact_body_text(body_text))
+def redact_oauth_error_body(status_code: int, body_text: str, assertion: SecretStr | None = None) -> TokenEndpointError:
+    rendered: Final = _redact_body_text(body_text)
+    return TokenEndpointError(
+        status_code=status_code,
+        redacted_body=_drop_reflected_assertion(rendered, assertion),
+    )
+
+
+def _drop_reflected_assertion(rendered: str, assertion: SecretStr | None) -> str:
+    """A token endpoint that echoes the submitted assertion back would otherwise put it in the
+    operator log and in the error handed to the caller."""
+    if assertion is None:
+        return rendered
+    secret: Final = assertion.get_secret_value()
+    probe: Final = secret[:_REFLECTION_PROBE_LENGTH]
+    if len(probe) < _REFLECTION_PROBE_LENGTH or probe not in rendered:
+        return rendered
+    return _REFLECTED_VALUE_MESSAGE
 
 
 def _redact_body_text(body_text: str) -> str:
+    if body_text in _SENTINEL_BODY_MESSAGES:
+        return body_text
     if len(body_text) > MAX_RESPONSE_BYTES:
         return _OVERSIZED_BODY_MESSAGE
     try:
         parsed: Final = _REDACTABLE_BODY_ADAPTER.validate_json(body_text)
     except ValidationError:
-        return body_text[:_REDACTION_CAP]
+        return _UNSTRUCTURED_BODY_MESSAGE
     match parsed:
-        case str():
-            return parsed[:_REDACTION_CAP]
         case Mapping():
             return _format_oauth_error_fields(parsed)
         case _:
@@ -419,7 +439,7 @@ class JwtBearerTokenExchangeEngine:
             return self._refresh_executor
 
     def _lead(self, spec: TokenExchangeSpec, entry: _Entry) -> ExchangeResult:
-        result: Final = self._exchange(spec)
+        result: Final = self._exchange_never_raises(spec)
         with self._lock:
             entry.publish(result, backoff_until=self._clock() + ADVISORY_REFRESH_BACKOFF_SECONDS)
         return result
@@ -439,7 +459,7 @@ class JwtBearerTokenExchangeEngine:
         return TokenTransportError(detail="timed out waiting for the token exchange leader")
 
     def _advisory_refresh(self, spec: TokenExchangeSpec, entry: _Entry) -> None:
-        result: Final = self._exchange(spec)
+        result: Final = self._exchange_never_raises(spec)
         with self._lock:
             entry.publish_advisory(result, backoff_until=self._clock() + ADVISORY_REFRESH_BACKOFF_SECONDS)
             stale_expires_at: Final = entry.token.expires_at if entry.token is not None else None
@@ -459,14 +479,30 @@ class JwtBearerTokenExchangeEngine:
             ADVISORY_REFRESH_BACKOFF_SECONDS,
         )
 
+    def _exchange_never_raises(self, spec: TokenExchangeSpec) -> ExchangeResult:
+        """The single-flight leader and the advisory refresher must always publish a result: an
+        unhandled exception here would leave the entry armed (in_flight, cleared event) forever, so
+        every subsequent caller for this key would follow a leader that never finishes."""
+        try:
+            return self._exchange(spec)
+        except Exception as e:  # noqa: BLE001  # a leader must resolve its entry; any failure becomes a value
+            return TokenTransportError(detail=f"{type(e).__name__}: {e}"[:_REDACTION_CAP])
+
     def _exchange(self, spec: TokenExchangeSpec) -> ExchangeResult:
         first: Final = self._attempt_exchange(spec)
         if not isinstance(first, _Unauthorized):
             return first
         second: Final = self._attempt_exchange(spec)
         if isinstance(second, _Unauthorized):
-            return redact_oauth_error_body(second.response.status_code, _capped_body_text(second.response))
+            return redact_oauth_error_body(
+                second.response.status_code, _capped_body_text(second.response), self._reread_assertion(spec)
+            )
         return second
+
+    def _reread_assertion(self, spec: TokenExchangeSpec) -> SecretStr | None:
+        """Best-effort re-read, purely so a reflected assertion can be recognized in an error body."""
+        reread: Final = _read_assertion(self._assertion_reader, spec.assertion_ref)
+        return reread if isinstance(reread, SecretStr) else None
 
     def _attempt_exchange(self, spec: TokenExchangeSpec) -> "ExchangeResult | _Unauthorized":
         assertion: Final = _read_assertion(self._assertion_reader, spec.assertion_ref)
@@ -486,11 +522,11 @@ class JwtBearerTokenExchangeEngine:
             return TokenTransportError(detail=f"{type(e).__name__}: {e}"[:_REDACTION_CAP])
         if response.status_code == 401:
             return _Unauthorized(response=response)
-        return self._parse_response(response)
+        return self._parse_response(response, assertion)
 
-    def _parse_response(self, response: httpx.Response) -> ExchangeResult:
+    def _parse_response(self, response: httpx.Response, assertion: SecretStr | None = None) -> ExchangeResult:
         if not 200 <= response.status_code < 300:
-            return redact_oauth_error_body(response.status_code, _capped_body_text(response))
+            return redact_oauth_error_body(response.status_code, _capped_body_text(response), assertion)
         if len(response.content) > MAX_RESPONSE_BYTES:
             return MalformedTokenResponse(detail="token response body exceeds the 1 MiB cap")
         try:

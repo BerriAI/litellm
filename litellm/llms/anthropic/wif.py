@@ -4,6 +4,7 @@ token for a short-lived ``sk-ant-oat01`` token via the shared RFC 7523 engine.""
 from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Final, NoReturn
+from urllib.parse import urlsplit, urlunsplit
 
 from pydantic import BaseModel, ConfigDict
 from typing_extensions import assert_never
@@ -29,6 +30,7 @@ from litellm.types.llms.anthropic import ANTHROPIC_TOKEN_EXCHANGE_PATH
 _JWT_BEARER_GRANT_TYPE: Final = "urn:ietf:params:oauth:grant-type:jwt-bearer"
 _DEFAULT_API_BASE: Final = "https://api.anthropic.com"
 _INLINE_ENV_VAR: Final = "ANTHROPIC_IDENTITY_TOKEN"
+_DISABLE_WIF_PARAM: Final = "anthropic_disable_workload_identity_federation"
 _ACCEPTED_REF_PREFIX: Final = "oidc/"
 _CHAT_BASE_SUFFIXES: Final = ("/v1/messages", "/v1")
 _REJECTED_REF_PREFIX: Final = "oidc/env_path/"
@@ -54,6 +56,8 @@ class AnthropicWifParams(BaseModel):
 
 
 def resolve_anthropic_wif_params(litellm_params: Mapping[str, object] | None) -> AnthropicWifParams | None:
+    if litellm_params is not None and litellm_params.get(_DISABLE_WIF_PARAM) is True:
+        return None
     federation_rule_id: Final = _config_value(
         litellm_params, "anthropic_federation_rule_id", "ANTHROPIC_FEDERATION_RULE_ID"
     )
@@ -151,12 +155,21 @@ def _resolve_default_api_base() -> str:
 
 
 def _strip_chat_suffix(base: str) -> str:
-    trimmed: Final = base.rstrip("/")
-    stripped: Final = next(
+    parts: Final = urlsplit(base)
+    if not parts.scheme or not parts.netloc:
+        return base.rstrip("/")
+    return urlunsplit((parts.scheme, parts.netloc, _strip_path_suffixes(parts.path), "", ""))
+
+
+def _strip_path_suffixes(path: str) -> str:
+    """Drop the chat-surface suffixes a deployment base may carry, so every tier derives the same
+    token URL. Recursion depth is bounded by the path's own segment count."""
+    trimmed: Final = path.rstrip("/")
+    shortened: Final = next(
         (trimmed.removesuffix(suffix) for suffix in _CHAT_BASE_SUFFIXES if trimmed.endswith(suffix)),
         trimmed,
     )
-    return trimmed if stripped == trimmed else _strip_chat_suffix(stripped)
+    return trimmed if shortened == trimmed else _strip_path_suffixes(shortened)
 
 
 def _config_value(litellm_params: Mapping[str, object] | None, param_key: str, env_name: str) -> str | None:

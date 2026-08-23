@@ -230,13 +230,13 @@ DROP_UNSUPPORTED_SPEED_WARNING: Final = (
 
 
 class AnthropicConfig(AnthropicModelInfo, BaseConfig):
-    _workload_identity_eligible: ClassVar[bool] = True
-
     """
     Reference: https://docs.anthropic.com/claude/reference/messages_post
 
     to pass metadata to anthropic, it's {"user_id": "any-relevant-information"}
     """
+
+    _workload_identity_eligible: ClassVar[bool] = True
 
     max_tokens: int | None = None
     stop_sequences: list | None = None

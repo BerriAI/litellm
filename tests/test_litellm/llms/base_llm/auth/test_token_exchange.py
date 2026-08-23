@@ -9,6 +9,7 @@ from typing import Final
 from urllib.parse import parse_qsl
 
 import httpx
+from pydantic import SecretStr
 import pytest
 
 from litellm.llms.base_llm.auth.token_exchange import (
@@ -476,13 +477,27 @@ class TestRedactionAndCaps:
         assert "m" * 256 in result.redacted_body
         assert "m" * 257 not in result.redacted_body
 
-    def test_string_body_truncated(self):
+    def test_json_string_body_is_not_echoed(self):
+        """A free-text body can carry back whatever was sent, so only structured OAuth fields are
+        ever rendered into an error an operator or caller will see."""
         result = redact_oauth_error_body(400, json.dumps("s" * 500))
-        assert result.redacted_body == "s" * 256
+        assert result.redacted_body == "non-object error response omitted"
+        assert "s" * 32 not in result.redacted_body
 
-    def test_plain_text_body_truncated(self):
+    def test_plain_text_body_is_not_echoed(self):
         result = redact_oauth_error_body(502, "t" * 500)
-        assert result.redacted_body == "t" * 256
+        assert result.redacted_body == "non-JSON error response omitted"
+        assert "t" * 32 not in result.redacted_body
+
+    def test_reflected_assertion_is_dropped(self):
+        """An endpoint that echoes the submitted assertion must not put it in the log or the error."""
+        assertion = SecretStr("eyJhbGciOiJSUzI1NiJ9.REFLECTEDPAYLOAD.signature")
+        body = {"error": "invalid_grant", "error_description": f"bad assertion {assertion.get_secret_value()}"}
+
+        result = redact_oauth_error_body(400, json.dumps(body), assertion)
+
+        assert assertion.get_secret_value() not in result.redacted_body
+        assert "REFLECTEDPAYLOAD" not in result.redacted_body
 
     def test_json_array_body_constant_message(self):
         result = redact_oauth_error_body(400, json.dumps(["a", "b"]))
