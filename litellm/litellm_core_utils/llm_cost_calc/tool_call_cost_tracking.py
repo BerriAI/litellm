@@ -5,11 +5,14 @@ Helper utilities for tracking the cost of built-in tools.
 from collections.abc import Mapping
 from typing import Any, Final, Literal
 
+from pydantic import ValidationError
+
 import litellm
 from litellm.constants import OPENAI_FILE_SEARCH_COST_PER_1K_CALLS
 from litellm.litellm_core_utils.llm_cost_calc.utils import _get_web_search_requests
 from litellm.types.llms.openai import (
     FileSearchTool,
+    ProviderToolUsage,
     ResponsesAPIResponse,
     WebSearchOptions,
 )
@@ -138,15 +141,35 @@ class StandardBuiltInToolCostTracking:
         return per_call_cost * StandardBuiltInToolCostTracking._count_web_search_calls(response_object)
 
     @staticmethod
+    def _reported_web_search_requests(response_object: object) -> int | None:
+        """The provider's own billable search count off a Responses payload, when it reports one.
+
+        Bedrock returns ``tool_usage.web_search.num_requests``, which counts only the searches it
+        charges for and excludes the cached-page fetches that share the ``web_search_call`` item
+        type. Counting items instead overcharges every request that opened a page.
+        """
+        tool_usage: Final = getattr(response_object, "tool_usage", None)
+        if tool_usage is None:
+            return None
+        try:
+            return ProviderToolUsage.model_validate(tool_usage).web_search.num_requests
+        except ValidationError:
+            return None
+
+    @staticmethod
     def _count_web_search_calls(response_object: object) -> int:
         """
         Number of web searches to bill for on the per-call pricing path.
 
         Providers that report a request count in usage (gemini, anthropic, xai, vertex) are handled by
-        get_cost_for_web_search_request and never reach here. This path prices per call, so it must count
-        the web_search_call items. Chat-completions responses only expose url_citation annotations with no
-        count, so they floor to a single billable search.
+        get_cost_for_web_search_request and never reach here. Of the rest, some report the count on the
+        response itself and are believed over the item count; otherwise count the web_search_call items.
+        Chat-completions responses only expose url_citation annotations with no count, so they floor to a
+        single billable search.
         """
+        reported: Final = StandardBuiltInToolCostTracking._reported_web_search_requests(response_object)
+        if reported is not None:
+            return reported
         if isinstance(response_object, ResponsesAPIResponse):
             count = sum(
                 1 for output_item in response_object.output if _output_item_type(output_item) == "web_search_call"

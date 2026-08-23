@@ -620,6 +620,88 @@ def _openai_responses_with_web_search_calls(model, num_calls):
     )
 
 
+def _responses_with_reported_web_search(model, num_requests, search_items, fetch_items):
+    """A Bedrock-shaped Responses payload: `web_search_call` items for both operations, plus the
+    `tool_usage.web_search.num_requests` count Bedrock reports for the searches it charges for."""
+    from litellm.types.llms.openai import ResponsesAPIResponse
+
+    output = [
+        {
+            "id": f"ws_s{i}",
+            "type": "web_search_call",
+            "status": "completed",
+            "action": {"type": "search", "queries": ["a", "b", "c"]},
+        }
+        for i in range(search_items)
+    ] + [
+        {
+            "id": f"ws_f{i}",
+            "type": "web_search_call",
+            "status": "completed",
+            "action": {"type": "open_page", "url": "https://example.invalid/page"},
+        }
+        for i in range(fetch_items)
+    ]
+    return ResponsesAPIResponse(
+        id="resp_1",
+        created_at=0,
+        model=model,
+        object="response",
+        output=output,
+        parallel_tool_calls=False,
+        tool_choice="auto",
+        tools=[],
+        tool_usage={"web_search": {"num_requests": num_requests}},
+    )
+
+
+def test_bedrock_mantle_web_search_bills_the_count_bedrock_reports(local_model_cost_map):
+    """Bedrock reports its billable search count as ``tool_usage.web_search.num_requests`` and it
+    excludes cached-page fetches, which arrive as ``web_search_call`` items indistinguishable from
+    searches by item type. Measured against bedrock-mantle.us-east-1.api.aws: a response with five
+    search items and one ``open_page`` item reports 5, and one with one search and one
+    ``open_page`` reports 1. Counting items would bill 6 and 2, overcharging every request that
+    opened a page. Three queries inside a single search item still count as one request."""
+    from litellm.types.utils import Usage
+
+    model = "bedrock_mantle/openai.gpt-5.6-terra"
+    per_query = litellm.get_model_info(model)["search_context_cost_per_query"]["search_context_size_medium"]
+    usage = Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15)
+
+    for num_requests, search_items, fetch_items in ((5, 5, 1), (1, 1, 1), (2, 2, 1)):
+        response = _responses_with_reported_web_search(model, num_requests, search_items, fetch_items)
+        cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+            model=model,
+            response_object=response,
+            usage=usage,
+            custom_llm_provider="bedrock_mantle",
+            standard_built_in_tools_params=None,
+        )
+        assert cost == pytest.approx(num_requests * per_query), (
+            f"{search_items + fetch_items} items reporting {num_requests} requests must bill "
+            f"{num_requests} x ${per_query}, got ${cost}"
+        )
+
+
+def test_web_search_falls_back_to_counting_items_when_no_count_is_reported(local_model_cost_map):
+    """Providers that report nothing must keep the item-count behaviour, so adding the Bedrock path
+    cannot change what OpenAI and Azure bill."""
+    model = "gpt-5-nano"
+    response = _openai_responses_with_web_search_calls(model, num_calls=3)
+    assert not hasattr(response, "tool_usage")
+    assert StandardBuiltInToolCostTracking._count_web_search_calls(response) == 3
+
+
+def test_malformed_reported_web_search_count_falls_back_to_items(local_model_cost_map):
+    """A tool_usage payload that does not carry an integer count must not raise or bill zero."""
+    response = _responses_with_reported_web_search("bedrock_mantle/openai.gpt-5.6-terra", 2, 2, 1)
+    response.tool_usage = {"web_search": {"num_requests": "not-a-number"}}
+    assert StandardBuiltInToolCostTracking._count_web_search_calls(response) == 3
+
+    response.tool_usage = {"unexpected_shape": True}
+    assert StandardBuiltInToolCostTracking._count_web_search_calls(response) == 3
+
+
 @pytest.mark.parametrize(
     "model",
     [

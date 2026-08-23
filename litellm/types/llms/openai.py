@@ -1300,6 +1300,25 @@ One of: completed, failed, in_progress, cancelled, queued, or incomplete.
 """
 
 
+class WebSearchToolUsage(BaseModel):
+    num_requests: int
+
+    model_config = ConfigDict(extra="allow")
+
+
+class ProviderToolUsage(BaseModel):
+    """A Responses payload's own `tool_usage`, used to bill server-side tools off the provider's
+    count rather than off the returned items. Bedrock populates `web_search.num_requests`.
+
+    Extra keys are allowed on both models so a payload that also reports other server-side tools
+    still validates and the web search count is still read.
+    """
+
+    web_search: WebSearchToolUsage
+
+    model_config = ConfigDict(extra="allow")
+
+
 class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
     id: str
     created_at: int
