@@ -4,7 +4,6 @@ Tests Bedrock Completion + Rerank endpoints
 
 # @pytest.mark.skip(reason="AWS Suspended Account")
 import os
-import sys
 import traceback
 
 from dotenv import load_dotenv
@@ -15,9 +14,6 @@ load_dotenv()
 import io
 import json
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest

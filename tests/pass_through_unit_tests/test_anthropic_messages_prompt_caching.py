@@ -11,10 +11,7 @@ Per AWS docs (https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-cachin
 - Claude 3.5 Haiku: GA, 2048 min tokens
 """
 
-import os
-import sys
 
-sys.path.insert(0, os.path.abspath("../../.."))
 
 import pytest
 from base_anthropic_messages_prompt_caching_test import (

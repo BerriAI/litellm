@@ -2,13 +2,11 @@ import asyncio
 import copy
 import logging
 import os
-import sys
 import time
 from typing import Any
 from unittest.mock import MagicMock, patch
 
 logging.basicConfig(level=logging.DEBUG)
-sys.path.insert(0, os.path.abspath("../.."))
 
 import litellm
 from litellm import completion

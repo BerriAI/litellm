@@ -4503,6 +4503,9 @@ def _init_custom_logger_compatible_class(
             _in_memory_loggers.append(gitlab_logger)
             return gitlab_logger
         elif logging_integration == "newrelic":
+            _v2 = _maybe_construct_otel_v2("newrelic", _in_memory_loggers)
+            if _v2 is not None:
+                return _v2
             for callback in _in_memory_loggers:
                 if isinstance(callback, NewRelicLogger):
                     return callback
@@ -4789,7 +4792,11 @@ def get_custom_logger_compatible_class(
                 if isinstance(callback, SMTPEmailLogger):
                     return callback
         elif logging_integration == "newrelic":
+            from litellm.integrations.otel.logger import OpenTelemetryV2
+
             for callback in _in_memory_loggers:
+                if isinstance(callback, OpenTelemetryV2) and callback.callback_name == "newrelic":
+                    return callback
                 if isinstance(callback, NewRelicLogger):
                     return callback
         return None

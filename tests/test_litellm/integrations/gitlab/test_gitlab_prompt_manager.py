@@ -1,13 +1,8 @@
-import os
 import re
-import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 from litellm.integrations.gitlab.gitlab_client import GitLabClient
 from litellm.integrations.gitlab.gitlab_prompt_manager import (

@@ -1,15 +1,10 @@
 import asyncio
 import json
-import os
-import sys
 from typing import Any, Dict, Final, List, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 from litellm.router_strategy.auto_router.auto_router import AutoRouter
 
