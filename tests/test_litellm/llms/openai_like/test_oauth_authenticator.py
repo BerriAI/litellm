@@ -5,10 +5,13 @@ OpenAI-compatible completion path.
 Regression coverage for https://github.com/BerriAI/litellm/issues/12367
 """
 
-from unittest.mock import MagicMock, patch
+import json
+from unittest.mock import MagicMock
+from urllib.parse import parse_qsl
 
 import httpx
 import pytest
+import respx
 
 from litellm.llms.openai_like.oauth_authenticator import (
     OAuthClientCredentialsError,
@@ -16,6 +19,12 @@ from litellm.llms.openai_like.oauth_authenticator import (
     get_client_credentials_token,
     resolve_client_credentials_token,
 )
+
+
+def _mock_token_endpoint(respx_mock, url="https://idp.test/token", access_token="tok-abc", expires_in=3600):
+    return respx_mock.post(url).mock(
+        return_value=httpx.Response(200, json={"access_token": access_token, "expires_in": expires_in})
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -217,46 +226,41 @@ class TestClientCredentialsTokenFetch:
 
 
 class TestResolveClientCredentialsToken:
-    def test_flag_on_with_creds_returns_token(self):
-        client = _token_client(access_token="tok-r")
-        with patch(
-            "litellm.llms.openai_like.oauth_authenticator._get_httpx_client",
-            return_value=client,
-        ):
-            token = resolve_client_credentials_token(
-                {
-                    "oauth_client_credentials": True,
-                    "oauth_token_url": "https://idp.test/token",
-                    "oauth_client_id": "cid-r",
-                    "oauth_client_secret": "secret-r",
-                    "oauth_scope": "scope-r",
-                }
-            )
+    def test_flag_on_with_creds_returns_token(self, respx_mock: respx.MockRouter):
+        token_route = _mock_token_endpoint(respx_mock, access_token="tok-r")
+
+        token = resolve_client_credentials_token(
+            {
+                "oauth_client_credentials": True,
+                "oauth_token_url": "https://idp.test/token",
+                "oauth_client_id": "cid-r",
+                "oauth_client_secret": "secret-r",
+                "oauth_scope": "scope-r",
+            }
+        )
 
         assert token == "tok-r"
-        data = client.post.call_args.kwargs["data"]
-        assert data["client_id"] == "cid-r"
-        assert data["client_secret"] == "secret-r"
-        assert data["scope"] == "scope-r"
+        form = dict(parse_qsl(token_route.calls.last.request.read().decode()))
+        assert form["grant_type"] == "client_credentials"
+        assert form["client_id"] == "cid-r"
+        assert form["client_secret"] == "secret-r"
+        assert form["scope"] == "scope-r"
 
-    def test_flag_absent_returns_none_without_fetch(self):
+    def test_flag_absent_returns_none_without_fetch(self, respx_mock: respx.MockRouter):
         # Creds present but no flag -> OAuth must not engage; the deployment keeps
         # its configured api_key. Kills a mutant that triggers on creds presence.
-        client = _token_client()
-        with patch(
-            "litellm.llms.openai_like.oauth_authenticator._get_httpx_client",
-            return_value=client,
-        ):
-            result = resolve_client_credentials_token(
-                {
-                    "oauth_token_url": "https://idp.test/token",
-                    "oauth_client_id": "cid",
-                    "oauth_client_secret": "secret",
-                }
-            )
+        token_route = _mock_token_endpoint(respx_mock)
+
+        result = resolve_client_credentials_token(
+            {
+                "oauth_token_url": "https://idp.test/token",
+                "oauth_client_id": "cid",
+                "oauth_client_secret": "secret",
+            }
+        )
 
         assert result is None
-        client.post.assert_not_called()
+        assert not token_route.called
 
     def test_flag_false_returns_none(self):
         assert (
@@ -274,7 +278,7 @@ class TestResolveClientCredentialsToken:
                 }
             )
 
-    def test_env_vars_are_not_consulted(self, monkeypatch):
+    def test_env_vars_are_not_consulted(self, monkeypatch, respx_mock: respx.MockRouter):
         # Creds live ONLY in env; the resolver reads litellm_params exclusively, so
         # with the flag on but creds absent from litellm_params it must raise and
         # never mint a token from env. This is the exfiltration path the security
@@ -282,18 +286,14 @@ class TestResolveClientCredentialsToken:
         monkeypatch.setenv("CUSTOM_OAUTH_TOKEN_URL", "https://idp.env/token")
         monkeypatch.setenv("CUSTOM_OAUTH_CLIENT_ID", "cid-env")
         monkeypatch.setenv("CUSTOM_OAUTH_CLIENT_SECRET", "secret-env")
-        client = _token_client(access_token="tok-env")
+        token_route = _mock_token_endpoint(respx_mock, url="https://idp.env/token", access_token="tok-env")
 
-        with patch(
-            "litellm.llms.openai_like.oauth_authenticator._get_httpx_client",
-            return_value=client,
-        ):
-            with pytest.raises(OAuthClientCredentialsError):
-                resolve_client_credentials_token({"oauth_client_credentials": True})
+        with pytest.raises(OAuthClientCredentialsError):
+            resolve_client_credentials_token({"oauth_client_credentials": True})
 
-        client.post.assert_not_called()
+        assert not token_route.called
 
-    def test_no_token_after_clientside_base_override_clear(self):
+    def test_no_token_after_clientside_base_override_clear(self, respx_mock: respx.MockRouter):
         # End-to-end with the router: a client api_base override clears the
         # deployment's oauth_client_credentials flag + creds, so the resolver
         # returns None (graceful fallback to the configured api_key) and no admin
@@ -313,152 +313,153 @@ class TestResolveClientCredentialsToken:
             {"api_base": "https://client.example/v1"},
         )
 
-        client = _token_client(access_token="tok-leak")
-        with patch(
-            "litellm.llms.openai_like.oauth_authenticator._get_httpx_client",
-            return_value=client,
-        ):
-            assert resolve_client_credentials_token(cleared) is None
+        token_route = _mock_token_endpoint(respx_mock, url="https://idp.internal/token", access_token="tok-leak")
 
-        client.post.assert_not_called()
+        assert resolve_client_credentials_token(cleared) is None
+        assert not token_route.called
+
+
+OPENAI_CHAT_RESPONSE = {
+    "id": "chatcmpl-oauth",
+    "object": "chat.completion",
+    "created": 1677652288,
+    "model": "gpt-4o",
+    "choices": [
+        {
+            "index": 0,
+            "message": {"role": "assistant", "content": "oauth works"},
+            "finish_reason": "stop",
+        }
+    ],
+    "usage": {"prompt_tokens": 9, "completion_tokens": 2, "total_tokens": 11},
+}
+
+ANTHROPIC_MESSAGES_RESPONSE = {
+    "id": "msg_oauth",
+    "type": "message",
+    "role": "assistant",
+    "model": "claude-sonnet-5",
+    "content": [{"type": "text", "text": "oauth works"}],
+    "stop_reason": "end_turn",
+    "stop_sequence": None,
+    "usage": {"input_tokens": 9, "output_tokens": 2},
+}
 
 
 class TestCompletionInjection:
-    def test_flag_injects_minted_token_as_api_key(self):
-        # End-to-end through litellm.completion on a plain openai/ model: the flag
-        # plus oauth_* in litellm_params mint a bearer that overrides the
-        # configured api_key, which the OpenAI SDK then sends as Authorization:
-        # Bearer. Fails if the injection in _complete_custom_openai is removed or
-        # the flag stops reaching litellm_params.
+    def test_flag_injects_minted_token_as_api_key(self, respx_mock: respx.MockRouter):
+        # End-to-end through litellm.completion on a plain openai/ model, faked at
+        # the HTTP boundary: the flag plus oauth_* in litellm_params mint a bearer
+        # that overrides the configured api_key, and the outbound chat request
+        # carries it as Authorization: Bearer while the oauth_* fields themselves
+        # never reach the provider request body.
         import litellm
-        import litellm.main as main_mod
-        from litellm.types.utils import ModelResponse
 
-        token_client = _token_client(access_token="tok-e2e")
-        fake = ModelResponse()
-        with (
-            patch(
-                "litellm.llms.openai_like.oauth_authenticator._get_httpx_client",
-                return_value=token_client,
-            ),
-            patch.object(
-                main_mod.openai_chat_completions, "completion", return_value=fake
-            ) as chat,
-        ):
-            litellm.completion(
-                model="openai/gpt-4o",
-                messages=[{"role": "user", "content": "hi"}],
-                api_base="https://gateway.test/v1",
-                api_key="sk-should-be-overridden",
-                oauth_client_credentials=True,
-                oauth_token_url="https://idp.test/token",
-                oauth_client_id="cid-e2e",
-                oauth_client_secret="secret-e2e",
-                oauth_scope="scope-e2e",
-            )
+        litellm.in_memory_llm_clients_cache.flush_cache()
+        _mock_token_endpoint(respx_mock, access_token="tok-e2e")
+        chat_route = respx_mock.post("https://gateway.test/v1/chat/completions").mock(
+            return_value=httpx.Response(200, json=OPENAI_CHAT_RESPONSE)
+        )
 
-        token_client.post.assert_called_once()
-        assert chat.call_args.kwargs["api_key"] == "tok-e2e"
+        response = litellm.completion(
+            model="openai/gpt-4o",
+            messages=[{"role": "user", "content": "hi"}],
+            api_base="https://gateway.test/v1",
+            api_key="sk-should-be-overridden",
+            oauth_client_credentials=True,
+            oauth_token_url="https://idp.test/token",
+            oauth_client_id="cid-e2e",
+            oauth_client_secret="secret-e2e",
+            oauth_scope="scope-e2e",
+        )
 
-    def test_no_flag_keeps_configured_api_key(self):
+        assert response.choices[0].message.content == "oauth works"
+        request = chat_route.calls.last.request
+        assert request.headers["authorization"] == "Bearer tok-e2e"
+        body = json.loads(request.read())
+        assert not any(key.startswith("oauth_") for key in body)
+
+    def test_no_flag_keeps_configured_api_key(self, respx_mock: respx.MockRouter):
         # Without the flag, even with oauth_* present, no token is fetched and the
         # configured api_key is sent unchanged.
         import litellm
-        import litellm.main as main_mod
-        from litellm.types.utils import ModelResponse
 
-        token_client = _token_client(access_token="should-not-be-used")
-        fake = ModelResponse()
-        with (
-            patch(
-                "litellm.llms.openai_like.oauth_authenticator._get_httpx_client",
-                return_value=token_client,
-            ),
-            patch.object(
-                main_mod.openai_chat_completions, "completion", return_value=fake
-            ) as chat,
-        ):
-            litellm.completion(
-                model="openai/gpt-4o",
-                messages=[{"role": "user", "content": "hi"}],
-                api_base="https://gateway.test/v1",
-                api_key="sk-static",
-                oauth_token_url="https://idp.test/token",
-                oauth_client_id="cid",
-                oauth_client_secret="secret",
-            )
+        litellm.in_memory_llm_clients_cache.flush_cache()
+        token_route = _mock_token_endpoint(respx_mock, access_token="should-not-be-used")
+        chat_route = respx_mock.post("https://gateway.test/v1/chat/completions").mock(
+            return_value=httpx.Response(200, json=OPENAI_CHAT_RESPONSE)
+        )
 
-        token_client.post.assert_not_called()
-        assert chat.call_args.kwargs["api_key"] == "sk-static"
+        litellm.completion(
+            model="openai/gpt-4o",
+            messages=[{"role": "user", "content": "hi"}],
+            api_base="https://gateway.test/v1",
+            api_key="sk-static",
+            oauth_token_url="https://idp.test/token",
+            oauth_client_id="cid",
+            oauth_client_secret="secret",
+        )
+
+        assert not token_route.called
+        assert chat_route.calls.last.request.headers["authorization"] == "Bearer sk-static"
 
 
 class TestAnthropicCompletionInjection:
-    def test_flag_injects_minted_token_and_bearer_mode(self):
-        # End-to-end through litellm.completion on an anthropic/ model: the flag
-        # plus oauth_* in litellm_params mint a bearer that overrides the
-        # configured api_key, and use_bearer_for_custom_base is set so the
-        # anthropic header builder emits Authorization: Bearer for the custom
-        # gateway base instead of x-api-key.
+    def test_flag_injects_minted_token_and_bearer_mode(self, respx_mock: respx.MockRouter):
+        # End-to-end through litellm.completion on an anthropic/ model with a
+        # custom gateway base, faked at the HTTP boundary: the minted bearer
+        # replaces the configured api_key and use_bearer_for_custom_base makes the
+        # header builder send Authorization: Bearer instead of x-api-key.
         import litellm
-        import litellm.main as main_mod
-        from litellm.types.utils import ModelResponse
 
-        token_client = _token_client(access_token="tok-anthropic")
-        fake = ModelResponse()
-        with (
-            patch(
-                "litellm.llms.openai_like.oauth_authenticator._get_httpx_client",
-                return_value=token_client,
-            ),
-            patch.object(
-                main_mod.anthropic_chat_completions, "completion", return_value=fake
-            ) as chat,
-        ):
-            litellm.completion(
-                model="anthropic/claude-sonnet-5",
-                messages=[{"role": "user", "content": "hi"}],
-                api_base="https://gateway.test",
-                api_key="sk-should-be-overridden",
-                oauth_client_credentials=True,
-                oauth_token_url="https://idp.test/token",
-                oauth_client_id="cid-anthropic",
-                oauth_client_secret="secret-anthropic",
-                oauth_scope="scope-anthropic",
-            )
+        litellm.in_memory_llm_clients_cache.flush_cache()
+        _mock_token_endpoint(respx_mock, access_token="tok-anthropic")
+        messages_route = respx_mock.post("https://gateway.test/v1/messages").mock(
+            return_value=httpx.Response(200, json=ANTHROPIC_MESSAGES_RESPONSE)
+        )
 
-        token_client.post.assert_called_once()
-        assert chat.call_args.kwargs["api_key"] == "tok-anthropic"
-        assert chat.call_args.kwargs["litellm_params"]["use_bearer_for_custom_base"] is True
+        response = litellm.completion(
+            model="anthropic/claude-sonnet-5",
+            messages=[{"role": "user", "content": "hi"}],
+            api_base="https://gateway.test",
+            api_key="sk-should-be-overridden",
+            oauth_client_credentials=True,
+            oauth_token_url="https://idp.test/token",
+            oauth_client_id="cid-anthropic",
+            oauth_client_secret="secret-anthropic",
+            oauth_scope="scope-anthropic",
+        )
 
-    def test_no_flag_keeps_configured_api_key(self):
+        assert response.choices[0].message.content == "oauth works"
+        request = messages_route.calls.last.request
+        assert request.headers["authorization"] == "Bearer tok-anthropic"
+        assert "x-api-key" not in request.headers
+        body = json.loads(request.read())
+        assert not any(key.startswith("oauth_") for key in body)
+
+    def test_no_flag_keeps_configured_api_key(self, respx_mock: respx.MockRouter):
         import litellm
-        import litellm.main as main_mod
-        from litellm.types.utils import ModelResponse
 
-        token_client = _token_client(access_token="should-not-be-used")
-        fake = ModelResponse()
-        with (
-            patch(
-                "litellm.llms.openai_like.oauth_authenticator._get_httpx_client",
-                return_value=token_client,
-            ),
-            patch.object(
-                main_mod.anthropic_chat_completions, "completion", return_value=fake
-            ) as chat,
-        ):
-            litellm.completion(
-                model="anthropic/claude-sonnet-5",
-                messages=[{"role": "user", "content": "hi"}],
-                api_base="https://gateway.test",
-                api_key="sk-static",
-                oauth_token_url="https://idp.test/token",
-                oauth_client_id="cid",
-                oauth_client_secret="secret",
-            )
+        litellm.in_memory_llm_clients_cache.flush_cache()
+        token_route = _mock_token_endpoint(respx_mock, access_token="should-not-be-used")
+        messages_route = respx_mock.post("https://gateway.test/v1/messages").mock(
+            return_value=httpx.Response(200, json=ANTHROPIC_MESSAGES_RESPONSE)
+        )
 
-        token_client.post.assert_not_called()
-        assert chat.call_args.kwargs["api_key"] == "sk-static"
-        assert "use_bearer_for_custom_base" not in chat.call_args.kwargs["litellm_params"]
+        litellm.completion(
+            model="anthropic/claude-sonnet-5",
+            messages=[{"role": "user", "content": "hi"}],
+            api_base="https://gateway.test",
+            api_key="sk-static",
+            oauth_token_url="https://idp.test/token",
+            oauth_client_id="cid",
+            oauth_client_secret="secret",
+        )
+
+        assert not token_route.called
+        request = messages_route.calls.last.request
+        assert request.headers["x-api-key"] == "sk-static"
+        assert "authorization" not in request.headers
 
 
 class TestOAuthParamsExcludedFromProviderBody:

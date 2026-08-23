@@ -550,7 +550,9 @@ def _strip_client_pricing_overrides(data: dict[str, Any]) -> None:
         )
 
 
-def _strip_client_oauth_overrides(data: dict[str, Any]) -> None:
+def _strip_client_oauth_overrides(
+    data: dict[str, Any],  # mutable-ok: strips in place on the request body the pre-call pipeline threads through
+) -> None:
     """Drop OAuth client-credentials fields from a client request body.
 
     These are deployment configuration; a client-supplied ``oauth_token_url``

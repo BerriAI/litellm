@@ -8,7 +8,7 @@ from config.
 """
 
 import hashlib
-from typing import Optional
+from collections.abc import Mapping
 
 import httpx
 from pydantic import BaseModel, ValidationError
@@ -34,12 +34,12 @@ class _TokenResponse(BaseModel):
 
 
 def get_client_credentials_token(
-    token_url: Optional[str],
-    client_id: Optional[str],
-    client_secret: Optional[str],
-    scope: Optional[str] = None,
+    token_url: str | None,
+    client_id: str | None,
+    client_secret: str | None,
+    scope: str | None = None,
     timeout: float = 30.0,
-    http_client: Optional[HTTPHandler] = None,
+    http_client: HTTPHandler | None = None,
 ) -> str:
     """
     Fetch (and cache) an OAuth2 access token using the client_credentials grant.
@@ -69,7 +69,7 @@ def get_client_credentials_token(
     if isinstance(cached, str):
         return cached
 
-    data = {
+    data = {  # mutable-ok: HTTPHandler.post types the form payload as a plain dict
         "grant_type": "client_credentials",
         "client_id": client_id,
         "client_secret": client_secret,
@@ -115,15 +115,15 @@ def get_client_credentials_token(
 
 class _ClientCredentialsConfig(BaseModel):
     oauth_client_credentials: bool = False
-    oauth_token_url: Optional[str] = None
-    oauth_client_id: Optional[str] = None
-    oauth_client_secret: Optional[str] = None
-    oauth_scope: Optional[str] = None
+    oauth_token_url: str | None = None
+    oauth_client_id: str | None = None
+    oauth_client_secret: str | None = None
+    oauth_scope: str | None = None
 
 
 def resolve_client_credentials_token(
-    litellm_params: dict[str, object],
-) -> Optional[str]:
+    litellm_params: Mapping[str, object],
+) -> str | None:
     """Return an OAuth2 client_credentials bearer when the deployment opted in.
 
     Runs on every OpenAI-compatible completion, so the common no-OAuth case is a

@@ -2483,7 +2483,7 @@ def _complete_custom_openai(
         resolve_client_credentials_token,
     )
 
-    oauth_api_key = resolve_client_credentials_token(cast("dict[str, object]", litellm_params))
+    oauth_api_key = resolve_client_credentials_token(litellm_params)
     if oauth_api_key is not None:
         api_key = oauth_api_key
 
@@ -2760,12 +2760,10 @@ def _complete_anthropic(ctx: _CompletionDispatchContext) -> _CompletionDispatchR
         resolve_client_credentials_token,
     )
 
-    oauth_api_key = resolve_client_credentials_token(cast("dict[str, object]", litellm_params))
+    oauth_api_key = resolve_client_credentials_token(litellm_params)
     if oauth_api_key is not None:
         api_key = oauth_api_key
-    request_litellm_params: Final = (
-        {**litellm_params, "use_bearer_for_custom_base": True} if oauth_api_key is not None else litellm_params
-    )
+        litellm_params["use_bearer_for_custom_base"] = True
 
     custom_prompt_dict = custom_prompt_dict or litellm.custom_prompt_dict
     # call /messages
@@ -2795,7 +2793,7 @@ def _complete_anthropic(ctx: _CompletionDispatchContext) -> _CompletionDispatchR
         model_response=model_response,
         print_verbose=print_verbose,
         optional_params=optional_params,
-        litellm_params=request_litellm_params,
+        litellm_params=litellm_params,
         logger_fn=logger_fn,
         encoding=_get_encoding(),  # for calculating input/output tokens
         api_key=api_key,
