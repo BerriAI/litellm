@@ -1618,7 +1618,7 @@ class AmazonConverseConfig(BaseConfig):
         if additional_request_params:
             data["additionalModelRequestFields"] = additional_request_params
             if "thinking" in additional_request_params:
-                data["additionalModelResponseFieldPaths"] = ["/usage/output_tokens_details"]
+                data["additionalModelResponseFieldPaths"] = ("/usage/output_tokens_details",)
         if system_content_blocks:
             data["system"] = system_content_blocks
 

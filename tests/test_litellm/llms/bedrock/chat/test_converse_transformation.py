@@ -401,7 +401,7 @@ def test_thinking_request_adds_output_tokens_details_response_path():
         headers={},
     )
 
-    assert result["additionalModelResponseFieldPaths"] == ["/usage/output_tokens_details"]
+    assert result["additionalModelResponseFieldPaths"] == ("/usage/output_tokens_details",)
 
 
 def test_request_without_thinking_omits_response_field_paths():
