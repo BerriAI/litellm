@@ -532,7 +532,7 @@ class BaseLLMHTTPHandler:
         if extra_body is not None:
             data = {**data, **extra_body}
 
-        signing_params: Final[dict[str, object]] = {
+        signing_params: Final[dict[str, object]] = {  # mutable-ok: signer needs a fresh dict
             **litellm_params,
             **optional_params,
         }
