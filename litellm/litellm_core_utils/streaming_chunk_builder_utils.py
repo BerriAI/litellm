@@ -761,6 +761,8 @@ class ChunkProcessor:
         # # Update usage information if needed
         prompt_tokens = 0
         completion_tokens = 0
+        prompt_tokens_provided = False
+        completion_tokens_provided = False
         # Anthropic's `message_start` SSE event carries usage.output_tokens=1 as a
         # cursor/placeholder; the real value only arrives in `message_delta`.
         # If a stream is cancelled before `message_delta` lands, the last-wins
@@ -793,6 +795,8 @@ class ChunkProcessor:
 
             if usage_chunk is not None:
                 usage_chunk_dict = self._usage_chunk_calculation_helper(usage_chunk)
+                prompt_tokens_provided = prompt_tokens_provided or "prompt_tokens" in usage_chunk
+                completion_tokens_provided = completion_tokens_provided or "completion_tokens" in usage_chunk
                 if usage_chunk_dict["prompt_tokens"] is not None and usage_chunk_dict["prompt_tokens"] > 0:
                     prompt_tokens = usage_chunk_dict["prompt_tokens"]
                 if usage_chunk_dict["completion_tokens"] is not None and usage_chunk_dict["completion_tokens"] > 0:
@@ -847,7 +851,9 @@ class ChunkProcessor:
 
         return UsagePerChunk(
             prompt_tokens=prompt_tokens,
+            prompt_tokens_provided=prompt_tokens_provided,
             completion_tokens=completion_tokens,
+            completion_tokens_provided=completion_tokens_provided,
             cache_creation_input_tokens=cache_creation_input_tokens,
             cache_read_input_tokens=cache_read_input_tokens,
             server_tool_use=server_tool_use,
@@ -946,13 +952,18 @@ class ChunkProcessor:
         cost: Final[float | None] = calculated_usage_per_chunk["cost"]
 
         try:
-            returned_usage.prompt_tokens = prompt_tokens or token_counter(model=model, messages=messages)
+            returned_usage.prompt_tokens = (
+                prompt_tokens
+                if calculated_usage_per_chunk["prompt_tokens_provided"]
+                else token_counter(model=model, messages=messages)
+            )
         except Exception:  # don't allow this failing to block a complete streaming response from being returned
             print_verbose("token_counter failed, assuming prompt tokens is 0")
             returned_usage.prompt_tokens = 0
         returned_usage.completion_tokens = (
             completion_tokens
-            or token_counter(
+            if calculated_usage_per_chunk["completion_tokens_provided"]
+            else token_counter(
                 model=model,
                 text=completion_output,
                 count_response_tokens=True,  # count_response_tokens is a Flag to tell token counter this is a response, No need to add extra tokens we do for input messages
