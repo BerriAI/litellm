@@ -89,17 +89,6 @@ test_paths:
       - tests/integration/sandbox/test_e2b_sandbox.py
       - tests/integration/test_oci_integration.py
       - tests/integration/test_oci_proxy_integration.py
-  - reason: >-
-      A unit test for the proxy-extras package that no job invokes, while the package's other
-      tests live under tests/proxy_migration_tests. Measured 2026-08-20: 24 of its 28 tests pass
-      and the 4 in TestMigrationSQLIdempotency fail, because 13 migrations from 2026-03 onward use
-      bare CREATE TABLE, ADD COLUMN, CREATE INDEX and ADD CONSTRAINT rather than the guarded forms
-      this file requires. It also matches those keywords inside SQL comments, so two further
-      migrations are reported that are in fact fine. Wiring it up means deciding what to do about
-      the 13 first, and they cannot simply be edited: Prisma checksums an applied migration, so a
-      changed one breaks migrate deploy for existing installs
-    paths:
-      - tests/litellm-proxy-extras/test_litellm_proxy_extras_utils.py
 
 dockerfiles:
   - reason: >-
