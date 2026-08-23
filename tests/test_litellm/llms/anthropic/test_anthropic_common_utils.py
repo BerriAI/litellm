@@ -2572,6 +2572,9 @@ class TestWifTokenUrlParity:
         ],
     )
     def test_both_tiers_share_one_clean_token_url(self, monkeypatch, wif_engine, configured_base):
+        # This is about deriving one URL from many spellings of the same base, not about which
+        # hosts an operator trusts with org-scoped credentials, so the private host is allowlisted.
+        monkeypatch.setenv("LITELLM_ANTHROPIC_WIF_ALLOWED_HOSTS", "gw.example.com")
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
         poster, _ = wif_engine

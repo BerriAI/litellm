@@ -1,7 +1,9 @@
 """Anthropic workload identity federation: exchanges an external OIDC identity
 token for a short-lived ``sk-ant-oat01`` token via the shared RFC 7523 engine."""
 
+import os
 from collections.abc import Callable, Mapping
+from itertools import chain
 from types import MappingProxyType
 from typing import Final, NoReturn, TypeVar
 from urllib.parse import urlsplit, urlunsplit
@@ -41,6 +43,14 @@ _INLINE_ENV_VAR: Final = "ANTHROPIC_IDENTITY_TOKEN"
 _DISABLE_WIF_PARAM: Final = "anthropic_disable_workload_identity_federation"
 _ACCEPTED_REF_PREFIX: Final = "oidc/"
 _CHAT_BASE_SUFFIXES: Final = ("/v1/messages", "/v1")
+# Hosts a federated exchange may talk to. api_base decides where the workload's assertion is sent
+# AND where the minted org-scoped token is presented, so anyone able to write api_base on a
+# federated deployment could otherwise redirect both. Gating each write path does not terminate:
+# a deployment, a referenced credential and a future endpoint all reach the same value. This is the
+# one place a federated exchange is built, so the trust decision is enforced here instead, and the
+# allowlist is server-owned -- read from the environment, never from a model or credential API.
+_TRUSTED_EXCHANGE_HOSTS_ENV: Final = "LITELLM_ANTHROPIC_WIF_ALLOWED_HOSTS"
+_DEFAULT_TRUSTED_EXCHANGE_HOST: Final = "api.anthropic.com"
 _REJECTED_REF_PREFIX: Final = "oidc/env_path/"
 _IDENTITY_SOURCE_PARAM: Final = "anthropic_identity_source"
 _IDENTITY_SOURCE_ENV: Final = "ANTHROPIC_IDENTITY_SOURCE"
@@ -228,7 +238,9 @@ def get_anthropic_wif_token(
     params: Final = resolve_anthropic_wif_params(litellm_params)
     if params is None:
         return None
-    result: Final = engine.get_token(build_anthropic_wif_spec(params, _token_exchange_base(api_base)))
+    exchange_base: Final = _token_exchange_base(api_base)
+    _raise_if_exchange_host_untrusted(exchange_base, model)
+    result: Final = engine.get_token(build_anthropic_wif_spec(params, exchange_base))
     return _token_from_result(result, model, params)
 
 
@@ -241,7 +253,9 @@ async def aget_anthropic_wif_token(
     params: Final = resolve_anthropic_wif_params(litellm_params)
     if params is None:
         return None
-    result: Final = await engine.aget_token(build_anthropic_wif_spec(params, _token_exchange_base(api_base)))
+    exchange_base: Final = _token_exchange_base(api_base)
+    _raise_if_exchange_host_untrusted(exchange_base, model)
+    result: Final = await engine.aget_token(build_anthropic_wif_spec(params, exchange_base))
     return _token_from_result(result, model, params)
 
 
@@ -258,6 +272,41 @@ def _token_exchange_base(api_base: str | None) -> str:
     slashes and chat-appended ``/v1/messages`` suffixes stripped, so every tier
     derives the same token URL (and cache key) for the same deployment."""
     return _strip_chat_suffix(api_base if api_base is not None else _resolve_default_api_base())
+
+
+def _trusted_exchange_hosts() -> frozenset[str]:
+    """Hostnames a federated exchange may reach: Anthropic's own, plus whatever the operator put in
+    the environment. Comma separated, case folded, entries given as a URL reduced to their host."""
+    configured: Final = os.getenv(_TRUSTED_EXCHANGE_HOSTS_ENV) or ""
+    extra: Final = (entry.strip() for entry in configured.split(",") if entry.strip())
+    return frozenset(
+        chain(
+            (_DEFAULT_TRUSTED_EXCHANGE_HOST,),
+            ((urlsplit(entry).hostname or entry.split("/")[0]).lower() for entry in extra),
+        )
+    )
+
+
+def _raise_if_exchange_host_untrusted(exchange_base: str, model: str) -> None:
+    """The federated exchange refuses any host the operator has not vouched for, whatever wrote the
+    deployment's api_base. Exact hostname match, never a substring: ``api.anthropic.com.evil.test``
+    contains the real host and must not pass."""
+    host: Final = (urlsplit(exchange_base).hostname or "").lower()
+    if host and host in _trusted_exchange_hosts():
+        return
+    raise litellm.AuthenticationError(
+        message=(
+            f"Anthropic workload identity federation refused to use host {host or exchange_base!r}. "
+            f"A federated exchange sends the workload's identity token to this host and presents the "
+            f"minted token to it, so only {_DEFAULT_TRUSTED_EXCHANGE_HOST} is trusted by default. To "
+            f"use a private Anthropic-compatible gateway, add its hostname to the "
+            f"{_TRUSTED_EXCHANGE_HOSTS_ENV} environment variable (comma separated); that is a "
+            f"decision to trust it with org-scoped credentials, so it is deliberately server-owned "
+            f"and cannot be set through the model or credential APIs."
+        ),
+        llm_provider="anthropic",
+        model=model,
+    )
 
 
 def _resolve_default_api_base() -> str:

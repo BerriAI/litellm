@@ -212,9 +212,76 @@ class TestWireProtocolExact:
         assert dict(spec.request_headers) == {}
 
 
+class TestExchangeHostTrust:
+    """A federated exchange sends the workload's identity token to api_base and presents the minted
+    org-scoped token to it, so api_base is a trust decision. Anyone able to write api_base, on the
+    deployment or on a credential it references, could otherwise redirect both, which is why this is
+    enforced where the exchange is built rather than at each write path."""
+
+    def _mint(self, api_base: str | None, monkeypatch: pytest.MonkeyPatch) -> str:
+        monkeypatch.setenv("ANTHROPIC_IDENTITY_TOKEN", "inline-jwt")
+        poster = ScriptedPoster([token_response()])
+        get_anthropic_wif_token(
+            {"anthropic_federation_rule_id": "fdrl_1", "anthropic_organization_id": "org-1"},
+            api_base,
+            "claude-sonnet-4-5",
+            make_engine(poster),
+        )
+        return poster.requests[0].url
+
+    def test_anthropic_is_trusted_without_configuration(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.delenv("LITELLM_ANTHROPIC_WIF_ALLOWED_HOSTS", raising=False)
+        assert self._mint("https://api.anthropic.com", monkeypatch) == "https://api.anthropic.com/v1/oauth/token"
+
+    def test_an_unlisted_host_never_receives_the_identity_token(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.delenv("LITELLM_ANTHROPIC_WIF_ALLOWED_HOSTS", raising=False)
+        monkeypatch.setenv("ANTHROPIC_IDENTITY_TOKEN", "inline-jwt")
+        poster = ScriptedPoster([token_response()])
+
+        with pytest.raises(litellm.AuthenticationError) as exc_info:
+            get_anthropic_wif_token(
+                {"anthropic_federation_rule_id": "fdrl_1", "anthropic_organization_id": "org-1"},
+                "https://attacker.example",
+                "claude-sonnet-4-5",
+                make_engine(poster),
+            )
+
+        assert poster.requests == [], "the exchange must be refused before anything is sent"
+        assert "attacker.example" in str(exc_info.value)
+        assert "LITELLM_ANTHROPIC_WIF_ALLOWED_HOSTS" in str(exc_info.value), (
+            "an operator running a private gateway has to be told how to allow it"
+        )
+
+    def test_a_lookalike_host_does_not_pass_on_a_substring(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.delenv("LITELLM_ANTHROPIC_WIF_ALLOWED_HOSTS", raising=False)
+        monkeypatch.setenv("ANTHROPIC_IDENTITY_TOKEN", "inline-jwt")
+        poster = ScriptedPoster([token_response()])
+
+        with pytest.raises(litellm.AuthenticationError):
+            get_anthropic_wif_token(
+                {"anthropic_federation_rule_id": "fdrl_1", "anthropic_organization_id": "org-1"},
+                "https://api.anthropic.com.evil.test",
+                "claude-sonnet-4-5",
+                make_engine(poster),
+            )
+
+        assert poster.requests == []
+
+    def test_an_operator_can_allow_a_private_gateway(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setenv("LITELLM_ANTHROPIC_WIF_ALLOWED_HOSTS", "gateway.internal")
+        assert self._mint("https://gateway.internal", monkeypatch) == "https://gateway.internal/v1/oauth/token"
+
+
 class TestBaseUrlDerivation:
     def _mint(self, api_base: str | None, monkeypatch: pytest.MonkeyPatch) -> str:
         monkeypatch.setenv("ANTHROPIC_IDENTITY_TOKEN", "inline-jwt")
+        # These cases are about how a base is normalised into a token URL, not about which hosts an
+        # operator trusts, so the private hosts they use are allowlisted explicitly. The trust
+        # boundary itself is covered by TestExchangeHostTrust.
+        monkeypatch.setenv(
+            "LITELLM_ANTHROPIC_WIF_ALLOWED_HOSTS",
+            "gw.example.com,env.example.com,base.example.com,model.example.com",
+        )
         poster = ScriptedPoster([token_response()])
         engine = make_engine(poster)
         get_anthropic_wif_token(
@@ -407,9 +474,7 @@ class TestServiceAccountIdIsOptional:
     without it; resolution must not gate activation on it, and the wire body must omit
     the key entirely rather than send it as null."""
 
-    def test_activates_and_omits_service_account_id_when_unset(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ):
+    def test_activates_and_omits_service_account_id_when_unset(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setenv("LITELLM_OIDC_ALLOWED_CREDENTIAL_DIRS", str(tmp_path))
         token_file = write_token_file(tmp_path, "jwt-assertion-value")
         litellm_params: Final = {
@@ -484,9 +549,7 @@ class TestFileAllowlistAndSymlink:
         assert self.SECRET_CONTENT not in exc_info.value.message
         assert poster.requests == []
 
-    def test_disallowed_path_message_names_allowlist_and_env_var(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ):
+    def test_disallowed_path_message_names_allowlist_and_env_var(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         """The disallowed_path error must explain the allowlist and name the env var an
         operator would set, not surface as a bare '(disallowed_path)' code dump."""
         monkeypatch.setenv("LITELLM_OIDC_ALLOWED_CREDENTIAL_DIRS", str(tmp_path / "allowed"))
