@@ -24817,7 +24817,7 @@ export interface components {
             search_tool: components["schemas"]["SearchTool"];
         };
         /** CredentialItem */
-        CredentialItem: {
+        "CredentialItem-Input": {
             /** Credential Info */
             credential_info: {
                 [key: string]: unknown;
@@ -24830,6 +24830,19 @@ export interface components {
             };
             /** Credential Values To Delete */
             credential_values_to_delete?: string[] | null;
+        };
+        /** CredentialItem */
+        "CredentialItem-Output": {
+            /** Credential Info */
+            credential_info: {
+                [key: string]: unknown;
+            };
+            /** Credential Name */
+            credential_name: string;
+            /** Credential Values */
+            credential_values: {
+                [key: string]: unknown;
+            };
         };
         /**
          * CustomerResponse
@@ -41494,7 +41507,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["CredentialItem"];
+                    "application/json": components["schemas"]["CredentialItem-Output"];
                 };
             };
             /** @description Validation Error */
@@ -41526,7 +41539,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["CredentialItem"];
+                    "application/json": components["schemas"]["CredentialItem-Output"];
                 };
             };
             /** @description Validation Error */
@@ -41636,7 +41649,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["CredentialItem"];
+                "application/json": components["schemas"]["CredentialItem-Input"];
             };
         };
         responses: {
