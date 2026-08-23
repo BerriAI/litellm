@@ -117,12 +117,13 @@ class _FakeStreamingDeAnonymizer:
     buffer isolation observable in tests.
     """
 
-    def __init__(self, _mapping):
+    def __init__(self, mapping):
+        self._fakes = mapping.get_all_fakes()
         self._buf = ""
 
     def feed(self, text):
         self._buf += text
-        for fake, original in _FAKES.items():
+        for fake, original in self._fakes.items():
             self._buf = self._buf.replace(fake, original)
         lt = self._buf.rfind("<")
         if lt != -1 and ">" not in self._buf[lt:]:
@@ -1279,3 +1280,81 @@ async def test_streaming_tails_on_real_litellm_chunks_stay_serializable():
     assert [p["choices"][0]["delta"].get("reasoning_content") for p in payloads] == ["then ", "<PER"]
     assert "finish_reason" not in payloads[-1]["choices"][0]
     assert payloads[-1]["id"] == "chunk"
+
+
+# An original carrying the characters a JSON string literal must escape.
+_SPECIALS_ORIGINAL = 'Jean "JJ" O\'Neil\\n\tnext'
+
+
+async def test_post_call_restores_tool_arguments_as_valid_json(monkeypatch):
+    # A restored original holding a quote, a backslash or a newline must be
+    # spliced JSON-escaped, on every argument carrier: tool_calls, the legacy
+    # function_call and a Responses function_call output item. A plain
+    # substitution would leave the client's json.loads failing on the quote.
+    monkeypatch.setitem(_FAKES, "<PERSON_2>", _SPECIALS_ORIGINAL)
+    gr = _make_guardrail()
+    data = {"metadata": {"privaite_map": _FAKES}}
+    message = types.SimpleNamespace(
+        content=None,
+        tool_calls=[
+            types.SimpleNamespace(function=types.SimpleNamespace(arguments='{"name": "<PERSON_2>", "n": 1}')),
+            # not JSON: the plain string restore is all there is, byte for byte
+            types.SimpleNamespace(function=types.SimpleNamespace(arguments="name=<PERSON_2>")),
+        ],
+        function_call=types.SimpleNamespace(arguments='["<PERSON_2>", {"k": "<PERSON_1>"}]'),
+    )
+    response = types.SimpleNamespace(
+        choices=[types.SimpleNamespace(message=message)],
+        output=[{"type": "function_call", "arguments": '{"who": "<PERSON_2>"}'}],
+    )
+
+    out = await gr.async_post_call_success_hook(data, None, response)
+
+    msg = out.choices[0].message
+    assert json.loads(msg.tool_calls[0].function.arguments) == {"name": _SPECIALS_ORIGINAL, "n": 1}
+    assert msg.tool_calls[1].function.arguments == f"name={_SPECIALS_ORIGINAL}"
+    assert json.loads(msg.function_call.arguments) == [_SPECIALS_ORIGINAL, {"k": "Marie Dupont"}]
+    assert json.loads(out.output[0]["arguments"]) == {"who": _SPECIALS_ORIGINAL}
+
+
+async def test_post_call_untouched_arguments_are_kept_byte_for_byte():
+    # No placeholder in the arguments: the string is returned as received, not
+    # re-encoded (key order, spacing and escapes stay the provider's).
+    gr = _make_guardrail()
+    data = {"metadata": {"privaite_map": _FAKES}}
+    raw = '{"b":1,\n "a": "x\\u00e9"}'
+    message = types.SimpleNamespace(
+        content=None,
+        tool_calls=[types.SimpleNamespace(function=types.SimpleNamespace(arguments=raw))],
+        function_call=None,
+    )
+    response = types.SimpleNamespace(choices=[types.SimpleNamespace(message=message)])
+    out = await gr.async_post_call_success_hook(data, None, response)
+    assert out.choices[0].message.tool_calls[0].function.arguments == raw
+
+
+async def test_streaming_tool_arguments_stay_valid_json_with_special_chars(monkeypatch):
+    # Streamed argument fragments are JSON source text: the original spliced in
+    # must be its JSON-escaped form, so the reassembled arguments still parse.
+    # Content keeps the raw original. The placeholder is split across chunks.
+    monkeypatch.setitem(_FAKES, "<PERSON_2>", _SPECIALS_ORIGINAL)
+    gr = _make_guardrail()
+    request_data = {"metadata": {"privaite_map": _FAKES}}
+
+    def _delta(args, content=None):
+        call = types.SimpleNamespace(index=0, function=types.SimpleNamespace(arguments=args))
+        return _bare_delta(content=content, tool_calls=[call], function_call=types.SimpleNamespace(arguments=args))
+
+    async def _source():
+        yield _choice_chunk(_delta('{"name": "<PERS', content="Hi <PERS"))
+        yield _choice_chunk(_delta('ON_2>"}', content="ON_2>"), finish="stop")
+
+    chunks = await _collect(gr.async_post_call_streaming_iterator_hook(None, _source(), request_data))
+    tool_args = "".join(
+        tc.function.arguments for chunk in chunks for choice in chunk.choices for tc in (choice.delta.tool_calls or [])
+    )
+    fc_args = "".join(choice.delta.function_call.arguments for chunk in chunks for choice in chunk.choices)
+    content = "".join(choice.delta.content or "" for chunk in chunks for choice in chunk.choices)
+    assert json.loads(tool_args) == {"name": _SPECIALS_ORIGINAL}
+    assert json.loads(fc_args) == {"name": _SPECIALS_ORIGINAL}
+    assert content == f"Hi {_SPECIALS_ORIGINAL}"
