@@ -6,7 +6,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
 from types import MappingProxyType
-from typing import Final, Literal, Protocol, TypeVar, assert_never
+from typing import Final, Literal, Protocol, TypeVar
+from typing_extensions import assert_never
 
 import litellm
 from litellm._logging import verbose_proxy_logger
