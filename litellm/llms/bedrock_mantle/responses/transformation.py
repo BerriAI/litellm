@@ -49,9 +49,9 @@ _BEDROCK_MANTLE_SUPPORTED_RESPONSE_TOOL_TYPES: Final = frozenset(
     {"function", "mcp", "custom", "namespace", "tool_search"}
 )
 
-# Bedrock's server-side Web Search tool is enabled per model, not per provider: the GPT
-# families AWS lists accept it, the rest reject the whole request with "Tool type
-# 'web_search' is not supported for model `<id>`", so the cost map flag decides.
+# Enabled per model, not per provider: models AWS has not enabled reject the whole request
+# with "Tool type 'web_search' is not supported for model `<id>`", so the cost map's
+# supports_web_search flag decides rather than a provider-wide allowlist entry.
 _BEDROCK_MANTLE_WEB_SEARCH_TOOL_TYPE: Final = "web_search"
 
 _BEDROCK_MANTLE_RESPONSE_TOOL_TYPES_WITH_WEB_SEARCH: Final = _BEDROCK_MANTLE_SUPPORTED_RESPONSE_TOOL_TYPES | frozenset(
@@ -113,8 +113,8 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
         return False
 
     def _supported_response_tool_types(self, tools: "Sequence[Any]", model: str) -> frozenset[str]:
-        """Only consult the cost map when the request actually carries a Web Search tool, so
-        every other request keeps resolving its tool types without a model lookup."""
+        """The tool types `tools` may keep: the provider-wide set, widened by `web_search`
+        only when this request asks for it and the model is one AWS enabled it for."""
         if not any(
             isinstance(tool, dict) and tool.get("type") == _BEDROCK_MANTLE_WEB_SEARCH_TOOL_TYPE for tool in tools
         ):
@@ -123,7 +123,7 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
             return _BEDROCK_MANTLE_RESPONSE_TOOL_TYPES_WITH_WEB_SEARCH
         return _BEDROCK_MANTLE_SUPPORTED_RESPONSE_TOOL_TYPES
 
-    def _filter_unsupported_tools(self, tools: list[Any], model: str) -> list[Any]:
+    def _filter_unsupported_tools(self, tools: "Sequence[Any]", model: str) -> list[Any]:
         """Keep only tool types Mantle's Responses API accepts for this model."""
         supported_tool_types: Final = self._supported_response_tool_types(tools=tools, model=model)
         kept: Final[list[Any]] = []
