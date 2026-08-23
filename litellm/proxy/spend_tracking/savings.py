@@ -192,19 +192,13 @@ def _matching_priced_deployments(
     priced: tuple[ModelInfo, ...] = ()
     seen_ids: tuple[str, ...] = ()
     for dep in deployments:
-        if not isinstance(dep, dict):
-            continue
         raw_info = dep.get("model_info")
         dep_id = raw_info.get("id") if isinstance(raw_info, dict) else None
         if not isinstance(dep_id, str) or dep_id in seen_ids:
             continue
-        raw_params = dep.get("litellm_params")
-        if isinstance(raw_params, dict):
-            dep_model = str(raw_params.get("model") or "")
-            dep_provider = raw_params.get("custom_llm_provider")
-        else:
-            dep_model = ""
-            dep_provider = None
+        raw_params = dep["litellm_params"]
+        dep_model = str(raw_params.get("model") or "")
+        dep_provider = raw_params.get("custom_llm_provider")
         if not _deployment_matches_logged_model(
             dep_model=dep_model,
             dep_provider=dep_provider,
@@ -239,20 +233,13 @@ def _pricing_for_savings(
 ) -> ModelInfo | None:
     """Deployment rate first, public rate only when it actually has a price."""
     logged: Final = model or ""
-    extra: Final[tuple[ModelInfo, ...]]
-    if model_id:
-        extra = ()
-    else:
-        priced = _matching_priced_deployments(router, identity, logged)
-        if not priced:
-            extra = ()
-        else:
-            unique = _unique_by_rate(priced, rate_key)
-            if unique is None:
-                # Matching deployments disagree. The public list price is not a
-                # substitute — it can match none of them.
-                return None
-            extra = (unique,)
+    priced: Final = () if model_id else _matching_priced_deployments(router, identity, logged)
+    unique: Final = _unique_by_rate(priced, rate_key) if priced else None
+    if priced and unique is None:
+        # Matching deployments disagree. The public list price is not a
+        # substitute — it can match none of them.
+        return None
+    extra: Final = (unique,) if unique is not None else ()
     candidates: Final = (
         _cost_map_deployment_info(model_id),
         _effective_model_info(router, model_id, logged),
