@@ -1,16 +1,12 @@
 import json
 import logging
 import os
-import sys
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from jsonschema import validate
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 
 import litellm
 from litellm._logging import (
@@ -100,18 +96,6 @@ def test_prompt_tokens_details_cache_write_creation_stay_in_sync_on_assignment()
     details.cache_creation_tokens = 375
     assert details.cache_write_tokens == details.cache_creation_tokens == 375
 
-
-@pytest.fixture
-def local_model_cost_map(monkeypatch):
-    original_model_cost = litellm.model_cost
-    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    litellm.model_cost = litellm.get_model_cost_map(url="")
-    litellm.get_model_info.cache_clear()
-    try:
-        yield
-    finally:
-        litellm.model_cost = original_model_cost
-        litellm.get_model_info.cache_clear()
 
 
 def test_get_model_info_surfaces_supports_adaptive_thinking(local_model_cost_map):
@@ -684,8 +668,8 @@ def test_all_model_configs():
     ) == {"max_output_tokens": 10}
 
 
-def test_anthropic_web_search_in_model_info():
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+def test_anthropic_web_search_in_model_info(monkeypatch):
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
     supported_models = [
@@ -1009,6 +993,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "supports_xhigh_reasoning_effort": {"type": "boolean"},
                 "supports_max_reasoning_effort": {"type": "boolean"},
                 "supports_adaptive_thinking": {"type": "boolean"},
+                "thinking_always_on": {"type": "boolean"},
                 "supports_mid_conversation_system": {"type": "boolean"},
                 "supports_sampling_params": {"type": "boolean"},
                 "supports_output_config": {"type": "boolean"},
@@ -1204,11 +1189,11 @@ def test_max_tokens_consistency():
         raise AssertionError(error_msg)
 
 
-def test_get_model_info_gemini():
+def test_get_model_info_gemini(monkeypatch):
     """
     Tests if ALL gemini models have 'tpm' and 'rpm' in the model info
     """
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
     model_map = litellm.model_cost
@@ -1263,8 +1248,8 @@ def test_get_model_info_bedrock_double_provider_prefix_resolves(local_model_cost
     assert info["key"] == "us.anthropic.claude-sonnet-4-6"
 
 
-def test_openai_models_in_model_info():
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+def test_openai_models_in_model_info(monkeypatch):
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
     model_map = litellm.model_cost
@@ -1374,7 +1359,7 @@ def test_get_provider_rerank_config():
     Test the get_provider_rerank_config function for various providers
     """
     from litellm import HostedVLLMRerankConfig
-    from litellm.utils import LlmProviders, ProviderConfigManager
+    from litellm.utils import LlmProviders
 
     # Test for hosted_vllm provider
     config = ProviderConfigManager.get_provider_rerank_config(
@@ -1419,7 +1404,7 @@ for commitment in BEDROCK_COMMITMENTS:
 print("block_list", block_list)
 
 
-def test_supports_computer_use_utility():
+def test_supports_computer_use_utility(monkeypatch):
     """
     Tests the litellm.utils.supports_computer_use utility function.
     """
@@ -1431,7 +1416,7 @@ def test_supports_computer_use_utility():
     original_env_var = os.getenv("LITELLM_LOCAL_MODEL_COST_MAP")
     original_model_cost = getattr(litellm, "model_cost", None)
 
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")  # Load with local/backup
 
     try:
@@ -1449,7 +1434,7 @@ def test_supports_computer_use_utility():
         if original_env_var is None:
             del os.environ["LITELLM_LOCAL_MODEL_COST_MAP"]
         else:
-            os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = original_env_var
+            monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", original_env_var)
 
         if original_model_cost is not None:
             litellm.model_cost = original_model_cost
@@ -1457,13 +1442,13 @@ def test_supports_computer_use_utility():
             delattr(litellm, "model_cost")
 
 
-def test_get_model_info_shows_supports_computer_use():
+def test_get_model_info_shows_supports_computer_use(monkeypatch):
     """
     Tests if 'supports_computer_use' is correctly retrieved by get_model_info.
     We'll use 'claude-4-sonnet-20250514' as it's configured
     in the backup JSON to have supports_computer_use: True.
     """
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     # Ensure litellm.model_cost is loaded, relying on the backup mechanism if primary fails
     # as per previous debugging.
     litellm.model_cost = litellm.get_model_cost_map(url="")
@@ -1497,7 +1482,7 @@ def test_get_model_info_shows_supports_computer_use():
 def test_pre_process_non_default_params(model, custom_llm_provider):
     from pydantic import BaseModel
 
-    from litellm.utils import ProviderConfigManager, pre_process_non_default_params
+    from litellm.utils import pre_process_non_default_params
 
     provider_config = ProviderConfigManager.get_provider_chat_config(
         model=model, provider=LlmProviders(custom_llm_provider)
@@ -2364,7 +2349,6 @@ def test_anthropic_claude_4_invoke_chat_provider_config():
     from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import (
         AmazonAnthropicClaudeConfig,
     )
-    from litellm.utils import ProviderConfigManager
 
     config = ProviderConfigManager.get_provider_chat_config(
         model="invoke/us.anthropic.claude-sonnet-4-20250514-v1:0",
@@ -3251,7 +3235,6 @@ class TestProxyLoggingBudgetAlerts:
 def test_azure_ai_claude_provider_config():
     """Test that Azure AI Claude models return AzureAnthropicConfig for proper tool transformation."""
     from litellm import AzureAIStudioConfig, AzureAnthropicConfig
-    from litellm.utils import ProviderConfigManager
 
     # Claude models should return AzureAnthropicConfig
     config = ProviderConfigManager.get_provider_chat_config(
@@ -4319,7 +4302,6 @@ class TestGetOptionalParamsTencent:
         from litellm.llms.tencent.messages.transformation import (
             TencentAnthropicMessagesConfig,
         )
-        from litellm.utils import ProviderConfigManager
 
         config = ProviderConfigManager.get_provider_anthropic_messages_config(
             model="deepseek-v4-pro",
@@ -4405,11 +4387,13 @@ class TestVertexEmbeddingEncodingFormat:
         "vertex_ai/gemini-3-pro-image-preview",
         "vertex_ai/gemini-3.1-flash-image",
         "vertex_ai/gemini-3.1-flash-image-preview",
+        "vertex_ai/gemini-3.1-flash-lite-image",
         "gemini/gemini-2.5-flash-image",
         "gemini/gemini-3-pro-image",
         "gemini/gemini-3-pro-image-preview",
         "gemini/gemini-3.1-flash-image",
         "gemini/gemini-3.1-flash-image-preview",
+        "gemini/gemini-3.1-flash-lite-image",
     ],
 )
 def test_gemini_image_models_do_not_support_reasoning(

@@ -1,5 +1,3 @@
-import os
-import sys
 
 import httpx
 import openai
@@ -7,9 +5,6 @@ import pytest
 
 import litellm
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 from litellm.litellm_core_utils.exception_mapping_utils import (
     ExceptionCheckers,
@@ -1047,3 +1042,50 @@ def test_a_timed_out_request_is_a_timeout_for_every_provider(
         )
 
     assert raised.value.status_code == 408
+
+
+def test_bedrock_mantle_400_maps_to_bad_request():
+    from litellm.llms.base_llm.chat.transformation import BaseLLMException
+
+    original_exception = BaseLLMException(
+        status_code=400,
+        message=(
+            '{"error": {"code": "validation_error", "message": '
+            "\"invalid request body: Invalid 'input': value did not match any expected variant\", "
+            '"type": "invalid_request_error"}}'
+        ),
+    )
+
+    with pytest.raises(litellm.BadRequestError) as excinfo:
+        exception_type(
+            model="gpt-5.6-terra",
+            original_exception=original_exception,
+            custom_llm_provider="bedrock_mantle",
+        )
+
+    assert excinfo.value.status_code == 400
+    assert "Invalid 'input'" in excinfo.value.message
+    assert type(excinfo.value) is litellm.BadRequestError
+
+
+def test_bedrock_mantle_context_overflow_maps_to_context_window_exceeded():
+    from litellm.llms.base_llm.chat.transformation import BaseLLMException
+
+    original_exception = BaseLLMException(
+        status_code=400,
+        message=(
+            '{"error":{"code":"validation_error",'
+            '"message":"prompt tokens (1055489) exceed model maximum (1050000) for openai.gpt-5.6-sol",'
+            '"param":null,"type":"invalid_request_error"}}'
+        ),
+    )
+
+    with pytest.raises(litellm.ContextWindowExceededError) as excinfo:
+        exception_type(
+            model="openai.gpt-5.6-sol",
+            original_exception=original_exception,
+            custom_llm_provider="bedrock_mantle",
+        )
+
+    assert excinfo.value.status_code == 400
+    assert "prompt is too long: 1055489 tokens > 1050000 maximum" in excinfo.value.message

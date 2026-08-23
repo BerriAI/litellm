@@ -78,6 +78,10 @@ jobs:
         run: |
           uv lock --check || (echo "❌ uv.lock is out of sync with pyproject.toml. Run 'uv lock' locally and commit the result." && exit 1)
 
+      - name: Cache the Rust build
+        if: steps.changes.outputs.decision != 'skip'
+        uses: ./.github/actions/cache-cargo-build
+
       - name: Install dependencies
         if: steps.changes.outputs.decision != 'skip'
         run: |

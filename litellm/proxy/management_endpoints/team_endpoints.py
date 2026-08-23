@@ -3286,15 +3286,6 @@ async def team_member_delete(
 
     _db_new_team_members: Final[list[dict]] = [m.model_dump() for m in new_team_members]
 
-    _ = await _team_db(prisma_client).update(
-        where={
-            "team_id": data.team_id,
-        },
-        data={"members_with_roles": json.dumps(_db_new_team_members)},
-    )
-
-    _emit_team_members_metric(existing_team_row)
-
     ## DELETE TEAM ID from USER ROW, IF EXISTS ##
     # get user row
     removed_user_ids: Final = frozenset(m.user_id for m in removed_team_members if m.user_id is not None)
@@ -3303,52 +3294,62 @@ async def team_member_delete(
     )
     existing_user_rows: Final[Sequence[LiteLLM_UserTable]] = await _user_db(prisma_client).find_many(where=key_val)
 
-    for existing_user in existing_user_rows:
-        if data.team_id in existing_user.teams:
-            await _user_db(prisma_client).update(
-                where={
-                    "user_id": existing_user.user_id,
-                },
-                data={"teams": {"set": [team for team in existing_user.teams if team != data.team_id]}},
-            )
-
     # Also clean up any existing team membership rows for this user and team
     user_ids_to_delete: Final = removed_user_ids.union(
         (data.user_id,) if data.user_id is not None else (),
         (user.user_id for user in existing_user_rows if user.user_id),
     )
 
-    for _uid in sorted(user_ids_to_delete):
-        await _team_membership_db(prisma_client).delete_many(where={"team_id": data.team_id, "user_id": _uid})
-
     ## DELETE KEYS CREATED BY USER FOR THIS TEAM
-    if user_ids_to_delete:
-        from litellm.proxy.management_endpoints.key_management_endpoints import (
-            _persist_deleted_verification_tokens,
+    # Fetch keys before deletion so their audit records can be persisted alongside the delete.
+    # An empty user_ids_to_delete still resolves cleanly: prisma's "in": [] matches no rows.
+    keys_to_delete: Final[list[LiteLLM_VerificationToken]] = await _tokens_db(prisma_client).find_many(
+        where={
+            "user_id": {"in": sorted(user_ids_to_delete)},
+            "team_id": data.team_id,
+        }
+    )
+
+    # All four cleanups run on one connection so a failure between them leaves
+    # no partial removal: either every write below lands, or none of them do.
+    async with prisma_client.tx() as tx:
+        await tx.litellm_teamtable.update(
+            where={"team_id": data.team_id},
+            data={"members_with_roles": json.dumps(_db_new_team_members)},
         )
 
-        # Fetch keys before deletion to persist them
-        keys_to_delete: Final[list[LiteLLM_VerificationToken]] = await _tokens_db(prisma_client).find_many(
-            where={
-                "user_id": {"in": sorted(user_ids_to_delete)},
-                "team_id": data.team_id,
-            }
-        )
+        for existing_user in existing_user_rows:
+            if data.team_id in existing_user.teams:
+                await tx.litellm_usertable.update(
+                    where={"user_id": existing_user.user_id},
+                    data={"teams": {"set": [team for team in existing_user.teams if team != data.team_id]}},
+                )
 
-        if keys_to_delete:
-            await _persist_deleted_verification_tokens(
-                keys=keys_to_delete,
-                prisma_client=prisma_client,
-                user_api_key_dict=user_api_key_dict,
-                litellm_changed_by=None,
+        for _uid in sorted(user_ids_to_delete):
+            await tx.litellm_teammembership.delete_many(where={"team_id": data.team_id, "user_id": _uid})
+
+        if user_ids_to_delete:
+            if keys_to_delete:
+                from litellm.proxy.management_endpoints.key_management_endpoints import (
+                    _persist_deleted_verification_tokens,
+                )
+
+                await _persist_deleted_verification_tokens(
+                    keys=keys_to_delete,
+                    prisma_client=prisma_client,
+                    user_api_key_dict=user_api_key_dict,
+                    litellm_changed_by=None,
+                    tx=tx,
+                )
+
+            await tx.litellm_verificationtoken.delete_many(
+                where={
+                    "user_id": {"in": sorted(user_ids_to_delete)},
+                    "team_id": data.team_id,
+                }
             )
 
-        await _tokens_db(prisma_client).delete_many(
-            where={
-                "user_id": {"in": sorted(user_ids_to_delete)},
-                "team_id": data.team_id,
-            }
-        )
+    _emit_team_members_metric(existing_team_row)
 
     return existing_team_row
 
