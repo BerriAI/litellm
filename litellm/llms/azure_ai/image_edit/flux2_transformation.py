@@ -26,15 +26,14 @@ class AzureFoundryFlux2ImageEditConfig(OpenAIImageEditConfig):
     """
 
     def get_supported_openai_params(self, model: str) -> list:
-        """
-        FLUX 2 supports a subset of OpenAI image edit params
-        """
         return [
             "prompt",
             "image",
             "model",
             "n",
             "size",
+            "width",
+            "height",
         ]
 
     def map_openai_params(
@@ -43,15 +42,17 @@ class AzureFoundryFlux2ImageEditConfig(OpenAIImageEditConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
-        """
-        Map OpenAI params to FLUX 2 params.
-        FLUX 2 uses the same param names as OpenAI for supported params.
-        """
         mapped_params: Final[dict[str, Any]] = {}
         supported_params: Final = self.get_supported_openai_params(model)
 
         for key, value in dict(image_edit_optional_params).items():
-            if key in supported_params and value is not None:
+            if key not in supported_params or value is None:
+                continue
+            if key == "size" and isinstance(value, str) and "x" in value:
+                w, h = value.lower().split("x", 1)
+                mapped_params["width"] = int(w)
+                mapped_params["height"] = int(h)
+            elif key != "size":
                 mapped_params[key] = value
 
         return mapped_params
