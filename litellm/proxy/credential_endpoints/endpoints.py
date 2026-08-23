@@ -22,7 +22,10 @@ from litellm.llms.base_llm.auth.identity_source import (
 from litellm.llms.base_llm.auth.internal_issuer import internal_issuer_jwks_document
 from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.common_utils.credential_hydration import hydrate_named_credential
+from litellm.proxy.common_utils.credential_hydration import (
+    hydrate_named_credential,
+    named_credential_wif_fields,
+)
 from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
 from litellm.proxy.utils import handle_exception_on_proxy, jsonify_object
 from litellm.repositories.credentials_repository import CredentialsRepository
@@ -172,9 +175,9 @@ async def create_credential(
                 detail="Credential values are required. Unable to infer credential values from model ID.",
             )
         _reject_non_admin_wif_fields(anthropic_wif_fields_named(credential.credential_values), user_api_key_dict)
-        existing_credential: Final = await hydrate_named_credential(credential.credential_name, prisma_client)
-        if existing_credential is not None:
-            _reject_non_admin_wif_fields(_stored_wif_fields(existing_credential), user_api_key_dict)
+        _reject_non_admin_wif_fields(
+            await named_credential_wif_fields(credential.credential_name, prisma_client), user_api_key_dict
+        )
         processed_credential: Final = CredentialItem(
             credential_name=credential.credential_name,
             credential_values=credential.credential_values,
@@ -392,9 +395,9 @@ async def delete_credential(
                 status_code=500,
                 detail={"error": CommonProxyErrors.db_not_connected_error.value},
             )
-        existing_credential: Final = await hydrate_named_credential(credential_name, prisma_client)
-        if existing_credential is not None:
-            _reject_non_admin_wif_fields(_stored_wif_fields(existing_credential), user_api_key_dict)
+        _reject_non_admin_wif_fields(
+            await named_credential_wif_fields(credential_name, prisma_client), user_api_key_dict
+        )
         await CredentialsRepository(prisma_client).delete_by_name(credential_name)
 
         ## DELETE FROM LITELLM ##

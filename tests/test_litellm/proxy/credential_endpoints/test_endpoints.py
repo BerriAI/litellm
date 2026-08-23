@@ -704,6 +704,21 @@ class TestNonAdminCannotTouchAStoredWifCredential:
         assert "anthropic_keycloak_token_url" in response.text
         repository.delete_by_name.assert_not_awaited()
 
+    def test_a_stale_in_memory_copy_does_not_authorize_deleting_a_stored_wif_credential(
+        self, restore_credential_list, monkeypatch
+    ):
+        """Resolution reads memory first and stops, which is right when serving a request. A pod
+        whose in-memory copy predates an admin adding the federation fields must not read that
+        stale object and authorize the delete: the gate takes the union of memory and the row."""
+        monkeypatch.setattr(litellm, "credential_list", [_plain_credential("federated-cred")])
+
+        with _repository_holding(_wif_credential("federated-cred")) as repository:
+            response = _delete_credential("federated-cred", auth=_as_non_admin)
+
+        assert response.status_code == 403, response.text
+        assert "anthropic_keycloak_token_url" in response.text
+        repository.delete_by_name.assert_not_awaited()
+
     def test_proxy_admin_can_delete_a_stored_wif_credential(self, restore_credential_list):
         with _repository_holding(_wif_credential("federated-cred")) as repository:
             response = _delete_credential("federated-cred", auth=_as_admin)
