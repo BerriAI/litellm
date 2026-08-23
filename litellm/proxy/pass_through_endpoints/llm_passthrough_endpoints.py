@@ -13,7 +13,7 @@ import os
 import re
 from collections.abc import Callable
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Annotated, Any, Final, Callable, cast
+from typing import TYPE_CHECKING, Annotated, Any, Final, cast
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, WebSocket
@@ -27,8 +27,8 @@ from litellm.constants import (
     ALLOWED_VERTEX_AI_PASSTHROUGH_HEADERS,
     BEDROCK_AGENT_RUNTIME_PASS_THROUGH_ROUTES,
 )
-from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.proxy._types import *
 from litellm.proxy.auth.route_checks import RouteChecks
@@ -1676,7 +1676,7 @@ def get_vertex_ai_allowed_incoming_headers(request: Request) -> dict:
 
 
 def get_vertex_pass_through_handler(
-    call_type: Literal["discovery", "aiplatform"],
+    call_type: Literal[discovery, aiplatform],
 ) -> BaseVertexAIPassThroughHandler:
     if call_type == "discovery":
         return VertexAIDiscoveryPassThroughHandler()
@@ -2413,7 +2413,7 @@ def _vertex_publisher_model_suffix(model: str) -> str:
     return f"{VERTEX_PUBLISHER_MODEL_PREFIX}{model.rsplit('/', 1)[-1]}"
 
 
-def _get_llm_router() -> "Router | None":
+def _get_llm_router() -> Router | None:
     from litellm.proxy.proxy_server import llm_router
 
     return llm_router
@@ -2453,7 +2453,7 @@ def _resolve_vertex_live_credentials(
 def _build_vertex_live_setup_model_rewriter(
     vertex_project: str | None,
     vertex_location: str | None,
-    llm_router: "Router | None",
+    llm_router: Router | None,
 ) -> Callable[[str], str] | None:
     """
     Rewrite the ``setup`` frame's model into the full Vertex resource path the Live API requires.
@@ -2473,7 +2473,7 @@ def _build_vertex_live_setup_model_rewriter(
     return rewrite
 
 
-def _resolve_alias_to_upstream_model(setup_model: str, llm_router: "Router | None") -> str:
+def _resolve_alias_to_upstream_model(setup_model: str, llm_router: Router | None) -> str:
     """
     The Live SDK wraps whatever the caller typed as ``models/<name>``, so a gateway alias arrives prefixed
     """
@@ -2726,7 +2726,9 @@ async def gigachat_proxy_route(
         )
 
     # Fall back to existing implementation for direct GigaChat models
-    verbose_proxy_logger.debug(f"Gigachat passthrough: Using direct Gigachat model '{model}' for endpoint '{endpoint}'")
+    verbose_proxy_logger.debug(
+        "Gigachat passthrough: Using direct Gigachat model '%s' for endpoint '%s'", model, endpoint
+    )
 
     data: Dict[str, Any] = {}
 
@@ -2747,7 +2749,7 @@ async def gigachat_proxy_route(
     base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
 
     try:
-        result = await base_llm_response_processor.base_passthrough_process_llm_request(
+        return await base_llm_response_processor.base_passthrough_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
@@ -2764,8 +2766,6 @@ async def gigachat_proxy_route(
             user_api_base=user_api_base,
             version=version,
         )
-
-        return result
     except Exception as e:  # noqa: BLE001 # Safe catch-all for handle exception
         raise await base_llm_response_processor._handle_llm_api_exception(
             e=e,
@@ -2834,7 +2834,7 @@ async def handle_gigachat_passthrough_router_model(
             data["metadata"]["agent_id"] = user_api_key_dict.agent_id
 
     verbose_proxy_logger.debug(
-        f"Gigachat router passthrough: model='{model}', endpoint='{endpoint}', streaming={is_streaming}"
+        "Gigachat router passthrough: model='%s', endpoint='%s', streaming=%s", model, endpoint, is_streaming
     )
 
     # Use the common processing path (same as non-router models)
