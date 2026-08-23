@@ -25,6 +25,22 @@ def _get_credential_list() -> Sequence[CredentialItem]:
     return litellm.credential_list
 
 
+async def _create_credential_record(
+    credentials_repository: CredentialsRepository,
+    data: dict[str, object],  # mutable-ok: repository create requires a concrete dict
+    credential_name: str,
+) -> None:
+    from prisma.errors import UniqueViolationError
+
+    try:
+        await credentials_repository.create(data=data)
+    except UniqueViolationError as error:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Credential with name '{credential_name}' already exists.",
+        ) from error
+
+
 class CredentialHelperUtils:
     @staticmethod
     def encrypt_credential_values(credential: CredentialItem, new_encryption_key: str | None = None) -> CredentialItem:
@@ -103,12 +119,14 @@ async def create_credential(
         encrypted_credential: Final = CredentialHelperUtils.encrypt_credential_values(processed_credential)
         credentials_dict: Final = encrypted_credential.model_dump()
         credentials_dict_jsonified: Final = jsonify_object(credentials_dict)
-        await CredentialsRepository(prisma_client).create(
+        await _create_credential_record(
+            credentials_repository=CredentialsRepository(prisma_client),
             data={
                 **credentials_dict_jsonified,
                 "created_by": user_api_key_dict.user_id,
                 "updated_by": user_api_key_dict.user_id,
-            }
+            },
+            credential_name=credential.credential_name,
         )
 
         ## ADD TO LITELLM ##

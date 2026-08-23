@@ -2,12 +2,16 @@
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
+import litellm
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.credential_endpoints.endpoints import _get_credential_list
+from litellm.proxy.credential_endpoints.endpoints import _create_credential_record, _get_credential_list
 from litellm.proxy.proxy_server import app
+from litellm.repositories.credentials_repository import CredentialsRepository
 from litellm.types.utils import CredentialItem
 
 client = TestClient(app)
@@ -73,6 +77,30 @@ def test_create_credential_rejects_config_defined_name_collision():
     )
 
     assert response.status_code == 409, response.text
+
+
+def test_get_credential_list_returns_the_live_list():
+    assert _get_credential_list() is litellm.credential_list
+
+
+@pytest.mark.asyncio
+async def test_create_credential_maps_database_duplicate_race_to_409():
+    from prisma.errors import UniqueViolationError
+
+    repository = MagicMock(spec=CredentialsRepository)
+    repository.create = AsyncMock(side_effect=UniqueViolationError({}, message="duplicate name"))
+    data = {"credential_name": "shared-credential"}
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _create_credential_record(
+            credentials_repository=repository,
+            data=data,
+            credential_name="shared-credential",
+        )
+
+    assert exc_info.value.status_code == 409
+    assert "already exists" in exc_info.value.detail
+    repository.create.assert_awaited_once_with(data=data)
 
 
 def test_update_credential_answers_404_when_the_credential_does_not_exist():
