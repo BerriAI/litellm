@@ -9,13 +9,10 @@ Bug Fixed: Key alias was not passed during auto-rotation, causing
 secrets to be created at a new location instead of updating in-place.
 """
 
-import os
-import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../.."))
 
 from litellm.proxy._types import (
     GenerateKeyResponse,

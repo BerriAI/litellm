@@ -4,7 +4,6 @@ Test suite for XAI cost calculation functionality.
 
 import math
 import os
-import sys
 
 import litellm
 from litellm.types.utils import (
@@ -13,9 +12,6 @@ from litellm.types.utils import (
     Usage,
 )
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
     StandardBuiltInToolCostTracking,

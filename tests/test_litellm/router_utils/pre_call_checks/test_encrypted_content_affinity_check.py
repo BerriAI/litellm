@@ -15,15 +15,12 @@ The mechanism works without any cache and supports two encoding strategies:
   encrypted_content back to their original forms before sending to the upstream provider.
 """
 
-import os
-import sys
 import time
 from typing import List, Optional
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 import litellm
 from litellm.responses.utils import ResponsesAPIRequestUtils

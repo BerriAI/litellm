@@ -1,13 +1,8 @@
-import os
-import sys
 from datetime import datetime, time, timezone
 from zoneinfo import ZoneInfo
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 import litellm
 from litellm.proxy.common_utils.timezone_utils import (

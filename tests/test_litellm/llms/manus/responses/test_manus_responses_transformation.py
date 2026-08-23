@@ -7,10 +7,7 @@ transformations for the Responses API.
 Source: litellm/llms/manus/responses/transformation.py
 """
 
-import os
-import sys
 
-sys.path.insert(0, os.path.abspath("../../../../.."))
 
 from litellm.llms.manus.responses.transformation import ManusResponsesAPIConfig
 from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams
