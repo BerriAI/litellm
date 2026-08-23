@@ -182,6 +182,7 @@ jobs:
           - test-group: endpoints-and-responses
             test-path: >-
               tests/proxy_unit_tests/test_blog_posts_endpoint.py
+              tests/proxy_unit_tests/test_cache_analytics.py
               tests/proxy_unit_tests/test_models_fallback_endpoint.py
               tests/proxy_unit_tests/test_google_endpoint_routing.py
               tests/proxy_unit_tests/test_google_gemini_proxy_request.py

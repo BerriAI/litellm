@@ -61,6 +61,7 @@ GROUPS_SQL: Final = """
             OR COALESCE(vt."key_alias", 'Unnamed Key') IN (SELECT jsonb_array_elements_text($3::jsonb)))
         AND ($4::jsonb = '[]'::jsonb
             OR sl."model" IN (SELECT jsonb_array_elements_text($4::jsonb)))
+        AND ($5::text IS NULL OR sl."user" = $5)
     GROUP BY 1
     ORDER BY (COUNT(*)) DESC
 """
@@ -72,6 +73,7 @@ KEY_ALIAS_OPTIONS_SQL: Final = """
     WHERE
         sl."startTime" >= ($1::timestamptz AT TIME ZONE 'UTC')
         AND sl."startTime" <  (($2::timestamptz + INTERVAL '1 day') AT TIME ZONE 'UTC')
+        AND ($3::text IS NULL OR sl."user" = $3)
     ORDER BY 1
 """
 
@@ -82,6 +84,7 @@ MODEL_OPTIONS_SQL: Final = """
         sl."startTime" >= ($1::timestamptz AT TIME ZONE 'UTC')
         AND sl."startTime" <  (($2::timestamptz + INTERVAL '1 day') AT TIME ZONE 'UTC')
         AND sl."model" != ''
+        AND ($3::text IS NULL OR sl."user" = $3)
     ORDER BY 1
 """
 
@@ -119,13 +122,14 @@ async def get_cache_activity(
     end_date: datetime,
     key_aliases: Sequence[str],
     models: Sequence[str],
+    user_id: str | None = None,
 ) -> CacheActivityResponse:
     group_rows, key_alias_rows, model_rows = await asyncio.gather(
         prisma_client.db.query_raw(
-            GROUPS_SQL, start_date, end_date, json.dumps(list(key_aliases)), json.dumps(list(models))
+            GROUPS_SQL, start_date, end_date, json.dumps(list(key_aliases)), json.dumps(list(models)), user_id
         ),
-        prisma_client.db.query_raw(KEY_ALIAS_OPTIONS_SQL, start_date, end_date),
-        prisma_client.db.query_raw(MODEL_OPTIONS_SQL, start_date, end_date),
+        prisma_client.db.query_raw(KEY_ALIAS_OPTIONS_SQL, start_date, end_date, user_id),
+        prisma_client.db.query_raw(MODEL_OPTIONS_SQL, start_date, end_date, user_id),
     )
     groups: Final = _groups_adapter.validate_python(group_rows or [])
     return CacheActivityResponse(
