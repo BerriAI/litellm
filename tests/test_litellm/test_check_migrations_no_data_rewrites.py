@@ -1,10 +1,9 @@
 """Tests for tests/code_coverage_tests/check_migrations_no_data_rewrites.py.
 
 The checker reads migration.sql as SQL rather than as text, so the cases that matter
-are the ones a grep would get wrong: `ON DELETE CASCADE` in a foreign key (60-odd
-occurrences in the shipped migrations), an `UPDATE` inside a string literal or a
-comment, and an `UPDATE` hidden in the `DO $$ ... $$` block this repo uses for
-conditional DDL.
+are the ones a grep would get wrong: the referential actions in a foreign key, of which
+the shipped migrations carry 60, an `UPDATE` inside a string literal or a comment, and
+an `UPDATE` hidden in the `DO $$ ... $$` block this repo uses for conditional DDL.
 """
 
 import importlib.util
@@ -218,6 +217,25 @@ class TestInsert:
     def test_a_table_named_in_the_insert_target_does_not_flag_it(self, tmp_path):
         assert _keywords(tmp_path, 'INSERT INTO "audit table" ("id") VALUES (1);') == ()
 
+    def test_a_returning_subquery_after_a_wrapped_values_list_is_not_the_row_source(self, tmp_path):
+        sql = 'INSERT INTO "Foo" ("id") (VALUES (1)) RETURNING (SELECT count(*) FROM "Bar");'
+        assert _keywords(tmp_path, sql) == ()
+
+    def test_a_conflict_update_after_a_wrapped_values_list_stays_bounded(self, tmp_path):
+        sql = (
+            'INSERT INTO "Foo" ("id") (VALUES (1))'
+            ' ON CONFLICT ("id") DO UPDATE SET "id" = (SELECT max("id") FROM "Bar");'
+        )
+        assert _keywords(tmp_path, sql) == ()
+
+    def test_a_wrapped_values_list_of_several_rows_stays_bounded(self, tmp_path):
+        sql = 'INSERT INTO "Foo" ("id") (VALUES (1), (2)) RETURNING (SELECT count(*) FROM "Bar");'
+        assert _keywords(tmp_path, sql) == ()
+
+    def test_the_row_source_names_its_own_keyword_not_a_later_subquery(self, tmp_path):
+        sql = 'INSERT INTO "Foo" ("id") (TABLE "Bar") RETURNING (SELECT count(*) FROM "Baz");'
+        assert _keywords(tmp_path, sql) == ("INSERT ... TABLE",)
+
 
 class TestCommonTableExpressions:
     def test_cte_led_update_is_flagged(self, tmp_path):
@@ -247,6 +265,32 @@ class TestCommonTableExpressions:
     def test_cte_led_insert_values_is_bounded_and_passes(self, tmp_path):
         sql = 'WITH latest AS (SELECT max("id") AS "id" FROM "Bar")\nINSERT INTO "Config" ("k", "v") VALUES (\'rev\', (SELECT "id"::text FROM latest));'
         assert _keywords(tmp_path, sql) == ()
+
+    def test_a_writable_cte_bounded_by_values_passes(self, tmp_path):
+        sql = 'WITH added AS (INSERT INTO "Foo" ("id") VALUES (1) RETURNING "id") SELECT * FROM added;'
+        assert _keywords(tmp_path, sql) == ()
+
+    def test_a_writable_cte_copying_a_query_is_flagged(self, tmp_path):
+        sql = (
+            'WITH added AS (INSERT INTO "Foo" ("id") SELECT "id" FROM "Bar" RETURNING "id")'
+            " SELECT * FROM added;"
+        )
+        assert _keywords(tmp_path, sql) == ("WITH ... INSERT ... SELECT",)
+
+    def test_a_bounded_writable_cte_does_not_hide_a_copying_one_beside_it(self, tmp_path):
+        sql = (
+            'WITH added AS (INSERT INTO "Foo" ("id") VALUES (1) RETURNING "id"),'
+            ' copied AS (INSERT INTO "Baz" ("id") SELECT "id" FROM "Bar" RETURNING "id")'
+            " SELECT * FROM added, copied;"
+        )
+        assert _keywords(tmp_path, sql) == ("WITH ... INSERT ... SELECT",)
+
+    def test_a_writable_cte_wrapping_its_row_source_is_flagged(self, tmp_path):
+        sql = (
+            'WITH added AS (INSERT INTO "Foo" ("id") (SELECT "id" FROM "Bar") RETURNING "id")'
+            " SELECT * FROM added;"
+        )
+        assert _keywords(tmp_path, sql) == ("WITH ... INSERT ... SELECT",)
 
 
 class TestDollarQuotedBlocks:
@@ -324,6 +368,94 @@ class TestDollarQuotedBlocks:
             "END $outer$;"
         )
         assert _scan(tmp_path, sql)[0].line == 7
+
+
+class TestStoredRoutines:
+    DEFINITION = (
+        "CREATE FUNCTION backfill() RETURNS void AS $$\n"
+        "BEGIN\n"
+        '    UPDATE "Foo" SET "a" = 1;\n'
+        "END;\n"
+        "$$ LANGUAGE plpgsql;\n"
+    )
+    PROCEDURE = (
+        "CREATE OR REPLACE PROCEDURE sweep() AS $$\n"
+        "BEGIN\n"
+        '    DELETE FROM "Foo";\n'
+        "END;\n"
+        "$$ LANGUAGE plpgsql;\n"
+    )
+
+    def test_a_function_body_nothing_calls_passes(self, tmp_path):
+        assert _keywords(tmp_path, self.DEFINITION) == ()
+
+    def test_a_procedure_body_nothing_calls_passes(self, tmp_path):
+        assert _keywords(tmp_path, self.PROCEDURE) == ()
+
+    def test_a_function_the_migration_calls_is_flagged(self, tmp_path):
+        assert _keywords(tmp_path, self.DEFINITION + "SELECT backfill();\n") == ("UPDATE",)
+
+    def test_a_procedure_the_migration_calls_is_flagged(self, tmp_path):
+        assert _keywords(tmp_path, self.PROCEDURE + "CALL sweep();\n") == ("DELETE",)
+
+    def test_a_call_written_above_the_definition_still_counts(self, tmp_path):
+        assert _keywords(tmp_path, "SELECT backfill();\n" + self.DEFINITION) == ("UPDATE",)
+
+    def test_a_call_from_inside_a_do_block_still_counts(self, tmp_path):
+        sql = self.DEFINITION + "DO $$ BEGIN PERFORM backfill(); END; $$;\n"
+        assert _keywords(tmp_path, sql) == ("UPDATE",)
+
+    def test_a_trigger_wiring_the_function_up_counts_as_a_call(self, tmp_path):
+        sql = self.DEFINITION + 'CREATE TRIGGER t AFTER INSERT ON "Foo" EXECUTE FUNCTION backfill();\n'
+        assert _keywords(tmp_path, sql) == ("UPDATE",)
+
+    def test_a_schema_qualified_definition_nothing_calls_passes(self, tmp_path):
+        assert _keywords(tmp_path, self.DEFINITION.replace("backfill()", "public.backfill()")) == ()
+
+    def test_a_schema_qualified_function_the_migration_calls_is_flagged(self, tmp_path):
+        sql = self.DEFINITION.replace("backfill()", "public.backfill()") + "SELECT public.backfill();\n"
+        assert _keywords(tmp_path, sql) == ("UPDATE",)
+
+    def test_the_name_written_only_in_a_comment_is_not_a_call(self, tmp_path):
+        sql = self.DEFINITION + "-- backfill() is run by hand after the deploy\n"
+        assert _keywords(tmp_path, sql) == ()
+
+    def test_a_recursive_call_does_not_count_as_the_migration_calling_it(self, tmp_path):
+        sql = (
+            "CREATE FUNCTION backfill(n int) RETURNS void AS $$\n"
+            "BEGIN\n"
+            '    UPDATE "Foo" SET "a" = 1;\n'
+            "    PERFORM backfill(n - 1);\n"
+            "END;\n"
+            "$$ LANGUAGE plpgsql;\n"
+        )
+        assert _keywords(tmp_path, sql) == ()
+
+    def test_a_quoted_routine_name_is_read_rather_than_trusted(self, tmp_path):
+        sql = self.DEFINITION.replace("backfill()", '"back fill"()')
+        assert _keywords(tmp_path, sql) == ("UPDATE",)
+
+    def test_a_do_block_is_not_a_routine_definition(self, tmp_path):
+        sql = 'DO $$ BEGIN UPDATE "Foo" SET "a" = 1; END; $$;\n'
+        assert _keywords(tmp_path, sql) == ("UPDATE",)
+
+    def test_a_definition_written_after_another_statement_is_still_recognised(self, tmp_path):
+        sql = 'ALTER TABLE "Foo" ADD COLUMN "a" INT;\n' + self.DEFINITION
+        assert _keywords(tmp_path, sql) == ()
+
+    def test_a_marker_exempts_a_rewrite_in_a_routine_the_migration_calls(self, tmp_path):
+        sql = (
+            "CREATE FUNCTION backfill() RETURNS void AS $$\n"
+            "BEGIN\n"
+            '    UPDATE "Foo" SET "a" = 1; -- data-migration-ok: single config row\n'
+            "END;\n"
+            "$$ LANGUAGE plpgsql;\n"
+            "SELECT backfill();\n"
+        )
+        assert _keywords(tmp_path, sql) == ()
+
+    def test_a_called_routine_reports_the_line_inside_its_body(self, tmp_path):
+        assert _scan(tmp_path, self.DEFINITION + "SELECT backfill();\n")[0].line == 3
 
 
 class TestLoopBodies:
@@ -1309,3 +1441,62 @@ class TestGrandfathering:
 class TestShippedMigrations:
     def test_the_repo_is_clean(self):
         assert checker.main() == 0
+
+
+CLEAN = 'ALTER TABLE "Foo" ADD COLUMN "a" INT;'
+DIRTY = 'UPDATE "Foo" SET "a" = 1;'
+FIXTURE = "20260101000000_fixture"
+
+
+def _tree(monkeypatch, tmp_path: Path, sql: str, grandfathered: frozenset = frozenset()) -> None:
+    """Stand a migrations directory holding one fixture migration in for the repo's own. The
+    root moves with it, since a rendered violation names the migration relative to the root and
+    the two are read off the same checkout everywhere but here."""
+    directory = tmp_path / "migrations" / FIXTURE
+    directory.mkdir(parents=True)
+    (directory / "migration.sql").write_text(sql, encoding="utf-8")
+    monkeypatch.setattr(checker, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(checker, "MIGRATIONS_DIR", tmp_path / "migrations")
+    monkeypatch.setattr(checker, "GRANDFATHERED", grandfathered)
+
+
+class TestExitCode:
+    def test_a_clean_tree_passes(self, tmp_path, monkeypatch):
+        _tree(monkeypatch, tmp_path, CLEAN)
+        assert checker.main() == 0
+
+    def test_a_violation_fails_the_check(self, tmp_path, monkeypatch):
+        _tree(monkeypatch, tmp_path, DIRTY)
+        assert checker.main() == 1
+
+    def test_a_stale_grandfather_alone_fails_the_check(self, tmp_path, monkeypatch):
+        _tree(monkeypatch, tmp_path, CLEAN, frozenset({FIXTURE}))
+        assert checker.main() == 1
+
+    def test_a_grandfathered_violation_passes(self, tmp_path, monkeypatch):
+        _tree(monkeypatch, tmp_path, DIRTY, frozenset({FIXTURE}))
+        assert checker.main() == 0
+
+    def test_a_missing_migrations_directory_is_an_error(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(checker, "MIGRATIONS_DIR", tmp_path / "absent")
+        assert checker.main() == 2
+
+    def test_the_failure_names_the_migration_the_line_and_the_keyword(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        _tree(monkeypatch, tmp_path, DIRTY)
+        checker.main()
+        printed = capsys.readouterr().out
+        assert f"migrations/{FIXTURE}/migration.sql:1" in printed
+        assert "UPDATE rewrites existing rows at boot" in printed
+        assert checker.GUIDANCE in printed
+
+    def test_a_stale_grandfather_is_named(self, tmp_path, monkeypatch, capsys):
+        _tree(monkeypatch, tmp_path, CLEAN, frozenset({FIXTURE}))
+        checker.main()
+        assert f"{FIXTURE}: listed in GRANDFATHERED" in capsys.readouterr().out
+
+    def test_a_missing_directory_is_reported_on_stderr(self, tmp_path, monkeypatch, capsys):
+        monkeypatch.setattr(checker, "MIGRATIONS_DIR", tmp_path / "absent")
+        checker.main()
+        assert "migrations directory not found" in capsys.readouterr().err
