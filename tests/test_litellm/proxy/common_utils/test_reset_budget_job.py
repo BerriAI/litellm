@@ -1,6 +1,5 @@
 import asyncio
 import json
-import os
 import sys
 import types
 from datetime import datetime, timedelta, timezone
@@ -12,7 +11,6 @@ import httpx
 import prisma
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system path
 
 from litellm.proxy._types import LiteLLM_VerificationToken
 from litellm.proxy.common_utils import reset_budget_job as reset_budget_job_module

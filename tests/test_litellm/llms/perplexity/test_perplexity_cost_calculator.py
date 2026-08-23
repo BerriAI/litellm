@@ -8,13 +8,11 @@ search queries, and reasoning tokens.
 import json
 import math
 import os
-import sys
 from unittest.mock import patch
 
 import pytest
 
 # Add the project root to Python path
-sys.path.insert(0, os.path.abspath("../../../.."))
 
 import litellm
 from litellm.cost_calculator import completion_cost, cost_per_token

@@ -1,4 +1,3 @@
-import sys
 import os
 import io, asyncio
 import json
@@ -7,7 +6,6 @@ import time
 from litellm import mock_completion
 from unittest.mock import MagicMock, AsyncMock, patch
 
-sys.path.insert(0, os.path.abspath("../.."))
 import litellm
 from litellm.proxy.guardrails.guardrail_hooks.presidio import (
     _OPTIONAL_PresidioPIIMasking,

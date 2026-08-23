@@ -3,14 +3,11 @@ Tests for AgenticAnthropicStreamingIterator and SSE rebuild helpers.
 """
 
 import json
-import os
-import sys
 from typing import Any, Dict, List, Optional, Tuple
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../../.."))
 
 from litellm.llms.anthropic.experimental_pass_through.messages.agentic_streaming_iterator import (
     AgenticAnthropicStreamingIterator,

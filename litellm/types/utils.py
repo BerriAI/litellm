@@ -2846,7 +2846,7 @@ class StandardLoggingRoutingDecision(TypedDict, total=False):
     classifier_cost: float
     escalated: bool
     tier_boundaries: StandardLoggingRoutingDecisionTierBoundaries
-    reasoning_override_min_score: ReadOnly[float]
+    reasoning_override_min_score: float  # writable-ok: Pydantic warns on ReadOnly TypedDict fields
     conversation_continuing: bool
     savings_baseline_model: str
     savings_baseline_deployment_id: str
