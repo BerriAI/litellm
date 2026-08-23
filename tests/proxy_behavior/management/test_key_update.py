@@ -12,7 +12,8 @@ pytestmark = pytest.mark.asyncio(loop_scope="session")
 
 # (id, actor, target_shape, expected_status). Pinned against current gating:
 # proxy_admin bypasses; org_admin is blocked by an early role gate (401);
-# every other (INTERNAL_USER-roled) actor hits user_id-mismatch 403, no-team-
+# a team admin may update keys on their own team; every other
+# (INTERNAL_USER-roled) actor hits user_id-mismatch 403, no-team-
 # admin 403, or team_member_permission 401 depending on target / membership.
 _SCENARIOS = [
     ("self/proxy_admin", Actor.PROXY_ADMIN, "self", 200),
@@ -25,7 +26,7 @@ _SCENARIOS = [
     ("self/service_account", Actor.SERVICE_ACCOUNT, "self", 403),
     ("owner_target/proxy_admin", Actor.PROXY_ADMIN, "owner", 200),
     ("owner_target/org_admin", Actor.ORG_ADMIN, "owner", 401),
-    ("owner_target/team_admin", Actor.TEAM_ADMIN, "owner", 403),
+    ("owner_target/team_admin", Actor.TEAM_ADMIN, "owner", 200),
     ("owner_target/internal_user", Actor.INTERNAL_USER, "owner", 403),
     ("owner_target/unrelated_same_org", Actor.UNRELATED_SAME_ORG, "owner", 403),
     ("owner_target/cross_org_user", Actor.CROSS_ORG_USER, "owner", 403),
