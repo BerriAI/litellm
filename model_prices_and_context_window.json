@@ -48600,6 +48600,11 @@
         "max_tokens": 128000,
         "mode": "responses",
         "use_openai_responses_path": true,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.012,
+            "search_context_size_low": 0.012,
+            "search_context_size_medium": 0.012
+        },
         "supported_endpoints": [
             "/v1/responses"
         ],
@@ -48633,6 +48638,11 @@
         "max_tokens": 128000,
         "mode": "responses",
         "use_openai_responses_path": true,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.012,
+            "search_context_size_low": 0.012,
+            "search_context_size_medium": 0.012
+        },
         "supported_endpoints": [
             "/v1/responses"
         ],
@@ -48666,6 +48676,11 @@
         "max_tokens": 128000,
         "mode": "responses",
         "use_openai_responses_path": true,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.012,
+            "search_context_size_low": 0.012,
+            "search_context_size_medium": 0.012
+        },
         "supported_endpoints": [
             "/v1/responses"
         ],
@@ -48844,6 +48859,11 @@
         "max_tokens": 128000,
         "mode": "responses",
         "use_openai_responses_path": true,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.012,
+            "search_context_size_low": 0.012,
+            "search_context_size_medium": 0.012
+        },
         "supported_endpoints": [
             "/v1/responses"
         ],
@@ -48872,6 +48892,11 @@
         "max_tokens": 128000,
         "mode": "responses",
         "use_openai_responses_path": true,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.012,
+            "search_context_size_low": 0.012,
+            "search_context_size_medium": 0.012
+        },
         "supported_endpoints": [
             "/v1/responses"
         ],

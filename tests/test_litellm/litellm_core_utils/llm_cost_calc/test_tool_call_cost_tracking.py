@@ -620,6 +620,42 @@ def _openai_responses_with_web_search_calls(model, num_calls):
     )
 
 
+@pytest.mark.parametrize(
+    "model",
+    [
+        "bedrock_mantle/openai.gpt-5.6-sol",
+        "bedrock_mantle/openai.gpt-5.6-terra",
+        "bedrock_mantle/openai.gpt-5.6-luna",
+        "bedrock_mantle/openai.gpt-5.5",
+        "bedrock_mantle/openai.gpt-5.4",
+    ],
+)
+def test_bedrock_mantle_native_web_search_priced_per_query(model, local_model_cost_map):
+    """Bedrock's server-side Web Search bills $12.00 per 1,000 queries in every Region that
+    offers it (AWS Pricing API usage type ``Bedrock-Websearch-Queries``, SKUs HTPA2KVTTT65JDW6,
+    YV3KSHNXJCCU32NJ and E6H6Z5RYDRVX7HF9, effective 2026-08-01). Bedrock counts each search,
+    not each request, so a Responses output carrying three ``web_search_call`` items must bill
+    three queries. Without ``search_context_cost_per_query`` the default fallback silently
+    returns $0 and every native search is free."""
+    from litellm.types.utils import Usage
+
+    per_query = litellm.get_model_info(model)["search_context_cost_per_query"]["search_context_size_medium"]
+    assert per_query == 0.012
+
+    for num_calls in (1, 3):
+        response = _openai_responses_with_web_search_calls(model, num_calls=num_calls)
+        cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+            model=model,
+            response_object=response,
+            usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
+            custom_llm_provider="bedrock_mantle",
+            standard_built_in_tools_params=None,
+        )
+        assert cost == pytest.approx(num_calls * per_query), (
+            f"{model} must bill {num_calls} x ${per_query} for {num_calls} web search(es), got ${cost}"
+        )
+
+
 def test_openai_responses_web_search_priced_per_call(local_model_cost_map):
     """
     Regression for LIT-5013 bug 1: OpenAI reasoning models (gpt-5 family, o-series, deep-research)
