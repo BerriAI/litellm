@@ -411,7 +411,7 @@ def test_router_handle_clientside_credential():
     }
     router = Router(model_list=[deployment])
 
-    new_deployment = router._handle_clientside_credential(
+    new_deployment, _ = router._handle_clientside_credential(
         deployment=deployment,
         kwargs={
             "api_key": "123",
