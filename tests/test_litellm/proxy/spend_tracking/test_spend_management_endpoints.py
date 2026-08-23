@@ -3135,6 +3135,151 @@ async def test_view_spend_logs_summarize_parameter(client, monkeypatch):
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
 
+class _FakeSpendLogRow(dict):
+    """Dict-backed row that also exposes request_id as an attribute like a Prisma model."""
+
+    @property
+    def request_id(self):
+        return self["request_id"]
+
+
+class _BatchRecordingSpendLogsDB:
+    """Fake db whose litellm_spendlogs.find_many honors take/skip/cursor and records every call."""
+
+    def __init__(self, rows):
+        self.rows = rows
+        self.calls = []
+        self.litellm_spendlogs = self
+
+    async def find_many(self, **kwargs):
+        self.calls.append(kwargs)
+        take = kwargs["take"]
+        skip = kwargs["skip"]
+        cursor = kwargs["cursor"]
+        start = (
+            0
+            if cursor is None
+            else next(i for i, r in enumerate(self.rows) if r["request_id"] == cursor["request_id"])
+        )
+        return self.rows[start + skip : start + skip + take]
+
+
+@pytest.mark.asyncio
+async def test_find_spend_logs_batches_reads(monkeypatch):
+    """Regression for LIT-4765: no single Prisma statement may carry an unbounded row payload."""
+    from litellm.proxy.spend_tracking.spend_management_endpoints import _find_spend_logs
+
+    rows = [_FakeSpendLogRow({"request_id": f"req-{i}", "spend": 0.01}) for i in range(5)]
+    db = _BatchRecordingSpendLogsDB(rows)
+
+    class MockPrismaClient:
+        def __init__(self):
+            self.db = db
+
+    result = await _find_spend_logs(
+        MockPrismaClient(),
+        where={},
+        order={"startTime": "desc"},
+        batch_size=2,
+    )
+
+    assert list(result) == rows
+    assert [c["skip"] for c in db.calls] == [0, 1, 1]
+    assert [c["cursor"] for c in db.calls] == [None, {"request_id": "req-1"}, {"request_id": "req-3"}]
+    assert all(c["take"] == 2 for c in db.calls)
+    assert all(c["order"] == [{"startTime": "desc"}, {"request_id": "desc"}] for c in db.calls)
+
+
+@pytest.mark.asyncio
+async def test_find_spend_logs_is_stable_under_concurrent_inserts(monkeypatch):
+    """Regression for LIT-4765: rows inserted mid-pagination must not duplicate or drop results."""
+    from litellm.proxy.spend_tracking.spend_management_endpoints import _find_spend_logs
+
+    rows = [_FakeSpendLogRow({"request_id": f"req-{i}", "spend": 0.01}) for i in range(5)]
+    db = _BatchRecordingSpendLogsDB(list(rows))
+
+    original_find_many = db.find_many
+
+    async def find_many_with_insert(**kwargs):
+        batch = await original_find_many(**kwargs)
+        if len(db.calls) == 1:
+            db.rows.insert(0, _FakeSpendLogRow({"request_id": "req-new", "spend": 0.01}))
+        return batch
+
+    db.find_many = find_many_with_insert
+
+    class MockPrismaClient:
+        def __init__(self):
+            self.db = db
+
+    result = await _find_spend_logs(
+        MockPrismaClient(),
+        where={},
+        order={"startTime": "desc"},
+        batch_size=2,
+    )
+
+    assert [r["request_id"] for r in result] == [f"req-{i}" for i in range(5)]
+
+
+@pytest.mark.asyncio
+async def test_view_spend_logs_no_filter_uses_bounded_reads(client, monkeypatch):
+    """Regression for LIT-4765: the no-filter /spend/logs path must not read the whole table in one statement."""
+    from litellm.constants import SPEND_LOG_READ_BATCH_MAX_ROWS
+
+    row_count = SPEND_LOG_READ_BATCH_MAX_ROWS * 2 + SPEND_LOG_READ_BATCH_MAX_ROWS // 2
+    rows = [_FakeSpendLogRow({"request_id": f"req-{i}", "spend": 0.01}) for i in range(row_count)]
+    db = _BatchRecordingSpendLogsDB(rows)
+
+    class MockPrismaClient:
+        def __init__(self):
+            self.db = db
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MockPrismaClient())
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+    try:
+        response = client.get("/spend/logs", headers={"Authorization": "Bearer sk-test"})
+        assert response.status_code == 200
+        assert len(response.json()) == row_count
+        assert len(db.calls) == 3
+        assert all(c["take"] == SPEND_LOG_READ_BATCH_MAX_ROWS for c in db.calls)
+        assert all(c["where"] == {} for c in db.calls)
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_view_spend_logs_user_filter_uses_bounded_reads(client, monkeypatch):
+    """Regression for LIT-4765: the user_id-filtered /spend/logs path must batch its reads too."""
+    from litellm.constants import SPEND_LOG_READ_BATCH_MAX_ROWS
+
+    row_count = SPEND_LOG_READ_BATCH_MAX_ROWS + 1
+    rows = [_FakeSpendLogRow({"request_id": f"req-{i}", "user": "u1", "spend": 0.01}) for i in range(row_count)]
+    db = _BatchRecordingSpendLogsDB(rows)
+
+    class MockPrismaClient:
+        def __init__(self):
+            self.db = db
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MockPrismaClient())
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+    try:
+        response = client.get(
+            "/spend/logs", params={"user_id": "u1"}, headers={"Authorization": "Bearer sk-test"}
+        )
+        assert response.status_code == 200
+        assert len(response.json()) == row_count
+        assert len(db.calls) == 2
+        assert all(c["take"] == SPEND_LOG_READ_BATCH_MAX_ROWS for c in db.calls)
+        assert all(c["where"] == {"user": "u1"} for c in db.calls)
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
 @pytest.mark.asyncio
 async def test_view_spend_tags(client, monkeypatch):
     """Test the /spend/tags endpoint"""
