@@ -1220,3 +1220,99 @@ class TestNonBearerTokenType:
 
         assert isinstance(result, MalformedTokenResponse)
         assert "non-bearer" in result.detail
+
+
+class TestShortLivedRefreshWindows:
+    """A token whose lifetime is at or below the flat 120s advisory window used to be inside that
+    window from birth, so every request armed another background exchange. The windows now scale
+    with the observed lifetime; long-lived tokens must keep the flat 120s/30s behaviour."""
+
+    @staticmethod
+    def _engine_with(
+        expires_in: int | None,
+    ) -> tuple[JwtBearerTokenExchangeEngine, ScriptedPoster, FakeClock, ManualExecutor, TokenExchangeSpec]:
+        poster = ScriptedPoster([token_response("short-lived", expires_in=expires_in), token_response("reminted")])
+        clock = FakeClock(start=1_000.0)
+        executor = ManualExecutor()
+        engine = make_engine(poster, clock=clock, executor=executor)
+        return engine, poster, clock, executor, make_spec()
+
+    def test_fallback_ttl_token_is_served_without_arming_a_refresh(self):
+        engine, poster, clock, executor, spec = self._engine_with(expires_in=None)
+
+        first = mint(engine, spec)
+        assert first.expires_at == 1_000.0 + FALLBACK_TOKEN_TTL_SECONDS
+
+        for _ in range(5):
+            clock.advance(1.0)
+            assert mint(engine, spec).access_token.get_secret_value() == "short-lived"
+
+        assert executor.pending == [], "a freshly minted fallback-TTL token must not arm a refresh on every request"
+        assert len(poster.requests) == 1
+
+    @pytest.mark.parametrize(
+        "elapsed,expect_advisory_submit",
+        [(29.0, False), (30.0, True), (52.0, True)],
+    )
+    def test_fallback_ttl_token_refreshes_around_its_half_life(self, elapsed: float, expect_advisory_submit: bool):
+        engine, poster, clock, executor, spec = self._engine_with(expires_in=None)
+
+        mint(engine, spec)
+        clock.advance(elapsed)
+        served = mint(engine, spec)
+
+        assert served.access_token.get_secret_value() == "short-lived"
+        assert len(executor.pending) == (1 if expect_advisory_submit else 0)
+        executor.run_all()
+        assert len(poster.requests) == (2 if expect_advisory_submit else 1)
+
+    @pytest.mark.parametrize(
+        "elapsed,expect_new_token",
+        [(52.0, False), (53.0, True)],
+    )
+    def test_fallback_ttl_mandatory_wall_scales_with_the_lifetime(self, elapsed: float, expect_new_token: bool):
+        engine, poster, clock, executor, spec = self._engine_with(expires_in=None)
+
+        mint(engine, spec)
+        clock.advance(elapsed)
+        served = mint(engine, spec)
+
+        assert served.access_token.get_secret_value() == ("reminted" if expect_new_token else "short-lived")
+        assert len(executor.pending) == (0 if expect_new_token else 1)
+
+    @pytest.mark.parametrize(
+        "elapsed,expect_advisory_submit",
+        [(89.0, False), (100.0, True)],
+    )
+    def test_a_200s_token_scales_its_advisory_window_too(self, elapsed: float, expect_advisory_submit: bool):
+        engine, poster, clock, executor, spec = self._engine_with(expires_in=200)
+
+        mint(engine, spec)
+        clock.advance(elapsed)
+        served = mint(engine, spec)
+
+        assert served.access_token.get_secret_value() == "short-lived"
+        assert len(executor.pending) == (1 if expect_advisory_submit else 0)
+
+    @pytest.mark.parametrize("expires_in", [240, 3600])
+    @pytest.mark.parametrize(
+        "remaining,expect_advisory_submit,expect_new_token",
+        [
+            (121.0, False, False),
+            (120.0, True, False),
+            (31.0, True, False),
+            (30.0, False, True),
+        ],
+    )
+    def test_long_lived_tokens_keep_the_flat_windows(
+        self, expires_in: int, remaining: float, expect_advisory_submit: bool, expect_new_token: bool
+    ):
+        engine, poster, clock, executor, spec = self._engine_with(expires_in=expires_in)
+
+        mint(engine, spec)
+        clock.now = 1_000.0 + expires_in - remaining
+        served = mint(engine, spec)
+
+        assert len(executor.pending) == (1 if expect_advisory_submit else 0)
+        assert served.access_token.get_secret_value() == ("reminted" if expect_new_token else "short-lived")
+        assert len(poster.requests) == (2 if expect_new_token else 1)
