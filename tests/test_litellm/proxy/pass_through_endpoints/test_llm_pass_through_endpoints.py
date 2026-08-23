@@ -3066,6 +3066,44 @@ def test_native_provider_routes_are_unchanged(method, path, expected_name):
     assert _resolve_route_name(method, path) == expected_name
 
 
+def test_custom_pass_through_endpoint_prefix_wins_over_native_provider_routes():
+    """
+    A pass_through_endpoints entry registered under an arbitrary, non-built-in
+    prefix (e.g. a self-hosted Anthropic-compatible endpoint reached via a
+    "/claude-aws" prefix) must win over the native /{provider}/v1/files and
+    /{provider}/v1/batches routes, which would otherwise misinterpret the
+    custom prefix as a provider name and 422/500 instead of forwarding
+    (see https://github.com/BerriAI/litellm/issues/37925).
+    """
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        InitPassThroughEndpointHelpers,
+    )
+    from litellm.proxy.proxy_server import app
+
+    for suffix in ("files", "batches"):
+        InitPassThroughEndpointHelpers.add_exact_path_route(
+            app=app,
+            path=f"/claude-aws/v1/{suffix}",
+            target=f"https://example.com/v1/{suffix}",
+            custom_headers=None,
+            forward_headers=False,
+            merge_query_params=False,
+            dependencies=None,
+            cost_per_request=None,
+            endpoint_id=f"test-claude-aws-{suffix}",
+        )
+
+    assert _resolve_route_name("POST", "/claude-aws/v1/files") == "endpoint_func"
+    assert _resolve_route_name("POST", "/claude-aws/v1/batches") == "endpoint_func"
+
+    # registering a custom prefix must not disturb resolution of unrelated,
+    # already-registered native-provider routes
+    assert _resolve_route_name("POST", "/openai/v1/files") == "create_file"
+    assert _resolve_route_name("GET", "/azure/v1/files") == "list_files"
+    assert _resolve_route_name("POST", "/v1/files") == "create_file"
+    assert _resolve_route_name("POST", "/v1/batches") == "create_batch"
+
+
 class TestCursorProxyRoute:
     """Tests for the Cursor Cloud Agents pass-through route."""
 
