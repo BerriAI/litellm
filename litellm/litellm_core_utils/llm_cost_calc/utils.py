@@ -298,6 +298,10 @@ def _is_within_off_peak_window(off_peak_hours_utc: str | Sequence[str], current_
     with multiple daily windows (e.g. ["16:30-00:30", "04:00-06:00"]). A window may wrap past
     midnight, and a window whose start equals its end covers the whole day. The start is
     inclusive and the end is exclusive; malformed windows are ignored.
+
+    An aware current_time is converted to UTC. A naive one is taken to already be UTC rather
+    than being localised, so callers must pass datetime.now(timezone.utc), never datetime.now(),
+    or every window shifts by the host's offset.
     """
     reference: Final = current_time if current_time is not None else datetime.now(timezone.utc)
     now: Final = (reference.astimezone(timezone.utc) if reference.tzinfo is not None else reference).time()
