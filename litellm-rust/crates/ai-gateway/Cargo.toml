@@ -18,6 +18,7 @@ litellm-core = { workspace = true, features = ["bedrock-auth"] }
 # reqwest (rustls + json) is used by io/ocr and ships realtime logs to the
 # Python proxy callbacks API.
 reqwest.workspace = true
+rustls = { workspace = true, optional = true }
 # `sync` powers the bounded mpsc channel the realtime logger drains.
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "time", "sync"] }
 tokio-tungstenite.workspace = true
@@ -34,7 +35,7 @@ pyo3 = { workspace = true, features = ["auto-initialize"], optional = true }
 
 [features]
 default = []
-server = ["dep:axum", "dep:subtle", "dep:sha2"]
+server = ["dep:axum", "dep:subtle", "dep:sha2", "dep:rustls"]
 # Build the gateway's config from the proxy YAML via an embedded Python
 # interpreter (links libpython; requires `litellm` importable at runtime).
 python-config = ["dep:pyo3"]

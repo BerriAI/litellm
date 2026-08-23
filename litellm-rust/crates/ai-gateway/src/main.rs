@@ -26,8 +26,16 @@ use litellm_ai_gateway::python;
 const DEFAULT_HOST: &str = "127.0.0.1";
 const DEFAULT_PORT: u16 = 4001;
 
+fn install_rustls_crypto_provider() {
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .expect("failed to install rustls crypto provider");
+}
+
 #[tokio::main]
 async fn main() {
+    install_rustls_crypto_provider();
+
     // Trim before storing so it matches the trimmed bearer token in `auth`
     // (avoids a silent auth failure when the env var has surrounding whitespace).
     let master_key: Option<Arc<str>> = std::env::var("LITELLM_MASTER_KEY")
@@ -159,4 +167,15 @@ fn build_router_from_env() -> Router {
         },
     };
     Router::new(vec![deployment])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::install_rustls_crypto_provider;
+
+    #[test]
+    fn tls_client_initializes() {
+        install_rustls_crypto_provider();
+        let _ = rustls::ClientConfig::builder();
+    }
 }
