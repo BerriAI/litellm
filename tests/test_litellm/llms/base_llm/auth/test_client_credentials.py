@@ -8,10 +8,14 @@ import httpx
 import pytest
 
 from litellm.llms.base_llm.auth.client_credentials import (
+    _HttpxSyncKeycloakPoster,
+    _default_secret_reader,
+    _new_keycloak_handler,
     fetch_keycloak_assertion,
     keycloak_assertion_source,
 )
 from litellm.llms.base_llm.auth.identity_source import KeycloakSource, identity_source_ref
+from litellm.llms.base_llm.auth.token_exchange import MAX_RESPONSE_BYTES
 
 TOKEN_URL: Final = "https://keycloak.example/realms/litellm/protocol/openid-connect/token"
 CLIENT_ID: Final = "litellm"
@@ -331,3 +335,80 @@ class TestClientSecretNeverLeaks:
             )
 
         assert CLIENT_SECRET not in caplog.text
+
+
+class StubHandler:
+    """Stands in for the HTTPHandler the default poster builds, so the poster's own contract
+    (redirects off, error responses returned rather than raised, no-response guarded) is testable
+    without a socket."""
+
+    def __init__(self, result: httpx.Response | Exception | None) -> None:
+        self.calls: list[dict[str, object]] = []
+        self._result = result
+
+    def post(self, url: str, *, content: bytes, headers: dict[str, str], timeout: float) -> httpx.Response | None:
+        self.calls.append({"url": url, "content": content, "headers": headers, "timeout": timeout})
+        if isinstance(self._result, Exception):
+            raise self._result
+        return self._result
+
+
+class TestDefaultKeycloakPoster:
+    def test_builds_its_handler_once_with_redirects_disabled(self):
+        built: list[StubHandler] = []
+
+        def factory() -> StubHandler:
+            handler = StubHandler(httpx.Response(200, json={"access_token": "kc-token"}))
+            built.append(handler)
+            return handler
+
+        poster: Final = _HttpxSyncKeycloakPoster(handler_factory=factory)  # pyright: ignore[reportArgumentType]  # StubHandler stands in for the legacy-untyped HTTPHandler
+        for _ in range(3):
+            poster.post(TOKEN_URL, content=b"grant_type=client_credentials", headers={}, timeout=1.0)
+
+        assert len(built) == 1, "the handler is built once and reused"
+        assert len(built[0].calls) == 3
+
+    def test_the_real_handler_refuses_to_follow_redirects(self):
+        handler: Final = _new_keycloak_handler()
+        assert handler.client.follow_redirects is False, (
+            "a redirected token POST would replay the client secret to whatever host the redirect names"
+        )
+
+    def test_an_http_status_error_becomes_its_response_rather_than_an_exception(self):
+        response: Final = httpx.Response(
+            401, json={"error": "invalid_client"}, request=httpx.Request("POST", TOKEN_URL)
+        )
+        poster: Final = _HttpxSyncKeycloakPoster(
+            handler_factory=lambda: StubHandler(
+                httpx.HTTPStatusError("boom", request=response.request, response=response)
+            )  # pyright: ignore[reportArgumentType]  # StubHandler stands in for the legacy-untyped HTTPHandler
+        )
+
+        assert poster.post(TOKEN_URL, content=b"", headers={}, timeout=1.0).status_code == 401
+
+    def test_a_missing_response_is_a_transport_error_not_a_none_deref(self):
+        poster: Final = _HttpxSyncKeycloakPoster(handler_factory=lambda: StubHandler(None))  # pyright: ignore[reportArgumentType]  # StubHandler stands in for the legacy-untyped HTTPHandler
+
+        with pytest.raises(httpx.TransportError):
+            poster.post(TOKEN_URL, content=b"", headers={}, timeout=1.0)
+
+
+class TestDefaultSecretReader:
+    def test_reads_through_litellm_secret_resolution(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setenv("KEYCLOAK_CLIENT_SECRET_FOR_DEFAULT_READER", CLIENT_SECRET)
+
+        assert _default_secret_reader("os.environ/KEYCLOAK_CLIENT_SECRET_FOR_DEFAULT_READER") == CLIENT_SECRET
+
+    def test_an_unset_reference_reads_as_none_so_the_caller_raises(self):
+        assert _default_secret_reader("os.environ/DEFINITELY_NOT_SET_KEYCLOAK_SECRET_REF") is None
+
+
+class TestOversizedSuccessBody:
+    def test_a_success_body_over_the_cap_is_refused_before_it_is_parsed(self):
+        oversized: Final = httpx.Response(200, content=b'{"access_token": "' + b"x" * MAX_RESPONSE_BYTES + b'"}')
+
+        with pytest.raises(ValueError, match="exceeded the size cap"):
+            fetch_keycloak_assertion(
+                make_config(), poster=ScriptedPoster([oversized]), secret_reader=DEFAULT_SECRET_READER
+            )

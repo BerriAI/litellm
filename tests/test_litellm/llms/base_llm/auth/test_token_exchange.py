@@ -19,6 +19,10 @@ from litellm.llms.base_llm.auth.token_exchange import (
     MAX_ASSERTION_BYTES,
     MAX_RESPONSE_BYTES,
     JwtBearerTokenExchangeEngine,
+    _default_assertion_reader,
+    _error_summary,
+    _HttpxSyncTokenPoster,
+    _new_exchange_handler,
     redact_oauth_error_body,
 )
 from litellm.llms.base_llm.auth.types import (
@@ -35,6 +39,7 @@ from litellm.secret_managers.main import OidcPathNotAllowedError, _resolve_oidc_
 
 DEFAULT_REF: Final = "oidc/env/TEST_ASSERTION"
 DEFAULT_ASSERTION: Final = "test-jwt-assertion"
+EXCHANGE_URL: Final = "https://token.example/v1/oauth/token"
 
 
 class FakeClock:
@@ -1118,3 +1123,100 @@ def test_invalidate_bypasses_lead_backoff():
     assert isinstance(second, MintedToken)
     assert second.access_token.get_secret_value() == "post-invalidate"
     assert len(poster.requests) == 2
+
+
+class StubExchangeHandler:
+    """Stands in for the HTTPHandler the default poster builds, so the poster's own contract is
+    testable without a socket."""
+
+    def __init__(self, result: httpx.Response | Exception | None) -> None:
+        self.calls = 0
+        self._result = result
+
+    def post(self, url: str, *, content: bytes, headers: dict[str, str], timeout: float) -> httpx.Response | None:
+        self.calls += 1
+        if isinstance(self._result, Exception):
+            raise self._result
+        return self._result
+
+
+class TestDefaultTokenPoster:
+    def test_builds_its_handler_once_and_reuses_it(self):
+        built: list[StubExchangeHandler] = []
+
+        def factory() -> StubExchangeHandler:
+            handler = StubExchangeHandler(httpx.Response(200, json={"access_token": "t"}))
+            built.append(handler)
+            return handler
+
+        poster: Final = _HttpxSyncTokenPoster(handler_factory=factory)  # pyright: ignore[reportArgumentType]  # StubExchangeHandler stands in for the legacy-untyped HTTPHandler
+        for _ in range(3):
+            poster.post(EXCHANGE_URL, content=b"", headers={}, timeout=1.0)
+
+        assert len(built) == 1
+        assert built[0].calls == 3
+
+    def test_the_real_handler_refuses_to_follow_redirects(self):
+        assert _new_exchange_handler().client.follow_redirects is False, (
+            "a redirected exchange POST would replay the workload assertion to the redirect target"
+        )
+
+    def test_an_http_status_error_becomes_its_response(self):
+        response: Final = httpx.Response(
+            401, json={"error": "invalid_grant"}, request=httpx.Request("POST", EXCHANGE_URL)
+        )
+        poster: Final = _HttpxSyncTokenPoster(
+            handler_factory=lambda: StubExchangeHandler(  # pyright: ignore[reportArgumentType]  # StubExchangeHandler stands in for the legacy-untyped HTTPHandler
+                httpx.HTTPStatusError("boom", request=response.request, response=response)
+            )
+        )
+
+        assert poster.post(EXCHANGE_URL, content=b"", headers={}, timeout=1.0).status_code == 401
+
+    def test_a_missing_response_is_a_transport_error(self):
+        poster: Final = _HttpxSyncTokenPoster(handler_factory=lambda: StubExchangeHandler(None))  # pyright: ignore[reportArgumentType]  # StubExchangeHandler stands in for the legacy-untyped HTTPHandler
+
+        with pytest.raises(httpx.TransportError):
+            poster.post(EXCHANGE_URL, content=b"", headers={}, timeout=1.0)
+
+
+class TestDefaultAssertionReader:
+    def test_reads_through_litellm_secret_resolution(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setenv("WIF_ASSERTION_FOR_DEFAULT_READER", "header.payload.signature")
+
+        assert _default_assertion_reader("os.environ/WIF_ASSERTION_FOR_DEFAULT_READER") == "header.payload.signature"
+
+    def test_an_unset_reference_reads_as_none(self):
+        assert _default_assertion_reader("os.environ/DEFINITELY_NOT_SET_WIF_ASSERTION_REF") is None
+
+
+class TestErrorSummary:
+    def test_every_error_variant_summarises_without_carrying_a_secret(self):
+        summaries: Final = {
+            _error_summary(AssertionSourceError(kind="unreadable", source_ref="oidc/file/x")),
+            _error_summary(InsecureTokenUrl(host="token.internal")),
+            _error_summary(TokenEndpointError(status_code=401, redacted_body="invalid_grant")),
+            _error_summary(TokenTransportError(detail="ConnectError: refused")),
+            _error_summary(MalformedTokenResponse(detail="empty access_token")),
+        }
+
+        assert {s.split(":")[0] for s in summaries} == {
+            "AssertionSourceError",
+            "InsecureTokenUrl",
+            "TokenEndpointError",
+            "TokenTransportError",
+            "MalformedTokenResponse",
+        }, "each variant names itself so a log line says which stage failed"
+
+
+class TestNonBearerTokenType:
+    def test_a_non_bearer_token_type_is_refused(self):
+        poster: Final = ScriptedPoster(
+            [httpx.Response(200, json={"access_token": "tok", "token_type": "mac", "expires_in": 300})]
+        )
+        engine: Final = JwtBearerTokenExchangeEngine(poster=poster, assertion_reader=lambda _ref: DEFAULT_ASSERTION)
+
+        result: Final = engine.get_token(make_spec())
+
+        assert isinstance(result, MalformedTokenResponse)
+        assert "non-bearer" in result.detail

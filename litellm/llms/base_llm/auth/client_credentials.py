@@ -49,24 +49,29 @@ def _default_secret_reader(ref: str) -> str | None:
     return get_secret_str(ref)
 
 
+def _new_keycloak_handler() -> "HTTPHandler":
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    handler: Final = HTTPHandler(timeout=httpx.Timeout(timeout=30.0, connect=5.0))
+    handler.client.follow_redirects = False
+    return handler
+
+
 class _HttpxSyncKeycloakPoster:
     """Dedicated HTTPHandler for the Keycloak token POST: no ``logging_obj`` (so litellm's
     request/response logging never sees the client secret or the fetched token), redirects
     disabled. A separate instance from the outer engine's own poster, since this is a genuinely
     new HTTP call site whose no-logging guarantee must be built here, not assumed inherited."""
 
-    def __init__(self) -> None:
+    def __init__(self, handler_factory: Callable[[], "HTTPHandler"] = _new_keycloak_handler) -> None:
         self._lock: Final = threading.Lock()
+        self._handler_factory: Final = handler_factory
         self._handler: HTTPHandler | None = None
 
     def _handler_instance(self) -> "HTTPHandler":
-        from litellm.llms.custom_httpx.http_handler import HTTPHandler
-
         with self._lock:
             if self._handler is None:
-                handler: Final = HTTPHandler(timeout=httpx.Timeout(timeout=30.0, connect=5.0))
-                handler.client.follow_redirects = False
-                self._handler = handler
+                self._handler = self._handler_factory()
             return self._handler
 
     def post(self, url: str, *, content: bytes, headers: Mapping[str, str], timeout: float) -> httpx.Response:
