@@ -3104,6 +3104,37 @@ def test_custom_pass_through_endpoint_prefix_wins_over_native_provider_routes():
     assert _resolve_route_name("POST", "/v1/batches") == "create_batch"
 
 
+def test_move_before_generic_provider_routes_is_a_no_op_without_a_generic_route():
+    """
+    If no generic "/{provider}/..." route is registered on the app (e.g. a minimal
+    deployment without the files/batches routers mounted), the newly-appended custom
+    route is left exactly where it was appended -- a safe no-op fallback.
+    """
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        SafeRouteAdder,
+    )
+
+    class _FakeRoute:
+        def __init__(self, path):
+            self.path = path
+
+    class _FakeRouter:
+        def __init__(self, routes):
+            self.routes = routes
+
+    class _FakeApp:
+        def __init__(self, routes):
+            self.routes = routes
+            self.router = _FakeRouter(routes)
+
+    routes = [_FakeRoute("/health"), _FakeRoute("/claude-aws/v1/files")]
+    app = _FakeApp(routes)
+
+    SafeRouteAdder._move_before_generic_provider_routes(app=app)
+
+    assert app.router.routes == routes
+
+
 class TestCursorProxyRoute:
     """Tests for the Cursor Cloud Agents pass-through route."""
 
