@@ -289,13 +289,14 @@ class GigaChatConfig(BaseConfig):
                     texts.append(part.get("text", ""))
                 elif part.get("type") == "image_url":
                     # Extract image URL and upload to GigaChat
-                    image_url = part.get("image_url", {})
+                    image_url: object = part.get("image_url", {})
+                    upload_url: str
                     if isinstance(image_url, str):
-                        url: Final = image_url
+                        upload_url = image_url
                     else:
-                        url: Final = image_url.get("url", "")
-                    if url:
-                        file_id = self._upload_image(url)  # rebind-ok: inside for loop, no outer binding
+                        upload_url = str(image_url.get("url", "")) if isinstance(image_url, dict) else ""
+                    if upload_url:
+                        file_id = self._upload_image(upload_url)
                         if file_id:
                             attachments.append(file_id)
         text: Final = "\n".join(texts) if texts else ""

@@ -17,7 +17,6 @@ from litellm.caching.caching import InMemoryCache
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.custom_httpx.http_handler import (
     HTTPHandler,
-    _get_httpx_client,
     get_async_httpx_client,
 )
 from litellm.secret_managers.main import get_secret_str
@@ -57,7 +56,7 @@ def _get_scope() -> str:
 
 def _get_http_client() -> HTTPHandler:
     """Get cached httpx client with SSL verification disabled."""
-    return _get_httpx_client(params={"ssl_verify": False})
+    return HTTPHandler(ssl_verify=False)
 
 
 def get_access_token(
@@ -101,24 +100,22 @@ def get_access_token(
     cache_key: Final = f"gigachat_token:{effective_credentials[:16]}"
     cached: Final = _token_cache.get_cache(cache_key)
     if cached:
-        token: Final
-        expires_at: Final
-        token, expires_at = cached
+        _token, _expires_at = cached
         # Check if token is still valid (with buffer)
-        if time.time() * 1000 < expires_at - TOKEN_EXPIRY_BUFFER_MS:
+        if time.time() * 1000 < _expires_at - TOKEN_EXPIRY_BUFFER_MS:
             verbose_logger.debug("Using cached GigaChat access token")
-            return token
+            return _token
 
     # Request new token
-    token, expires_at = _request_token_sync(effective_credentials, effective_scope, effective_auth_url)
+    new_token, new_expires_at = _request_token_sync(effective_credentials, effective_scope, effective_auth_url)
 
-    if expires_at:
+    if new_expires_at:
         # Cache token
-        ttl_seconds: Final = max(0, (expires_at - TOKEN_EXPIRY_BUFFER_MS - time.time() * 1000) / 1000)
+        ttl_seconds: Final = max(0, (new_expires_at - TOKEN_EXPIRY_BUFFER_MS - time.time() * 1000) / 1000)
         if ttl_seconds > 0:
-            _token_cache.set_cache(cache_key, (token, expires_at), ttl=ttl_seconds)
+            _token_cache.set_cache(cache_key, (new_token, new_expires_at), ttl=ttl_seconds)
 
-    return token
+    return new_token
 
 
 async def get_access_token_async(
@@ -149,23 +146,21 @@ async def get_access_token_async(
     cache_key: Final = f"gigachat_token:{effective_credentials[:16]}"
     cached: Final = _token_cache.get_cache(cache_key)
     if cached:
-        token: Final
-        expires_at: Final
-        token, expires_at = cached
-        if time.time() * 1000 < expires_at - TOKEN_EXPIRY_BUFFER_MS:
+        _token, _expires_at = cached
+        if time.time() * 1000 < _expires_at - TOKEN_EXPIRY_BUFFER_MS:
             verbose_logger.debug("Using cached GigaChat access token")
-            return token
+            return _token
 
     # Request new token
-    token, expires_at = await _request_token_async(effective_credentials, effective_scope, effective_auth_url)
+    new_token, new_expires_at = await _request_token_async(effective_credentials, effective_scope, effective_auth_url)
 
-    if expires_at:
+    if new_expires_at:
         # Cache token
-        ttl_seconds: Final = max(0, (expires_at - TOKEN_EXPIRY_BUFFER_MS - time.time() * 1000) / 1000)
+        ttl_seconds: Final = max(0, (new_expires_at - TOKEN_EXPIRY_BUFFER_MS - time.time() * 1000) / 1000)
         if ttl_seconds > 0:
-            _token_cache.set_cache(cache_key, (token, expires_at), ttl=ttl_seconds)
+            _token_cache.set_cache(cache_key, (new_token, new_expires_at), ttl=ttl_seconds)
 
-    return token
+    return new_token
 
 
 def _request_token_sync(
