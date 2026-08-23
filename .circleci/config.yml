@@ -430,7 +430,7 @@ jobs:
               --verbose \
               --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
                 -vv \
-                --cov=./litellm \
+                --cov=./litellm --cov=./enterprise/litellm_enterprise \
                 --cov-report=xml \
                 --junitxml=test-results/junit.xml \
                 --durations=20 \
@@ -504,7 +504,7 @@ jobs:
               --verbose \
               --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
                 -vv \
-                --cov=./litellm \
+                --cov=./litellm --cov=./enterprise/litellm_enterprise \
                 --cov-report=xml \
                 --junitxml=test-results/junit.xml \
                 --durations=20 \
@@ -631,7 +631,7 @@ jobs:
               --verbose \
               --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
                 -v -x \
-                --cov=./litellm --cov-report=xml \
+                --cov=./litellm --cov=./enterprise/litellm_enterprise --cov-report=xml \
                 --junitxml=test-results/junit.xml \
                 --durations=5 \
                 -n 2"
@@ -738,7 +738,7 @@ jobs:
               --verbose \
               --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
                 -v -x \
-                --cov=./litellm --cov-report=xml \
+                --cov=./litellm --cov=./enterprise/litellm_enterprise --cov-report=xml \
                 --junitxml=test-results/junit.xml \
                 --durations=5 \
                 -n 4"
@@ -865,7 +865,7 @@ jobs:
               --verbose \
               --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
                 -vv \
-                --cov=./litellm --cov-report=xml \
+                --cov=./litellm --cov=./enterprise/litellm_enterprise --cov-report=xml \
                 --junitxml=test-results/junit.xml \
                 --durations=20 \
                 -n 4 \
@@ -910,7 +910,7 @@ jobs:
               --verbose \
               --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
                 -vv -x -s \
-                --cov=./litellm --cov-report=xml \
+                --cov=./litellm --cov=./enterprise/litellm_enterprise --cov-report=xml \
                 --junitxml=test-results/junit.xml \
                 --durations=5"
           no_output_timeout: 15m
@@ -954,7 +954,7 @@ jobs:
               --verbose \
               --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
                 -vv \
-                --cov=./litellm --cov-report=xml \
+                --cov=./litellm --cov=./enterprise/litellm_enterprise --cov-report=xml \
                 --junitxml=test-results/junit.xml \
                 --durations=5 \
                 -n 2 \
@@ -1000,7 +1000,7 @@ jobs:
               --verbose \
               --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
                 -vv -x -s \
-                --cov=./litellm --cov-report=xml \
+                --cov=./litellm --cov=./enterprise/litellm_enterprise --cov-report=xml \
                 --junitxml=test-results/junit.xml \
                 --durations=5 \
                 --retries 3 --retry-delay 5"
@@ -1091,7 +1091,7 @@ jobs:
               --verbose \
               --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
                 -vv -x \
-                --cov=./litellm --cov-report=xml \
+                --cov=./litellm --cov=./enterprise/litellm_enterprise --cov-report=xml \
                 --junitxml=test-results/junit.xml \
                 --durations=5 \
                 -n 4"
@@ -1135,7 +1135,7 @@ jobs:
               --verbose \
               --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
                 -vv -x \
-                --cov=./litellm --cov-report=xml \
+                --cov=./litellm --cov=./enterprise/litellm_enterprise --cov-report=xml \
                 --junitxml=test-results/junit.xml \
                 --durations=5 \
                 -n 4"
@@ -1213,7 +1213,7 @@ jobs:
               --verbose \
               --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
                 -vv -x -s \
-                --cov=./litellm --cov-report=xml \
+                --cov=./litellm --cov=./enterprise/litellm_enterprise --cov-report=xml \
                 --junitxml=test-results/junit.xml \
                 --durations=5 \
                 -n 2"
@@ -1257,7 +1257,7 @@ jobs:
               --verbose \
               --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
                 -vv -x -s \
-                --cov=./litellm --cov-report=xml \
+                --cov=./litellm --cov=./enterprise/litellm_enterprise --cov-report=xml \
                 --junitxml=test-results/junit.xml \
                 --durations=5 \
                 -n 2"
@@ -1302,7 +1302,7 @@ jobs:
               --verbose \
               --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
                 -vv -x \
-                --cov=./litellm --cov-report=xml \
+                --cov=./litellm --cov=./enterprise/litellm_enterprise --cov-report=xml \
                 --junitxml=test-results/junit.xml \
                 --durations=5 \
                 -n 4"
@@ -1381,7 +1381,7 @@ jobs:
               --verbose \
               --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
                 -vv \
-                --cov=./litellm --cov-report=xml \
+                --cov=./litellm --cov=./enterprise/litellm_enterprise --cov-report=xml \
                 -n 4 \
                 --junitxml=test-results/junit.xml \
                 --durations=5 \
@@ -1426,7 +1426,7 @@ jobs:
               --verbose \
               --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
                 -vv -x -s \
-                --cov=./litellm --cov-report=xml \
+                --cov=./litellm --cov=./enterprise/litellm_enterprise --cov-report=xml \
                 --junitxml=test-results/junit.xml \
                 --durations=5"
           no_output_timeout: 15m
@@ -1479,7 +1479,7 @@ jobs:
               --verbose \
               --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
                 -vv -x -s \
-                --cov=./litellm --cov-report=xml \
+                --cov=./litellm --cov=./enterprise/litellm_enterprise --cov-report=xml \
                 --junitxml=test-results/junit.xml \
                 --durations=5 -n 2 \
                 --reruns 2 --reruns-delay 1"
