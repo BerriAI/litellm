@@ -189,7 +189,7 @@ def _fetch_anthropic_model_ids(
     collected: tuple[str, ...] = ()  # rebind-ok: accumulates one page of ids per iteration
     cursor: str | None = after_id  # rebind-ok: advances to each page's last_id
     for _ in range(max(pages_left, 0)):
-        page: Final = _fetch_anthropic_models_page(api_base, headers, cursor)
+        page = _fetch_anthropic_models_page(api_base, headers, cursor)  # rebind-ok: one page per iteration
         collected += tuple(entry.id for entry in page.data)
         if not page.has_more or page.last_id is None:
             return collected

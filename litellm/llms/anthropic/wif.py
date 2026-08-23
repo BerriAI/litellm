@@ -278,7 +278,7 @@ def _strip_path_suffixes(path: str) -> str:
     token URL. Each pass removes at most one suffix, so the loop is bounded by the segment count."""
     trimmed = path.rstrip("/")  # rebind-ok: fixed-point strip, one suffix per pass
     while True:
-        shortened: Final = next(
+        shortened = next(  # rebind-ok: one suffix removed per iteration
             (trimmed.removesuffix(suffix) for suffix in _CHAT_BASE_SUFFIXES if trimmed.endswith(suffix)),
             trimmed,
         )
