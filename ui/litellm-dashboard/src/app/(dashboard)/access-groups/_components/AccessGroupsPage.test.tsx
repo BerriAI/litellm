@@ -1,4 +1,5 @@
-import { renderWithProviders, screen, within } from "@/../tests/test-utils";
+import { fireEvent, renderWithProviders, screen, within } from "@/../tests/test-utils";
+import { waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AccessGroupsPage } from "./AccessGroupsPage";
@@ -61,11 +62,11 @@ vi.mock("./AccessGroupsDetailsPage", () => ({
   ),
 }));
 
-vi.mock("./AccessGroupsModal/AccessGroupCreateModal", () => ({
-  AccessGroupCreateModal: ({ visible, onCancel }: { visible: boolean; onCancel: () => void }) =>
-    visible ? (
+vi.mock("./access-group-create/AccessGroupCreateDialog", () => ({
+  AccessGroupCreateDialog: ({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) =>
+    open ? (
       <div data-testid="create-access-group-modal">
-        <button onClick={onCancel}>Cancel</button>
+        <button onClick={() => onOpenChange(false)}>Cancel</button>
       </div>
     ) : null,
 }));
@@ -134,7 +135,9 @@ describe("AccessGroupsPage", () => {
   it("filters by name", async () => {
     const user = userEvent.setup();
     renderWithProviders(<AccessGroupsPage />);
-    await user.type(screen.getByPlaceholderText("Search groups by name, ID, or description..."), "Admin");
+    fireEvent.change(screen.getByPlaceholderText("Search groups by name, ID, or description..."), {
+      target: { value: "Admin" },
+    });
     expect(screen.getByText("Admin Group")).toBeInTheDocument();
     expect(screen.queryByText("Read Only")).not.toBeInTheDocument();
   });
@@ -142,7 +145,9 @@ describe("AccessGroupsPage", () => {
   it("filters by ID", async () => {
     const user = userEvent.setup();
     renderWithProviders(<AccessGroupsPage />);
-    await user.type(screen.getByPlaceholderText("Search groups by name, ID, or description..."), "ag-2");
+    fireEvent.change(screen.getByPlaceholderText("Search groups by name, ID, or description..."), {
+      target: { value: "ag-2" },
+    });
     expect(screen.getByText("Read Only")).toBeInTheDocument();
     expect(screen.queryByText("Admin Group")).not.toBeInTheDocument();
   });
@@ -150,7 +155,9 @@ describe("AccessGroupsPage", () => {
   it("filters by description", async () => {
     const user = userEvent.setup();
     renderWithProviders(<AccessGroupsPage />);
-    await user.type(screen.getByPlaceholderText("Search groups by name, ID, or description..."), "read-only");
+    fireEvent.change(screen.getByPlaceholderText("Search groups by name, ID, or description..."), {
+      target: { value: "read-only" },
+    });
     expect(screen.getByText("Read Only")).toBeInTheDocument();
     expect(screen.queryByText("Admin Group")).not.toBeInTheDocument();
   });
@@ -158,7 +165,9 @@ describe("AccessGroupsPage", () => {
   it("shows the filtered empty state when nothing matches", async () => {
     const user = userEvent.setup();
     renderWithProviders(<AccessGroupsPage />);
-    await user.type(screen.getByPlaceholderText("Search groups by name, ID, or description..."), "no-such-group");
+    fireEvent.change(screen.getByPlaceholderText("Search groups by name, ID, or description..."), {
+      target: { value: "no-such-group" },
+    });
     expect(screen.getByText("No matching access groups")).toBeInTheDocument();
     expect(screen.queryByText("Admin Group")).not.toBeInTheDocument();
   });
@@ -215,7 +224,9 @@ describe("AccessGroupsPage", () => {
     await user.click(await openRowMenu(user, "ag-1"));
     const dialog = screen.getByRole("dialog", { name: "Delete Access Group" });
     await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
-    expect(screen.queryByRole("dialog", { name: "Delete Access Group" })).not.toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "Delete Access Group" })).not.toBeInTheDocument();
+    });
     expect(mockMutate).not.toHaveBeenCalled();
   });
 
@@ -241,7 +252,9 @@ describe("AccessGroupsPage", () => {
     expect(screen.queryByText("ag-01")).not.toBeInTheDocument();
 
     // The only match lives on page 1, so the page index must reset or the table reads as empty.
-    await user.type(screen.getByPlaceholderText("Search groups by name, ID, or description..."), "ag-01");
+    fireEvent.change(screen.getByPlaceholderText("Search groups by name, ID, or description..."), {
+      target: { value: "ag-01" },
+    });
     expect(await screen.findByText("ag-01")).toBeInTheDocument();
     expect(screen.queryByText("No matching access groups")).not.toBeInTheDocument();
   });

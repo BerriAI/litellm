@@ -6,14 +6,12 @@ Core tests to validate that priority weights are respected (0.9/0.1) instead of 
 
 import asyncio
 import os
-import sys
 import time
 from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../.."))
 
 import litellm
 from litellm import DualCache, Router
@@ -42,7 +40,7 @@ def time_controller(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_priority_weight_allocation():
+async def test_priority_weight_allocation(monkeypatch):
     """
     Test that priority weights are correctly applied instead of equal splitting.
 
@@ -53,7 +51,7 @@ async def test_priority_weight_allocation():
     This validates the core fix where before it would split 50/50.
     """
     # Set up environment for premium feature
-    os.environ["LITELLM_LICENSE"] = "test-license-key"
+    monkeypatch.setenv("LITELLM_LICENSE", "test-license-key")
 
     # Set up priority reservations
     litellm.priority_reservation = {"high": 0.9, "low": 0.1}
@@ -128,7 +126,7 @@ async def test_priority_weight_allocation():
 
 
 @pytest.mark.asyncio
-async def test_concurrent_priority_requests():
+async def test_concurrent_priority_requests(monkeypatch):
     """
     Test the core issue: 5 concurrent requests with different priorities should get
     proper allocation based on priority weights, not equal splitting.
@@ -136,7 +134,7 @@ async def test_concurrent_priority_requests():
     This tests the exact scenario mentioned: priorities 0.9 and 0.1 should be 0.9/0.1, not 0.5/0.5.
     """
     # Set up environment for premium feature
-    os.environ["LITELLM_LICENSE"] = "test-license-key"
+    monkeypatch.setenv("LITELLM_LICENSE", "test-license-key")
 
     # Set up the exact scenario from the issue
     litellm.priority_reservation = {"high": 0.9, "low": 0.1}
@@ -214,7 +212,7 @@ async def test_concurrent_priority_requests():
 
 
 @pytest.mark.asyncio
-async def test_100_concurrent_priority_requests(time_controller):
+async def test_100_concurrent_priority_requests(time_controller, monkeypatch):
     """
     Stress test: 100 concurrent requests with mixed priorities over 10 seconds.
 
@@ -224,7 +222,7 @@ async def test_100_concurrent_priority_requests(time_controller):
     - Spread across 10 seconds to simulate real-world load
     """
     # Set up environment for premium feature
-    os.environ["LITELLM_LICENSE"] = "test-license-key"
+    monkeypatch.setenv("LITELLM_LICENSE", "test-license-key")
 
     # Set up priority reservations
     litellm.priority_reservation = {"high": 0.9, "low": 0.1}
@@ -384,7 +382,7 @@ async def test_100_concurrent_priority_requests(time_controller):
 
 
 @pytest.mark.asyncio
-async def test_concurrent_pre_call_hooks_stress():
+async def test_concurrent_pre_call_hooks_stress(monkeypatch):
     """
     Stress test: 50 concurrent pre-call hooks with saturation-aware priority enforcement.
 
@@ -394,7 +392,7 @@ async def test_concurrent_pre_call_hooks_stress():
     Standard users (20% allocation) should have ~70% success rate with 30% random limiting.
     """
     # Set up environment for premium feature
-    os.environ["LITELLM_LICENSE"] = "test-license-key"
+    monkeypatch.setenv("LITELLM_LICENSE", "test-license-key")
 
     litellm.priority_reservation = {"premium": 0.8, "standard": 0.2}
 
@@ -634,7 +632,7 @@ async def test_concurrent_pre_call_hooks_stress():
 
 
 @pytest.mark.asyncio
-async def test_fake_calls_case_1_no_rate_limiting_at_capacity():
+async def test_fake_calls_case_1_no_rate_limiting_at_capacity(monkeypatch):
     """
     Test Case 1: Saturation-Aware Rate Limiting at 50% Threshold
 
@@ -650,7 +648,7 @@ async def test_fake_calls_case_1_no_rate_limiting_at_capacity():
 
     Once saturation hits 50%, strict mode enforces priority-based limits.
     """
-    os.environ["LITELLM_LICENSE"] = "test-license-key"
+    monkeypatch.setenv("LITELLM_LICENSE", "test-license-key")
 
     # Set up priority reservations
     litellm.priority_reservation = {"key_a": 0.75, "key_b": 0.25}
@@ -759,7 +757,7 @@ async def test_fake_calls_case_1_no_rate_limiting_at_capacity():
 
 
 @pytest.mark.asyncio
-async def test_fake_calls_case_2_priority_queue_during_saturation():
+async def test_fake_calls_case_2_priority_queue_during_saturation(monkeypatch):
     """
     Test Case 2: Priority Queue Behavior During Saturation
 
@@ -773,7 +771,7 @@ async def test_fake_calls_case_2_priority_queue_during_saturation():
 
     When total traffic exceeds capacity, rate limiting enforces priority reservations.
     """
-    os.environ["LITELLM_LICENSE"] = "test-license-key"
+    monkeypatch.setenv("LITELLM_LICENSE", "test-license-key")
 
     litellm.priority_reservation = {"key_a": 0.75, "key_b": 0.25}
 
@@ -886,7 +884,7 @@ async def test_fake_calls_case_2_priority_queue_during_saturation():
 
 
 @pytest.mark.asyncio
-async def test_fake_calls_case_3_spillover_capacity_default_keys():
+async def test_fake_calls_case_3_spillover_capacity_default_keys(monkeypatch):
     """
     Test Case 3: Spillover Capacity for Default Keys
 
@@ -906,7 +904,7 @@ async def test_fake_calls_case_3_spillover_capacity_default_keys():
 
     Tests spillover behavior where default keys share remaining capacity.
     """
-    os.environ["LITELLM_LICENSE"] = "test-license-key"
+    monkeypatch.setenv("LITELLM_LICENSE", "test-license-key")
 
     litellm.priority_reservation = {"key_a": 0.75}
     litellm.priority_reservation_settings.default_priority = 0.25
@@ -1025,7 +1023,7 @@ async def test_fake_calls_case_3_spillover_capacity_default_keys():
 
 
 @pytest.mark.asyncio
-async def test_fake_calls_case_4_over_allocated_with_normalization():
+async def test_fake_calls_case_4_over_allocated_with_normalization(monkeypatch):
     """
     Test Case 4: Over-Allocated Priority reservations with Normalization
 
@@ -1042,7 +1040,7 @@ async def test_fake_calls_case_4_over_allocated_with_normalization():
     - Due to concurrent burst, total successful may exceed 100 RPM in the test window
     - This test verifies normalization works and total capacity is reasonably bounded
     """
-    os.environ["LITELLM_LICENSE"] = "test-license-key"
+    monkeypatch.setenv("LITELLM_LICENSE", "test-license-key")
 
     litellm.priority_reservation = {"key_a": 0.60, "key_b": 0.80}
 
@@ -1156,7 +1154,7 @@ async def test_fake_calls_case_4_over_allocated_with_normalization():
 
 
 @pytest.mark.asyncio
-async def test_fake_calls_case_5_default_value_priority_reservation():
+async def test_fake_calls_case_5_default_value_priority_reservation(monkeypatch):
     """
     Test Case 5: Default value for priority reservation
 
@@ -1176,7 +1174,7 @@ async def test_fake_calls_case_5_default_value_priority_reservation():
 
     Tests complex scenario with explicit priorities and default priority.
     """
-    os.environ["LITELLM_LICENSE"] = "test-license-key"
+    monkeypatch.setenv("LITELLM_LICENSE", "test-license-key")
 
     litellm.priority_reservation = {"key_a": 0.50, "key_b": 0.20, "key_c": 0.05}
     litellm.priority_reservation_settings.default_priority = 0.05
@@ -1296,7 +1294,7 @@ async def test_fake_calls_case_5_default_value_priority_reservation():
 
 
 @pytest.mark.asyncio
-async def test_default_priority_shared_pool():
+async def test_default_priority_shared_pool(monkeypatch):
     """
     Test that keys without explicit priority share ONE default pool, not get individual allocations.
 
@@ -1304,7 +1302,7 @@ async def test_default_priority_shared_pool():
     - Key A, B, C (no priority) should share ONE 25 RPM pool
     - NOT get 25 RPM each (which would be 75 RPM total)
     """
-    os.environ["LITELLM_LICENSE"] = "test-license-key"
+    monkeypatch.setenv("LITELLM_LICENSE", "test-license-key")
 
     litellm.priority_reservation = {"prod": 0.75}
     litellm.priority_reservation_settings.default_priority = 0.25
@@ -1382,7 +1380,7 @@ async def test_default_priority_shared_pool():
 
 
 @pytest.mark.asyncio
-async def test_async_log_success_event_increments_by_actual_tokens():
+async def test_async_log_success_event_increments_by_actual_tokens(monkeypatch):
     """
     Test that async_log_success_event increments token counters by actual token usage.
 
@@ -1394,7 +1392,7 @@ async def test_async_log_success_event_increments_by_actual_tokens():
 
     from litellm.types.utils import ModelResponse, Usage
 
-    os.environ["LITELLM_LICENSE"] = "test-license-key"
+    monkeypatch.setenv("LITELLM_LICENSE", "test-license-key")
     litellm.priority_reservation = {"dev": 0.1, "prod": 0.9}
 
     dual_cache = DualCache()
@@ -1483,7 +1481,7 @@ async def test_async_log_success_event_increments_by_actual_tokens():
 
 
 @pytest.mark.asyncio
-async def test_saturation_check_cache_ttl_configuration():
+async def test_saturation_check_cache_ttl_configuration(monkeypatch):
     """
     Test that saturation_check_cache_ttl controls how long saturation values are cached locally.
 
@@ -1492,7 +1490,7 @@ async def test_saturation_check_cache_ttl_configuration():
     - After expiration, fresh values should be fetched from Redis
     - This prevents nodes from having stale saturation data in multi-node deployments
     """
-    os.environ["LITELLM_LICENSE"] = "test-license-key"
+    monkeypatch.setenv("LITELLM_LICENSE", "test-license-key")
 
     # Set a short TTL for testing (5 seconds)
     original_ttl = litellm.priority_reservation_settings.saturation_check_cache_ttl
@@ -1587,7 +1585,7 @@ async def test_saturation_check_cache_ttl_configuration():
 
 
 @pytest.mark.asyncio
-async def test_async_log_success_event_uses_team_priority_from_auth_metadata():
+async def test_async_log_success_event_uses_team_priority_from_auth_metadata(monkeypatch):
     """
     Test that async_log_success_event correctly retrieves priority from user_api_key_auth_metadata.
 
@@ -1598,7 +1596,7 @@ async def test_async_log_success_event_uses_team_priority_from_auth_metadata():
 
     from litellm.types.utils import ModelResponse, Usage
 
-    os.environ["LITELLM_LICENSE"] = "test-license-key"
+    monkeypatch.setenv("LITELLM_LICENSE", "test-license-key")
     litellm.priority_reservation = {"team_priority": 0.8, "default": 0.2}
 
     dual_cache = DualCache()
@@ -1680,7 +1678,7 @@ async def test_async_log_success_event_uses_team_priority_from_auth_metadata():
 
 
 @pytest.mark.asyncio
-async def test_priority_429_includes_model_name_and_configured_limits():
+async def test_priority_429_includes_model_name_and_configured_limits(monkeypatch):
     """
     The priority-based 429 should tell operators which model was hit and what
     the model's configured TPM/RPM are, so they can decide whether to tune the
@@ -1694,7 +1692,7 @@ async def test_priority_429_includes_model_name_and_configured_limits():
     """
     from fastapi import HTTPException
 
-    os.environ["LITELLM_LICENSE"] = "test-license-key"
+    monkeypatch.setenv("LITELLM_LICENSE", "test-license-key")
     litellm.priority_reservation = {"prod": 0.5}
 
     dual_cache = DualCache()
@@ -1754,7 +1752,6 @@ async def test_priority_429_includes_model_name_and_configured_limits():
                 user_api_key_dict=user,
                 priority="prod",
                 saturation=0.95,
-                data={"model": model},
             )
 
     assert exc_info.value.status_code == 429
@@ -1772,3 +1769,95 @@ async def test_priority_429_includes_model_name_and_configured_limits():
     assert "Priority: prod" in error_msg, error_msg
     assert "Rate limit type: tokens" in error_msg, error_msg
     assert "Model saturation:" in error_msg, error_msg
+
+
+@pytest.mark.asyncio
+async def test_tpm_only_model_enforces_priority_and_model_capacity(monkeypatch):
+    """Regression: a model configured with ONLY tpm (no rpm) must still be
+    rate limited.
+
+    The atomic check-and-increment path used to drop any counter whose
+    pre-call increment was zero. Token increments are always zero pre-call
+    (usage lands on the counters post-call), so on a TPM-only model the
+    limiter evaluated no counters at all: no model-wide cap, no priority
+    reservation, in either mode. This test drives the real pre-call ->
+    log-success -> pre-call flow with no limiter internals mocked.
+    """
+    from fastapi import HTTPException
+
+    from litellm.types.utils import ModelResponse, Usage
+
+    monkeypatch.setenv("LITELLM_LICENSE", "test-license-key")
+    litellm.priority_reservation = {"dev": 0.25, "prod": 0.5}
+
+    dual_cache = DualCache()
+    handler = DynamicRateLimitHandler(internal_usage_cache=dual_cache)
+
+    model = "tpm-only-model"
+    llm_router = Router(
+        model_list=[
+            {
+                "model_name": model,
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "api_key": "test-key",
+                    "api_base": "test-base",
+                    "tpm": 400,
+                },
+            }
+        ]
+    )
+    handler.update_variables(llm_router=llm_router)
+
+    dev_user = UserAPIKeyAuth()
+    dev_user.metadata = {"priority": "dev"}
+    prod_user = UserAPIKeyAuth()
+    prod_user.metadata = {"priority": "prod"}
+
+    async def record_usage(priority: str, total_tokens: int) -> None:
+        await handler.async_log_success_event(
+            kwargs={
+                "standard_logging_object": {
+                    "metadata": {"user_api_key_auth_metadata": {"priority": priority}},
+                },
+                "litellm_params": {"metadata": {"model_group": model}},
+            },
+            response_obj=ModelResponse(
+                model=model,
+                usage=Usage(prompt_tokens=0, completion_tokens=total_tokens, total_tokens=total_tokens),
+            ),
+            start_time=None,
+            end_time=None,
+        )
+
+    assert (
+        await handler.async_pre_call_hook(
+            user_api_key_dict=dev_user, cache=dual_cache, data={"model": model}, call_type="completion"
+        )
+        is None
+    )
+
+    await record_usage("dev", 250)
+
+    with pytest.raises(HTTPException) as dev_blocked:
+        await handler.async_pre_call_hook(
+            user_api_key_dict=dev_user, cache=dual_cache, data={"model": model}, call_type="completion"
+        )
+    assert dev_blocked.value.status_code == 429
+    assert "Priority-based rate limit exceeded" in dev_blocked.value.detail["error"]
+
+    assert (
+        await handler.async_pre_call_hook(
+            user_api_key_dict=prod_user, cache=dual_cache, data={"model": model}, call_type="completion"
+        )
+        is None
+    )
+
+    await record_usage("prod", 200)
+
+    with pytest.raises(HTTPException) as capacity_blocked:
+        await handler.async_pre_call_hook(
+            user_api_key_dict=prod_user, cache=dual_cache, data={"model": model}, call_type="completion"
+        )
+    assert capacity_blocked.value.status_code == 429
+    assert "Model capacity reached" in capacity_blocked.value.detail["error"]

@@ -1,9 +1,5 @@
-import sys
 import os
 
-sys.path.insert(
-    0, os.path.abspath("../../")
-)  # Adds the parent directory to the system path
 
 import httpx
 import pytest
@@ -103,7 +99,6 @@ from unittest.mock import MagicMock, patch
 from openai import AzureOpenAI
 import litellm
 from litellm import completion
-import os
 
 
 @pytest.mark.parametrize(
@@ -255,7 +250,6 @@ def test_get_azure_ad_token_from_username_password(
 
 
 def test_azure_openai_gpt_4o_naming(monkeypatch):
-    from openai import AzureOpenAI
     from pydantic import BaseModel, Field
 
     monkeypatch.setenv("AZURE_API_VERSION", "2024-10-21")
@@ -302,7 +296,6 @@ def test_azure_gpt_4o_with_tool_call_and_response_format(api_version):
     from pydantic import BaseModel
     import litellm
 
-    from openai import AzureOpenAI
 
     client = AzureOpenAI(
         api_key="fake-key",
@@ -650,7 +643,7 @@ def test_azure_openai_responses_bridge():
         mock_responses.assert_called_once()
         assert (
             mock_responses.call_args.kwargs["model"]
-            == "test-azure-computer-use-preview"
+            == "azure/test-azure-computer-use-preview"
         )
         assert mock_responses.call_args.kwargs["custom_llm_provider"] == "azure"
 
