@@ -427,6 +427,7 @@ class TestRuninfra:
             ),
             "runinfra/Inferact/Qwen3.8-2.4T-A95B-NVFP4": (2e-06, 6e-06, 2e-07),
             "runinfra/Qwen/Qwen3.8-27B": (1e-07, 4e-07, 1e-08),
+            "runinfra/ornith-ai/Ornith-1.5-35B-A3B": (1e-07, 4e-07, 1e-08),
         }
         for model, (input_cost, output_cost, cache_read_cost) in expected_models.items():
             assert model in model_cost
@@ -449,6 +450,18 @@ class TestRuninfra:
         assert model_cost["runinfra/Qwen/Qwen3.8-27B"]["max_input_tokens"] == 262144
         assert model_cost["runinfra/Inferact/Qwen3.8-2.4T-A95B-NVFP4"]["supports_response_schema"] is True
         assert model_cost["runinfra/Qwen/Qwen3.8-27B"]["supports_response_schema"] is True
+        assert model_cost["runinfra/ornith-ai/Ornith-1.5-35B-A3B"]["max_input_tokens"] == 262144
+        # Image input is proven on exactly these two and declared on no other,
+        # so a copied flag on a text-only model reddens here.
+        for model, expected_vision in (
+            ("runinfra/Qwen/Qwen3.8-27B", True),
+            ("runinfra/ornith-ai/Ornith-1.5-35B-A3B", True),
+            ("runinfra/deepseek-ai/DeepSeek-V4-Flash-0731", False),
+            ("runinfra/deepseek-ai/DeepSeek-V4-Pro-0813", False),
+            ("runinfra/nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16", False),
+            ("runinfra/Inferact/Qwen3.8-2.4T-A95B-NVFP4", False),
+        ):
+            assert model_cost[model].get("supports_vision", False) is expected_vision
 
 
 class TestPublicAIIntegration:
