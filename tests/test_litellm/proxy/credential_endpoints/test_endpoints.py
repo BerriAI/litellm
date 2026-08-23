@@ -2,12 +2,11 @@
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
 from fastapi.testclient import TestClient
-
 
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.credential_endpoints.endpoints import _get_credential_list
 from litellm.proxy.proxy_server import app
 from litellm.types.utils import CredentialItem
 
@@ -35,19 +34,65 @@ def _patch_credential(name: str, body: dict):
             app.dependency_overrides[user_api_key_auth] = previous_override
 
 
+def _post_credential(body: dict, credential_list: tuple[CredentialItem, ...]):
+    missing = object()
+    previous_auth_override = app.dependency_overrides.get(user_api_key_auth, missing)
+    previous_list_override = app.dependency_overrides.get(_get_credential_list, missing)
+    app.dependency_overrides[user_api_key_auth] = _as_admin
+    app.dependency_overrides[_get_credential_list] = lambda: credential_list
+    try:
+        return client.post(
+            "/credentials",
+            json=body,
+            headers={"Authorization": "Bearer test-key"},
+        )
+    finally:
+        if previous_auth_override is missing:
+            app.dependency_overrides.pop(user_api_key_auth, None)
+        else:
+            app.dependency_overrides[user_api_key_auth] = previous_auth_override
+        if previous_list_override is missing:
+            app.dependency_overrides.pop(_get_credential_list, None)
+        else:
+            app.dependency_overrides[_get_credential_list] = previous_list_override
+
+
+def test_create_credential_rejects_config_defined_name_collision():
+    existing = CredentialItem(
+        credential_name="shared-credential",
+        credential_values={"api_key": "config-secret"},
+        credential_info={"description": "defined in config"},
+    )
+    response = _post_credential(
+        {
+            "credential_name": "shared-credential",
+            "credential_values": {"api_key": "replacement-secret"},
+            "credential_info": {},
+        },
+        (existing,),
+    )
+
+    assert response.status_code == 409, response.text
+
+
 def test_update_credential_answers_404_when_the_credential_does_not_exist():
     """Regression: the handler used to ``return handle_exception_on_proxy(e)``, which makes
     the exception the response body and lets FastAPI answer 200, so a write the handler
     rejected read as a success to every caller that checks the status. The dashboard's API
     client branches on the status, so it reported a failed edit as applied."""
-    with patch("litellm.proxy.proxy_server.prisma_client", MagicMock()), patch(
-        "litellm.proxy.credential_endpoints.endpoints.CredentialsRepository"
-    ) as repository:
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.credential_endpoints.endpoints.CredentialsRepository") as repository,
+    ):
         repository.return_value.find_by_name = AsyncMock(return_value=None)
 
         response = _patch_credential(
             "definitely-not-there",
-            {"credential_name": "definitely-not-there", "credential_values": {"api_key": "sk-x"}, "credential_info": {}},
+            {
+                "credential_name": "definitely-not-there",
+                "credential_values": {"api_key": "sk-x"},
+                "credential_info": {},
+            },
         )
 
     assert response.status_code == 404, f"rejected write answered {response.status_code}: {response.text}"
@@ -73,9 +118,11 @@ def test_update_credential_still_answers_200_on_a_successful_write():
         credential_values={"api_key": "sk-old"},
         credential_info={"custom_llm_provider": "openai"},
     )
-    with patch("litellm.proxy.proxy_server.prisma_client", MagicMock()), patch(
-        "litellm.proxy.proxy_server.master_key", "sk-test-master"
-    ), patch("litellm.proxy.credential_endpoints.endpoints.CredentialsRepository") as repository:
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.master_key", "sk-test-master"),
+        patch("litellm.proxy.credential_endpoints.endpoints.CredentialsRepository") as repository,
+    ):
         repository.return_value.find_by_name = AsyncMock(return_value=stored)
         repository.return_value.update_by_name = AsyncMock(return_value=None)
 
