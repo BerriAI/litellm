@@ -390,3 +390,92 @@ class TestCompletionInjection:
 
         token_client.post.assert_not_called()
         assert chat.call_args.kwargs["api_key"] == "sk-static"
+
+
+class TestAnthropicCompletionInjection:
+    def test_flag_injects_minted_token_and_bearer_mode(self):
+        # End-to-end through litellm.completion on an anthropic/ model: the flag
+        # plus oauth_* in litellm_params mint a bearer that overrides the
+        # configured api_key, and use_bearer_for_custom_base is set so the
+        # anthropic header builder emits Authorization: Bearer for the custom
+        # gateway base instead of x-api-key.
+        import litellm
+        import litellm.main as main_mod
+        from litellm.types.utils import ModelResponse
+
+        token_client = _token_client(access_token="tok-anthropic")
+        fake = ModelResponse()
+        with (
+            patch(
+                "litellm.llms.openai_like.oauth_authenticator._get_httpx_client",
+                return_value=token_client,
+            ),
+            patch.object(
+                main_mod.anthropic_chat_completions, "completion", return_value=fake
+            ) as chat,
+        ):
+            litellm.completion(
+                model="anthropic/claude-sonnet-5",
+                messages=[{"role": "user", "content": "hi"}],
+                api_base="https://gateway.test",
+                api_key="sk-should-be-overridden",
+                oauth_client_credentials=True,
+                oauth_token_url="https://idp.test/token",
+                oauth_client_id="cid-anthropic",
+                oauth_client_secret="secret-anthropic",
+                oauth_scope="scope-anthropic",
+            )
+
+        token_client.post.assert_called_once()
+        assert chat.call_args.kwargs["api_key"] == "tok-anthropic"
+        assert chat.call_args.kwargs["litellm_params"]["use_bearer_for_custom_base"] is True
+
+    def test_no_flag_keeps_configured_api_key(self):
+        import litellm
+        import litellm.main as main_mod
+        from litellm.types.utils import ModelResponse
+
+        token_client = _token_client(access_token="should-not-be-used")
+        fake = ModelResponse()
+        with (
+            patch(
+                "litellm.llms.openai_like.oauth_authenticator._get_httpx_client",
+                return_value=token_client,
+            ),
+            patch.object(
+                main_mod.anthropic_chat_completions, "completion", return_value=fake
+            ) as chat,
+        ):
+            litellm.completion(
+                model="anthropic/claude-sonnet-5",
+                messages=[{"role": "user", "content": "hi"}],
+                api_base="https://gateway.test",
+                api_key="sk-static",
+                oauth_token_url="https://idp.test/token",
+                oauth_client_id="cid",
+                oauth_client_secret="secret",
+            )
+
+        token_client.post.assert_not_called()
+        assert chat.call_args.kwargs["api_key"] == "sk-static"
+        assert "use_bearer_for_custom_base" not in chat.call_args.kwargs["litellm_params"]
+
+
+class TestOAuthParamsExcludedFromProviderBody:
+    def test_oauth_fields_are_litellm_params_not_provider_params(self):
+        # Regression: without the all_litellm_params registration, unrecognized
+        # top-level kwargs are swept into extra_body and sent to the provider,
+        # leaking oauth_client_secret to the upstream.
+        from litellm.utils import get_non_default_completion_params
+
+        non_default = get_non_default_completion_params(
+            kwargs={
+                "oauth_client_credentials": True,
+                "oauth_token_url": "https://idp.test/token",
+                "oauth_client_id": "cid",
+                "oauth_client_secret": "secret",
+                "oauth_scope": "scope",
+                "some_provider_param": "stays",
+            }
+        )
+        assert non_default == {"some_provider_param": "stays"}

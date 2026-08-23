@@ -21,6 +21,7 @@ from litellm.types.llms.anthropic import (
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
 )
+from litellm.llms.openai_like.oauth_authenticator import resolve_client_credentials_token
 from litellm.types.llms.anthropic_tool_search import get_tool_search_beta_header
 from litellm.types.router import GenericLiteLLMParams
 
@@ -306,6 +307,11 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
     ) -> tuple[dict, str | None]:
         # Check for Anthropic OAuth token in Authorization header
         headers, api_key = optionally_handle_anthropic_oauth(headers=headers, api_key=api_key)
+
+        oauth_token: Final = resolve_client_credentials_token(litellm_params)
+        if oauth_token is not None:
+            headers.pop("x-api-key", None)
+            headers["authorization"] = f"Bearer {oauth_token}"
 
         if "x-api-key" not in headers and "authorization" not in headers:
             auth_header: Final = AnthropicModelInfo.get_auth_header(api_key)

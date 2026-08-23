@@ -2755,6 +2755,18 @@ def _complete_anthropic(ctx: _CompletionDispatchContext) -> _CompletionDispatchR
     timeout: Final = ctx.timeout
 
     api_key = api_key or litellm.anthropic_key or litellm.api_key or os.environ.get("ANTHROPIC_API_KEY")
+
+    from litellm.llms.openai_like.oauth_authenticator import (
+        resolve_client_credentials_token,
+    )
+
+    oauth_api_key = resolve_client_credentials_token(cast("dict[str, object]", litellm_params))
+    if oauth_api_key is not None:
+        api_key = oauth_api_key
+    request_litellm_params: Final = (
+        {**litellm_params, "use_bearer_for_custom_base": True} if oauth_api_key is not None else litellm_params
+    )
+
     custom_prompt_dict = custom_prompt_dict or litellm.custom_prompt_dict
     # call /messages
     # default route for all anthropic models
@@ -2783,7 +2795,7 @@ def _complete_anthropic(ctx: _CompletionDispatchContext) -> _CompletionDispatchR
         model_response=model_response,
         print_verbose=print_verbose,
         optional_params=optional_params,
-        litellm_params=litellm_params,
+        litellm_params=request_litellm_params,
         logger_fn=logger_fn,
         encoding=_get_encoding(),  # for calculating input/output tokens
         api_key=api_key,
