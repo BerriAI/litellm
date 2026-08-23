@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import json
 from collections.abc import Callable, Iterator
 from typing import Any, cast
 
@@ -115,6 +116,43 @@ def _obj_set(obj: Any, key: str, value: Any) -> None:
         obj[key] = value
     else:
         setattr(obj, key, value)
+
+
+def _json_escape(value: str) -> str:
+    """The JSON string-literal encoding of value, without the surrounding
+    quotes: what a restored original must look like when spliced into streamed
+    argument fragments. Mirrors privaite.streaming.buffer.json_escape."""
+    return json.dumps(value, ensure_ascii=False)[1:-1]
+
+
+async def _restore_json_tree(engine: Any, value: Any, mapping: Any) -> Any:
+    """Restore every string leaf of a parsed JSON document (keys are not
+    rewritten, mirroring the core engine's walker)."""
+    if isinstance(value, str):
+        return await engine.process_response(value, mapping)
+    if isinstance(value, dict):
+        return {key: await _restore_json_tree(engine, item, mapping) for key, item in value.items()}
+    if isinstance(value, list):
+        return [await _restore_json_tree(engine, item, mapping) for item in value]
+    return value
+
+
+async def _restore_arguments(engine: Any, arguments: str, mapping: Any) -> str:
+    """Restore a tool/function call's `arguments`: a JSON document inside a
+    string. Plain substitution would splice a raw quote, backslash or newline
+    from the original into a JSON string literal and the client's json.loads of
+    the arguments would fail; restore on the parsed tree and re-encode instead
+    (core parity: PIIEngine._deanonymize_arguments). When nothing changes, or
+    the string is not JSON, the previous behaviour is kept byte for byte."""
+    plain = await engine.process_response(arguments, mapping)
+    if plain == arguments:
+        return arguments
+    try:
+        parsed = json.loads(arguments)
+    except ValueError:
+        # Not JSON: the plain string restore is all there is.
+        return plain
+    return json.dumps(await _restore_json_tree(engine, parsed, mapping), ensure_ascii=False)
 
 
 def _append_nested(delta: object, carrier: str, field: str, remaining: str) -> None:
@@ -204,15 +242,20 @@ class _StreamRestorer:
     cloned from the last chunk seen for that choice. A held tail is never
     dropped."""
 
-    def __init__(self, mapping: object, make_buffer: Callable[[object], object]) -> None:
+    def __init__(self, mapping: object, json_mapping: object, make_buffer: Callable[..., object]) -> None:
         self._mapping = mapping
+        # For the argument channels: their fragments are JSON source text, so the
+        # original has to arrive JSON-escaped or the client's parse of the
+        # reassembled arguments fails on a quote, a backslash or a newline.
+        # (Placeholders need no escaping, so the fakes are the same on both sides.)
+        self._json_mapping = json_mapping
         self._make_buffer = make_buffer
         self._buffers: dict = {}
         self._last_chunk: dict = {}
 
-    def restore(self, key: tuple, text: str, finished: bool) -> str:
+    def restore(self, key: tuple, text: str, finished: bool, json_fragment: bool = False) -> str:
         if key not in self._buffers:
-            self._buffers[key] = self._make_buffer(self._mapping)
+            self._buffers[key] = self._make_buffer(self._json_mapping if json_fragment else self._mapping)
         deanon = self._buffers[key]
         out = deanon.feed(text) if text else ""
         if finished:
@@ -668,12 +711,12 @@ class PrivaiteGuardrail(CustomGuardrail):
                 continue
             args = getattr(fn, "arguments", None)
             if args:
-                fn.arguments = await engine.process_response(args, mapping)
+                fn.arguments = await _restore_arguments(engine, args, mapping)
         function_call = getattr(message, "function_call", None)
         if function_call is not None:
             fc_args = getattr(function_call, "arguments", None)
             if fc_args:
-                function_call.arguments = await engine.process_response(fc_args, mapping)
+                function_call.arguments = await _restore_arguments(engine, fc_args, mapping)
 
     async def _restore_responses_output(self, response: Any, engine: Any, mapping: Any) -> None:
         """Restore originals in a Responses API result: output_text content
@@ -685,7 +728,7 @@ class PrivaiteGuardrail(CustomGuardrail):
                     _obj_set(block, "text", await engine.process_response(text, mapping))
             args = _obj_get(item, "arguments")
             if isinstance(args, str) and args:
-                _obj_set(item, "arguments", await engine.process_response(args, mapping))
+                _obj_set(item, "arguments", await _restore_arguments(engine, args, mapping))
 
     async def async_post_call_success_hook(self, data: dict, user_api_key_dict: Any, response: Any) -> Any:
         if not self.deanonymize:
@@ -753,13 +796,15 @@ class PrivaiteGuardrail(CustomGuardrail):
             if args:
                 tc_index = getattr(tool_call, "index", 0) or 0
                 # Pass `finished` so a fragment on the same chunk as finish_reason
-                # flushes its held-back tail instead of dropping it.
-                fn.arguments = restore(("tool", index, tc_index), args, finished)
+                # flushes its held-back tail instead of dropping it. json_fragment:
+                # the fragment is JSON source text, so the restored original must
+                # be spliced in JSON-escaped.
+                fn.arguments = restore(("tool", index, tc_index), args, finished, True)
         function_call = getattr(delta, "function_call", None)
         if function_call is not None:
             fc_args = getattr(function_call, "arguments", None)
             if fc_args:
-                function_call.arguments = restore(("fc", index), fc_args, finished)
+                function_call.arguments = restore(("fc", index), fc_args, finished, True)
 
     async def async_post_call_streaming_iterator_hook(
         self, user_api_key_dict: Any, response: Any, request_data: dict
@@ -775,10 +820,12 @@ class PrivaiteGuardrail(CustomGuardrail):
         from privaite.streaming.buffer import StreamingDeAnonymizer
 
         mapping = PIIMapping()
+        json_mapping = PIIMapping()
         for fake, original in fakes.items():
             mapping.add(original, fake, "PII")
+            json_mapping.add(_json_escape(original), fake, "PII")
 
-        restorer = _StreamRestorer(mapping, StreamingDeAnonymizer)
+        restorer = _StreamRestorer(mapping, json_mapping, StreamingDeAnonymizer)
         async for chunk in response:
             restorer.restore_chunk(chunk, self._restore_delta)
             yield chunk
