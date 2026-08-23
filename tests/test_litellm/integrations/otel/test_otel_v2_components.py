@@ -963,7 +963,13 @@ def test_operation_exception_log_event_is_otlp_encodable():
     logs = log_exporter.get_finished_logs()
 
     # Raises "Invalid type <class 'NoneType'> of value None" when body is unset.
-    encode_logs(logs).SerializeToString()
+    request = encode_logs(logs)
+    assert request.SerializeToString()
+
+    (resource_logs,) = request.resource_logs
+    (scope_logs,) = resource_logs.scope_logs
+    (log_record,) = scope_logs.log_records
+    assert log_record.body.string_value == "rate limited"
 
 
 def test_operation_exception_log_event_body_is_never_none():
