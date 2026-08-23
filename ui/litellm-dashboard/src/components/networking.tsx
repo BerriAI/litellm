@@ -673,7 +673,10 @@ export const modelCreateCall = async (accessToken: string, formValues: Model) =>
   }
 };
 
-export const createProviderModelCall = async (accessToken: string, formValues: Model): Promise<{ model_id?: string }> => {
+export const createProviderModelCall = async (
+  accessToken: string,
+  formValues: Model,
+): Promise<{ model_id?: string }> => {
   /**
    * Same endpoint as modelCreateCall, without the per-call success toast -- used by the Add
    * Provider wizard, which creates many rows at once and reports its own bulk-creation summary.

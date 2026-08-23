@@ -83,7 +83,8 @@ export const rowsPendingCreation = (
       .map((deployment) => deploymentKey(credentialName, deployment.litellm_params.model ?? "")),
   );
   return rows.filter(
-    (row) => !existingKeys.has(deploymentKey(credentialName, litellmModelForUpstreamId(litellmProvider, row.upstreamId))),
+    (row) =>
+      !existingKeys.has(deploymentKey(credentialName, litellmModelForUpstreamId(litellmProvider, row.upstreamId))),
   );
 };
 

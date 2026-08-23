@@ -161,7 +161,9 @@ export default function AddProviderPanel() {
       }
       setSavedValues(values);
       setCredentialSaved(true);
-      setFederationRuleId(typeof values.anthropic_federation_rule_id === "string" ? values.anthropic_federation_rule_id : "");
+      setFederationRuleId(
+        typeof values.anthropic_federation_rule_id === "string" ? values.anthropic_federation_rule_id : "",
+      );
       queryClient.invalidateQueries({ queryKey: ["credentials"] });
       toast.success(`Credential "${credentialName}" saved`);
       if (values.anthropic_identity_source === ANTHROPIC_INTERNAL_ISSUER_DISCRIMINATOR) {

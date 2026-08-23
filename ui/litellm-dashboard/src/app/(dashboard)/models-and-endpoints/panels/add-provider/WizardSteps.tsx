@@ -91,8 +91,8 @@ export const JwksStep: React.FC<JwksStepProps> = ({
       <Alert variant="info">
         <AlertTitle>Register this JWKS with Anthropic</AlertTitle>
         <AlertDescription>
-          Register this public JWKS as the inline issuer for your federation rule in the Anthropic Console, then
-          paste the resulting Federation Rule ID below.
+          Register this public JWKS as the inline issuer for your federation rule in the Anthropic Console, then paste
+          the resulting Federation Rule ID below.
         </AlertDescription>
       </Alert>
       {jwksError && (

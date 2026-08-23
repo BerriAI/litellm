@@ -42,7 +42,12 @@ const anthropicVariants: ProviderCredentialVariants = {
     {
       id: "wif_internal_issuer",
       label: "WIF (internal issuer)",
-      field_keys: ["anthropic_federation_rule_id", "anthropic_organization_id", "anthropic_issuer_url", "anthropic_issuer_signing_key_ref"],
+      field_keys: [
+        "anthropic_federation_rule_id",
+        "anthropic_organization_id",
+        "anthropic_issuer_url",
+        "anthropic_issuer_signing_key_ref",
+      ],
       fixed_values: { anthropic_identity_source: "internal_issuer" },
     },
     {

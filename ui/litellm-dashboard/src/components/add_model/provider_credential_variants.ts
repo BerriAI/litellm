@@ -1,7 +1,13 @@
-import type { ProviderCredentialFieldMetadata, ProviderCredentialVariant, ProviderCredentialVariants } from "../networking";
+import type {
+  ProviderCredentialFieldMetadata,
+  ProviderCredentialVariant,
+  ProviderCredentialVariants,
+} from "../networking";
 
-export const getVariant = (variants: ProviderCredentialVariants, variantId: string): ProviderCredentialVariant | undefined =>
-  variants.variants.find((variant) => variant.id === variantId);
+export const getVariant = (
+  variants: ProviderCredentialVariants,
+  variantId: string,
+): ProviderCredentialVariant | undefined => variants.variants.find((variant) => variant.id === variantId);
 
 export const resolveVariantFieldDefs = (
   variants: ProviderCredentialVariants,
