@@ -18,12 +18,10 @@ check-and-increment becomes atomic.
 
 import asyncio
 import os
-import sys
 from typing import List
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../.."))
 
 import litellm
 from litellm import DualCache, Router
@@ -189,7 +187,7 @@ async def test_batch_limiter_uses_atomic_check_and_increment():
 
 
 @pytest.mark.asyncio
-async def test_dynamic_rate_limiter_v3_concurrent_bypasses_model_capacity():
+async def test_dynamic_rate_limiter_v3_concurrent_bypasses_model_capacity(monkeypatch):
     """
     DynamicRateLimitHandler PHASE 1 (read_only check) → PHASE 3 (increment)
     is non-atomic: dynamic_rate_limiter_v3.py:463-548.
@@ -209,7 +207,7 @@ async def test_dynamic_rate_limiter_v3_concurrent_bypasses_model_capacity():
     # RPM + 1 successes before the next sees counter > RPM.
     MAX_SEQUENTIAL_SUCCESSES = MODEL_RPM + 1
 
-    os.environ["LITELLM_LICENSE"] = "test-license-key"
+    monkeypatch.setenv("LITELLM_LICENSE", "test-license-key")
     litellm.priority_reservation = {"high": 0.9, "low": 0.1}
 
     dual_cache = DualCache()
@@ -253,7 +251,6 @@ async def test_dynamic_rate_limiter_v3_concurrent_bypasses_model_capacity():
                 user_api_key_dict=user,
                 priority="high",
                 saturation=0.0,
-                data={},
             )
             return "OK"
         except Exception as e:
@@ -274,7 +271,7 @@ async def test_dynamic_rate_limiter_v3_concurrent_bypasses_model_capacity():
 
 
 @pytest.mark.asyncio
-async def test_dynamic_rate_limiter_v3_uses_atomic_check_and_increment():
+async def test_dynamic_rate_limiter_v3_uses_atomic_check_and_increment(monkeypatch):
     """
     Regression test: dynamic limiter's enforced descriptors flow through
     `atomic_check_and_increment_by_n`, not the legacy
@@ -284,7 +281,7 @@ async def test_dynamic_rate_limiter_v3_uses_atomic_check_and_increment():
     bundled into the atomic call alongside model_saturation_check. When not
     enforced, priority counter is incremented for tracking only.
     """
-    os.environ["LITELLM_LICENSE"] = "test-license-key"
+    monkeypatch.setenv("LITELLM_LICENSE", "test-license-key")
     litellm.priority_reservation = {"high": 0.9, "low": 0.1}
 
     dual_cache = DualCache()
@@ -332,7 +329,6 @@ async def test_dynamic_rate_limiter_v3_uses_atomic_check_and_increment():
         user_api_key_dict=user,
         priority="high",
         saturation=0.0,
-        data={},
     )
 
     assert atomic_descriptors_observed, (
@@ -415,7 +411,7 @@ async def test_batch_zero_token_consumes_rpm_only():
 
 
 @pytest.mark.asyncio
-async def test_dynamic_rate_limiter_v3_fails_closed_on_unknown_descriptor():
+async def test_dynamic_rate_limiter_v3_fails_closed_on_unknown_descriptor(monkeypatch):
     """
     Fail-closed guard: when atomic_check_and_increment_by_n returns
     overall_code=OVER_LIMIT but with a descriptor_key the dispatcher does
@@ -427,7 +423,7 @@ async def test_dynamic_rate_limiter_v3_fails_closed_on_unknown_descriptor():
     """
     from fastapi import HTTPException
 
-    os.environ["LITELLM_LICENSE"] = "test-license-key"
+    monkeypatch.setenv("LITELLM_LICENSE", "test-license-key")
     litellm.priority_reservation = {"high": 0.9, "low": 0.1}
 
     dual_cache = DualCache()
@@ -482,7 +478,6 @@ async def test_dynamic_rate_limiter_v3_fails_closed_on_unknown_descriptor():
             user_api_key_dict=user,
             priority="high",
             saturation=0.0,
-            data={},
         )
     assert (
         exc.value.status_code == 429

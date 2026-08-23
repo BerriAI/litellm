@@ -1,15 +1,10 @@
 import asyncio
 import json
-import os
-import sys
 import traceback
 from unittest.mock import AsyncMock, MagicMock, patch
 from dotenv import load_dotenv
 
 load_dotenv()
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system-path
 import logging
 import time
 
@@ -19,10 +14,8 @@ import litellm
 from litellm import create_batch, create_file
 from litellm._logging import verbose_logger
 from litellm.batches.batch_utils import (
-    _batch_cost_calculator,
+    _aggregate_batch_cost_usage_models,
     _get_file_content_as_dictionary,
-    _get_batch_job_cost_from_file_content,
-    _get_batch_job_total_usage_from_file_content,
     _get_batch_job_usage_from_response_body,
     _get_response_from_batch_job_output_file,
     _batch_response_was_successful,
@@ -139,9 +132,10 @@ def test_get_file_content_as_dictionary(sample_file_content):
 
 
 def test_get_batch_job_total_usage_from_file_content(sample_file_content_dict):
-    usage = _get_batch_job_total_usage_from_file_content(
-        sample_file_content_dict, custom_llm_provider="openai"
-    )
+    with patch("litellm.completion_cost", return_value=0.0):
+        _, usage, _ = _aggregate_batch_cost_usage_models(
+            entries=sample_file_content_dict, custom_llm_provider="openai"
+        )
     assert usage.total_tokens == 62  # 30 + 32
     assert usage.prompt_tokens == 42  # 20 + 22
     assert usage.completion_tokens == 20  # 10 + 10
@@ -157,8 +151,8 @@ async def test_batch_cost_calculator(sample_file_content_dict):
     so we expect the cost to be 0.5 * 2 = 1.0
     """
     with patch("litellm.completion_cost", return_value=0.5):
-        cost = _batch_cost_calculator(
-            file_content_dictionary=sample_file_content_dict,
+        cost, _, _ = _aggregate_batch_cost_usage_models(
+            entries=sample_file_content_dict,
             custom_llm_provider="openai",
         )
         assert cost == 1.0  # 0.5 * 2 successful responses
@@ -278,9 +272,12 @@ async def test_handle_completed_batch_computes_real_cost_from_output_file(
         created_at=1234567890,
     )
 
+    sample_file_content_bytes = "\n".join(
+        json.dumps(row) for row in sample_file_content_dict
+    ).encode()
     with patch(
-        "litellm.batches.batch_utils._get_batch_output_file_content_as_dictionary",
-        new=AsyncMock(return_value=sample_file_content_dict),
+        "litellm.batches.batch_utils._fetch_batch_output_file_content",
+        new=AsyncMock(return_value=sample_file_content_bytes),
     ):
         cost, usage, models = await _handle_completed_batch(
             batch=batch, custom_llm_provider="openai"

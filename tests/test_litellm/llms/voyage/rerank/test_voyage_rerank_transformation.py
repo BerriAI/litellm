@@ -227,7 +227,7 @@ class TestVoyageRerankTransform:
         mock_logging = MagicMock()
         model_response = RerankResponse()
 
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(Exception, match='Unauthorized') as exc_info:
             self.config.transform_rerank_response(
                 model=self.model,
                 raw_response=mock_response,
@@ -248,7 +248,7 @@ class TestVoyageRerankTransform:
         mock_logging = MagicMock()
         model_response = RerankResponse()
 
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(Exception, match='Failed to parse response: Invalid JSON response') as exc_info:
             self.config.transform_rerank_response(
                 model=self.model,
                 raw_response=mock_response,

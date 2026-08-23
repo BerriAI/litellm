@@ -14,7 +14,7 @@ path = "src/main.rs"
 required-features = ["server"]
 
 [dependencies]
-litellm-core.workspace = true
+litellm-core = { workspace = true, features = ["bedrock-auth"] }
 # reqwest (rustls + json) is used by io/ocr and ships realtime logs to the
 # Python proxy callbacks API.
 reqwest.workspace = true

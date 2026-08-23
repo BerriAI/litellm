@@ -1,11 +1,8 @@
 import asyncio
-import os
-import sys
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 import json
 
@@ -465,8 +462,7 @@ async def test_async_pre_call_hook_uses_model_map_key_scope():
     Deployment affinity caching uses (user_api_key_hash, model_map_key) -> model_id.
     """
 
-    cache = AsyncMock()
-    cache.async_set_cache = AsyncMock()
+    cache = DualCache()
 
     callback = DeploymentAffinityCheck(
         cache=cache,
@@ -489,11 +485,7 @@ async def test_async_pre_call_hook_uses_model_map_key_scope():
         model_group="claude-sonnet-4-5@20250929",
         user_key="user-key-abc",
     )
-    cache.async_set_cache.assert_called_once_with(
-        expected_cache_key,
-        {"model_id": "model-id-123"},
-        ttl=123,
-    )
+    assert await cache.async_get_cache(key=expected_cache_key) == {"model_id": "model-id-123"}
 
 
 @pytest.mark.asyncio

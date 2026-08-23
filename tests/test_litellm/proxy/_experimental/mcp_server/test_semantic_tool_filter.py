@@ -6,13 +6,14 @@ an ordered set of top K tools based on semantic similarity.
 """
 
 import asyncio
-import os
 import sys
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))
+if sys.version_info < (3, 11):  # BaseExceptionGroup is a builtin only from 3.11
+    from exceptiongroup import BaseExceptionGroup
+
 
 from mcp.types import Tool as MCPTool
 
@@ -1893,24 +1894,53 @@ def test_is_context_window_error_detection_variants():
     )
     assert _is_context_window_error(cwe)
 
-    try:
+    with pytest.raises(ValueError, match="Internal_litellm_router API call failed") as explicitly_chained:
         raise ValueError("Internal_litellm_router API call failed") from cwe
-    except ValueError as explicitly_chained:
-        assert _is_context_window_error(explicitly_chained)
+    assert _is_context_window_error(explicitly_chained.value)
 
-    try:
+    def wrap_without_explicit_chaining():
         try:
             raise litellm.ContextWindowExceededError(
                 message="overflow", model="m", llm_provider="openai"
             )
         except litellm.ContextWindowExceededError:
             raise ValueError("wrapper without explicit chaining")
-    except ValueError as implicitly_chained:
-        assert _is_context_window_error(implicitly_chained)
+
+    with pytest.raises(ValueError, match="wrapper without explicit chaining") as implicitly_chained:
+        wrap_without_explicit_chaining()
+    assert _is_context_window_error(implicitly_chained.value)
 
     assert _is_context_window_error(ValueError("Invalid 'input[0]': maximum input length is 8192 tokens."))
     assert not _is_context_window_error(ValueError("A generic API error occurred."))
     assert not _is_context_window_error(None)
+
+
+def test_is_context_window_error_sees_through_trees_the_chain_walk_missed():
+    """Overflow shapes the old single-path depth-5 chain walk could not reach: hidden in
+    ``__context__`` behind a non-matching ``__cause__``, buried inside an anyio-style
+    ``ExceptionGroup``, and chained deeper than five links."""
+    import litellm
+    from litellm.proxy._experimental.mcp_server.semantic_tool_filter import (
+        _is_context_window_error,
+    )
+
+    def _cwe() -> litellm.ContextWindowExceededError:
+        return litellm.ContextWindowExceededError(message="overflow", model="m", llm_provider="openai")
+
+    shadowed = ValueError("wrapper")
+    shadowed.__cause__ = TypeError("unrelated failure")
+    shadowed.__context__ = _cwe()
+    assert _is_context_window_error(shadowed)
+
+    grouped = BaseExceptionGroup("task group", [RuntimeError("sibling"), _cwe()])
+    assert _is_context_window_error(grouped)
+
+    deep: BaseException = _cwe()
+    for depth in range(6):
+        wrapper = ValueError(f"layer {depth}")
+        wrapper.__cause__ = deep
+        deep = wrapper
+    assert _is_context_window_error(deep)
 
 
 def _make_keyword_embedding_router(recorded_inputs):

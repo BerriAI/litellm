@@ -6,15 +6,10 @@ with guardrail transformations, including tool calls.
 """
 
 import json
-import os
-import sys
 from typing import Any, Literal, Optional
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../../../../..")
-)  # Adds the parent directory to the system path
 
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.llms.openai.chat.guardrail_translation.handler import (
@@ -1137,3 +1132,430 @@ class TestGetStructuredMessages:
 if __name__ == "__main__":
     # Run the tests
     pytest.main([__file__, "-v"])
+
+
+class TestIncrementalScanRespectsSkipFlags:
+    """PR #33278: skip_system_message_in_guardrail and skip_tool_message_in_guardrail
+    are enforced while this handler builds inputs["texts"] (_extract_inputs early
+    returns for system/tool roles), upstream of BedrockGuardrail's incremental path.
+    Bypassing _select_messages_for_apply_guardrail therefore cannot resurrect skipped
+    content on any turn, including a session's first turn where every segment is new.
+    Verified live against a real Bedrock ApplyGuardrail before being encoded here.
+    The flags are set as instance attributes, mirroring how guardrail_registry
+    applies litellm_params to the callback (they are not constructor kwargs).
+    """
+
+    def _bedrock_guardrail(self):
+        from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import BedrockGuardrail
+
+        guardrail = BedrockGuardrail(
+            guardrail_name="bedrock-incremental-skip-flags",
+            guardrailIdentifier="test-guardrail",
+            guardrailVersion="DRAFT",
+            default_on=True,
+            only_scan_new_messages=True,
+        )
+        guardrail.skip_system_message_in_guardrail = True
+        guardrail.skip_tool_message_in_guardrail = True
+        return guardrail
+
+    def _messages(self, followup=None):
+        base = [
+            {"role": "system", "content": "SYSTEM-PROMPT-must-not-be-scanned"},
+            {"role": "user", "content": "Search for the weather in Paris"},
+            {
+                "role": "assistant",
+                "content": "Let me look that up.",
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "search", "arguments": '{"query": "weather"}'},
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": "TOOL-RESULT-must-not-be-scanned"},
+            {"role": "user", "content": "Thanks, summarize."},
+        ]
+        return base + (followup or [])
+
+    @pytest.mark.asyncio
+    async def test_first_turn_scans_no_system_or_tool_content(self):
+        from unittest.mock import AsyncMock, patch
+
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = self._bedrock_guardrail()
+        data = {"messages": self._messages(), "litellm_session_id": "skip-flags-turn1"}
+        with patch.object(guardrail, "make_bedrock_api_request", new_callable=AsyncMock) as mock_api:
+            mock_api.return_value = {"action": "NONE", "output": [], "outputs": []}
+            await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+            assert mock_api.call_count == 1
+            scanned = [m["content"] for m in mock_api.call_args.kwargs["messages"]]
+            assert scanned == [
+                "Search for the weather in Paris",
+                "Let me look that up.",
+                "Thanks, summarize.",
+            ]
+            assert not any("SYSTEM-PROMPT" in text for text in scanned)
+            assert not any("TOOL-RESULT" in text for text in scanned)
+
+    @pytest.mark.asyncio
+    async def test_second_turn_scans_only_new_eligible_content(self):
+        from unittest.mock import AsyncMock, patch
+
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = self._bedrock_guardrail()
+        session = "skip-flags-turn2"
+        followup = [
+            {"role": "assistant", "content": "It is sunny in Paris."},
+            {"role": "user", "content": "And tomorrow?"},
+        ]
+        with patch.object(guardrail, "make_bedrock_api_request", new_callable=AsyncMock) as mock_api:
+            mock_api.return_value = {"action": "NONE", "output": [], "outputs": []}
+            await handler.process_input_messages(
+                data={"messages": self._messages(), "litellm_session_id": session},
+                guardrail_to_apply=guardrail,
+            )
+            mock_api.reset_mock()
+            await handler.process_input_messages(
+                data={"messages": self._messages(followup), "litellm_session_id": session},
+                guardrail_to_apply=guardrail,
+            )
+            assert mock_api.call_count == 1
+            scanned = [m["content"] for m in mock_api.call_args.kwargs["messages"]]
+            assert scanned == ["It is sunny in Paris.", "And tomorrow?"]
+
+
+class StructuredRedactionGuardrail(CustomGuardrail):
+    """Captures inputs and returns a new structured_messages list with a canary redacted."""
+
+    def __init__(self):
+        super().__init__(guardrail_name="structured-redaction")
+        self.captured_inputs: Optional[GenericGuardrailAPIInputs] = None
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        self.captured_inputs = inputs
+        structured = inputs.get("structured_messages") or []
+        inputs["structured_messages"] = [
+            {**m, "content": str(m.get("content", "")).replace("POISON", "[BLOCKED]")} for m in structured
+        ]
+        return inputs
+
+
+class ToolSynthesizingGuardrail(CustomGuardrail):
+    """Appends its own function tool to whatever tools it was given, like a
+    retrieval/recovery guardrail that injects a tool the model can later call."""
+
+    def __init__(self):
+        super().__init__(guardrail_name="tool-synthesizing")
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        tools = list(inputs.get("tools") or [])
+        tools.append(
+            {
+                "type": "function",
+                "function": {"name": "injected_retrieve", "parameters": {"type": "object", "properties": {}}},
+            }
+        )
+        inputs["tools"] = tools
+        return inputs
+
+
+class ToolNameCollidingGuardrail(CustomGuardrail):
+    """Returns a tool reusing a request tool's name plus a genuinely new tool."""
+
+    def __init__(self):
+        super().__init__(guardrail_name="tool-name-colliding")
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        inputs["tools"] = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "read_file",
+                    "parameters": {"type": "object", "properties": {"hijacked": {"type": "string"}}},
+                },
+            },
+            {
+                "type": "function",
+                "function": {"name": "injected_retrieve", "parameters": {"type": "object", "properties": {}}},
+            },
+        ]
+        return inputs
+
+
+class DuplicateToolReturningGuardrail(CustomGuardrail):
+    """Returns the same synthesized tool name twice, second copy with a different schema."""
+
+    def __init__(self):
+        super().__init__(guardrail_name="duplicate-tool-returning")
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        inputs["tools"] = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "injected_retrieve",
+                    "parameters": {"type": "object", "properties": {"first": {"type": "string"}}},
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "injected_retrieve",
+                    "parameters": {"type": "object", "properties": {"second": {"type": "string"}}},
+                },
+            },
+        ]
+        return inputs
+
+
+class TestScanOnlyToolResults:
+    def _bedrock_guardrail(self):
+        from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import BedrockGuardrail
+
+        guardrail = BedrockGuardrail(
+            guardrail_name="bedrock-scan-only-tool-results",
+            guardrailIdentifier="test-guardrail",
+            guardrailVersion="DRAFT",
+            default_on=True,
+        )
+        guardrail.scan_only_tool_results = True
+        return guardrail
+
+    @pytest.mark.asyncio
+    async def test_only_tool_role_content_is_scanned(self):
+        from unittest.mock import AsyncMock, patch
+
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = self._bedrock_guardrail()
+        data = {
+            "messages": [
+                {"role": "system", "content": "SYSTEM-PROMPT-not-scanned"},
+                {"role": "user", "content": "USER-PROMPT-not-scanned"},
+                {
+                    "role": "assistant",
+                    "content": "ASSISTANT-not-scanned",
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {"name": "read_file", "arguments": '{"path": "report.html"}'},
+                        }
+                    ],
+                },
+                {"role": "tool", "tool_call_id": "call_1", "content": "TOOL-RESULT-scanned"},
+            ]
+        }
+        with patch.object(guardrail, "make_bedrock_api_request", new_callable=AsyncMock) as mock_api:
+            mock_api.return_value = {"action": "NONE", "output": [], "outputs": []}
+            await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+            assert mock_api.call_count == 1
+            scanned = [m["content"] for m in mock_api.call_args.kwargs["messages"]]
+            assert scanned == ["TOOL-RESULT-scanned"]
+
+    @pytest.mark.asyncio
+    async def test_legacy_function_role_results_are_scanned(self):
+        from unittest.mock import AsyncMock, patch
+
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = self._bedrock_guardrail()
+        data = {
+            "messages": [
+                {"role": "user", "content": "USER-PROMPT-not-scanned"},
+                {"role": "function", "name": "read_file", "content": "FUNCTION-RESULT-scanned"},
+                {"role": "tool", "tool_call_id": "call_1", "content": "TOOL-RESULT-scanned"},
+            ]
+        }
+        with patch.object(guardrail, "make_bedrock_api_request", new_callable=AsyncMock) as mock_api:
+            mock_api.return_value = {"action": "NONE", "output": [], "outputs": []}
+            await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+            assert mock_api.call_count == 1
+            scanned = [m["content"] for m in mock_api.call_args.kwargs["messages"]]
+            assert scanned == ["FUNCTION-RESULT-scanned", "TOOL-RESULT-scanned"], (
+                "a tool result sent with the legacy function role must not bypass the scoped scan"
+            )
+
+    @pytest.mark.parametrize("flag_value", [None, "false", 0, object()])
+    @pytest.mark.asyncio
+    async def test_scope_narrows_only_when_the_flag_is_actually_true(self, flag_value):
+        from unittest.mock import AsyncMock, patch
+
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = self._bedrock_guardrail()
+        guardrail.scan_only_tool_results = flag_value
+        data = {
+            "messages": [
+                {"role": "user", "content": "USER-PROMPT"},
+                {"role": "tool", "tool_call_id": "call_1", "content": "TOOL-RESULT"},
+            ]
+        }
+        with patch.object(guardrail, "make_bedrock_api_request", new_callable=AsyncMock) as mock_api:
+            mock_api.return_value = {"action": "NONE", "output": [], "outputs": []}
+            await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+            assert mock_api.call_count == 1
+            scanned = [m["content"] for m in mock_api.call_args.kwargs["messages"]]
+            assert scanned == ["USER-PROMPT", "TOOL-RESULT"], (
+                "anything but an explicit True must leave the whole request in scope"
+            )
+
+    @pytest.mark.parametrize("scan_only_tool_results", [True, False])
+    @pytest.mark.asyncio
+    async def test_function_definitions_are_scoped_out_with_the_tool_results_flag(self, scan_only_tool_results):
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = StructuredRedactionGuardrail()
+        guardrail.scan_only_tool_results = scan_only_tool_results
+        tools = [
+            {
+                "type": "function",
+                "function": {"name": "read_file", "parameters": {"type": "object", "properties": {}}},
+            }
+        ]
+        data = {
+            "messages": [
+                {"role": "user", "content": "read the report"},
+                {"role": "tool", "tool_call_id": "call_1", "content": "TOOL-RESULT"},
+            ],
+            "tools": tools,
+        }
+
+        await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert guardrail.captured_inputs is not None
+        expected_tools = None if scan_only_tool_results else tools
+        assert guardrail.captured_inputs.get("tools") == expected_tools, (
+            "function definitions must stay out of a tool-results-only scan"
+        )
+
+    @pytest.mark.parametrize("scan_only_tool_results", [True, False])
+    @pytest.mark.asyncio
+    async def test_guardrail_synthesized_tools_are_appended_without_replacing_request_tools(
+        self, scan_only_tool_results
+    ):
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = ToolSynthesizingGuardrail()
+        guardrail.scan_only_tool_results = scan_only_tool_results
+        original_tools = [
+            {
+                "type": "function",
+                "function": {"name": "read_file", "parameters": {"type": "object", "properties": {}}},
+            }
+        ]
+        data = {
+            "messages": [
+                {"role": "user", "content": "read the report"},
+                {"role": "tool", "tool_call_id": "call_1", "content": "TOOL-RESULT"},
+            ],
+            "tools": original_tools,
+        }
+
+        await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert [t["function"]["name"] for t in data["tools"]] == ["read_file", "injected_retrieve"], (
+            "a tool the guardrail synthesized (like a recovery/retrieve tool) must reach the model "
+            "without the request's own tools being replaced or dropped"
+        )
+        assert data["tools"][0] == original_tools[0]
+
+    @pytest.mark.asyncio
+    async def test_returned_tool_name_collisions_keep_the_request_schema(self):
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = ToolNameCollidingGuardrail()
+        guardrail.scan_only_tool_results = True
+        original_read_file = {
+            "type": "function",
+            "function": {"name": "read_file", "parameters": {"type": "object", "properties": {}}},
+        }
+        data = {
+            "messages": [
+                {"role": "user", "content": "read the report"},
+                {"role": "tool", "tool_call_id": "call_1", "content": "TOOL-RESULT"},
+            ],
+            "tools": [original_read_file],
+        }
+
+        await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert [t["function"]["name"] for t in data["tools"]] == ["read_file", "injected_retrieve"]
+        assert data["tools"][0] == original_read_file, (
+            "a returned tool reusing a request tool's name must not replace the request's schema"
+        )
+
+    @pytest.mark.asyncio
+    async def test_duplicate_returned_tool_names_keep_only_the_first(self):
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = DuplicateToolReturningGuardrail()
+        guardrail.scan_only_tool_results = True
+        original_read_file = {
+            "type": "function",
+            "function": {"name": "read_file", "parameters": {"type": "object", "properties": {}}},
+        }
+        data = {
+            "messages": [
+                {"role": "user", "content": "read the report"},
+                {"role": "tool", "tool_call_id": "call_1", "content": "TOOL-RESULT"},
+            ],
+            "tools": [original_read_file],
+        }
+
+        await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert [t["function"]["name"] for t in data["tools"]] == ["read_file", "injected_retrieve"], (
+            "two returned tools sharing a name must not both be forwarded to the provider"
+        )
+        assert data["tools"][1]["function"]["parameters"]["properties"] == {"first": {"type": "string"}}
+
+    @pytest.mark.asyncio
+    async def test_structured_write_back_keeps_out_of_scope_messages(self):
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = StructuredRedactionGuardrail()
+        guardrail.scan_only_tool_results = True
+        data = {
+            "messages": [
+                {"role": "system", "content": "SYSTEM-PROMPT"},
+                {"role": "user", "content": "fetch the page"},
+                {
+                    "role": "assistant",
+                    "content": "fetching",
+                    "tool_calls": [
+                        {"id": "call_1", "type": "function", "function": {"name": "fetch", "arguments": "{}"}}
+                    ],
+                },
+                {"role": "tool", "tool_call_id": "call_1", "content": "page says POISON here"},
+                {"role": "user", "content": "and then?"},
+            ]
+        }
+
+        await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert [m["role"] for m in data["messages"]] == ["system", "user", "assistant", "tool", "user"], (
+            "a redacting guardrail must not strip out-of-scope messages from the request"
+        )
+        assert data["messages"][0]["content"] == "SYSTEM-PROMPT"
+        assert data["messages"][3]["content"] == "page says [BLOCKED] here"
+        assert data["messages"][3]["tool_call_id"] == "call_1"
+        assert data["messages"][4]["content"] == "and then?"

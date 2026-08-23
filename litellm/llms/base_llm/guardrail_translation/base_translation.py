@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Final, Optional
 
 if TYPE_CHECKING:
     from litellm.integrations.custom_guardrail import (
@@ -36,7 +36,7 @@ class BaseTranslation(ABC):
     @staticmethod
     def transform_user_api_key_dict_to_metadata(
         user_api_key_dict: Any | None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Transform user_api_key_dict to a metadata dict with prefixed keys.
 
@@ -59,7 +59,7 @@ class BaseTranslation(ABC):
             return {}
 
         # Transform keys to be prefixed with 'user_api_key_'
-        transformed = {}
+        transformed: Final = {}
         for key, value in user_dict.items():
             # Skip None values and internal fields
             if value is None or key.startswith("_"):
@@ -85,7 +85,6 @@ class BaseTranslation(ABC):
 
         Note: user_api_key_dict metadata should be available in the data dict.
         """
-        pass
 
     @abstractmethod
     async def process_output_response(
@@ -105,11 +104,10 @@ class BaseTranslation(ABC):
             litellm_logging_obj: Optional logging object
             user_api_key_dict: User API key metadata (passed separately since response doesn't contain it)
         """
-        pass
 
     async def process_output_streaming_response(
         self,
-        responses_so_far: List[Any],
+        responses_so_far: list[Any],
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: Optional["LiteLLMLoggingObj"] = None,
         user_api_key_dict: Optional["UserAPIKeyAuth"] = None,
@@ -149,7 +147,7 @@ class BaseTranslation(ABC):
         """
         return None
 
-    def get_structured_messages(self, data: dict) -> List["AllMessageValues"] | None:
+    def get_structured_messages(self, data: dict) -> list["AllMessageValues"] | None:
         """
         Convert request data to OpenAI-spec structured messages.
 
@@ -159,7 +157,7 @@ class BaseTranslation(ABC):
         """
         return None
 
-    def extract_request_tool_names(self, data: dict) -> List[str]:
+    def extract_request_tool_names(self, data: dict) -> list[str]:
         """
         Extract tool names from the request body for allowlist/policy checks.
         Override in tool-capable handlers; default returns [].

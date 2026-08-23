@@ -1,10 +1,17 @@
 """Tests for unified guardrail."""
 
+import logging
+
 import pytest
 
 import litellm
 from litellm.caching import DualCache
-from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.integrations.custom_guardrail import (
+    CustomGuardrail,
+    log_guardrail_information,
+)
+from litellm.litellm_core_utils.api_route_to_call_types import get_call_types_for_route
+from litellm.llms import load_guardrail_translation_mappings
 from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
 from litellm.llms.base_llm.guardrail_translation.utils import (
     effective_skip_system_message_for_guardrail,
@@ -15,12 +22,15 @@ from litellm.llms.base_llm.guardrail_translation.utils import (
 from litellm.llms.openai.chat.guardrail_translation.handler import (
     OpenAIChatCompletionsHandler,
 )
+from litellm.llms.openai.responses.guardrail_translation.handler import (
+    OpenAIResponsesHandler,
+)
 from litellm.llms.base_llm.ocr.transformation import OCRPage, OCRResponse
 from litellm.llms.mistral.ocr.guardrail_translation.handler import OCRHandler
 from litellm.proxy._experimental.mcp_server.guardrail_translation.handler import (
     MCPGuardrailTranslationHandler,
 )
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import LiteLLMRoutes, UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail import (
     unified_guardrail as unified_module,
 )
@@ -28,6 +38,7 @@ from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrai
     UnifiedLLMGuardrails,
 )
 from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.utils import CallTypes, Delta, ModelResponseStream, StreamingChoices
 
 
@@ -72,6 +83,8 @@ def _inject_mcp_handler_mapping():
         CallTypes.anthropic_messages: _NoopTranslation,
         CallTypes.ocr: OCRHandler,
         CallTypes.aocr: OCRHandler,
+        CallTypes.responses: OpenAIResponsesHandler,
+        CallTypes.aresponses: OpenAIResponsesHandler,
     }
     yield
     unified_module.endpoint_guardrail_translation_mappings = None
@@ -483,6 +496,144 @@ class TestUnifiedLLMGuardrails:
                     f"Expected non-empty content for every streamed chunk."
                 )
 
+    class TestResponsesRouteAliases:
+        """Every /responses path alias that serves model output must scan it.
+
+        ``async_post_call_success_hook`` resolves the call type from
+        ``request_route`` via ``API_ROUTE_TO_CALL_TYPES``. A route missing from
+        that map resolves to ``None`` and the hook returns the response
+        unscanned, so an alias that the proxy serves but the map omits is a
+        silent post-call guardrail bypass.
+        """
+
+        @staticmethod
+        def _responses_api_response() -> ResponsesAPIResponse:
+            return ResponsesAPIResponse(
+                id="resp_lit4979",
+                created_at=1234567890,
+                model="gpt-4o",
+                object="response",
+                status="completed",
+                output=[
+                    {
+                        "type": "message",
+                        "id": "msg_lit4979",
+                        "status": "completed",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "Paris"}],
+                    }
+                ],
+            )
+
+        @pytest.mark.parametrize(
+            "request_route",
+            [
+                "/responses",
+                "/v1/responses",
+                "/openai/v1/responses",
+                "/responses/{response_id}",
+                "/v1/responses/{response_id}",
+                "/openai/v1/responses/{response_id}",
+            ],
+        )
+        @pytest.mark.asyncio
+        async def test_post_call_scans_output_on_every_registered_alias(
+            self, request_route: str
+        ) -> None:
+            handler = UnifiedLLMGuardrails()
+            guardrail = RecordingGuardrail()
+
+            await handler.async_post_call_success_hook(
+                data={"guardrail_to_apply": guardrail, "model": "gpt-4o"},
+                user_api_key_dict=UserAPIKeyAuth(
+                    api_key="test-key", request_route=request_route
+                ),
+                response=self._responses_api_response(),
+            )
+
+            assert guardrail.apply_calls, (
+                f"guardrail never ran for request_route={request_route!r}; model "
+                f"output reached the client unscanned"
+            )
+            assert guardrail.apply_calls[0]["input_type"] == "response"
+            assert guardrail.apply_calls[0]["inputs"]["texts"] == ["Paris"]
+
+        @pytest.mark.parametrize(
+            "route, expected",
+            [
+                ("/openai/v1/responses", (CallTypes.aresponses, CallTypes.responses)),
+                (
+                    "/openai/v1/responses/resp_abc",
+                    (CallTypes.aresponses, CallTypes.responses),
+                ),
+                (
+                    "/openai/v1/responses/resp_abc/input_items",
+                    (CallTypes.alist_input_items,),
+                ),
+            ],
+        )
+        def test_openai_prefixed_aliases_resolve_like_canonical_routes(
+            self, route: str, expected: tuple[CallTypes, ...]
+        ) -> None:
+            assert tuple(get_call_types_for_route(route) or ()) == expected
+
+        def test_responses_handler_is_registered_in_the_real_registry(self) -> None:
+            mappings = load_guardrail_translation_mappings()
+            assert CallTypes.aresponses in mappings
+            assert CallTypes.responses in mappings
+
+        @pytest.mark.asyncio
+        async def test_unresolvable_route_skips_scanning_and_says_so(
+            self, caplog: pytest.LogCaptureFixture
+        ) -> None:
+            handler = UnifiedLLMGuardrails()
+            guardrail = RecordingGuardrail()
+
+            with caplog.at_level(logging.WARNING):
+                result = await handler.async_post_call_success_hook(
+                    data={"guardrail_to_apply": guardrail, "model": "gpt-4o"},
+                    user_api_key_dict=UserAPIKeyAuth(
+                        api_key="test-key", request_route="/cursor/chat/completions"
+                    ),
+                    response=self._responses_api_response(),
+                )
+
+            assert not guardrail.apply_calls
+            assert result is not None
+            assert "call type could not be resolved" in caplog.text
+            assert "/cursor/chat/completions" in caplog.text
+
+        @pytest.mark.asyncio
+        async def test_call_type_without_handler_skips_scanning_and_says_so(
+            self, caplog: pytest.LogCaptureFixture
+        ) -> None:
+            handler = UnifiedLLMGuardrails()
+            guardrail = RecordingGuardrail()
+
+            with caplog.at_level(logging.WARNING):
+                await handler.async_post_call_success_hook(
+                    data={"guardrail_to_apply": guardrail, "model": "gpt-4o"},
+                    user_api_key_dict=UserAPIKeyAuth(
+                        api_key="test-key", request_route="/v1/chat/completions"
+                    ),
+                    response=self._responses_api_response(),
+                )
+
+            assert not guardrail.apply_calls
+            assert "has no guardrail translation handler" in caplog.text
+
+        def test_openai_prefixed_aliases_are_authorized_like_canonical_routes(self) -> None:
+            openai_routes = LiteLLMRoutes.openai_routes.value
+            for route in (
+                "/openai/v1/responses",
+                "/openai/v1/responses/{response_id}",
+                "/openai/v1/responses/{response_id}/input_items",
+            ):
+                assert route in openai_routes, (
+                    f"{route!r} missing from LiteLLMRoutes.openai_routes; team and "
+                    f"key-scoped users get 403 on this alias"
+                )
+
     class TestOCRGuardrailE2E:
         """End-to-end tests: UnifiedLLMGuardrails -> OCRHandler."""
 
@@ -865,10 +1016,9 @@ class TestStreamingTransform:
 
     @pytest.mark.asyncio
     async def test_emit_streaming_http_error_a2a_yields_jsonrpc_chunk(self):
-        """The shared streaming error helper emits an in-stream JSON-RPC error for
-        A2A call types instead of raising."""
-        import json
-
+        """The shared streaming error helper emits an in-stream JSON-RPC error
+        object (not a pre-serialized string, which the A2A endpoint would frame as
+        a JSON string instead of an error object) for A2A call types."""
         handler = UnifiedLLMGuardrails()
         exc = unified_module.HTTPException(
             status_code=400,
@@ -885,7 +1035,8 @@ class TestStreamingTransform:
             emitted.append(item)
 
         assert len(emitted) == 1
-        payload = json.loads(emitted[0])
+        payload = emitted[0]
+        assert isinstance(payload, dict)
         assert payload["error"]["message"] == "stream_transform_underflow"
         assert payload["id"] == "req-1"
 
@@ -1490,3 +1641,109 @@ class TestStreamingTransform:
 
         # None holdback treated as 0: full text emitted, no crash.
         assert "".join(_delta_text(i) for i in out) == "ABCDEF"
+
+
+def _applied_guardrails(data: dict) -> list:
+    for key in ("metadata", "litellm_metadata"):
+        meta = data.get(key)
+        if isinstance(meta, dict) and isinstance(meta.get("applied_guardrails"), list):
+            return meta["applied_guardrails"]
+    return []
+
+
+class _TextsOnlyTranslation(BaseTranslation):
+    """Mimics a passthrough handler: hands the guardrail only `texts`, never
+    structured_messages, so a structured_messages-based guardrail no-ops."""
+
+    async def process_input_messages(self, data, guardrail_to_apply, litellm_logging_obj=None):  # type: ignore[override]
+        await guardrail_to_apply.apply_guardrail(
+            inputs={"texts": ["payload"]},
+            request_data=data,
+            input_type="request",
+            logging_obj=litellm_logging_obj,
+        )
+        return data
+
+    async def process_output_response(  # type: ignore[override]
+        self,
+        response,
+        guardrail_to_apply,
+        litellm_logging_obj=None,
+        user_api_key_dict=None,
+        request_data=None,
+    ):
+        return response
+
+
+class _SelfLoggingGuardrail(CustomGuardrail):
+    records_own_guardrail_information = True
+
+    def __init__(self, *, self_add: bool):
+        super().__init__(guardrail_name="self-logging")
+        self._self_add = self_add
+
+    def should_run_guardrail(self, data, event_type):  # type: ignore[override]
+        return True
+
+    @log_guardrail_information
+    async def apply_guardrail(self, inputs, request_data, input_type, **kwargs):
+        if self._self_add:
+            from litellm.proxy.common_utils.callback_utils import (
+                add_guardrail_to_applied_guardrails_header,
+            )
+
+            add_guardrail_to_applied_guardrails_header(request_data=request_data, guardrail_name=self.guardrail_name)
+        return inputs
+
+
+class _AutoLoggingGuardrail(CustomGuardrail):
+    def __init__(self):
+        super().__init__(guardrail_name="auto-logging")
+
+    def should_run_guardrail(self, data, event_type):  # type: ignore[override]
+        return True
+
+    @log_guardrail_information
+    async def apply_guardrail(self, inputs, request_data, input_type, **kwargs):
+        return inputs
+
+
+class TestAppliedGuardrailsReflectsExecution:
+    """The unified hook must not auto-mark a self-logging guardrail
+    (records_own_guardrail_information) as applied; such a guardrail owns that
+    decision and marks itself only when it actually ran (LIT-4650). Ordinary
+    guardrails are still auto-marked by the hook after dispatch."""
+
+    @staticmethod
+    def _data(guardrail):
+        return {
+            "guardrail_to_apply": guardrail,
+            "model": "gpt-4o",
+            "messages": [{"role": "user", "content": "hello world"}],
+        }
+
+    async def _run(self, guardrail):
+        unified_module.endpoint_guardrail_translation_mappings = {CallTypes.pass_through: _TextsOnlyTranslation}
+        data = self._data(guardrail)
+        await UnifiedLLMGuardrails().async_pre_call_hook(
+            user_api_key_dict=None,
+            cache=DualCache(),
+            data=data,
+            call_type=CallTypes.pass_through.value,
+        )
+        return data
+
+    @pytest.mark.asyncio
+    async def test_self_logging_guardrail_is_not_auto_marked_applied(self):
+        data = await self._run(_SelfLoggingGuardrail(self_add=False))
+        assert "self-logging" not in _applied_guardrails(data)
+
+    @pytest.mark.asyncio
+    async def test_self_logging_guardrail_that_self_marks_is_applied(self):
+        data = await self._run(_SelfLoggingGuardrail(self_add=True))
+        assert "self-logging" in _applied_guardrails(data)
+
+    @pytest.mark.asyncio
+    async def test_ordinary_guardrail_is_auto_marked_applied(self):
+        data = await self._run(_AutoLoggingGuardrail())
+        assert "auto-logging" in _applied_guardrails(data)

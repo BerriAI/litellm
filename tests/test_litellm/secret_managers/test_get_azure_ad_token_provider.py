@@ -1,16 +1,18 @@
 import json
 import os
-import sys
 from typing import Optional
 from unittest.mock import MagicMock, patch
 
 # Adds the grandparent directory to sys.path to allow importing project modules
-sys.path.insert(0, os.path.abspath("../.."))
 
 import pytest
 
 from litellm.secret_managers.get_azure_ad_token_provider import (
     get_azure_ad_token_provider,
+    infer_credential_type_from_environment,
+)
+from litellm.types.secret_managers.get_azure_ad_token_provider import (
+    AzureCredentialType,
 )
 
 
@@ -214,6 +216,46 @@ class TestGetAzureAdTokenProvider:
         # Test that the returned callable works
         token = result()
         assert token == "mock-certificate-token"
+
+    @patch.dict(
+        os.environ,
+        {
+            "AZURE_CLIENT_ID": "test-client-id",
+            "AZURE_TENANT_ID": "test-tenant-id",
+            "AZURE_FEDERATED_TOKEN_FILE": "/var/run/secrets/azure/tokens/azure-identity-token",
+            "AZURE_AUTHORITY_HOST": "https://login.microsoftonline.com/",
+        },
+        clear=True,
+    )
+    @patch("azure.identity.get_bearer_token_provider")
+    @patch("azure.identity.ManagedIdentityCredential")
+    @patch("azure.identity.DefaultAzureCredential")
+    def test_get_azure_ad_token_provider_prefers_workload_identity_over_managed_identity(
+        self,
+        mock_default_azure_credential,
+        mock_managed_identity_credential,
+        mock_get_bearer_token_provider,
+    ):
+        """The AKS workload identity webhook injects AZURE_CLIENT_ID, AZURE_TENANT_ID, and
+        AZURE_FEDERATED_TOKEN_FILE, and never a client secret. Reading the bare client id as a
+        managed identity sends the pod to IMDS, which has no identity attached to it, so every
+        token request fails and the federated token is never exchanged. Only
+        DefaultAzureCredential's chain reaches WorkloadIdentityCredential."""
+        mock_credential_instance = MagicMock()
+        mock_default_azure_credential.return_value = mock_credential_instance
+        mock_get_bearer_token_provider.return_value = MagicMock(
+            return_value="mock-workload-identity-token"
+        )
+
+        result = get_azure_ad_token_provider()
+
+        assert (
+            infer_credential_type_from_environment()
+            == AzureCredentialType.DefaultAzureCredential
+        )
+        mock_managed_identity_credential.assert_not_called()
+        mock_default_azure_credential.assert_called_once_with()
+        assert result() == "mock-workload-identity-token"
 
     @patch.dict(os.environ, {}, clear=True)  # Clear all environment variables
     @patch("azure.identity.get_bearer_token_provider")

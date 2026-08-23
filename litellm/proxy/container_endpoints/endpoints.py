@@ -1,6 +1,6 @@
 #### Container Endpoints #####
 
-from typing import Any, Dict
+from typing import Any, Final
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import ORJSONResponse
@@ -22,7 +22,7 @@ from litellm.proxy.container_endpoints.ownership import (
     record_container_owner,
 )
 
-router = APIRouter()
+router: Final = APIRouter()
 
 
 @router.post(
@@ -88,11 +88,11 @@ async def create_container(
     )
 
     # Read request body
-    data = await _read_request_body(request=request)
+    data: Final = await _read_request_body(request=request)
 
     # Extract custom_llm_provider using priority chain
     # Priority: headers > query params > request body > default
-    custom_llm_provider = (
+    custom_llm_provider: Final = (
         get_custom_llm_provider_from_request_headers(request=request)
         or get_custom_llm_provider_from_request_query(request=request)
         or await get_custom_llm_provider_from_request_body(request=request)
@@ -103,9 +103,9 @@ async def create_container(
     data["custom_llm_provider"] = custom_llm_provider
 
     # Process request using ProxyBaseLLMRequestProcessing
-    processor = ProxyBaseLLMRequestProcessing(data=data)
+    processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
-        response = await processor.base_process_llm_request(
+        response: Final = await processor.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
@@ -207,11 +207,11 @@ async def list_containers(
     )
 
     # Read query parameters
-    query_params = dict(request.query_params)
-    data: Dict[str, Any] = {"query_params": query_params}
+    query_params: Final = dict(request.query_params)
+    data: Final[dict[str, Any]] = {"query_params": query_params}
 
     # Extract custom_llm_provider using priority chain
-    custom_llm_provider = (
+    custom_llm_provider: Final = (
         get_custom_llm_provider_from_request_headers(request=request)
         or get_custom_llm_provider_from_request_query(request=request)
         or "openai"
@@ -221,9 +221,9 @@ async def list_containers(
     data["custom_llm_provider"] = custom_llm_provider
 
     # Process request using ProxyBaseLLMRequestProcessing
-    processor = ProxyBaseLLMRequestProcessing(data=data)
+    processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
-        response = await processor.base_process_llm_request(
+        response: Final = await processor.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
@@ -312,7 +312,7 @@ async def retrieve_container(
     )
 
     # Include container_id in request data
-    data: Dict[str, Any] = {"container_id": container_id}
+    data: Final[dict[str, Any]] = {"container_id": container_id}
 
     # Extract custom_llm_provider using priority chain
     custom_llm_provider = (
@@ -336,7 +336,7 @@ async def retrieve_container(
     )
 
     # Process request using ProxyBaseLLMRequestProcessing
-    processor = ProxyBaseLLMRequestProcessing(data=data)
+    processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
         return await processor.base_process_llm_request(
             request=request,
@@ -417,7 +417,7 @@ async def delete_container(
     )
 
     # Include container_id in request data
-    data: Dict[str, Any] = {"container_id": container_id}
+    data: Final[dict[str, Any]] = {"container_id": container_id}
 
     # Extract custom_llm_provider using priority chain
     custom_llm_provider = (
@@ -441,7 +441,7 @@ async def delete_container(
     )
 
     # Process request using ProxyBaseLLMRequestProcessing
-    processor = ProxyBaseLLMRequestProcessing(data=data)
+    processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
         return await processor.base_process_llm_request(
             request=request,
