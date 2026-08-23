@@ -426,7 +426,24 @@ class TestBedrockMantleChatAuth:
         assert "Bearer" in msg
         assert "SigV4" in msg or "IAM" in msg
 
-    def test_completion_no_bearer_signs_with_sigv4_end_to_end(self, monkeypatch):
+    @pytest.mark.parametrize(
+        ("completion_kwargs", "expected_access_key", "expected_region"),
+        [
+            ({}, "AKIAEXAMPLE", "us-east-2"),
+            (
+                {
+                    "aws_access_key_id": "DEPLOYMENTKEY",
+                    "aws_secret_access_key": "deployment-secret",
+                    "aws_region_name": "eu-west-1",
+                },
+                "DEPLOYMENTKEY",
+                "eu-west-1",
+            ),
+        ],
+    )
+    def test_completion_no_bearer_signs_with_sigv4_end_to_end(
+        self, monkeypatch, completion_kwargs, expected_access_key, expected_region
+    ):
         # The full completion chain (not just sign_request in isolation) must reach
         # the SigV4 path when no Bearer token exists: with api_key=None the parent
         # validate_environment must not short-circuit before sign_request runs.
@@ -477,14 +494,16 @@ class TestBedrockMantleChatAuth:
             response = litellm.completion(
                 model="bedrock_mantle/openai.gpt-oss-120b",
                 messages=[{"role": "user", "content": "hello"}],
+                **completion_kwargs,
             )
 
         assert response.choices[0].message.content == "ok"
         assert len(requests) == 1
         authorization = requests[0]["headers"]["Authorization"]
         assert authorization.startswith("AWS4-HMAC-SHA256")
-        assert "/us-east-2/bedrock/aws4_request" in authorization
-        assert requests[0]["url"].startswith("https://bedrock-mantle.us-east-2.api.aws")
+        assert f"Credential={expected_access_key}/" in authorization
+        assert f"/{expected_region}/bedrock/aws4_request" in authorization
+        assert requests[0]["url"].startswith(f"https://bedrock-mantle.{expected_region}.api.aws")
 
 
 class TestBedrockMantleProjectHeader:

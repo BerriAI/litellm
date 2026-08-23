@@ -532,9 +532,13 @@ class BaseLLMHTTPHandler:
         if extra_body is not None:
             data = {**data, **extra_body}
 
+        signing_params: Final[dict[str, object]] = {
+            **litellm_params,
+            **optional_params,
+        }
         headers, signed_json_body = provider_config.sign_request(
             headers=headers,
-            optional_params=optional_params,
+            optional_params=signing_params,
             request_data=data,
             api_base=api_base,
             api_key=api_key,
