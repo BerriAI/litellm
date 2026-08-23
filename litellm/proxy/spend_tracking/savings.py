@@ -8,7 +8,7 @@ are known) and summed into the daily tables; tokens cannot be priced after they
 have been aggregated across models.
 """
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from typing import (
     TYPE_CHECKING,
     Final,
@@ -153,9 +153,9 @@ def _cost_map_deployment_info(deployment_id: str | None) -> ModelInfo | None:
         return None
     info = litellm.model_cost.get(deployment_id)
     if isinstance(info, dict) and info.get("input_cost_per_token") is not None:
-        return cast(
+        return cast(  # cast-ok: model_cost dict already checked for input_cost_per_token; same shape router uses
             ModelInfo, info
-        )  # cast-ok: model_cost dict already checked for input_cost_per_token; same shape router uses
+        )
     return None
 
 
@@ -179,47 +179,54 @@ def _matching_priced_deployments(
     router: "Router | None",
     identity: _ModelIdentity | None,
     logged_model: str,
-) -> list[ModelInfo]:
+) -> tuple[ModelInfo, ...]:
     """Priced router rows that could be this spend log, or empty if we cannot tell."""
     if router is None:
-        return []
+        return ()
     try:
-        deployments = router.get_model_list() or []
+        deployments = router.get_model_list() or ()
     except Exception as e:  # noqa: BLE001  # a dashboard metric must not fail the spend write
         verbose_proxy_logger.debug("savings: cannot list deployments (%s)", e)
-        return []
+        return ()
 
-    priced: list[ModelInfo] = []
-    seen_ids: set[str] = set()
+    priced: tuple[ModelInfo, ...] = ()
+    seen_ids: tuple[str, ...] = ()
     for dep in deployments:
         if not isinstance(dep, dict):
             continue
-        dep_id = (dep.get("model_info") or {}).get("id")
+        raw_info = dep.get("model_info")
+        dep_id = raw_info.get("id") if isinstance(raw_info, dict) else None
         if not isinstance(dep_id, str) or dep_id in seen_ids:
             continue
-        params = dep.get("litellm_params") or {}
+        raw_params = dep.get("litellm_params")
+        if isinstance(raw_params, dict):
+            dep_model = str(raw_params.get("model") or "")
+            dep_provider = raw_params.get("custom_llm_provider")
+        else:
+            dep_model = ""
+            dep_provider = None
         if not _deployment_matches_logged_model(
-            dep_model=str(params.get("model") or ""),
-            dep_provider=params.get("custom_llm_provider"),
+            dep_model=dep_model,
+            dep_provider=dep_provider,
             public_name=dep.get("model_name"),
             identity=identity,
             logged_model=logged_model,
         ):
             continue
-        seen_ids.add(dep_id)
+        seen_ids = (*seen_ids, dep_id)
         info = _cost_map_deployment_info(dep_id) or _effective_model_info(router, dep_id, logged_model)
         if _has_input_price(info):
-            priced.append(info)
+            priced = (*priced, info)
     return priced
 
 
 def _unique_by_rate(
-    priced: list[ModelInfo],
+    priced: Sequence[ModelInfo],
     rate_key: Callable[[ModelInfo], object],
 ) -> ModelInfo | None:
     if not priced:
         return None
-    fingerprints = {rate_key(info) for info in priced}
+    fingerprints = frozenset(rate_key(info) for info in priced)
     return priced[0] if len(fingerprints) == 1 else None
 
 
@@ -231,21 +238,27 @@ def _pricing_for_savings(
     rate_key: Callable[[ModelInfo], object] = _savings_rate_fingerprint,
 ) -> ModelInfo | None:
     """Deployment rate first, public rate only when it actually has a price."""
-    logged = model or ""
-    candidates: list[ModelInfo | None] = [
-        _cost_map_deployment_info(model_id),
-        _effective_model_info(router, model_id, logged),
-    ]
-    if not model_id:
+    logged: Final = model or ""
+    extra: Final[tuple[ModelInfo, ...]]
+    if model_id:
+        extra = ()
+    else:
         priced = _matching_priced_deployments(router, identity, logged)
-        if priced:
+        if not priced:
+            extra = ()
+        else:
             unique = _unique_by_rate(priced, rate_key)
             if unique is None:
                 # Matching deployments disagree. The public list price is not a
                 # substitute — it can match none of them.
                 return None
-            candidates.append(unique)
-    candidates.append(_model_info(identity) if identity else None)
+            extra = (unique,)
+    candidates: Final = (
+        _cost_map_deployment_info(model_id),
+        _effective_model_info(router, model_id, logged),
+        *extra,
+        _model_info(identity) if identity else None,
+    )
     for candidate in candidates:
         if _has_input_price(candidate):
             return candidate
