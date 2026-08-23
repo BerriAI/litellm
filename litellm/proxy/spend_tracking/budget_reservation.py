@@ -1278,14 +1278,18 @@ def _count_input_tokens(request_body: dict, model: str) -> int | None:
             # server-side extraction of the referenced document and cannot be
             # derived client-side — token_counter only counts its filename/id
             # fields, which would under-reserve arbitrarily large uploads.
-            # Fall through to the conservative max_input_tokens reservation.
-            if not _messages_contain_file_content_blocks(messages):
-                return litellm.token_counter(
-                    model=model,
-                    messages=messages,
-                    tools=request_body.get("tools"),
-                    tool_choice=request_body.get("tool_choice"),
-                )
+            # Return None so the caller takes the conservative max_input_tokens
+            # reservation — an explicit return, because falling through would
+            # let a stray `prompt` / `input` / `query` on the same body count
+            # as the whole request.
+            if _messages_contain_file_content_blocks(messages):
+                return None
+            return litellm.token_counter(
+                model=model,
+                messages=messages,
+                tools=request_body.get("tools"),
+                tool_choice=request_body.get("tool_choice"),
+            )
         if "prompt" in request_body:
             return _count_text_tokens(model=model, text=request_body.get("prompt"))
         if "input" in request_body:

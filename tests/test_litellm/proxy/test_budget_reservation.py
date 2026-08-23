@@ -1136,6 +1136,17 @@ def test_estimate_input_tokens_reserves_max_for_file_content_blocks():
     )
     assert estimated == 128000
 
+    # A stray text field on the same body must not be counted in place of the
+    # file — the messages branch owns the request once `messages` is present.
+    decoy_request = {**file_request, "prompt": "hi"}
+    decoy_estimated = _estimate_input_tokens(
+        request_body=decoy_request,
+        route="/chat/completions",
+        model="gpt-4o",
+        model_info={"max_input_tokens": 128000},
+    )
+    assert decoy_estimated == 128000
+
     # Plain text messages must still be counted, not blanket-reserved.
     text_request = {"messages": [{"role": "user", "content": "hi"}]}
     counted = _estimate_input_tokens(
