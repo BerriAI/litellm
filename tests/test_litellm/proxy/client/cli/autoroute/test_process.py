@@ -171,8 +171,7 @@ class TestIsRunningDoesNotSignal:
             assert is_running(child.pid) is True
             time.sleep(1.0)
             assert child.poll() is None, (
-                f"the liveness probe terminated the process it was asked about "
-                f"(exit code {child.returncode})"
+                f"the liveness probe terminated the process it was asked about (exit code {child.returncode})"
             )
             assert is_running(child.pid) is True
         finally:
