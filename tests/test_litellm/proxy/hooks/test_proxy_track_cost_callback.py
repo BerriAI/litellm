@@ -438,6 +438,9 @@ async def test_track_cost_callback_settles_budget_reservation_when_response_cost
         )
         mock_update_database.assert_not_called()
         mock_proxy_logging.failed_tracking_alert.assert_called()
+        # The hold is converted, not dropped: later traffic still sees the reserved cost.
+        assert budget_reservation["reserved_cost"] == 0.5
+        assert budget_reservation.get("finalized") is not True
 
 
 @pytest.mark.asyncio
@@ -497,6 +500,8 @@ async def test_track_cost_callback_settles_async_stream_when_response_cost_missi
         )
         mock_update_database.assert_not_called()
         mock_proxy_logging.failed_tracking_alert.assert_called()
+        assert budget_reservation["reserved_cost"] == 0.5
+        assert budget_reservation.get("finalized") is not True
 
 
 @pytest.mark.asyncio
@@ -592,6 +597,9 @@ async def test_track_cost_callback_releases_budget_reservation_for_non_model_cal
         mock_release_budget_reservation.assert_awaited_once_with(
             budget_reservation=budget_reservation,
         )
+        # Health checks refund the hold; they must not stamp it settled.
+        assert budget_reservation.get("finalized") is not True
+        assert budget_reservation["reserved_cost"] == 0.5
 
 
 def test_get_budget_reservation_from_metadata_handles_dict_auth_object():
