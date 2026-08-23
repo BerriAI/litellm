@@ -9,14 +9,11 @@ Covers actual execution of redaction in:
 """
 
 import logging
-import os
-import sys
 import traceback
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 from litellm._logging import _ENABLE_SECRET_REDACTION, _redact_string
 
@@ -234,7 +231,7 @@ class TestRouterFallbackFailureTracebackRedaction:
                 raise ValueError(f"primary deployment failed api_key={secret}")
             except ValueError as original_exception:
                 with caplog.at_level(logging.DEBUG, logger="LiteLLM Router"):
-                    with pytest.raises(Exception):
+                    with pytest.raises(ValueError, match='primary deployment failed api_key=sk-testsecretvalu'):
                         await router.async_function_with_fallbacks_common_utils(
                             e=original_exception,
                             disable_fallbacks=False,

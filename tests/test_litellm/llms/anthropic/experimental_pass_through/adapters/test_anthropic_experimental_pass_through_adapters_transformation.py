@@ -1,10 +1,9 @@
-import os
-import sys
 from typing import Any, cast
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../../.."))
+import litellm
+
 
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -633,6 +632,94 @@ def test_translate_anthropic_to_openai_orders_top_level_and_midturn_system():
         {"role": "system", "content": "Use the corrected result."},
         {"role": "user", "content": "Continue."},
     ]
+
+
+def _translate_with_metadata(
+    model: str, metadata: dict[str, Any], custom_llm_provider: str | None
+) -> dict[str, Any]:
+    openai_request, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
+        anthropic_message_request={
+            "model": model,
+            "max_tokens": 100,
+            "metadata": metadata,
+            "messages": [{"role": "user", "content": "hi"}],
+        },
+        custom_llm_provider=custom_llm_provider,
+    )
+    return cast(dict[str, Any], openai_request)
+
+
+def test_translate_anthropic_to_openai_maps_user_id_to_prompt_cache_key_for_openai():
+    openai_request = _translate_with_metadata("openai/gpt-5.6-luna", {"user_id": "session-abc"}, "openai")
+    assert openai_request["user"] == "session-abc"
+    assert openai_request["prompt_cache_key"] == "session-abc"
+
+
+def test_translate_anthropic_to_openai_truncates_prompt_cache_key_but_keeps_full_user():
+    long_id = "".join(str(i % 10) for i in range(100))
+    openai_request = _translate_with_metadata("openai/gpt-5.6-luna", {"user_id": long_id}, "openai")
+    assert openai_request["user"] == long_id
+    assert openai_request["prompt_cache_key"] == long_id[:64]
+    assert len(openai_request["prompt_cache_key"]) == 64
+
+
+@pytest.mark.parametrize("model", ["azure/my-gpt-5-deployment", "my-gpt-5-deployment"])
+def test_translate_anthropic_to_openai_sets_prompt_cache_key_for_azure(model: str):
+    openai_request = _translate_with_metadata(model, {"user_id": "session-abc"}, "azure")
+    assert openai_request["prompt_cache_key"] == "session-abc"
+
+
+@pytest.mark.parametrize(
+    "model, custom_llm_provider",
+    [
+        ("gemini/gemini-2.5-pro", "gemini"),
+        ("vertex_ai/gemini-2.5-pro", "vertex_ai"),
+        ("anthropic/claude-sonnet-4-5", "anthropic"),
+        ("bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0", "bedrock"),
+        ("no-such-model-lit5875", "no-such-provider-lit5875"),
+    ],
+)
+def test_translate_anthropic_to_openai_skips_prompt_cache_key_when_provider_lacks_it(
+    model: str, custom_llm_provider: str
+):
+    openai_request = _translate_with_metadata(model, {"user_id": "session-abc"}, custom_llm_provider)
+    assert openai_request["user"] == "session-abc"
+    assert "prompt_cache_key" not in openai_request
+
+
+def test_translate_anthropic_to_openai_skips_prompt_cache_key_for_chained_litellm_proxy():
+    assert "prompt_cache_key" in litellm.get_supported_openai_params(
+        model="xai", custom_llm_provider="litellm_proxy"
+    )
+    openai_request = _translate_with_metadata("litellm_proxy/xai", {"user_id": "session-abc"}, "litellm_proxy")
+    assert openai_request["user"] == "session-abc"
+    assert "prompt_cache_key" not in openai_request
+
+
+def test_translate_anthropic_to_openai_skips_prompt_cache_key_without_provider():
+    openai_request = _translate_with_metadata("openai/gpt-5.6-luna", {"user_id": "session-abc"}, None)
+    assert openai_request["user"] == "session-abc"
+    assert "prompt_cache_key" not in openai_request
+
+
+@pytest.mark.parametrize("user_id", ["", None])
+def test_translate_anthropic_to_openai_skips_prompt_cache_key_for_empty_or_null_user_id(user_id: str | None):
+    openai_request = _translate_with_metadata("openai/gpt-5.6-luna", {"user_id": user_id}, "openai")
+    assert openai_request["user"] == user_id
+    assert "prompt_cache_key" not in openai_request
+
+
+def test_translate_anthropic_to_openai_without_metadata_sets_neither_user_nor_prompt_cache_key():
+    openai_request, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
+        anthropic_message_request={
+            "model": "openai/gpt-5.6-luna",
+            "max_tokens": 100,
+            "messages": [{"role": "user", "content": "hi"}],
+        },
+        custom_llm_provider="openai",
+    )
+    assert "user" not in openai_request
+    assert "prompt_cache_key" not in openai_request
 
 
 def test_translate_openai_content_to_anthropic_empty_function_arguments():
@@ -3518,6 +3605,53 @@ def test_translate_anthropic_tools_to_openai_preserves_parameters_type():
     assert new_tools[0]["type"] == "function"
 
 
+def test_translate_anthropic_tools_to_openai_maps_strict_onto_function_not_parameters():
+    """A tool-level `strict` lands on the OpenAI function, leaving the caller's `input_schema` untouched."""
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    input_schema = {
+        "type": "object",
+        "properties": {"city": {"type": "string"}},
+        "required": ["city"],
+        "additionalProperties": False,
+    }
+    tools = [{"type": "custom", "name": "get_weather", "strict": True, "input_schema": input_schema}]
+
+    new_tools, _ = adapter.translate_anthropic_tools_to_openai(tools=tools)
+
+    function = new_tools[0]["function"]
+    assert function["strict"] is True
+    assert "strict" not in function["parameters"]
+    assert input_schema == {
+        "type": "object",
+        "properties": {"city": {"type": "string"}},
+        "required": ["city"],
+        "additionalProperties": False,
+    }
+
+
+def test_translate_anthropic_tools_to_openai_omits_unset_strict():
+    """Chat Completions already defaults to non-strict, so an unset `strict` stays unset."""
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    tools = [
+        {
+            "type": "custom",
+            "name": "search",
+            "input_schema": {
+                "type": "object",
+                "properties": {"query": {"type": "string"}, "cursor": {"type": "string"}},
+                "required": ["query"],
+            },
+        }
+    ]
+
+    new_tools, _ = adapter.translate_anthropic_tools_to_openai(tools=tools)
+
+    function = new_tools[0]["function"]
+    assert "strict" not in function
+    assert "strict" not in function["parameters"]
+    assert function["parameters"]["required"] == ["query"]
+
+
 TOOL_RESULT_IMAGE_B64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
 TOOL_RESULT_IMAGE_URL = "https://example.com/screenshot.png"
 
@@ -3694,3 +3828,59 @@ def test_tool_result_plain_text_unchanged_by_openai_transform():
     assert len(tool_messages) == 1
     assert tool_messages[0]["content"] == "42 files found"
     assert _image_urls_in_user_messages(result) == []
+
+
+def test_translate_anthropic_to_openai_carries_prompt_cache_breakpoint_on_system_and_user_blocks():
+    explicit = {"mode": "explicit"}
+    openai_request, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
+        anthropic_message_request={
+            "model": "gpt-5.6",
+            "max_tokens": 64,
+            "system": [{"type": "text", "text": "sys", "prompt_cache_breakpoint": explicit}],
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "hi", "prompt_cache_breakpoint": explicit},
+                        {
+                            "type": "image",
+                            "source": {"type": "url", "url": "https://example.com/a.png"},
+                            "prompt_cache_breakpoint": explicit,
+                        },
+                    ],
+                }
+            ],
+        }
+    )
+    assert openai_request["messages"][0] == {
+        "role": "system",
+        "content": [{"type": "text", "text": "sys", "prompt_cache_breakpoint": explicit}],
+    }
+    user_content = openai_request["messages"][1]["content"]
+    assert user_content[0] == {"type": "text", "text": "hi", "prompt_cache_breakpoint": explicit}
+    assert user_content[1]["type"] == "image_url"
+    assert user_content[1]["prompt_cache_breakpoint"] == explicit
+
+
+def test_translate_anthropic_to_openai_without_prompt_cache_breakpoint_adds_nothing():
+    openai_request, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
+        anthropic_message_request={
+            "model": "gpt-5.6",
+            "max_tokens": 64,
+            "system": [{"type": "text", "text": "sys"}],
+            "messages": [{"role": "user", "content": [{"type": "text", "text": "hi"}]}],
+        }
+    )
+    assert openai_request["messages"][0] == {"role": "system", "content": [{"type": "text", "text": "sys"}]}
+    assert openai_request["messages"][1]["content"] == [{"type": "text", "text": "hi"}]
+
+
+def test_translate_anthropic_messages_to_openai_carries_midturn_system_prompt_cache_breakpoint():
+    explicit = {"mode": "explicit"}
+    result = LiteLLMAnthropicMessagesAdapter().translate_anthropic_messages_to_openai(
+        messages=[{"role": "system", "content": [{"type": "text", "text": "fix", "prompt_cache_breakpoint": explicit}]}],
+        model="gpt-5.6",
+    )
+    assert result == [
+        {"role": "system", "content": [{"type": "text", "text": "fix", "prompt_cache_breakpoint": explicit}]}
+    ]

@@ -8,9 +8,6 @@ import pytest
 import requests
 from click.testing import CliRunner
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 
 from litellm.proxy.client.cli.commands.agents import (
@@ -255,7 +252,7 @@ class TestRunAgent:
         assert calls["args"] == ("claude", "--resume")
 
     def test_missing_binary_raises_with_install_hint(self):
-        with pytest.raises(AgentRunError, match="claude.*Install it first"):
+        with pytest.raises(AgentRunError, match=r"claude.*Install it first"):
             run_agent(
                 "http://localhost:4000",
                 "sk-key",
@@ -672,8 +669,9 @@ class TestAgentCommands:
         assert "LITELLM_PROXY_API_KEY" in result.output
         mock_run.assert_not_called()
 
-    def test_interactive_without_key_logs_in_then_launches(self):
+    def test_interactive_without_key_logs_in_then_launches(self, secret_vault_factory):
         captured = {}
+        vault = secret_vault_factory()
 
         @click.command()
         def fake_login():
@@ -695,12 +693,12 @@ class TestAgentCommands:
             result = self.runner.invoke(
                 _agent_command("claude"),
                 [],
-                obj={"base_url": "http://localhost:4000", "api_key": None},
+                obj={"base_url": "http://localhost:4000", "api_key": None, "secret_vault": vault},
             )
 
         assert result.exit_code == 0, result.output
         assert captured["api_key"] == "sk-after-login"
-        mock_get.assert_called_once_with(expected_base_url="http://localhost:4000")
+        mock_get.assert_called_once_with(expected_base_url="http://localhost:4000", vault=vault)
 
     def test_child_exit_code_reaches_the_shell(self):
         with patch(f"{AGENTS_MODULE}.run_agent", side_effect=SystemExit(42)):

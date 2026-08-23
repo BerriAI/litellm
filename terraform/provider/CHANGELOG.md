@@ -2,10 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
+
+Up to `0.4.0` the provider had its own version line, cut from the headings in
+this file. It now ships at the **LiteLLM version**, on every LiteLLM release
+channel, built from the same commit as the proxy (see `RELEASING.md`). The
+headings below no longer drive a release; they record what changed and which
+LiteLLM line first carried it. A change that breaks existing configurations
+or state must be called out loudly here, because the version number can no
+longer signal it.
 
 ## [Unreleased]
+
+### Changed
+
+- **Versioning**: the provider is now published at the LiteLLM version, from the same commit as the proxy, on every LiteLLM release (dev, rc, stable). The `0.x` line ends at `0.4.0`; a `~> 0.4` constraint will not receive further releases, so re-pin to the LiteLLM version your proxy runs (for example `~> 1.99.0`). Existing `0.x` versions remain in the registry and keep verifying
 
 ## [0.4.0] - 2026-08-06
 

@@ -1,12 +1,7 @@
 import json
-import os
-import sys
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 from litellm.responses.litellm_completion_transformation.transformation import (
     TOOL_CALLS_CACHE,
@@ -418,6 +413,107 @@ class TestLiteLLMCompletionResponsesConfig:
             item for item in responses_api_response.output if item.type == "message"
         ]
         assert len(message_items) == 2, "Should have two message items"
+
+    def test_signature_only_thinking_block_still_emits_reasoning_item(self):
+        response = ModelResponse(
+            id="test-id",
+            created=1234567890,
+            model="test-model",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=Message(
+                        content="10",
+                        role="assistant",
+                        reasoning_content="",
+                        thinking_blocks=[
+                            {"type": "thinking", "thinking": "", "signature": "signature-payload"}
+                        ],
+                    ),
+                )
+            ],
+        )
+
+        responses_api_response = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+            request_input="Test input",
+            responses_api_request={},
+            chat_completion_response=response,
+        )
+
+        reasoning_items = [
+            item for item in responses_api_response.output if item.type == "reasoning"
+        ]
+        assert len(reasoning_items) == 1, "Signature-only thinking should still surface a reasoning item"
+        assert reasoning_items[0].content == []
+        assert "signature-payload" in reasoning_items[0].encrypted_content
+
+    def test_redacted_thinking_block_preserved_as_encrypted_content(self):
+        response = ModelResponse(
+            id="test-id",
+            created=1234567890,
+            model="test-model",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=Message(
+                        content="10",
+                        role="assistant",
+                        thinking_blocks=[{"type": "redacted_thinking", "data": "redacted-payload"}],
+                    ),
+                )
+            ],
+        )
+
+        responses_api_response = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+            request_input="Test input",
+            responses_api_request={},
+            chat_completion_response=response,
+        )
+
+        reasoning_items = [
+            item for item in responses_api_response.output if item.type == "reasoning"
+        ]
+        assert len(reasoning_items) == 1
+        assert "redacted-payload" in reasoning_items[0].encrypted_content
+
+    def test_visible_thinking_keeps_text_and_signature(self):
+        response = ModelResponse(
+            id="test-id",
+            created=1234567890,
+            model="test-model",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=Message(
+                        content="10",
+                        role="assistant",
+                        reasoning_content="counting the primes",
+                        thinking_blocks=[
+                            {"type": "thinking", "thinking": "counting the primes", "signature": "sig"}
+                        ],
+                    ),
+                )
+            ],
+        )
+
+        responses_api_response = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+            request_input="Test input",
+            responses_api_request={},
+            chat_completion_response=response,
+        )
+
+        reasoning_items = [
+            item for item in responses_api_response.output if item.type == "reasoning"
+        ]
+        assert len(reasoning_items) == 1
+        assert reasoning_items[0].content[0].text == "counting the primes"
+        assert "sig" in reasoning_items[0].encrypted_content
 
     def test_transform_chat_completion_response_status_with_stop(self):
         """
@@ -2537,10 +2633,10 @@ class TestUsageTransformation:
         assert response_usage.output_tokens_details.text_tokens == 50
         assert response_usage.output_tokens_details.image_tokens == 100
 
-    def test_reasoning_tokens_not_forced_to_zero_when_absent(self):
-        # Regression: previously the else branch wrote reasoning_tokens=0 even when
-        # completion_tokens_details had no reasoning (reasoning_tokens=None). That caused
-        # the proxy to always report reasoning_tokens=0 for non-thinking responses.
+    def test_reasoning_tokens_fall_back_to_zero_when_absent(self):
+        # The OpenAI SDK's ResponseUsage requires output_tokens_details.reasoning_tokens
+        # as an int, so an absent count degrades to 0 on the responses wire instead of
+        # dropping output_tokens_details and breaking SDK clients.
         usage = Usage(
             prompt_tokens=10,
             completion_tokens=50,
@@ -2571,7 +2667,8 @@ class TestUsageTransformation:
         )
 
         assert response_usage.output_tokens_details is not None
-        assert response_usage.output_tokens_details.reasoning_tokens is None
+        assert response_usage.output_tokens_details.reasoning_tokens == 0
+        assert response_usage.output_tokens_details.text_tokens == 50
 
     def test_reasoning_tokens_preserved_when_thinking_occurred(self):
         # Regression: reasoning_tokens must survive the chat->responses translation
@@ -2744,9 +2841,9 @@ class TestStreamingIDConsistency:
         # Verify the cached ID is set and matches
         assert iterator._cached_item_id is not None, "Iterator should cache the item_id"
         assert iterator._cached_item_id == item_id_1, "Cached ID should match event IDs"
-        assert (
-            iterator._cached_item_id == "chatcmpl-first-id"
-        ), "Should use the first chunk's ID"
+        assert iterator._cached_item_id.startswith(
+            "msg_"
+        ), "Message item IDs must use the Responses API msg_ prefix (issue #27333)"
 
     def test_streaming_iterator_initial_events_use_cached_id(self):
         """
@@ -3674,3 +3771,234 @@ def test_function_call_tool_id_falls_back_to_unique_id_for_degenerate_call_id():
         id="fc_2", call_id="call_tokyo", name="get_weather", arguments="{}"
     )
     assert convert(openai)["id"] == "call_tokyo"
+
+
+BRIDGED_CHAT_COMPLETION_ID = "chatcmpl-dfa2da3a-1586-4ff7-b64e-f59c692a5d11"
+
+
+def _bridged_chat_completion_response(**overrides):
+    defaults = dict(
+        id=BRIDGED_CHAT_COMPLETION_ID,
+        created=1717000000,
+        model="claude-sonnet-4-5",
+        object="chat.completion",
+        choices=[
+            Choices(
+                index=0,
+                finish_reason="stop",
+                message=Message(role="assistant", content="apple"),
+            )
+        ],
+        usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
+    )
+    defaults.update(overrides)
+    return ModelResponse(**defaults)
+
+
+def _bridged_output_items(response, item_type):
+    return [item for item in response.output if getattr(item, "type", None) == item_type]
+
+
+class TestBridgedOutputItemIdPrefixes:
+    """Bridged output items must carry Responses API ID prefixes (issue #27333).
+
+    Native OpenAI Responses rejects a replayed history whose message item ID does not
+    begin with "msg", so leaking the upstream chatcmpl-* ID makes the conversation
+    impossible to hand off from a bridged provider to OpenAI.
+    """
+
+    def _transform(self, chat_completion_response):
+        return LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+            request_input="Say the single word: apple",
+            responses_api_request={},
+            chat_completion_response=chat_completion_response,
+        )
+
+    def test_message_item_id_uses_msg_prefix(self):
+        response = self._transform(_bridged_chat_completion_response())
+
+        message_items = _bridged_output_items(response, "message")
+        assert len(message_items) == 1
+        assert message_items[0].id.startswith("msg_")
+
+    def test_message_item_id_does_not_leak_chat_completion_id(self):
+        response = self._transform(_bridged_chat_completion_response())
+
+        for item in _bridged_output_items(response, "message"):
+            assert item.id != BRIDGED_CHAT_COMPLETION_ID
+            assert not item.id.startswith("chatcmpl-")
+
+    def test_message_item_ids_are_unique_across_responses(self):
+        first = self._transform(_bridged_chat_completion_response())
+        second = self._transform(_bridged_chat_completion_response())
+
+        first_id = _bridged_output_items(first, "message")[0].id
+        second_id = _bridged_output_items(second, "message")[0].id
+        assert first_id != second_id
+
+    def _reasoning_items(self):
+        message = Message(role="assistant", content="apple")
+        message.reasoning_content = "thinking about fruit"
+        choice = Choices(index=0, finish_reason="stop", message=message)
+        return LiteLLMCompletionResponsesConfig._extract_reasoning_output_items(
+            chat_completion_response=_bridged_chat_completion_response(),
+            choices=[choice],
+        )
+
+    def test_reasoning_item_id_uses_rs_prefix(self):
+        items = self._reasoning_items()
+
+        assert len(items) == 1
+        assert items[0].id.startswith("rs_")
+
+    def test_reasoning_item_id_is_not_a_salted_hash(self):
+        """Python's hash() is salted per process, so the old rs_{hash(...)} ID for the
+        same reasoning text differed between workers and across restarts."""
+        suffix = self._reasoning_items()[0].id.removeprefix("rs_")
+
+        assert not suffix.lstrip("-").isdigit()
+        assert not suffix.startswith("-")
+
+
+class TestStreamingSnapshotItemIds:
+    """The response.completed snapshot must reuse the streamed item ID (issue #27333).
+
+    The incremental events already minted msg_* IDs while the final snapshot went back
+    through the non-streaming transform, so a streaming client replaying the snapshot
+    sent back an ID it had never been shown.
+    """
+
+    def _make_iterator(self):
+        from unittest.mock import Mock
+
+        import litellm
+        from litellm.responses.litellm_completion_transformation.streaming_iterator import (
+            LiteLLMCompletionStreamingIterator,
+        )
+
+        mock_stream_wrapper = Mock(spec=litellm.CustomStreamWrapper)
+        mock_stream_wrapper.logging_obj = Mock()
+        return LiteLLMCompletionStreamingIterator(
+            model="anthropic/claude-sonnet-4-5",
+            litellm_custom_stream_wrapper=mock_stream_wrapper,
+            request_input="Say the single word: apple",
+            responses_api_request={},
+            custom_llm_provider="anthropic",
+        )
+
+    def _make_chunk(self, content):
+        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+        return ModelResponseStream(
+            id=BRIDGED_CHAT_COMPLETION_ID,
+            choices=[
+                StreamingChoices(
+                    index=0,
+                    delta=Delta(content=content, role="assistant"),
+                    finish_reason=None,
+                )
+            ],
+            created=1717000000,
+            model="claude-sonnet-4-5",
+            object="chat.completion.chunk",
+        )
+
+    def test_incremental_item_id_uses_msg_prefix(self):
+        iterator = self._make_iterator()
+
+        event = iterator._transform_chat_completion_chunk_to_response_api_chunk(
+            self._make_chunk("apple")
+        )
+
+        assert event is not None
+        assert event.item_id.startswith("msg_")
+        assert event.item_id != BRIDGED_CHAT_COMPLETION_ID
+
+    def test_completed_snapshot_reuses_streamed_item_id(self):
+        iterator = self._make_iterator()
+
+        streamed_event = iterator._transform_chat_completion_chunk_to_response_api_chunk(
+            self._make_chunk("apple")
+        )
+        assert streamed_event is not None
+
+        completed_event = iterator._emit_response_completed_event(
+            _bridged_chat_completion_response()
+        )
+
+        assert completed_event is not None
+        message_items = _bridged_output_items(completed_event.response, "message")
+        assert len(message_items) == 1
+        assert message_items[0].id == streamed_event.item_id
+
+    def test_completed_snapshot_item_id_is_replayable(self):
+        iterator = self._make_iterator()
+        iterator._transform_chat_completion_chunk_to_response_api_chunk(
+            self._make_chunk("apple")
+        )
+
+        completed_event = iterator._emit_response_completed_event(
+            _bridged_chat_completion_response()
+        )
+
+        assert completed_event is not None
+        for item in _bridged_output_items(completed_event.response, "message"):
+            assert item.id.startswith("msg_")
+            assert not item.id.startswith("chatcmpl-")
+
+    def _make_reasoning_chunk(self, reasoning_content):
+        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+        return ModelResponseStream(
+            id=BRIDGED_CHAT_COMPLETION_ID,
+            choices=[
+                StreamingChoices(
+                    index=0,
+                    delta=Delta(role="assistant", reasoning_content=reasoning_content),
+                    finish_reason=None,
+                )
+            ],
+            created=1717000000,
+            model="claude-sonnet-4-5",
+            object="chat.completion.chunk",
+        )
+
+    def _reasoning_chat_completion_response(self):
+        message = Message(role="assistant", content="apple")
+        message.reasoning_content = "thinking about fruit"
+        return _bridged_chat_completion_response(
+            choices=[Choices(index=0, finish_reason="stop", message=message)]
+        )
+
+    def test_reasoning_delta_events_share_one_item_id(self):
+        """The old rs_{hash(text)} ID changed with every delta, so a client accumulating
+        reasoning by item ID saw a new item per chunk."""
+        iterator = self._make_iterator()
+
+        first = iterator._transform_chat_completion_chunk_to_response_api_chunk(
+            self._make_reasoning_chunk("thinking ")
+        )
+        second = iterator._transform_chat_completion_chunk_to_response_api_chunk(
+            self._make_reasoning_chunk("about fruit")
+        )
+
+        assert first is not None and second is not None
+        assert first.item_id.startswith("rs_")
+        assert first.item_id == second.item_id
+
+    def test_completed_snapshot_reuses_streamed_reasoning_item_id(self):
+        iterator = self._make_iterator()
+
+        streamed_event = iterator._transform_chat_completion_chunk_to_response_api_chunk(
+            self._make_reasoning_chunk("thinking about fruit")
+        )
+        assert streamed_event is not None
+
+        completed_event = iterator._emit_response_completed_event(
+            self._reasoning_chat_completion_response()
+        )
+
+        assert completed_event is not None
+        reasoning_items = _bridged_output_items(completed_event.response, "reasoning")
+        assert len(reasoning_items) == 1
+        assert reasoning_items[0].id == streamed_event.item_id

@@ -1,7 +1,5 @@
 import inspect
 import json
-import os
-import sys
 from collections.abc import Sequence
 from typing import Optional
 
@@ -10,9 +8,6 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from prisma.actions import LiteLLM_VerificationTokenActions
 
-sys.path.insert(
-    0, os.path.abspath("../../../..")
-)  # Adds the parent directory to the system path
 
 from contextlib import contextmanager
 from unittest.mock import AsyncMock, Mock, patch

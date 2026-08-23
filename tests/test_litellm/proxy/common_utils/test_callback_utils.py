@@ -1,13 +1,9 @@
 import copy
 import sys
-import os
 from types import ModuleType, SimpleNamespace
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 from litellm.proxy.common_utils.callback_utils import (
     add_guardrail_scan_id,
@@ -492,6 +488,7 @@ def test_strip_callback_config_drops_credential_bearing_slots():
             }
         ],
         "callback_settings": {"callback_vars": {"langfuse_secret_key": "litellm_enc::other"}},
+        "secret_manager_settings": {"vault_token": "vt-secret"},
         "priority": "high",
         "guardrails": ["presidio"],
         "langsmith_provisioning": {"api_key_id": "prov-1"},
@@ -501,6 +498,7 @@ def test_strip_callback_config_drops_credential_bearing_slots():
 
     assert "logging" not in stripped
     assert "callback_settings" not in stripped
+    assert "secret_manager_settings" not in stripped
     assert stripped["priority"] == "high"
     assert stripped["guardrails"] == ["presidio"]
     assert stripped["langsmith_provisioning"] == {"api_key_id": "prov-1"}
@@ -584,7 +582,7 @@ def test_initialize_callbacks_on_proxy_rejects_class_valued_entry(probe_config_p
     silently never run the hook. Config load must fail instead."""
     entry = f"{_PROBE_MODULE_NAME}.FloorMaxTokens"
 
-    with pytest.raises(ValueError) as exc_info:
+    with pytest.raises(ValueError, match='litellm_settings\\.callbacks entry') as exc_info:
         _load_callbacks([entry], probe_config_path)
 
     message = str(exc_info.value)
@@ -607,7 +605,7 @@ def test_initialize_callbacks_on_proxy_rejects_non_dispatchable_values(
 ):
     entry = f"{_PROBE_MODULE_NAME}.{attribute}"
 
-    with pytest.raises(ValueError) as exc_info:
+    with pytest.raises(ValueError, match='litellm_settings\\.callbacks entry') as exc_info:
         _load_callbacks([entry], probe_config_path)
 
     message = str(exc_info.value)
@@ -619,7 +617,7 @@ def test_initialize_callbacks_on_proxy_rejects_non_dispatchable_values(
 def test_initialize_callbacks_on_proxy_rejects_class_valued_non_list_value(probe_config_path):
     entry = f"{_PROBE_MODULE_NAME}.FloorMaxTokens"
 
-    with pytest.raises(ValueError) as exc_info:
+    with pytest.raises(ValueError, match='litellm_settings\\.callbacks entry') as exc_info:
         _load_callbacks(entry, probe_config_path)
 
     assert entry in str(exc_info.value)
