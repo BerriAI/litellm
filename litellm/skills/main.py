@@ -85,11 +85,7 @@ def _native_skill_request(
 
     method_path, request_fields = _NATIVE_SKILL_OPERATIONS[operation]
     extra_headers: Final = request_data.get("extra_headers")
-    headers: Final = (
-        {**(extra_headers or {}), "Foundry-Features": "Skills=V1Preview"}  # mutable-ok: SDK headers
-        if custom_llm_provider == "azure"
-        else extra_headers
-    )
+    headers: Final = extra_headers
     params: Final = {  # mutable-ok: SDK request parameters
         field: value
         for field, value in (

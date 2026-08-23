@@ -218,7 +218,7 @@ async def test_openai_sdk_handles_every_native_skill_operation() -> None:
 
 
 @pytest.mark.asyncio
-async def test_azure_uses_preview_header_with_existing_sdk_client() -> None:
+async def test_azure_does_not_use_foundry_preview_header_with_existing_sdk_client() -> None:
     requests: list[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -236,7 +236,7 @@ async def test_azure_uses_preview_header_with_existing_sdk_client() -> None:
         await GLOBAL_LOGGING_WORKER.flush()
         await client.close()
 
-    assert requests[0].headers["foundry-features"] == "Skills=V1Preview"
+    assert "foundry-features" not in requests[0].headers
     assert requests[0].headers["x-test-header"] == "present"
 
 
@@ -283,6 +283,7 @@ async def test_router_model_configuration_overrides_request_provider() -> None:
     ("body_model", "query", "header_model", "expected"),
     [
         ("body", "model=query", "header", "body"),
+        ("", "model=query", "header", "query"),
         (None, "model=query", "header", "query"),
         (None, "", "header", "header"),
         (None, "", None, None),
@@ -459,6 +460,20 @@ def test_extract_model_param_ignores_non_string_body_model() -> None:
     )
 
     assert extract_model_param(request, {"model": {"unexpected": "type"}}) is None
+
+
+def test_extract_model_param_falls_back_from_empty_body_model() -> None:
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/v1/skills/skill_1",
+            "headers": [(b"x-litellm-model", b"header-model")],
+            "query_string": b"model=query-model",
+        }
+    )
+
+    assert extract_model_param(request, {"model": ""}) == "query-model"
 
 
 @pytest.mark.parametrize(
