@@ -102,6 +102,9 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self.final_text: str = ""
         self._cached_item_id: str | None = None
         self._cached_response_id: str | None = None
+        self._buffered_chunk: ModelResponseStream | None = None
+        self._upstream_exhausted: bool = False
+        self._response_id_primed: bool = False
         self._pending_tool_events: list[BaseLiteLLMOpenAIResponseObject] = []
         self._tool_output_index_by_call_id: dict[str, int] = {}
         self._tool_args_by_call_id: dict[str, str] = {}
@@ -346,6 +349,59 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             )
             self._pending_tool_events.append(item_done_event)
 
+    def _adopt_response_id_from_chunk(self, chunk: ModelResponseStream) -> None:
+        if self._cached_response_id is not None:
+            return
+        chunk_id: Final = getattr(chunk, "id", None)
+        if chunk_id and isinstance(chunk_id, str):
+            self._cached_response_id = chunk_id
+
+    async def _aprime_response_id(self) -> None:
+        """
+        Pull the first upstream chunk before `response.created` is emitted so every event
+        carries the chat completion id that spend tracking stores as `request_id`.
+        """
+        if self._response_id_primed:
+            return
+        self._response_id_primed = True
+        while True:
+            try:
+                chunk = await self.litellm_custom_stream_wrapper.__anext__()
+            except StopAsyncIteration:
+                self._upstream_exhausted = True
+                return
+            if chunk is not None:
+                self._buffered_chunk = chunk
+                self._adopt_response_id_from_chunk(chunk)
+                return
+
+    def _prime_response_id(self) -> None:
+        if self._response_id_primed:
+            return
+        self._response_id_primed = True
+        while True:
+            try:
+                chunk = self.litellm_custom_stream_wrapper.__next__()
+            except StopIteration:
+                self._upstream_exhausted = True
+                return
+            if chunk is not None:
+                self._buffered_chunk = chunk
+                self._adopt_response_id_from_chunk(chunk)
+                return
+
+    def _take_buffered_chunk(self) -> ModelResponseStream | None:
+        buffered: Final = self._buffered_chunk
+        self._buffered_chunk = None
+        return buffered
+
+    def _with_encoded_response_id(self, response: ResponsesAPIResponse) -> ResponsesAPIResponse:
+        return ResponsesAPIRequestUtils._update_responses_api_response_id_with_model_id(
+            responses_api_response=response,
+            custom_llm_provider=self.custom_llm_provider,
+            litellm_metadata=self.litellm_metadata,
+        )
+
     def _default_response_created_event_data(self) -> dict:
         # Use cached response ID if available, otherwise generate a new one
         if self._cached_response_id is None:
@@ -404,7 +460,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self._sequence_number += 1
         event: Final = ResponseCreatedEvent(
             type=ResponsesAPIStreamEvents.RESPONSE_CREATED,
-            response=ResponsesAPIResponse(**response_created_event_data),
+            response=self._with_encoded_response_id(ResponsesAPIResponse(**response_created_event_data)),
         )
         event.__dict__["sequence_number"] = self._sequence_number
         return event
@@ -415,7 +471,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self._sequence_number += 1
         event: Final = ResponseInProgressEvent(
             type=ResponsesAPIStreamEvents.RESPONSE_IN_PROGRESS,
-            response=ResponsesAPIResponse(**response_in_progress_event_data),
+            response=self._with_encoded_response_id(ResponsesAPIResponse(**response_in_progress_event_data)),
         )
         event.__dict__["sequence_number"] = self._sequence_number
         return event
@@ -827,6 +883,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                 if self.finished is True:
                     raise StopAsyncIteration
 
+                await self._aprime_response_id()
                 result = self.return_default_initial_events()
                 if result:
                     return result
@@ -838,7 +895,11 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                     return self._pending_tool_events.pop(0)
 
                 try:
-                    chunk = await self.litellm_custom_stream_wrapper.__anext__()
+                    chunk = self._take_buffered_chunk()
+                    if chunk is None:
+                        if self._upstream_exhausted:
+                            raise StopAsyncIteration
+                        chunk = await self.litellm_custom_stream_wrapper.__anext__()
                     if chunk is not None:
                         chunk = cast(ModelResponseStream, chunk)
                         self._ensure_output_item_for_chunk(chunk)
@@ -929,6 +990,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             while True:
                 if self.finished is True:
                     raise StopIteration
+                self._prime_response_id()
                 result = self.return_default_initial_events()
                 if result:
                     return result
@@ -939,7 +1001,13 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                 if self._pending_tool_events:
                     return self._pending_tool_events.pop(0)
                 try:
-                    chunk = self.litellm_custom_stream_wrapper.__next__()
+                    buffered_chunk = self._take_buffered_chunk()
+                    if buffered_chunk is not None:
+                        chunk = buffered_chunk
+                    elif self._upstream_exhausted:
+                        raise StopIteration
+                    else:
+                        chunk = self.litellm_custom_stream_wrapper.__next__()
                     self._ensure_output_item_for_chunk(chunk)
                     # Accumulate provider_specific_fields from chunk and delta
                     for src in (
@@ -1117,11 +1185,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             responses_api_response.output = list(self._output_with_streamed_item_ids(responses_api_response))
 
             # Encode the response ID to match non-streaming behavior
-            encoded_response: Final = ResponsesAPIRequestUtils._update_responses_api_response_id_with_model_id(
-                responses_api_response=responses_api_response,
-                custom_llm_provider=self.custom_llm_provider,
-                litellm_metadata=self.litellm_metadata,
-            )
+            encoded_response: Final = self._with_encoded_response_id(responses_api_response)
 
             return ResponseCompletedEvent(
                 type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
