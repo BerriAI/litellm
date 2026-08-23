@@ -4,7 +4,7 @@ litellm.Router Types - includes RouterConfig, UpdateRouterConfig, ModelInfo etc
 
 import datetime
 import enum
-from collections.abc import Mapping
+from collections.abc import Container, Mapping
 from dataclasses import dataclass
 from typing import Any, ClassVar, Final, Generic, Literal, TypeVar, get_type_hints
 
@@ -308,6 +308,19 @@ def anthropic_wif_fields_present(fields: Mapping[str, object]) -> tuple[str, ...
     this stays correct when a new WIF field is added there.
     """
     return tuple(name for name in _anthropic_wif_litellm_params if fields.get(name) is not None)
+
+
+def anthropic_wif_fields_named(keys: Container[str]) -> tuple[str, ...]:
+    """Server-owned Anthropic workload identity federation field names that appear in ``keys``,
+    whatever value they carry.
+
+    The write gates on credentials need this key-based sibling of ``anthropic_wif_fields_present``:
+    ``get_litellm_params`` forwards a WIF kwarg on key presence and the federation resolver rejects
+    a foreign variant's field by key, so a persisted ``{"anthropic_issuer_url": None}`` wedges every
+    deployment that references the credential even though no value is set. Pass a mapping (its keys
+    are tested) or a plain collection of key names.
+    """
+    return tuple(name for name in _anthropic_wif_litellm_params if name in keys)
 
 
 _RESERVED_INIT_KEYS: Final = frozenset({"self", "params", "__class__"})

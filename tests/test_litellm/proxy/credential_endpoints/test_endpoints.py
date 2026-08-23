@@ -1,6 +1,7 @@
 """Tests for the credential management endpoints."""
 
 import json
+from contextlib import contextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -55,11 +56,12 @@ def _post_credential(body: dict, auth=_as_admin):
             app.dependency_overrides[user_api_key_auth] = previous_override
 
 
-def test_create_credential_write_omits_the_patch_only_deletion_field():
-    """Regression: CredentialItem.credential_values_to_delete is a PATCH-only field that
-    defaults to None on every other construction path. A bare .model_dump() (without
-    exclude_none) on the create path put a `credential_values_to_delete: null` key into the
-    Prisma write, which litellm_credentialstable has no column for."""
+@contextmanager
+def _repository_holding(stored: CredentialItem | None):
+    """The credentials repository seam, answering ``find_by_name`` with ``stored`` and recording
+    the writes the handler attempts. Patched at both import sites, since the handlers resolve an
+    existing credential through ``hydrate_named_credential`` (memory first, then this repository)
+    and then write through their own ``CredentialsRepository`` binding."""
     with (
         patch(  # test-quality-ok: the proxy wiring under test is what this patches
             "litellm.proxy.proxy_server.prisma_client", MagicMock()
@@ -69,11 +71,24 @@ def test_create_credential_write_omits_the_patch_only_deletion_field():
         ),
         patch(  # test-quality-ok: the proxy wiring under test is what this patches
             "litellm.proxy.credential_endpoints.endpoints.CredentialsRepository"
-        ) as repository,  # test-quality-ok: the proxy wiring under test is what this patches
+        ) as repository,
+        patch(  # test-quality-ok: the proxy wiring under test is what this patches
+            "litellm.proxy.common_utils.credential_hydration.CredentialsRepository", repository
+        ),
     ):
-        create_mock = AsyncMock(return_value=None)
-        repository.return_value.create = create_mock
+        repository.return_value.find_by_name = AsyncMock(return_value=stored)
+        repository.return_value.create = AsyncMock(return_value=None)
+        repository.return_value.update_by_name = AsyncMock(return_value=None)
+        repository.return_value.delete_by_name = AsyncMock(return_value=None)
+        yield repository.return_value
 
+
+def test_create_credential_write_omits_the_patch_only_deletion_field(restore_credential_list):
+    """Regression: CredentialItem.credential_values_to_delete is a PATCH-only field that
+    defaults to None on every other construction path. A bare .model_dump() (without
+    exclude_none) on the create path put a `credential_values_to_delete: null` key into the
+    Prisma write, which litellm_credentialstable has no column for."""
+    with _repository_holding(None) as repository:
         response = _post_credential(
             {
                 "credential_name": "new-cred",
@@ -83,7 +98,7 @@ def test_create_credential_write_omits_the_patch_only_deletion_field():
         )
 
     assert response.status_code == 200, response.text
-    written_data = create_mock.await_args.kwargs["data"]
+    written_data = repository.create.await_args.kwargs["data"]
     assert "credential_values_to_delete" not in written_data
 
 
@@ -463,20 +478,8 @@ class TestNonAdminCannotPersistWifFieldsOnCredential:
 
         assert response.status_code == 403, response.text
 
-    def test_non_admin_can_create_a_credential_without_wif_fields(self):
-        with (
-            patch(  # test-quality-ok: the proxy wiring under test is what this patches
-                "litellm.proxy.proxy_server.prisma_client", MagicMock()
-            ),
-            patch(  # test-quality-ok: the proxy wiring under test is what this patches
-                "litellm.proxy.proxy_server.master_key", "sk-test-master"
-            ),
-            patch(  # test-quality-ok: the proxy wiring under test is what this patches
-                "litellm.proxy.credential_endpoints.endpoints.CredentialsRepository"
-            ) as repository,  # test-quality-ok: the proxy wiring under test is what this patches
-        ):
-            repository.return_value.create = AsyncMock(return_value=None)
-
+    def test_non_admin_can_create_a_credential_without_wif_fields(self, restore_credential_list):
+        with _repository_holding(None) as repository:
             response = _post_credential(
                 {
                     "credential_name": "ordinary-cred",
@@ -487,21 +490,10 @@ class TestNonAdminCannotPersistWifFieldsOnCredential:
             )
 
         assert response.status_code == 200, response.text
+        repository.create.assert_awaited_once()
 
-    def test_proxy_admin_can_create_a_credential_with_a_wif_destination(self):
-        with (
-            patch(  # test-quality-ok: the proxy wiring under test is what this patches
-                "litellm.proxy.proxy_server.prisma_client", MagicMock()
-            ),
-            patch(  # test-quality-ok: the proxy wiring under test is what this patches
-                "litellm.proxy.proxy_server.master_key", "sk-test-master"
-            ),
-            patch(  # test-quality-ok: the proxy wiring under test is what this patches
-                "litellm.proxy.credential_endpoints.endpoints.CredentialsRepository"
-            ) as repository,  # test-quality-ok: the proxy wiring under test is what this patches
-        ):
-            repository.return_value.create = AsyncMock(return_value=None)
-
+    def test_proxy_admin_can_create_a_credential_with_a_wif_destination(self, restore_credential_list):
+        with _repository_holding(None) as repository:
             response = _post_credential(
                 {
                     "credential_name": "admin-cred",
@@ -512,6 +504,7 @@ class TestNonAdminCannotPersistWifFieldsOnCredential:
             )
 
         assert response.status_code == 200, response.text
+        repository.create.assert_awaited_once()
 
     def test_non_admin_cannot_update_a_credential_to_add_a_wif_destination(self):
         stored = CredentialItem(
@@ -577,3 +570,359 @@ class TestNonAdminCannotPersistWifFieldsOnCredential:
 
         assert response.status_code == 200, response.text
         update_mock.assert_awaited_once()
+
+
+def _delete_credential(name: str, auth=_as_admin):
+    missing = object()
+    previous_override = app.dependency_overrides.get(user_api_key_auth, missing)
+    app.dependency_overrides[user_api_key_auth] = auth
+    try:
+        return client.delete(f"/credentials/{name}", headers={"Authorization": "Bearer test-key"})
+    finally:
+        if previous_override is missing:
+            app.dependency_overrides.pop(user_api_key_auth, None)
+        else:
+            app.dependency_overrides[user_api_key_auth] = previous_override
+
+
+def _wif_credential(name: str = "federated-cred") -> CredentialItem:
+    return CredentialItem(
+        credential_name=name,
+        credential_values={
+            "anthropic_keycloak_token_url": "https://keycloak.internal/token",
+            "api_key": "sk-old",
+        },
+        credential_info={"custom_llm_provider": "anthropic"},
+    )
+
+
+def _plain_credential(name: str = "ordinary-cred") -> CredentialItem:
+    return CredentialItem(
+        credential_name=name,
+        credential_values={"api_key": "sk-old"},
+        credential_info={"custom_llm_provider": "openai"},
+    )
+
+
+class TestNonAdminCannotTouchAStoredWifCredential:
+    """The WIF gate used to read only the incoming ``credential_values``, so a non-admin could
+    drop a federation field by naming it in ``credential_values_to_delete`` (breaking every
+    deployment that references the credential), or edit a stored admin-owned WIF credential by
+    sending a payload carrying no WIF field at all. The gate is evaluated against the effective
+    surface of the operation: incoming keys (a ``null`` value still persists the key), deleted
+    keys, and the stored credential, wherever it lives (DB row or config-only ``credential_list``
+    entry)."""
+
+    def test_non_admin_cannot_delete_a_wif_field_off_a_credential(self, restore_credential_list):
+        with _repository_holding(_plain_credential("some-cred")) as repository:
+            response = _patch_credential(
+                "some-cred",
+                {
+                    "credential_name": "some-cred",
+                    "credential_values": {},
+                    "credential_values_to_delete": ["anthropic_keycloak_token_url"],
+                    "credential_info": {},
+                },
+                auth=_as_non_admin,
+            )
+
+        assert response.status_code == 403, response.text
+        assert "anthropic_keycloak_token_url" in response.text
+        repository.update_by_name.assert_not_awaited()
+
+    def test_non_admin_cannot_patch_a_stored_wif_credential(self, restore_credential_list):
+        with _repository_holding(_wif_credential("federated-cred")) as repository:
+            response = _patch_credential(
+                "federated-cred",
+                {
+                    "credential_name": "federated-cred",
+                    "credential_values": {"api_key": "sk-attacker"},
+                    "credential_info": {},
+                },
+                auth=_as_non_admin,
+            )
+
+        assert response.status_code == 403, response.text
+        assert "anthropic_keycloak_token_url" in response.text
+        repository.update_by_name.assert_not_awaited()
+
+    def test_proxy_admin_can_delete_a_wif_field_off_a_credential(self, restore_credential_list):
+        with _repository_holding(_wif_credential("federated-cred")) as repository:
+            response = _patch_credential(
+                "federated-cred",
+                {
+                    "credential_name": "federated-cred",
+                    "credential_values": {},
+                    "credential_values_to_delete": ["anthropic_keycloak_token_url"],
+                    "credential_info": {},
+                },
+                auth=_as_admin,
+            )
+
+        assert response.status_code == 200, response.text
+        written_values = json.loads(repository.update_by_name.await_args.kwargs["data"]["credential_values"])
+        assert "anthropic_keycloak_token_url" not in written_values
+
+    def test_proxy_admin_can_patch_a_stored_wif_credential(self, restore_credential_list):
+        with _repository_holding(_wif_credential("federated-cred")) as repository:
+            response = _patch_credential(
+                "federated-cred",
+                {
+                    "credential_name": "federated-cred",
+                    "credential_values": {"api_key": "sk-rotated"},
+                    "credential_info": {},
+                },
+                auth=_as_admin,
+            )
+
+        assert response.status_code == 200, response.text
+        written_values = json.loads(repository.update_by_name.await_args.kwargs["data"]["credential_values"])
+        assert written_values["anthropic_keycloak_token_url"] is not None
+
+    def test_non_admin_can_still_patch_a_credential_with_no_wif_fields_anywhere(self, restore_credential_list):
+        with _repository_holding(_plain_credential("ordinary-cred")) as repository:
+            response = _patch_credential(
+                "ordinary-cred",
+                {
+                    "credential_name": "ordinary-cred",
+                    "credential_values": {"api_key": "sk-rotated"},
+                    "credential_info": {},
+                },
+                auth=_as_non_admin,
+            )
+
+        assert response.status_code == 200, response.text
+        repository.update_by_name.assert_awaited_once()
+
+    def test_non_admin_cannot_delete_a_stored_wif_credential(self, restore_credential_list):
+        """DELETE takes the whole row, so it drops the admin-owned federation settings as surely
+        as a targeted key deletion would."""
+        with _repository_holding(_wif_credential("federated-cred")) as repository:
+            response = _delete_credential("federated-cred", auth=_as_non_admin)
+
+        assert response.status_code == 403, response.text
+        assert "anthropic_keycloak_token_url" in response.text
+        repository.delete_by_name.assert_not_awaited()
+
+    def test_proxy_admin_can_delete_a_stored_wif_credential(self, restore_credential_list):
+        with _repository_holding(_wif_credential("federated-cred")) as repository:
+            response = _delete_credential("federated-cred", auth=_as_admin)
+
+        assert response.status_code == 200, response.text
+        repository.delete_by_name.assert_awaited_once_with("federated-cred")
+
+    def test_non_admin_can_still_delete_a_credential_with_no_wif_fields(self, restore_credential_list):
+        with _repository_holding(_plain_credential("ordinary-cred")) as repository:
+            response = _delete_credential("ordinary-cred", auth=_as_non_admin)
+
+        assert response.status_code == 200, response.text
+        repository.delete_by_name.assert_awaited_once_with("ordinary-cred")
+
+    def test_non_admin_cannot_null_out_a_wif_field_on_a_credential(self, restore_credential_list):
+        """A JSON ``null`` still lands as a key in ``credential_values``. ``get_litellm_params``
+        forwards a WIF kwarg on key presence and the federation resolver rejects a foreign
+        variant's field by key, so a value-based gate let a non-admin persist the key and wedge
+        every deployment referencing the credential at request time."""
+        with _repository_holding(_plain_credential("some-cred")) as repository:
+            response = _patch_credential(
+                "some-cred",
+                {
+                    "credential_name": "some-cred",
+                    "credential_values": {"anthropic_issuer_url": None},
+                    "credential_info": {},
+                },
+                auth=_as_non_admin,
+            )
+
+        assert response.status_code == 403, response.text
+        assert "anthropic_issuer_url" in response.text
+        repository.update_by_name.assert_not_awaited()
+
+    def test_non_admin_cannot_patch_a_credential_storing_a_null_wif_field(self, restore_credential_list):
+        stored = CredentialItem(
+            credential_name="nulled-cred",
+            credential_values={"anthropic_issuer_url": None, "api_key": "sk-old"},
+            credential_info={"custom_llm_provider": "anthropic"},
+        )
+        with _repository_holding(stored) as repository:
+            response = _patch_credential(
+                "nulled-cred",
+                {
+                    "credential_name": "nulled-cred",
+                    "credential_values": {"api_key": "sk-attacker"},
+                    "credential_info": {},
+                },
+                auth=_as_non_admin,
+            )
+
+        assert response.status_code == 403, response.text
+        assert "anthropic_issuer_url" in response.text
+        repository.update_by_name.assert_not_awaited()
+
+    def test_proxy_admin_can_null_out_a_wif_field_on_a_credential(self, restore_credential_list):
+        with _repository_holding(_wif_credential("federated-cred")) as repository:
+            response = _patch_credential(
+                "federated-cred",
+                {
+                    "credential_name": "federated-cred",
+                    "credential_values": {"anthropic_keycloak_token_url": None},
+                    "credential_info": {},
+                },
+                auth=_as_admin,
+            )
+
+        assert response.status_code == 200, response.text
+        repository.update_by_name.assert_awaited_once()
+
+    def test_non_admin_cannot_delete_a_config_only_wif_credential(self, restore_credential_list, monkeypatch):
+        """A ``credential_list`` entry from config.yaml has no DB row, so a gate that consulted
+        only the DB let a non-admin evict the admin-owned federation settings from memory."""
+        config_credential = _wif_credential("config-wif")
+        monkeypatch.setattr(litellm, "credential_list", [config_credential])
+        with _repository_holding(None) as repository:
+            response = _delete_credential("config-wif", auth=_as_non_admin)
+
+        assert response.status_code == 403, response.text
+        assert "anthropic_keycloak_token_url" in response.text
+        repository.delete_by_name.assert_not_awaited()
+        assert litellm.credential_list == [config_credential]
+
+    def test_proxy_admin_can_delete_a_config_only_wif_credential(self, restore_credential_list, monkeypatch):
+        monkeypatch.setattr(litellm, "credential_list", [_wif_credential("config-wif")])
+        with _repository_holding(None) as repository:
+            response = _delete_credential("config-wif", auth=_as_admin)
+
+        assert response.status_code == 200, response.text
+        repository.delete_by_name.assert_awaited_once_with("config-wif")
+        assert litellm.credential_list == []
+
+    def test_non_admin_cannot_shadow_a_config_only_wif_credential(self, restore_credential_list, monkeypatch):
+        """POST with the same name carries no WIF field and collides with no DB row, yet
+        ``CredentialAccessor.upsert_credentials`` would replace the admin entry in memory and
+        the periodic config sync would then make the takeover permanent."""
+        config_credential = _wif_credential("config-wif")
+        monkeypatch.setattr(litellm, "credential_list", [config_credential])
+        with _repository_holding(None) as repository:
+            response = _post_credential(
+                {
+                    "credential_name": "config-wif",
+                    "credential_values": {"api_key": "sk-attacker"},
+                    "credential_info": {"custom_llm_provider": "anthropic"},
+                },
+                auth=_as_non_admin,
+            )
+
+        assert response.status_code == 403, response.text
+        assert "anthropic_keycloak_token_url" in response.text
+        repository.create.assert_not_awaited()
+        assert litellm.credential_list == [config_credential]
+        assert litellm.credential_list[0].credential_values["api_key"] == "sk-old"
+
+    def test_proxy_admin_can_post_over_a_config_only_wif_credential(self, restore_credential_list, monkeypatch):
+        monkeypatch.setattr(litellm, "credential_list", [_wif_credential("config-wif")])
+        with _repository_holding(None) as repository:
+            response = _post_credential(
+                {
+                    "credential_name": "config-wif",
+                    "credential_values": {"api_key": "sk-rotated"},
+                    "credential_info": {"custom_llm_provider": "anthropic"},
+                },
+                auth=_as_admin,
+            )
+
+        assert response.status_code == 200, response.text
+        repository.create.assert_awaited_once()
+        assert litellm.credential_list[0].credential_values == {"api_key": "sk-rotated"}
+
+    def test_non_admin_cannot_rename_a_credential_onto_a_config_only_wif_credential(
+        self, restore_credential_list, monkeypatch
+    ):
+        """PATCH is the other way to shadow: renaming an ordinary credential onto the WIF
+        credential's name makes ``_sync_in_memory_credential`` upsert the attacker's values over
+        the admin entry, with no WIF field in the payload and no DB row to collide with."""
+        config_credential = _wif_credential("config-wif")
+        monkeypatch.setattr(litellm, "credential_list", [_plain_credential("mine"), config_credential])
+        with _repository_holding(_plain_credential("mine")) as repository:
+            response = _patch_credential(
+                "mine",
+                {
+                    "credential_name": "config-wif",
+                    "credential_values": {"api_key": "sk-attacker"},
+                    "credential_info": {},
+                },
+                auth=_as_non_admin,
+            )
+
+        assert response.status_code == 403, response.text
+        assert "anthropic_keycloak_token_url" in response.text
+        repository.update_by_name.assert_not_awaited()
+        assert config_credential in litellm.credential_list
+        assert litellm.credential_list[1].credential_values["api_key"] == "sk-old"
+
+    def test_proxy_admin_can_rename_a_credential_onto_a_config_only_wif_credential(
+        self, restore_credential_list, monkeypatch
+    ):
+        monkeypatch.setattr(litellm, "credential_list", [_plain_credential("mine"), _wif_credential("config-wif")])
+        with _repository_holding(_plain_credential("mine")) as repository:
+            response = _patch_credential(
+                "mine",
+                {
+                    "credential_name": "config-wif",
+                    "credential_values": {"api_key": "sk-rotated"},
+                    "credential_info": {},
+                },
+                auth=_as_admin,
+            )
+
+        assert response.status_code == 200, response.text
+        repository.update_by_name.assert_awaited_once()
+        assert [c.credential_name for c in litellm.credential_list] == ["config-wif"]
+
+    def test_non_admin_cannot_post_a_null_wif_field(self, restore_credential_list):
+        """Same key-presence rule on the create path: ``{"anthropic_issuer_url": null}`` persists
+        the key, and the resolver reacts to the key."""
+        with _repository_holding(None) as repository:
+            response = _post_credential(
+                {
+                    "credential_name": "nulled-cred",
+                    "credential_values": {"anthropic_issuer_url": None, "api_key": "sk-new"},
+                    "credential_info": {"custom_llm_provider": "anthropic"},
+                },
+                auth=_as_non_admin,
+            )
+
+        assert response.status_code == 403, response.text
+        assert "anthropic_issuer_url" in response.text
+        repository.create.assert_not_awaited()
+        assert litellm.credential_list == []
+
+    def test_non_admin_cannot_shadow_a_db_stored_wif_credential(self, restore_credential_list):
+        """Same hole for a WIF credential another pod wrote to the DB before this pod's in-memory
+        list caught up: the existing-credential lookup falls through to the DB."""
+        with _repository_holding(_wif_credential("federated-cred")) as repository:
+            response = _post_credential(
+                {
+                    "credential_name": "federated-cred",
+                    "credential_values": {"api_key": "sk-attacker"},
+                    "credential_info": {"custom_llm_provider": "anthropic"},
+                },
+                auth=_as_non_admin,
+            )
+
+        assert response.status_code == 403, response.text
+        repository.create.assert_not_awaited()
+
+    def test_non_admin_can_still_post_a_credential_with_no_wif_fields_anywhere(self, restore_credential_list):
+        with _repository_holding(None) as repository:
+            response = _post_credential(
+                {
+                    "credential_name": "ordinary-cred",
+                    "credential_values": {"api_key": "sk-new"},
+                    "credential_info": {"custom_llm_provider": "openai"},
+                },
+                auth=_as_non_admin,
+            )
+
+        assert response.status_code == 200, response.text
+        repository.create.assert_awaited_once()
+        assert litellm.credential_list[0].credential_name == "ordinary-cred"

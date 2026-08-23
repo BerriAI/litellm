@@ -6,6 +6,7 @@ from litellm.types.router import (
     Deployment,
     LiteLLM_Params,
     ModelInfo,
+    anthropic_wif_fields_named,
     anthropic_wif_fields_present,
 )
 from litellm.types.utils import (
@@ -129,3 +130,18 @@ def test_anthropic_wif_fields_present_is_derived_from_the_shared_list():
     written -- so this must read the shared list rather than a hand-copied one."""
     values = {field: "set" for field in anthropic_wif_litellm_params}
     assert set(anthropic_wif_fields_present(values)) == set(anthropic_wif_litellm_params)
+
+
+def test_anthropic_wif_fields_named_reports_keys_whatever_their_value():
+    """The credential write gates must see a key a caller sets to ``None``: the federation
+    resolver reacts to the key's presence, not its value, so ``{"anthropic_issuer_url": None}``
+    wedges every deployment referencing the credential once persisted."""
+    assert anthropic_wif_fields_named({}) == ()
+    assert anthropic_wif_fields_named({"model": "gpt-4o"}) == ()
+    assert anthropic_wif_fields_named({"anthropic_issuer_url": None}) == ("anthropic_issuer_url",)
+    assert anthropic_wif_fields_present({"anthropic_issuer_url": None}) == ()
+    assert anthropic_wif_fields_named(("anthropic_keycloak_token_url", "api_key")) == ("anthropic_keycloak_token_url",)
+
+
+def test_anthropic_wif_fields_named_is_derived_from_the_shared_list():
+    assert set(anthropic_wif_fields_named(frozenset(anthropic_wif_litellm_params))) == set(anthropic_wif_litellm_params)
