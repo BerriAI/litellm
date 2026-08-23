@@ -669,6 +669,24 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
     # logic becomes shared across providers.
 
     #### CALL HOOKS - proxy only ####
+    @staticmethod
+    def _get_bedrock_api_key(request_data: Mapping[str, object] | None) -> str | None:
+        if not request_data:
+            return None
+
+        top_level_provider: Final[object | None] = request_data.get("custom_llm_provider")
+        request_provider: Final[str | None] = (
+            top_level_provider if isinstance(top_level_provider, str) else None
+        )
+        model: Final[object | None] = request_data.get("model")
+        model_provider: Final = model.partition("/")[0] if isinstance(model, str) else None
+        custom_llm_provider: Final = request_provider or model_provider
+        if custom_llm_provider not in ("bedrock", "bedrock_converse"):
+            return None
+
+        api_key: Final[object | None] = request_data.get("api_key")
+        return api_key if isinstance(api_key, str) else None
+
     def _load_credentials(
         self,
     ):
@@ -841,7 +859,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         bedrock_request_data: Final[dict] = dict(
             self.convert_to_bedrock_format(source=source, messages=messages, response=response)
         )
-        api_key: str | None = None
+        api_key: Final = self._get_bedrock_api_key(request_data)
         if request_data:
             dynamic_request_body_params = self.get_guardrail_dynamic_request_body_params(request_data=request_data)
             bedrock_request_data.update(
@@ -851,8 +869,6 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                     if key not in _BEDROCK_DYNAMIC_BODY_DENYLIST
                 }
             )
-            if request_data.get("api_key") is not None:
-                api_key = request_data["api_key"]
 
         event_type: Final = (
             logging_event_type
@@ -1828,7 +1844,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
         credentials, aws_region_name = self._load_credentials()
         body: Final[dict[str, Any]] = {"messages": checks_messages, "checks": self.checks}
-        api_key: Final[str | None] = request_data.get("api_key") if request_data else None
+        api_key: Final = self._get_bedrock_api_key(request_data)
 
         prepared_request: Final = self._prepare_request(
             credentials=credentials,

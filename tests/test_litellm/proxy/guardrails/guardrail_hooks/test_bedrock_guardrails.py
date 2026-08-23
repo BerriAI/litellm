@@ -1115,6 +1115,55 @@ async def test_make_apply_guardrail_request_skips_scan_without_credentials():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("custom_llm_provider", "expected_auth_prefix"),
+    [("nvidia_nim", "AWS4-HMAC-SHA256"), ("bedrock", "Bearer bedrock-key")],
+)
+async def test_make_apply_guardrail_request_scopes_api_key_to_bedrock_provider(
+    custom_llm_provider, expected_auth_prefix, monkeypatch
+):
+    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+    guardrail = BedrockGuardrail(
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+    )
+    request_data = {
+        "model": f"{custom_llm_provider}/test-model",
+        "api_key": "bedrock-key",
+    }
+    mock_credentials = MagicMock()
+    mock_credentials.access_key = "test-access-key"
+    mock_credentials.secret_key = "test-secret-key"
+    mock_credentials.token = None
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {"action": "NONE", "assessments": []}
+
+    with (
+        patch.object(
+            guardrail,
+            "_load_credentials",
+            return_value=(mock_credentials, "us-east-1"),
+        ),
+        patch.object(
+            guardrail.async_handler,
+            "post",
+            new=AsyncMock(return_value=mock_response),
+        ) as mock_post,
+    ):
+        result = await guardrail.make_bedrock_api_request(
+            source="INPUT",
+            messages=[{"role": "user", "content": "hello"}],
+            request_data=request_data,
+        )
+
+    assert result["action"] == "NONE"
+    assert mock_post.await_args.kwargs["headers"]["Authorization"].startswith(
+        expected_auth_prefix
+    )
+
+
+@pytest.mark.asyncio
 async def test_bedrock_apply_guardrail_response_uses_OUTPUT_source():
     """input_type='response' must call Bedrock with source=OUTPUT and assistant content.
 
