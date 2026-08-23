@@ -568,6 +568,12 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             custom_llm_provider=self._resolved_provider,
         )
 
+        AnthropicModelInfo.maybe_drop_disabled_thinking(
+            model=model,
+            optional_params=anthropic_messages_optional_request_params,
+            custom_llm_provider=self._resolved_provider,
+        )
+
         self._translate_legacy_thinking_for_adaptive_model(
             model=model,
             optional_params=anthropic_messages_optional_request_params,

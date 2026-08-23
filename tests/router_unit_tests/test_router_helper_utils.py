@@ -1,13 +1,9 @@
-import sys
 import os
 import traceback
 from dotenv import load_dotenv
 from fastapi import Request
 from datetime import datetime
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 from litellm import Router
 import pytest
 import litellm
@@ -756,25 +752,19 @@ async def test_routing_strategy_pre_call_checks(model_list, sync_mode):
                 )
             ),
         ):
-            try:
+            with pytest.raises(litellm.RateLimitError):
                 await router.async_routing_strategy_pre_call_checks(
                     deployment, litellm_logging_obj
                 )
-                pytest.fail("Exception was not raised")
-            except Exception as e:
-                assert isinstance(e, litellm.RateLimitError)
 
         ## WITH EXCEPTION - generic error
         with patch.object(
             callback, "async_pre_call_check", AsyncMock(side_effect=Exception("Error"))
         ):
-            try:
+            with pytest.raises(Exception, match="Error"):
                 await router.async_routing_strategy_pre_call_checks(
                     deployment, litellm_logging_obj
                 )
-                pytest.fail("Exception was not raised")
-            except Exception as e:
-                assert isinstance(e, Exception)
 
 
 @pytest.mark.parametrize(
@@ -1838,7 +1828,7 @@ def test_init_auto_router_deployment_duplicate_model_name(mock_auto_router, mode
     )
 
     with pytest.raises(
-        ValueError, match="Auto-router deployment test-auto-router with tags .* already exists"
+        ValueError, match=r"Auto-router deployment test-auto-router with tags .* already exists"
     ):
         router.init_auto_router_deployment(deployment)
 
@@ -1866,21 +1856,14 @@ def testgenerate_model_id_with_deployment_model_name(model_list):
         pytest.fail(f"Failed with valid model_group: {e}")
 
     # Test case 2: Edge case with None model_group (this should fail as expected - our fix prevents this from happening)
-    try:
-        result = router.generate_model_id(
-            model_group=None, litellm_params=litellm_params
-        )
-        pytest.fail(
-            "Expected TypeError when model_group is None - this confirms our fix is needed"
-        )
-    except TypeError as e:
-        # After optimization, error message changed but still fails appropriately on None
-        assert "unsupported operand type(s) for +=" in str(
-            e
-        ) or "expected str instance, NoneType found" in str(e)
-        print(f"✓ Correctly failed with None model_group (as expected): {e}")
-    except Exception as e:
-        pytest.fail(f"Unexpected error with None model_group: {e}")
+    with pytest.raises(TypeError) as exc_info:
+        router.generate_model_id(model_group=None, litellm_params=litellm_params)
+    # After optimization, error message changed but still fails appropriately on None
+    error_str = str(exc_info.value)
+    assert (
+        "unsupported operand type(s) for +=" in error_str
+        or "expected str instance, NoneType found" in error_str
+    )
 
     # Test case 3: Edge case with None key in litellm_params
     litellm_params_with_none_key = {

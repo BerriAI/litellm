@@ -1,4 +1,4 @@
-import { cleanup, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "../../../../../tests/test-utils";
@@ -610,6 +610,125 @@ describe("UserEditView", () => {
         expect(screen.getByLabelText("Metadata")).toHaveValue("not json");
       });
       expect(onSubmit).not.toHaveBeenCalled();
+    });
+
+    // /user/new validates model_max_budget behind an enterprise license, so a
+    // form that re-sends what is already stored turns an unrelated edit into a
+    // 400 on a proxy without one.
+    describe("per-model budgets", () => {
+      const withStoredBudgets = {
+        ...MOCK_USER_DATA,
+        user_info: {
+          ...MOCK_USER_DATA.user_info,
+          model_max_budget: { "gpt-4": { budget_limit: 5, time_period: "30d" } },
+        },
+      };
+
+      it("should leave model_max_budget out of an edit that did not touch it", async () => {
+        const payload = await submittedPayload({ userData: withStoredBudgets, premiumUser: true });
+
+        expect(payload).not.toHaveProperty("model_max_budget");
+      });
+
+      // The proxy stores model_max_budget as a plain dict, exactly as the client
+      // sent it, and BudgetConfig documents the max_budget/budget_duration
+      // spelling. A row hydrated from the spelling the editor does not read mounts
+      // with an empty cap, and every edit re-emits ALL rows, so touching one
+      // model's budget silently deletes another's.
+      it("should keep a row stored under the BudgetConfig aliases when a sibling row is edited", async () => {
+        const onSubmit = vi.fn();
+        renderWithProviders(
+          <UserEditView
+            {...defaultProps}
+            premiumUser={true}
+            onSubmit={onSubmit}
+            userData={{
+              ...MOCK_USER_DATA,
+              user_info: {
+                ...MOCK_USER_DATA.user_info,
+                model_max_budget: {
+                  "gpt-4": { max_budget: 5, budget_duration: "30d" },
+                  "gpt-3.5-turbo": { budget_limit: 2, time_period: "1h" },
+                },
+              },
+            }}
+          />,
+        );
+
+        const [aliasRow, canonicalRow] = await screen.findAllByPlaceholderText("Max spend ($)");
+        expect(aliasRow).toHaveValue(5);
+
+        fireEvent.change(canonicalRow, { target: { value: "3" } });
+        await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+        await waitFor(() => {
+          expect(onSubmit).toHaveBeenCalled();
+        });
+        expect(onSubmit.mock.calls[0][0].model_max_budget).toEqual({
+          "gpt-4": { budget_limit: 5, time_period: "30d" },
+          "gpt-3.5-turbo": { budget_limit: 3, time_period: "1h" },
+        });
+      });
+
+      // The effect already re-seeds the form on a userData change, so that change
+      // does happen while this component stays mounted. The editor holds its rows
+      // in state seeded once, so without a matching re-seed the rows on screen
+      // keep describing the previously loaded user and a save overwrites theirs.
+      it("re-seeds the editor when a different user is loaded", async () => {
+        const withBudget = (limit: number, id: string) => ({
+          ...MOCK_USER_DATA,
+          user_id: id,
+          user_info: {
+            ...MOCK_USER_DATA.user_info,
+            model_max_budget: { "gpt-4": { budget_limit: limit, time_period: "1h" } },
+          },
+        });
+
+        const { rerender } = renderWithProviders(
+          <UserEditView {...defaultProps} premiumUser={true} userData={withBudget(5, "user-a")} />,
+        );
+        expect(await screen.findByPlaceholderText("Max spend ($)")).toHaveValue(5);
+
+        rerender(<UserEditView {...defaultProps} premiumUser={true} userData={withBudget(99, "user-b")} />);
+
+        expect(await screen.findByPlaceholderText("Max spend ($)")).toHaveValue(99);
+      });
+
+      // BulkEditUsers copies a fixed field list into its payload and never reads
+      // model_max_budget, so an editor rendered here would take input and throw
+      // it away. It also has no single stored budget to diff against, since its
+      // userData stands in for every selected user.
+      it("does not offer the editor in bulk edit, where the value would be discarded", async () => {
+        renderWithProviders(
+          <UserEditView
+            {...defaultProps}
+            isBulkEdit={true}
+            premiumUser={true}
+            userData={{
+              ...MOCK_USER_DATA,
+              user_info: {
+                ...MOCK_USER_DATA.user_info,
+                model_max_budget: { "gpt-4": { budget_limit: 5, time_period: "1h" } },
+              },
+            }}
+          />,
+        );
+
+        await screen.findByRole("button", { name: /save changes/i });
+        expect(screen.queryByPlaceholderText("Max spend ($)")).not.toBeInTheDocument();
+      });
+
+      it("should lock the editor when the proxy has no enterprise license", async () => {
+        renderWithProviders(<UserEditView {...defaultProps} userData={withStoredBudgets} />);
+
+        expect(await screen.findByPlaceholderText("Max spend ($)")).toBeDisabled();
+      });
+
+      it("should leave the editor usable when the proxy has one", async () => {
+        renderWithProviders(<UserEditView {...defaultProps} userData={withStoredBudgets} premiumUser={true} />);
+
+        expect(await screen.findByPlaceholderText("Max spend ($)")).toBeEnabled();
+      });
     });
 
     it("should send an empty-string metadata through untouched rather than as an object", async () => {

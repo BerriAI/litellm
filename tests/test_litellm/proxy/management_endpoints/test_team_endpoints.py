@@ -1,7 +1,5 @@
 import asyncio
 import json
-import os
-import sys
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -14,9 +12,6 @@ from fastapi.testclient import TestClient
 
 from litellm._uuid import uuid
 
-sys.path.insert(
-    0, os.path.abspath("../../../")
-)  # Adds the parent directory to the system path
 from litellm.proxy._types import UserAPIKeyAuth  # Import UserAPIKeyAuth
 from litellm.proxy._types import (
     LiteLLM_BudgetTableFull,
@@ -83,6 +78,23 @@ def _wire_team_create_tx(prisma_client):
         )
 
     prisma_client.db.tx = lambda *_args, **_kwargs: _tx()
+
+
+def _wire_member_delete_tx(prisma_client):
+    """/team/member_delete's four cleanups run inside one transaction, so a mocked
+    client has to hand back its own table mocks out of `tx()` for the existing
+    per-table assertions to keep seeing the calls."""
+    tx = SimpleNamespace(
+        litellm_teamtable=prisma_client.db.litellm_teamtable,
+        litellm_usertable=prisma_client.db.litellm_usertable,
+        litellm_teammembership=prisma_client.db.litellm_teammembership,
+        litellm_verificationtoken=prisma_client.db.litellm_verificationtoken,
+        litellm_deletedverificationtoken=prisma_client.db.litellm_deletedverificationtoken,
+    )
+    tx_cm = MagicMock()
+    tx_cm.__aenter__ = AsyncMock(return_value=tx)
+    tx_cm.__aexit__ = AsyncMock(return_value=None)
+    prisma_client.tx = MagicMock(return_value=tx_cm)
 
 
 # Mock prisma_client
@@ -4152,6 +4164,8 @@ async def test_team_member_delete_cleans_membership(mock_db_client, mock_admin_a
         return_value=MagicMock()
     )
 
+    _wire_member_delete_tx(mock_db_client)
+
     # Execute
     await team_member_delete(
         data=TeamMemberDeleteRequest(team_id=test_team_id, user_id=test_user_id),
@@ -4209,6 +4223,8 @@ async def test_team_member_delete_cleans_verification_tokens(
     mock_db_client.db.litellm_verificationtoken.delete_many = AsyncMock(
         return_value=MagicMock()
     )
+
+    _wire_member_delete_tx(mock_db_client)
 
     await team_member_delete(
         data=TeamMemberDeleteRequest(team_id=test_team_id, user_id=test_user_id),
@@ -4305,6 +4321,8 @@ async def test_team_member_delete_by_email_the_user_row_does_not_carry(
         return_value=MagicMock()
     )
 
+    _wire_member_delete_tx(mock_db_client)
+
     await team_member_delete(
         data=TeamMemberDeleteRequest(team_id=test_team_id, user_email=roster_email),
         user_api_key_dict=mock_admin_auth,
@@ -4321,6 +4339,83 @@ async def test_team_member_delete_by_email_the_user_row_does_not_carry(
     mock_db_client.db.litellm_teammembership.delete_many.assert_awaited_once_with(
         where={"team_id": test_team_id, "user_id": test_user_id}
     )
+
+
+class _InjectedMemberDeleteFailure(Exception):
+    pass
+
+
+@pytest.mark.asyncio
+async def test_team_member_delete_is_atomic_across_its_four_writes(
+    mock_db_client, mock_admin_auth
+):
+    """
+    /team/member_delete's four cleanups (team roster, user.teams, team
+    membership, verification tokens) run as one transaction, so a failure
+    partway through must not leave the removal half applied.
+
+    Failing the second write (the user's ``teams`` update) pins two things a
+    non-transactional implementation gets wrong: the roster write that already
+    ran has to land on the SAME transaction client the failure raises on (so a
+    real database rolls it back too), and the writes still queued behind the
+    failure (membership delete, token delete) must never be attempted at all.
+    """
+    from litellm.proxy._types import TeamMemberDeleteRequest
+    from litellm.proxy.management_endpoints.team_endpoints import team_member_delete
+
+    test_team_id = "team-del-atomic-123"
+    test_user_id = "user-atomic@example.com"
+
+    mock_team_row = MagicMock()
+    mock_team_row.model_dump.return_value = {
+        "team_id": test_team_id,
+        "members_with_roles": [
+            {"user_id": test_user_id, "user_email": None, "role": "user"}
+        ],
+        "team_member_permissions": [],
+        "metadata": {},
+        "models": [],
+        "spend": 0.0,
+    }
+    mock_db_client.db.litellm_teamtable.find_unique = AsyncMock(
+        return_value=mock_team_row
+    )
+    mock_db_client.db.litellm_teamtable.update = AsyncMock(return_value=mock_team_row)
+
+    mock_user_row = MagicMock()
+    mock_user_row.user_id = test_user_id
+    mock_user_row.teams = [test_team_id]
+    mock_db_client.db.litellm_usertable.find_many = AsyncMock(
+        return_value=[mock_user_row]
+    )
+    mock_db_client.db.litellm_usertable.update = AsyncMock(
+        side_effect=_InjectedMemberDeleteFailure("boom between writes 1 and 2")
+    )
+
+    mock_db_client.db.litellm_teammembership = MagicMock()
+    mock_db_client.db.litellm_teammembership.delete_many = AsyncMock()
+
+    mock_db_client.db.litellm_verificationtoken = MagicMock()
+    mock_db_client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+    mock_db_client.db.litellm_verificationtoken.delete_many = AsyncMock()
+
+    _wire_member_delete_tx(mock_db_client)
+
+    with pytest.raises(_InjectedMemberDeleteFailure):
+        await team_member_delete(
+            data=TeamMemberDeleteRequest(team_id=test_team_id, user_id=test_user_id),
+            user_api_key_dict=mock_admin_auth,
+        )
+
+    # The roster write ran, but on the transaction the injected failure also raised on.
+    mock_db_client.db.litellm_teamtable.update.assert_awaited_once()
+    mock_db_client.tx.assert_called_once()
+    aexit_args = mock_db_client.tx.return_value.__aexit__.await_args.args
+    assert aexit_args[0] is _InjectedMemberDeleteFailure
+
+    # Writes queued behind the failure inside that same transaction never ran.
+    mock_db_client.db.litellm_teammembership.delete_many.assert_not_awaited()
+    mock_db_client.db.litellm_verificationtoken.delete_many.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -4529,7 +4624,6 @@ async def test_new_team_org_scoped_budget_bypasses_user_limit():
     from fastapi import Request
 
     from litellm.proxy._types import (
-        LiteLLM_OrganizationTable,
         LiteLLM_UserTable,
         NewTeamRequest,
         UserAPIKeyAuth,
@@ -4674,7 +4768,6 @@ async def test_new_team_org_scoped_models_bypasses_user_limit():
     from fastapi import Request
 
     from litellm.proxy._types import (
-        LiteLLM_OrganizationTable,
         LiteLLM_UserTable,
         NewTeamRequest,
         UserAPIKeyAuth,
@@ -4964,7 +5057,6 @@ async def test_new_team_org_scoped_budget_exceeds_org_limit():
 
     from litellm.proxy._types import (
         LiteLLM_BudgetTable,
-        LiteLLM_OrganizationTable,
         NewTeamRequest,
         ProxyException,
         UserAPIKeyAuth,
@@ -5044,7 +5136,6 @@ async def test_new_team_org_scoped_models_not_in_org_models():
 
     from litellm.proxy._types import (
         LiteLLM_BudgetTable,
-        LiteLLM_OrganizationTable,
         NewTeamRequest,
         ProxyException,
         UserAPIKeyAuth,
@@ -5633,7 +5724,6 @@ async def test_update_team_org_scoped_budget_exceeds_org_limit():
 
     from litellm.proxy._types import (
         LiteLLM_BudgetTable,
-        LiteLLM_OrganizationTable,
         ProxyException,
         UpdateTeamRequest,
         UserAPIKeyAuth,
@@ -5813,7 +5903,6 @@ async def test_update_team_org_scoped_budget_bypasses_user_limit(
 
     from litellm.proxy._types import (
         LiteLLM_BudgetTable,
-        LiteLLM_OrganizationTable,
         LiteLLM_UserTable,
         UpdateTeamRequest,
         UserAPIKeyAuth,
@@ -5929,7 +6018,6 @@ async def test_update_team_org_scoped_models_bypasses_user_limit(
     from fastapi import Request
 
     from litellm.proxy._types import (
-        LiteLLM_OrganizationTable,
         UpdateTeamRequest,
         UserAPIKeyAuth,
     )
@@ -6031,7 +6119,6 @@ async def test_update_team_org_scoped_models_not_in_org_models():
     from fastapi import Request
 
     from litellm.proxy._types import (
-        LiteLLM_OrganizationTable,
         ProxyException,
         UpdateTeamRequest,
         UserAPIKeyAuth,
@@ -6120,7 +6207,6 @@ async def test_update_team_org_scoped_models_with_all_proxy_models(
     from fastapi import Request
 
     from litellm.proxy._types import (
-        LiteLLM_OrganizationTable,
         SpecialModelNames,
         UpdateTeamRequest,
         UserAPIKeyAuth,
@@ -6403,7 +6489,6 @@ async def test_new_team_org_scoped_tpm_exceeds_org_limit():
 
     from litellm.proxy._types import (
         LiteLLM_BudgetTable,
-        LiteLLM_OrganizationTable,
         NewTeamRequest,
         ProxyException,
         UserAPIKeyAuth,
@@ -6479,7 +6564,6 @@ async def test_new_team_org_scoped_rpm_exceeds_org_limit():
 
     from litellm.proxy._types import (
         LiteLLM_BudgetTable,
-        LiteLLM_OrganizationTable,
         NewTeamRequest,
         ProxyException,
         UserAPIKeyAuth,
@@ -6556,7 +6640,6 @@ async def test_new_team_org_scoped_tpm_rpm_bypasses_user_limit():
 
     from litellm.proxy._types import (
         LiteLLM_BudgetTable,
-        LiteLLM_OrganizationTable,
         LiteLLM_TeamTable,
         NewTeamRequest,
         UserAPIKeyAuth,
@@ -6665,7 +6748,6 @@ async def test_update_team_org_scoped_tpm_exceeds_org_limit():
 
     from litellm.proxy._types import (
         LiteLLM_BudgetTable,
-        LiteLLM_OrganizationTable,
         ProxyException,
         UpdateTeamRequest,
         UserAPIKeyAuth,
@@ -6752,7 +6834,6 @@ async def test_update_team_org_scoped_rpm_exceeds_org_limit():
 
     from litellm.proxy._types import (
         LiteLLM_BudgetTable,
-        LiteLLM_OrganizationTable,
         ProxyException,
         UpdateTeamRequest,
         UserAPIKeyAuth,
@@ -6842,7 +6923,6 @@ async def test_update_team_org_scoped_tpm_rpm_bypasses_user_limit(
 
     from litellm.proxy._types import (
         LiteLLM_BudgetTable,
-        LiteLLM_OrganizationTable,
         LiteLLM_TeamTable,
         UpdateTeamRequest,
         UserAPIKeyAuth,
@@ -6948,7 +7028,6 @@ async def test_update_team_guardrails_with_org_id(
     from fastapi import Request
 
     from litellm.proxy._types import (
-        LiteLLM_OrganizationTable,
         LiteLLM_TeamTable,
         UpdateTeamRequest,
         UserAPIKeyAuth,
@@ -7826,6 +7905,8 @@ async def test_team_member_delete_persists_deleted_keys(monkeypatch):
     mock_prisma_client.db.litellm_deletedverificationtoken.create_many = (
         mock_create_many_keys
     )
+
+    _wire_member_delete_tx(mock_prisma_client)
 
     monkeypatch.setattr(
         "litellm.proxy.proxy_server.prisma_client",

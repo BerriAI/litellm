@@ -1,8 +1,6 @@
 import asyncio
 import datetime
 import json
-import os
-import sys
 import time
 import unittest
 from typing import Final, List, Optional, Tuple
@@ -10,7 +8,6 @@ from unittest.mock import ANY, AsyncMock, MagicMock, Mock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system-path
 import litellm
 from litellm.caching.caching import DualCache
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting

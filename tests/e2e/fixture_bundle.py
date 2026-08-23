@@ -5,7 +5,9 @@ version + format version) plus one subdirectory per test, holding one JSON file
 per provider-bound interaction in call order. Bundles older than
 ``MAX_BUNDLE_AGE`` hard-fail replay at collection time (see conftest), so a
 green replay run can never certify against fixtures that have drifted more than
-a week from the live providers.
+a week from the live providers. Bump ``BUNDLE_FORMAT_VERSION`` whenever a change
+moves recorded keys: a bundle recorded under the old rules then fails naming
+both versions instead of quietly missing on every call.
 
 This module owns the format only. The provider-edge server that produces and
 consumes it lives in provider_edge.py (LIT-5745) and the canonical match keys
@@ -28,7 +30,7 @@ from typing import Final
 
 from pydantic import BaseModel, JsonValue
 
-BUNDLE_FORMAT_VERSION: Final = 2
+BUNDLE_FORMAT_VERSION: Final = 3
 MAX_BUNDLE_AGE: Final = timedelta(days=7)
 MANIFEST_FILENAME: Final = "manifest.json"
 
@@ -47,7 +49,14 @@ class RecordedRequest(BaseModel):
     over ``method``, ``path`` (the edge path including the provider mount,
     query string excluded), and the canonicalized headers, params, body, form,
     and file identity. Non-JSON bodies store a canonicalized content digest
-    instead of the bytes."""
+    instead of the bytes.
+
+    ``file_name`` is a JSON list of the uploaded parts' ``[field, filename,
+    content-type]`` triples rather than a flat label, so a separator inside a
+    filename cannot impersonate a field boundary. ``file_bytes`` is recorded for
+    a reader's benefit and stays out of the key: the canonicalizer absorbs
+    timestamp and id drift inside an uploaded file, and that drift moves the
+    byte count."""
 
     method: str
     path: str

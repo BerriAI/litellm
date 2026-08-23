@@ -39,6 +39,7 @@ from litellm.llms.anthropic.chat.transformation import (
     REASONING_EFFORT_TO_OUTPUT_CONFIG_EFFORT,
     AnthropicConfig,
 )
+from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.bedrock.request_metadata import (
     bedrock_request_metadata_headers,
@@ -1570,6 +1571,12 @@ class AmazonConverseConfig(BaseConfig):
                     "Dropping 'thinking' param because the last assistant message with tool_calls "
                     "has no thinking_blocks. The model won't use extended thinking for this turn."
                 )
+
+        AnthropicModelInfo.maybe_drop_disabled_thinking(
+            model=model,
+            optional_params=optional_params,
+            custom_llm_provider="bedrock",
+        )
 
         # Prepare and separate parameters
         (

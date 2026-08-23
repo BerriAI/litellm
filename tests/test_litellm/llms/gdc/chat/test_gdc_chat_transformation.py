@@ -1,11 +1,8 @@
-import os
-import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 # Adds the parent directory to the system path
-sys.path.insert(0, os.path.abspath("../../../../.."))
 
 import litellm
 from litellm.llms.gdc.chat.transformation import GDCGeminiConfig
