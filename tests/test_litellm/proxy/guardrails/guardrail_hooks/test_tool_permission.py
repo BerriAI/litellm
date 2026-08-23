@@ -25,8 +25,10 @@ from litellm.types.proxy.guardrails.guardrail_hooks.tool_permission import (
 from litellm.types.utils import (
     ChatCompletionMessageToolCall,
     Choices,
+    Delta,
     ModelResponse,
     ModelResponseStream,
+    StreamingChoices,
 )
 
 
@@ -1198,6 +1200,46 @@ class TestToolPermissionGuardrailAnthropicMessages:
             out = await self._drain(self.blocking, chunks)
 
         assert out == chunks, "an allowed stream must not be re-serialized"
+
+    @pytest.mark.asyncio
+    async def test_denied_tool_call_in_mixed_stream_with_stray_bytes_is_blocked(self):
+        # Regression test for #37873: a provider yielding a stray bytes chunk
+        # must not crash stream assembly nor disable permission enforcement.
+        tool_call_chunk = ModelResponseStream(
+            id="chatcmpl-tool",
+            created=1700000000,
+            model="nvidia_nim/meta/llama-3.1-8b-instruct",
+            object="chat.completion.chunk",
+            choices=[
+                StreamingChoices(
+                    index=0,
+                    delta=Delta(
+                        role="assistant",
+                        tool_calls=[
+                            {
+                                "index": 0,
+                                "id": "call_1",
+                                "type": "function",
+                                "function": {"name": "Read", "arguments": '{"file_path": "/etc/passwd"}'},
+                            }
+                        ],
+                    ),
+                )
+            ],
+        )
+        finish_chunk = ModelResponseStream(
+            id="chatcmpl-tool",
+            created=1700000000,
+            model="nvidia_nim/meta/llama-3.1-8b-instruct",
+            object="chat.completion.chunk",
+            choices=[StreamingChoices(index=0, delta=Delta(), finish_reason="tool_calls")],
+        )
+        chunks = [tool_call_chunk, b"stray provider bytes", finish_chunk]
+
+        with patch.object(self.blocking, "should_run_guardrail", return_value=True):
+            with pytest.raises(GuardrailRaisedException):
+                await self._drain(self.blocking, chunks)
+
 
     @pytest.mark.asyncio
     async def test_rewrite_mode_removes_denied_tool_use_from_anthropic_sse_stream(self):

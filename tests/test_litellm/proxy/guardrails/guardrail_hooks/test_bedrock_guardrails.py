@@ -2252,6 +2252,59 @@ async def test_streaming_post_call_only_runs_output_scan():
 
 
 @pytest.mark.asyncio
+async def test_post_call_streaming_iterator_hook_ignores_stray_bytes_chunk():
+    """
+    Regression test for #37873: a provider (nvidia_nim) yielding a stray raw
+    bytes chunk made stream_chunk_builder raise TypeError on c["choices"],
+    which turned a successful streamed completion into a 500. The hook must
+    ignore non-frame chunks for assembly and still run the OUTPUT scan on
+    the real chunks, so enforcement is never skipped.
+    """
+    guardrail = BedrockGuardrail(
+        guardrail_name="bedrock-stream-bytes-chunk",
+        guardrailIdentifier="test-id",
+        guardrailVersion="DRAFT",
+        event_hook=GuardrailEventHooks.post_call,
+        default_on=True,
+    )
+    mock_chunks = [
+        litellm.ModelResponseStream(
+            id="tid",
+            choices=[
+                litellm.types.utils.StreamingChoices(
+                    delta=litellm.types.utils.Delta(content="Hi", role="assistant"),
+                    finish_reason="stop",
+                    index=0,
+                )
+            ],
+            created=1,
+            model="nvidia_nim/meta/llama-3.1-8b-instruct",
+            object="chat.completion.chunk",
+        ),
+        b"raw bytes chunk that stream_chunk_builder cannot index",
+    ]
+
+    async def mock_stream():
+        for c in mock_chunks:
+            yield c
+
+    minimal = {"action": "NONE", "assessments": [], "outputs": []}
+    with patch.object(guardrail, "make_bedrock_api_request", AsyncMock(return_value=minimal)) as mock_make:
+        out = []
+        async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(),
+            response=mock_stream(),
+            request_data={"model": "nvidia_nim/meta/llama-3.1-8b-instruct", "messages": []},
+        ):
+            out.append(chunk)
+
+    output_calls = [c for c in mock_make.call_args_list if c.kwargs.get("source") == "OUTPUT"]
+    assert len(output_calls) == 1
+    assert out, "streamed content must reach the client"
+
+
+
+@pytest.mark.asyncio
 async def test_streaming_post_call_output_only_path_passes_request_data_to_make_bedrock():
     """When INPUT validation is skipped (pre/during already ran), OUTPUT still gets request_data."""
     request_data = {

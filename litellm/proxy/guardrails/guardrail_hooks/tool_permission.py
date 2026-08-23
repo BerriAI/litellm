@@ -888,9 +888,23 @@ class ToolPermissionGuardrail(CustomGuardrail):
         async for chunk in response:
             all_chunks.append(chunk)
 
-        assembled_model_response: Final[ModelResponse | TextCompletionResponse | None] = (
-            stream_chunk_builder(chunks=all_chunks) if not is_raw_sse_stream(all_chunks) else None
-        )
+        assembled_model_response: ModelResponse | TextCompletionResponse | None
+        if is_raw_sse_stream(all_chunks):
+            assembled_model_response = None
+        else:
+            # Some providers yield stray str/bytes chunks among the parsed
+            # chunks (e.g. nvidia_nim, #37873). They carry no model content
+            # and crash stream_chunk_builder, so exclude them from assembly;
+            # permission checks still run on every real chunk.
+            assemblable_chunks: Final = [  # mutable-ok: filtered copy passed to stream_chunk_builder
+                c for c in all_chunks if not isinstance(c, (str, bytes))
+            ]
+            if len(assemblable_chunks) != len(all_chunks):
+                verbose_proxy_logger.warning(
+                    "ToolPermissionGuardrail: ignoring %d non-frame chunk(s) before stream assembly",
+                    len(all_chunks) - len(assemblable_chunks),
+                )
+            assembled_model_response = stream_chunk_builder(chunks=assemblable_chunks)
         if isinstance(assembled_model_response, ModelResponse):
             denied_tools = self._check_assembled_stream(assembled_model_response)
             if denied_tools:

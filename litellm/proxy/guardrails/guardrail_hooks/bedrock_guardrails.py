@@ -2671,11 +2671,23 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
         # /v1/messages arrives as SSE frames, which stream_chunk_builder cannot assemble
         raw_sse: Final = is_raw_sse_stream(all_chunks)
-        assembled_model_response: ModelResponse | TextCompletionResponse | None = (
-            assemble_anthropic_sse_stream(all_chunks, restore_identity=True)
-            if raw_sse
-            else stream_chunk_builder(chunks=all_chunks)
-        )
+        assembled_model_response: ModelResponse | TextCompletionResponse | None
+        if raw_sse:
+            assembled_model_response = assemble_anthropic_sse_stream(all_chunks, restore_identity=True)
+        else:
+            # Some providers yield stray str/bytes chunks among the parsed
+            # chunks (e.g. nvidia_nim, #37873). They carry no model content
+            # and crash stream_chunk_builder, so exclude them from assembly;
+            # the OUTPUT scan still runs on every real chunk.
+            assemblable_chunks: Final = [  # mutable-ok: filtered copy passed to stream_chunk_builder
+                c for c in all_chunks if not isinstance(c, (str, bytes))
+            ]
+            if len(assemblable_chunks) != len(all_chunks):
+                verbose_proxy_logger.warning(
+                    "BedrockGuardrail: ignoring %d non-frame chunk(s) before stream assembly",
+                    len(all_chunks) - len(assemblable_chunks),
+                )
+            assembled_model_response = stream_chunk_builder(chunks=assemblable_chunks)
         if isinstance(assembled_model_response, ModelResponse):
             pre_guardrail_text: Final = model_response_text(assembled_model_response)
             _pre_block_response: Final = assembled_model_response

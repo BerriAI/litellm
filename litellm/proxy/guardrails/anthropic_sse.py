@@ -15,7 +15,11 @@ from litellm.types.utils import Choices, ModelResponse
 
 
 def is_raw_sse_stream(all_chunks: Sequence[object]) -> bool:
-    return any(isinstance(chunk, (str, bytes)) for chunk in all_chunks)
+    # A genuine SSE stream carries only str/bytes frames. A stream that mixes
+    # parsed chunk objects with a stray str/bytes chunk (e.g. nvidia_nim,
+    # #37873) is not SSE: it must go to stream_chunk_builder, not the
+    # fail-closed Anthropic-SSE path.
+    return len(all_chunks) > 0 and all(isinstance(chunk, (str, bytes)) for chunk in all_chunks)
 
 
 def _joined_sse_stream(all_chunks: Sequence[object]) -> str | None:
