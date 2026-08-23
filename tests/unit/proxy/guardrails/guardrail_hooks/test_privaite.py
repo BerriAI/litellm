@@ -10,6 +10,7 @@ wiring end to end (registry, engine caching, pre/post/streaming hooks) without
 re-testing PrivAiTe's detection internals.
 """
 
+import json
 import sys
 import types
 
@@ -1103,3 +1104,178 @@ async def test_streaming_restores_audio_transcript():
     chunks = await _collect(gr.async_post_call_streaming_iterator_hook(None, _source(), request_data))
     transcript = "".join(c.choices[0].delta.audio.transcript or "" for c in chunks if c.choices[0].delta.audio)
     assert transcript == "Hi Marie Dupont"
+
+
+def _bare_delta(**fields):
+    """A streamed delta carrying only the given fields (the others None), the
+    shape of the finish chunk most providers send: delta {} + finish_reason."""
+    base = dict(content=None, tool_calls=None, function_call=None)
+    base.update(fields)
+    return types.SimpleNamespace(**base)
+
+
+def _choice_chunk(delta, finish=None, index=0):
+    return types.SimpleNamespace(choices=[types.SimpleNamespace(index=index, delta=delta, finish_reason=finish)])
+
+
+def _get(obj, *path):
+    """Walk dict-or-object attributes; the guardrail may create a carrier as a
+    plain dict on a finish delta that had none."""
+    for key in path:
+        if obj is None:
+            return None
+        obj = obj.get(key) if isinstance(obj, dict) else getattr(obj, key, None)
+    return obj
+
+
+# The restorer holds back a tail that could begin a placeholder ("<PER" here),
+# so a channel ending on one loses it unless the end of the stream flushes it.
+
+
+@pytest.mark.parametrize("field", ["reasoning_content", "reasoning", "refusal"])
+async def test_streaming_flushes_text_field_tail_onto_a_bare_finish_chunk(field):
+    gr = _make_guardrail()
+    request_data = {"metadata": {"privaite_map": _FAKES}}
+
+    async def _source():
+        yield _choice_chunk(_bare_delta(**{field: "Considering <PERSON_1>, then <PER"}))
+        yield _choice_chunk(_bare_delta(**{field: None}), finish="stop")
+
+    chunks = await _collect(gr.async_post_call_streaming_iterator_hook(None, _source(), request_data))
+    out = "".join(getattr(choice.delta, field, None) or "" for chunk in chunks for choice in chunk.choices)
+    assert out == "Considering Marie Dupont, then <PER"
+
+
+async def test_streaming_flushes_tool_tail_onto_a_bare_finish_chunk():
+    # A provider that stops mid-argument (finish_reason "length") sends the
+    # finish on a chunk with no tool_calls slot. The held fragment must still
+    # go out, on that chunk, under the same tool_call index: the client
+    # reassembles arguments per index and must see every byte it was sent.
+    gr = _make_guardrail()
+    request_data = {"metadata": {"privaite_map": _FAKES}}
+
+    async def _source():
+        call = types.SimpleNamespace(index=2, function=types.SimpleNamespace(arguments='{"to": "<EMAIL'))
+        yield _choice_chunk(_bare_delta(tool_calls=[call]))
+        yield _choice_chunk(_bare_delta(), finish="length")
+
+    chunks = await _collect(gr.async_post_call_streaming_iterator_hook(None, _source(), request_data))
+    args = {}
+    for chunk in chunks:
+        for choice in chunk.choices:
+            for tc in choice.delta.tool_calls or []:
+                slot = _get(tc, "index")
+                args[slot] = args.get(slot, "") + (_get(tc, "function", "arguments") or "")
+    assert args == {2: '{"to": "<EMAIL'}
+    assert chunks[-1].choices[0].finish_reason == "length"
+    assert chunks[-1].choices[0].delta.tool_calls
+
+
+async def test_streaming_flushes_function_call_tail_onto_a_bare_finish_chunk():
+    gr = _make_guardrail()
+    request_data = {"metadata": {"privaite_map": _FAKES}}
+
+    async def _source():
+        yield _choice_chunk(_bare_delta(function_call=types.SimpleNamespace(arguments='{"n": "<PER')))
+        yield _choice_chunk(_bare_delta(), finish="length")
+
+    chunks = await _collect(gr.async_post_call_streaming_iterator_hook(None, _source(), request_data))
+    out = "".join(
+        _get(choice.delta, "function_call", "arguments") or "" for chunk in chunks for choice in chunk.choices
+    )
+    assert out == '{"n": "<PER'
+
+
+async def test_streaming_drains_held_tails_when_the_stream_ends_without_finish_reason():
+    # Some providers close the stream without ever sending finish_reason. What
+    # the buffers still hold goes out as trailing chunks instead of vanishing
+    # with the generator: one per held channel, cloned from the last chunk of
+    # its choice, without that chunk's usage and without a finish_reason.
+    gr = _make_guardrail()
+    request_data = {"metadata": {"privaite_map": _FAKES}}
+
+    async def _source():
+        first = _choice_chunk(_bare_delta(content="Ask <PERSON_1> or <PER", audio={"transcript": "Call <EMAIL"}))
+        first.usage = types.SimpleNamespace(total_tokens=3)
+        yield first
+        call = types.SimpleNamespace(index=0, function=types.SimpleNamespace(arguments='{"to": "<EMAIL'))
+        yield _choice_chunk(_bare_delta(tool_calls=[call]), index=1)
+
+    chunks = await _collect(gr.async_post_call_streaming_iterator_hook(None, _source(), request_data))
+    content = audio = args = ""
+    for chunk in chunks:
+        for choice in chunk.choices:
+            assert choice.finish_reason is None
+            if choice.index == 0:
+                content += choice.delta.content or ""
+                audio += _get(choice.delta, "audio", "transcript") or ""
+            else:
+                for tc in choice.delta.tool_calls or []:
+                    args += _get(tc, "function", "arguments") or ""
+    assert content == "Ask Marie Dupont or <PER"
+    assert audio == "Call <EMAIL"
+    assert args == '{"to": "<EMAIL'
+    assert chunks[0].usage.total_tokens == 3
+    assert all(getattr(chunk, "usage", None) is None for chunk in chunks[2:])
+    assert len(chunks) == 5  # 2 from the provider + content, audio and tool tails
+
+
+async def test_streaming_finish_chunk_with_empty_slots_gets_the_tails_under_them():
+    # A finish chunk may carry the tool_call slot and the function_call holder
+    # with empty arguments. Their restore skips an empty fragment, so the sweep
+    # appends the held tail under the existing holder: no duplicate slot.
+    gr = _make_guardrail()
+    request_data = {"metadata": {"privaite_map": _FAKES}}
+
+    def _slots(args, fc_args):
+        return _bare_delta(
+            tool_calls=[types.SimpleNamespace(index=2, function=types.SimpleNamespace(arguments=args))],
+            function_call=types.SimpleNamespace(arguments=fc_args),
+        )
+
+    async def _source():
+        yield _choice_chunk(_slots('{"to": "<EMAIL', '{"n": "<PER'))
+        yield _choice_chunk(_slots("", ""), finish="length")
+
+    chunks = await _collect(gr.async_post_call_streaming_iterator_hook(None, _source(), request_data))
+    finish = chunks[-1].choices[0].delta
+    assert len(finish.tool_calls) == 1
+    assert finish.tool_calls[0].index == 2
+    assert finish.tool_calls[0].function.arguments == "<EMAIL"
+    assert finish.function_call.arguments == "<PER"
+
+
+async def test_streaming_tails_on_real_litellm_chunks_stay_serializable():
+    # The same two shapes on litellm's own chunk types: a carrier created on a
+    # bare finish Delta and a drained clone must both still serialize the way
+    # the proxy does it (model_dump_json).
+    from litellm.types.utils import ChatCompletionDeltaToolCall, Delta, Function, ModelResponseStream, StreamingChoices
+
+    gr = _make_guardrail()
+
+    def _chunk(delta, finish=None):
+        choice = StreamingChoices(index=0, delta=delta, finish_reason=finish)
+        return ModelResponseStream(id="chunk", model="m", choices=[choice])
+
+    async def _source():
+        call = ChatCompletionDeltaToolCall(index=0, type="function", function=Function(arguments='{"to": "<EMAIL'))
+        yield _chunk(Delta(content=None, tool_calls=[call]))
+        yield _chunk(Delta(content=None), finish="length")
+
+    async def _no_finish():
+        yield _chunk(Delta(content=None, reasoning_content="then <PER"))
+
+    request_data = {"metadata": {"privaite_map": _FAKES}}
+    chunks = await _collect(gr.async_post_call_streaming_iterator_hook(None, _source(), request_data))
+    payloads = [json.loads(chunk.model_dump_json(exclude_none=True)) for chunk in chunks]
+    finish = payloads[-1]["choices"][0]
+    assert finish["finish_reason"] == "length"
+    assert finish["delta"]["tool_calls"][0]["index"] == 0
+    assert finish["delta"]["tool_calls"][0]["function"]["arguments"] == "<EMAIL"
+
+    request_data = {"metadata": {"privaite_map": _FAKES}}
+    chunks = await _collect(gr.async_post_call_streaming_iterator_hook(None, _no_finish(), request_data))
+    payloads = [json.loads(chunk.model_dump_json(exclude_none=True)) for chunk in chunks]
+    assert [p["choices"][0]["delta"].get("reasoning_content") for p in payloads] == ["then ", "<PER"]
+    assert "finish_reason" not in payloads[-1]["choices"][0]
+    assert payloads[-1]["id"] == "chunk"
