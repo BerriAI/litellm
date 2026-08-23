@@ -62,7 +62,8 @@ PUBLISHED_DBU_PER_MILLION: Final = {
     "databricks/databricks-gemini-2-5-pro": ("22.321", "178.571", "22.321", "2.232"),
     "databricks/databricks-gemini-2-5-flash": ("5.357", "44.643", "5.357", "0.536"),
 }
-OLDER_VINTAGE_MODELS: Final = (
+PROMOTIONAL_DISCOUNT: Final = 0.80
+PROMOTIONALLY_DISCOUNTED_MODELS: Final = (
     "databricks/databricks-gemini-2-5-pro",
     "databricks/databricks-gemini-2-5-flash",
 )
@@ -135,7 +136,7 @@ def test_new_models_price_at_published_dbu_rates(local_model_cost_map: None, mod
         assert info[field] == _dollars_per_token(dbu_per_million), field
 
 
-@pytest.mark.parametrize("model", sorted(set(PUBLISHED_DBU_PER_MILLION) - set(OLDER_VINTAGE_MODELS)))
+@pytest.mark.parametrize("model", sorted(set(PUBLISHED_DBU_PER_MILLION) - set(PROMOTIONALLY_DISCOUNTED_MODELS)))
 def test_cache_rates_derive_from_published_cache_dbu(local_model_cost_map: None, model: str) -> None:
     info: Final = _model_info(model)
     cache_dbu_per_million: Final = PUBLISHED_DBU_PER_MILLION[model][2:]
@@ -221,12 +222,17 @@ def test_sonnet_5_ships_standard_rates_not_introductory(local_model_cost_map: No
         assert sonnet_5[field] == pytest.approx(sonnet_4_6[field]), field
 
 
-@pytest.mark.parametrize("model", OLDER_VINTAGE_MODELS)
-def test_entries_priced_at_an_older_vintage_keep_cache_rates_tied_to_their_own_input(
+@pytest.mark.parametrize("model", PROMOTIONALLY_DISCOUNTED_MODELS)
+def test_promotionally_discounted_entries_price_below_the_published_table(
     local_model_cost_map: None,
     model: str,
 ) -> None:
     info: Final = _model_info(model)
+    input_dbu, output_dbu, _, _ = PUBLISHED_DBU_PER_MILLION[model]
 
+    assert info["input_cost_per_token"] == pytest.approx(_dollars_per_token(input_dbu) * PROMOTIONAL_DISCOUNT, rel=1e-3)
+    assert info["output_cost_per_token"] == pytest.approx(
+        _dollars_per_token(output_dbu) * PROMOTIONAL_DISCOUNT, rel=1e-3
+    )
     assert info["cache_creation_input_token_cost"] == pytest.approx(info["input_cost_per_token"])
     assert info["cache_read_input_token_cost"] == pytest.approx(0.1 * info["input_cost_per_token"])
