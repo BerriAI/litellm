@@ -163,9 +163,26 @@ def test_baseten_model_api_pricing_entries(_local_model_cost_map):
 
 def test_wandb_model_api_pricing_entries(_local_model_cost_map):
 
+    # W&B publishes per 1M tokens (https://wandb.ai/site/pricing/inference); these are
+    # those figures divided by 1e6. Entries added before this was checked carried the
+    # published number scaled by 1e5 too little, billing $15,000 per 1M tokens instead
+    # of $0.15.
     expected_pricing = {
         "wandb/moonshotai/Kimi-K2.5": (6e-07, 3e-06),
         "wandb/MiniMaxAI/MiniMax-M2.5": (3e-07, 1.2e-06),
+        "wandb/openai/gpt-oss-120b": (1.5e-07, 6e-07),
+        "wandb/openai/gpt-oss-20b": (5e-08, 2e-07),
+        "wandb/zai-org/GLM-4.5": (5.5e-07, 2e-06),
+        "wandb/Qwen/Qwen3-235B-A22B-Instruct-2507": (1e-07, 1e-07),
+        "wandb/Qwen/Qwen3-235B-A22B-Thinking-2507": (1e-07, 1e-07),
+        "wandb/Qwen/Qwen3-Coder-480B-A35B-Instruct": (1e-06, 1.5e-06),
+        "wandb/meta-llama/Llama-3.1-8B-Instruct": (2.2e-07, 2.2e-07),
+        "wandb/meta-llama/Llama-3.3-70B-Instruct": (7.1e-07, 7.1e-07),
+        "wandb/meta-llama/Llama-4-Scout-17B-16E-Instruct": (1.7e-07, 6.6e-07),
+        "wandb/deepseek-ai/DeepSeek-V3.1": (5.5e-07, 1.65e-06),
+        "wandb/deepseek-ai/DeepSeek-V3-0324": (1.14e-06, 2.75e-06),
+        "wandb/deepseek-ai/DeepSeek-R1-0528": (1.35e-06, 5.4e-06),
+        "wandb/microsoft/Phi-4-mini-instruct": (8e-08, 3.5e-07),
     }
 
     for model_name, (input_cost, output_cost) in expected_pricing.items():

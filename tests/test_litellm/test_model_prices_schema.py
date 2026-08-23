@@ -173,3 +173,52 @@ def test_dated_variants_carry_base_alias_service_tier_pricing(prices: dict):
         "sync the tier keys so service-tier requests against pinned snapshots are not "
         "billed at standard rates:\n" + "\n".join(drifted)
     )
+
+
+# Fields quoting USD per token, including the audio/image/reasoning token variants and the
+# tier and threshold suffixes ("_flex", "_batches", "_above_200k_tokens"). Deliberately
+# excludes per-character/per-second/per-1k fields, whose "_above_128k_tokens" suffix names
+# a threshold rather than the unit, and Databricks' DBU fields, which are not dollars.
+PER_TOKEN_COST_FIELD = re.compile(r"(?:per_token|token_cost)(?:_|$)|_token$")
+
+# $1000 per million tokens. The priciest model in the map is o1-pro at $600 per million
+# output tokens, so this leaves room for a genuinely expensive future model while still
+# being far below what a per-1k or per-million figure looks like once it lands in a
+# per-token field.
+MAX_USD_PER_TOKEN = 1e-3
+
+
+def per_token_costs(entry: dict) -> list[tuple[str, float]]:
+    return [
+        (field, value)
+        for field, value in entry.items()
+        if "dbu" not in field
+        and PER_TOKEN_COST_FIELD.search(field)
+        and isinstance(value, (int, float))
+        and not isinstance(value, bool)
+    ]
+
+
+@pytest.mark.parametrize("path", (PRICES_PATH, BACKUP_PRICES_PATH), ids=("main", "backup"))
+def test_per_token_costs_are_priced_per_token(path: Path):
+    """Catch a vendor's per-1k or per-million price landing in a per-token field.
+
+    Vendors quote prices per 1,000 or per 1,000,000 tokens, litellm stores dollars per
+    single token, and pasting the quoted number straight in overcharges by 3 to 6 orders
+    of magnitude on every request through that model. Spend logs, budgets and the
+    x-litellm-response-cost header all read these fields, so a budget trips on the first
+    call instead of the ten-thousandth.
+    """
+    mispriced = [
+        f"{name}.{field}={value} (${value * 1_000_000:,.2f} per 1M tokens)"
+        for name, entry in json.loads(path.read_text()).items()
+        if isinstance(entry, dict) and name not in ("sample_spec", "fallback_generalizations")
+        for field, value in per_token_costs(entry)
+        if value > MAX_USD_PER_TOKEN
+    ]
+    assert mispriced == [], (
+        f"{path.name} prices these above ${MAX_USD_PER_TOKEN} per token, which is what a "
+        "price quoted per 1k or per 1M tokens looks like when it is copied into a per-token "
+        "field. Divide by the vendor's unit, or raise MAX_USD_PER_TOKEN if a model really is "
+        "this expensive:\n" + "\n".join(mispriced)
+    )
