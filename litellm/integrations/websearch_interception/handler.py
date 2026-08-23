@@ -1109,6 +1109,7 @@ class WebSearchInterceptionLogger(CustomLogger):
             k: v
             for k, v in kwargs.items()
             if not k.startswith("_websearch_interception")
+            and k not in optional_params_clean
             and k
             not in {
                 "_agentic_loop_api_surface",
