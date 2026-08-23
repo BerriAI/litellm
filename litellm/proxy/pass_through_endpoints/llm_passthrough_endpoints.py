@@ -47,6 +47,7 @@ from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     create_websocket_passthrough_route,
     websocket_passthrough_request,
 )
+from litellm.proxy.utils import ProxyLogging as ProxyLoggingType
 from litellm.proxy.utils import is_known_model
 from litellm.proxy.vector_store_endpoints.utils import (
     assert_proxy_admin_for_vector_store_index_management,
@@ -1676,7 +1677,7 @@ def get_vertex_ai_allowed_incoming_headers(request: Request) -> dict:
 
 
 def get_vertex_pass_through_handler(
-    call_type: Literal[discovery, aiplatform],
+    call_type: Literal["discovery", "aiplatform"],  # noqa: UP037
 ) -> BaseVertexAIPassThroughHandler:
     if call_type == "discovery":
         return VertexAIDiscoveryPassThroughHandler()
@@ -2732,7 +2733,7 @@ async def gigachat_proxy_route(
         "Gigachat passthrough: Using direct Gigachat model '%s' for endpoint '%s'", model, endpoint
     )
 
-    data: Dict[str, Any] = {}  # mutable-ok: request body mutated in place by proxy pipeline
+    data: dict[str, Any] = {}  # mutable-ok: request body mutated in place by proxy pipeline
 
     data["method"] = request.method
     data["endpoint"] = endpoint
@@ -2784,7 +2785,7 @@ async def handle_gigachat_passthrough_router_model(
     fastapi_response: Response,
     llm_router: litellm.Router,
     user_api_key_dict: UserAPIKeyAuth,
-    proxy_logging_obj: ProxyLogging,
+    proxy_logging_obj: ProxyLoggingType,
     general_settings: dict,
     proxy_config: ProxyConfig,
     select_data_generator: Callable,
@@ -2822,7 +2823,7 @@ async def handle_gigachat_passthrough_router_model(
     # Detect streaming based on request body
     is_streaming = request_body.get("stream", False)
 
-    data: Dict[str, Any] = await _read_request_body(request=request)
+    data: dict[str, Any] = await _read_request_body(request=request)
     if user_api_key_dict is not None:
         if data.get("metadata") is None:
             data["metadata"] = {}  # mutable-ok: metadata dict mutated in place

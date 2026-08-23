@@ -157,21 +157,13 @@ class GigaChatPassthroughConfig(BasePassthroughConfig):
         all_translated_chunks: Final[list[object]] = []  # mutable-ok: accumulator
 
         for chunk in all_chunks:
-            if isinstance(chunk, bytes):
-                chunk = chunk.decode("utf-8", errors="ignore")
-
-            if isinstance(chunk, str):
-                chunk = chunk.strip()
-                if not chunk or chunk == "[DONE]":
-                    continue
-                chunk = chunk.removeprefix("data: ")
-                try:
-                    message = json.loads(chunk)
-                except json.JSONDecodeError:
-                    continue
-            elif isinstance(chunk, dict):
-                message = chunk
-            else:
+            chunk = chunk.strip()
+            if not chunk or chunk == "[DONE]":
+                continue
+            chunk = chunk.removeprefix("data: ")
+            try:
+                message = json.loads(chunk)
+            except json.JSONDecodeError:
                 continue
 
             gigachat_iterator = GigaChatModelResponseIterator(
@@ -180,7 +172,7 @@ class GigaChatPassthroughConfig(BasePassthroughConfig):
             )
             translated_chunk = gigachat_iterator.chunk_parser(chunk=message)
 
-            if isinstance(translated_chunk, dict) and generic_chunk_has_all_required_fields(translated_chunk):
+            if isinstance(translated_chunk, dict) and generic_chunk_has_all_required_fields(translated_chunk):  # pyright: ignore[reportUnnecessaryIsInstance]  # runtime guard for patched chunk_parser
                 chunk_obj = convert_generic_chunk_to_model_response_stream(
                     translated_chunk  # pyright: ignore[reportArgumentType]  # validated TypedDict
                 )
@@ -212,5 +204,5 @@ class GigaChatPassthroughConfig(BasePassthroughConfig):
     def get_base_model(model: str) -> str | None:
         return model
 
-    def get_models(self, api_key: str | None = None, api_base: str | None = None) -> Sequence[str]:
-        return super().get_models(api_key, api_base)
+    def get_models(self, api_key: str | None = None, api_base: str | None = None) -> list[str]:
+        return list(super().get_models(api_key, api_base))

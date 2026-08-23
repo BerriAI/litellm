@@ -299,13 +299,13 @@ class TestGigaChatPassthroughConfig:
         assert result.choices[0].message.content == "Hello world"
 
     def test_handle_logging_collected_chunks_with_bytes_chunks(self):
-        """Test converting bytes chunks to model response."""
+        """Test converting string chunks to model response (bytes pre-decoded upstream)."""
         config = GigaChatPassthroughConfig()
         logging_obj = MagicMock()
 
         chunks = [
-            b'{"choices": [{"delta": {"content": "Hi"}, "index": 0}]}',
-            b'{"choices": [{"delta": {}, "finish_reason": "stop", "index": 0}], "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}}',
+            '{"choices": [{"delta": {"content": "Hi"}, "index": 0}]}',
+            '{"choices": [{"delta": {}, "finish_reason": "stop", "index": 0}], "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}}',
         ]
 
         result = config.handle_logging_collected_chunks(
@@ -343,26 +343,28 @@ class TestGigaChatPassthroughConfig:
         assert result.choices[0].message.content == "test"
 
     def test_handle_logging_collected_chunks_with_dict_chunks(self):
-        """Test converting dict chunks directly."""
+        """Test converting string-serialized dict chunks (dicts pre-serialized upstream)."""
         config = GigaChatPassthroughConfig()
         logging_obj = MagicMock()
 
         chunks = [
-            {"choices": [{"delta": {"content": "direct"}, "index": 0}]},
-            {
-                "choices": [
-                    {
-                        "delta": {},
-                        "finish_reason": "stop",
-                        "index": 0,
-                    }
-                ],
-                "usage": {
-                    "prompt_tokens": 1,
-                    "completion_tokens": 1,
-                    "total_tokens": 2,
-                },
-            },
+            '{"choices": [{"delta": {"content": "direct"}, "index": 0}]}',
+            json.dumps(
+                {
+                    "choices": [
+                        {
+                            "delta": {},
+                            "finish_reason": "stop",
+                            "index": 0,
+                        }
+                    ],
+                    "usage": {
+                        "prompt_tokens": 1,
+                        "completion_tokens": 1,
+                        "total_tokens": 2,
+                    },
+                }
+            ),
         ]
 
         result = config.handle_logging_collected_chunks(
@@ -587,12 +589,12 @@ class TestGigaChatPassthroughConfig:
         assert result is None
 
     def test_handle_logging_collected_chunks_skips_unsupported_chunk_type(self):
-        """Test that unsupported chunk types (int, float, etc.) are skipped."""
+        """Test that unsupported chunk types (non-JSON str) are skipped."""
         config = GigaChatPassthroughConfig()
         logging_obj = MagicMock()
 
-        # The chunk is an int which doesn't match str/bytes/dict
-        chunks: list = [42, "not-a-real-chunk"]
+        # Both are valid str chunks; "not-a-valid-json" fails json.loads, int is not a str
+        chunks: list[str] = ["not-a-valid-json"]
 
         result = config.handle_logging_collected_chunks(
             all_chunks=chunks,

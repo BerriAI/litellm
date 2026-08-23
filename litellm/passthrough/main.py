@@ -8,6 +8,7 @@ import asyncio
 import contextvars
 from collections.abc import AsyncGenerator, AsyncIterator, Coroutine, Generator, Iterator
 from functools import partial
+from types import TracebackType
 from typing import Any, Final, cast
 
 import httpx
@@ -124,7 +125,7 @@ class AsyncPassthroughStreamingResponse(AsyncGenerator[Any, Any]):
 
     async def __anext__(self) -> bytes:
         if not self._initialized:
-            await self
+            await self  # pyright: ignore[reportGeneralTypeIssues]  # structural type check misses __await__
         try:
             chunk = await anext(self._iterator)
             self._raw_bytes.append(chunk)
@@ -140,17 +141,17 @@ class AsyncPassthroughStreamingResponse(AsyncGenerator[Any, Any]):
 
     async def asend(self, value: bytes) -> bytes:
         if not self._initialized:
-            await self
+            await self  # pyright: ignore[reportGeneralTypeIssues]  # structural type check misses __await__
         return await self._iterator.asend(value)
 
     async def athrow(
         self,
-        typ: type[BaseException],
-        val: BaseException | None = None,
-        tb: type | None = None,
+        typ: BaseException | type[BaseException],
+        val: BaseException | object = None,
+        tb: TracebackType | None = None,
     ) -> bytes:
         if not self._initialized:
-            await self
+            await self  # pyright: ignore[reportGeneralTypeIssues]  # structural type check misses __await__
         return await self._iterator.athrow(typ, val, tb)
 
     async def aclose(self) -> None:
@@ -221,9 +222,9 @@ class PassthroughStreamingResponse(Generator[Any, Any, Any]):
 
     def throw(
         self,
-        typ: type[BaseException],
-        val: BaseException | None = None,
-        tb: type | None = None,
+        typ: BaseException | type[BaseException],
+        val: BaseException | object = None,
+        tb: TracebackType | None = None,
     ) -> bytes:
         return self._iterator.throw(typ, val, tb)
 
@@ -552,8 +553,8 @@ def llm_passthrough_route(
             else:
                 return response
     except Exception as e:
-        if provider_config is None:
-            raise e
+        # provider_config is guaranteed non-None here due to the earlier guard
+        assert provider_config is not None
         raise base_llm_http_handler._handle_error(
             e=e,
             provider_config=provider_config,
@@ -577,7 +578,7 @@ async def _async_passthrough_request(
     # Check if it's a coroutine and await it
     if asyncio.iscoroutine(response_result):
         if is_streaming_request:
-            return await AsyncPassthroughStreamingResponse(
+            return await AsyncPassthroughStreamingResponse(  # pyright: ignore[reportGeneralTypeIssues]  # structural type check misses __await__
                 response=response_result,
                 litellm_logging_obj=litellm_logging_obj,
                 provider_config=provider_config,
