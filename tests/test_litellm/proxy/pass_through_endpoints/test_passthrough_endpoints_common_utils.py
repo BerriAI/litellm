@@ -1,6 +1,4 @@
 import json
-import os
-import sys
 import traceback
 from unittest import mock
 from unittest.mock import MagicMock, patch
@@ -12,9 +10,6 @@ from fastapi.testclient import TestClient
 
 from litellm.passthrough.utils import CommonUtils
 
-sys.path.insert(
-    0, os.path.abspath("../../../..")
-)  # Adds the parent directory to the system path
 
 from unittest.mock import Mock
 

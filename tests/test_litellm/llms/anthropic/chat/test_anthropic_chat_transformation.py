@@ -1,11 +1,6 @@
-import os
-import sys
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
 from unittest.mock import MagicMock, patch
 
 import litellm
@@ -219,6 +214,162 @@ def test_calculate_usage_clamps_text_tokens_when_reasoning_estimate_exceeds_outp
     assert usage.completion_tokens_details is not None
     assert usage.completion_tokens_details.reasoning_tokens == usage.completion_tokens
     assert usage.completion_tokens_details.text_tokens == 0
+
+
+def test_calculate_usage_prefers_provider_reported_thinking_tokens():
+    config = AnthropicConfig()
+
+    usage = config.calculate_usage(
+        usage_object={
+            "input_tokens": 32,
+            "output_tokens": 421,
+            "output_tokens_details": {"thinking_tokens": 372},
+        },
+        reasoning_content="",
+        completion_response={
+            "content": [
+                {"type": "thinking", "thinking": "", "signature": "sig"},
+                {"type": "text", "text": "10"},
+            ]
+        },
+    )
+
+    assert usage.completion_tokens_details is not None
+    assert usage.completion_tokens_details.reasoning_tokens == 372
+    assert usage.completion_tokens_details.text_tokens == 49
+
+
+def test_calculate_usage_provider_thinking_tokens_win_over_visible_reasoning_estimate():
+    config = AnthropicConfig()
+
+    usage = config.calculate_usage(
+        usage_object={
+            "input_tokens": 50,
+            "output_tokens": 811,
+            "output_tokens_details": {"thinking_tokens": 747},
+        },
+        reasoning_content="short visible reasoning that tokenizes to far fewer than 747 tokens",
+    )
+
+    assert usage.completion_tokens_details is not None
+    assert usage.completion_tokens_details.reasoning_tokens == 747
+    assert usage.completion_tokens_details.text_tokens == 64
+
+
+def test_calculate_usage_sums_provider_thinking_tokens_across_iterations():
+    config = AnthropicConfig()
+
+    usage = config.calculate_usage(
+        usage_object={
+            "input_tokens": 10,
+            "output_tokens": 300,
+            "iterations": [
+                {"input_tokens": 5, "output_tokens": 100, "output_tokens_details": {"thinking_tokens": 60}},
+                {"input_tokens": 5, "output_tokens": 200, "output_tokens_details": {"thinking_tokens": 90}},
+            ],
+        },
+        reasoning_content=None,
+    )
+
+    assert usage.completion_tokens == 300
+    assert usage.completion_tokens_details is not None
+    assert usage.completion_tokens_details.reasoning_tokens == 150
+    assert usage.completion_tokens_details.text_tokens == 150
+
+
+def test_calculate_usage_falls_back_when_only_some_iterations_report_thinking_tokens():
+    config = AnthropicConfig()
+
+    usage = config.calculate_usage(
+        usage_object={
+            "input_tokens": 10,
+            "output_tokens": 300,
+            "output_tokens_details": {"thinking_tokens": 240},
+            "iterations": [
+                {"input_tokens": 5, "output_tokens": 100, "output_tokens_details": {"thinking_tokens": 60}},
+                {"input_tokens": 5, "output_tokens": 200},
+            ],
+        },
+        reasoning_content=None,
+    )
+
+    assert usage.completion_tokens == 300
+    assert usage.completion_tokens_details is not None
+    assert usage.completion_tokens_details.reasoning_tokens == 240
+    assert usage.completion_tokens_details.text_tokens == 60
+
+
+def test_calculate_usage_reports_unknown_split_when_only_some_iterations_report_thinking_tokens():
+    config = AnthropicConfig()
+
+    usage = config.calculate_usage(
+        usage_object={
+            "input_tokens": 10,
+            "output_tokens": 300,
+            "iterations": [
+                {"input_tokens": 5, "output_tokens": 100, "output_tokens_details": {"thinking_tokens": 60}},
+                {"input_tokens": 5, "output_tokens": 200},
+            ],
+        },
+        reasoning_content="",
+        completion_response={"content": [{"type": "thinking", "thinking": "", "signature": "sig"}]},
+    )
+
+    assert usage.completion_tokens == 300
+    assert usage.completion_tokens_details is not None
+    assert usage.completion_tokens_details.reasoning_tokens is None
+    assert usage.completion_tokens_details.text_tokens is None
+
+
+def test_calculate_usage_reports_unknown_split_when_thinking_ran_without_a_count():
+    config = AnthropicConfig()
+
+    usage = config.calculate_usage(
+        usage_object={"input_tokens": 32, "output_tokens": 580},
+        reasoning_content="",
+        completion_response={
+            "content": [
+                {"type": "redacted_thinking", "data": "encrypted"},
+                {"type": "text", "text": "10"},
+            ]
+        },
+    )
+
+    assert usage.completion_tokens == 580
+    assert usage.completion_tokens_details is not None
+    assert usage.completion_tokens_details.reasoning_tokens is None
+    assert usage.completion_tokens_details.text_tokens is None
+
+
+def test_calculate_usage_without_thinking_reports_all_output_as_text():
+    config = AnthropicConfig()
+
+    usage = config.calculate_usage(
+        usage_object={"input_tokens": 32, "output_tokens": 171},
+        reasoning_content=None,
+        completion_response={"content": [{"type": "text", "text": "10"}]},
+    )
+
+    assert usage.completion_tokens_details is not None
+    assert usage.completion_tokens_details.reasoning_tokens == 0
+    assert usage.completion_tokens_details.text_tokens == 171
+
+
+def test_calculate_usage_ignores_malformed_provider_thinking_tokens():
+    config = AnthropicConfig()
+
+    usage = config.calculate_usage(
+        usage_object={
+            "input_tokens": 32,
+            "output_tokens": 100,
+            "output_tokens_details": {"thinking_tokens": "not-a-number"},
+        },
+        reasoning_content=None,
+    )
+
+    assert usage.completion_tokens_details is not None
+    assert usage.completion_tokens_details.reasoning_tokens == 0
+    assert usage.completion_tokens_details.text_tokens == 100
 
 
 def test_calculate_usage_handles_mocked_output_tokens_with_reasoning_content():
@@ -1830,10 +1981,11 @@ def test_effort_validation():
         )
         assert result["output_config"]["effort"] == effort
 
+    optional_params = {"output_config": {"effort": "invalid"}}
+
     with pytest.raises(
         litellm.exceptions.BadRequestError, match="Invalid effort value"
     ):
-        optional_params = {"output_config": {"effort": "invalid"}}
         config.transform_request(
             model="claude-opus-4-5-20251101",
             messages=messages,
@@ -1887,11 +2039,12 @@ def test_max_effort_rejected_for_opus_45():
 
     messages = [{"role": "user", "content": "Test"}]
 
+    optional_params = {"output_config": {"effort": "max"}}
+
     with pytest.raises(
         litellm.exceptions.BadRequestError,
         match="effort='max' is not supported by this model",
     ):
-        optional_params = {"output_config": {"effort": "max"}}
         config.transform_request(
             model="claude-opus-4-5-20251101",
             messages=messages,
@@ -2654,18 +2807,6 @@ def test_raw_adaptive_thinking_untouched_for_46_plus_model():
 
     assert result["thinking"] == {"type": "adaptive"}
 
-
-@pytest.fixture
-def local_model_cost_map(monkeypatch):
-    original_model_cost = litellm.model_cost
-    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    litellm.model_cost = litellm.get_model_cost_map(url="")
-    litellm.get_model_info.cache_clear()
-    try:
-        yield
-    finally:
-        litellm.model_cost = original_model_cost
-        litellm.get_model_info.cache_clear()
 
 
 @pytest.mark.parametrize(
@@ -5985,3 +6126,41 @@ def test_is_anthropic_usage_object_rejects_responses_api_usage():
             "output_tokens_details": {"reasoning_tokens": 0},
         }
     )
+
+
+@pytest.mark.parametrize(
+    "model, expected_dropped",
+    [
+        # always-on-thinking models reject thinking.type=disabled with a 400
+        ("claude-fable-5", True),
+        ("claude-mythos-5", True),
+        # unmapped future family member -> claude-always-on-thinking fallback rule
+        ("claude-fable-5-1", True),
+        # adaptive-capable models that ACCEPT disabled must keep it verbatim
+        ("claude-opus-5", False),
+        ("claude-sonnet-5", False),
+        ("claude-opus-4-8", False),
+        # legacy models keep it verbatim
+        ("claude-sonnet-4-5-20250929", False),
+    ],
+)
+def test_disabled_thinking_omitted_only_for_always_on_models(
+    local_model_cost_map, model, expected_dropped
+):
+    """``thinking={"type": "disabled"}`` is omitted for always-on-thinking models
+    (Fable/Mythos, which 400 on it: the API remedy is to omit the param) and is
+    forwarded verbatim for every model that accepts it."""
+    config = AnthropicConfig()
+
+    request = config.transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={"max_tokens": 64, "thinking": {"type": "disabled"}},
+        litellm_params={},
+        headers={},
+    )
+
+    if expected_dropped:
+        assert "thinking" not in request
+    else:
+        assert request["thinking"] == {"type": "disabled"}

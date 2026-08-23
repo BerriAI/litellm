@@ -10,12 +10,9 @@ verifies metadata is preserved for custom callbacks via kwargs['litellm_params']
 """
 
 import asyncio
-import os
-import sys
 from typing import Optional
 from unittest.mock import AsyncMock, patch
 
-sys.path.insert(0, os.path.abspath("../../.."))
 
 import pytest
 

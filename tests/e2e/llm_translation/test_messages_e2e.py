@@ -9,7 +9,7 @@ litellm-regression-tests/tests/test_inference_endpoints.py.
 from __future__ import annotations
 
 import pytest
-from e2e_config import unique_marker
+from e2e_config import provider_edge_base, unique_marker
 from e2e_http import assert_client_error, require_successful_call, unwrap
 from endpoints_client import EndpointsClient, MessagesResult
 from lifecycle import ResourceManager
@@ -50,16 +50,27 @@ def _approx_equal(actual: float, expected: float) -> bool:
     return abs(actual - expected) <= max(1e-9, abs(expected) * 1e-2)
 
 
+def _anthropic_params() -> LiteLLMParamsBody:
+    """The Anthropic deployment, wired through the record/replay edge when a fixture
+    mode is active (LIT-5974). The mount base carries no ``/v1``: litellm's Anthropic
+    handler appends ``/v1/messages`` to ``api_base`` itself, where the OpenAI handler
+    appends only ``/chat/completions``."""
+    base = provider_edge_base("anthropic")
+    return LiteLLMParamsBody(
+        model=ANTHROPIC_BACKEND, api_key="os.environ/ANTHROPIC_API_KEY", api_base=base
+    )
+
+
 class TestAnthropicMessages:
     def _register(
-        self, endpoints_client: EndpointsClient, resources: ResourceManager
+        self,
+        endpoints_client: EndpointsClient,
+        resources: ResourceManager,
+        params: LiteLLMParamsBody | None = None,
     ) -> tuple[str, str]:
         model = f"e2e-messages-{unique_marker()}"
         model_id = endpoints_client.create_model(
-            model,
-            LiteLLMParamsBody(
-                model=ANTHROPIC_BACKEND, api_key="os.environ/ANTHROPIC_API_KEY"
-            ),
+            model, _anthropic_params() if params is None else params
         )
         resources.defer(lambda: endpoints_client.delete_model(model_id))
         return model, resources.key()
@@ -81,12 +92,7 @@ class TestAnthropicMessages:
         self, endpoints_client: EndpointsClient, resources: ResourceManager
     ) -> None:
         model = f"e2e-messages-cost-{unique_marker()}"
-        model_id = endpoints_client.create_model(
-            model,
-            LiteLLMParamsBody(
-                model=ANTHROPIC_BACKEND, api_key="os.environ/ANTHROPIC_API_KEY"
-            ),
-        )
+        model_id = endpoints_client.create_model(model, _anthropic_params())
         resources.defer(lambda: endpoints_client.delete_model(model_id))
         key = resources.key()
 
@@ -131,7 +137,13 @@ class TestAnthropicMessages:
     def test_messages_streams_completion(
         self, endpoints_client: EndpointsClient, resources: ResourceManager
     ) -> None:
-        model, key = self._register(endpoints_client, resources)
+        """Stays on a live Anthropic deployment in every mode: the edge buffers a
+        streamed response into one body, so chunk fidelity waits on LIT-5742."""
+        model, key = self._register(
+            endpoints_client,
+            resources,
+            LiteLLMParamsBody(model=ANTHROPIC_BACKEND, api_key="os.environ/ANTHROPIC_API_KEY"),
+        )
 
         result = endpoints_client.proxy.messages_stream(
             key,

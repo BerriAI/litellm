@@ -231,10 +231,10 @@ def test_inception_in_provider_lists():
     assert "https://api.inceptionlabs.ai/v1" in litellm.openai_compatible_endpoints
 
 
-def test_inception_model_configuration():
+def test_inception_model_configuration(monkeypatch):
     from litellm import get_model_info
 
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
     litellm.inception_models = set()
     litellm.add_known_models()
@@ -251,8 +251,8 @@ def test_inception_model_configuration():
     assert info.get("supports_response_schema") is True
 
 
-def test_inception_model_list_populated():
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+def test_inception_model_list_populated(monkeypatch):
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
     litellm.inception_models = set()
     litellm.add_known_models()

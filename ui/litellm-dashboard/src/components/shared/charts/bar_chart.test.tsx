@@ -23,7 +23,7 @@ describe("BarChart", () => {
   it("renders the No data placeholder instead of a chart when data is empty", () => {
     const { container, getByText } = render(<BarChart data={[]} index="date" categories={["passed"]} />);
 
-    expect(getByText("No data")).toBeTruthy();
+    expect(getByText("No data")).toBeInTheDocument();
     expect(container.querySelector('[data-slot="chart"]')).toBeNull();
   });
 
