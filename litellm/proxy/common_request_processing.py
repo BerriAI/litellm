@@ -1434,7 +1434,7 @@ class ProxyBaseLLMRequestProcessing:
 
         Proxy/custom headers win on key collisions.
         """
-        excluded_headers = {
+        excluded_headers = {  # mutable-ok: set of header names to exclude from forwarding
             "transfer-encoding",
             "content-encoding",
             "set-cookie",
@@ -1447,7 +1447,7 @@ class ProxyBaseLLMRequestProcessing:
             "upgrade",
         }
 
-        merged_headers = {
+        merged_headers = {  # mutable-ok: dict comprehension for merged headers forwarded to httpx
             key: value for key, value in dict(response_headers or {}).items() if key.lower() not in excluded_headers
         }
         merged_headers.update(custom_headers)
@@ -2448,7 +2448,7 @@ class ProxyBaseLLMRequestProcessing:
                         # For passthrough routes, stream directly without error parsing
                         # since we're dealing with raw binary data (e.g., AWS event streams)
                         return StreamingResponse(
-                            content=generator,  # type: ignore[arg-type]
+                            content=generator,  # pyright: ignore[reportArgumentType]  # generator-configured StreamingResponse
                             status_code=getattr(response, "status_code", status.HTTP_200_OK),
                             media_type=self._passthrough_event_stream_media_type(),
                             headers=streaming_headers,

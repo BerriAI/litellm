@@ -9,6 +9,7 @@ import base64
 import hashlib
 import re
 import uuid
+from collections.abc import Mapping
 from typing import Final
 
 from litellm._logging import verbose_logger
@@ -80,7 +81,7 @@ def upload_file_sync(
     image_url: str,
     credentials: str | None = None,
     api_base: str | None = None,
-    litellm_params: dict | None = None,
+    litellm_params: Mapping[str, object] | None = None,
 ) -> str | None:
     """
     Upload file to GigaChat and return file_id (sync).
@@ -146,7 +147,7 @@ async def upload_file_async(
     image_url: str,
     credentials: str | None = None,
     api_base: str | None = None,
-    litellm_params: dict | None = None,
+    litellm_params: Mapping[str, object] | None = None,
 ) -> str | None:
     """
     Upload file to GigaChat and return file_id (async).

@@ -2665,8 +2665,8 @@ def create_generic_websocket_passthrough_endpoint(
 
 @router.api_route(
     "/gigachat/{endpoint:path}",
-    methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
-    tags=["Gigachat Pass-through", "pass-through"],
+    methods=["GET", "POST", "PUT", "DELETE", "PATCH"],  # mutable-ok: FastAPI route methods
+    tags=["Gigachat Pass-through", "pass-through"],  # mutable-ok: FastAPI route tags
 )
 async def gigachat_proxy_route(
     endpoint: str,
@@ -2700,7 +2700,9 @@ async def gigachat_proxy_route(
     if model:
         is_router_model = is_passthrough_request_using_router_model(request_body, llm_router)
     elif any(word in endpoint for word in ("completions", "embeddings")):
-        raise HTTPException(status_code=400, detail={"error": "Model is required in request body"})
+        raise HTTPException(
+            status_code=400, detail={"error": "Model is required in request body"}
+        )  # mutable-ok: HTTPException detail dict
 
     # If router model, use dedicated router passthrough handler
     # This uses the same common processing path as non-router models
@@ -2730,16 +2732,16 @@ async def gigachat_proxy_route(
         "Gigachat passthrough: Using direct Gigachat model '%s' for endpoint '%s'", model, endpoint
     )
 
-    data: Dict[str, Any] = {}
+    data: Dict[str, Any] = {}  # mutable-ok: request body mutated in place by proxy pipeline
 
     data["method"] = request.method
     data["endpoint"] = endpoint
     data["json"] = request_body
     data["custom_llm_provider"] = "gigachat"
 
-    client = get_async_httpx_client(  # type: ignore
+    client = get_async_httpx_client(
         llm_provider=LlmProviders.GIGACHAT,
-        params={
+        params={  # mutable-ok: httpx client params
             "timeout": httpx.Timeout(timeout=600.0, connect=5.0),
             "ssl_verify": False,
         },
@@ -2823,7 +2825,7 @@ async def handle_gigachat_passthrough_router_model(
     data: Dict[str, Any] = await _read_request_body(request=request)
     if user_api_key_dict is not None:
         if data.get("metadata") is None:
-            data["metadata"] = {}
+            data["metadata"] = {}  # mutable-ok: metadata dict mutated in place
         if hasattr(user_api_key_dict, "user_id") and user_api_key_dict.user_id is not None:
             data["metadata"]["user_api_key_user_id"] = user_api_key_dict.user_id
         if hasattr(user_api_key_dict, "team_id") and user_api_key_dict.team_id is not None:
@@ -2847,7 +2849,7 @@ async def handle_gigachat_passthrough_router_model(
     data["custom_llm_provider"] = "gigachat"
 
     # Remove sensitive keys from data
-    keys = [
+    keys = [  # mutable-ok: list of keys to remove from data
         "gigachat_auth_url",
         "gigachat_access_token",
         "gigachat_scope",
@@ -2857,9 +2859,9 @@ async def handle_gigachat_passthrough_router_model(
     for key in keys:
         data.pop(key, None)
 
-    client = get_async_httpx_client(  # type: ignore
+    client = get_async_httpx_client(
         llm_provider=LlmProviders.GIGACHAT,
-        params={
+        params={  # mutable-ok: httpx client params
             "timeout": httpx.Timeout(timeout=600.0, connect=5.0),
             "ssl_verify": False,
         },
