@@ -1038,7 +1038,7 @@ def extract_model_param(request: "Request", request_body: Mapping[str, object]) 
     body_model: Final = request_body.get("model")
     return (
         body_model
-        if isinstance(body_model, str)
+        if isinstance(body_model, str) and body_model
         else request.query_params.get("model") or request.headers.get("x-litellm-model")
     )
 
