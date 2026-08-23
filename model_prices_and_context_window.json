@@ -14683,6 +14683,7 @@
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
         "supports_reasoning": true,
+        "supports_anthropic_thinking_payload": true,
         "supports_tool_choice": true
     },
     "databricks/databricks-claude-sonnet-4": {
@@ -14762,6 +14763,7 @@
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
         "supports_reasoning": true,
+        "supports_anthropic_thinking_payload": true,
         "supports_tool_choice": true
     },
     "databricks/databricks-gemini-2-5-flash": {
