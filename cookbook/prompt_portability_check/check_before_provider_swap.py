@@ -22,7 +22,7 @@ Install:
     pip install prompt-portability litellm
 
 Run:
-    python prompt_portability_litellm_check.py
+    python check_before_provider_swap.py
 """
 
 from __future__ import annotations
@@ -31,8 +31,6 @@ import litellm
 from llm_prompt_lint.linter import lint
 from llm_prompt_lint.parsers import detect_and_parse
 
-# A request written and tested against OpenAI, about to be pointed at a
-# different provider via LiteLLM's `model=` switch.
 request = {
     "model": "gpt-4o",
     "messages": [
@@ -61,8 +59,6 @@ if report.findings:
         "the new provider."
     )
 
-# LiteLLM's own call succeeds regardless -- it standardizes the transport,
-# not the content, which is exactly the gap prompt-portability closes.
 response = litellm.completion(
     model="gpt-4o",
     messages=request["messages"],
