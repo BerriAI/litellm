@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 from typing import Final
 
@@ -17,4 +18,8 @@ def test_prisma_client_uses_recursive_types(schema_path: Path) -> None:
     schema: Final = schema_path.read_text(encoding="utf-8")
     generator_settings: Final = schema.partition("generator client {")[2].partition("}")[0]
 
-    assert "recursive_type_depth = -1" in tuple(line.strip() for line in generator_settings.splitlines())
+    assert re.search(
+        r"^\s*recursive_type_depth\s*=\s*-1\s*$",
+        generator_settings,
+        flags=re.MULTILINE,
+    )
