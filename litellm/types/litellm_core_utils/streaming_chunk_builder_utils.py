@@ -5,9 +5,7 @@ from ..utils import CompletionTokensDetails, PromptTokensDetailsWrapper, ServerT
 
 class UsagePerChunk(TypedDict):
     prompt_tokens: int
-    prompt_tokens_provided: bool
     completion_tokens: int
-    completion_tokens_provided: bool
     cache_creation_input_tokens: int | None
     cache_read_input_tokens: int | None
     server_tool_use: ServerToolUse | None

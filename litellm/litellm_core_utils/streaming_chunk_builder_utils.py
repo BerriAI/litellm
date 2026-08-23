@@ -178,6 +178,7 @@ class ChunkProcessor:
         self.chunks = self._sort_chunks(chunks)
         self.messages = messages
         self.first_chunk = chunks[0]
+        self._usage_fields_provided: tuple[bool, bool] = (False, False)
 
     def _sort_chunks(self, chunks: list) -> list:
         if not chunks:
@@ -795,13 +796,20 @@ class ChunkProcessor:
 
             if usage_chunk is not None:
                 usage_chunk_dict = self._usage_chunk_calculation_helper(usage_chunk)
-                prompt_tokens_provided = prompt_tokens_provided or "prompt_tokens" in usage_chunk
-                completion_tokens_provided = completion_tokens_provided or "completion_tokens" in usage_chunk
-                if usage_chunk_dict["prompt_tokens"] is not None and usage_chunk_dict["prompt_tokens"] > 0:
+                if "prompt_tokens" in usage_chunk:
+                    prompt_tokens_provided = True
+                if "prompt_tokens" in usage_chunk and (
+                    usage_chunk_dict["prompt_tokens"] > 0 or prompt_tokens == 0
+                ):
                     prompt_tokens = usage_chunk_dict["prompt_tokens"]
-                if usage_chunk_dict["completion_tokens"] is not None and usage_chunk_dict["completion_tokens"] > 0:
+                if "completion_tokens" in usage_chunk:
+                    completion_tokens_provided = True
+                if "completion_tokens" in usage_chunk and (
+                    usage_chunk_dict["completion_tokens"] > 0 or completion_tokens == 0
+                ):
                     completion_tokens = usage_chunk_dict["completion_tokens"]
-                    completion_usage_updates += 1
+                    if completion_tokens > 0:
+                        completion_usage_updates += 1
                 if usage_chunk_dict["cache_creation_input_tokens"] is not None and (
                     usage_chunk_dict["cache_creation_input_tokens"] > 0 or cache_creation_input_tokens is None
                 ):
@@ -843,17 +851,20 @@ class ChunkProcessor:
 
         prompt_tokens_details = attach_cache_creation_token_details(prompt_tokens_details, cache_creation_token_details)
 
+        was_anthropic_cursor = completion_tokens == 1
         completion_tokens = self._reset_anthropic_cursor_completion_tokens(
             chunks=chunks,
-            completion_tokens=completion_tokens,
+            completion_tokens=completion_tokens or 0,
             completion_usage_updates=completion_usage_updates,
         )
+        if was_anthropic_cursor and completion_tokens == 0:
+            completion_tokens_provided = False
+
+        self._usage_fields_provided = (prompt_tokens_provided, completion_tokens_provided)
 
         return UsagePerChunk(
             prompt_tokens=prompt_tokens,
-            prompt_tokens_provided=prompt_tokens_provided,
             completion_tokens=completion_tokens,
-            completion_tokens_provided=completion_tokens_provided,
             cache_creation_input_tokens=cache_creation_input_tokens,
             cache_read_input_tokens=cache_read_input_tokens,
             server_tool_use=server_tool_use,
@@ -950,11 +961,12 @@ class ChunkProcessor:
         ]
         prompt_tokens_details: PromptTokensDetailsWrapper | None = calculated_usage_per_chunk["prompt_tokens_details"]
         cost: Final[float | None] = calculated_usage_per_chunk["cost"]
+        prompt_tokens_provided, completion_tokens_provided = self._usage_fields_provided
 
         try:
             returned_usage.prompt_tokens = (
                 prompt_tokens
-                if calculated_usage_per_chunk["prompt_tokens_provided"]
+                if prompt_tokens_provided
                 else token_counter(model=model, messages=messages)
             )
         except Exception:  # don't allow this failing to block a complete streaming response from being returned
@@ -962,7 +974,7 @@ class ChunkProcessor:
             returned_usage.prompt_tokens = 0
         returned_usage.completion_tokens = (
             completion_tokens
-            if calculated_usage_per_chunk["completion_tokens_provided"]
+            if completion_tokens_provided
             else token_counter(
                 model=model,
                 text=completion_output,
