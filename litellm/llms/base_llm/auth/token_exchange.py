@@ -342,6 +342,7 @@ _Decision: TypeAlias = _Serve | _ServeAndRefresh | _Lead | _Follow | _Fail
 @dataclass(frozen=True, slots=True)
 class _Unauthorized:
     response: httpx.Response
+    assertion: SecretStr
 
 
 class JwtBearerTokenExchangeEngine:
@@ -508,14 +509,9 @@ class JwtBearerTokenExchangeEngine:
         second: Final = self._attempt_exchange(spec)
         if isinstance(second, _Unauthorized):
             return redact_oauth_error_body(
-                second.response.status_code, _capped_body_text(second.response), self._reread_assertion(spec)
+                second.response.status_code, _capped_body_text(second.response), second.assertion
             )
         return second
-
-    def _reread_assertion(self, spec: TokenExchangeSpec) -> SecretStr | None:
-        """Best-effort re-read, purely so a reflected assertion can be recognized in an error body."""
-        reread: Final = _read_assertion(_assertion_fetch(self._assertion_reader, spec), spec.assertion_ref)
-        return reread if isinstance(reread, SecretStr) else None
 
     def _attempt_exchange(self, spec: TokenExchangeSpec) -> "ExchangeResult | _Unauthorized":
         assertion: Final = _read_assertion(_assertion_fetch(self._assertion_reader, spec), spec.assertion_ref)
@@ -534,7 +530,7 @@ class JwtBearerTokenExchangeEngine:
         except Exception as e:  # noqa: BLE001  # injected posters may raise beyond httpx; transport failures become values
             return TokenTransportError(detail=f"{type(e).__name__}: {e}"[:_REDACTION_CAP])
         if response.status_code == 401:
-            return _Unauthorized(response=response)
+            return _Unauthorized(response=response, assertion=assertion)
         return self._parse_response(response, assertion)
 
     def _parse_response(self, response: httpx.Response, assertion: SecretStr | None = None) -> ExchangeResult:

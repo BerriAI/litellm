@@ -414,6 +414,55 @@ def test_401_retry_once_with_reread():
     assert poster.requests[1].json_body()["assertion"] == "assertion-v2"
 
 
+class RotatingAssertionSource:
+    """A per-call assertion source that mints a fresh value on every read -- the shape
+    internal_issuer/keycloak identity sources take (a fresh JWT/token minted per call)."""
+
+    def __init__(self, values: list[str]) -> None:
+        self._values = iter(values)
+        self.calls = 0
+
+    def __call__(self) -> str:
+        self.calls += 1
+        return next(self._values)
+
+
+class EchoingUnauthorizedPoster:
+    """401s every attempt, echoing the submitted assertion back into the error body -- a
+    token endpoint that reflects the request."""
+
+    def __init__(self) -> None:
+        self.requests: list[RecordedRequest] = []
+
+    def post(self, url: str, *, content: bytes, headers: Mapping[str, str], timeout: float) -> httpx.Response:
+        recorded = RecordedRequest(url, content, headers, timeout)
+        self.requests.append(recorded)
+        submitted = recorded.json_body()["assertion"]
+        return httpx.Response(401, json={"error": "invalid_grant", "error_description": f"bad assertion {submitted}"})
+
+
+def test_401_retry_redacts_the_assertion_actually_sent_not_a_fresh_reread():
+    """Regression: with a rotating identity source, the reflection-drop check must match the
+    assertion the failing (second) attempt actually sent. Re-reading for the check would mint a
+    THIRD value that was never sent, so the reflection probe would miss and the actually-sent,
+    actually-reflected second assertion would leak into the error."""
+    poster = EchoingUnauthorizedPoster()
+    source = RotatingAssertionSource(["assertion-v1", "assertion-v2", "assertion-v3"])
+    engine = make_engine(poster)
+    spec = make_spec(assertion_source=source)
+
+    result = engine.get_token(spec)
+
+    assert isinstance(result, TokenEndpointError)
+    assert len(poster.requests) == 2
+    assert poster.requests[0].json_body()["assertion"] == "assertion-v1"
+    assert poster.requests[1].json_body()["assertion"] == "assertion-v2"
+    assert source.calls == 2, "the failing attempt's own assertion must be reused, never re-read a third time"
+    assert "assertion-v1" not in result.redacted_body
+    assert "assertion-v2" not in result.redacted_body
+    assert "assertion-v3" not in result.redacted_body
+
+
 def test_401_twice_is_endpoint_error():
     poster = ScriptedPoster([httpx.Response(401, json={"error": "invalid_grant"})])
     engine = make_engine(poster)
@@ -719,8 +768,8 @@ class TestAssertionSourceOverridesEngineReader:
         assert len(poster.requests) == 0
 
     def test_assertion_source_is_re_invoked_on_401_retry(self):
-        """The 401-retry re-read (``_reread_assertion``) must also prefer ``assertion_source``,
-        not silently fall back to the engine reader for the reflected-assertion check."""
+        """The retry's second attempt must also prefer ``assertion_source`` for the assertion it
+        sends, not silently fall back to the engine reader."""
         values = iter(["assertion-v1", "assertion-v2"])
         poster = ScriptedPoster([httpx.Response(401, json={"error": "invalid_grant"}), token_response()])
         engine = make_engine(poster, reader=lambda ref: "from-engine-reader")

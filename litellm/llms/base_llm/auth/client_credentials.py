@@ -15,7 +15,7 @@ import threading
 from collections.abc import Callable, Mapping
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, TypeAlias
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 
 import httpx
 from pydantic import BaseModel, SecretStr, ValidationError
@@ -87,8 +87,16 @@ class _HttpxSyncKeycloakPoster:
 _DEFAULT_POSTER: Final[SyncTokenPoster] = _HttpxSyncKeycloakPoster()
 
 
+def _form_encode(value: str) -> str:
+    """RFC 6749 Appendix B before RFC 6749 2.3.1's base64: application/x-www-form-urlencoded
+    with spaces as ``%20`` rather than ``+``, else a reserved character (":", "+", "%", " ") in
+    the id or secret corrupts the credential the far side decodes back out of Basic auth."""
+    return quote(value, safe="")
+
+
 def _basic_auth_header(client_id: str, client_secret: str) -> str:
-    return "Basic " + base64.b64encode(f"{client_id}:{client_secret}".encode()).decode("ascii")
+    encoded_pair: Final = f"{_form_encode(client_id)}:{_form_encode(client_secret)}"
+    return "Basic " + base64.b64encode(encoded_pair.encode()).decode("ascii")
 
 
 def _prepared_request(config: KeycloakSource, client_secret: str) -> tuple[bytes, Mapping[str, str]]:

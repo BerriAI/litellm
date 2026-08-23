@@ -2,7 +2,7 @@ import base64
 import logging
 from collections.abc import Mapping
 from typing import Final
-from urllib.parse import parse_qsl
+from urllib.parse import parse_qsl, unquote
 
 import httpx
 import pytest
@@ -57,10 +57,11 @@ def make_config(
     scope: str | None = None,
     token_url: str = TOKEN_URL,
     client_secret_ref: str = CLIENT_SECRET_REF,
+    client_id: str = CLIENT_ID,
 ) -> KeycloakSource:
     return KeycloakSource(
         token_url=token_url,
-        client_id=CLIENT_ID,
+        client_id=client_id,
         client_secret_ref=client_secret_ref,
         auth_method=auth_method,  # pyright: ignore[reportArgumentType]  # test-only string widened for parametrization
         scope=scope,
@@ -100,6 +101,27 @@ class TestClientSecretBasic:
         assert body["grant_type"] == "client_credentials"
         assert "client_secret" not in body
         assert "client_id" not in body
+
+    def test_reserved_characters_are_form_encoded_before_basic(self):
+        """RFC 6749 2.3.1 requires the client id and secret be application/x-www-form-urlencoded
+        (Appendix B) before being base64'd into the Basic header; a raw join lets a reserved
+        character in either value corrupt the ':'-joined pair Keycloak decodes back out."""
+        client_id = "id:with+reserved% chars"
+        client_secret = "secret:with+reserved% chars"
+        poster = ScriptedPoster([token_response("minted-reserved")])
+
+        fetch_keycloak_assertion(
+            make_config(auth_method="client_secret_basic", client_id=client_id),
+            poster=poster,
+            secret_reader=secret_reader_returning(client_secret),
+        )
+
+        header = poster.requests[0].headers["authorization"]
+        assert header.startswith("Basic ")
+        decoded = base64.b64decode(header.removeprefix("Basic ")).decode("ascii")
+        encoded_id, _, encoded_secret = decoded.partition(":")
+        assert unquote(encoded_id) == client_id
+        assert unquote(encoded_secret) == client_secret
 
     def test_scope_included_only_when_set(self):
         poster = ScriptedPoster([token_response()])
