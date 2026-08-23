@@ -2479,6 +2479,14 @@ def _complete_custom_openai(
         or get_secret("OPENAI_API_KEY")
     )
 
+    from litellm.llms.openai_like.oauth_authenticator import (
+        resolve_client_credentials_token,
+    )
+
+    oauth_api_key = resolve_client_credentials_token(cast("dict[str, object]", litellm_params))
+    if oauth_api_key is not None:
+        api_key = oauth_api_key
+
     headers = headers or litellm.headers
 
     # Add GitHub Copilot headers (same as /responses endpoint does)
