@@ -631,12 +631,11 @@ def _openai_responses_with_web_search_calls(model, num_calls):
     ],
 )
 def test_bedrock_mantle_native_web_search_priced_per_query(model, local_model_cost_map):
-    """Bedrock's server-side Web Search bills $12.00 per 1,000 queries in every Region that
-    offers it (AWS Pricing API usage type ``Bedrock-Websearch-Queries``, SKUs HTPA2KVTTT65JDW6,
-    YV3KSHNXJCCU32NJ and E6H6Z5RYDRVX7HF9, effective 2026-08-01). Bedrock counts each search,
-    not each request, so a Responses output carrying three ``web_search_call`` items must bill
-    three queries. Without ``search_context_cost_per_query`` the default fallback silently
-    returns $0 and every native search is free."""
+    """Bedrock's server-side Web Search bills $12.00 per 1,000 queries, the same in every Region
+    that offers it (AWS Pricing API usage type ``Bedrock-Websearch-Queries``, effective
+    2026-08-01). Bedrock counts each search rather than each request, so a Responses output
+    carrying three ``web_search_call`` items must bill three queries. Without
+    ``search_context_cost_per_query`` the default fallback silently returns $0."""
     from litellm.types.utils import Usage
 
     per_query = litellm.get_model_info(model)["search_context_cost_per_query"]["search_context_size_medium"]

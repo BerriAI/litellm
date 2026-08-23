@@ -8,6 +8,7 @@ gate, the URL construction for both paths, and the shared Bearer auth.
 """
 
 import copy
+from typing import Final
 
 
 import pytest
@@ -46,7 +47,10 @@ class TestBedrockMantleResponsesURL:
             api_base="https://bedrock-mantle.us-east-2.api.aws/v1/",
             litellm_params={},
         )
-        assert url_trailing == "https://bedrock-mantle.us-east-2.api.aws/openai/v1/responses"
+        assert (
+            url_trailing
+            == "https://bedrock-mantle.us-east-2.api.aws/openai/v1/responses"
+        )
 
     def test_url_does_not_double_openai_v1(self, monkeypatch):
         monkeypatch.delenv("BEDROCK_MANTLE_API_BASE", raising=False)
@@ -106,7 +110,9 @@ class TestBedrockMantleResponsesURL:
         with pytest.raises(ValueError, match="api\\.aws\\.attacker\\.example/'\\. Region names must contain only"):
             cfg.get_complete_url(
                 api_base=None,
-                litellm_params={"aws_region_name": "us-east-1.api.aws.attacker.example/"},
+                litellm_params={
+                    "aws_region_name": "us-east-1.api.aws.attacker.example/"
+                },
             )
 
     def test_url_region_default_us_east_1(self, monkeypatch):
@@ -146,6 +152,7 @@ class TestBedrockMantleResponsesURL:
         assert url == "https://bedrock-mantle.us-east-2.api.aws/v1/responses"
         assert url.count("/responses") == 1
 
+
     def test_url_aws_region_name_overrides_stale_api_base(self, monkeypatch):
         monkeypatch.delenv("BEDROCK_MANTLE_REGION", raising=False)
         monkeypatch.delenv("BEDROCK_MANTLE_API_BASE", raising=False)
@@ -159,7 +166,9 @@ class TestBedrockMantleResponsesURL:
 
 
 class TestBedrockMantleGetLlmProviderRegion:
-    def test_get_llm_provider_uses_supplemental_litellm_params(self, monkeypatch, local_cost_map):
+    def test_get_llm_provider_uses_supplemental_litellm_params(
+        self, monkeypatch, local_cost_map
+    ):
         monkeypatch.delenv("BEDROCK_MANTLE_REGION", raising=False)
         monkeypatch.delenv("BEDROCK_MANTLE_API_BASE", raising=False)
         monkeypatch.delenv("AWS_REGION", raising=False)
@@ -176,7 +185,9 @@ class TestBedrockMantleGetLlmProviderRegion:
         # the resolved chat base) is on the /openai/v1 base per the AWS card.
         assert api_base == "https://bedrock-mantle.us-east-2.api.aws/openai/v1"
 
-    def test_get_llm_provider_uses_aws_region_from_litellm_params(self, monkeypatch, local_cost_map):
+    def test_get_llm_provider_uses_aws_region_from_litellm_params(
+        self, monkeypatch, local_cost_map
+    ):
         monkeypatch.delenv("BEDROCK_MANTLE_REGION", raising=False)
         monkeypatch.delenv("BEDROCK_MANTLE_API_BASE", raising=False)
         monkeypatch.delenv("AWS_REGION", raising=False)
@@ -210,14 +221,18 @@ class TestBedrockMantleResponsesAuth:
         monkeypatch.setenv("BEDROCK_MANTLE_API_KEY", "env-key")
         monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
         cfg = BedrockMantleResponsesAPIConfig()
-        headers = cfg.validate_environment(headers={}, model="openai.gpt-5.5", litellm_params=GenericLiteLLMParams())
+        headers = cfg.validate_environment(
+            headers={}, model="openai.gpt-5.5", litellm_params=GenericLiteLLMParams()
+        )
         assert headers["Authorization"] == "Bearer env-key"
 
     def test_bedrock_bearer_token_fallback(self, monkeypatch):
         monkeypatch.delenv("BEDROCK_MANTLE_API_KEY", raising=False)
         monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "bearer-key")
         cfg = BedrockMantleResponsesAPIConfig()
-        headers = cfg.validate_environment(headers={}, model="openai.gpt-5.5", litellm_params=GenericLiteLLMParams())
+        headers = cfg.validate_environment(
+            headers={}, model="openai.gpt-5.5", litellm_params=GenericLiteLLMParams()
+        )
         assert headers["Authorization"] == "Bearer bearer-key"
 
     def test_missing_bearer_does_not_raise_in_validate_environment(self, monkeypatch):
@@ -225,7 +240,9 @@ class TestBedrockMantleResponsesAuth:
         monkeypatch.delenv("BEDROCK_MANTLE_API_KEY", raising=False)
         monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
         cfg = BedrockMantleResponsesAPIConfig()
-        headers = cfg.validate_environment(headers={}, model="openai.gpt-5.5", litellm_params=GenericLiteLLMParams())
+        headers = cfg.validate_environment(
+            headers={}, model="openai.gpt-5.5", litellm_params=GenericLiteLLMParams()
+        )
         assert "Authorization" not in headers
 
     def test_project_id_sets_openai_project_header(self):
@@ -233,7 +250,9 @@ class TestBedrockMantleResponsesAuth:
         headers = cfg.validate_environment(
             headers={},
             model="openai.gpt-5.5",
-            litellm_params=GenericLiteLLMParams(api_key="fake-key", aws_bedrock_project_id="proj_abc123def456"),
+            litellm_params=GenericLiteLLMParams(
+                api_key="fake-key", aws_bedrock_project_id="proj_abc123def456"
+            ),
         )
         assert headers["OpenAI-Project"] == "proj_abc123def456"
 
@@ -334,7 +353,9 @@ class TestBedrockMantleResponsesTools:
         from unittest.mock import patch
 
         cfg = BedrockMantleResponsesAPIConfig()
-        with patch("litellm.llms.bedrock_mantle.responses.transformation.verbose_logger.warning") as mock_warning:
+        with patch(
+            "litellm.llms.bedrock_mantle.responses.transformation.verbose_logger.warning"
+        ) as mock_warning:
             cfg.map_openai_params(
                 response_api_optional_params={"tools": [{"type": "file_search"}]},
                 model="openai.gpt-5.5",
@@ -344,28 +365,47 @@ class TestBedrockMantleResponsesTools:
         assert "file_search" in str(mock_warning.call_args)
 
 
-def _web_search_tool(external_web_access=False):
+def _web_search_tool(external_web_access: bool = False) -> dict[str, object]:
     return {"type": "web_search", "external_web_access": external_web_access}
 
 
-def _function_tool():
+def _function_tool() -> dict[str, object]:
     return {"type": "function", "name": "exec_command"}
 
 
-def _codex_additional_tools_input(tools):
+def _output_item_type(item: object) -> object:
+    return item.get("type") if isinstance(item, dict) else getattr(item, "type", None)
+
+
+def _annotations_of_first_message(response: object) -> list[object]:
+    """Annotations off the first output_text block, tolerating dict or model output items."""
+    for item in getattr(response, "output", []):
+        if _output_item_type(item) != "message":
+            continue
+        blocks = item.get("content", []) if isinstance(item, dict) else getattr(item, "content", [])
+        for block in blocks:
+            annotations = (
+                block.get("annotations") if isinstance(block, dict) else getattr(block, "annotations", None)
+            )
+            if annotations is not None:
+                return [a if isinstance(a, dict) else a.model_dump() for a in annotations]
+    return []
+
+
+def _codex_additional_tools_input(tools: list[dict[str, object]]) -> list[dict[str, object]]:
     return [
         {"type": "additional_tools", "role": "developer", "tools": tools},
         {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]},
     ]
 
 
-_WEB_SEARCH_CAPABLE_MODELS = [
+_WEB_SEARCH_CAPABLE_MODELS: Final = (
     "openai.gpt-5.6-sol",
     "openai.gpt-5.6-terra",
     "openai.gpt-5.6-luna",
     "openai.gpt-5.5",
     "openai.gpt-5.4",
-]
+)
 
 
 class TestBedrockMantleResponsesNativeWebSearch:
@@ -438,6 +478,65 @@ class TestBedrockMantleResponsesNativeWebSearch:
             litellm.supports_web_search(model=f"bedrock_mantle/{model}", custom_llm_provider="bedrock_mantle")
             for model in _WEB_SEARCH_CAPABLE_MODELS
         )
+
+    def test_search_results_and_citations_survive_the_response_transform(self):
+        """Mantle returns Web Search results in the OpenAI Responses shape, so the config adds no
+        response-side handling. Lock that: a `web_search_call` item and the `url_citation`
+        annotations that make the answer attributable must both reach the caller intact."""
+        import httpx
+
+        from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+
+        citation: Final = {
+            "type": "url_citation",
+            "title": "Web Search - Amazon Bedrock",
+            "url": "https://docs.aws.amazon.com/bedrock/latest/userguide/web-search.html",
+            "start_index": 0,
+            "end_index": 12,
+        }
+        upstream: Final = {
+            "id": "resp_1",
+            "created_at": 0,
+            "model": "openai.gpt-5.6-terra",
+            "object": "response",
+            "output": [
+                {
+                    "id": "ws_1",
+                    "type": "web_search_call",
+                    "status": "completed",
+                    "action": {"type": "search", "queries": ["bedrock web search regions"]},
+                },
+                {
+                    "id": "msg_1",
+                    "type": "message",
+                    "role": "assistant",
+                    "status": "completed",
+                    "content": [{"type": "output_text", "text": "Three Regions", "annotations": [citation]}],
+                },
+            ],
+            "parallel_tool_calls": False,
+            "tool_choice": "auto",
+            "tools": [],
+        }
+
+        cfg = BedrockMantleResponsesAPIConfig()
+        out = cfg.transform_response_api_response(
+            model="openai.gpt-5.6-terra",
+            raw_response=httpx.Response(200, json=upstream),
+            logging_obj=LiteLLMLoggingObj(
+                model="openai.gpt-5.6-terra",
+                messages=[],
+                stream=False,
+                call_type="aresponses",
+                start_time=0,
+                litellm_call_id="1",
+                function_id="1",
+            ),
+        )
+
+        search_calls = [item for item in out.output if _output_item_type(item) == "web_search_call"]
+        assert len(search_calls) == 1, f"web_search_call item was dropped: {out.output}"
+        assert _annotations_of_first_message(out) == [citation]
 
 
 def _codex_exec_tool():
@@ -515,7 +614,9 @@ class TestBedrockMantleServiceTier:
         from unittest.mock import patch
 
         cfg = BedrockMantleResponsesAPIConfig()
-        with patch("litellm.llms.bedrock_mantle.responses.transformation.verbose_logger.warning") as mock_warning:
+        with patch(
+            "litellm.llms.bedrock_mantle.responses.transformation.verbose_logger.warning"
+        ) as mock_warning:
             cfg.map_openai_params(
                 response_api_optional_params={"service_tier": "priority"},
                 model="openai.gpt-5.5",
@@ -684,7 +785,9 @@ class TestBedrockMantleCodexAdditionalTools:
     def test_hoist_is_logged_at_debug_level(self):
         from unittest.mock import patch
 
-        with patch("litellm.llms.bedrock_mantle.responses.transformation.verbose_logger.debug") as mock_debug:
+        with patch(
+            "litellm.llms.bedrock_mantle.responses.transformation.verbose_logger.debug"
+        ) as mock_debug:
             self._transform(
                 input=[
                     {"type": "additional_tools", "role": "developer", "tools": self._CODEX_TOOLS},
@@ -819,7 +922,9 @@ class TestBedrockMantleResponsesRegistry:
         )
         assert cfg is None
 
-    def test_price_map_flag_routes_non_gpt_name_to_openai_path(self, restore_model_cost):
+    def test_price_map_flag_routes_non_gpt_name_to_openai_path(
+        self, restore_model_cost
+    ):
         # Data-driven onboarding: a frontier model whose name does NOT match the
         # openai.gpt- convention can still be routed to /openai/v1/responses by
         # declaring use_openai_responses_path in its price-map entry, with no code
@@ -845,8 +950,18 @@ class TestBedrockMantleResponsesRegistry:
     def test_gpt_5_5_price_map_declares_openai_responses_path(self, local_cost_map):
         # The gpt-5.x entries must carry the data-driven flag so frontier routing
         # does not rely on the name-string fallback alone.
-        assert litellm.model_cost["bedrock_mantle/openai.gpt-5.5"].get("use_openai_responses_path") is True
-        assert litellm.model_cost["bedrock_mantle/openai.gpt-5.4"].get("use_openai_responses_path") is True
+        assert (
+            litellm.model_cost["bedrock_mantle/openai.gpt-5.5"].get(
+                "use_openai_responses_path"
+            )
+            is True
+        )
+        assert (
+            litellm.model_cost["bedrock_mantle/openai.gpt-5.4"].get(
+                "use_openai_responses_path"
+            )
+            is True
+        )
 
     @pytest.mark.parametrize(
         "model",
@@ -881,7 +996,9 @@ class TestBedrockMantleResponsesRegistry:
         )
         assert cfg is None
 
-    def test_declared_responses_non_openai_routes_to_standard_path(self, restore_model_cost):
+    def test_declared_responses_non_openai_routes_to_standard_path(
+        self, restore_model_cost
+    ):
         # New feature: a non-OpenAI model declared mode=responses (e.g. via a
         # user's proxy model_info block) must route to the STANDARD /v1/responses
         # path, not the frontier /openai/v1/responses path. Fails before the
@@ -989,7 +1106,11 @@ class TestMantleBaseSegment:
             ),
             (
                 "google.gemma-4-31b",
-                {"bedrock_mantle/google.gemma-4-31b": {"use_openai_responses_path": True}},
+                {
+                    "bedrock_mantle/google.gemma-4-31b": {
+                        "use_openai_responses_path": True
+                    }
+                },
                 "openai/v1",
             ),
             (
@@ -1028,7 +1149,11 @@ class TestMantleSupportsResponses:
             # chat-only supported_endpoints -> not supported (the discriminator)
             (
                 "openai.gpt-oss-safeguard-120b",
-                {"bedrock_mantle/openai.gpt-oss-safeguard-120b": {"supported_endpoints": ["/v1/chat/completions"]}},
+                {
+                    "bedrock_mantle/openai.gpt-oss-safeguard-120b": {
+                        "supported_endpoints": ["/v1/chat/completions"]
+                    }
+                },
                 False,
             ),
             # mode=responses (no supported_endpoints) -> supported
@@ -1067,7 +1192,9 @@ class TestBedrockMantlePerModelResponsesURL:
             model=model,
         )
         assert isinstance(cfg, BedrockMantleResponsesAPIConfig)
-        return cfg.get_complete_url(api_base=None, litellm_params={"aws_region_name": region})
+        return cfg.get_complete_url(
+            api_base=None, litellm_params={"aws_region_name": region}
+        )
 
     def test_gpt_oss_uses_standard_responses_path(self, local_cost_map):
         url = self._url_for("openai.gpt-oss-120b")
@@ -1166,7 +1293,9 @@ class TestBedrockMantleResponsesSigV4:
         monkeypatch.delenv("BEDROCK_MANTLE_API_KEY", raising=False)
 
         signer = BaseAWSLLM()
-        signer.get_credentials = MagicMock(side_effect=AssertionError("get_credentials must not run for bearer auth"))
+        signer.get_credentials = MagicMock(
+            side_effect=AssertionError("get_credentials must not run for bearer auth")
+        )
         cfg = BedrockMantleResponsesAPIConfig(aws_signer=signer)
 
         headers, signed_body = cfg.sign_request(
@@ -1188,7 +1317,9 @@ class TestBedrockMantleResponsesSigV4:
         monkeypatch.setenv("BEDROCK_MANTLE_API_KEY", "env-bearer")
 
         signer = BaseAWSLLM()
-        signer.get_credentials = MagicMock(side_effect=AssertionError("get_credentials must not run for bearer auth"))
+        signer.get_credentials = MagicMock(
+            side_effect=AssertionError("get_credentials must not run for bearer auth")
+        )
         cfg = BedrockMantleResponsesAPIConfig(aws_signer=signer)
 
         headers, _ = cfg.sign_request(
@@ -1210,7 +1341,9 @@ class TestBedrockMantleResponsesSigV4:
         monkeypatch.setenv("BEDROCK_MANTLE_API_KEY", "env-bearer")
 
         signer = BaseAWSLLM()
-        signer.get_credentials = MagicMock(side_effect=AssertionError("get_credentials must not run for bearer auth"))
+        signer.get_credentials = MagicMock(
+            side_effect=AssertionError("get_credentials must not run for bearer auth")
+        )
         cfg = BedrockMantleResponsesAPIConfig(aws_signer=signer)
 
         headers, _ = cfg.sign_request(
@@ -1356,7 +1489,9 @@ class TestBedrockMantleResponsesSigV4:
         }
         cfg = BedrockMantleResponsesAPIConfig(aws_signer=BaseAWSLLM())
         url = cfg.get_complete_url(api_base=None, litellm_params=params)
-        assert url == "https://bedrock-mantle.ap-southeast-2.api.aws/openai/v1/responses"
+        assert (
+            url == "https://bedrock-mantle.ap-southeast-2.api.aws/openai/v1/responses"
+        )
 
         headers, _ = cfg.sign_request(
             headers={},
@@ -1367,7 +1502,9 @@ class TestBedrockMantleResponsesSigV4:
         )
         assert "/ap-southeast-2/bedrock/aws4_request" in headers["Authorization"]
 
-    def test_injected_default_region_base_does_not_override_aws_region_name(self, monkeypatch):
+    def test_injected_default_region_base_does_not_override_aws_region_name(
+        self, monkeypatch
+    ):
         """2nd-round adversarial regression: responses/main.py auto-injects
         litellm_params.api_base = https://bedrock-mantle.<DEFAULT>.api.aws/v1 (default
         region, ignoring aws_region_name). The config must still pin BOTH the URL host
@@ -1453,7 +1590,7 @@ class TestBedrockMantleResponsesSigV4:
         signer.get_credentials = MagicMock(side_effect=NoCredentialsError())
         cfg = BedrockMantleResponsesAPIConfig(aws_signer=signer)
 
-        with pytest.raises(ValueError, match="Bedrock Mantle auth failed: no Bearer token and no usable") as exc:
+        with pytest.raises(ValueError, match='Bedrock Mantle auth failed: no Bearer token and no usable') as exc:
             cfg.sign_request(
                 headers={},
                 optional_params={"aws_region_name": "us-east-2"},
@@ -1483,7 +1620,7 @@ class TestBedrockMantleResponsesSigV4:
         signer.get_credentials = MagicMock(side_effect=cred_error)
         cfg = BedrockMantleResponsesAPIConfig(aws_signer=signer)
 
-        with pytest.raises(ValueError, match="Bedrock Mantle auth failed: no Bearer token and no usable") as exc:
+        with pytest.raises(ValueError, match='Bedrock Mantle auth failed: no Bearer token and no usable') as exc:
             cfg.sign_request(
                 headers={},
                 optional_params={"aws_region_name": "us-east-2"},
@@ -1508,7 +1645,9 @@ class TestBedrockMantleResponsesSigV4:
 
         signer = BaseAWSLLM()
         signer.get_credentials = MagicMock(
-            side_effect=ConnectTimeoutError(endpoint_url="https://sts.us-east-2.amazonaws.com")
+            side_effect=ConnectTimeoutError(
+                endpoint_url="https://sts.us-east-2.amazonaws.com"
+            )
         )
         cfg = BedrockMantleResponsesAPIConfig(aws_signer=signer)
 
