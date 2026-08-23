@@ -1298,9 +1298,7 @@ class LiteLLMCompletionResponsesConfig:
         text_parts: Final = tuple(
             text.strip()
             for block in summary
-            if isinstance(block, Mapping)
-            and isinstance(text := block.get("text"), str)
-            and text.strip()
+            if isinstance(block, Mapping) and isinstance(text := block.get("text"), str) and text.strip()
         )
         return "\n".join(text_parts) if text_parts else None
 
