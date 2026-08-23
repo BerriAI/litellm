@@ -5,9 +5,7 @@ Tests for litellm.llms.gigachat.utils
 import os
 import sys
 
-sys.path.insert(
-    0, os.path.abspath("../../../../../")
-)  # Adds the project root to the system path
+sys.path.insert(0, os.path.abspath("../../.."))
 
 import pytest
 from litellm.llms.gigachat.utils import convert_usage
