@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
 import httpx
 
@@ -149,7 +149,7 @@ class GigaChatPassthroughConfig(BasePassthroughConfig):
             generic_chunk_has_all_required_fields,
         )
         from litellm.main import stream_chunk_builder
-        from litellm.types.utils import GenericStreamingChunk, ModelResponseStream
+        from litellm.types.utils import ModelResponseStream
 
         all_translated_chunks = []
 
@@ -179,8 +179,7 @@ class GigaChatPassthroughConfig(BasePassthroughConfig):
 
             if isinstance(translated_chunk, dict) and generic_chunk_has_all_required_fields(translated_chunk):
                 chunk_obj = convert_generic_chunk_to_model_response_stream(
-                    # cast-ok: validated TypedDict
-                    cast(GenericStreamingChunk, translated_chunk)
+                    translated_chunk  # type: ignore[arg-type]  # validated TypedDict
                 )
             elif isinstance(translated_chunk, ModelResponseStream):
                 chunk_obj = translated_chunk

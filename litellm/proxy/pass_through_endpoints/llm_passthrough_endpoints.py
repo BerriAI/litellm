@@ -2888,13 +2888,6 @@ async def handle_gigachat_passthrough_router_model(
             user_api_base=user_api_base,
             version=version,
         )
-
-        if isinstance(result, StreamingResponse):
-            if result.headers.get("Content-Type") is None:
-                result.headers["Content-Type"] = "text/event-stream; charset=utf-8"
-            return result
-
-        return result
     except Exception as e:  # noqa: BLE001 # Safe catch-all for handle exception
         # Use common exception handling
         raise await base_llm_response_processor._handle_llm_api_exception(
@@ -2902,6 +2895,12 @@ async def handle_gigachat_passthrough_router_model(
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
         )
+    else:
+        if isinstance(result, StreamingResponse):
+            if result.headers.get("Content-Type") is None:
+                result.headers["Content-Type"] = "text/event-stream; charset=utf-8"
+
+        return result
 
 
 @router.api_route(

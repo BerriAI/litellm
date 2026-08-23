@@ -11,7 +11,7 @@ from functools import partial
 from typing import Any, Final, cast
 
 import httpx
-from httpx._types import CookieTypes, QueryParamTypes, RequestFiles
+from httpx._types import CookieTypes, QueryParamTypes, RequestContent, RequestFiles
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
@@ -32,8 +32,7 @@ async def _as_async_generator(iterable: AsyncIterator[bytes]) -> AsyncGenerator[
 
 
 def _as_generator(iterable: Iterator[bytes]) -> Generator[bytes, Any, Any]:
-    for chunk in iterable:
-        yield chunk
+    yield from iterable
 
 
 class AsyncPassthroughStreamingResponse(AsyncGenerator[Any, Any]):
@@ -88,7 +87,7 @@ class AsyncPassthroughStreamingResponse(AsyncGenerator[Any, Any]):
                 except Exception:  # noqa: BLE001 # Safe catch-all for cleanup logic
                     try:
                         await self._response.aclose()
-                    except Exception:  # noqa: BLE001 # Safe catch-all for cleanup logic
+                    except Exception:  # noqa: BLE001 S110 # Safe catch-all for cleanup logic
                         pass
                     raise
             return self
@@ -129,21 +128,27 @@ class AsyncPassthroughStreamingResponse(AsyncGenerator[Any, Any]):
         try:
             chunk = await anext(self._iterator)
             self._raw_bytes.append(chunk)
-            return chunk
         except Exception:  # noqa: BLE001 # Safe catch-all for cleanup logic
             self._start_flush()
             try:
                 await self._response.aclose()
-            except Exception:  # noqa: BLE001 # Safe catch-all for cleanup logic
+            except Exception:  # noqa: BLE001 S110 # Safe catch-all for cleanup logic
                 pass
             raise
+        else:
+            return chunk
 
-    async def asend(self, value: Any) -> bytes:
+    async def asend(self, value: bytes) -> bytes:
         if not self._initialized:
             await self
         return await self._iterator.asend(value)
 
-    async def athrow(self, typ: Any, val: Any = None, tb: Any = None) -> bytes:
+    async def athrow(
+        self,
+        typ: type[BaseException],
+        val: BaseException | None = None,
+        tb: type | None = None,
+    ) -> bytes:
         if not self._initialized:
             await self
         return await self._iterator.athrow(typ, val, tb)
@@ -154,7 +159,7 @@ class AsyncPassthroughStreamingResponse(AsyncGenerator[Any, Any]):
             if self._initialized:
                 await self._iterator.aclose()
                 await self._response.aclose()
-        except Exception:  # noqa: BLE001 # Safe catch-all for cleanup logic
+        except Exception:  # noqa: BLE001 S110 # Safe catch-all for cleanup logic
             pass
 
 
@@ -201,26 +206,32 @@ class PassthroughStreamingResponse(Generator[Any, Any, Any]):
         try:
             chunk = next(self._iterator)
             self._raw_bytes.append(chunk)
-            return chunk
         except Exception:  # noqa: BLE001 # Safe catch-all for cleanup logic
             self._start_flush()
             try:
                 self._response.close()
-            except Exception:  # noqa: BLE001 # Safe catch-all for cleanup logic
+            except Exception:  # noqa: BLE001 S110 # Safe catch-all for cleanup logic
                 pass
             raise
+        else:
+            return chunk
 
-    def send(self, value: Any) -> bytes:
+    def send(self, value: bytes) -> bytes:
         return self._iterator.send(value)
 
-    def throw(self, typ: Any, val: Any = None, tb: Any = None) -> bytes:
+    def throw(
+        self,
+        typ: type[BaseException],
+        val: BaseException | None = None,
+        tb: type | None = None,
+    ) -> bytes:
         return self._iterator.throw(typ, val, tb)
 
     def close(self) -> None:
         self._start_flush()
         try:
             self._response.close()
-        except Exception:  # noqa: BLE001 # Safe catch-all for cleanup logic
+        except Exception:  # noqa: BLE001 S110 # Safe catch-all for cleanup logic
             pass
 
 
@@ -235,10 +246,10 @@ async def allm_passthrough_route(
     api_key: str | None = None,
     request_query_params: dict | None = None,
     request_headers: dict | None = None,
-    content: Any | None = None,
+    content: RequestContent | None = None,
     data: dict | None = None,
     files: RequestFiles | None = None,
-    json: Any | None = None,
+    json: object | None = None,
     params: QueryParamTypes | None = None,
     cookies: CookieTypes | None = None,
     client: HTTPHandler | AsyncHTTPHandler | None = None,
@@ -335,7 +346,7 @@ async def allm_passthrough_route(
                     provider=LlmProviders(resolved_custom_llm_provider),
                     model=model,
                 )
-            except Exception:
+            except Exception:  # noqa: BLE001 S110
                 # If we can't get provider config, pass None
                 pass
 
@@ -360,10 +371,10 @@ def llm_passthrough_route(
     api_key: str | None = None,
     request_query_params: dict | None = None,
     request_headers: dict | None = None,
-    content: Any | None = None,
+    content: RequestContent | None = None,
     data: dict | None = None,
     files: RequestFiles | None = None,
-    json: Any | None = None,
+    json: object | None = None,
     params: QueryParamTypes | None = None,
     cookies: CookieTypes | None = None,
     client: HTTPHandler | AsyncHTTPHandler | None = None,
