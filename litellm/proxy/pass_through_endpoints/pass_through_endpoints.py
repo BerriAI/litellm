@@ -2582,14 +2582,16 @@ class SafeRouteAdder:
         before the first such generic route, so it is matched first instead. If no
         generic provider route is registered (e.g. a minimal deployment), leave the
         route appended -- current behavior is preserved as a safe fallback.
+
+        Builds the reordered list in one expression and reassigns app.router.routes
+        wholesale, rather than mutating the existing list in place with pop()/insert().
         """
         routes = app.routes
         new_route = routes[-1]
         for index, route in enumerate(routes[:-1]):
             route_path = getattr(route, "path", None)
             if route_path and SafeRouteAdder._GENERIC_PROVIDER_PATH_MARKER in route_path:
-                routes.pop()
-                routes.insert(index, new_route)
+                app.router.routes = [*routes[:index], new_route, *routes[index:-1]]
                 return
 
     @staticmethod
