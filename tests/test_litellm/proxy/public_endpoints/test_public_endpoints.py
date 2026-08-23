@@ -1171,3 +1171,36 @@ def test_provider_fields_without_credential_variants_still_parse():
     openai = next((p for p in providers if p["provider"] == "OpenAI"), None)
     assert openai is not None
     assert openai.get("credential_variants") is None
+
+
+def test_credential_variants_rejects_optional_field_keys_the_variant_does_not_mount():
+    with pytest.raises(ValidationError, match="optional_field_keys it does not mount"):
+        ProviderCredentialVariants(
+            selector_label="Auth method",
+            default_variant="a",
+            field_definitions=[_field("x"), _field("y")],
+            variants=[ProviderCredentialVariant(id="a", label="A", field_keys=["x"], optional_field_keys=["y"])],
+        )
+
+
+def test_anthropic_internal_issuer_variant_relaxes_only_the_federation_rule_id():
+    """The federation rule id is read off the Anthropic Console only after the generated JWKS is
+    registered, and the JWKS only exists once the credential is saved, so demanding it up front
+    would deadlock first-time setup of the LiteLLM-signed variant. Every other variant collects it
+    on the one and only form it has, so there it stays required."""
+    app_instance = FastAPI()
+    app_instance.include_router(router)
+    test_client = TestClient(app_instance)
+
+    response = test_client.get("/public/providers/fields")
+    assert response.status_code == 200
+
+    anthropic = next(p for p in response.json() if p["provider"] == "Anthropic")
+    variants_block = anthropic["credential_variants"]
+    field_defs_by_key = {f["key"]: f for f in variants_block["field_definitions"]}
+    variants_by_id = {v["id"]: v for v in variants_block["variants"]}
+
+    assert field_defs_by_key["anthropic_federation_rule_id"]["required"] is True
+    assert variants_by_id["wif_internal_issuer"]["optional_field_keys"] == ["anthropic_federation_rule_id"]
+    for variant_id in ("api_key", "wif_token", "wif_token_file", "wif_keycloak"):
+        assert variants_by_id[variant_id]["optional_field_keys"] == []

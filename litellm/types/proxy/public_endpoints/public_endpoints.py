@@ -31,23 +31,31 @@ class ProviderCredentialVariant(BaseModel):
     federation, Keycloak'. ``field_keys`` names entries in the parent
     ``ProviderCredentialVariants.field_definitions`` to mount when this variant is active;
     ``fixed_values`` are litellm_params values the variant implies (e.g. a discriminator like
-    ``anthropic_identity_source: keycloak``) and are submitted without a form field for them."""
+    ``anthropic_identity_source: keycloak``) and are submitted without a form field for them.
+    ``optional_field_keys`` relaxes a globally-required field for this variant alone, for a value
+    only obtainable after the credential exists (the federation rule id an operator can only read
+    off the Anthropic Console once the generated JWKS is registered)."""
 
     id: str
     label: str
     field_keys: tuple[str, ...]
+    optional_field_keys: tuple[str, ...] = ()
     fixed_values: Mapping[str, str] = Field(default_factory=dict)
 
 
 def _validate_variant(variant: "ProviderCredentialVariant", defined_keys: frozenset[str]) -> None:
-    """Each variant may only reference declared fields, and a fixed value may not also be a field the
-    form would mount, or the form and the payload would disagree about who owns that key."""
+    """Each variant may only reference declared fields, may only relax fields it actually mounts, and a
+    fixed value may not also be a field the form would mount, or the form and the payload would
+    disagree about who owns that key."""
     unresolved: Final = tuple(key for key in variant.field_keys if key not in defined_keys)
     if unresolved:
         raise ValueError(f"variant {variant.id!r} references undefined field_keys: {unresolved}")
     overlap: Final = sorted(frozenset(variant.field_keys) & frozenset(variant.fixed_values))
     if overlap:
         raise ValueError(f"variant {variant.id!r} has fixed_values overlapping field_keys: {overlap}")
+    unmounted: Final = tuple(key for key in variant.optional_field_keys if key not in frozenset(variant.field_keys))
+    if unmounted:
+        raise ValueError(f"variant {variant.id!r} relaxes optional_field_keys it does not mount: {unmounted}")
 
 
 class ProviderCredentialVariants(BaseModel):

@@ -48,6 +48,7 @@ const anthropicVariants: ProviderCredentialVariants = {
         "anthropic_issuer_url",
         "anthropic_issuer_signing_key_ref",
       ],
+      optional_field_keys: ["anthropic_federation_rule_id"],
       fixed_values: { anthropic_identity_source: "internal_issuer" },
     },
     {
@@ -95,6 +96,23 @@ describe("resolveVariantFieldDefs", () => {
       variants: [{ id: "broken", label: "Broken", field_keys: ["api_key", "missing_field"], fixed_values: {} }],
     };
     expect(resolveVariantFieldDefs(variants, "broken").map((f) => f.key)).toEqual(["api_key"]);
+  });
+
+  it("relaxes a globally-required field the variant lists in optional_field_keys", () => {
+    const fields = resolveVariantFieldDefs(anthropicVariants, "wif_internal_issuer");
+    expect(fields.find((f) => f.key === "anthropic_federation_rule_id")?.required).toBe(false);
+    expect(fields.find((f) => f.key === "anthropic_organization_id")?.required).toBe(true);
+  });
+
+  it("keeps the same field required on a variant that does not relax it", () => {
+    const fields = resolveVariantFieldDefs(anthropicVariants, "wif_keycloak");
+    expect(fields.find((f) => f.key === "anthropic_federation_rule_id")?.required).toBe(true);
+  });
+
+  it("relaxes a copy, leaving the shared field_definitions entry untouched", () => {
+    resolveVariantFieldDefs(anthropicVariants, "wif_internal_issuer");
+    const shared = anthropicVariants.field_definitions.find((f) => f.key === "anthropic_federation_rule_id");
+    expect(shared?.required).toBe(true);
   });
 });
 
@@ -153,5 +171,15 @@ describe("inferActiveVariant", () => {
   it("ignores non-required optional fields when deciding a match", () => {
     const values = { api_base: "https://api.anthropic.com" };
     expect(inferActiveVariant(anthropicVariants, values)).toBe("api_key");
+  });
+
+  it("still matches wif_internal_issuer while its relaxed federation rule id is unset", () => {
+    const values = {
+      anthropic_identity_source: "internal_issuer",
+      anthropic_organization_id: "org-1",
+      anthropic_issuer_url: "https://issuer.example.com",
+      anthropic_issuer_signing_key_ref: "os.environ/SIGNING_KEY",
+    };
+    expect(inferActiveVariant(anthropicVariants, values)).toBe("wif_internal_issuer");
   });
 });

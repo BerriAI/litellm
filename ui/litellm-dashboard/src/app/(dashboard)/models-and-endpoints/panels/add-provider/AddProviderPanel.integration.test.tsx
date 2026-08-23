@@ -1,4 +1,11 @@
-import { renderWithProviders, screen, waitFor, within } from "../../../../../../tests/test-utils";
+import {
+  chooseSelectOption,
+  fireEvent,
+  renderWithProviders,
+  screen,
+  waitFor,
+  within,
+} from "../../../../../../tests/test-utils";
 import userEvent, { PointerEventsCheckLevel } from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import AddProviderPanel from "./AddProviderPanel";
@@ -10,6 +17,7 @@ const createProviderModelCall = vi.fn();
 const listAllModelsCall = vi.fn();
 const getCallbacksCall = vi.fn();
 const setCallbacksCall = vi.fn();
+const getCredentialJwksCall = vi.fn();
 const mockAuthorized = vi.fn();
 
 vi.mock("@/components/networking", async (importOriginal) => {
@@ -23,6 +31,7 @@ vi.mock("@/components/networking", async (importOriginal) => {
     listAllModelsCall: (...args: unknown[]) => listAllModelsCall(...args),
     getCallbacksCall: (...args: unknown[]) => getCallbacksCall(...args),
     setCallbacksCall: (...args: unknown[]) => setCallbacksCall(...args),
+    getCredentialJwksCall: (...args: unknown[]) => getCredentialJwksCall(...args),
   };
 });
 
@@ -50,8 +59,39 @@ vi.mock("@/app/(dashboard)/hooks/providers/useProviderFields", () => ({
           field_definitions: [
             { key: "api_base", label: "Upstream API Base", field_type: "text" },
             { key: "api_key", label: "API Key", field_type: "password" },
+            {
+              key: "anthropic_federation_rule_id",
+              label: "Federation Rule ID",
+              field_type: "text",
+              required: true,
+              tooltip: "Can be left blank and filled in once the JWKS is registered.",
+            },
+            { key: "anthropic_organization_id", label: "Organization ID", field_type: "text", required: true },
+            { key: "anthropic_issuer_url", label: "Issuer URL", field_type: "text", required: true },
+            { key: "anthropic_issuer_subject", label: "Issuer Subject", field_type: "text", required: true },
+            {
+              key: "anthropic_issuer_signing_key_ref",
+              label: "Signing Key Reference",
+              field_type: "text",
+              required: true,
+            },
           ],
-          variants: [{ id: "api_key", label: "API Key", field_keys: ["api_base", "api_key"], fixed_values: {} }],
+          variants: [
+            { id: "api_key", label: "API Key", field_keys: ["api_base", "api_key"], fixed_values: {} },
+            {
+              id: "wif_internal_issuer",
+              label: "Workload Identity Federation (LiteLLM-signed)",
+              field_keys: [
+                "anthropic_federation_rule_id",
+                "anthropic_organization_id",
+                "anthropic_issuer_url",
+                "anthropic_issuer_subject",
+                "anthropic_issuer_signing_key_ref",
+              ],
+              optional_field_keys: ["anthropic_federation_rule_id"],
+              fixed_values: { anthropic_identity_source: "internal_issuer" },
+            },
+          ],
         },
       },
     ],
@@ -86,6 +126,7 @@ describe("AddProviderPanel", () => {
     createProviderModelCall.mockResolvedValue({ model_id: "new-id" });
     getCallbacksCall.mockResolvedValue({ router_settings: {} });
     setCallbacksCall.mockResolvedValue({});
+    getCredentialJwksCall.mockResolvedValue({ keys: [{ kid: "kid-1", kty: "RSA", n: "n", e: "AQAB" }] });
   });
 
   it("walks provider -> credential -> discover -> review -> create, with blocked and aliases wired correctly", async () => {
@@ -237,5 +278,59 @@ describe("AddProviderPanel", () => {
         router_settings: { model_group_alias: { "gpt-4o": "claude-3-opus" } },
       }),
     );
+  });
+
+  it("saves a LiteLLM-signed credential with a blank federation rule id, then PATCHes it from the JWKS step", async () => {
+    discoverProviderModelsCall.mockResolvedValue({ models: ["claude-3-opus"] });
+    const { user } = await setup();
+
+    await chooseProvider(user, "Anthropic");
+    await user.type(screen.getByLabelText("Credential name"), "anthropic-wif");
+    await user.click(screen.getByRole("button", { name: /Next/ }));
+
+    await chooseSelectOption(
+      user,
+      await screen.findByRole("combobox", { name: "Authentication method" }),
+      "Workload Identity Federation (LiteLLM-signed)",
+    );
+
+    fireEvent.change(await screen.findByLabelText("Organization ID"), { target: { value: "org-1" } });
+    fireEvent.change(screen.getByLabelText("Issuer URL"), { target: { value: "https://proxy.example.com" } });
+    fireEvent.change(screen.getByLabelText("Issuer Subject"), { target: { value: "litellm-proxy" } });
+    fireEvent.change(screen.getByLabelText("Signing Key Reference"), { target: { value: "os.environ/SIGNING_KEY" } });
+    expect(screen.getByLabelText("Federation Rule ID")).toHaveValue("");
+
+    await user.click(screen.getByRole("button", { name: "Save credential" }));
+
+    // The rule id is only readable off the Anthropic Console once the JWKS below is registered,
+    // and the JWKS only exists once the credential is saved, so saving must not demand it first.
+    await waitFor(() =>
+      expect(credentialCreateCall).toHaveBeenCalledWith("test-access-token", {
+        credential_name: "anthropic-wif",
+        credential_values: {
+          anthropic_organization_id: "org-1",
+          anthropic_issuer_url: "https://proxy.example.com",
+          anthropic_issuer_subject: "litellm-proxy",
+          anthropic_issuer_signing_key_ref: "os.environ/SIGNING_KEY",
+          anthropic_identity_source: "internal_issuer",
+        },
+        credential_info: { custom_llm_provider: "anthropic" },
+      }),
+    );
+
+    expect(await screen.findByText("Register this JWKS with Anthropic")).toBeInTheDocument();
+    expect(getCredentialJwksCall).toHaveBeenCalledWith("test-access-token", "anthropic-wif");
+
+    fireEvent.change(screen.getByLabelText("Federation Rule ID"), { target: { value: "rule-abc" } });
+    await user.click(screen.getByRole("button", { name: /Next/ }));
+
+    await waitFor(() =>
+      expect(credentialUpdateCall).toHaveBeenCalledWith("test-access-token", "anthropic-wif", {
+        credential_name: "anthropic-wif",
+        credential_values: { anthropic_federation_rule_id: "rule-abc" },
+        credential_info: { custom_llm_provider: "anthropic" },
+      }),
+    );
+    expect(await screen.findByText("claude-3-opus")).toBeInTheDocument();
   });
 });

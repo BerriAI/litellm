@@ -372,7 +372,7 @@
           "key": "anthropic_federation_rule_id",
           "label": "Federation Rule ID",
           "placeholder": null,
-          "tooltip": "The workload identity federation rule id, created in the Anthropic Console.",
+          "tooltip": "The workload identity federation rule id, created in the Anthropic Console. With the LiteLLM-signed identity source you can leave this blank and fill it in on the next step, once the generated JWKS has been registered.",
           "required": true,
           "field_type": "text",
           "options": null,
@@ -576,6 +576,9 @@
             "anthropic_issuer_audience",
             "anthropic_issuer_ttl_seconds",
             "anthropic_issuer_signing_key_ref"
+          ],
+          "optional_field_keys": [
+            "anthropic_federation_rule_id"
           ],
           "fixed_values": {
             "anthropic_identity_source": "internal_issuer"

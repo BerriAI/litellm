@@ -32022,6 +32022,9 @@ export interface components {
          *     ``ProviderCredentialVariants.field_definitions`` to mount when this variant is active;
          *     ``fixed_values`` are litellm_params values the variant implies (e.g. a discriminator like
          *     ``anthropic_identity_source: keycloak``) and are submitted without a form field for them.
+         *     ``optional_field_keys`` relaxes a globally-required field for this variant alone, for a value
+         *     only obtainable after the credential exists (the federation rule id an operator can only read
+         *     off the Anthropic Console once the generated JWKS is registered).
          */
         ProviderCredentialVariant: {
             /** Field Keys */
@@ -32034,6 +32037,11 @@ export interface components {
             id: string;
             /** Label */
             label: string;
+            /**
+             * Optional Field Keys
+             * @default []
+             */
+            optional_field_keys: string[];
         };
         /**
          * ProviderCredentialVariants

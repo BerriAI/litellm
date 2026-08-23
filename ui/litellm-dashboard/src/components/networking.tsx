@@ -279,6 +279,7 @@ export interface ProviderCredentialVariant {
   id: string;
   label: string;
   field_keys: string[];
+  optional_field_keys?: string[];
   fixed_values: Record<string, string>;
 }
 

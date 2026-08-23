@@ -9,6 +9,11 @@ export const getVariant = (
   variantId: string,
 ): ProviderCredentialVariant | undefined => variants.variants.find((variant) => variant.id === variantId);
 
+/**
+ * A variant may relax a field_definition's global `required` for itself alone, when the value is
+ * only obtainable after the credential exists (see `optional_field_keys` on the API model), so the
+ * relaxation is applied here rather than by every caller that reads a field's `required`.
+ */
 export const resolveVariantFieldDefs = (
   variants: ProviderCredentialVariants,
   variantId: string,
@@ -18,9 +23,11 @@ export const resolveVariantFieldDefs = (
     return [];
   }
   const byKey = new Map(variants.field_definitions.map((field) => [field.key, field]));
+  const optionalKeys = new Set(variant.optional_field_keys ?? []);
   return variant.field_keys
     .map((key) => byKey.get(key))
-    .filter((field): field is ProviderCredentialFieldMetadata => field !== undefined);
+    .filter((field): field is ProviderCredentialFieldMetadata => field !== undefined)
+    .map((field) => (optionalKeys.has(field.key) ? { ...field, required: false } : field));
 };
 
 const hasValue = (value: unknown): boolean => (typeof value === "string" ? value.trim() !== "" : value != null);
@@ -34,7 +41,10 @@ const isFullySatisfied = (
   if (!fixedValuesMatch) {
     return false;
   }
-  return variant.field_keys.every((key) => !fieldsByKey.get(key)?.required || hasValue(values[key]));
+  const optionalKeys = new Set(variant.optional_field_keys ?? []);
+  return variant.field_keys.every(
+    (key) => optionalKeys.has(key) || !fieldsByKey.get(key)?.required || hasValue(values[key]),
+  );
 };
 
 /**
