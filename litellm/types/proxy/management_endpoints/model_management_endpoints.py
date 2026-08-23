@@ -1,6 +1,7 @@
+from collections.abc import Sequence
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from ...router import ModelGroupInfo
 
@@ -61,3 +62,21 @@ class AccessGroupInfo(BaseModel):
 
 class ListAccessGroupsResponse(BaseModel):
     access_groups: list[AccessGroupInfo]
+
+
+class ProviderModelDiscoveryRequest(BaseModel):
+    """Body for POST /provider/models/discover. Exactly one of ``litellm_credential_name`` or
+    inline ``api_key``/``api_base`` names the credential to probe; extra fields are rejected
+    outright rather than silently ignored, since this is a security boundary -- see
+    ``reject_server_owned_wif_params`` in the handler for why."""
+
+    custom_llm_provider: str
+    litellm_credential_name: str | None = None
+    api_key: str | None = None
+    api_base: str | None = None
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class ProviderModelDiscoveryResponse(BaseModel):
+    models: Sequence[str]

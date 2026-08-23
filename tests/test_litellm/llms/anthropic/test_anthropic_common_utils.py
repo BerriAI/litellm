@@ -2954,6 +2954,170 @@ class TestWifProviderAllowlist:
         assert poster.requests == []
 
 
+def _models_page_response(page: dict, status_code: int = 200):
+    import httpx
+
+    return httpx.Response(status_code, json=page, request=httpx.Request("GET", "https://api.anthropic.com/v1/models"))
+
+
+class RecordingModelsClient:
+    """Records every call and answers with the queued responses in order, cycling the last one
+    once exhausted so a runaway pagination loop degrades to a repeated page rather than an
+    IndexError, letting the page-cap test observe the cap firing instead of a test bug."""
+
+    def __init__(self, pages: list[dict] | None = None, responses=None):
+        self.calls = []
+        self._responses = responses if responses is not None else [_models_page_response(page) for page in pages]
+
+    def get(self, url, headers=None, params=None, follow_redirects=None, timeout=None):
+        self.calls.append(SimpleNamespace(url=url, headers=headers, params=params, follow_redirects=follow_redirects))
+        index = min(len(self.calls) - 1, len(self._responses) - 1)
+        return self._responses[index]
+
+
+class TestModelDiscovery:
+    """AnthropicModelInfo.get_models / discover_models: pagination, redirect refusal, and
+    sanitized errors on the upstream Anthropic /v1/models call itself (issue #28607 gap: a
+    WIF source configured in litellm_params, rather than the environment, could not
+    discover)."""
+
+    def test_get_models_paginates_via_has_more_and_last_id(self, monkeypatch, clean_anthropic_env):
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        monkeypatch.setenv("ANTHROPIC_API_KEY", FAKE_REGULAR_KEY)
+        client = RecordingModelsClient(
+            [
+                {"data": [{"id": "claude-a"}, {"id": "claude-b"}], "has_more": True, "last_id": "claude-b"},
+                {"data": [{"id": "claude-c"}], "has_more": False, "last_id": "claude-c"},
+            ]
+        )
+        monkeypatch.setattr("litellm.module_level_client", client)
+
+        models = AnthropicModelInfo().get_models(api_base="https://api.anthropic.com")
+
+        assert models == ["anthropic/claude-a", "anthropic/claude-b", "anthropic/claude-c"]
+        assert len(client.calls) == 2
+        assert client.calls[0].params == {}
+        assert client.calls[1].params == {"after_id": "claude-b"}
+
+    def test_get_models_refuses_to_follow_redirects(self, monkeypatch, clean_anthropic_env):
+        """Only the configured api_base is validated, so a redirected /v1/models must not be
+        allowed to replay the credential to an unvalidated origin -- same rule already applied
+        to the WIF token exchange itself."""
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        monkeypatch.setenv("ANTHROPIC_API_KEY", FAKE_REGULAR_KEY)
+        client = RecordingModelsClient([{"data": [], "has_more": False, "last_id": None}])
+        monkeypatch.setattr("litellm.module_level_client", client)
+
+        AnthropicModelInfo().get_models(api_base="https://api.anthropic.com")
+
+        assert client.calls[0].follow_redirects is False
+
+    def test_get_models_page_cap_stops_a_runaway_has_more(self, monkeypatch, clean_anthropic_env):
+        from litellm.llms.anthropic.common_utils import (
+            _MODEL_LIST_PAGE_CAP,
+            AnthropicModelInfo,
+        )
+
+        monkeypatch.setenv("ANTHROPIC_API_KEY", FAKE_REGULAR_KEY)
+        client = RecordingModelsClient([{"data": [{"id": "claude-loop"}], "has_more": True, "last_id": "claude-loop"}])
+        monkeypatch.setattr("litellm.module_level_client", client)
+
+        with pytest.raises(Exception, match="did not terminate"):
+            AnthropicModelInfo().get_models(api_base="https://api.anthropic.com")
+
+        assert len(client.calls) == _MODEL_LIST_PAGE_CAP
+
+    def test_get_models_error_is_sanitized_not_raw_response_text(self, monkeypatch, clean_anthropic_env):
+        """A failed discovery call must never echo the raw response body verbatim -- only the
+        structured error message, so an unrelated/oversized/reflected body is not surfaced."""
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        monkeypatch.setenv("ANTHROPIC_API_KEY", FAKE_REGULAR_KEY)
+        reflected_payload = "<script>evil()</script>" * 50
+        client = RecordingModelsClient(
+            responses=[
+                _models_page_response(
+                    {
+                        "type": "error",
+                        "error": {
+                            "type": "authentication_error",
+                            "message": "invalid x-api-key",
+                            "reflected": reflected_payload,
+                        },
+                    },
+                    status_code=401,
+                )
+            ]
+        )
+        monkeypatch.setattr("litellm.module_level_client", client)
+
+        with pytest.raises(Exception, match="invalid x-api-key") as exc_info:  # noqa: B017, PT011  # the callee raises a bare Exception; match pins the sanitized text
+            AnthropicModelInfo().get_models(api_base="https://api.anthropic.com")
+
+        assert "invalid x-api-key" in str(exc_info.value)
+        assert reflected_payload not in str(exc_info.value)
+
+    def test_discover_models_threads_litellm_params_into_wif(self, monkeypatch, wif_engine):
+        """The gap this phase fixes: get_models only ever saw api_key/api_base, so a WIF source
+        configured in litellm_params (rather than ANTHROPIC_* env vars) could not discover."""
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        poster, calls = wif_engine
+        client = RecordingModelsClient([{"data": [{"id": "claude-wif"}], "has_more": False, "last_id": None}])
+        monkeypatch.setattr("litellm.module_level_client", client)
+        monkeypatch.setenv("DISC_JWT", "jwt-assertion-value")
+
+        models = AnthropicModelInfo().discover_models(
+            litellm_params={
+                "anthropic_federation_rule_id": "fdrl_disc",
+                "anthropic_organization_id": "org-disc",
+                "anthropic_identity_token": "oidc/env/DISC_JWT",
+            }
+        )
+
+        assert models == ["anthropic/claude-wif"]
+        assert len(poster.requests) == 1
+        assert client.calls[0].headers["authorization"] == f"Bearer {FAKE_MINTED_TOKEN}"
+
+    def test_discover_models_without_litellm_params_behaves_like_get_models(self, monkeypatch, clean_anthropic_env):
+        """No litellm_params (the wildcard-discovery call shape) must fall back to the
+        env-only resolution get_models has always used -- zero behavior change for that path."""
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        monkeypatch.setenv("ANTHROPIC_API_KEY", FAKE_REGULAR_KEY)
+        client = RecordingModelsClient([{"data": [{"id": "claude-env"}], "has_more": False, "last_id": None}])
+        monkeypatch.setattr("litellm.module_level_client", client)
+
+        models = AnthropicModelInfo().discover_models(litellm_params=None)
+
+        assert models == ["anthropic/claude-env"]
+        assert client.calls[0].headers["x-api-key"] == FAKE_REGULAR_KEY
+
+    def test_discover_models_explicit_api_key_beats_wif(self, monkeypatch, wif_engine):
+        """Same precedence discover_models must honor as every other Anthropic auth surface:
+        WIF is the lowest tier."""
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        poster, calls = wif_engine
+        client = RecordingModelsClient([{"data": [], "has_more": False, "last_id": None}])
+        monkeypatch.setattr("litellm.module_level_client", client)
+
+        AnthropicModelInfo().discover_models(
+            litellm_params={
+                "api_key": FAKE_REGULAR_KEY,
+                "anthropic_federation_rule_id": "fdrl_disc",
+                "anthropic_organization_id": "org-disc",
+                "anthropic_identity_token": "oidc/env/DISC_JWT",
+            }
+        )
+
+        assert client.calls[0].headers["x-api-key"] == FAKE_REGULAR_KEY
+        assert calls == []
+        assert poster.requests == []
+
+
 class TestWifExchangeTransportHardening:
     def test_token_exchange_client_does_not_follow_redirects(self):
         """Only the initial token URL is validated, so a 3xx must not be allowed to replay the

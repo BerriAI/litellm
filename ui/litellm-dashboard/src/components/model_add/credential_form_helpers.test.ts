@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { Providers } from "../provider_info_helpers";
-import { resetCredentialFormOnProviderChange } from "./credential_form_helpers";
+import { computeCredentialValuesToDelete, resetCredentialFormOnProviderChange } from "./credential_form_helpers";
 
 /**
  * Build a minimal FormInstance stub that records calls. We don't depend
@@ -79,5 +79,33 @@ describe("resetCredentialFormOnProviderChange", () => {
 
     const credentialNameCalls = calls.setFieldValue.mock.calls.filter(([key]) => key === "credential_name");
     expect(credentialNameCalls).toHaveLength(0);
+  });
+});
+
+describe("computeCredentialValuesToDelete", () => {
+  it("flags a field that is no longer mounted at all", () => {
+    // e.g. switching from the api_key variant to a WIF variant unmounts api_key/api_base.
+    const original = { api_base: "https://api.anthropic.com", api_key: "sk-***1234" };
+    const mounted = { anthropic_federation_rule_id: "rule-1" };
+
+    expect(computeCredentialValuesToDelete(original, mounted)).toEqual(["api_base", "api_key"]);
+  });
+
+  it("keeps a masked-but-untouched field, since it is still mounted", () => {
+    const original = { api_key: "sk-***1234" };
+    const mounted = { api_key: "sk-***1234" };
+
+    expect(computeCredentialValuesToDelete(original, mounted)).toEqual([]);
+  });
+
+  it("keeps a field the operator genuinely changed", () => {
+    const original = { api_key: "sk-***1234" };
+    const mounted = { api_key: "sk-new-real-key" };
+
+    expect(computeCredentialValuesToDelete(original, mounted)).toEqual([]);
+  });
+
+  it("returns nothing when nothing existed before", () => {
+    expect(computeCredentialValuesToDelete({}, { api_key: "sk-new" })).toEqual([]);
   });
 });

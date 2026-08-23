@@ -10,8 +10,19 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.litellm_logging import _get_masked_values
-from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
+from litellm.llms.anthropic.wif import (
+    _IDENTITY_SOURCE_PARAM,  # pyright: ignore[reportPrivateUsage]  # one canonical param name, shared with the litellm_params identity-source resolver
+    _INTERNAL_ISSUER_FIELD_MAP,  # pyright: ignore[reportPrivateUsage]  # one canonical field map, shared with the litellm_params identity-source resolver
+    _build_variant,  # pyright: ignore[reportPrivateUsage]  # one canonical builder, shared with the litellm_params identity-source resolver
+)
+from litellm.llms.base_llm.auth.identity_source import (
+    AnthropicIdentitySourceKind,
+    InternalIssuerSource,
+)
+from litellm.llms.base_llm.auth.internal_issuer import internal_issuer_jwks_document
+from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.credential_hydration import hydrate_named_credential
 from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
 from litellm.proxy.utils import handle_exception_on_proxy, jsonify_object
 from litellm.repositories.credentials_repository import CredentialsRepository
@@ -87,7 +98,7 @@ async def create_credential(
             credential_info=credential.credential_info,
         )
         encrypted_credential: Final = CredentialHelperUtils.encrypt_credential_values(processed_credential)
-        credentials_dict: Final = encrypted_credential.model_dump()
+        credentials_dict: Final = encrypted_credential.model_dump(exclude_none=True)
         credentials_dict_jsonified: Final = jsonify_object(credentials_dict)
         await CredentialsRepository(prisma_client).create(
             data={
@@ -166,6 +177,70 @@ async def get_credential_by_name(
             detail="Credential not found. Got credential name: " + credential_name,
         )
     except Exception as e:
+        verbose_proxy_logger.exception(e)
+        raise handle_exception_on_proxy(e)
+
+
+@router.get(
+    "/credentials/{credential_name:path}/jwks",
+    dependencies=(Depends(user_api_key_auth),),
+    tags=["credential management"],  # mutable-ok: FastAPI's include_router does self.tags.copy(), needs a real list
+)
+async def get_credential_internal_issuer_jwks(
+    credential_name: str = Path(..., description="The credential name, percent-decoded; may contain slashes"),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),  # noqa: B008  # FastAPI resolves the dependency from the default
+):
+    """
+    Export the public JWKS for an anthropic ``internal_issuer`` credential, so the operator can
+    register it on the Anthropic federation issuer from the UI. Never touches the private signing
+    key: only its derived public JWKS leaves this process. 404s for any other credential shape.
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        raise HTTPException(
+            status_code=403,
+            detail={  # mutable-ok: starlette json.dumps()s HTTPException.detail raw, needs a real dict
+                "error": "Only proxy admins can export a credential's JWKS."
+            },
+        )
+
+    try:
+        credential: Final = await hydrate_named_credential(credential_name, prisma_client)
+        if credential is None or credential.credential_info.get("custom_llm_provider") != "anthropic":
+            raise HTTPException(
+                status_code=404,
+                detail={  # mutable-ok: starlette json.dumps()s HTTPException.detail raw, needs a real dict
+                    "error": f"No anthropic credential named {credential_name!r}."
+                },
+            )
+        configured_source: Final = credential.credential_values.get(_IDENTITY_SOURCE_PARAM)
+        if configured_source != AnthropicIdentitySourceKind.internal_issuer.value:
+            raise HTTPException(
+                status_code=404,
+                detail={  # mutable-ok: starlette json.dumps()s HTTPException.detail raw, needs a real dict
+                    "error": (
+                        f"Credential {credential_name!r} is not configured with "
+                        f"{_IDENTITY_SOURCE_PARAM}={AnthropicIdentitySourceKind.internal_issuer.value!r}."
+                    )
+                },
+            )
+        try:
+            issuer_source: Final = _build_variant(
+                InternalIssuerSource, credential.credential_values, _INTERNAL_ISSUER_FIELD_MAP
+            )
+            jwks_document: Final = internal_issuer_jwks_document(issuer_source)
+        except (litellm.AuthenticationError, ValueError) as e:
+            raise HTTPException(
+                status_code=400,
+                detail={  # mutable-ok: starlette json.dumps()s HTTPException.detail raw, needs a real dict
+                    "error": str(e)
+                },
+            ) from e
+        return Response(content=jwks_document, media_type="application/json")
+    except HTTPException:
+        raise
+    except Exception as e:  # noqa: BLE001  # endpoint boundary: every failure becomes the proxy's error contract
         verbose_proxy_logger.exception(e)
         raise handle_exception_on_proxy(e)
 
@@ -272,6 +347,9 @@ def update_db_credential(
 
         merged_credential.credential_values.update(encrypted_params)
 
+    for key in updated_patch.credential_values_to_delete or ():
+        merged_credential.credential_values.pop(key, None)
+
     # update model info
     if encrypted_credential.credential_info:
         """Update credential info"""
@@ -300,6 +378,14 @@ async def update_credential(
     from litellm.proxy.proxy_server import prisma_client
 
     try:
+        overlap: Final = frozenset(credential.credential_values) & frozenset(
+            credential.credential_values_to_delete or ()
+        )
+        if overlap:
+            raise HTTPException(
+                status_code=400,
+                detail=f"credential_values_to_delete overlaps credential_values for key(s): {sorted(overlap)}",
+            )
         if prisma_client is None:
             raise HTTPException(
                 status_code=500,
@@ -310,7 +396,7 @@ async def update_credential(
         if db_credential is None:
             raise HTTPException(status_code=404, detail="Credential not found in DB.")
         merged_credential: Final = update_db_credential(db_credential, credential)
-        credential_object_jsonified: Final = jsonify_object(merged_credential.model_dump())
+        credential_object_jsonified: Final = jsonify_object(merged_credential.model_dump(exclude_none=True))
         await credentials_repository.update_by_name(
             credential_name,
             data={
@@ -331,6 +417,8 @@ async def update_credential(
             in_memory_values: Final = dict(existing_in_memory.credential_values or {})
             if credential.credential_values:
                 in_memory_values.update(credential.credential_values)
+            for key in credential.credential_values_to_delete or ():
+                in_memory_values.pop(key, None)
             in_memory_info: Final = dict(existing_in_memory.credential_info or {})
             if credential.credential_info:
                 in_memory_info.update(credential.credential_info)

@@ -197,6 +197,8 @@ export interface Model {
   model_name: string;
   litellm_params: object;
   model_info: object | null;
+  // Admin-toggled pause flag, mirrors LiteLLM_ProxyModelTable.blocked. Proxy-admin only.
+  blocked?: boolean;
 }
 
 interface PromptInfo {
@@ -258,6 +260,8 @@ export interface CredentialItem {
     description?: string;
     required?: boolean;
   };
+  // PATCH-only: keys to drop from the stored credential_values.
+  credential_values_to_delete?: string[] | null;
 }
 
 export interface ProviderCredentialFieldMetadata {
@@ -271,12 +275,27 @@ export interface ProviderCredentialFieldMetadata {
   default_value?: string | null;
 }
 
+export interface ProviderCredentialVariant {
+  id: string;
+  label: string;
+  field_keys: string[];
+  fixed_values: Record<string, string>;
+}
+
+export interface ProviderCredentialVariants {
+  selector_label: string;
+  default_variant: string;
+  field_definitions: ProviderCredentialFieldMetadata[];
+  variants: ProviderCredentialVariant[];
+}
+
 export interface ProviderCreateInfo {
   provider: string;
   provider_display_name: string;
   litellm_provider: string;
   default_model_placeholder?: string | null;
   credential_fields: ProviderCredentialFieldMetadata[];
+  credential_variants?: ProviderCredentialVariants | null;
 }
 
 export interface AgentCredentialFieldMetadata {
@@ -370,6 +389,39 @@ export const getProviderCreateMetadata = async (): Promise<ProviderCreateInfo[]>
 
   const jsonData: ProviderCreateInfo[] = await response.json();
   return jsonData;
+};
+
+export interface ProviderModelDiscoveryRequest {
+  custom_llm_provider: string;
+  litellm_credential_name?: string;
+  api_key?: string;
+  api_base?: string;
+}
+
+export interface ProviderModelDiscoveryResponse {
+  models: string[];
+}
+
+export const discoverProviderModelsCall = async (
+  accessToken: string,
+  body: ProviderModelDiscoveryRequest,
+): Promise<ProviderModelDiscoveryResponse> => {
+  /**
+   * Live model discovery for a configured provider credential. Proxy-admin only.
+   */
+  return await apiClient.post(`/provider/models/discover`, { accessToken, body });
+};
+
+export interface AnthropicJwks {
+  keys: Record<string, string>[];
+}
+
+export const getCredentialJwksCall = async (accessToken: string, credentialName: string): Promise<AnthropicJwks> => {
+  /**
+   * Export the public JWKS for an anthropic internal_issuer credential, so it can be
+   * registered on the Anthropic federation issuer.
+   */
+  return await apiClient.get(`/credentials/${encodeURIComponent(credentialName)}/jwks`, { accessToken });
 };
 
 export interface ComplexityScorerDefaults {
@@ -619,6 +671,14 @@ export const modelCreateCall = async (accessToken: string, formValues: Model) =>
     console.error("Failed to create key:", error);
     throw error;
   }
+};
+
+export const createProviderModelCall = async (accessToken: string, formValues: Model): Promise<{ model_id?: string }> => {
+  /**
+   * Same endpoint as modelCreateCall, without the per-call success toast -- used by the Add
+   * Provider wizard, which creates many rows at once and reports its own bulk-creation summary.
+   */
+  return await apiClient.post(`/model/new`, { accessToken, body: formValues });
 };
 
 export const modelDeleteCall = async (accessToken: string, model_id: string) => {
@@ -1753,6 +1813,20 @@ export const modelInfoV1Call = async (accessToken: string, modelId: string) => {
     console.error("Failed to create key:", error);
     throw error;
   }
+};
+
+export interface DeploymentInfoRow {
+  model_name: string;
+  litellm_params: { model?: string; litellm_credential_name?: string };
+  model_info: { id: string };
+}
+
+export const listAllModelsCall = async (accessToken: string): Promise<{ data: DeploymentInfoRow[] }> => {
+  /**
+   * Every deployment the caller can see, unpaginated. Used to dedupe model creation against
+   * what already exists (e.g. when resuming a partially-failed Add Provider wizard run).
+   */
+  return await apiClient.get(`/model/info`, { accessToken });
 };
 
 export const modelHubPublicModelsCall = async () => {

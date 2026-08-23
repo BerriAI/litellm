@@ -17,7 +17,7 @@ import {
 import { CredentialItem } from "../networking";
 import { Providers } from "../provider_info_helpers";
 import { Logo } from "@/components/molecules/logo/Logo";
-import { resetCredentialFormOnProviderChange } from "./credential_form_helpers";
+import { computeCredentialValuesToDelete, resetCredentialFormOnProviderChange } from "./credential_form_helpers";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 const providerOptions: SearchSelectOption[] = Object.entries(Providers).map(([providerEnum, providerDisplayName]) => ({
@@ -29,7 +29,7 @@ const providerOptions: SearchSelectOption[] = Object.entries(Providers).map(([pr
 interface CredentialModalProps {
   open: boolean;
   onCancel: () => void;
-  onSubmit: (values: any) => void;
+  onSubmit: (values: any, credentialValuesToDelete: string[]) => void;
   mode: "add" | "edit";
   existingCredential?: CredentialItem | null;
 }
@@ -77,7 +77,10 @@ export default function CredentialModal({
       }
       return acc;
     }, {} as any);
-    onSubmit(filteredValues);
+    const credentialValuesToDelete = isEdit
+      ? computeCredentialValuesToDelete(existingCredential?.credential_values ?? {}, values)
+      : [];
+    onSubmit(filteredValues, credentialValuesToDelete);
     form.reset();
   };
 

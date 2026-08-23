@@ -36,3 +36,22 @@ export function resetCredentialFormOnProviderChange(
   setSelectedProvider(newProvider);
   form.setFieldValue("custom_llm_provider", newProvider);
 }
+
+/**
+ * Keys to drop from a saved credential's `credential_values` on update: whatever the form had
+ * mounted before that it does not have mounted now. A field stops being mounted either because
+ * the operator cleared it or because a credential_variants switch (e.g. api_key -> Keycloak)
+ * unmounted it, and either way the backend must actually delete it rather than merge over it
+ * -- a leftover field from a different auth variant fails validation on the next request
+ * (wif.py rejects foreign-variant fields by presence).
+ *
+ * `mountedValues` must be the full projected form state (masked-but-untouched fields included),
+ * not the caller's post-filter payload: a masked value that the operator never touched is still
+ * mounted and must be preserved, not read as "absent, so delete it".
+ */
+export function computeCredentialValuesToDelete(
+  originalValues: Record<string, unknown>,
+  mountedValues: Record<string, unknown>,
+): string[] {
+  return Object.keys(originalValues).filter((key) => !(key in mountedValues));
+}

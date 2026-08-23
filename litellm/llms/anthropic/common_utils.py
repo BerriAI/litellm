@@ -10,7 +10,7 @@ from types import MappingProxyType
 from typing import Any, ClassVar, Final, Literal
 
 import httpx
-from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
 import litellm
 from litellm.constants import DEFAULT_MODEL_CREATED_AT_TIME
@@ -126,6 +126,72 @@ class AnthropicError(BaseLLMException):
         headers: httpx.Headers | None = None,
     ):
         super().__init__(status_code=status_code, message=message, headers=headers)
+
+
+_MODEL_LIST_PAGE_CAP: Final = 20
+
+
+def _litellm_params_str(litellm_params: Mapping[str, object] | None, key: str) -> str | None:
+    value: Final = litellm_params.get(key) if litellm_params is not None else None
+    return value if isinstance(value, str) else None
+
+
+class _AnthropicModelListEntry(BaseModel):
+    id: str
+
+
+class _AnthropicModelsPage(BaseModel):
+    data: Sequence[_AnthropicModelListEntry] = Field(default_factory=tuple)
+    has_more: bool = False
+    last_id: str | None = None
+
+
+def _sanitized_anthropic_error(response: httpx.Response, detail: str | None = None) -> str:
+    """A provider error detail built only from structured fields, never ``response.text``
+    verbatim: the raw body is untrusted content the caller of ``/v1/models`` did not ask for
+    and should not have echoed back to it wholesale."""
+    if detail is not None:
+        return f"HTTP {response.status_code}: {detail}"
+    try:
+        body: Final = response.json()
+    except ValueError:
+        return f"HTTP {response.status_code}"
+    error: Final = body.get("error") if isinstance(body, dict) else None
+    message: Final = error.get("message") if isinstance(error, dict) else None
+    return f"HTTP {response.status_code}: {message}" if isinstance(message, str) else f"HTTP {response.status_code}"
+
+
+def _fetch_anthropic_models_page(
+    api_base: str, headers: Mapping[str, str], after_id: str | None
+) -> _AnthropicModelsPage:
+    response: Final = litellm.module_level_client.get(
+        url=f"{api_base}/v1/models",
+        headers=headers,
+        params=MappingProxyType({"after_id": after_id}) if after_id else MappingProxyType({}),
+        follow_redirects=False,
+    )
+    try:
+        response.raise_for_status()
+    except httpx.HTTPStatusError:
+        raise Exception(f"Failed to fetch models from Anthropic. {_sanitized_anthropic_error(response)}") from None
+    try:
+        return _AnthropicModelsPage.model_validate(response.json())
+    except ValueError as e:
+        raise Exception(
+            f"Failed to fetch models from Anthropic. {_sanitized_anthropic_error(response, detail=str(e))}"
+        ) from None
+
+
+def _fetch_anthropic_model_ids(
+    api_base: str, headers: Mapping[str, str], after_id: str | None, pages_left: int
+) -> tuple[str, ...]:
+    if pages_left <= 0:
+        raise Exception(f"Anthropic /v1/models did not terminate within {_MODEL_LIST_PAGE_CAP} pages.")
+    page: Final = _fetch_anthropic_models_page(api_base, headers, after_id)
+    page_ids: Final = tuple(entry.id for entry in page.data)
+    if not page.has_more or page.last_id is None:
+        return page_ids
+    return page_ids + _fetch_anthropic_model_ids(api_base, headers, page.last_id, pages_left - 1)
 
 
 class AnthropicModelInfo(BaseLLMModelInfo):
@@ -899,39 +965,49 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         return model.replace("anthropic/", "") if model else None
 
     def get_models(self, api_key: str | None = None, api_base: str | None = None) -> list[str]:
-        api_base = AnthropicModelInfo.get_api_base(api_base)
-        auth_header: Final = AnthropicModelInfo.get_auth_header(
-            api_key, api_base, allow_workload_identity=config_allows_workload_identity(self)
+        return self._list_models(api_key=api_key, api_base=api_base, litellm_params=None)
+
+    def discover_models(
+        self, litellm_params: Mapping[str, object] | None = None
+    ) -> list[str]:  # mutable-ok: matches get_models' list[str] contract shared by every provider override
+        """Live discovery for a configured deployment: unlike ``get_models``, this threads the
+        full ``litellm_params`` into ``get_auth_header`` so a workload-identity-federation source
+        configured on the deployment (rather than the environment) is honored, gated the same way
+        every other Anthropic auth surface is via ``config_allows_workload_identity``."""
+        return self._list_models(
+            api_key=_litellm_params_str(litellm_params, "api_key"),
+            api_base=_litellm_params_str(litellm_params, "api_base"),
+            litellm_params=litellm_params,
         )
-        if api_base is None or auth_header is None:
+
+    def _list_models(
+        self,
+        *,
+        api_key: str | None,
+        api_base: str | None,
+        litellm_params: Mapping[str, object] | None,
+    ) -> list[str]:  # mutable-ok: matches get_models' list[str] contract shared by every provider override
+        resolved_api_base: Final = AnthropicModelInfo.get_api_base(api_base)
+        auth_header: Final = AnthropicModelInfo.get_auth_header(
+            api_key,
+            resolved_api_base,
+            litellm_params=litellm_params,
+            allow_workload_identity=config_allows_workload_identity(self),
+        )
+        if resolved_api_base is None or auth_header is None:
             raise ValueError(
                 "ANTHROPIC_API_BASE/ANTHROPIC_BASE_URL or ANTHROPIC_API_KEY/ANTHROPIC_AUTH_TOKEN (or workload "
                 "identity federation via ANTHROPIC_FEDERATION_RULE_ID/ANTHROPIC_ORGANIZATION_ID/"
                 "ANTHROPIC_IDENTITY_TOKEN_FILE) is not set. Please set the environment variable, to query "
                 "Anthropic's `/models` endpoint."
             )
-        headers: Final = {"anthropic-version": "2023-06-01"}
-        headers.update(auth_header)
-        response: Final = litellm.module_level_client.get(
-            url=f"{api_base}/v1/models",
-            headers=headers,
+        headers: Final = MappingProxyType({"anthropic-version": "2023-06-01", **auth_header})
+        model_ids: Final = _fetch_anthropic_model_ids(
+            resolved_api_base, headers, after_id=None, pages_left=_MODEL_LIST_PAGE_CAP
         )
-
-        try:
-            response.raise_for_status()
-        except httpx.HTTPStatusError:
-            raise Exception(
-                f"Failed to fetch models from Anthropic. Status code: {response.status_code}, Response: {response.text}"
-            )
-
-        models: Final = response.json()["data"]
-
-        litellm_model_names: Final = []
-        for model in models:
-            stripped_model_name = model["id"]
-            litellm_model_name = "anthropic/" + stripped_model_name
-            litellm_model_names.append(litellm_model_name)
-        return litellm_model_names
+        return [  # mutable-ok: matches get_models' list[str] contract shared by every provider override
+            "anthropic/" + model_id for model_id in model_ids
+        ]
 
     def get_token_counter(self) -> BaseTokenCounter | None:
         """

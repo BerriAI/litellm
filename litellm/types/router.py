@@ -536,6 +536,9 @@ class Deployment(BaseModel):
     model_name: str
     litellm_params: LiteLLM_Params
     model_info: ModelInfo
+    # admin-toggled pause flag; mirrors LiteLLM_ProxyModelTable.blocked. None means "don't set it
+    # on create" -- the Prisma column defaults to False -- rather than "explicitly unblocked".
+    blocked: bool | None = None
 
     model_config = ConfigDict(extra="allow", protected_namespaces=())
 

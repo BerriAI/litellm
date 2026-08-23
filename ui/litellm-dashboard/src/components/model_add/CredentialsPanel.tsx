@@ -47,12 +47,15 @@ export default function CredentialsPanel() {
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [isCredentialDeleting, setIsCredentialDeleting] = useState(false);
 
-  const handleUpdateCredential = async (values: Record<string, unknown>) => {
+  const handleUpdateCredential = async (values: Record<string, unknown>, credentialValuesToDelete: string[] = []) => {
     if (!accessToken) {
       return;
     }
     try {
-      const newCredential = buildCredential(values, stripMaskedSecrets(withoutRestrictedFields(values)));
+      const newCredential = {
+        ...buildCredential(values, stripMaskedSecrets(withoutRestrictedFields(values))),
+        ...(credentialValuesToDelete.length > 0 ? { credential_values_to_delete: credentialValuesToDelete } : {}),
+      };
       await credentialUpdateCall(accessToken, values.credential_name as string, newCredential);
       toast.success("Credential updated successfully");
       setIsUpdateModalOpen(false);

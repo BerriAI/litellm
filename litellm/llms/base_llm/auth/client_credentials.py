@@ -159,9 +159,7 @@ def fetch_keycloak_assertion(
     workload assertion; the caller must not cache the result -- see the module docstring."""
     match validate_token_endpoint_url(config.token_url):
         case InsecureTokenUrl(host=host):
-            raise ValueError(
-                f"keycloak token_url must use https; refusing to send the client secret to host {host!r}"
-            )
+            raise ValueError(f"keycloak token_url must use https; refusing to send the client secret to host {host!r}")
         case _:
             pass
     client_secret: Final = _resolve_client_secret(config, secret_reader)

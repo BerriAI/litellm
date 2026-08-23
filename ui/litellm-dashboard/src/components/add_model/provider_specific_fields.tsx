@@ -10,12 +10,15 @@ import { useFormContext } from "react-hook-form";
 import { requiredRule } from "../common_components/formRules";
 import {
   MountedFormField,
+  useMountedName,
   type MountedFieldControlProps,
   type MountedFormValues,
 } from "../common_components/MountedFormField";
-import { CredentialItem, ProviderCredentialFieldMetadata } from "../networking";
+import { CredentialItem, ProviderCredentialFieldMetadata, ProviderCredentialVariants } from "../networking";
 import { provider_map, Providers } from "../provider_info_helpers";
 import { labelWithHint } from "@/components/shared/form/LabelWithHint";
+import { Field, FieldLabel } from "@/components/shared/form/field";
+import { getVariant, inferActiveVariant, resolveVariantFieldDefs } from "./provider_credential_variants";
 
 interface ProviderSpecificFieldsProps {
   selectedProvider: Providers;
@@ -88,6 +91,13 @@ const mapFieldMetadataToUiField = (field: ProviderCredentialFieldMetadata): Prov
 // non-React helpers like createCredentialFromModel.
 const providerFieldsByDisplayName: Record<string, ProviderCredentialField[]> = {};
 
+// Companion cache for credential_variants, keyed and populated the same way. Without this,
+// `allFields`'s cache-first lookup can resolve before providerMetadata (and thus `variants`)
+// has loaded, briefly rendering a variant-capable provider through the flat legacy field list
+// -- which registers the wrong `required` rule with react-hook-form for a field name a variant
+// later reuses (e.g. api_key), and that stale rule outlives the field's unmount.
+const providerVariantsByDisplayName: Record<string, ProviderCredentialVariants | null> = {};
+
 export const createCredentialFromModel = (provider: string, modelData: any): CredentialItem => {
   const enumKey = Object.keys(provider_map).find((key) => provider_map[key].toLowerCase() === provider.toLowerCase());
   if (!enumKey) {
@@ -117,6 +127,20 @@ export const createCredentialFromModel = (provider: string, modelData: any): Cre
   return credential;
 };
 
+// Mounts a litellm_params value a credential_variants variant implies (e.g. the
+// anthropic_identity_source discriminator) without a visible form field for it, so it is
+// submitted alongside whatever the operator actually typed. Registering via useMountedName
+// (rather than rendering a MountedFormField) keeps this a real function component, so the
+// effect below follows the ordinary rules of hooks instead of running inside a render-prop.
+const FixedValueField: React.FC<{ name: string; value: string }> = ({ name, value }) => {
+  const form = useFormContext<MountedFormValues>();
+  useMountedName(name);
+  React.useEffect(() => {
+    form.setValue(name, value);
+  }, [form, name, value]);
+  return null;
+};
+
 const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({ selectedProvider }) => {
   const selectedProviderEnum = Providers[selectedProvider as keyof typeof Providers] as Providers;
   const form = useFormContext<MountedFormValues>();
@@ -139,45 +163,50 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({ selecte
     }
 
     // Compute cache entries keyed by provider display name and identifiers
-    const entries: Record<string, ProviderCredentialField[]> = {};
+    const fieldEntries: Record<string, ProviderCredentialField[]> = {};
+    const variantEntries: Record<string, ProviderCredentialVariants | null> = {};
     providerMetadata.forEach((providerInfo) => {
-      const displayName = providerInfo.provider_display_name;
       const mappedFields = providerInfo.credential_fields.map(mapFieldMetadataToUiField);
-
-      // Primary key: human-readable display name
-      entries[displayName] = mappedFields;
-
-      // Also cache by backend identifiers so lookups by provider slug work
-      if (providerInfo.provider) {
-        entries[providerInfo.provider] = mappedFields;
-      }
-      if (providerInfo.litellm_provider) {
-        entries[providerInfo.litellm_provider] = mappedFields;
-      }
+      const keys = [providerInfo.provider_display_name, providerInfo.provider, providerInfo.litellm_provider].filter(
+        (key): key is string => Boolean(key),
+      );
+      keys.forEach((key) => {
+        fieldEntries[key] = mappedFields;
+        variantEntries[key] = providerInfo.credential_variants ?? null;
+      });
     });
-    return entries;
+    return { fieldEntries, variantEntries };
   }, [providerMetadata]);
 
-  // Sync memoized cache entries to module-level cache
+  // Sync memoized cache entries to the module-level caches together, so a lookup can never see
+  // one updated and the other still stale.
   React.useEffect(() => {
     if (!cacheEntries) {
       return;
     }
 
-    Object.assign(providerFieldsByDisplayName, cacheEntries);
+    Object.assign(providerFieldsByDisplayName, cacheEntries.fieldEntries);
+    Object.assign(providerVariantsByDisplayName, cacheEntries.variantEntries);
   }, [cacheEntries]);
 
-  const allFields = React.useMemo(() => {
-    // First try to resolve from the in-memory cache. We support both the
-    // enum/display-name form and the raw provider slug (e.g. "petals").
+  // Resolves this provider's fields and variants together -- from the module-level cache when
+  // an earlier mount (of any provider) has already populated it, else from providerMetadata once
+  // loaded. Combined into one lookup so the two can never disagree about whether this provider
+  // has credential_variants on a given render (see the cache comment above for why that matters).
+  const { allFields, variants } = React.useMemo((): {
+    allFields: ProviderCredentialField[];
+    variants: ProviderCredentialVariants | null;
+  } => {
     const cachedFields =
       providerFieldsByDisplayName[selectedProviderEnum] ?? providerFieldsByDisplayName[selectedProvider];
     if (cachedFields) {
-      return cachedFields;
+      const cachedVariants =
+        providerVariantsByDisplayName[selectedProviderEnum] ?? providerVariantsByDisplayName[selectedProvider];
+      return { allFields: cachedFields, variants: cachedVariants ?? null };
     }
 
     if (!providerMetadata) {
-      return [];
+      return { allFields: [], variants: null };
     }
 
     const providerInfo = providerMetadata.find(
@@ -187,21 +216,42 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({ selecte
         p.litellm_provider === selectedProvider,
     );
     if (!providerInfo) {
-      return [];
+      return { allFields: [], variants: null };
     }
 
     const mapped = providerInfo.credential_fields.map(mapFieldMetadataToUiField);
-    providerFieldsByDisplayName[providerInfo.provider_display_name] = mapped;
-    if (providerInfo.provider) {
-      providerFieldsByDisplayName[providerInfo.provider] = mapped;
-    }
-    if (providerInfo.litellm_provider) {
-      providerFieldsByDisplayName[providerInfo.litellm_provider] = mapped;
-    }
-    return mapped;
+    const resolvedVariants = providerInfo.credential_variants ?? null;
+    [providerInfo.provider_display_name, providerInfo.provider, providerInfo.litellm_provider]
+      .filter((key): key is string => Boolean(key))
+      .forEach((key) => {
+        providerFieldsByDisplayName[key] = mapped;
+        providerVariantsByDisplayName[key] = resolvedVariants;
+      });
+    return { allFields: mapped, variants: resolvedVariants };
   }, [selectedProviderEnum, selectedProvider, providerMetadata]);
 
-  const hasApiVersionField = React.useMemo(() => allFields.some((field) => field.key === "api_version"), [allFields]);
+  // The selector's own choice, once the operator makes one; otherwise undefined so the variant
+  // stays derived (inferred fresh every render from `variants`/the current field values, so a
+  // still-loading `variants` or a provider switch resolve correctly with no effect needed to
+  // "catch up" afterward). A choice left over from a different provider's variant list is
+  // treated as unset rather than resolving to a variant id that provider doesn't have.
+  const [userChosenVariantId, setUserChosenVariantId] = React.useState<string | undefined>(undefined);
+  const validUserChoice = variants?.variants.some((variant) => variant.id === userChosenVariantId)
+    ? userChosenVariantId
+    : undefined;
+  const activeVariantId = validUserChoice ?? (variants ? inferActiveVariant(variants, form.getValues()) : "");
+
+  const activeVariantFields = React.useMemo(
+    () => (variants ? resolveVariantFieldDefs(variants, activeVariantId).map(mapFieldMetadataToUiField) : []),
+    [variants, activeVariantId],
+  );
+
+  const currentFields = variants ? activeVariantFields : allFields;
+
+  const hasApiVersionField = React.useMemo(
+    () => currentFields.some((field) => field.key === "api_version"),
+    [currentFields],
+  );
   const lastInferredApiVersionRef = React.useRef<string | null>(null);
 
   const handleApiBaseChange = React.useCallback(
@@ -313,49 +363,83 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({ selecte
     );
   };
 
+  const renderFieldEntry = (field: ProviderCredentialField) => (
+    <React.Fragment key={field.key}>
+      <MountedFormField
+        label={field.tooltip ? labelWithHint(field.label, field.tooltip) : field.label}
+        name={field.key}
+        required={field.required}
+        rules={field.required ? { validate: { required: requiredRule("Required") } } : undefined}
+        className={field.key === "vertex_credentials" ? "mb-0" : "mb-4"}
+      >
+        {(control) => renderFieldControl(field, control)}
+      </MountedFormField>
+
+      {/* Special case for Vertex Credentials help text */}
+      {field.key === "vertex_credentials" && (
+        <p className="text-sm mb-3 mt-1">Give a gcp service account(.json file)</p>
+      )}
+
+      {/* Special case for Azure Base Model help text */}
+      {field.key === "base_model" && (
+        <div className="grid grid-cols-24">
+          <p className="col-start-11 col-span-10 text-sm mb-2">
+            The actual model your azure deployment uses. Used for accurate cost tracking. Select name from{" "}
+            <a
+              href="https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-primary underline-offset-4 hover:underline"
+            >
+              here
+            </a>
+          </p>
+        </div>
+      )}
+    </React.Fragment>
+  );
+
+  const activeVariant = variants ? getVariant(variants, activeVariantId) : undefined;
+
   return (
     <>
-      {isLoading && allFields.length === 0 && <p className="text-sm mb-2">Loading provider fields...</p>}
-      {loadError && allFields.length === 0 && (
+      {isLoading && currentFields.length === 0 && <p className="text-sm mb-2">Loading provider fields...</p>}
+      {loadError && currentFields.length === 0 && (
         <p className="text-sm mb-2 text-destructive">
           {loadError instanceof Error ? loadError.message : "Failed to load provider credential fields"}
         </p>
       )}
-      {allFields.map((field) => (
-        <React.Fragment key={field.key}>
-          <MountedFormField
-            label={field.tooltip ? labelWithHint(field.label, field.tooltip) : field.label}
-            name={field.key}
-            required={field.required}
-            rules={field.required ? { validate: { required: requiredRule("Required") } } : undefined}
-            className={field.key === "vertex_credentials" ? "mb-0" : "mb-4"}
+      {variants && (
+        <Field className="mb-4">
+          <FieldLabel htmlFor="provider-credential-variant">{variants.selector_label}</FieldLabel>
+          <Select
+            items={variants.variants.map((variant) => ({ value: variant.id, label: variant.label }))}
+            value={activeVariantId || null}
+            onValueChange={(value) => value && setUserChosenVariantId(value)}
           >
-            {(control) => renderFieldControl(field, control)}
-          </MountedFormField>
-
-          {/* Special case for Vertex Credentials help text */}
-          {field.key === "vertex_credentials" && (
-            <p className="text-sm mb-3 mt-1">Give a gcp service account(.json file)</p>
-          )}
-
-          {/* Special case for Azure Base Model help text */}
-          {field.key === "base_model" && (
-            <div className="grid grid-cols-24">
-              <p className="col-start-11 col-span-10 text-sm mb-2">
-                The actual model your azure deployment uses. Used for accurate cost tracking. Select name from{" "}
-                <a
-                  href="https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-primary underline-offset-4 hover:underline"
-                >
-                  here
-                </a>
-              </p>
-            </div>
-          )}
-        </React.Fragment>
-      ))}
+            <SelectTrigger id="provider-credential-variant" aria-label={variants.selector_label} className="w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {variants.variants.map((variant) => (
+                <SelectItem key={variant.id} value={variant.id}>
+                  {variant.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </Field>
+      )}
+      {/* Keyed by the active variant so switching variants fully unmounts the previous
+          variant's fields (deregistering them from submission) and re-applies fixed_values
+          fresh, rather than leaving a stale value behind under a reused field name. */}
+      <React.Fragment key={variants ? activeVariantId : "static"}>
+        {currentFields.map(renderFieldEntry)}
+        {activeVariant &&
+          Object.entries(activeVariant.fixed_values).map(([key, value]) => (
+            <FixedValueField key={key} name={key} value={value} />
+          ))}
+      </React.Fragment>
     </>
   );
 };

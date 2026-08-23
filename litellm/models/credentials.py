@@ -15,6 +15,8 @@ class CredentialBase(BaseModel):
 
 class CredentialItem(CredentialBase):
     credential_values: dict
+    # PATCH-only: keys to drop from the stored credential_values.
+    credential_values_to_delete: tuple[str, ...] | None = None
 
 
 class CreateCredentialItem(CredentialBase):

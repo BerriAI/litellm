@@ -343,7 +343,265 @@
         "default_value": null
       }
     ],
-    "default_model_placeholder": "claude-3-opus"
+    "default_model_placeholder": "claude-3-opus",
+    "credential_variants": {
+      "selector_label": "Authentication method",
+      "default_variant": "api_key",
+      "field_definitions": [
+        {
+          "key": "api_base",
+          "label": "Upstream API Base",
+          "placeholder": "https://api.anthropic.com",
+          "tooltip": "Optional. Where the proxy forwards requests upstream. Leave blank to use Anthropic's public API. Set this only for private Anthropic deployments or reverse proxies. Do NOT set this to your LiteLLM proxy URL — that causes a recursive loop.",
+          "required": false,
+          "field_type": "text",
+          "options": null,
+          "default_value": null
+        },
+        {
+          "key": "api_key",
+          "label": "API Key",
+          "placeholder": "sk-",
+          "tooltip": "Leave empty for BYOK (bring-your-own-key) flows, where clients forward their own Anthropic key via the x-api-key header. Requires the 'Forward LLM provider auth headers' UI setting to be enabled.",
+          "required": false,
+          "field_type": "password",
+          "options": null,
+          "default_value": null
+        },
+        {
+          "key": "anthropic_federation_rule_id",
+          "label": "Federation Rule ID",
+          "placeholder": null,
+          "tooltip": "The workload identity federation rule id, created in the Anthropic Console.",
+          "required": true,
+          "field_type": "text",
+          "options": null,
+          "default_value": null
+        },
+        {
+          "key": "anthropic_organization_id",
+          "label": "Organization ID",
+          "placeholder": null,
+          "tooltip": "The Anthropic organization id the federation rule belongs to.",
+          "required": true,
+          "field_type": "text",
+          "options": null,
+          "default_value": null
+        },
+        {
+          "key": "anthropic_service_account_id",
+          "label": "Service Account ID",
+          "placeholder": null,
+          "tooltip": "Optional. Required only if the federation rule is scoped to more than one service account.",
+          "required": false,
+          "field_type": "text",
+          "options": null,
+          "default_value": null
+        },
+        {
+          "key": "anthropic_workspace_id",
+          "label": "Workspace ID",
+          "placeholder": null,
+          "tooltip": "Optional. Set this if the federation rule is scoped to a workspace.",
+          "required": false,
+          "field_type": "text",
+          "options": null,
+          "default_value": null
+        },
+        {
+          "key": "anthropic_identity_token",
+          "label": "Identity Token Reference",
+          "placeholder": "oidc/env/MY_TOKEN_VAR",
+          "tooltip": "A secret reference to the workload's OIDC identity token, e.g. oidc/env/VAR_NAME, oidc/github/<audience>, or oidc/google/<audience>. This is a REFERENCE, never the token itself.",
+          "required": true,
+          "field_type": "text",
+          "options": null,
+          "default_value": null
+        },
+        {
+          "key": "anthropic_identity_token_file",
+          "label": "Identity Token File Path",
+          "placeholder": "/var/run/secrets/tokens/oidc-token",
+          "tooltip": "Absolute path to a mounted file containing the workload's OIDC identity token.",
+          "required": true,
+          "field_type": "text",
+          "options": null,
+          "default_value": null
+        },
+        {
+          "key": "anthropic_issuer_url",
+          "label": "Issuer URL",
+          "placeholder": "https://issuer.example.com",
+          "tooltip": "The 'iss' claim LiteLLM signs into the self-issued workload assertion. Must match the issuer registered on the Anthropic federation rule.",
+          "required": true,
+          "field_type": "text",
+          "options": null,
+          "default_value": null
+        },
+        {
+          "key": "anthropic_issuer_subject",
+          "label": "Subject",
+          "placeholder": null,
+          "tooltip": "The 'sub' claim LiteLLM signs into the self-issued workload assertion.",
+          "required": true,
+          "field_type": "text",
+          "options": null,
+          "default_value": null
+        },
+        {
+          "key": "anthropic_issuer_audience",
+          "label": "Audience",
+          "placeholder": null,
+          "tooltip": "Optional. The 'aud' claim LiteLLM signs into the self-issued workload assertion.",
+          "required": false,
+          "field_type": "text",
+          "options": null,
+          "default_value": null
+        },
+        {
+          "key": "anthropic_issuer_ttl_seconds",
+          "label": "Assertion TTL (seconds)",
+          "placeholder": "300",
+          "tooltip": "Optional. How long each freshly minted assertion is valid for, up to 3600 seconds.",
+          "required": false,
+          "field_type": "text",
+          "options": null,
+          "default_value": "300"
+        },
+        {
+          "key": "anthropic_issuer_signing_key_ref",
+          "label": "Signing Key Reference",
+          "placeholder": "os.environ/ISSUER_SIGNING_KEY_PEM",
+          "tooltip": "A secret reference to the ES256 (P-256) private key PEM LiteLLM signs assertions with, e.g. os.environ/VAR_NAME. This is a REFERENCE, never the key itself.",
+          "required": true,
+          "field_type": "text",
+          "options": null,
+          "default_value": null
+        },
+        {
+          "key": "anthropic_keycloak_token_url",
+          "label": "Keycloak Token URL",
+          "placeholder": "https://keycloak.example.com/realms/my-realm/protocol/openid-connect/token",
+          "tooltip": "The Keycloak client_credentials token endpoint LiteLLM fetches the workload assertion from.",
+          "required": true,
+          "field_type": "text",
+          "options": null,
+          "default_value": null
+        },
+        {
+          "key": "anthropic_keycloak_client_id",
+          "label": "Keycloak Client ID",
+          "placeholder": null,
+          "tooltip": "The confidential client id LiteLLM authenticates to Keycloak as.",
+          "required": true,
+          "field_type": "text",
+          "options": null,
+          "default_value": null
+        },
+        {
+          "key": "anthropic_keycloak_auth_method",
+          "label": "Keycloak Client Auth Method",
+          "placeholder": null,
+          "tooltip": "How the client secret is presented to Keycloak's token endpoint.",
+          "required": false,
+          "field_type": "select",
+          "options": ["client_secret_basic", "client_secret_post"],
+          "default_value": "client_secret_basic"
+        },
+        {
+          "key": "anthropic_keycloak_client_secret_ref",
+          "label": "Keycloak Client Secret Reference",
+          "placeholder": "os.environ/KEYCLOAK_CLIENT_SECRET",
+          "tooltip": "A secret reference to the Keycloak client secret, e.g. os.environ/VAR_NAME. This is a REFERENCE, never the secret itself.",
+          "required": true,
+          "field_type": "text",
+          "options": null,
+          "default_value": null
+        },
+        {
+          "key": "anthropic_keycloak_scope",
+          "label": "Keycloak Scope",
+          "placeholder": null,
+          "tooltip": "Optional. The OAuth scope requested from Keycloak's token endpoint.",
+          "required": false,
+          "field_type": "text",
+          "options": null,
+          "default_value": null
+        }
+      ],
+      "variants": [
+        {
+          "id": "api_key",
+          "label": "API Key",
+          "field_keys": ["api_base", "api_key"],
+          "fixed_values": {}
+        },
+        {
+          "id": "wif_token",
+          "label": "Workload Identity Federation (external token)",
+          "field_keys": [
+            "api_base",
+            "anthropic_federation_rule_id",
+            "anthropic_organization_id",
+            "anthropic_service_account_id",
+            "anthropic_workspace_id",
+            "anthropic_identity_token"
+          ],
+          "fixed_values": {}
+        },
+        {
+          "id": "wif_token_file",
+          "label": "Workload Identity Federation (token file)",
+          "field_keys": [
+            "api_base",
+            "anthropic_federation_rule_id",
+            "anthropic_organization_id",
+            "anthropic_service_account_id",
+            "anthropic_workspace_id",
+            "anthropic_identity_token_file"
+          ],
+          "fixed_values": {}
+        },
+        {
+          "id": "wif_internal_issuer",
+          "label": "Workload Identity Federation (LiteLLM-signed)",
+          "field_keys": [
+            "api_base",
+            "anthropic_federation_rule_id",
+            "anthropic_organization_id",
+            "anthropic_service_account_id",
+            "anthropic_workspace_id",
+            "anthropic_issuer_url",
+            "anthropic_issuer_subject",
+            "anthropic_issuer_audience",
+            "anthropic_issuer_ttl_seconds",
+            "anthropic_issuer_signing_key_ref"
+          ],
+          "fixed_values": {
+            "anthropic_identity_source": "internal_issuer"
+          }
+        },
+        {
+          "id": "wif_keycloak",
+          "label": "Workload Identity Federation (Keycloak)",
+          "field_keys": [
+            "api_base",
+            "anthropic_federation_rule_id",
+            "anthropic_organization_id",
+            "anthropic_service_account_id",
+            "anthropic_workspace_id",
+            "anthropic_keycloak_token_url",
+            "anthropic_keycloak_client_id",
+            "anthropic_keycloak_auth_method",
+            "anthropic_keycloak_client_secret_ref",
+            "anthropic_keycloak_scope"
+          ],
+          "fixed_values": {
+            "anthropic_identity_source": "keycloak"
+          }
+        }
+      ]
+    }
   },
   {
     "provider": "ANTHROPIC_TEXT",

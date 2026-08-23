@@ -2,15 +2,19 @@ from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
-
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.public_endpoints import router
 from litellm.types.proxy.management_endpoints.model_management_endpoints import (
     ModelGroupInfoProxy,
+)
+from litellm.types.proxy.public_endpoints.public_endpoints import (
+    ProviderCredentialField,
+    ProviderCredentialVariant,
+    ProviderCredentialVariants,
 )
 from litellm.types.utils import LlmProviders
 
@@ -1037,3 +1041,133 @@ def test_public_mcp_hub_does_not_expose_upstream_url():
     assert all("url" not in item for item in data)
     assert secret_url not in response.text
     app.dependency_overrides.clear()
+
+
+def _field(key: str) -> ProviderCredentialField:
+    return ProviderCredentialField(key=key, label=key)
+
+
+def test_credential_variants_rejects_duplicate_variant_ids():
+    with pytest.raises(ValidationError, match="unique"):
+        ProviderCredentialVariants(
+            selector_label="Auth method",
+            default_variant="a",
+            field_definitions=[_field("x")],
+            variants=[
+                ProviderCredentialVariant(id="a", label="A", field_keys=["x"]),
+                ProviderCredentialVariant(id="a", label="A again", field_keys=["x"]),
+            ],
+        )
+
+
+def test_credential_variants_rejects_unknown_default_variant():
+    with pytest.raises(ValidationError, match="default_variant"):
+        ProviderCredentialVariants(
+            selector_label="Auth method",
+            default_variant="does-not-exist",
+            field_definitions=[_field("x")],
+            variants=[ProviderCredentialVariant(id="a", label="A", field_keys=["x"])],
+        )
+
+
+def test_credential_variants_rejects_unresolved_field_keys():
+    with pytest.raises(ValidationError, match="undefined field_keys"):
+        ProviderCredentialVariants(
+            selector_label="Auth method",
+            default_variant="a",
+            field_definitions=[_field("x")],
+            variants=[ProviderCredentialVariant(id="a", label="A", field_keys=["x", "does-not-exist"])],
+        )
+
+
+def test_credential_variants_rejects_fixed_values_overlapping_field_keys():
+    with pytest.raises(ValidationError, match="overlapping"):
+        ProviderCredentialVariants(
+            selector_label="Auth method",
+            default_variant="a",
+            field_definitions=[_field("x")],
+            variants=[
+                ProviderCredentialVariant(id="a", label="A", field_keys=["x"], fixed_values={"x": "fixed"}),
+            ],
+        )
+
+
+def test_credential_variants_accepts_a_well_formed_schema():
+    variants = ProviderCredentialVariants(
+        selector_label="Auth method",
+        default_variant="a",
+        field_definitions=[_field("x"), _field("y")],
+        variants=[
+            ProviderCredentialVariant(id="a", label="A", field_keys=["x"]),
+            ProviderCredentialVariant(id="b", label="B", field_keys=["y"], fixed_values={"mode": "b"}),
+        ],
+    )
+    assert [v.id for v in variants.variants] == ["a", "b"]
+
+
+def test_anthropic_provider_fields_expose_credential_variants():
+    """The Anthropic provider must publish a variant selector covering API-key auth
+    and every workload-identity-federation identity source, while the legacy
+    credential_fields stays exactly api_base + api_key for old dashboards."""
+    app_instance = FastAPI()
+    app_instance.include_router(router)
+    test_client = TestClient(app_instance)
+
+    response = test_client.get("/public/providers/fields")
+    assert response.status_code == 200
+    providers = response.json()
+
+    anthropic = next((p for p in providers if p["provider"] == "Anthropic"), None)
+    assert anthropic is not None
+
+    # Legacy fallback is untouched: still exactly api_base + api_key.
+    assert {f["key"] for f in anthropic["credential_fields"]} == {"api_base", "api_key"}
+
+    variants_block = anthropic["credential_variants"]
+    assert variants_block is not None
+    assert variants_block["default_variant"] == "api_key"
+
+    variant_ids = {v["id"] for v in variants_block["variants"]}
+    assert variant_ids == {
+        "api_key",
+        "wif_token",
+        "wif_token_file",
+        "wif_internal_issuer",
+        "wif_keycloak",
+    }
+
+    field_defs_by_key = {f["key"]: f for f in variants_block["field_definitions"]}
+
+    # Every *_ref secret-pointer field is a plain text input, never password: pasting a
+    # secret into it would be exactly the exfiltration primitive the WIF hardening closed.
+    for ref_key in ("anthropic_issuer_signing_key_ref", "anthropic_keycloak_client_secret_ref", "anthropic_identity_token"):
+        assert field_defs_by_key[ref_key]["field_type"] == "text", f"{ref_key} must not render as a password field"
+
+    variants_by_id = {v["id"]: v for v in variants_block["variants"]}
+    assert variants_by_id["wif_internal_issuer"]["fixed_values"] == {"anthropic_identity_source": "internal_issuer"}
+    assert variants_by_id["wif_keycloak"]["fixed_values"] == {"anthropic_identity_source": "keycloak"}
+    assert variants_by_id["api_key"]["fixed_values"] == {}
+
+    # Every field_key referenced by a variant must resolve in field_definitions -- if this
+    # ever drifted the endpoint's own response_model validation would already 500, but assert
+    # it explicitly so a future edit fails fast in this test instead.
+    for variant in variants_block["variants"]:
+        for key in variant["field_keys"]:
+            assert key in field_defs_by_key, f"variant {variant['id']} references undefined field {key}"
+
+
+def test_provider_fields_without_credential_variants_still_parse():
+    """A provider with no credential_variants block (the overwhelming majority) must keep
+    parsing with the field simply absent, so old dashboards that only read credential_fields
+    see no change at all."""
+    app_instance = FastAPI()
+    app_instance.include_router(router)
+    test_client = TestClient(app_instance)
+
+    response = test_client.get("/public/providers/fields")
+    assert response.status_code == 200
+    providers = response.json()
+
+    openai = next((p for p in providers if p["provider"] == "OpenAI"), None)
+    assert openai is not None
+    assert openai.get("credential_variants") is None
