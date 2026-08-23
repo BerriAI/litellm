@@ -5200,3 +5200,81 @@ def test_prompt_hooks_skip_prompt_managers_when_no_prompt_id(logging_obj, tmp_pa
             )
         for hook in [cb for cb in litellm.callbacks if isinstance(cb, VectorStorePreCallHook)]:
             litellm.logging_callback_manager.remove_callback_from_list_by_object(litellm.callbacks, hook)
+def test_newrelic_dispatch_prefers_otel_v2_when_flag_on(monkeypatch):
+    """With LITELLM_OTEL_V2 on, the "newrelic" callback builds the OTel v2
+    logger (per-team credential routing); with the flag off (default) it keeps
+    the legacy agent-based logger, so existing deployments are untouched."""
+    from litellm.integrations.otel.logger import OpenTelemetryV2
+    from litellm.integrations.otel.model.config import is_otel_v2_enabled
+    from litellm.litellm_core_utils import litellm_logging as logging_module
+
+    logging_module._in_memory_loggers.clear()
+    monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+    is_otel_v2_enabled.cache_clear()
+    try:
+        v2_logger = logging_module._init_custom_logger_compatible_class(
+            logging_integration="newrelic",
+            internal_usage_cache=None,
+            llm_router=None,
+            custom_logger_init_args={},
+        )
+        assert isinstance(v2_logger, OpenTelemetryV2)
+        assert v2_logger.callback_name == "newrelic"
+        # Same name resolves to the same instance, not a second logger.
+        again = logging_module._init_custom_logger_compatible_class(
+            logging_integration="newrelic",
+            internal_usage_cache=None,
+            llm_router=None,
+            custom_logger_init_args={},
+        )
+        assert again is v2_logger
+    finally:
+        logging_module._in_memory_loggers.clear()
+        monkeypatch.delenv("LITELLM_OTEL_V2", raising=False)
+        is_otel_v2_enabled.cache_clear()
+
+
+def test_newrelic_dispatch_keeps_legacy_agent_when_flag_off(monkeypatch):
+    from litellm.integrations.newrelic import NewRelicLogger
+    from litellm.integrations.otel.model.config import is_otel_v2_enabled
+    from litellm.litellm_core_utils import litellm_logging as logging_module
+
+    logging_module._in_memory_loggers.clear()
+    monkeypatch.delenv("LITELLM_OTEL_V2", raising=False)
+    is_otel_v2_enabled.cache_clear()
+    try:
+        legacy = logging_module._init_custom_logger_compatible_class(
+            logging_integration="newrelic",
+            internal_usage_cache=None,
+            llm_router=None,
+            custom_logger_init_args={},
+        )
+        assert isinstance(legacy, NewRelicLogger)
+    finally:
+        logging_module._in_memory_loggers.clear()
+        is_otel_v2_enabled.cache_clear()
+
+
+def test_get_custom_logger_compatible_class_finds_v2_newrelic(monkeypatch):
+    """Under LITELLM_OTEL_V2 the "newrelic" instance is an OpenTelemetryV2; the
+    cached-lookup must find it or hook resolution (post-call failure/success
+    hooks) silently skips the callback."""
+    from litellm.integrations.otel.model.config import is_otel_v2_enabled
+    from litellm.litellm_core_utils import litellm_logging as logging_module
+
+    logging_module._in_memory_loggers.clear()
+    monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+    is_otel_v2_enabled.cache_clear()
+    try:
+        created = logging_module._init_custom_logger_compatible_class(
+            logging_integration="newrelic",
+            internal_usage_cache=None,
+            llm_router=None,
+            custom_logger_init_args={},
+        )
+        found = logging_module.get_custom_logger_compatible_class("newrelic")
+        assert found is created
+    finally:
+        logging_module._in_memory_loggers.clear()
+        monkeypatch.delenv("LITELLM_OTEL_V2", raising=False)
+        is_otel_v2_enabled.cache_clear()

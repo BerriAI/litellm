@@ -3300,6 +3300,11 @@ class StandardCallbackDynamicParams(TypedDict, total=False):
     dd_agent_host: str | None
     dd_agent_port: str | None
 
+    # New Relic dynamic params (proxy-stamped team/key callback vars only;
+    # request-supplied values are blocked)
+    newrelic_api_key: str | None  # writable-ok: initialize_standard_callback_dynamic_params assigns into the dict
+    newrelic_region: str | None  # writable-ok: initialize_standard_callback_dynamic_params assigns into the dict
+
     # Logging settings
     turn_off_message_logging: bool | None  # when true will not log messages
     litellm_disabled_callbacks: list[str] | None
