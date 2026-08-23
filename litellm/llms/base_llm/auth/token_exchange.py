@@ -15,6 +15,7 @@ import time
 from collections.abc import Callable, Coroutine, Mapping
 from concurrent.futures import Executor, ThreadPoolExecutor
 from dataclasses import dataclass
+from math import inf
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Protocol, TypeAlias
 from urllib.parse import urlencode, urlsplit
@@ -577,7 +578,7 @@ class JwtBearerTokenExchangeEngine:
                 case _Lead(call_type=call_type):
                     return self._lead(spec, entry, call_type)
                 case _Follow():
-                    followed: Final = self._await_leader(spec, entry)
+                    followed = self._await_leader(spec, entry)  # rebind-ok: one leader wait per round
                     if followed is not None:
                         return followed
                 case _:
@@ -615,13 +616,20 @@ class JwtBearerTokenExchangeEngine:
             del self._entries[key]
         if len(self._entries) < self._max_entries:
             return
-        evictable: Final = tuple(
-            (entry.token.expires_at, key)
+        # Evict soonest-to-expire first, and take as many as the overshoot needs rather than one, so a
+        # burst of distinct identities does not leave the map permanently above max_entries. An entry
+        # a leader owns or a follower waits on is never a candidate, so a moment where every entry is
+        # in flight still over-inserts; that residue is bounded by the concurrent mints themselves.
+        evictable: Final = sorted(
+            (
+                entry.token.expires_at if entry.token is not None and entry.token.expires_at is not None else -inf,
+                key,
+            )
             for key, entry in self._entries.items()
-            if not entry.in_flight and entry.token is not None and entry.token.expires_at is not None
+            if not entry.in_flight
         )
-        if evictable:
-            del self._entries[min(evictable)[1]]
+        for _, key in evictable[: len(self._entries) - self._max_entries + 1]:
+            del self._entries[key]
 
     def _classify_and_arm_locked(self, entry: _Entry) -> _Decision:
         token: Final = entry.token

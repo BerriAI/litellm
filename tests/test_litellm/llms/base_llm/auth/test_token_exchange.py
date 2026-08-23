@@ -889,6 +889,24 @@ def test_cache_key_semantics():
     assert cached.access_token.get_secret_value() == "sk-ant-oat01-minted"
 
 
+def test_the_cache_returns_to_its_bound_after_an_all_in_flight_burst():
+    """An entry a leader owns is never evictable, so a burst of distinct identities can push the map
+    past max_entries. It must come back down once those entries are idle, rather than holding the
+    high-water mark for the life of the process."""
+    clock = FakeClock()
+    engine = make_engine(ScriptedPoster([token_response(expires_in=3600)]), clock=clock, max_entries=4)
+
+    def spec_for(index: int) -> TokenExchangeSpec:
+        return make_spec(cache_key_identity=("fdrl_1", f"org-{index}", "", ""))
+
+    for index in range(12):
+        mint(engine, spec_for(index))
+
+    assert len(engine._entries) <= 4, (  # noqa: SLF001  # the bound under test is internal state
+        f"the cap is enforced once entries are idle, saw {len(engine._entries)}"
+    )
+
+
 def test_bounded_eviction():
     clock = FakeClock()
 
