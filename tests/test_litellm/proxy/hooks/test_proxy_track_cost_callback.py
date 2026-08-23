@@ -785,11 +785,17 @@ def _in_progress_interaction_kwargs(reservation: dict) -> dict:
 
 
 @pytest.mark.asyncio
-async def test_track_cost_callback_keeps_reservation_open_for_in_progress_background_interaction():
+@pytest.mark.parametrize("status", ["in_progress", "queued"])
+async def test_track_cost_callback_keeps_reservation_open_for_in_progress_background_interaction(status):
     """
     The pre-call budget reservation must stay open while a background
     interaction is in flight, so concurrent creates cannot stack past the
     budget; the poll task's completion event reconciles it to the actual cost.
+
+    ``queued`` is in flight for the same reason ``in_progress`` is: it has not
+    reached a terminal status, so releasing its reservation here would drop the
+    estimate off the spend counters while the interaction is still going to run
+    and still going to cost money.
     """
     from litellm.types.interactions import InteractionsAPIResponse
 
@@ -798,7 +804,7 @@ async def test_track_cost_callback_keeps_reservation_open_for_in_progress_backgr
     in_progress_response = InteractionsAPIResponse(
         id="interactions/bg-abc",
         model="gemini-3-flash-preview",
-        status="in_progress",
+        status=status,
     )
 
     with patch(
@@ -982,29 +988,59 @@ async def test_track_cost_callback_releases_reservation_for_interaction_without_
         mock_proxy_logging.failed_tracking_alert.assert_not_called()
 
 
-@pytest.mark.parametrize(
-    "status",
-    ["in_progress", "completed", "failed", "cancelled", "incomplete", "requires_action"],
-)
-@pytest.mark.parametrize("interaction_id", ["interactions/bg-abc", ""])
-def test_callback_defers_exactly_the_interactions_the_scheduler_polls(status, interaction_id):
+@pytest.mark.asyncio
+async def test_callback_handles_every_status_the_interactions_api_can_return():
     """
-    Pins the invariant the two modules share: the callback may only hold a
-    budget reservation open for a response the scheduler will actually poll.
-    Any drift between the two gates leaks reservations onto live spend
-    counters, so assert they agree rather than restating either condition.
+    Whatever status a usage-less create comes back with, exactly one of two
+    things has to happen to its budget reservation: the callback holds it open
+    for a poll task that will settle it, or it releases it on the spot. A
+    status that falls through both leaves the pre-call estimate pinned to the
+    key, user, team and org spend counters forever, refusing traffic against
+    budget nobody spent.
+
+    Driven off the generated spec enum so a status Google adds later fails here
+    instead of quietly leaking reservations in production.
     """
-    from litellm.interactions.background_cost_polling import is_pollable_background_interaction
-    from litellm.proxy.hooks.proxy_track_cost_callback import _is_unbilled_in_progress_interaction
     from litellm.types.interactions import InteractionsAPIResponse
+    from litellm.types.interactions.generated import Status1
 
-    response = InteractionsAPIResponse(
-        id=interaction_id,
-        model="gemini-3-flash-preview",
-        status=status,
-    )
+    deferred = set()
+    released = set()
 
-    assert _is_unbilled_in_progress_interaction(response) is is_pollable_background_interaction(response)
+    for status in sorted(member.value for member in Status1):
+        logger = _ProxyDBLogger()
+        reservation = {"reserved_cost": 0.05, "entries": [], "finalized": False}
+        response = InteractionsAPIResponse(
+            id="interactions/bg-abc",
+            model="gemini-3-flash-preview",
+            status=status,
+        )
+
+        with patch(
+            "litellm.proxy.proxy_server.proxy_logging_obj",
+        ) as mock_proxy_logging:
+            mock_proxy_logging.failed_tracking_alert = AsyncMock()
+            mock_proxy_logging.db_spend_update_writer = MagicMock()
+            mock_proxy_logging.db_spend_update_writer.update_database = AsyncMock()
+
+            await logger._PROXY_track_cost_callback(
+                kwargs=_in_progress_interaction_kwargs(reservation),
+                completion_response=response,
+                start_time=datetime.now(),
+                end_time=datetime.now(),
+            )
+
+        (deferred if reservation["finalized"] is False else released).add(status)
+
+    assert deferred == {"in_progress", "queued"}
+    assert released == {
+        "completed",
+        "requires_action",
+        "failed",
+        "cancelled",
+        "incomplete",
+        "budget_exceeded",
+    }
 
 
 @pytest.mark.asyncio

@@ -32,7 +32,7 @@ the interaction is billed exactly once no matter who settles first.
 import asyncio
 from collections.abc import Awaitable, Callable, Iterator, Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, TypeAlias
+from typing import TYPE_CHECKING, Final, TypeAlias
 
 from litellm._logging import verbose_logger
 from litellm.constants import (
@@ -47,9 +47,13 @@ from litellm.types.interactions import InteractionsAPIResponse
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
-_TERMINAL_STATUSES = frozenset({"completed", "failed", "cancelled", "incomplete", "budget_exceeded", "requires_action"})
+_TERMINAL_STATUSES: Final = frozenset(
+    {"completed", "failed", "cancelled", "incomplete", "budget_exceeded", "requires_action"}
+)
 
-_STATUSES_THAT_PRODUCED_OUTPUT = frozenset({"completed", "requires_action"})
+_POLLABLE_STATUSES: Final = frozenset({"in_progress", "queued"})
+
+_STATUSES_THAT_PRODUCED_OUTPUT: Final = frozenset({"completed", "requires_action"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -113,6 +117,7 @@ async def poll_and_log_background_interaction_cost(
     context: BackgroundInteractionPollContext,
     fetch_interaction: FetchInteraction = _fetch_interaction,
 ) -> None:
+    last_seen_status: str | None = None
     for interval in _poll_intervals(
         initial=context.initial_interval_seconds,
         maximum=context.max_interval_seconds,
@@ -130,6 +135,7 @@ async def poll_and_log_background_interaction_cost(
                 e,
             )
             continue
+        last_seen_status = response.status
         if response.status not in _TERMINAL_STATUSES:
             continue
         if not _claim_settlement(context.logging_obj):
@@ -141,11 +147,21 @@ async def poll_and_log_background_interaction_cost(
         return
     if not _claim_settlement(context.logging_obj):
         return
-    verbose_logger.warning(
-        "Gave up cost polling for background interaction %s after %ss; its usage will not be tracked",
-        context.interaction_id,
-        context.timeout_seconds,
-    )
+    if last_seen_status is not None and last_seen_status not in _POLLABLE_STATUSES:
+        verbose_logger.error(
+            "Gave up cost polling for background interaction %s after %ss: its last status %r is in neither "
+            "the pollable nor the terminal set, so this proxy never learned how to settle it and its usage "
+            "will not be tracked",
+            context.interaction_id,
+            context.timeout_seconds,
+            last_seen_status,
+        )
+    else:
+        verbose_logger.warning(
+            "Gave up cost polling for background interaction %s after %ss; its usage will not be tracked",
+            context.interaction_id,
+            context.timeout_seconds,
+        )
     await _release_open_budget_reservation(logging_obj=context.logging_obj)
 
 
@@ -193,8 +209,14 @@ def is_pollable_background_interaction(response: InteractionsAPIResponse) -> boo
     exactly these responses, on the promise that a poll task will settle them,
     so a response one site accepts and the other refuses strands its
     reservation on the spend counters with nothing left to reconcile it.
+
+    ``queued`` belongs here alongside ``in_progress``. It is the API's
+    not-started-yet state, so it reaches a terminal status the same way and
+    needs polling for the same reason: nothing else in the proxy ever bills a
+    create that came back without usage, so a status missing from both this
+    set and ``_TERMINAL_STATUSES`` is billed nowhere and alerts nobody.
     """
-    return response.status == "in_progress" and bool(response.id)
+    return response.status in _POLLABLE_STATUSES and bool(response.id)
 
 
 def missing_usage_is_expected(response: InteractionsAPIResponse) -> bool:

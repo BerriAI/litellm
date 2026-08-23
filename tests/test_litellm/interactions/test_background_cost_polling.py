@@ -448,3 +448,98 @@ async def test_schedule_respects_kill_switch(monkeypatch):
     )
 
     assert task is None
+
+
+def test_every_status_the_api_can_return_is_either_pollable_or_terminal():
+    """
+    The proxy bills a usage-less create in exactly two ways: it polls the
+    interaction until it settles, or it recognises the status as terminal and
+    settles immediately. A status in neither set is billed by nobody, alerts
+    nobody, and releases its budget reservation, which is the zero-spend bug
+    this whole module exists to fix.
+
+    Pinned against the generated spec enum rather than a hand-written list, so
+    a status Google adds later breaks this test instead of silently shipping
+    another unbilled path.
+    """
+    from litellm.interactions.background_cost_polling import _POLLABLE_STATUSES, _TERMINAL_STATUSES
+    from litellm.types.interactions.generated import Status1
+
+    spec_statuses = {member.value for member in Status1}
+    handled = _POLLABLE_STATUSES | _TERMINAL_STATUSES
+
+    assert spec_statuses - handled == set()
+    assert handled - spec_statuses == set()
+
+
+@pytest.mark.asyncio
+async def test_schedule_creates_poll_task_for_queued_create():
+    """
+    ``queued`` is the API's not-started-yet state. It carries no usage, so the
+    create cannot bill it, and it is not terminal, so nothing settles it:
+    without a poll task it is never charged at all.
+    """
+    logging_obj = _logging_obj()
+    task = maybe_schedule_background_interaction_cost_polling(
+        response=_response("queued", with_usage=False),
+        create_kwargs={"litellm_logging_obj": logging_obj},
+        custom_llm_provider="gemini",
+    )
+
+    assert isinstance(task, asyncio.Task)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+
+@pytest.mark.asyncio
+async def test_poller_bills_an_interaction_that_started_out_queued():
+    logging_obj = _logging_obj()
+    fetch, calls = _fetch_sequence(
+        _response("queued", with_usage=False),
+        _response("in_progress", with_usage=False),
+        _response("completed", with_usage=True),
+    )
+
+    await poll_and_log_background_interaction_cost(_context(logging_obj), fetch_interaction=fetch)
+
+    assert len(calls) == 3
+    assert logging_obj.model_call_details["response_cost"] > 0
+    assert logging_obj.model_call_details["standard_logging_object"]["total_tokens"] == 175
+
+
+def test_poll_intervals_double_up_to_the_cap_and_stay_inside_the_timeout():
+    """
+    The degenerate cases are covered above; this pins the shape the proxy
+    actually ships, so an off-by-one in the doubling or in the remaining-budget
+    check cannot pass green.
+    """
+    intervals = list(_poll_intervals(initial=5.0, maximum=60.0, timeout=3600.0))
+
+    assert intervals[:6] == [5.0, 10.0, 20.0, 40.0, 60.0, 60.0]
+    assert max(intervals) == 60.0
+    assert sum(intervals) <= 3600.0
+    assert sum(intervals) + 60.0 > 3600.0
+
+
+@pytest.mark.asyncio
+async def test_giving_up_on_an_unrecognized_status_says_which_status_it_was(monkeypatch):
+    """
+    A status outside both sets polls for the full timeout and then gives up.
+    The give-up line is the only trace it leaves, so it has to name the status
+    rather than reporting it as an interaction that was merely still running.
+    """
+    import litellm.interactions.background_cost_polling as bg
+
+    errors = []
+    monkeypatch.setattr(bg.verbose_logger, "error", lambda *args, **kwargs: errors.append(args))
+
+    logging_obj = _logging_obj()
+    fetch, _ = _fetch_sequence(_response("halted_for_review", with_usage=False))
+
+    await poll_and_log_background_interaction_cost(
+        _context(logging_obj, timeout_seconds=0.01), fetch_interaction=fetch
+    )
+
+    assert len(errors) == 1
+    assert "halted_for_review" in errors[0]

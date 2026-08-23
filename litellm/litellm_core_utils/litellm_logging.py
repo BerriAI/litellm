@@ -2212,10 +2212,16 @@ class Logging(LiteLLMLoggingBaseClass):
         cost breakdown at the zeros the usage-less create stamped and writing
         those zeros to the spend log. Dropping it makes this event price the
         settled body itself, against the deployment that served the create.
+
+        The same throwaway call stamped the deployment identity that travels
+        with the price, so ``model_id`` and ``litellm_model_name`` go with it.
+        Left in place they overwrite the create's real deployment with the
+        poll's empty one in the payload every logging integration reads.
         """
         settled_hidden_params: Final = getattr(result, "_hidden_params", None)
         if isinstance(settled_hidden_params, dict):
-            settled_hidden_params.pop("response_cost", None)
+            for poll_scoped_key in ("response_cost", "model_id", "litellm_model_name"):
+                settled_hidden_params.pop(poll_scoped_key, None)
         self._reset_success_emission_dedupe()
         await self.async_success_handler(result=result)
 
