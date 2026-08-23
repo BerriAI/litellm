@@ -1,0 +1,130 @@
+name: Sync base and publish dark-mode image
+
+# Keeps this fork's PR head in sync with BerriAI/litellm:litellm_internal_staging
+# and publishes the themed proxy image to the owner's Gitea registry once the PR
+# carries an approving review (or on a manual run with build: true, which skips
+# the approval gate so the pipeline can be verified end to end first).
+# Fails email eternity336@gmail.com when any part of the run goes wrong.
+
+on:
+  schedule:
+    - cron: "17 8 * * *"
+  workflow_dispatch:
+    inputs:
+      build:
+        description: "Build and push the image even without an approving review"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  pull-requests: read
+
+jobs:
+  sync-and-publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Sync PR head with upstream base
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git remote add upstream https://github.com/BerriAI/litellm.git
+          git fetch --no-tags upstream litellm_internal_staging
+          base=$(git rev-parse upstream/litellm_internal_staging)
+          if [ "$(git merge-base HEAD "$base")" = "$base" ]; then
+            echo "Base has not advanced; nothing to sync."
+          else
+            git merge --no-edit "$base"
+            if ! git push origin HEAD:"${GITHUB_REF_NAME}"; then
+              echo "::error::Pushing the merged base failed. If the PR head moved in the meantime, the next scheduled run retries; a real merge conflict needs manual resolution."
+              exit 1
+            fi
+            echo "Synced PR head with upstream base."
+          fi
+
+      - name: Check latest PR review
+        id: review
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          pr=$(curl -fsSL -H "Authorization: token $GH_TOKEN" \
+            "https://api.github.com/repos/BerriAI/litellm/pulls?state=open&head=eternity336:litellm_internal_staging" \
+            | jq -r 'first | .number // empty')
+          if [ -z "${pr}" ]; then
+            echo "::error::No open PR found for eternity336:litellm_internal_staging into BerriAI/litellm."
+            exit 1
+          fi
+          state=$(curl -fsSL -H "Authorization: token $GH_TOKEN" \
+            "https://api.github.com/repos/BerriAI/litellm/pulls/${pr}/reviews" \
+            | jq -r '.[-1].state // empty')
+          echo "pr=${pr}" >> "$GITHUB_OUTPUT"
+          echo "state=${state}" >> "$GITHUB_OUTPUT"
+          echo "Latest review state for PR #${pr}: ${state:-none}"
+
+      - name: Decide whether to publish
+        id: gate
+        run: |
+          if [ "${{ inputs.build }}" = "true" ] || [ "${{ steps.review.outputs.state }}" = "APPROVED" ]; then
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Ensure Gitea image repository exists
+        if: steps.gate.outputs.publish == 'true'
+        env:
+          GITEA_REGISTRY: ${{ secrets.GITEA_REGISTRY }}
+          GITEA_TOKEN: ${{ secrets.GITEA_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ "$(curl -s -o /dev/null -w '%{http_code}' \
+              -H "Authorization: token $GITEA_TOKEN" \
+              "https://${GITEA_REGISTRY}/api/v1/repos/jochsankehl/litellm")" = "200" ]; then
+            echo "Image repository jochsankehl/litellm already exists."
+          else
+            curl -fsSL -X POST -H "Authorization: token $GITEA_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d '{"name": "litellm", "auto_init": true, "mirror": true, "private": true}' \
+              "https://${GITEA_REGISTRY}/api/v1/user/repos" >/dev/null
+            echo "Created image repository jochsankehl/litellm."
+          fi
+
+      - name: Build and push image
+        if: steps.gate.outputs.publish == 'true'
+        env:
+          GITEA_REGISTRY: ${{ secrets.GITEA_REGISTRY }}
+          GITEA_TOKEN: ${{ secrets.GITEA_TOKEN }}
+        run: |
+          set -euo pipefail
+          sha=$(git rev-parse --short HEAD)
+          echo "Building ${GITEA_REGISTRY}/jochsankehl/litellm:latest-darkmode from commit ${sha}..."
+          docker build --platform linux/amd64 \
+            -t "${GITEA_REGISTRY}/jochsankehl/litellm:latest-darkmode" \
+            -t "${GITEA_REGISTRY}/jochsankehl/litellm:${sha}" .
+          echo "${GITEA_TOKEN}" | docker login "${GITEA_REGISTRY}" --username jochsankehl --password-stdin
+          docker push "${GITEA_REGISTRY}/jochsankehl/litellm:latest-darkmode"
+          docker push "${GITEA_REGISTRY}/jochsankehl/litellm:${sha}"
+          echo "Pushed ${GITEA_REGISTRY}/jochsankehl/litellm:latest-darkmode and :${sha}."
+
+      - name: Notify on failure
+        if: failure()
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 587
+          username: ${{ secrets.GMAIL_USER }}
+          password: ${{ secrets.GMAIL_APP_PASSWORD }}
+          subject: "LiteLLM dark-mode pipeline failed (run ${{ github.run_id }})"
+          to: eternity336@gmail.com
+          from: ${{ secrets.GMAIL_USER }}
+          body: |
+            The sync-and-image workflow failed.
+            Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+            Commit: ${{ github.sha }}
