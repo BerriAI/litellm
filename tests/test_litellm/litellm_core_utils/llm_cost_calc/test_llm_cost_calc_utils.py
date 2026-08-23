@@ -431,6 +431,19 @@ def test_is_within_off_peak_window_wraps_midnight():
     assert _is_within_off_peak_window(window, datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)) is False
 
 
+def test_is_within_off_peak_window_equal_start_and_end_covers_whole_day():
+    """An equal start and end is the natural way to spell off-peak all day. It used to take the
+    non-wrap branch, where start <= now < end can never hold, so it matched nothing and billed at
+    standard rates around the clock without raising or logging anything."""
+    from datetime import datetime, timezone
+
+    for window in ("00:00-00:00", "10:00-10:00"):
+        for hour in range(24):
+            assert (
+                _is_within_off_peak_window(window, datetime(2026, 1, 1, hour, 0, tzinfo=timezone.utc)) is True
+            ), f"{window} should cover {hour:02d}:00"
+
+
 def test_is_within_off_peak_window_multiple_windows():
     from datetime import datetime, timezone
 

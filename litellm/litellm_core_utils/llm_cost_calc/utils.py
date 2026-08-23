@@ -296,7 +296,8 @@ def _is_within_off_peak_window(off_peak_hours_utc: str | Sequence[str], current_
 
     off_peak_hours_utc is a "HH:MM-HH:MM" string in UTC, or a list of such strings for providers
     with multiple daily windows (e.g. ["16:30-00:30", "04:00-06:00"]). A window may wrap past
-    midnight. The start is inclusive and the end is exclusive; malformed windows are ignored.
+    midnight, and a window whose start equals its end covers the whole day. The start is
+    inclusive and the end is exclusive; malformed windows are ignored.
     """
     reference: Final = current_time if current_time is not None else datetime.now(timezone.utc)
     now: Final = (reference.astimezone(timezone.utc) if reference.tzinfo is not None else reference).time()
@@ -308,7 +309,7 @@ def _is_within_off_peak_window(off_peak_hours_utc: str | Sequence[str], current_
             end = datetime.strptime(end_str.strip(), "%H:%M").replace(tzinfo=timezone.utc).time()
         except (ValueError, AttributeError):
             continue
-        if start <= end:
+        if start < end:
             if start <= now < end:
                 return True
         elif now >= start or now < end:
