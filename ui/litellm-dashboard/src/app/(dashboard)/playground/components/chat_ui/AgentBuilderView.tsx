@@ -1,18 +1,26 @@
 "use client";
 
-import {
-  CommentOutlined,
-  DeleteOutlined,
-  ExperimentOutlined,
-  LinkOutlined,
-  PlusOutlined,
-  RobotOutlined,
-  SaveOutlined,
-} from "@ant-design/icons";
-import { Button, Input, Modal, Select, Spin, Tabs } from "antd";
+import { Bot, FlaskConical, Link as LinkIcon, MessageSquare, Plus, Save, Trash2 } from "lucide-react";
 import React, { useCallback, useEffect, useState } from "react";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Textarea } from "@/components/ui/textarea";
+import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
+import { MultiSelect } from "@/components/shared/MultiSelect";
+import { useVisitedTabs } from "@/hooks/useVisitedTabs";
 import CodeBlock from "@/components/CodeBlock";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import {
   keyCreateCall,
   modelCreateCall,
@@ -26,8 +34,6 @@ import { AgentModel, fetchAvailableAgentModels, MCPToolEntry } from "../../llm_c
 import { fetchAvailableModels, ModelGroup } from "@/components/llm_calls/fetch_models";
 import ComplianceUI from "../complianceUI/ComplianceUI";
 import ChatUI from "./ChatUI";
-
-const { TextArea } = Input;
 
 export interface AgentBuilderViewProps {
   accessToken: string | null;
@@ -44,6 +50,8 @@ export interface AgentBuilderViewProps {
 }
 
 const NEW_AGENT_ID = "__new__";
+
+type AgentTab = "configure" | "chat" | "test" | "connect";
 
 function getConnectTabBaseUrl(
   proxySettings: AgentBuilderViewProps["proxySettings"],
@@ -101,29 +109,29 @@ function ConnectTabContent({
   return (
     <div className="mx-auto max-w-3xl space-y-6">
       <div>
-        <h3 className="text-sm font-semibold text-gray-900 mb-1">Proxy base URL</h3>
-        <p className="text-sm text-gray-600 font-mono bg-gray-50 px-2 py-1.5 rounded-sm border border-gray-200 break-all">
+        <h3 className="text-sm font-semibold text-foreground mb-1">Proxy base URL</h3>
+        <p className="text-sm text-muted-foreground font-mono bg-muted px-2 py-1.5 rounded-sm border border-border break-all">
           {baseUrl}
         </p>
       </div>
       <div>
-        <h3 className="text-sm font-semibold text-gray-900 mb-2">Call your agent (cURL)</h3>
+        <h3 className="text-sm font-semibold text-foreground mb-2">Call your agent (cURL)</h3>
         <CodeBlock code={curlExample} language="bash" />
       </div>
-      <div className="rounded-lg border border-gray-200 bg-gray-50 p-4">
-        <h3 className="text-sm font-semibold text-gray-900 mb-2">Create a key for this agent</h3>
-        <p className="text-sm text-gray-600 mb-3">
+      <div className="rounded-lg border border-border bg-muted p-4">
+        <h3 className="text-sm font-semibold text-foreground mb-2">Create a key for this agent</h3>
+        <p className="text-sm text-muted-foreground mb-3">
           Create a virtual key that can only call this agent. The key will be scoped to you (user_id) and restricted to
-          the model <span className="font-mono text-gray-800">{agentName}</span>.
+          the model <span className="font-mono text-foreground">{agentName}</span>.
         </p>
-        <Button type="primary" onClick={onCreateKey} loading={creatingKey} disabled={disabledPersonalKeyCreation}>
+        <Button onClick={onCreateKey} disabled={creatingKey || disabledPersonalKeyCreation}>
           Create key for this agent
         </Button>
         {disabledPersonalKeyCreation && (
-          <p className="text-xs text-amber-600 mt-2">Key creation is disabled for your account.</p>
+          <p className="text-xs text-warning mt-2">Key creation is disabled for your account.</p>
         )}
         {createdKeyValue && (
-          <p className="text-xs text-green-700 mt-2">
+          <p className="text-xs text-success mt-2">
             Key created. It is shown in the cURL example above — copy the snippet to use it.
           </p>
         )}
@@ -190,7 +198,12 @@ export default function AgentBuilderView({
   const [modelGroups, setModelGroups] = useState<ModelGroup[]>([]);
   const [loadingAgents, setLoadingAgents] = useState(true);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<"configure" | "chat" | "test" | "connect">("configure");
+  const [activeTab, setActiveTab] = useState<AgentTab>("configure");
+  const { onTabChange, hasVisited } = useVisitedTabs("configure");
+  const goToTab = (tab: AgentTab) => {
+    setActiveTab(tab);
+    onTabChange(tab);
+  };
   const [creatingKey, setCreatingKey] = useState(false);
   const [createdKeyValue, setCreatedKeyValue] = useState<string | null>(null);
 
@@ -207,6 +220,7 @@ export default function AgentBuilderView({
 
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
 
   const effectiveApiKey = apiKey || accessToken || "";
   const selectedAgent =
@@ -226,7 +240,7 @@ export default function AgentBuilderView({
       return list;
     } catch (e) {
       console.error(e);
-      NotificationsManager.fromBackend("Failed to load agents");
+      toast.fromError("Failed to load agents");
       return [];
     } finally {
       setLoadingAgents(false);
@@ -314,12 +328,12 @@ export default function AgentBuilderView({
     setDraftTemperature(0.7);
     setDraftMaxTokens(4096);
     setDraftTools([]);
-    setActiveTab("configure");
+    goToTab("configure");
   };
 
   const handleSaveAgent = async () => {
     if (!accessToken || !draftName?.trim() || !draftUnderlyingModel) {
-      NotificationsManager.fromBackend("Name and underlying model are required");
+      toast.fromError("Name and underlying model are required");
       return;
     }
     setSaving(true);
@@ -344,9 +358,9 @@ export default function AgentBuilderView({
         ? list.find((a) => getAgentModelId(a) === createdId) ?? list.find((a) => a.model_name === draftName.trim())
         : list.find((a) => a.model_name === draftName.trim());
       setSelectedId(created ? getAgentSelectionKey(created) : list[0] ? getAgentSelectionKey(list[0]) : null);
-      setActiveTab("chat");
+      goToTab("chat");
     } catch (e) {
-      NotificationsManager.fromBackend("Failed to save agent");
+      toast.fromError("Failed to save agent");
     } finally {
       setSaving(false);
     }
@@ -354,7 +368,7 @@ export default function AgentBuilderView({
 
   const handleUpdateAgent = async () => {
     if (!accessToken || !selectedAgent || !selectedAgentModelId || !draftName?.trim() || !draftUnderlyingModel) {
-      NotificationsManager.fromBackend("Name and underlying model are required");
+      toast.fromError("Name and underlying model are required");
       return;
     }
     setSaving(true);
@@ -374,13 +388,13 @@ export default function AgentBuilderView({
         },
         selectedAgentModelId,
       );
-      NotificationsManager.success("Agent updated successfully");
+      toast.success("Agent updated successfully");
       const list = await loadAgents();
       const stillSelected = list.find((a) => getAgentModelId(a) === selectedAgentModelId);
       const target = stillSelected ?? list[0];
       setSelectedId(target ? getAgentSelectionKey(target) : null);
     } catch (e) {
-      NotificationsManager.fromBackend("Failed to update agent");
+      toast.fromError("Failed to update agent");
     } finally {
       setSaving(false);
     }
@@ -398,12 +412,12 @@ export default function AgentBuilderView({
       const keyValue = response?.key ?? null;
       if (keyValue) {
         setCreatedKeyValue(keyValue);
-        NotificationsManager.success("Virtual key created. Use it in the curl example below.");
+        toast.success("Virtual key created. Use it in the curl example below.");
       } else {
-        NotificationsManager.fromBackend("Key created but value not returned");
+        toast.fromError("Key created but value not returned");
       }
     } catch (e) {
-      NotificationsManager.fromBackend("Failed to create key for agent");
+      toast.fromError("Failed to create key for agent");
     } finally {
       setCreatingKey(false);
     }
@@ -411,60 +425,54 @@ export default function AgentBuilderView({
 
   const handleDeleteAgent = () => {
     if (!selectedAgent || !selectedAgentModelId || !accessToken) return;
-    Modal.confirm({
-      title: "Delete agent",
-      content: `Are you sure you want to delete "${selectedAgent.model_name}"? This cannot be undone.`,
-      okText: "Delete",
-      okType: "danger",
-      cancelText: "Cancel",
-      onOk: async () => {
-        setDeleting(true);
-        try {
-          await modelDeleteCall(accessToken, selectedAgentModelId);
-          NotificationsManager.success("Agent deleted");
-          const list = await loadAgents();
-          const remaining = list.filter((a) => getAgentModelId(a) !== selectedAgentModelId);
-          setSelectedId(remaining.length > 0 ? getAgentSelectionKey(remaining[0]) : null);
-        } catch (e) {
-          NotificationsManager.fromBackend("Failed to delete agent");
-        } finally {
-          setDeleting(false);
-        }
-      },
-    });
+    setConfirmingDelete(true);
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!selectedAgent || !selectedAgentModelId || !accessToken) return;
+    setDeleting(true);
+    try {
+      await modelDeleteCall(accessToken, selectedAgentModelId);
+      toast.success("Agent deleted");
+      const list = await loadAgents();
+      const remaining = list.filter((a) => getAgentModelId(a) !== selectedAgentModelId);
+      setSelectedId(remaining.length > 0 ? getAgentSelectionKey(remaining[0]) : null);
+    } catch (e) {
+      toast.fromError("Failed to delete agent");
+    } finally {
+      setDeleting(false);
+      setConfirmingDelete(false);
+    }
   };
 
   if (!accessToken || !userID || !userRole) {
     return (
-      <div className="flex h-full items-center justify-center p-8 text-gray-500">Sign in to use Agent Builder.</div>
+      <div className="flex h-full items-center justify-center p-8 text-muted-foreground">
+        Sign in to use Agent Builder.
+      </div>
     );
   }
 
   return (
-    <div className="flex h-full flex-col bg-white text-gray-900">
-      <div className="flex shrink-0 flex-col border-b border-gray-200">
+    <div className="flex h-full flex-col bg-card text-foreground">
+      <div className="flex shrink-0 flex-col border-b border-border">
         <div className="flex h-12 items-center justify-between px-4">
-          <span className="text-sm font-medium text-gray-900">Agent Builder</span>
+          <span className="text-sm font-medium text-foreground">Agent Builder</span>
           {isNewAgent ? (
-            <Button
-              type="primary"
-              icon={<SaveOutlined />}
-              onClick={handleSaveAgent}
-              loading={saving}
-              disabled={!draftName?.trim() || !draftUnderlyingModel}
-            >
+            <Button onClick={handleSaveAgent} disabled={saving || !draftName?.trim() || !draftUnderlyingModel}>
+              <Save />
               Save Agent
             </Button>
           ) : (
-            <span className="text-xs text-gray-500">Build Agents that pass your compliance requirements.</span>
+            <span className="text-xs text-muted-foreground">Build Agents that pass your compliance requirements.</span>
           )}
         </div>
-        <div className="flex items-center gap-2 border-t border-amber-200 bg-amber-50 px-4 py-2 text-xs text-amber-800">
-          <ExperimentOutlined className="shrink-0 text-amber-600" />
+        <div className="flex items-center gap-2 border-t border-warning/20 bg-warning/10 px-4 py-2 text-xs text-warning">
+          <FlaskConical className="size-4 shrink-0 text-warning" />
           <span>
             Agent Builder is experimental and may change or be removed without notice. We’d love your feedback—email us
             at{" "}
-            <a href="mailto:product@berri.ai" className="font-medium text-amber-900 underline hover:text-amber-700">
+            <a href="mailto:product@berri.ai" className="font-medium text-warning underline hover:text-warning/80">
               product@berri.ai
             </a>
             .
@@ -474,15 +482,17 @@ export default function AgentBuilderView({
 
       <div className="flex flex-1 overflow-hidden">
         {/* Roster */}
-        <div className="w-60 shrink-0 border-r border-gray-200 bg-white flex flex-col">
-          <div className="flex items-center justify-between border-b border-gray-200 p-3">
-            <span className="text-xs font-semibold uppercase tracking-wide text-gray-500">Agents</span>
-            <Button type="text" size="small" icon={<PlusOutlined />} onClick={handleAddAgent} aria-label="Add agent" />
+        <div className="w-60 shrink-0 border-r border-border bg-card flex flex-col">
+          <div className="flex items-center justify-between border-b border-border p-3">
+            <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Agents</span>
+            <Button variant="ghost" size="icon-sm" onClick={handleAddAgent} aria-label="Add agent">
+              <Plus />
+            </Button>
           </div>
           <div className="flex-1 overflow-y-auto p-2">
             {loadingAgents ? (
-              <div className="flex justify-center py-4">
-                <Spin size="small" />
+              <div className="flex justify-center py-4" aria-busy="true">
+                <UiLoadingSpinner className="size-4 text-muted-foreground" />
               </div>
             ) : (
               <>
@@ -494,22 +504,20 @@ export default function AgentBuilderView({
                       type="button"
                       onClick={() => setSelectedId(key)}
                       className={`mb-1 w-full rounded-md border-l-2 px-3 py-2 text-left text-sm transition-colors ${
-                        selectedId === key
-                          ? "border-blue-500 bg-blue-50 text-blue-800"
-                          : "border-transparent hover:bg-gray-50"
+                        selectedId === key ? "border-info bg-info/10 text-info" : "border-transparent hover:bg-accent"
                       }`}
                     >
                       <div className="font-medium truncate">{agent.model_name}</div>
-                      <div className="text-[10px] text-gray-500 truncate">litellm_agent</div>
+                      <div className="text-[10px] text-muted-foreground truncate">litellm_agent</div>
                     </button>
                   );
                 })}
                 <button
                   type="button"
                   onClick={handleAddAgent}
-                  className="mb-1 w-full rounded-md border border-dashed border-gray-300 px-3 py-2 text-left text-sm text-gray-500 hover:border-blue-400 hover:bg-blue-50/50 hover:text-gray-700"
+                  className="mb-1 w-full rounded-md border border-dashed border-border px-3 py-2 text-left text-sm text-muted-foreground hover:border-info hover:bg-info/10 hover:text-foreground"
                 >
-                  <PlusOutlined className="mr-1" /> New agent
+                  <Plus className="mr-1 inline size-4" /> New agent
                 </button>
               </>
             )}
@@ -519,234 +527,237 @@ export default function AgentBuilderView({
         {/* Main content */}
         <div className="flex flex-1 flex-col overflow-hidden">
           {selectedId === null && !isNewAgent && agentModels.length === 0 && !loadingAgents && (
-            <div className="flex flex-1 items-center justify-center p-8 text-gray-500">
+            <div className="flex flex-1 items-center justify-center p-8 text-muted-foreground">
               No agents yet. Add an agent to get started.
             </div>
           )}
           {(selectedId !== null || isNewAgent) && (
             <>
               <Tabs
-                activeKey={activeTab}
-                onChange={(k) => setActiveTab(k as "configure" | "chat" | "test" | "connect")}
-                className="flex-1 overflow-hidden [&_.ant-tabs-content]:h-full [&_.ant-tabs-tabpane]:h-full [&_.ant-tabs-nav]:pl-4"
-                items={[
-                  {
-                    key: "configure",
-                    label: (
-                      <span>
-                        <RobotOutlined className="mr-1" /> Configure
-                      </span>
-                    ),
-                    children: (
-                      <div className="h-full overflow-y-auto p-6">
-                        {isNewAgent || selectedAgent ? (
-                          <div className="mx-auto max-w-xl space-y-4">
-                            {!selectedAgentModelId && selectedAgent && (
-                              <div className="rounded-sm border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-                                This agent cannot be updated or deleted here (missing model id). Manage it from Models
-                                &amp; Endpoints.
-                              </div>
-                            )}
-                            <div>
-                              <label className="mb-1 block text-sm font-medium text-gray-700">Agent name</label>
-                              <Input
-                                value={draftName}
-                                onChange={(e) => setDraftName(e.target.value)}
-                                placeholder="My Agent"
-                              />
-                            </div>
-                            <div>
-                              <label className="mb-1 block text-sm font-medium text-gray-700">System prompt</label>
-                              <TextArea
-                                value={draftSystemPrompt}
-                                onChange={(e) => setDraftSystemPrompt(e.target.value)}
-                                placeholder="You are a helpful assistant..."
-                                rows={6}
-                              />
-                            </div>
-                            <div>
-                              <label className="mb-1 block text-sm font-medium text-gray-700">Underlying LLM</label>
-                              <Select
-                                value={draftUnderlyingModel}
-                                onChange={setDraftUnderlyingModel}
-                                className="w-full"
-                                options={modelGroups.map((m) => ({ value: m.model_group, label: m.model_group }))}
-                                placeholder="Select model"
-                              />
-                            </div>
-                            <div className="grid grid-cols-2 gap-4">
-                              <div>
-                                <label className="mb-1 block text-sm font-medium text-gray-700">Temperature</label>
-                                <Input
-                                  type="number"
-                                  min={0}
-                                  max={2}
-                                  step={0.1}
-                                  value={draftTemperature}
-                                  onChange={(e) => setDraftTemperature(Number(e.target.value))}
-                                />
-                              </div>
-                              <div>
-                                <label className="mb-1 block text-sm font-medium text-gray-700">Max tokens</label>
-                                <Input
-                                  type="number"
-                                  min={1}
-                                  value={draftMaxTokens}
-                                  onChange={(e) => setDraftMaxTokens(Number(e.target.value))}
-                                />
-                              </div>
-                            </div>
-                            <div>
-                              <label className="mb-1 block text-sm font-medium text-gray-700">MCP servers</label>
-                              <Select
-                                mode="multiple"
-                                placeholder="Select MCP servers to attach (same format as chat completions API)"
-                                value={selectedMCPServerIds}
-                                onChange={handleMCPServerChange}
-                                loading={loadingMCPServers}
-                                className="w-full"
-                                allowClear
-                                showSearch
-                                optionFilterProp="label"
-                                options={mcpServers.map((s) => ({
-                                  value: s.server_id,
-                                  label: s.alias || s.server_name || s.server_id,
-                                }))}
-                              />
-                              {selectedAgent && draftTools.length > 0 && (
-                                <p className="mt-1 text-xs text-gray-500">
-                                  {draftTools.length} MCP server{draftTools.length !== 1 ? "s" : ""} saved. Use the same{" "}
-                                  <code className="rounded-sm bg-gray-100 px-1">tools</code> array in chat completions
-                                  when calling this agent.
-                                </p>
-                              )}
-                            </div>
-                            {selectedAgent && (
-                              <div className="flex flex-wrap items-center gap-2 pt-2">
-                                {selectedAgentModelId && (
-                                  <>
-                                    <Button
-                                      type="primary"
-                                      icon={<SaveOutlined />}
-                                      onClick={handleUpdateAgent}
-                                      loading={saving}
-                                      disabled={!draftName?.trim() || !draftUnderlyingModel}
-                                    >
-                                      Update Agent
-                                    </Button>
-                                    <Button
-                                      type="default"
-                                      danger
-                                      icon={<DeleteOutlined />}
-                                      onClick={handleDeleteAgent}
-                                      loading={deleting}
-                                    >
-                                      Delete
-                                    </Button>
-                                  </>
-                                )}
-                                <Button type="primary" icon={<CommentOutlined />} onClick={() => setActiveTab("chat")}>
-                                  Test in Chat
+                value={activeTab}
+                onValueChange={(value) => goToTab(value as AgentTab)}
+                className="flex flex-1 flex-col overflow-hidden"
+              >
+                <TabsList variant="line" className="h-auto w-full justify-start rounded-none border-b p-0 pl-4">
+                  <TabsTrigger value="configure" className="flex-none rounded-none px-4 py-2">
+                    <Bot />
+                    Configure
+                  </TabsTrigger>
+                  <TabsTrigger value="chat" disabled={isNewAgent} className="flex-none rounded-none px-4 py-2">
+                    <MessageSquare />
+                    Chat
+                  </TabsTrigger>
+                  <TabsTrigger value="test" disabled={isNewAgent} className="flex-none rounded-none px-4 py-2">
+                    <FlaskConical />
+                    Batch Test
+                  </TabsTrigger>
+                  <TabsTrigger value="connect" disabled={isNewAgent} className="flex-none rounded-none px-4 py-2">
+                    <LinkIcon />
+                    Connect
+                  </TabsTrigger>
+                </TabsList>
+
+                <TabsContent
+                  value="configure"
+                  keepMounted={hasVisited("configure")}
+                  className="min-h-0 overflow-hidden"
+                >
+                  <div className="h-full overflow-y-auto p-6">
+                    {isNewAgent || selectedAgent ? (
+                      <div className="mx-auto max-w-xl space-y-4">
+                        {!selectedAgentModelId && selectedAgent && (
+                          <div className="rounded-sm border border-warning/20 bg-warning/10 px-3 py-2 text-xs text-warning">
+                            This agent cannot be updated or deleted here (missing model id). Manage it from Models &amp;
+                            Endpoints.
+                          </div>
+                        )}
+                        <div>
+                          <label className="mb-1 block text-sm font-medium text-foreground">Agent name</label>
+                          <Input
+                            value={draftName}
+                            onChange={(e) => setDraftName(e.target.value)}
+                            placeholder="My Agent"
+                          />
+                        </div>
+                        <div>
+                          <label className="mb-1 block text-sm font-medium text-foreground">System prompt</label>
+                          <Textarea
+                            value={draftSystemPrompt}
+                            onChange={(e) => setDraftSystemPrompt(e.target.value)}
+                            placeholder="You are a helpful assistant..."
+                            rows={6}
+                            className="field-sizing-fixed"
+                          />
+                        </div>
+                        <div>
+                          <label className="mb-1 block text-sm font-medium text-foreground">Underlying LLM</label>
+                          <Select
+                            value={draftUnderlyingModel ?? null}
+                            onValueChange={(model: string | null) => setDraftUnderlyingModel(model ?? undefined)}
+                          >
+                            <SelectTrigger className="w-full" aria-label="Underlying LLM">
+                              <SelectValue placeholder="Select model" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {modelGroups.map((m) => (
+                                <SelectItem key={m.model_group} value={m.model_group}>
+                                  {m.model_group}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        <div className="grid grid-cols-2 gap-4">
+                          <div>
+                            <label className="mb-1 block text-sm font-medium text-foreground">Temperature</label>
+                            <Input
+                              type="number"
+                              min={0}
+                              max={2}
+                              step={0.1}
+                              value={draftTemperature}
+                              onChange={(e) => setDraftTemperature(Number(e.target.value))}
+                            />
+                          </div>
+                          <div>
+                            <label className="mb-1 block text-sm font-medium text-foreground">Max tokens</label>
+                            <Input
+                              type="number"
+                              min={1}
+                              value={draftMaxTokens}
+                              onChange={(e) => setDraftMaxTokens(Number(e.target.value))}
+                            />
+                          </div>
+                        </div>
+                        <div>
+                          <label className="mb-1 block text-sm font-medium text-foreground">MCP servers</label>
+                          <MultiSelect
+                            placeholder="Select MCP servers to attach (same format as chat completions API)"
+                            value={selectedMCPServerIds}
+                            onValueChange={handleMCPServerChange}
+                            loading={loadingMCPServers}
+                            className="w-full"
+                            options={mcpServers.map((s) => ({
+                              value: s.server_id,
+                              label: s.alias || s.server_name || s.server_id,
+                            }))}
+                          />
+                          {selectedAgent && draftTools.length > 0 && (
+                            <p className="mt-1 text-xs text-muted-foreground">
+                              {draftTools.length} MCP server{draftTools.length !== 1 ? "s" : ""} saved. Use the same{" "}
+                              <code className="rounded-sm bg-muted px-1">tools</code> array in chat completions when
+                              calling this agent.
+                            </p>
+                          )}
+                        </div>
+                        {selectedAgent && (
+                          <div className="flex flex-wrap items-center gap-2 pt-2">
+                            {selectedAgentModelId && (
+                              <>
+                                <Button
+                                  onClick={handleUpdateAgent}
+                                  disabled={saving || !draftName?.trim() || !draftUnderlyingModel}
+                                >
+                                  <Save />
+                                  Update Agent
                                 </Button>
-                              </div>
+                                <Button variant="destructive" onClick={handleDeleteAgent} disabled={deleting}>
+                                  <Trash2 />
+                                  Delete
+                                </Button>
+                              </>
                             )}
-                          </div>
-                        ) : null}
-                      </div>
-                    ),
-                  },
-                  {
-                    key: "chat",
-                    label: (
-                      <span>
-                        <CommentOutlined className="mr-1" /> Chat
-                      </span>
-                    ),
-                    disabled: isNewAgent,
-                    children: (
-                      <div className="flex h-full flex-col min-h-0">
-                        {selectedAgent ? (
-                          <ChatUI
-                            key={selectedAgent.model_name}
-                            simplified
-                            fixedModel={selectedAgent.model_name}
-                            accessToken={accessToken}
-                            token={token}
-                            userRole={userRole}
-                            userID={userID}
-                            disabledPersonalKeyCreation={disabledPersonalKeyCreation}
-                            proxySettings={proxySettings}
-                          />
-                        ) : (
-                          <div className="flex flex-1 items-center justify-center text-gray-500">
-                            Save an agent first to test in Chat.
+                            <Button onClick={() => goToTab("chat")}>
+                              <MessageSquare />
+                              Test in Chat
+                            </Button>
                           </div>
                         )}
                       </div>
-                    ),
-                  },
-                  {
-                    key: "test",
-                    label: (
-                      <span>
-                        <ExperimentOutlined className="mr-1" /> Batch Test
-                      </span>
-                    ),
-                    disabled: isNewAgent,
-                    children: (
-                      <div className="flex h-full flex-col min-h-0">
-                        {selectedAgent ? (
-                          <ComplianceUI
-                            accessToken={accessToken}
-                            disabledPersonalKeyCreation={disabledPersonalKeyCreation}
-                            backendMode="chat_completions"
-                            fixedModel={selectedAgent.model_name}
-                            proxySettings={proxySettings}
-                          />
-                        ) : (
-                          <div className="flex flex-1 items-center justify-center text-gray-500">
-                            Select an agent to run batch tests.
-                          </div>
-                        )}
+                    ) : null}
+                  </div>
+                </TabsContent>
+                <TabsContent value="chat" keepMounted={hasVisited("chat")} className="min-h-0 overflow-hidden">
+                  <div className="flex h-full flex-col min-h-0">
+                    {selectedAgent ? (
+                      <ChatUI
+                        key={selectedAgent.model_name}
+                        simplified
+                        fixedModel={selectedAgent.model_name}
+                        accessToken={accessToken}
+                        token={token}
+                        userRole={userRole}
+                        userID={userID}
+                        disabledPersonalKeyCreation={disabledPersonalKeyCreation}
+                        proxySettings={proxySettings}
+                      />
+                    ) : (
+                      <div className="flex flex-1 items-center justify-center text-muted-foreground">
+                        Save an agent first to test in Chat.
                       </div>
-                    ),
-                  },
-                  {
-                    key: "connect",
-                    label: (
-                      <span>
-                        <LinkOutlined className="mr-1" /> Connect
-                      </span>
-                    ),
-                    disabled: isNewAgent,
-                    children: (
-                      <div className="h-full overflow-y-auto p-6">
-                        {selectedAgent ? (
-                          <ConnectTabContent
-                            agentName={selectedAgent.model_name}
-                            proxySettings={proxySettings}
-                            customProxyBaseUrl={customProxyBaseUrl}
-                            accessToken={accessToken}
-                            userID={userID}
-                            disabledPersonalKeyCreation={disabledPersonalKeyCreation}
-                            creatingKey={creatingKey}
-                            createdKeyValue={createdKeyValue}
-                            onCreateKey={handleCreateKeyForAgent}
-                          />
-                        ) : (
-                          <div className="flex flex-1 items-center justify-center text-gray-500">
-                            Select an agent to see how to connect.
-                          </div>
-                        )}
+                    )}
+                  </div>
+                </TabsContent>
+                <TabsContent value="test" keepMounted={hasVisited("test")} className="min-h-0 overflow-hidden">
+                  <div className="flex h-full flex-col min-h-0">
+                    {selectedAgent ? (
+                      <ComplianceUI
+                        accessToken={accessToken}
+                        disabledPersonalKeyCreation={disabledPersonalKeyCreation}
+                        backendMode="chat_completions"
+                        fixedModel={selectedAgent.model_name}
+                        proxySettings={proxySettings}
+                      />
+                    ) : (
+                      <div className="flex flex-1 items-center justify-center text-muted-foreground">
+                        Select an agent to run batch tests.
                       </div>
-                    ),
-                  },
-                ]}
-              />
+                    )}
+                  </div>
+                </TabsContent>
+                <TabsContent value="connect" keepMounted={hasVisited("connect")} className="min-h-0 overflow-hidden">
+                  <div className="h-full overflow-y-auto p-6">
+                    {selectedAgent ? (
+                      <ConnectTabContent
+                        agentName={selectedAgent.model_name}
+                        proxySettings={proxySettings}
+                        customProxyBaseUrl={customProxyBaseUrl}
+                        accessToken={accessToken}
+                        userID={userID}
+                        disabledPersonalKeyCreation={disabledPersonalKeyCreation}
+                        creatingKey={creatingKey}
+                        createdKeyValue={createdKeyValue}
+                        onCreateKey={handleCreateKeyForAgent}
+                      />
+                    ) : (
+                      <div className="flex flex-1 items-center justify-center text-muted-foreground">
+                        Select an agent to see how to connect.
+                      </div>
+                    )}
+                  </div>
+                </TabsContent>
+              </Tabs>
             </>
           )}
         </div>
       </div>
+
+      <AlertDialog open={confirmingDelete} onOpenChange={setConfirmingDelete}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete agent</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to delete &quot;{selectedAgent?.model_name}&quot;? This cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogAction variant="outline">Cancel</AlertDialogAction>
+            <Button variant="destructive" onClick={handleConfirmDelete} disabled={deleting}>
+              Delete
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

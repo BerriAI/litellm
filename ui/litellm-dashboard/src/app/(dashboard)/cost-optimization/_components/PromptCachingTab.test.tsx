@@ -33,6 +33,9 @@ describe("PromptCachingTab", () => {
       results: [],
       loading: false,
       isFetchingMore: false,
+      progress: { currentPage: 1, totalPages: 1 },
+      cancelled: false,
+      cancel: vi.fn(),
     };
     const { getByTestId } = render(<PromptCachingTab accessToken="test-token" activity={activity} />);
 

@@ -1,15 +1,10 @@
 import asyncio
 import json
-import os
-import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 import litellm
 from litellm.containers.main import (
@@ -384,7 +379,7 @@ class TestContainerAPI:
             "container_create_handler",
             side_effect=Exception("API Error"),
         ):
-            with pytest.raises(Exception):
+            with pytest.raises(litellm.APIConnectionError):
                 create_container(
                     name="Error Test Container", custom_llm_provider="openai"
                 )

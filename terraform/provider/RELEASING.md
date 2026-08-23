@@ -4,7 +4,16 @@ This document describes the release process for the LiteLLM Terraform Provider.
 
 ## Overview
 
-Releases are automated via GitHub Actions when a version tag is pushed. The workflow builds the provider for multiple platforms, signs the artifacts with GPG, and publishes them to GitHub Releases.
+The provider is released **in lockstep with LiteLLM**: every LiteLLM release (dev, rc and stable) publishes the provider at the LiteLLM version, built from the same commit as the proxy. There is no separate provider release to cut.
+
+The flow, end to end:
+
+1. `BerriAI/project-releaser`'s release pipeline resolves the commit to release (`main` HEAD for dev; `main` HEAD or an operator-supplied SHA for rc/stable) and passes the release approval gate
+2. Its componentized terraform job rsyncs `terraform/provider/` from that commit into `BerriAI/terraform-provider-litellm`, commits, and pushes the tag `v<litellm version>` (for example `v1.99.0`, `v1.99.0-rc.1`, `v1.99.0-dev.1`), alongside the `terraform-aws-litellm` / `terraform-google-litellm` module mirrors which get the same tag
+3. The tag push triggers the mirror's own `Release` workflow (goreleaser): multi-platform build, GPG-signed checksums, GitHub release. It runs unattended; project-releaser does not wait for it
+4. The public Terraform Registry ingests the GitHub release as provider version `<litellm version>`
+
+`terraform/provider/` only exists from LiteLLM ~1.95, so a stable patch cut from an older line skips the provider and publishes only the modules.
 
 ## Prerequisites
 
@@ -68,109 +77,26 @@ Before publishing to the Terraform Registry:
 
 **Note**: The public key fingerprint must match the key used to sign the provider releases.
 
-## Release Steps
+## What a change needs
 
-### 1. Prepare the Release
+1. **Land it in `BerriAI/litellm`.** Open a PR against `litellm_internal_staging` with the source change and a `CHANGELOG.md` entry under `[Unreleased]`. CI runs `gofmt`, `go vet`, build, tests and the endpoint-drift audit. A change that breaks existing configurations or state must say so in the changelog: the version number cannot signal it any more
+2. **Wait for the next LiteLLM release.** The nightly dev release carries it within a day; it reaches a stable version on the next stable cut
+3. **Verify** (optional): the version appears at https://registry.terraform.io/providers/BerriAI/litellm and https://github.com/BerriAI/terraform-provider-litellm/releases. If the tag is on the mirror but there is no release, the goreleaser run failed: https://github.com/BerriAI/terraform-provider-litellm/actions
 
-Before creating a release:
+Locally, before opening the PR:
 
-1. **Update CHANGELOG.md**
-   - Move items from `[Unreleased]` section to a new version section
-   - Follow [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) format
-   - Use [Semantic Versioning](https://semver.org/spec/v2.0.0.html) for version numbers
-   - Include all notable changes since the last release
+```bash
+make test
+make build
+```
 
-   Example:
-   ```markdown
-   ## [0.1.2] - 2026-02-20
+## Out-of-band publish or recovery
 
-   ### Added
-   - New feature description
+Dispatch `Build and Publish Componentized Images + Chart` in `BerriAI/project-releaser` by hand with only `publish_terraform` enabled and the `git_ref` / `tag` of the release to (re)publish. The run waits on project-releaser's release approval, then mirrors and tags exactly as the pipeline does.
 
-   ### Fixed
-   - Bug fix description
+The mirror is push-only: do not commit or tag `BerriAI/terraform-provider-litellm` directly. The publish refuses to overwrite an existing tag; a version that failed in goreleaser is recovered by re-running the mirror's `Release` workflow for that tag, not by re-tagging.
 
-   ### Changed
-   - Changed behavior description
-   ```
-
-2. **Verify tests pass**
-   ```bash
-   make test
-   ```
-
-3. **Verify the build works locally**
-   ```bash
-   make build
-   ```
-
-4. **Land the changes in BerriAI/litellm**
-
-   Open a PR to `BerriAI/litellm` updating `terraform/provider/CHANGELOG.md` (and any source changes) and merge it. Note the merge commit SHA; the release workflow takes it as `git_ref`
-
-### 2. Mirror and Tag via project-releaser
-
-The provider source lives at `terraform/provider/` in `BerriAI/litellm`; `BerriAI/terraform-provider-litellm` is a thin release mirror. Do not commit or tag the mirror directly
-
-1. Go to `BerriAI/project-releaser` > **Actions** > `Publish Terraform provider`
-2. Click **Run workflow**:
-   - `git_ref`: full 40-char commit SHA from `BerriAI/litellm` to release from
-   - `provider_version`: the new version without the `v` prefix (e.g. `0.3.0`)
-   - `dry_run`: optional; validates without pushing
-3. The workflow rsyncs `terraform/provider/` into the mirror repo, commits, and pushes tag `v<provider_version>`
-4. The tag push triggers the mirror's `Release` workflow (goreleaser), which is gated by the `production-release` environment approval
-
-**Important**:
-- Tags must follow the format: `v<MAJOR>.<MINOR>.<PATCH>` (e.g., `v0.1.2`, `v1.0.0`)
-- The workflow refuses to overwrite an existing tag; publish a new version instead
-
-### 3. Monitor the Release Workflow
-
-1. Go to: https://github.com/BerriAI/terraform-provider-litellm/actions
-2. Find the "Release" workflow run for your tag
-3. Monitor the progress and check for any errors
-
-The workflow will:
-- Check out the code
-- Set up Go
-- Import the GPG key
-- Run `go mod tidy`
-- Build binaries for multiple platforms (Linux, macOS, Windows, FreeBSD)
-- Create archives and checksums
-- Sign the checksums with GPG
-- Create a GitHub release
-- Upload all artifacts
-
-### 4. Verify the Release
-
-After the workflow completes successfully:
-
-1. **Check the GitHub Release**
-   - Go to: https://github.com/BerriAI/terraform-provider-litellm/releases
-   - Verify the release was created with the correct version
-   - Confirm all artifacts are present:
-     - Binary archives for each platform
-     - SHA256SUMS file
-     - SHA256SUMS.sig (GPG signature)
-     - terraform-registry-manifest.json
-
-2. **Verify the signature** (optional)
-   ```bash
-   # Download the checksums and signature
-   wget https://github.com/BerriAI/terraform-provider-litellm/releases/download/v0.1.2/terraform-provider-litellm_0.1.2_SHA256SUMS
-   wget https://github.com/BerriAI/terraform-provider-litellm/releases/download/v0.1.2/terraform-provider-litellm_0.1.2_SHA256SUMS.sig
-
-   # Verify the signature
-   gpg --verify terraform-provider-litellm_0.1.2_SHA256SUMS.sig terraform-provider-litellm_0.1.2_SHA256SUMS
-   ```
-
-### 5. Publish to Terraform Registry (Optional)
-
-If this provider is published to the Terraform Registry:
-
-1. The registry should automatically detect the new release via the GitHub webhook
-2. If not, you may need to manually trigger a sync on the Terraform Registry dashboard
-3. Verify the new version appears at: https://registry.terraform.io/providers/BerriAI/litellm/latest
+The mirror's `.github/` directory (the `Release` workflow) is the one thing the rsync preserves, so a change to the goreleaser *workflow* is a direct PR on the mirror; a change to `.goreleaser.yml` itself lands here like any other source change.
 
 ## Troubleshooting
 
@@ -203,21 +129,15 @@ If this provider is published to the Terraform Registry:
 
 ### Tag Already Exists
 
-**Error**: The publish workflow refuses to push because the tag already exists on the mirror
+**Error**: The publish job refuses to push because the tag already exists on the mirror
 
-**Solution**: Tags are immutable by design. Re-run the workflow with a new patch version instead of deleting or moving an existing tag
+**Solution**: Tags are immutable by design and the version is the LiteLLM version, so this means the provider was already mirrored for this release. If the registry is missing the version, re-run the mirror's `Release` workflow for the existing tag rather than re-tagging
 
 ## Version Numbering
 
-This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html):
+The provider version is the LiteLLM version, verbatim: `X.Y.Z` for a stable release, `X.Y.Z-rc.N` for a release candidate and `X.Y.Z-dev.N` for a nightly. It says which proxy the provider shipped with and was audited against; it does not follow SemVer's break-signalling, so breaking changes are announced in `CHANGELOG.md` and the registry docs instead.
 
-- **MAJOR** version (1.0.0): Incompatible API changes
-- **MINOR** version (0.1.0): New functionality in a backward-compatible manner
-- **PATCH** version (0.0.1): Backward-compatible bug fixes
-
-For pre-1.0 releases:
-- Breaking changes may occur in minor versions
-- Patch versions should only contain bug fixes
+Versions `0.1.0` to `0.4.0` predate this and remain in the registry on their own line. A `~> 0.4` constraint never receives another release.
 
 ## Security Considerations
 
@@ -233,5 +153,4 @@ For pre-1.0 releases:
 - [Terraform Provider Publishing](https://www.terraform.io/docs/registry/providers/publishing.html)
 - [HashiCorp GPG Signing Requirements](https://www.terraform.io/docs/registry/providers/publishing.html#signing-releases)
 - [GitHub Actions Secrets](https://docs.github.com/en/actions/security-guides/encrypted-secrets)
-- [Semantic Versioning](https://semver.org/)
 - [Keep a Changelog](https://keepachangelog.com/)

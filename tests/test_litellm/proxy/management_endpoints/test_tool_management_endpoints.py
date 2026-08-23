@@ -8,8 +8,6 @@ imports these inside function bodies to avoid circular imports.
 """
 
 import inspect
-import os
-import sys
 from collections.abc import Sequence
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -20,7 +18,6 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from prisma.actions import LiteLLM_TeamTableActions
 
-sys.path.insert(0, os.path.abspath("../../.."))
 
 from litellm.proxy.management_endpoints.tool_management_endpoints import router
 from litellm.types.tool_management import LiteLLM_ToolTableRow

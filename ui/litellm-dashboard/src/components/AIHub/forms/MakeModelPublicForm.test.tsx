@@ -29,67 +29,8 @@ vi.mock("../../networking", () => ({
 import { makeModelGroupPublic } from "../../networking";
 const mockMakeModelGroupPublic = vi.mocked(makeModelGroupPublic);
 
-// Mock antd components
-vi.mock("antd", () => ({
-  Modal: ({ open, title, children, onCancel, footer }: any) =>
-    open ? (
-      <div data-testid="modal">
-        <div>{title}</div>
-        {children}
-        {footer}
-      </div>
-    ) : null,
-  Form: Object.assign(({ children, form }: any) => <form data-testid="form">{children}</form>, {
-    useForm: () => [
-      {
-        resetFields: vi.fn(),
-        validateFields: vi.fn(),
-        getFieldsValue: vi.fn(),
-        setFieldsValue: vi.fn(),
-      },
-      vi.fn(),
-    ],
-    Item: ({ children }: any) => <div>{children}</div>,
-  }),
-  Steps: Object.assign(
-    ({ children, current, className }: any) => (
-      <div data-testid="steps" className={className}>
-        {children}
-      </div>
-    ),
-    {
-      Step: ({ title }: any) => <div>{title}</div>,
-    },
-  ),
-  Button: ({ children, onClick, disabled, loading, ...props }: any) => (
-    <button onClick={onClick} disabled={disabled || loading} data-loading={loading} {...props}>
-      {children}
-    </button>
-  ),
-  Checkbox: ({ checked, indeterminate, onChange, children, disabled }: any) => (
-    <label>
-      <input
-        type="checkbox"
-        checked={checked}
-        onChange={(e) => onChange({ target: { checked: e.target.checked } })}
-        disabled={disabled}
-        data-indeterminate={indeterminate}
-      />
-      {children}
-    </label>
-  ),
-}));
-
-// Mock @tremor/react components
-vi.mock("@tremor/react", () => ({
-  Text: ({ children, className }: any) => <span className={className}>{children}</span>,
-  Title: ({ children }: any) => <h3>{children}</h3>,
-  Badge: ({ children, color, size }: any) => (
-    <span data-color={color} data-size={size}>
-      {children}
-    </span>
-  ),
-}));
+const expectDisabledControl = (element: HTMLElement) =>
+  expect(element.hasAttribute("disabled") || element.getAttribute("aria-disabled") === "true").toBe(true);
 
 // Mock ModelFilters component
 vi.mock("../../model_filters", () => ({
@@ -100,14 +41,6 @@ vi.mock("../../model_filters", () => ({
       </button>
     </div>
   ),
-}));
-
-// Mock NotificationsManager
-vi.mock("../../molecules/notifications_manager", () => ({
-  default: {
-    fromBackend: vi.fn(),
-    success: vi.fn(),
-  },
 }));
 
 describe("MakeModelPublicForm", () => {
@@ -180,7 +113,7 @@ describe("MakeModelPublicForm", () => {
 
     // Check that the Next button is enabled (models are preselected)
     const nextButton = screen.getByRole("button", { name: "Next" });
-    expect(nextButton).not.toBeDisabled();
+    expect(nextButton).toBeEnabled();
   });
 
   it("should handle model selection and navigation", async () => {
@@ -190,14 +123,14 @@ describe("MakeModelPublicForm", () => {
     expect(screen.getByText("Select Models to Make Public")).toBeInTheDocument();
 
     // Select all models using the select all checkbox
-    const selectAllCheckbox = screen.getByLabelText("Select All (2)");
+    const selectAllCheckbox = screen.getByRole("checkbox", { name: "Select All (2)" });
     await act(async () => {
       fireEvent.click(selectAllCheckbox);
     });
 
     // Verify Next button is enabled
     const nextButton = screen.getByRole("button", { name: "Next" });
-    expect(nextButton).not.toBeDisabled();
+    expect(nextButton).toBeEnabled();
 
     // Click Next
     await act(async () => {
@@ -216,12 +149,11 @@ describe("MakeModelPublicForm", () => {
     render(<MakeModelPublicForm {...mockProps} />);
 
     // Select all models
-    const selectAllCheckbox = screen.getByLabelText("Select All (2)");
+    const selectAllCheckbox = screen.getByRole("checkbox", { name: "Select All (2)" });
     await act(async () => {
       fireEvent.click(selectAllCheckbox);
     });
 
-    // Navigate to confirm step
     const nextButton = screen.getByRole("button", { name: "Next" });
     await act(async () => {
       fireEvent.click(nextButton);
@@ -232,7 +164,6 @@ describe("MakeModelPublicForm", () => {
       expect(screen.getByText("Confirm Making Models Public")).toBeInTheDocument();
     });
 
-    // Submit
     const submitButton = screen.getByRole("button", { name: "Make Public" });
     await act(async () => {
       fireEvent.click(submitButton);
@@ -279,6 +210,8 @@ describe("MakeModelPublicForm", () => {
     const checkboxes = screen.getAllByRole("checkbox");
     await act(async () => {
       fireEvent.click(checkboxes[0]); // Click select all to select all
+    });
+    await act(async () => {
       fireEvent.click(checkboxes[0]); // Click select all again to deselect all
     });
 
@@ -303,8 +236,8 @@ describe("MakeModelPublicForm", () => {
     expect(screen.getByText("No models match the current filters.")).toBeInTheDocument();
 
     // Select All checkbox should be disabled
-    const selectAllCheckbox = screen.getByLabelText("Select All");
-    expect(selectAllCheckbox).toBeDisabled();
+    const selectAllCheckbox = screen.getByRole("checkbox", { name: "Select All" });
+    expectDisabledControl(selectAllCheckbox);
 
     // Next button should be disabled
     const nextButton = screen.getByRole("button", { name: "Next" });
@@ -379,7 +312,7 @@ describe("MakeModelPublicForm", () => {
 
     // Select all should be indeterminate now
     const selectAllCheckbox = checkboxes[0];
-    expect(selectAllCheckbox).toHaveAttribute("data-indeterminate", "true");
+    expect(selectAllCheckbox).toBePartiallyChecked();
   });
 
   it("should display model badges and information", () => {
@@ -402,7 +335,6 @@ describe("MakeModelPublicForm", () => {
 
     render(<MakeModelPublicForm {...mockProps} />);
 
-    // Navigate to confirm step
     const nextButton = screen.getByRole("button", { name: "Next" });
     await act(async () => {
       fireEvent.click(nextButton);
@@ -412,7 +344,6 @@ describe("MakeModelPublicForm", () => {
       expect(screen.getByText("Confirm Making Models Public")).toBeInTheDocument();
     });
 
-    // Submit
     const submitButton = screen.getByRole("button", { name: "Make Public" });
     await act(async () => {
       fireEvent.click(submitButton);
@@ -428,7 +359,7 @@ describe("MakeModelPublicForm", () => {
     expect(mockProps.onClose).not.toHaveBeenCalled();
   });
 
-  it("should show loading state during submit", async () => {
+  it("should not complete the flow until the submit request resolves", async () => {
     let resolvePromise: (value: any) => void = () => {};
     const pendingPromise = new Promise((resolve) => {
       resolvePromise = resolve;
@@ -437,7 +368,6 @@ describe("MakeModelPublicForm", () => {
 
     render(<MakeModelPublicForm {...mockProps} />);
 
-    // Navigate to confirm step
     const nextButton = screen.getByRole("button", { name: "Next" });
     await act(async () => {
       fireEvent.click(nextButton);
@@ -447,17 +377,20 @@ describe("MakeModelPublicForm", () => {
       expect(screen.getByText("Confirm Making Models Public")).toBeInTheDocument();
     });
 
-    // Submit
     const submitButton = screen.getByRole("button", { name: "Make Public" });
     await act(async () => {
       fireEvent.click(submitButton);
     });
 
-    // Check loading state
-    expect(submitButton).toHaveAttribute("data-loading", "true");
-    expect(submitButton).toBeDisabled();
+    expectDisabledControl(submitButton);
+    await act(async () => {
+      fireEvent.click(submitButton);
+    });
+    expect(mockMakeModelGroupPublic).toHaveBeenCalledTimes(1);
+    expect(mockProps.onSuccess).not.toHaveBeenCalled();
+    expect(mockProps.onClose).not.toHaveBeenCalled();
+    expect(screen.getByText("Confirm Making Models Public")).toBeInTheDocument();
 
-    // Resolve the promise
     resolvePromise({});
     await waitFor(() => {
       expect(mockProps.onSuccess).toHaveBeenCalled();
@@ -474,7 +407,7 @@ describe("MakeModelPublicForm", () => {
     render(<MakeModelPublicForm {...invisibleProps} />);
 
     // Modal should not be rendered
-    expect(screen.queryByTestId("modal")).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(screen.queryByText("Make Models Public")).not.toBeInTheDocument();
   });
 
@@ -521,21 +454,19 @@ describe("MakeModelPublicForm", () => {
 
     // Select all should be indeterminate
     const selectAllCheckbox = checkboxes[0];
-    expect(selectAllCheckbox).toHaveAttribute("data-indeterminate", "true");
+    expect(selectAllCheckbox).toBePartiallyChecked();
   });
 
   it("should show selected count", () => {
     render(<MakeModelPublicForm {...mockProps} />);
 
     // Should show that 1 model is selected (gpt-3.5-turbo is preselected)
-    expect(screen.getByText("1")).toBeInTheDocument();
-    expect(screen.getByText("model selected")).toBeInTheDocument();
+    expect(screen.getByText("model selected")).toHaveTextContent("1 model selected");
   });
 
   it("should show confirmation step with selected models", async () => {
     render(<MakeModelPublicForm {...mockProps} />);
 
-    // Navigate to confirm step
     const nextButton = screen.getByRole("button", { name: "Next" });
     await act(async () => {
       fireEvent.click(nextButton);
