@@ -62,6 +62,7 @@ from litellm.proxy.auth.auth_utils import (
     enforce_output_token_estimates_are_admin_only,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.callback_config_validation import logging_metadata_config_error
 from litellm.proxy.common_utils.callback_utils import (
     decrypt_callback_vars,
     encrypt_callback_vars,
@@ -553,6 +554,17 @@ def key_generation_check(
         return _personal_key_generation_check(user_api_key_dict=user_api_key_dict, data=data)
 
 
+def raise_on_invalid_key_logging_config(metadata: Mapping[str, object] | None) -> None:
+    """Key-level logging writes go through key metadata, not /team/callback.
+
+    Without this the same New Relic config the team endpoint rejects would be
+    accepted here and then silently ignored or misrouted at request time.
+    """
+    error: Final = logging_metadata_config_error(metadata)
+    if error is not None:
+        raise HTTPException(status_code=400, detail={"error": error})  # mutable-ok: FastAPI detail contract
+
+
 def common_key_access_checks(
     user_api_key_dict: UserAPIKeyAuth,
     data: GenerateKeyRequest | UpdateKeyRequest,
@@ -891,6 +903,7 @@ async def _common_key_generation_helper(
     )
 
     validate_budget_duration(data.budget_duration)
+    raise_on_invalid_key_logging_config(data.metadata)
 
     if data.throttle_on_budget_exceeded is True and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value:
         raise HTTPException(
@@ -1992,6 +2005,8 @@ def prepare_metadata_fields(data: BaseModel, non_default_values: dict, existing_
     """
     Check LiteLLM_ManagementEndpoint_MetadataFields (proxy/_types.py) for fields that are allowed to be updated
     """
+    raise_on_invalid_key_logging_config(non_default_values.get("metadata"))
+
     if "metadata" not in non_default_values:  # allow user to set metadata to none
         non_default_values["metadata"] = existing_metadata.copy()
 
