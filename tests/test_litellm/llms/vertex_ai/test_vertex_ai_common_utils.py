@@ -695,6 +695,25 @@ def test_get_vertex_region_global_only_model(
         assert result == expected_region
 
 
+@pytest.mark.parametrize(
+    "vertex_region, expected_region",
+    [
+        (None, "global"),
+        ("global", "global"),
+        ("us", "us"),
+        ("eu", "eu"),
+        ("us-central1", "global"),
+    ],
+)
+def test_get_vertex_region_gemini_3_7_flash(vertex_region, expected_region):
+    from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
+
+    assert (
+        VertexBase.get_vertex_region(vertex_region=vertex_region, model="gemini-3.7-flash")
+        == expected_region
+    )
+
+
 def test_vertex_filter_format_uri():
     import json
 
