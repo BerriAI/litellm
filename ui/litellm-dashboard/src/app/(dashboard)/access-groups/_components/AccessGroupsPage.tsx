@@ -59,8 +59,8 @@ export function AccessGroupsPage() {
   }
 
   return (
-    <div className="p-6 px-12">
-      <div className="mb-4">
+    <div className="p-8">
+      <div className="mb-6">
         <LegacyPageHeader
           title="Access Groups"
           subtitle="Manage resource permissions for your organization"

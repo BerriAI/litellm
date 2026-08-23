@@ -78,7 +78,7 @@ const ClaudeCodePluginsPanel: React.FC<ClaudeCodePluginsPanelProps> = ({ accessT
   };
 
   return (
-    <div className="w-full mx-auto flex-auto overflow-y-auto m-8 p-2">
+    <div className="p-8">
       {selectedSkill ? (
         <SkillDetail
           skill={selectedSkill}

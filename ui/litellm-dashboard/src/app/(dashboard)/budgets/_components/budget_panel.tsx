@@ -79,7 +79,7 @@ const BudgetPanel: React.FC<BudgetSettingsPageProps> = ({ accessToken }) => {
   };
 
   return (
-    <div className="flex h-full flex-col gap-4 p-6 px-12">
+    <div className="flex h-full flex-col gap-6 p-8">
       <LegacyPageHeader
         icon={<Wallet className="size-5" />}
         title="Budgets"
