@@ -14,6 +14,8 @@ from litellm.proxy.client.cli.commands.autoroute.process import (
     PidRecord,
     ProcessLaunchError,
     UpError,
+    _windows_pid_exists,
+    _WindowsProcessApi,
     clear_pid_record,
     is_port_available,
     is_running,
@@ -42,6 +44,18 @@ class FakeResponse:
 def _signals_sent(fake_kill: Mock) -> tuple[int, ...]:
     """Signal numbers ``os.kill`` was called with, in call order."""
     return tuple(call.args[1] for call in fake_kill.call_args_list)
+
+
+def _windows_api(handle: int, exit_code: int | None = None, last_error: int = 0) -> tuple[_WindowsProcessApi, Mock]:
+    """A kernel32 stand-in, plus the Mock that recorded ``CloseHandle``."""
+    close_handle: Final = Mock()
+    api: Final = _WindowsProcessApi(
+        open_query_handle=Mock(return_value=handle),
+        exit_code=Mock(return_value=exit_code),
+        close_handle=close_handle,
+        last_error=Mock(return_value=last_error),
+    )
+    return api, close_handle
 
 
 class TestIsPortAvailable:
@@ -183,6 +197,83 @@ class TestIsRunningDoesNotSignal:
 
         assert is_running(1234) is True
         assert _signals_sent(fake_kill) == (), "os.kill reached on win32; signal 0 is CTRL_C_EVENT there"
+
+
+class TestWindowsPidExists:
+    """The Windows probe, driven through an injected kernel32 so it runs on any platform.
+
+    ``OpenProcess`` / ``GetExitCodeProcess`` only exist on Windows, so CI could
+    never execute this decision logic before.  The four calls the probe needs
+    now arrive as a ``_WindowsProcessApi``; only the loader that builds the real
+    one out of ``ctypes`` stays Windows-only.
+    """
+
+    _ERROR_ACCESS_DENIED: Final = 5
+    _ERROR_INVALID_PARAMETER: Final = 87
+    _STILL_ACTIVE: Final = 259
+
+    def test_access_denied_on_open_means_the_pid_exists(self):
+        """A pid we may not open is still a live pid; POSIX answers the same way via PermissionError."""
+        api, close_handle = _windows_api(handle=0, last_error=self._ERROR_ACCESS_DENIED)
+
+        assert _windows_pid_exists(4321, api) is True
+        close_handle.assert_not_called()
+
+    def test_any_other_open_failure_means_the_pid_is_gone(self):
+        api, close_handle = _windows_api(handle=0, last_error=self._ERROR_INVALID_PARAMETER)
+
+        assert _windows_pid_exists(4321, api) is False
+        close_handle.assert_not_called()
+
+    def test_still_active_means_running(self):
+        api, close_handle = _windows_api(handle=99, exit_code=self._STILL_ACTIVE)
+
+        assert _windows_pid_exists(4321, api) is True
+        close_handle.assert_called_once_with(99)
+
+    def test_a_real_exit_code_means_the_process_finished(self):
+        api, close_handle = _windows_api(handle=99, exit_code=0)
+
+        assert _windows_pid_exists(4321, api) is False
+        close_handle.assert_called_once_with(99)
+
+    def test_an_unreadable_exit_code_is_reported_as_running(self):
+        """``GetExitCodeProcess`` failing is not evidence the process died, so do not claim it did."""
+        api, close_handle = _windows_api(handle=99, exit_code=None)
+
+        assert _windows_pid_exists(4321, api) is True
+        close_handle.assert_called_once_with(99)
+
+    def test_the_handle_is_released_even_when_the_query_raises(self):
+        """A leaked query handle would keep the exited process object alive for the life of the CLI."""
+        close_handle: Final = Mock()
+        api: Final = _WindowsProcessApi(
+            open_query_handle=Mock(return_value=99),
+            exit_code=Mock(side_effect=OSError(22, "Invalid argument")),
+            close_handle=close_handle,
+            last_error=Mock(return_value=0),
+        )
+
+        with pytest.raises(OSError):
+            _windows_pid_exists(4321, api)
+
+        close_handle.assert_called_once_with(99)
+
+    def test_the_probe_asks_about_the_pid_it_was_given(self):
+        api, _ = _windows_api(handle=99, exit_code=self._STILL_ACTIVE)
+
+        _windows_pid_exists(4321, api)
+
+        api.open_query_handle.assert_called_once_with(4321)
+
+    def test_the_probe_never_signals_the_process(self, monkeypatch):
+        """The bug this replaces: ``os.kill(pid, 0)`` is ``CTRL_C_EVENT`` on Windows."""
+        fake_kill: Final = Mock()
+        monkeypatch.setattr(process_module.os, "kill", fake_kill)
+        api, _ = _windows_api(handle=99, exit_code=self._STILL_ACTIVE)
+
+        assert _windows_pid_exists(4321, api) is True
+        assert _signals_sent(fake_kill) == ()
 
 
 class TestTerminateHardKillSignal:

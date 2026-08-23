@@ -8,6 +8,7 @@ import subprocess
 import sys
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
@@ -143,19 +144,17 @@ _STILL_ACTIVE: Final = 259
 _ERROR_ACCESS_DENIED: Final = 5
 
 
-def _windows_pid_exists(pid: int) -> bool:
-    """Liveness check for Windows that does not signal the process.
+@dataclass(frozen=True, slots=True)
+class _WindowsProcessApi:
+    """The kernel32 surface ``_windows_pid_exists`` needs, injected so the probe is testable off Windows."""
 
-    Opens a query-only handle and asks for the exit code.  ``OpenProcess``
-    failing with ``ERROR_ACCESS_DENIED`` means the pid exists but is not ours
-    to open, which is the case the ``PermissionError`` arm covers on POSIX.
+    open_query_handle: Callable[[int], int]
+    exit_code: Callable[[int], int | None]
+    close_handle: Callable[[int], None]
+    last_error: Callable[[], int]
 
-    Caveat kept deliberately: a process whose real exit code is 259 reads as
-    alive, because ``GetExitCodeProcess`` reports ``STILL_ACTIVE`` (259) for a
-    running process and cannot distinguish the two.  That is the standard
-    trade-off for this API and it is strictly better than the previous
-    behaviour, which killed the process it was asked about.
-    """
+
+def _load_windows_process_api() -> _WindowsProcessApi:  # pragma: no cover - kernel32 is Windows-only; CI is Linux
     import ctypes
     from ctypes import wintypes
 
@@ -167,16 +166,43 @@ def _windows_pid_exists(pid: int) -> bool:
     kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
     kernel32.CloseHandle.restype = wintypes.BOOL
 
-    handle: Final = kernel32.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+    def exit_code(handle: int) -> int | None:
+        code = wintypes.DWORD()
+        if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+            return None
+        return code.value
+
+    return _WindowsProcessApi(
+        open_query_handle=lambda pid: kernel32.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION, False, pid),
+        exit_code=exit_code,
+        close_handle=kernel32.CloseHandle,
+        last_error=ctypes.get_last_error,
+    )
+
+
+def _windows_pid_exists(pid: int, api: _WindowsProcessApi | None = None) -> bool:
+    """Liveness check for Windows that does not signal the process.
+
+    Opens a query-only handle and asks for the exit code.  ``OpenProcess``
+    failing with ``ERROR_ACCESS_DENIED`` means the pid exists but is not ours
+    to open, which is the case the ``PermissionError`` arm covers on POSIX.
+    An unreadable exit code is reported as alive rather than guessed away.
+
+    Caveat kept deliberately: a process whose real exit code is 259 reads as
+    alive, because ``GetExitCodeProcess`` reports ``STILL_ACTIVE`` (259) for a
+    running process and cannot distinguish the two.  That is the standard
+    trade-off for this API and it is strictly better than the previous
+    behaviour, which killed the process it was asked about.
+    """
+    resolved: Final = api if api is not None else _load_windows_process_api()
+    handle: Final = resolved.open_query_handle(pid)
     if not handle:
-        return ctypes.get_last_error() == _ERROR_ACCESS_DENIED
+        return resolved.last_error() == _ERROR_ACCESS_DENIED
     try:
-        exit_code: Final = wintypes.DWORD()
-        if not kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
-            return True
-        return exit_code.value == _STILL_ACTIVE
+        code: Final = resolved.exit_code(handle)
+        return code is None or code == _STILL_ACTIVE
     finally:
-        kernel32.CloseHandle(handle)
+        resolved.close_handle(handle)
 
 
 def is_running(pid: int) -> bool:
