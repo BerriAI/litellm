@@ -743,7 +743,7 @@ export const keyCreateServiceAccountCall = async (
     }
     // Parse JSON fields if they exist
     for (const field of jsonFields) {
-      if (formValues[field]) {
+      if (typeof formValues[field] === "string" && formValues[field]) {
         // if there's an exception JSON.parse, show it in the message
         try {
           formValues[field] = JSON.parse(formValues[field]);
@@ -801,7 +801,7 @@ export const keyCreateCall = async (
     }
     // Parse JSON fields if they exist
     for (const field of jsonFields) {
-      if (formValues[field]) {
+      if (typeof formValues[field] === "string" && formValues[field]) {
         // if there's an exception JSON.parse, show it in the message
         try {
           formValues[field] = JSON.parse(formValues[field]);

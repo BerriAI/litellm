@@ -1,6 +1,6 @@
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, renderWithProviders, screen, testQueryClient, waitFor } from "../../../tests/test-utils";
+import { act, fireEvent, renderWithProviders, screen, testQueryClient, waitFor } from "../../../tests/test-utils";
 import type { Team } from "../key_team_helpers/key_list";
 import { keyCreateCall, keyCreateServiceAccountCall, modelAvailableCall, userFilterUICall } from "../networking";
 import { toast } from "@/lib/toast";
@@ -98,8 +98,10 @@ const OPENAPI_SCHEMA = {
         properties: {
           key: { type: "string", title: "Key" },
           soft_budget: { type: "number", title: "Soft Budget" },
-          blocked: { type: "boolean", title: "Blocked" },
+          blocked: { anyOf: [{ type: "boolean" }, { type: "null" }], title: "Blocked" },
           max_budget: { type: "number", title: "Max Budget" },
+          allowed_cache_controls: { anyOf: [{ items: {}, type: "array" }, { type: "null" }] },
+          model_rpm_limit: { anyOf: [{ type: "object" }, { type: "null" }] },
         },
       },
     },
@@ -168,7 +170,13 @@ const SECTION_PAYLOAD_ADDITIONS: Record<keyof typeof SECTIONS, Record<string, un
   router: { router_settings: ROUTER_SETTINGS_DEFAULT },
   aliases: {},
   lifecycle: {},
-  advanced: { key: undefined, soft_budget: undefined, blocked: undefined },
+  advanced: {
+    key: undefined,
+    soft_budget: undefined,
+    blocked: undefined,
+    allowed_cache_controls: undefined,
+    model_rpm_limit: undefined,
+  },
 };
 
 const ALL_OPEN_PAYLOAD = {
@@ -479,6 +487,37 @@ describe("CreateKey", () => {
       expect(payload).toHaveProperty("key");
     });
 
+    it("routes the Advanced Settings boolean switch, tags input, and JSON textarea into their payload keys", async () => {
+      await openModal();
+      await nameTheKey();
+      await openSection(/Optional Settings/i);
+      await openSection(SECTIONS.advanced);
+
+      await userEvent.click(await screen.findByRole("switch", { name: /Blocked/ }));
+      await userEvent.type(await screen.findByLabelText(/Allowed Cache Controls/), "no-cache");
+      await userEvent.click(await screen.findByText('Create "no-cache"'));
+      fireEvent.change(await screen.findByLabelText(/Model RPM Limits/), { target: { value: '{"gpt-4o": 100}' } });
+      await submit();
+
+      const payload = await createdPayload();
+      expect(payload.blocked).toBe(true);
+      expect(payload.allowed_cache_controls).toStrictEqual(["no-cache"]);
+      expect(payload.model_rpm_limit).toBe('{"gpt-4o": 100}');
+    });
+
+    it("rejects invalid JSON typed into an Advanced Settings JSON field instead of submitting", async () => {
+      await openModal();
+      await nameTheKey();
+      await openSection(/Optional Settings/i);
+      await openSection(SECTIONS.advanced);
+
+      fireEvent.change(await screen.findByLabelText(/Model RPM Limits/), { target: { value: "not json" } });
+      await submit();
+
+      expect(await screen.findByText("Please enter valid JSON")).toBeInTheDocument();
+      expect(vi.mocked(keyCreateCall)).not.toHaveBeenCalled();
+    });
+
     it("drops the schema-driven custom key field when the proxy disables custom API keys", async () => {
       state.uiSettings = { disable_custom_api_keys: true };
       await openModal();
@@ -603,15 +642,15 @@ describe("CreateKey", () => {
       expect(vi.mocked(keyCreateCall)).not.toHaveBeenCalled();
     });
 
-    it("suppresses the required message behind the always-visible help text", async () => {
+    it("replaces the help text with the required message while the field is invalid", async () => {
       await openModal();
       await submit();
 
       await waitFor(() => {
         expect(screen.getByLabelText(/Key Name/)).toHaveAttribute("aria-invalid", "true");
       });
-      expect(screen.queryByText("Please input a key name")).not.toBeInTheDocument();
-      expect(screen.getByText("required")).toBeInTheDocument();
+      expect(screen.getByText("Please input a key name")).toBeInTheDocument();
+      expect(screen.queryByText("required")).not.toBeInTheDocument();
     });
 
     it("blocks a service account submit until a team is chosen, then lets it through", async () => {
