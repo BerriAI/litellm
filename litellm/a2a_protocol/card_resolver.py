@@ -67,11 +67,9 @@ def normalize_agent_card_protocol_bindings(agent_card: "AgentCard") -> "AgentCar
     case-sensitively against its uppercase TransportProtocol constants and fails
     with "no compatible transports found." for spec-adjacent casings.
     """
-    interfaces: Final = getattr(agent_card, "supported_interfaces", None) or ()
-    for interface in interfaces:
-        binding: str = getattr(interface, "protocol_binding", "") or ""
-        canonical = _CANONICAL_PROTOCOL_BINDINGS.get(binding.lower())
-        if canonical is not None and binding != canonical:
+    for interface in agent_card.supported_interfaces:
+        canonical: str | None = _CANONICAL_PROTOCOL_BINDINGS.get(interface.protocol_binding.lower())
+        if canonical is not None and canonical != interface.protocol_binding:
             interface.protocol_binding = canonical
     return agent_card
 

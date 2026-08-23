@@ -344,6 +344,7 @@ async def test_lowercase_protocol_binding_in_agent_card_still_gets_a_client(isol
     response = await _send_message(a2a_client, _send_request("lc"))
 
     assert type(response.root.result).__name__ == "Message"
+    assert a2a_client._litellm_agent_card.supported_interfaces[0].protocol_binding == "JSONRPC"
 
 
 @pytest.mark.asyncio
