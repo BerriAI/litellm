@@ -14614,7 +14614,7 @@
         "supports_reasoning": true,
         "supports_sampling_params": false,
         "supports_tool_choice": true,
-        "supports_vision": false,
+        "supports_vision": true,
         "thinking_always_on": true
     },
     "databricks/databricks-claude-haiku-4-5": {
