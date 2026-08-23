@@ -25,6 +25,8 @@ class ServiceTypes(str, enum.Enum):
     AUTH = "auth"
     PROXY_PRE_CALL = "proxy_pre_call"
     POD_LOCK_MANAGER = "pod_lock_manager"
+    ANTHROPIC_WIF = "anthropic_wif"
+    ANTHROPIC_WIF_CACHE = "anthropic_wif_cache"
 
     """
     Operational metrics for DB Transaction Queues
@@ -65,6 +67,13 @@ DEFAULT_SERVICE_CONFIGS: Final = {
     ServiceTypes.ROUTER.value: {"metrics": [ServiceMetrics.COUNTER, ServiceMetrics.HISTOGRAM]},
     ServiceTypes.AUTH.value: {"metrics": [ServiceMetrics.COUNTER, ServiceMetrics.HISTOGRAM]},
     ServiceTypes.PROXY_PRE_CALL.value: {"metrics": [ServiceMetrics.COUNTER, ServiceMetrics.HISTOGRAM]},
+    ServiceTypes.ANTHROPIC_WIF.value: {  # mutable-ok: ServiceConfig mandates the dict-of-list shape
+        "metrics": [ServiceMetrics.COUNTER, ServiceMetrics.HISTOGRAM]  # mutable-ok: ServiceConfig mandates a list
+    },
+    # cache hits are counter-only: no HTTP call happens, so observing a latency would be a lie
+    ServiceTypes.ANTHROPIC_WIF_CACHE.value: {  # mutable-ok: ServiceConfig mandates the dict-of-list shape
+        "metrics": [ServiceMetrics.COUNTER]  # mutable-ok: ServiceConfig mandates a list
+    },
     # Operational metrics for DB Transaction Queues
     ServiceTypes.POD_LOCK_MANAGER.value: {"metrics": [ServiceMetrics.GAUGE]},
     ServiceTypes.IN_MEMORY_DAILY_SPEND_UPDATE_QUEUE.value: {"metrics": [ServiceMetrics.GAUGE]},

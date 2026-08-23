@@ -15,10 +15,14 @@ from pydantic import SecretStr
 from litellm.llms.base_llm.auth.token_exchange import (
     _REDACTION_CAP,
     ADVISORY_REFRESH_BACKOFF_SECONDS,
+    CALL_TYPE_CACHE_HIT,
     FALLBACK_TOKEN_TTL_SECONDS,
     MAX_ASSERTION_BYTES,
     MAX_RESPONSE_BYTES,
     JwtBearerTokenExchangeEngine,
+    ServiceLoggingMetricsSink,
+    TokenExchangeEndpointFailure,
+    TokenExchangeTransportFailure,
     _default_assertion_reader,
     _error_summary,
     _HttpxSyncTokenPoster,
@@ -27,6 +31,7 @@ from litellm.llms.base_llm.auth.token_exchange import (
 )
 from litellm.llms.base_llm.auth.types import (
     AssertionSourceError,
+    ExchangeError,
     ExchangeResult,
     InsecureTokenUrl,
     MalformedTokenResponse,
@@ -36,6 +41,7 @@ from litellm.llms.base_llm.auth.types import (
     TokenTransportError,
 )
 from litellm.secret_managers.main import OidcPathNotAllowedError, _resolve_oidc_file_path
+from litellm.types.services import ServiceTypes
 
 DEFAULT_REF: Final = "oidc/env/TEST_ASSERTION"
 DEFAULT_ASSERTION: Final = "test-jwt-assertion"
@@ -147,12 +153,29 @@ def make_spec(**overrides) -> TokenExchangeSpec:
     return TokenExchangeSpec(**base)
 
 
+class RecordingMetricsSink:
+    def __init__(self) -> None:
+        self.successes: list[tuple[str, float]] = []
+        self.failures: list[tuple[str, float, ExchangeError]] = []
+        self.cache_hits = 0
+
+    def exchange_success(self, *, call_type: str, duration_seconds: float) -> None:
+        self.successes.append((call_type, duration_seconds))
+
+    def exchange_failure(self, *, call_type: str, duration_seconds: float, error: ExchangeError) -> None:
+        self.failures.append((call_type, duration_seconds, error))
+
+    def cache_hit(self) -> None:
+        self.cache_hits += 1
+
+
 def make_engine(
     poster,
     reader: Mapping[str, str] | Callable[[str], str | None] | None = None,
     clock: FakeClock | None = None,
     executor: concurrent.futures.Executor | None = None,
     max_entries: int = 64,
+    metrics_sink=None,
 ) -> JwtBearerTokenExchangeEngine:
     resolved_reader = reader if callable(reader) else (reader or {DEFAULT_REF: DEFAULT_ASSERTION}).get
     return JwtBearerTokenExchangeEngine(
@@ -161,6 +184,7 @@ def make_engine(
         clock=clock if clock is not None else FakeClock(),
         refresh_executor=executor if executor is not None else ManualExecutor(),
         max_entries=max_entries,
+        metrics_sink=metrics_sink if metrics_sink is not None else RecordingMetricsSink(),
     )
 
 
@@ -1316,3 +1340,214 @@ class TestShortLivedRefreshWindows:
         assert len(executor.pending) == (1 if expect_advisory_submit else 0)
         assert served.access_token.get_secret_value() == ("reminted" if expect_new_token else "short-lived")
         assert len(poster.requests) == (2 if expect_new_token else 1)
+
+
+class RaisingMetricsSink:
+    def exchange_success(self, *, call_type: str, duration_seconds: float) -> None:
+        raise RuntimeError("metrics sink down")
+
+    def exchange_failure(self, *, call_type: str, duration_seconds: float, error: ExchangeError) -> None:
+        raise RuntimeError("metrics sink down")
+
+    def cache_hit(self) -> None:
+        raise RuntimeError("metrics sink down")
+
+
+class TestMetricsEmission:
+    def test_cold_mint_emits_success_with_duration(self):
+        clock = FakeClock()
+        sink = RecordingMetricsSink()
+        poster = ScriptedPoster([token_response()], on_request=lambda _request: clock.advance(0.25))
+        engine = make_engine(poster, clock=clock, metrics_sink=sink)
+
+        mint(engine, make_spec())
+
+        assert sink.successes == [("cold_mint", 0.25)]
+        assert sink.failures == []
+        assert sink.cache_hits == 0
+
+    def test_cache_hit_emits_counter_not_a_mint(self):
+        clock = FakeClock()
+        sink = RecordingMetricsSink()
+        engine = make_engine(ScriptedPoster([token_response()]), clock=clock, metrics_sink=sink)
+        spec = make_spec()
+
+        mint(engine, spec)
+        clock.advance(100.0)
+        mint(engine, spec)
+
+        assert sink.cache_hits == 1
+        assert len(sink.successes) == 1
+
+    def test_advisory_refresh_call_type(self):
+        clock = FakeClock(start=1_000.0)
+        sink = RecordingMetricsSink()
+        executor = ManualExecutor()
+        poster = ScriptedPoster([token_response("old", expires_in=3600), token_response("new")])
+        engine = make_engine(poster, clock=clock, executor=executor, metrics_sink=sink)
+        spec = make_spec()
+
+        mint(engine, spec)
+        clock.now = 1_000.0 + 3600 - 119.0
+        mint(engine, spec)
+        executor.run_all()
+
+        assert [call_type for call_type, _ in sink.successes] == ["cold_mint", "advisory_refresh"]
+        assert sink.cache_hits == 1
+
+    def test_mandatory_refresh_call_type(self):
+        clock = FakeClock(start=1_000.0)
+        sink = RecordingMetricsSink()
+        poster = ScriptedPoster([token_response("old", expires_in=3600), token_response("new")])
+        engine = make_engine(poster, clock=clock, metrics_sink=sink)
+        spec = make_spec()
+
+        mint(engine, spec)
+        clock.now = 1_000.0 + 3600 - 29.0
+        mint(engine, spec)
+
+        assert [call_type for call_type, _ in sink.successes] == ["cold_mint", "mandatory_refresh"]
+        assert sink.cache_hits == 0
+
+    def test_failed_exchange_emits_failure_once_and_negative_cache_does_not_reemit(self):
+        sink = RecordingMetricsSink()
+        poster = ScriptedPoster([httpx.Response(503, json={"error": "unavailable"})])
+        engine = make_engine(poster, metrics_sink=sink)
+        spec = make_spec()
+
+        first = engine.get_token(spec)
+        second = engine.get_token(spec)
+
+        assert isinstance(first, TokenEndpointError)
+        assert isinstance(second, TokenEndpointError)
+        assert len(sink.failures) == 1
+        call_type, _duration, error = sink.failures[0]
+        assert call_type == "cold_mint"
+        assert isinstance(error, TokenEndpointError)
+        assert error.status_code == 503
+        assert sink.successes == []
+
+    def test_failure_payload_carries_no_assertion_material(self):
+        sink = RecordingMetricsSink()
+        engine = make_engine(EchoingUnauthorizedPoster(), metrics_sink=sink)
+
+        result = engine.get_token(make_spec())
+
+        assert isinstance(result, TokenEndpointError)
+        (failure,) = sink.failures
+        assert DEFAULT_ASSERTION not in repr(failure)
+        assert DEFAULT_ASSERTION not in _error_summary(failure[2])
+
+    def test_raising_sink_never_breaks_mint_serve_or_failure(self):
+        clock = FakeClock()
+        engine = make_engine(ScriptedPoster([token_response()]), clock=clock, metrics_sink=RaisingMetricsSink())
+        spec = make_spec()
+
+        minted = mint(engine, spec)
+        clock.advance(100.0)
+        served = mint(engine, spec)
+
+        assert served.access_token.get_secret_value() == minted.access_token.get_secret_value()
+
+        failing = make_engine(RaisingPoster(httpx.ConnectError("boom")), metrics_sink=RaisingMetricsSink())
+        result = failing.get_token(make_spec())
+        assert isinstance(result, TokenTransportError)
+
+
+class RecordingServiceHooks:
+    def __init__(self) -> None:
+        self.successes: list[tuple[ServiceTypes, str, float]] = []
+        self.failures: list[tuple[ServiceTypes, float, str | Exception, str]] = []
+
+    async def async_service_success_hook(self, service: ServiceTypes, call_type: str, duration: float) -> None:
+        self.successes.append((service, call_type, duration))
+
+    async def async_service_failure_hook(
+        self, service: ServiceTypes, duration: float, error: str | Exception, call_type: str
+    ) -> None:
+        self.failures.append((service, duration, error, call_type))
+
+
+class RaisingServiceHooks:
+    """Every hook raises, and each call is recorded first so a test can prove the sink kept
+    calling through rather than bailing after the first failure."""
+
+    def __init__(self) -> None:
+        self.attempts: list[str] = []  # mutable-ok: a test spy accumulating calls in order
+
+    async def async_service_success_hook(self, service: ServiceTypes, call_type: str, duration: float) -> None:
+        self.attempts.append(f"success:{call_type}")
+        raise RuntimeError("hook down")
+
+    async def async_service_failure_hook(
+        self, service: ServiceTypes, duration: float, error: str | Exception, call_type: str
+    ) -> None:
+        self.attempts.append(f"failure:{call_type}")
+        raise RuntimeError("hook down")
+
+
+class TestServiceLoggingMetricsSink:
+    def _sink(self, hooks) -> ServiceLoggingMetricsSink:
+        return ServiceLoggingMetricsSink(service_logging_factory=lambda: hooks, executor=InlineExecutor())
+
+    def test_success_maps_to_anthropic_wif_service(self):
+        hooks = RecordingServiceHooks()
+
+        self._sink(hooks).exchange_success(call_type="cold_mint", duration_seconds=0.2)
+
+        assert hooks.successes == [(ServiceTypes.ANTHROPIC_WIF, "cold_mint", 0.2)]
+
+    def test_failure_maps_variant_and_redacted_summary(self):
+        hooks = RecordingServiceHooks()
+        error = TokenEndpointError(status_code=503, redacted_body="error: unavailable")
+
+        self._sink(hooks).exchange_failure(call_type="mandatory_refresh", duration_seconds=0.1, error=error)
+
+        ((service, duration, emitted, call_type),) = hooks.failures
+        assert service is ServiceTypes.ANTHROPIC_WIF
+        assert duration == 0.1
+        assert call_type == "mandatory_refresh"
+        assert isinstance(emitted, TokenExchangeEndpointFailure)
+        assert str(emitted) == _error_summary(error)
+
+    def test_transport_failure_gets_its_own_error_class(self):
+        hooks = RecordingServiceHooks()
+
+        self._sink(hooks).exchange_failure(
+            call_type="advisory_refresh", duration_seconds=0.05, error=TokenTransportError(detail="ConnectError: boom")
+        )
+
+        ((_service, _duration, emitted, _call_type),) = hooks.failures
+        assert isinstance(emitted, TokenExchangeTransportFailure)
+
+    def test_cache_hit_maps_to_cache_service_with_zero_duration(self):
+        hooks = RecordingServiceHooks()
+
+        self._sink(hooks).cache_hit()
+
+        assert hooks.successes == [(ServiceTypes.ANTHROPIC_WIF_CACHE, CALL_TYPE_CACHE_HIT, 0.0)]
+
+    def test_end_to_end_reflected_assertion_never_reaches_the_hook(self):
+        hooks = RecordingServiceHooks()
+        sink = self._sink(hooks)
+        engine = make_engine(EchoingUnauthorizedPoster(), metrics_sink=sink)
+
+        result = engine.get_token(make_spec())
+
+        assert isinstance(result, TokenEndpointError)
+        ((_service, _duration, emitted, call_type),) = hooks.failures
+        assert call_type == "cold_mint"
+        assert DEFAULT_ASSERTION not in str(emitted)
+        assert DEFAULT_ASSERTION not in repr(emitted)
+
+    def test_raising_hooks_are_swallowed(self):
+        hooks: Final = RaisingServiceHooks()
+        sink: Final = self._sink(hooks)
+
+        sink.exchange_success(call_type="cold_mint", duration_seconds=0.2)
+        sink.cache_hit()
+        sink.exchange_failure(call_type="cold_mint", duration_seconds=0.1, error=TokenTransportError(detail="boom"))
+
+        assert hooks.attempts == ["success:cold_mint", "success:cache_hit", "failure:cold_mint"], (
+            "every event is still handed to the hooks, and one raising hook does not stop the next"
+        )

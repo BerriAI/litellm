@@ -76,6 +76,22 @@ ExchangeError: TypeAlias = (
 )
 ExchangeResult: TypeAlias = MintedToken | ExchangeError
 
+ExchangeCallType: TypeAlias = Literal["cold_mint", "mandatory_refresh", "advisory_refresh"]
+
+
+class TokenExchangeMetricsSink(Protocol):
+    """Observability seam for the exchange engine. Implementations must be best-effort: never raise
+    into the mint path, never block the calling thread, and never receive credential material --
+    ``ExchangeError`` values are redacted by construction."""
+
+    def exchange_success(self, *, call_type: ExchangeCallType, duration_seconds: float) -> None: ...
+
+    def exchange_failure(
+        self, *, call_type: ExchangeCallType, duration_seconds: float, error: ExchangeError
+    ) -> None: ...
+
+    def cache_hit(self) -> None: ...
+
 
 class SyncTokenPoster(Protocol):
     """Returns the response for ANY status; never raises for status."""

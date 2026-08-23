@@ -12,11 +12,11 @@ import hashlib
 import json
 import threading
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Coroutine, Mapping
 from concurrent.futures import Executor, ThreadPoolExecutor
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, TypeAlias
+from typing import TYPE_CHECKING, Final, Protocol, TypeAlias
 from urllib.parse import urlencode, urlsplit
 
 import httpx
@@ -28,6 +28,7 @@ from litellm.llms.base_llm.auth.types import (
     AssertionReader,
     AssertionSource,
     AssertionSourceError,
+    ExchangeCallType,
     ExchangeError,
     ExchangeResult,
     InsecureTokenUrl,
@@ -35,12 +36,19 @@ from litellm.llms.base_llm.auth.types import (
     MintedToken,
     SyncTokenPoster,
     TokenEndpointError,
+    TokenExchangeMetricsSink,
     TokenExchangeSpec,
     TokenTransportError,
 )
+from litellm.types.services import ServiceTypes
 
 if TYPE_CHECKING:
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+CALL_TYPE_COLD_MINT: Final[ExchangeCallType] = "cold_mint"
+CALL_TYPE_MANDATORY_REFRESH: Final[ExchangeCallType] = "mandatory_refresh"
+CALL_TYPE_ADVISORY_REFRESH: Final[ExchangeCallType] = "advisory_refresh"
+CALL_TYPE_CACHE_HIT: Final = "cache_hit"
 
 ADVISORY_REFRESH_SECONDS: Final = 120.0
 MANDATORY_REFRESH_SECONDS: Final = 30.0
@@ -162,6 +170,44 @@ def _error_summary(error: ExchangeError) -> str:
             return f"TokenTransportError: {error.detail}"
         case MalformedTokenResponse():
             return f"MalformedTokenResponse: {error.detail}"
+        case _:
+            assert_never(error)
+
+
+class _MetricsFailure(Exception):
+    """Never raised: typed carriers handed to the service failure hook so the prometheus
+    ``error_class`` label names the ``ExchangeError`` variant; the message is the redacted
+    ``_error_summary`` and carries no credential material."""
+
+
+class TokenExchangeAssertionSourceFailure(_MetricsFailure): ...
+
+
+class TokenExchangeInsecureUrlFailure(_MetricsFailure): ...
+
+
+class TokenExchangeEndpointFailure(_MetricsFailure): ...
+
+
+class TokenExchangeTransportFailure(_MetricsFailure): ...
+
+
+class TokenExchangeMalformedResponseFailure(_MetricsFailure): ...
+
+
+def _failure_exception(error: ExchangeError) -> _MetricsFailure:
+    summary: Final = _error_summary(error)
+    match error:
+        case AssertionSourceError():
+            return TokenExchangeAssertionSourceFailure(summary)
+        case InsecureTokenUrl():
+            return TokenExchangeInsecureUrlFailure(summary)
+        case TokenEndpointError():
+            return TokenExchangeEndpointFailure(summary)
+        case TokenTransportError():
+            return TokenExchangeTransportFailure(summary)
+        case MalformedTokenResponse():
+            return TokenExchangeMalformedResponseFailure(summary)
         case _:
             assert_never(error)
 
@@ -294,6 +340,94 @@ class _HttpxSyncTokenPoster:
         return response
 
 
+class _ServiceLoggingHooks(Protocol):
+    """The slice of ``litellm._service_logger.ServiceLogging`` the metrics sink calls; a protocol
+    so tests inject a recorder instead of monkeypatching."""
+
+    async def async_service_success_hook(self, service: ServiceTypes, call_type: str, duration: float) -> None: ...
+
+    async def async_service_failure_hook(
+        self, service: ServiceTypes, duration: float, error: str | Exception, call_type: str
+    ) -> None: ...
+
+
+_HooksCoroFactory: TypeAlias = Callable[
+    [_ServiceLoggingHooks],  # mutable-ok: Callable param-list syntax, not a list
+    Coroutine[object, object, None],
+]
+
+
+def _default_service_logging() -> _ServiceLoggingHooks:
+    from litellm._service_logger import ServiceLogging
+
+    return ServiceLogging()
+
+
+class ServiceLoggingMetricsSink:
+    """Default sink: bridges engine metrics onto litellm's ServiceTypes pattern
+    (prometheus ``litellm_anthropic_wif_*`` via ``service_callback``). The engine's entry points
+    are sync threads with no event loop, and the service hooks are async, so every emission is
+    fire-and-forget on a dedicated single worker thread that owns its own short-lived loop --
+    the mint path only ever pays for an executor queue put."""
+
+    def __init__(
+        self,
+        service_logging_factory: Callable[[], _ServiceLoggingHooks] = _default_service_logging,
+        executor: Executor | None = None,
+    ) -> None:
+        self._lock: Final = threading.Lock()
+        self._service_logging_factory: Final = service_logging_factory
+        self._service_logging: _ServiceLoggingHooks | None = None
+        self._executor: Executor | None = executor
+
+    def _service_logging_instance(self) -> _ServiceLoggingHooks:
+        with self._lock:
+            if self._service_logging is None:
+                self._service_logging = self._service_logging_factory()
+            return self._service_logging
+
+    def _executor_instance(self) -> Executor:
+        with self._lock:
+            if self._executor is None:
+                self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="litellm-token-exchange-metrics")
+            return self._executor
+
+    def _emit(self, coro_factory: _HooksCoroFactory) -> None:
+        try:
+            asyncio.run(coro_factory(self._service_logging_instance()))
+        except Exception as e:  # noqa: BLE001  # metrics are best-effort; emission failures must never surface
+            verbose_logger.debug("token exchange metrics emission failed: %s", e)
+
+    def _submit(self, coro_factory: _HooksCoroFactory) -> None:
+        self._executor_instance().submit(self._emit, coro_factory)
+
+    def exchange_success(self, *, call_type: ExchangeCallType, duration_seconds: float) -> None:
+        def start(hooks: _ServiceLoggingHooks) -> Coroutine[object, object, None]:
+            return hooks.async_service_success_hook(
+                service=ServiceTypes.ANTHROPIC_WIF, call_type=call_type, duration=duration_seconds
+            )
+
+        self._submit(start)
+
+    def exchange_failure(self, *, call_type: ExchangeCallType, duration_seconds: float, error: ExchangeError) -> None:
+        failure: Final = _failure_exception(error)
+
+        def start(hooks: _ServiceLoggingHooks) -> Coroutine[object, object, None]:
+            return hooks.async_service_failure_hook(
+                service=ServiceTypes.ANTHROPIC_WIF, duration=duration_seconds, error=failure, call_type=call_type
+            )
+
+        self._submit(start)
+
+    def cache_hit(self) -> None:
+        def start(hooks: _ServiceLoggingHooks) -> Coroutine[object, object, None]:
+            return hooks.async_service_success_hook(
+                service=ServiceTypes.ANTHROPIC_WIF_CACHE, call_type=CALL_TYPE_CACHE_HIT, duration=0.0
+            )
+
+        self._submit(start)
+
+
 class _Entry:
     """Single-flight state for one cache key; mutable by design, confined to the
     engine, and only ever mutated under the engine lock."""
@@ -354,7 +488,7 @@ class _ServeAndRefresh:
 
 @dataclass(frozen=True, slots=True)
 class _Lead:
-    pass
+    call_type: ExchangeCallType
 
 
 @dataclass(frozen=True, slots=True)
@@ -384,6 +518,7 @@ class JwtBearerTokenExchangeEngine:
         clock: Callable[[], float] = time.monotonic,
         refresh_executor: Executor | None = None,
         max_entries: int = 64,
+        metrics_sink: TokenExchangeMetricsSink | None = None,
     ) -> None:
         self._poster: Final[SyncTokenPoster] = poster if poster is not None else _HttpxSyncTokenPoster()
         self._assertion_reader: Final[AssertionReader] = (
@@ -392,6 +527,9 @@ class JwtBearerTokenExchangeEngine:
         self._clock: Final = clock
         self._refresh_executor: Executor | None = refresh_executor
         self._max_entries: Final = max_entries
+        self._metrics_sink: Final[TokenExchangeMetricsSink] = (
+            metrics_sink if metrics_sink is not None else ServiceLoggingMetricsSink()
+        )
         self._lock: Final = threading.Lock()
         self._entries: Final[dict[str, _Entry]] = {}  # mutable-ok: engine-owned map guarded by _lock
 
@@ -401,14 +539,16 @@ class JwtBearerTokenExchangeEngine:
             decision: Final = self._classify_and_arm_locked(entry)
         match decision:
             case _Serve(token=token):
+                self._report_cache_hit()
                 return token
             case _ServeAndRefresh(token=token):
+                self._report_cache_hit()
                 self._executor_instance().submit(self._advisory_refresh, spec, entry)
                 return token
             case _Fail(error=error):
                 return error
-            case _Lead():
-                return self._lead(spec, entry)
+            case _Lead(call_type=call_type):
+                return self._lead(spec, entry, call_type)
             case _Follow():
                 followed: Final = self._await_leader(spec, entry)
                 return followed if followed is not None else self.get_token(spec)
@@ -474,7 +614,7 @@ class JwtBearerTokenExchangeEngine:
         if entry.last_error is not None and self._clock() < entry.backoff_until:
             return _Fail(error=entry.last_error)
         entry.arm()
-        return _Lead()
+        return _Lead(call_type=CALL_TYPE_COLD_MINT if token is None else CALL_TYPE_MANDATORY_REFRESH)
 
     def _executor_instance(self) -> Executor:
         with self._lock:
@@ -484,10 +624,13 @@ class JwtBearerTokenExchangeEngine:
                 )
             return self._refresh_executor
 
-    def _lead(self, spec: TokenExchangeSpec, entry: _Entry) -> ExchangeResult:
+    def _lead(self, spec: TokenExchangeSpec, entry: _Entry, call_type: ExchangeCallType) -> ExchangeResult:
+        started: Final = self._clock()
         result: Final = self._exchange_never_raises(spec)
+        duration: Final = self._clock() - started
         with self._lock:
             entry.publish(result, now=self._clock())
+        self._report_exchange(call_type, duration, result)
         return result
 
     def _await_leader(self, spec: TokenExchangeSpec, entry: _Entry) -> "ExchangeResult | None":
@@ -505,12 +648,15 @@ class JwtBearerTokenExchangeEngine:
         return TokenTransportError(detail="timed out waiting for the token exchange leader")
 
     def _advisory_refresh(self, spec: TokenExchangeSpec, entry: _Entry) -> None:
+        started: Final = self._clock()
         result: Final = self._exchange_never_raises(spec)
+        duration: Final = self._clock() - started
         with self._lock:
             now: Final = self._clock()
             entry.publish_advisory(result, now=now)
             stale_expires_at: Final = entry.token.expires_at if entry.token is not None else None
             stale_mandatory: Final = _refresh_windows(entry.lifetime_seconds).mandatory
+        self._report_exchange(CALL_TYPE_ADVISORY_REFRESH, duration, result)
         if isinstance(result, MintedToken):
             return
         seconds_to_mandatory_wall: Final = (
@@ -524,6 +670,24 @@ class JwtBearerTokenExchangeEngine:
             seconds_to_mandatory_wall,
             ADVISORY_REFRESH_BACKOFF_SECONDS,
         )
+
+    def _report_exchange(self, call_type: ExchangeCallType, duration_seconds: float, result: ExchangeResult) -> None:
+        try:
+            match result:
+                case MintedToken():
+                    self._metrics_sink.exchange_success(call_type=call_type, duration_seconds=duration_seconds)
+                case _:
+                    self._metrics_sink.exchange_failure(
+                        call_type=call_type, duration_seconds=duration_seconds, error=result
+                    )
+        except Exception as e:  # noqa: BLE001  # metrics are best-effort; a sink failure must never fail a mint
+            verbose_logger.debug("token exchange metrics emission failed: %s", e)
+
+    def _report_cache_hit(self) -> None:
+        try:
+            self._metrics_sink.cache_hit()
+        except Exception as e:  # noqa: BLE001  # metrics are best-effort; a sink failure must never fail a serve
+            verbose_logger.debug("token exchange cache-hit metric emission failed: %s", e)
 
     def _exchange_never_raises(self, spec: TokenExchangeSpec) -> ExchangeResult:
         """The single-flight leader and the advisory refresher must always publish a result: an
