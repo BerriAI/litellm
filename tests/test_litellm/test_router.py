@@ -8994,6 +8994,7 @@ def test_model_group_info_reasoning_efforts_empty_on_a_mapped_non_reasoning_depl
                 "litellm_provider": "anthropic",
                 "mode": "chat",
                 "supports_reasoning": True,
+                "supports_max_reasoning_effort": True,
             }
         return {"key": model_name, "litellm_provider": "openai", "mode": "chat", "supports_reasoning": None}
 
@@ -9032,6 +9033,7 @@ def test_model_group_info_reasoning_efforts_ignore_a_value_declared_in_model_inf
             "litellm_provider": "openai",
             "mode": "chat",
             "supports_reasoning": True,
+            "supports_none_reasoning_effort": True,
         }
         if model_id == "first-deployment":
             info["supported_reasoning_efforts"] = ("high",)
@@ -9047,26 +9049,39 @@ def test_model_group_info_reasoning_efforts_ignore_a_value_declared_in_model_inf
     assert result.supported_reasoning_efforts == ("none", "minimal", "low", "medium", "high")
 
 
-@pytest.mark.parametrize(
-    "configured, expected",
-    [
-        ("high", ("high",)),
-        (["low", "high"], ("low", "high")),
-        (17, None),
-        ({"effort": "high"}, None),
-        ([1, 2], None),
-    ],
-)
-def test_model_group_info_tolerates_any_configured_reasoning_efforts_shape(configured, expected):
-    """Deployment model_info is splatted into ModelGroupInfo, so this key arrives with whatever an
-    operator wrote in the config. A shape pydantic cannot validate used to fail the whole
-    /model_group/info response, not just the group carrying it."""
-    from litellm.types.router import ModelGroupInfo
+def test_model_group_info_reasoning_efforts_ignore_a_mode_the_operator_declared():
+    """A deployment is registered in the cost map under its own id with whatever model_info the
+    operator wrote, so a mode they set themselves reads back exactly like one the map supplied. Only
+    a mode the map supplied marks the deployment as known, or an off-map deployment carrying any
+    mode empties the group it sits in."""
+    from litellm.router_utils.reasoning_effort_capability import resolve_supported_reasoning_efforts
 
-    info = ModelGroupInfo(
-        model_group="g",
-        providers=["openai"],
-        supported_reasoning_efforts=configured,
+    mapped_model = "openai/gpt-5.6-sol"
+    expected = resolve_supported_reasoning_efforts(
+        litellm.get_model_info(model=mapped_model),
+        deployment_is_mapped=True,
+    )
+    assert expected
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "smart-group",
+                "litellm_params": {"model": mapped_model, "api_key": "sk-fake"},
+                "model_info": {"id": "mapped-deployment"},
+            },
+            {
+                "model_name": "smart-group",
+                "litellm_params": {"model": "openai/a-model-the-map-never-heard-of", "api_key": "sk-fake"},
+                "model_info": {"id": "off-map-deployment", "mode": "chat"},
+            },
+        ]
     )
 
-    assert info.supported_reasoning_efforts == expected
+    result = router._set_model_group_info(
+        model_group="smart-group",
+        user_facing_model_group_name="smart-group",
+    )
+
+    assert result is not None
+    assert result.supported_reasoning_efforts == expected

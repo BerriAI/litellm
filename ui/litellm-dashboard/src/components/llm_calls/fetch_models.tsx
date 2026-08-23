@@ -44,7 +44,8 @@ export const fetchAvailableModelsForTeam = async (accessToken: string, teamId: s
 export const fetchAvailableModels = async (accessToken: string): Promise<ModelGroup[]> => {
   try {
     const fetchedModels = await modelHubCall(accessToken);
-    const models: ModelGroup[] = (fetchedModels?.data ?? [])
+    const fetchedData: unknown = fetchedModels?.data;
+    const models: ModelGroup[] = (Array.isArray(fetchedData) ? fetchedData : [])
       .map(toModelGroup)
       .filter((model: ModelGroup) => model.model_group !== "")
       .sort((a: ModelGroup, b: ModelGroup) => a.model_group.localeCompare(b.model_group));

@@ -641,19 +641,6 @@ class ModelGroupInfo(BaseModel):
     supported_openai_params: list[str] | None = Field(default=[])
     configurable_clientside_auth_params: CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS = None
 
-    @field_validator("supported_reasoning_efforts", mode="before")
-    @classmethod
-    def _accept_only_well_formed_reasoning_efforts(cls, value: object) -> tuple[str, ...] | None:
-        """Deployment model_info reaches this model through a **kwargs splat, so an operator can put
-        any shape under this key. Anything that is not a level or a list of levels resolves to None
-        and lets the computed intersection stand, because raising here fails the whole
-        /model_group/info response rather than the one group that carries the bad value."""
-        if isinstance(value, str):
-            return (value,)
-        if isinstance(value, (list, tuple)) and all(isinstance(level, str) for level in value):
-            return tuple(value)
-        return None
-
     def __init__(self, **data) -> None:
         for field_name, field_type in get_type_hints(self.__class__).items():
             if field_type is bool and data.get(field_name) is None:
