@@ -14,6 +14,7 @@ Anthropic Files API endpoints:
 
 import calendar
 import time
+from collections.abc import Mapping
 from typing import Any, Final, cast
 
 import httpx
@@ -94,12 +95,41 @@ class AnthropicFilesConfig(BaseFilesConfig):
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:
+        params_mapping, resolved_api_base = self._resolve_params(litellm_params, api_base)
+        auth_header: Final = AnthropicModelInfo.get_auth_header(
+            api_key, resolved_api_base, litellm_params=params_mapping, allow_workload_identity=True
+        )
+        return self._finalize_headers(headers, auth_header)
+
+    async def avalidate_environment(
+        self,
+        headers: dict,  # mutable-ok: mirrors the sync validate_environment contract this overrides
+        model: str,
+        messages: list,  # mutable-ok: mirrors the sync validate_environment contract this overrides
+        optional_params: dict,  # mutable-ok: mirrors the sync validate_environment contract this overrides
+        litellm_params: dict,  # mutable-ok: mirrors the sync validate_environment contract this overrides
+        api_key: str | None = None,
+        api_base: str | None = None,
+    ) -> dict:  # mutable-ok: mirrors the sync validate_environment contract this overrides
+        """Async counterpart of validate_environment: the WIF tier can block on a token
+        exchange POST, so async callers await it off the event loop."""
+        params_mapping, resolved_api_base = self._resolve_params(litellm_params, api_base)
+        auth_header: Final = await AnthropicModelInfo.aget_auth_header(
+            api_key, resolved_api_base, litellm_params=params_mapping, allow_workload_identity=True
+        )
+        return self._finalize_headers(headers, auth_header)
+
+    @staticmethod
+    def _resolve_params(
+        litellm_params: dict, api_base: str | None
+    ) -> tuple[dict | None, str | None]:  # mutable-ok: mirrors the sync validate_environment contract this overrides
         params_mapping: Final = litellm_params if isinstance(litellm_params, dict) else None
         if api_base is None and params_mapping is not None:
             api_base = params_mapping.get("api_base")
-        auth_header: Final = AnthropicModelInfo.get_auth_header(
-            api_key, api_base, litellm_params=params_mapping, allow_workload_identity=True
-        )
+        return params_mapping, api_base
+
+    @staticmethod
+    def _finalize_headers(headers: dict, auth_header: Mapping[str, str] | None) -> dict:  # mutable-ok: out-param
         if auth_header is None:
             raise ValueError(
                 "Anthropic API key is required. Set ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN environment variable or pass api_key parameter."

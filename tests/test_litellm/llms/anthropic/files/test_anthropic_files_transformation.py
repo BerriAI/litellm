@@ -5,7 +5,9 @@ Tests the AnthropicFilesConfig class which transforms between
 OpenAI-compatible file operations and Anthropic's Files API format.
 """
 
+import asyncio
 import io
+import threading
 import time
 
 import httpx
@@ -82,6 +84,38 @@ class TestAnthropicFilesConfig:
     def test_validate_environment_missing_api_key(self, mock_get_key):
         with pytest.raises(ValueError, match="Anthropic API key is required"):
             self.config.validate_environment(
+                headers={},
+                model="",
+                messages=[],
+                optional_params={},
+                litellm_params={},
+                api_key=None,
+            )
+
+    @pytest.mark.asyncio
+    async def test_avalidate_environment_sets_headers(self):
+        headers = {}
+        result = await self.config.avalidate_environment(
+            headers=headers,
+            model="",
+            messages=[],
+            optional_params={},
+            litellm_params={},
+            api_key="sk-ant-test-key",
+        )
+        assert result["x-api-key"] == "sk-ant-test-key"
+        assert result["anthropic-version"] == "2023-06-01"
+        assert result["anthropic-beta"] == ANTHROPIC_FILES_BETA_HEADER
+
+    @pytest.mark.asyncio
+    @patch.dict("os.environ", {}, clear=True)
+    @patch(
+        "litellm.llms.anthropic.common_utils.AnthropicModelInfo.get_api_key",
+        return_value=None,
+    )
+    async def test_avalidate_environment_missing_api_key(self, mock_get_key):
+        with pytest.raises(ValueError, match="Anthropic API key is required"):
+            await self.config.avalidate_environment(
                 headers={},
                 model="",
                 messages=[],
@@ -409,6 +443,108 @@ class TestAnthropicFilesConfig:
         )
         assert error.status_code == 404
         assert error.message == "Not found"
+
+
+_WIF_ENV = {
+    "ANTHROPIC_FEDERATION_RULE_ID": "fdrl_files_seam",
+    "ANTHROPIC_ORGANIZATION_ID": "org-files-seam",
+    "ANTHROPIC_IDENTITY_TOKEN": "files-seam-inline-jwt",
+}
+
+
+class _BlockingPoster:
+    """A token-endpoint poster that blocks until released, so the test can prove
+    the exchange ran off the event loop's own thread instead of freezing it."""
+
+    def __init__(self):
+        self.release = threading.Event()
+        self.thread_ids = []
+
+    def post(self, url, *, content, headers, timeout):
+        self.thread_ids.append(threading.get_ident())
+        self.release.wait(timeout=5)
+        return httpx.Response(
+            200,
+            json={
+                "access_token": "sk-ant-oat01-files-seam",
+                "token_type": "Bearer",
+                "expires_in": 3600,
+            },
+        )
+
+
+class TestAnthropicFilesConfigWifAsyncSeam:
+    """Regression (Greptile P1): avalidate_environment must resolve workload identity
+    federation through the async token-exchange facade, never the blocking sync one,
+    so a cold WIF mint on async file retrieval doesn't freeze the event loop."""
+
+    def setup_method(self):
+        self.config = AnthropicFilesConfig()
+
+    @pytest.mark.asyncio
+    async def test_avalidate_environment_wif_exchange_does_not_block_event_loop(self, monkeypatch):
+        from litellm.llms.anthropic import common_utils as anthropic_common_utils
+        from litellm.llms.anthropic.wif import aget_anthropic_wif_token, get_anthropic_wif_token
+        from litellm.llms.base_llm.auth.token_exchange import JwtBearerTokenExchangeEngine
+
+        for name in (
+            "ANTHROPIC_API_KEY",
+            "ANTHROPIC_AUTH_TOKEN",
+            "ANTHROPIC_API_BASE",
+            "ANTHROPIC_BASE_URL",
+        ):
+            monkeypatch.delenv(name, raising=False)
+        for name, value in _WIF_ENV.items():
+            monkeypatch.setenv(name, value)
+
+        poster = _BlockingPoster()
+        engine = JwtBearerTokenExchangeEngine(poster=poster)
+        sync_calls = []
+
+        def sync_shim(litellm_params, api_base, model):
+            sync_calls.append(model)
+            return get_anthropic_wif_token(litellm_params, api_base, model, engine)
+
+        async def async_shim(litellm_params, api_base, model):
+            return await aget_anthropic_wif_token(litellm_params, api_base, model, engine)
+
+        monkeypatch.setattr(anthropic_common_utils, "get_anthropic_wif_token", sync_shim)
+        monkeypatch.setattr(anthropic_common_utils, "aget_anthropic_wif_token", async_shim)
+
+        ticks = []
+
+        async def ticker():
+            for i in range(20):
+                await asyncio.sleep(0.005)
+                ticks.append(i)
+
+        ticker_task = asyncio.create_task(ticker())
+        await asyncio.sleep(0.02)
+
+        validate_task = asyncio.create_task(
+            self.config.avalidate_environment(
+                headers={},
+                model="",
+                messages=[],
+                optional_params={},
+                litellm_params={},
+                api_key=None,
+            )
+        )
+        await asyncio.sleep(0.05)
+        # The ticker kept advancing while the exchange was still blocked on
+        # poster.release, proving avalidate_environment did not run it inline.
+        assert len(ticks) > 0
+        assert not validate_task.done()
+
+        poster.release.set()
+        headers = await validate_task
+        await ticker_task
+
+        assert headers["authorization"] == "Bearer sk-ant-oat01-files-seam"
+        assert sync_calls == []
+        assert poster.thread_ids
+        assert poster.thread_ids[0] != threading.get_ident()
 
 
 class TestProviderConfigRegistration:

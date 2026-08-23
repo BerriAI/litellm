@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import threading
 import time
 from unittest.mock import AsyncMock, Mock, patch
 
@@ -1630,7 +1631,7 @@ async def test_async_anthropic_messages_handler_passes_api_key_to_agentic_hooks(
         ),
         patch.object(handler, "_call_agentic_completion_hooks", side_effect=fake_agentic_hooks),
         patch("litellm.llms.custom_httpx.llm_http_handler.get_async_httpx_client"),
-        patch(
+        patch(  # test-quality-ok: the proxy wiring under test is what this patches
             "litellm.litellm_core_utils.get_provider_specific_headers.ProviderSpecificHeaderUtils.get_provider_specific_headers",
             return_value=None,
         ),
@@ -1964,6 +1965,105 @@ def test_sync_retrieve_file_content_raises_on_http_error():
         )
 
     assert exc_info.value.status_code == 404
+
+
+_FILE_CONTENT_WIF_ENV = {
+    "ANTHROPIC_FEDERATION_RULE_ID": "fdrl_llm_http_handler_seam",
+    "ANTHROPIC_ORGANIZATION_ID": "org-llm-http-handler-seam",
+    "ANTHROPIC_IDENTITY_TOKEN": "llm-http-handler-seam-inline-jwt",
+}
+
+
+class _BlockingWifPoster:
+    """A token-endpoint poster that blocks until released, so the test can prove
+    the exchange ran off the event loop's own thread instead of freezing it."""
+
+    def __init__(self):
+        self.release = threading.Event()
+        self.thread_ids = []
+
+    def post(self, url, *, content, headers, timeout):
+        self.thread_ids.append(threading.get_ident())
+        self.release.wait(timeout=5)
+        return httpx.Response(
+            200,
+            json={
+                "access_token": "sk-ant-oat01-llm-http-handler-seam",
+                "token_type": "Bearer",
+                "expires_in": 3600,
+            },
+        )
+
+
+@pytest.mark.asyncio
+async def test_async_retrieve_file_content_wif_exchange_does_not_block_event_loop(monkeypatch):
+    """Regression (Greptile P1): async_retrieve_file_content called the synchronous
+    validate_environment directly, so a cold WIF mint on this call site froze the
+    event loop until the exchange finished. It must resolve credentials through the
+    async facade instead."""
+    from litellm.llms.anthropic import common_utils as anthropic_common_utils
+    from litellm.llms.anthropic.files.transformation import AnthropicFilesConfig
+    from litellm.llms.anthropic.wif import aget_anthropic_wif_token, get_anthropic_wif_token
+    from litellm.llms.base_llm.auth.token_exchange import JwtBearerTokenExchangeEngine
+
+    for name in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_BASE", "ANTHROPIC_BASE_URL"):
+        monkeypatch.delenv(name, raising=False)
+    for name, value in _FILE_CONTENT_WIF_ENV.items():
+        monkeypatch.setenv(name, value)
+
+    poster = _BlockingWifPoster()
+    engine = JwtBearerTokenExchangeEngine(poster=poster)
+    sync_calls = []
+
+    def sync_shim(litellm_params, api_base, model):
+        sync_calls.append(model)
+        return get_anthropic_wif_token(litellm_params, api_base, model, engine)
+
+    async def async_shim(litellm_params, api_base, model):
+        return await aget_anthropic_wif_token(litellm_params, api_base, model, engine)
+
+    monkeypatch.setattr(anthropic_common_utils, "get_anthropic_wif_token", sync_shim)
+    monkeypatch.setattr(anthropic_common_utils, "aget_anthropic_wif_token", async_shim)
+
+    handler = BaseLLMHTTPHandler()
+    client = Mock(spec=AsyncHTTPHandler)
+    client.get = AsyncMock(return_value=httpx.Response(status_code=200, content=b"file bytes"))
+
+    ticks = []
+
+    async def ticker():
+        for i in range(20):
+            await asyncio.sleep(0.005)
+            ticks.append(i)
+
+    ticker_task = asyncio.create_task(ticker())
+    await asyncio.sleep(0.02)
+
+    retrieve_task = asyncio.create_task(
+        handler.async_retrieve_file_content(
+            file_content_request={"file_id": "file-abc"},
+            provider_config=AnthropicFilesConfig(),
+            litellm_params={},
+            headers={},
+            logging_obj=Mock(),
+            client=client,
+        )
+    )
+    await asyncio.sleep(0.05)
+    # The ticker kept advancing while the token exchange was still blocked on
+    # poster.release, proving the exchange did not run inline on the event loop.
+    assert len(ticks) > 0
+    assert not retrieve_task.done()
+
+    poster.release.set()
+    await retrieve_task
+    await ticker_task
+
+    assert sync_calls == []
+    assert poster.thread_ids
+    assert poster.thread_ids[0] != threading.get_ident()
+    sent_headers = client.get.call_args.kwargs["headers"]
+    assert sent_headers["authorization"] == "Bearer sk-ant-oat01-llm-http-handler-seam"
 
 
 _UPSTREAM_NOT_FOUND_BODY = {

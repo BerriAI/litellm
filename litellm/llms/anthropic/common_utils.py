@@ -687,6 +687,33 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             return {"authorization": value}
         return {"x-api-key": api_key}
 
+    def _credential_headers(
+        self,
+        *,
+        api_key: str | None,
+        auth_token: str | None,
+        api_base: str | None,
+        use_bearer_for_custom_base: bool,
+        wif_minted: bool,
+        betas: set[str],  # mutable-ok: the caller's beta accumulator, appended to by the oauth tier
+    ) -> Mapping[str, str]:
+        """The credential tier walk: a consumer OAuth token, then ANTHROPIC_AUTH_TOKEN, then an api key.
+
+        A server-minted federation token takes the same Bearer shape as a consumer OAuth token but is
+        not browser-forwarded, so it does not get the direct-browser-access header.
+        """
+        if api_key and api_key.startswith(ANTHROPIC_OAUTH_TOKEN_PREFIX):
+            betas.add(ANTHROPIC_OAUTH_BETA_HEADER)
+            oauth_headers: Final = {"authorization": f"Bearer {api_key}"}
+            if wif_minted:
+                return oauth_headers
+            return {**oauth_headers, "anthropic-dangerous-direct-browser-access": "true"}
+        if auth_token and not api_key:
+            return {"authorization": f"Bearer {auth_token}"}
+        if api_key:
+            return self._make_api_key_auth_header(api_key, api_base, use_bearer_for_custom_base)
+        return {}
+
     def get_anthropic_headers(
         self,
         api_key: str | None = None,
@@ -744,21 +771,21 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         if container_with_skills_used:
             betas.add("skills-2025-10-02")
 
-        _is_oauth: Final = api_key and api_key.startswith(ANTHROPIC_OAUTH_TOKEN_PREFIX)
         headers: Final = {
             "anthropic-version": anthropic_version or "2023-06-01",
             "accept": "application/json",
             "content-type": "application/json",
         }
-        if _is_oauth:
-            headers["authorization"] = f"Bearer {api_key}"
-            if not wif_minted:
-                headers["anthropic-dangerous-direct-browser-access"] = "true"
-            betas.add(ANTHROPIC_OAUTH_BETA_HEADER)
-        elif auth_token and not api_key:
-            headers["authorization"] = f"Bearer {auth_token}"
-        elif api_key:
-            headers.update(self._make_api_key_auth_header(api_key, api_base, use_bearer_for_custom_base))
+        headers.update(
+            self._credential_headers(
+                api_key=api_key,
+                auth_token=auth_token,
+                api_base=api_base,
+                use_bearer_for_custom_base=use_bearer_for_custom_base,
+                wif_minted=wif_minted,
+                betas=betas,
+            )
+        )
 
         if user_anthropic_beta_headers is not None:
             betas.update(user_anthropic_beta_headers)

@@ -483,6 +483,7 @@ def _handle_retrieve_batch_providers_without_provider_config(
         )
         api_key = optional_params.api_key or litellm.api_key or litellm.azure_key or get_secret_str("ANTHROPIC_API_KEY")
 
+        batch_params: Final = dict(litellm_params)  # mutable-ok: handler contract, copied not shared
         response = anthropic_batches_instance.retrieve_batch(
             _is_async=_is_async,
             batch_id=batch_id,
@@ -490,7 +491,7 @@ def _handle_retrieve_batch_providers_without_provider_config(
             api_key=api_key,
             timeout=timeout,
             max_retries=optional_params.max_retries,
-            litellm_params=dict(litellm_params),
+            litellm_params=batch_params,
         )
     else:
         raise litellm.exceptions.BadRequestError(

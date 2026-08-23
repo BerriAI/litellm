@@ -19,7 +19,9 @@ from unittest.mock import patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../..")))
+sys.path.insert(
+    0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../.."))
+)
 
 # Fake tokens for testing (not real secrets)
 FAKE_OAUTH_TOKEN = "sk-ant-oat01-fake-token-for-testing-123456789abcdef"
@@ -915,9 +917,7 @@ class TestValidateEnvironmentAuthToken:
 
         config = AnthropicModelInfo()
         with mock_patch.dict("os.environ", {}, clear=True):
-            with pytest.raises(
-                Exception, match=r"ANTHROPIC_API_KEY.*ANTHROPIC_AUTH_TOKEN"
-            ):
+            with pytest.raises(Exception, match=r"ANTHROPIC_API_KEY.*ANTHROPIC_AUTH_TOKEN"):
                 config.validate_environment(
                     headers={},
                     model="claude-sonnet-4-5-20250929",
@@ -2847,7 +2847,7 @@ class TestWifRespxEndToEnd:
                     "anthropic_federation_rule_id": "fdrl_e2e",
                     "anthropic_organization_id": "org-e2e",
                     "anthropic_identity_token_file": str(token_file),
-                }
+                },
             )
 
         assert result == {

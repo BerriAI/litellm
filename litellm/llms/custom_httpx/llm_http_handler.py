@@ -1,4 +1,5 @@
 import asyncio
+import inspect
 import json
 import os
 import ssl
@@ -6,7 +7,20 @@ from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping, Sequenc
 from contextlib import asynccontextmanager
 from functools import lru_cache
 from types import MappingProxyType, ModuleType
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional, TypedDict, TypeVar, Union, cast, get_type_hints
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Final,
+    Literal,
+    Optional,
+    Protocol,
+    TypedDict,
+    TypeVar,
+    Union,
+    cast,
+    get_type_hints,
+    runtime_checkable,
+)
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 import httpx
@@ -200,6 +214,55 @@ class _MediaUploadKwargs(TypedDict, total=False):
     headers: dict[str, str]
     content: Iterator[bytes] | AsyncIterator[bytes]
     timeout: float | httpx.Timeout
+
+
+@runtime_checkable
+class _AsyncFilesEnvironmentValidator(Protocol):
+    async def avalidate_environment(
+        self,
+        headers: dict,  # mutable-ok: mirrors the sync validate_environment contract this overrides
+        model: str,
+        messages: list,  # mutable-ok: mirrors the sync validate_environment contract this overrides
+        optional_params: dict,  # mutable-ok: mirrors the sync validate_environment contract this overrides
+        litellm_params: dict,  # mutable-ok: mirrors the sync validate_environment contract this overrides
+        api_key: str | None = None,
+        api_base: str | None = None,
+    ) -> dict: ...  # mutable-ok: mirrors the sync validate_environment contract this overrides
+
+
+async def _avalidate_files_environment(
+    provider_config: BaseFilesConfig,
+    *,
+    headers: dict,  # mutable-ok: mirrors the sync validate_environment contract this overrides
+    model: str,
+    messages: list,  # mutable-ok: mirrors the sync validate_environment contract this overrides
+    optional_params: dict,  # mutable-ok: mirrors the sync validate_environment contract this overrides
+    litellm_params: dict,  # mutable-ok: mirrors the sync validate_environment contract this overrides
+    api_key: str | None,
+) -> dict:  # mutable-ok: mirrors the sync validate_environment contract this overrides
+    """Await the provider's async credential hook when it has one (e.g. Anthropic's workload
+    identity token exchange); otherwise offload the sync hook to a worker thread. Either way
+    the caller, an async file handler, never blocks the event loop on it."""
+    if isinstance(provider_config, _AsyncFilesEnvironmentValidator) and inspect.iscoroutinefunction(
+        provider_config.avalidate_environment
+    ):
+        return await provider_config.avalidate_environment(
+            headers=headers,
+            model=model,
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            api_key=api_key,
+        )
+    return await asyncio.to_thread(
+        provider_config.validate_environment,
+        headers=headers,
+        model=model,
+        messages=messages,
+        optional_params=optional_params,
+        litellm_params=litellm_params,
+        api_key=api_key,
+    )
 
 
 def _google_genai_streaming_hidden_params(
@@ -4648,7 +4711,8 @@ class BaseLLMHTTPHandler:
         )
 
         # Validate environment and get headers
-        headers = provider_config.validate_environment(
+        headers = await _avalidate_files_environment(
+            provider_config,
             api_key=litellm_params.get("api_key"),
             headers=headers,
             model="",
@@ -4772,7 +4836,8 @@ class BaseLLMHTTPHandler:
         )
 
         # Validate environment and get headers
-        headers = provider_config.validate_environment(
+        headers = await _avalidate_files_environment(
+            provider_config,
             api_key=litellm_params.get("api_key"),
             headers=headers,
             model="",
@@ -4896,7 +4961,8 @@ class BaseLLMHTTPHandler:
         )
 
         # Validate environment and get headers
-        headers = provider_config.validate_environment(
+        headers = await _avalidate_files_environment(
+            provider_config,
             api_key=litellm_params.get("api_key"),
             headers=headers,
             model="",
@@ -5027,7 +5093,8 @@ class BaseLLMHTTPHandler:
         )
 
         # Validate environment and get headers
-        headers = provider_config.validate_environment(
+        headers = await _avalidate_files_environment(
+            provider_config,
             api_key=litellm_params.get("api_key"),
             headers=headers,
             model="",

@@ -42,7 +42,7 @@ class AnthropicBatchesHandler:
         timeout: float | httpx.Timeout,
         max_retries: int | None,
         logging_obj: LiteLLMLoggingObj | None = None,
-        litellm_params: dict | None = None,
+        litellm_params: dict | None = None,  # mutable-ok: handed straight to validate_environment
     ) -> LiteLLMBatch:
         """
         Async: Retrieve a batch from Anthropic.
@@ -87,8 +87,10 @@ class AnthropicBatchesHandler:
             litellm_params=resolved_litellm_params,
         )
 
-        # Validate environment and get headers
-        headers: Final = self.provider_config.validate_environment(
+        # Validate environment and get headers. Offloaded to a worker thread: a WIF token
+        # exchange here would otherwise block the event loop.
+        headers: Final = await asyncio.to_thread(
+            self.provider_config.validate_environment,
             headers={},
             model="",
             messages=[],
@@ -129,7 +131,7 @@ class AnthropicBatchesHandler:
         timeout: float | httpx.Timeout,
         max_retries: int | None,
         logging_obj: LiteLLMLoggingObj | None = None,
-        litellm_params: dict | None = None,
+        litellm_params: dict | None = None,  # mutable-ok: handed straight to validate_environment
     ) -> LiteLLMBatch | Coroutine[Any, Any, LiteLLMBatch]:
         """
         Retrieve a batch from Anthropic.
