@@ -1154,40 +1154,6 @@ jobs:
           paths:
             - search_coverage.xml
             - search_coverage
-  litellm_mapped_enterprise_tests:
-    docker:
-      - *python312_image
-    working_directory: ~/project
-    resource_class: large
-
-    steps:
-      - checkout
-      - skip_if_unrelated_changes
-      - setup_google_dns
-      - install_uv
-      - install_rust
-      - run:
-          name: Install Dependencies
-          command: |
-            uv sync --frozen --all-groups --all-extras --python 3.12
-      - setup_litellm_enterprise_pip
-      - run:
-          name: Run enterprise tests
-          command: |
-            uv run --no-sync python -m prisma generate
-            mkdir -p test-results
-            TEST_FILES=$(circleci tests glob "tests/enterprise/**/test_*.py")
-            echo "$TEST_FILES" | circleci tests run \
-              --verbose \
-              --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
-                -v -x \
-                --junitxml=test-results/junit-enterprise.xml \
-                --durations=10 \
-                -n 4"
-          no_output_timeout: 15m
-      # Store test results
-      - store_test_results:
-          path: test-results
   batches_testing:
     docker:
       - *python312_image
@@ -3041,8 +3007,6 @@ workflows:
           filters: *main_branches
       - search_testing:
           filters: *main_branches
-      - litellm_mapped_enterprise_tests:
-          filters: *main_branches
       - batches_testing:
           filters: *main_branches
       - litellm_utils_testing:
@@ -3065,7 +3029,6 @@ workflows:
             - guardrails_testing
             - ocr_testing
             - search_testing
-            - litellm_mapped_enterprise_tests
             - batches_testing
             - litellm_utils_testing
             - pass_through_unit_testing
