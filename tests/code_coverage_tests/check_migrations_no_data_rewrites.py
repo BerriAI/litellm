@@ -8,10 +8,12 @@ plus a doubled heap that plain autovacuum will not give back.
 
 What is banned is the row-rewriting DML behind that, not everything whose cost
 scales that way. A non-concurrent `CREATE INDEX`, an `ALTER COLUMN ... TYPE` that is
-not binary coercible, and a volatile `DEFAULT` on a new column all read the whole
-table and all pass. That is deliberate: a rule wide enough to reach them fires on
-most ordinary migrations, and a marker everyone adds by reflex stops carrying
-information. The outage this was written for was a backfill.
+not binary coercible, a volatile `DEFAULT` on a new column, a `CREATE TABLE ... AS
+SELECT` or `SELECT ... INTO` filling a new table from an existing one, the rename
+that pairs with one of those to swap a table out, and a `REFRESH MATERIALIZED VIEW`
+all read the whole table and all pass. That is deliberate: a rule wide enough to
+reach them fires on most ordinary migrations, and a marker everyone adds by reflex
+stops carrying information. The outage this was written for was a backfill.
 
 Flagged, per statement, by its leading keyword:
 
@@ -21,10 +23,15 @@ Flagged, per statement, by its leading keyword:
   INSERT      only when its rows come from a query rather than a literal `VALUES`
               list. The query counts wherever it sits, since Postgres takes it
               parenthesised, and `TABLE t` is one as much as a `SELECT` is. An
-              insert bounded by a leading `VALUES` passes, scalar subqueries in that
-              list included, while a `VALUES` reached through a subquery or joined
-              to a query by a set operation bounds nothing
-  WITH        a CTE-led statement containing any of the above
+              insert bounded by a `VALUES` list passes, written bare or in
+              parentheses, and so do the scalar subqueries in that list and the
+              `RETURNING` and `ON CONFLICT` clauses written after it, none of which
+              supply the rows. A `VALUES` reached through a subquery or joined to a
+              query by a set operation bounds nothing
+  WITH        a CTE-led statement containing any of the above. An `INSERT` is read
+              against the part of the statement holding it, so a writable CTE
+              bounded by its own `VALUES` list is not handed the query the statement
+              ends with as the rows it copies
 
 Referential actions (`ON DELETE CASCADE`, `ON UPDATE CASCADE`) are schema, never a
 statement's leading keyword, so they pass.
@@ -37,7 +44,12 @@ told not to run at boot, and a marker is a cheap answer if one ever does.
 
 Statements inside dollar-quoted bodies are scanned too. `DO $$ ... $$` is this
 repo's idiom for conditional DDL, so a body is where an `UPDATE` would otherwise
-hide. The SQL an `EXECUTE` runs is scanned the same way, since a rewrite reads the
+hide. A `CREATE FUNCTION` or `CREATE PROCEDURE` body is the exception, because
+defining a routine only stores it: that body is read when the same migration names
+the routine somewhere else, which is what defining a backfill and then running it
+looks like, and left alone when nothing calls it. A routine whose name needed
+quoting is read either way, since quoting is blanked at the call sites too and a
+call written there could never be found. The SQL an `EXECUTE` runs is scanned the same way, since a rewrite reads the
 same to Postgres whether it is spelled out or handed over as a string, and so is a
 literal parked in a variable some `EXECUTE` in the same body then runs by name,
 however it got there: an assignment with `:=`, the bare `=` PL/pgSQL takes as the
@@ -110,6 +122,11 @@ LOOP_HEADER = re.compile(r"\bFOR(?:EACH)?\b.*?\bLOOP\b", re.IGNORECASE | re.DOTA
 WORD_OR_ASSIGN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*|:=|(?<![<>!:=])=(?![=>])")
 PRECEDING_WORD = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)[^A-Za-z0-9_]*$")
 EXPLAIN_OPTIONS = re.compile(r"\bEXPLAIN\b(?:\s+(?:ANALYZE|ANALYSE|VERBOSE)\b)+", re.IGNORECASE)
+DEFINES_A_ROUTINE = re.compile(
+    r"\bCREATE\b(?:\s+OR\s+REPLACE)?\s+(?:FUNCTION|PROCEDURE)\b", re.IGNORECASE
+)
+QUALIFIED_NAME = r"(?:\"[^\"]*\"|[A-Za-z_][A-Za-z0-9_$]*)"
+ROUTINE_NAME = re.compile(rf"\s*(?:{QUALIFIED_NAME}\s*\.\s*)?({QUALIFIED_NAME})")
 
 REWRITES_ROWS = frozenset({"UPDATE", "DELETE", "MERGE"})
 
@@ -151,6 +168,8 @@ OPENS_A_BLOCK = frozenset({"BEGIN", "THEN", "ELSE", "LOOP"})
 NEVER_A_VARIABLE = frozenset({"INTO", "USING"})
 
 BIND_VALUES = re.compile(r"\bUSING\b", re.IGNORECASE)
+
+WRITES_ROWS = re.compile(r"\bINSERT\b", re.IGNORECASE)
 
 GUIDANCE = """
 Migrations apply at proxy boot, before it serves traffic, so a statement whose cost
@@ -370,11 +389,28 @@ def offending_keyword(statement: str) -> str | None:
         if nested is not None:
             return f"WITH ... {nested}"
         if contains(statement, "INSERT"):
-            source = row_source_keyword(statement)
+            source = insert_row_source(statement)
             if source is not None:
                 return f"WITH ... INSERT ... {source}"
 
     return None
+
+
+def insert_row_source(statement: str) -> str | None:
+    """Which keyword supplies the rows to an `INSERT` written somewhere inside a `WITH`
+    statement. Only the parts that hold that insert are read, because a writable CTE sits
+    beside the query the statement ends with and reading the whole thing hands the insert
+    the outer `SELECT` as its row source: `WITH c AS (INSERT ... VALUES (1) RETURNING "x")
+    SELECT * FROM c` adds one literal row and copies nothing. A CTE keeps its insert in a
+    parenthesised group, and the statement's own insert, if it is the one writing, runs from
+    the keyword to the end, found in the text outside every parenthesis so a group's insert
+    is not counted twice."""
+    inserts = [group for group in parenthesised_groups(statement) if contains(group, "INSERT")]
+    written = WRITES_ROWS.search(strip_parens(statement))
+    if written is not None:
+        inserts.append(statement[written.start() :])
+    sources = (row_source_keyword(insert) for insert in inserts)
+    return next((source for source in sources if source is not None), None)
 
 
 def row_source_keyword(statement: str) -> str | None:
@@ -387,9 +423,12 @@ def row_source_keyword(statement: str) -> str | None:
     a rewrite. Failing all three, the rows come from a parenthesised group, which Postgres
     accepts and which reading only the unparenthesised text would let through:
     `INSERT INTO "t" ("a") (SELECT ...)` copies a whole table. Each group at that level is
-    read on its own terms and the first to name a row source is the answer, since the ones
-    around it are the column list, the conflict target and the rest of the clauses an insert
-    is allowed to carry, and any of those can be the last group written."""
+    read on its own terms until one of them supplies the rows, since the ones before it are
+    the column list and the ones after it are the conflict target and the rest of the clauses
+    an insert is allowed to carry. A wrapped `VALUES` list is the row source as much as a
+    wrapped query is, so it ends the search rather than being skipped over: reading past it
+    reaches a `RETURNING (SELECT ...)` or a `DO UPDATE SET "a" = (SELECT ...)` written after
+    it and calls that scalar subquery the rows the insert copies."""
     outer = strip_parens(statement)
     joined = row_source_in(outer)
     if joined is not None:
@@ -402,8 +441,13 @@ def row_source_keyword(statement: str) -> str | None:
     groups = list(parenthesised_groups(statement))
     if not groups:
         return row_source_in(statement)
-    sources = (row_source_keyword(group) for group in groups)
-    return next((source for source in sources if source is not None), None)
+    for group in groups:
+        if contains(strip_parens(group), "VALUES"):
+            return None
+        source = row_source_keyword(group)
+        if source is not None:
+            return source
+    return None
 
 
 def set_operation_terms(statement: str, outer: str) -> Iterator[str]:
@@ -594,8 +638,52 @@ def scan_region(
                 continue
             yield Violation(migration, line_of(document, offset + keyword_start(clause, base)), keyword)
 
-    for start, end in bodies:
+    for body in bodies:
+        if not runs_when_applied(masked, region, bodies, body):
+            continue
+        start, end = body
         yield from scan_region(document, region[start:end], migration, markers, offset + start)
+
+
+def runs_when_applied(
+    masked: str, region: str, bodies: tuple[tuple[int, int], ...], body: tuple[int, int]
+) -> bool:
+    """Whether a dollar-quoted body runs while the migration is being applied. A `DO` block runs
+    where it is written, and so does every other use of this quoting. A `CREATE FUNCTION` or a
+    `CREATE PROCEDURE` only stores its body, which runs when something calls the routine, so a
+    definition nothing calls rewrites no rows at boot and reporting it names a line that never
+    executes. Skipping every definition instead would let a migration define a backfill and then
+    run it unseen, which is the shape this check exists to catch, so the body is read whenever
+    the same migration names the routine anywhere outside the definition. The definition is
+    found in the masked text, where one written inside a comment has already been blanked, and
+    the name is read from the region at those same offsets, since masking blanks a quoted
+    identifier in place. A name that needed those quotes is blanked at its call sites too and
+    so can never be found there, which would read as uncalled however the migration runs it,
+    and the body is read rather than trusted."""
+    start, end = body
+    opens = masked.rfind(";", 0, start) + 1
+    defined = DEFINES_A_ROUTINE.search(masked, opens, start)
+    if defined is None:
+        return True
+    named = ROUTINE_NAME.match(region, defined.end(), start)
+    if named is None or named.group(1).startswith('"'):
+        return True
+    return contains(outside_definition(masked, region, bodies, opens, end), re.escape(named.group(1)))
+
+
+def outside_definition(
+    masked: str, region: str, bodies: tuple[tuple[int, int], ...], opens: int, closes: int
+) -> str:
+    """The migration's text with one routine definition blanked out and every dollar-quoted body
+    put back. Masking blanks the bodies alike, and a `DO` block is the ordinary way a migration
+    runs a routine it has just defined, so a call written inside one has to stay readable. The
+    definition is blanked after they are restored, which takes its own body with it, so a
+    routine that names itself recursively does not thereby count as called."""
+    text = list(masked)
+    for start, end in bodies:
+        text[start:end] = region[start:end]
+    text[opens:closes] = blank(region[opens:closes])
+    return "".join(text)
 
 
 def clauses(statement: str, start: int) -> Iterator[tuple[str, int]]:
