@@ -1760,7 +1760,6 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                               "budget_duration",
                               "tpm_limit",
                               "rpm_limit",
-                              "spend",
                               "user_id",
                               "agent_id",
                               "project_id",

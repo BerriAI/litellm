@@ -98,6 +98,7 @@ const OPENAPI_SCHEMA = {
         properties: {
           key: { type: "string", title: "Key" },
           soft_budget: { type: "number", title: "Soft Budget" },
+          spend: { anyOf: [{ type: "number" }, { type: "null" }], title: "Spend" },
           blocked: { anyOf: [{ type: "boolean" }, { type: "null" }], title: "Blocked" },
           max_budget: { type: "number", title: "Max Budget" },
           allowed_cache_controls: { anyOf: [{ items: {}, type: "array" }, { type: "null" }] },
@@ -173,6 +174,7 @@ const SECTION_PAYLOAD_ADDITIONS: Record<keyof typeof SECTIONS, Record<string, un
   advanced: {
     key: undefined,
     soft_budget: undefined,
+    spend: undefined,
     blocked: undefined,
     allowed_cache_controls: undefined,
     model_rpm_limit: undefined,
@@ -480,10 +482,12 @@ describe("CreateKey", () => {
       await openSection(/Optional Settings/i);
       await openSection(SECTIONS.advanced);
       await userEvent.type(await screen.findByLabelText("Soft Budget"), "12");
+      await userEvent.type(await screen.findByLabelText("Spend"), "5");
       await submit();
 
       const payload = await createdPayload();
       expect(payload.soft_budget).toBe(12);
+      expect(payload.spend).toBe(5);
       expect(payload).toHaveProperty("key");
     });
 

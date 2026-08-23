@@ -111,6 +111,7 @@ const fieldTooltips: { [key: string]: string } = {
   key: "Bring your own key value instead of an auto-generated one. Must start with 'sk-' and be at least 16 characters",
   budget_id: "Attach an existing budget (created via /budget/new) to this key",
   soft_budget: "Spend threshold that triggers an alert without blocking the key",
+  spend: "Starting spend in USD recorded for this key. Counts toward its budget",
   send_invite_email: "Send an invite email to this key's user",
   max_parallel_requests: "Maximum number of concurrent requests. Requests beyond this limit receive a 429 error",
   allowed_cache_controls: "Cache control values requests with this key may use, e.g. no-cache, no-store",
@@ -160,6 +161,7 @@ const getFieldHelp = (key: string, property: SchemaProperty, type: string): stri
   const specificHelp: { [key: string]: string } = {
     max_budget: "Enter maximum budget in USD (e.g., 100.50)",
     soft_budget: "Enter alert threshold in USD (e.g., 50)",
+    spend: "Enter starting spend in USD (e.g., 0)",
     budget_duration: "Select a time period for budget reset",
     budget_id: "Enter the id of an existing budget",
     tpm_limit: "Enter maximum tokens per minute (whole number)",
