@@ -22,27 +22,39 @@ Never hardcode hex values. Use these CSS variables via Tailwind classes — all 
 
 ### Colors
 
-| Token                         | Tailwind class                        | Use                                                            |
-| ----------------------------- | ------------------------------------- | -------------------------------------------------------------- |
-| `--background`                | `bg-background`                       | Main content area, input surfaces                              |
-| `--foreground`                | `text-foreground`                     | Primary text                                                   |
-| `--card`                      | `bg-card`                             | Popover/dialog surfaces (no `<Card>` component yet — see gaps) |
-| `--muted`                     | `bg-muted`                            | Table header rows, subtle fills                                |
-| `--muted-foreground`          | `text-muted-foreground`               | Secondary/helper text, timestamps                              |
-| `--border`                    | `border-border` (or bare `border`)    | All 1px separators                                             |
-| `--primary`                   | `bg-primary` / `text-primary`         | Send button, checkmarks, active links                          |
-| `--destructive`               | `bg-destructive` / `text-destructive` | Delete, error actions                                          |
-| `--sidebar`                   | `bg-sidebar`                          | **Left sidebar background — use this, not `bg-secondary`**     |
-| `--sidebar-foreground`        | `text-sidebar-foreground`             | Sidebar text                                                   |
-| `--sidebar-accent`            | `bg-sidebar-accent`                   | Active/hover nav item fill                                     |
-| `--sidebar-accent-foreground` | `text-sidebar-accent-foreground`      | Active nav item text                                           |
-| `--sidebar-border`            | `border-sidebar-border`               | Sidebar's own dividers/right border                            |
+| Token                          | Tailwind class                                | Use                                                                  |
+| ------------------------------ | --------------------------------------------- | -------------------------------------------------------------------- |
+| `--background`                 | `bg-background`                               | Main content area, input surfaces                                    |
+| `--foreground`                 | `text-foreground`                             | Primary text                                                         |
+| `--card`                       | `bg-card`                                     | Popover/dialog surfaces (no `<Card>` component yet — see gaps)       |
+| `--muted`                      | `bg-muted`                                    | Table header rows, subtle fills                                      |
+| `--muted-foreground`           | `text-muted-foreground`                       | Secondary/helper text, timestamps                                    |
+| `--border`                     | `border-border` (or bare `border`)            | All 1px separators                                                   |
+| `--primary`                    | `bg-primary` / `text-primary`                 | Send button, checkmarks, active links                                |
+| `--destructive`                | `bg-destructive` / `text-destructive`         | Delete, error actions                                                |
+| `--sidebar`                    | `bg-sidebar`                                  | **Left sidebar background — use this, not `bg-secondary`**           |
+| `--sidebar-foreground`         | `text-sidebar-foreground`                     | Sidebar text                                                         |
+| `--sidebar-accent`             | `bg-sidebar-accent`                           | Active/hover nav item fill                                           |
+| `--sidebar-accent-foreground`  | `text-sidebar-accent-foreground`              | Active nav item text                                                 |
+| `--sidebar-primary`            | `bg-sidebar-primary` / `text-sidebar-primary` | Sidebar brand accent: active nav stripe, menu badge, usage-card icon |
+| `--sidebar-primary-foreground` | `text-sidebar-primary-foreground`             | Text on a solid `bg-sidebar-primary` fill                            |
+| `--sidebar-border`             | `border-sidebar-border`                       | Sidebar's own dividers/right border                                  |
 
 **Known gotcha — verified in `globals.css`:** `--accent`, `--secondary`, and `--muted` all resolve to the _identical_ OKLCH value in both light and dark themes. Using `bg-accent` for a "selected" state against a `bg-secondary` container is **invisible** — there is zero contrast. This bit us repeatedly in this exact sidebar. Rules:
 
 - Sidebar container: `bg-sidebar`, never `bg-secondary` or `bg-accent`.
 - Active/selected nav item: `bg-sidebar-accent text-sidebar-accent-foreground`, never `bg-accent` on its own inside the sidebar.
 - Anywhere else `bg-accent`/`bg-muted` is used for hover/selected state, confirm the container isn't _also_ `bg-accent`/`bg-secondary`/`bg-muted` before shipping — check `globals.css` values, don't assume.
+
+**The sidebar brand hue is 225, taken from the LiteLLM logo (`#87ceea`).** `--sidebar-primary` used to be a near-black in light mode and a copy of `--chart-1` (a saturated violet, `oklch(0.488 0.243 264.376)`) in dark mode, which is why the active nav stripe and the Enterprise usage icon clashed with everything around them. Both themes now sit on hue 225 and differ only in lightness and chroma, because the same value cannot serve both:
+
+- `--sidebar-primary` is rendered as _text and icons on a 10%-alpha tint of itself_ (`bg-sidebar-primary/10`, used by `SidebarMenuBadge` and `SidebarUsageCard`). That pairing is the binding contrast constraint, not the stripe.
+- Dark mode takes the logo value directly, `oklch(0.814 0.081 225)`, giving 8.83:1 on its own chip. The old violet gave 2.58:1, below the 3:1 floor for icons.
+- Light mode cannot reuse it: the logo sky blue as text on a near-white chip is 1.66:1. Light mode uses `oklch(0.5 0.094 225)` instead, 5.05:1 on its own chip, and it is at the sRGB gamut edge, so raising either lightness or chroma clips.
+- `--sidebar-primary-foreground` must stay opposite in lightness to `--sidebar-primary`. Dark mode's is dark (`oklch(0.187 0 0)`) precisely because the fill it sits on is light.
+- `--sidebar-accent` carries only a trace of the same hue (chroma 0.016 light, 0.024 dark). It is the fill behind both hover and active, so saturating it makes every row look selected. Keep the saturation in `--sidebar-primary`.
+
+Hover and active currently share `bg-sidebar-accent` and are distinguished only by the stripe. That is pre-existing, not a regression from the retune.
 
 ### Status colors (semantic — don't substitute)
 
