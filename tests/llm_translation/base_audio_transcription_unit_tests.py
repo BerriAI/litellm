@@ -1,15 +1,11 @@
 import httpx
 import json
 import pytest
-import sys
 from typing import Any, Dict, List
 from unittest.mock import MagicMock, Mock, patch
 import os
 from litellm._uuid import uuid
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 import litellm
 from litellm import transcription
 from litellm.litellm_core_utils.get_supported_openai_params import (

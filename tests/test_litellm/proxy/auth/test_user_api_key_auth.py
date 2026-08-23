@@ -1,15 +1,10 @@
 import asyncio
 import json
-import os
-import sys
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 import pytest
 from fastapi import status
@@ -34,6 +29,8 @@ from litellm.proxy.auth.auth_checks import get_key_object, _cache_key_object
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.auth.user_api_key_auth import (
     _check_key_model_budget_with_fallback,
+    _ensure_litellm_received_at_on_request_state,
+    _ensure_parent_otel_span_on_request_state,
     _PendingAutoRegister,
     _matches_routing_override,
     _reserve_budget_after_common_checks,
@@ -3580,6 +3577,201 @@ async def test_auth_flow_never_persists_fallback_team_object_lit_4391():
             setattr(_proxy_server_mod, k, v)
 
 
+@pytest.mark.asyncio
+async def test_auth_flow_fallback_team_resolves_object_permission_by_id():
+    """The unresolvable-team fallback resolves team_object_permission by its own id instead of leaving it unset."""
+    from starlette.datastructures import URL
+    from starlette.requests import Request
+    from fastapi import HTTPException
+
+    from litellm.proxy._types import (
+        LiteLLM_ObjectPermissionTable,
+        LitellmUserRoles,
+        UserAPIKeyAuth,
+    )
+    from litellm.proxy.auth.user_api_key_auth import _user_api_key_auth_builder
+
+    api_key = "sk-test-fallback-team-object-permission"
+    valid_token = UserAPIKeyAuth(
+        api_key=api_key,
+        token=api_key,
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        team_id="team-fallback-object-permission",
+        team_object_permission_id="op-fallback-object-permission",
+    )
+
+    restricted_object_permission = LiteLLM_ObjectPermissionTable(
+        object_permission_id="op-fallback-object-permission",
+        vector_stores=["vs-allowed-only"],
+        mcp_servers=["mcp-allowed-only"],
+    )
+
+    mock_cache = AsyncMock()
+    mock_cache.async_get_cache = AsyncMock(return_value=valid_token)
+    mock_cache.async_set_cache = AsyncMock(return_value=None)
+
+    mock_proxy_logging_obj = MagicMock()
+    mock_proxy_logging_obj.internal_usage_cache = MagicMock()
+    mock_proxy_logging_obj.internal_usage_cache.dual_cache = AsyncMock()
+    mock_proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
+
+    import litellm.proxy.proxy_server as _proxy_server_mod
+
+    _attrs = {
+        "prisma_client": MagicMock(),
+        "user_api_key_cache": mock_cache,
+        "proxy_logging_obj": mock_proxy_logging_obj,
+        "master_key": "sk-master-key",
+        "general_settings": {},
+        "llm_model_list": [],
+        "llm_router": None,
+        "open_telemetry_logger": None,
+        "model_max_budget_limiter": MagicMock(),
+        "user_custom_auth": None,
+        "jwt_handler": None,
+        "litellm_proxy_admin_name": "admin",
+    }
+    _originals = {k: getattr(_proxy_server_mod, k, None) for k in _attrs}
+
+    try:
+        for k, v in _attrs.items():
+            setattr(_proxy_server_mod, k, v)
+
+        request = Request(scope={"type": "http"})
+        request._url = URL(url="/chat/completions")
+
+        with (
+            patch(
+                "litellm.proxy.auth.resolvers.store.IdentityStore._resolve_key",
+                new_callable=AsyncMock,
+                return_value=valid_token,
+            ),
+            patch(
+                "litellm.proxy.auth.user_api_key_auth.get_team_object",
+                new_callable=AsyncMock,
+                side_effect=HTTPException(
+                    status_code=404,
+                    detail={"error": "Team doesn't exist in db."},
+                ),
+            ),
+            patch(
+                "litellm.proxy.auth.user_api_key_auth.get_object_permission",
+                new_callable=AsyncMock,
+                return_value=restricted_object_permission,
+            ) as mock_get_object_permission,
+        ):
+            result = await _user_api_key_auth_builder(
+                request=request,
+                api_key=f"Bearer {api_key}",
+                azure_api_key_header="",
+                anthropic_api_key_header=None,
+                google_ai_studio_api_key_header=None,
+                azure_apim_header=None,
+                request_data={},
+            )
+
+        mock_get_object_permission.assert_awaited_once()
+        assert mock_get_object_permission.await_args.kwargs["object_permission_id"] == "op-fallback-object-permission"
+        assert result.team_object_permission == restricted_object_permission
+        assert result.team_object_permission.vector_stores == ["vs-allowed-only"]
+        assert result.team_object_permission.mcp_servers == ["mcp-allowed-only"]
+
+    finally:
+        for k, v in _originals.items():
+            setattr(_proxy_server_mod, k, v)
+
+
+@pytest.mark.asyncio
+async def test_auth_flow_fallback_team_object_permission_none_when_unreadable():
+    """When the object_permission row is also unreadable, the fallback leaves team_object_permission as None
+    instead of raising or fabricating a grant."""
+    from starlette.datastructures import URL
+    from starlette.requests import Request
+    from fastapi import HTTPException
+
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.auth.user_api_key_auth import _user_api_key_auth_builder
+
+    api_key = "sk-test-fallback-team-object-permission-unreadable"
+    valid_token = UserAPIKeyAuth(
+        api_key=api_key,
+        token=api_key,
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        team_id="team-fallback-object-permission-unreadable",
+        team_object_permission_id="op-fallback-object-permission-unreadable",
+    )
+
+    mock_cache = AsyncMock()
+    mock_cache.async_get_cache = AsyncMock(return_value=valid_token)
+    mock_cache.async_set_cache = AsyncMock(return_value=None)
+
+    mock_proxy_logging_obj = MagicMock()
+    mock_proxy_logging_obj.internal_usage_cache = MagicMock()
+    mock_proxy_logging_obj.internal_usage_cache.dual_cache = AsyncMock()
+    mock_proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
+
+    import litellm.proxy.proxy_server as _proxy_server_mod
+
+    _attrs = {
+        "prisma_client": MagicMock(),
+        "user_api_key_cache": mock_cache,
+        "proxy_logging_obj": mock_proxy_logging_obj,
+        "master_key": "sk-master-key",
+        "general_settings": {},
+        "llm_model_list": [],
+        "llm_router": None,
+        "open_telemetry_logger": None,
+        "model_max_budget_limiter": MagicMock(),
+        "user_custom_auth": None,
+        "jwt_handler": None,
+        "litellm_proxy_admin_name": "admin",
+    }
+    _originals = {k: getattr(_proxy_server_mod, k, None) for k in _attrs}
+
+    try:
+        for k, v in _attrs.items():
+            setattr(_proxy_server_mod, k, v)
+
+        request = Request(scope={"type": "http"})
+        request._url = URL(url="/chat/completions")
+
+        with (
+            patch(
+                "litellm.proxy.auth.resolvers.store.IdentityStore._resolve_key",
+                new_callable=AsyncMock,
+                return_value=valid_token,
+            ),
+            patch(
+                "litellm.proxy.auth.user_api_key_auth.get_team_object",
+                new_callable=AsyncMock,
+                side_effect=HTTPException(
+                    status_code=404,
+                    detail={"error": "Team doesn't exist in db."},
+                ),
+            ),
+            patch(
+                "litellm.proxy.auth.user_api_key_auth.get_object_permission",
+                new_callable=AsyncMock,
+                return_value=None,
+            ),
+        ):
+            result = await _user_api_key_auth_builder(
+                request=request,
+                api_key=f"Bearer {api_key}",
+                azure_api_key_header="",
+                anthropic_api_key_header=None,
+                google_ai_studio_api_key_header=None,
+                azure_apim_header=None,
+                request_data={},
+            )
+
+        assert result.team_object_permission is None
+
+    finally:
+        for k, v in _originals.items():
+            setattr(_proxy_server_mod, k, v)
+
+
 # ---------------------------------------------------------------------------
 
 # _run_centralized_common_checks — centralized authz gate
@@ -4498,6 +4690,283 @@ async def test_centralized_common_checks_team_404_does_not_zero_other_contexts()
         assert kwargs["user_object"] is fetched_user
         assert kwargs["end_user_object"] is fetched_end_user
         assert kwargs["project_object"] is fetched_project
+    finally:
+        for k, v in originals.items():
+            setattr(_proxy_server_mod, k, v)
+
+
+@pytest.mark.asyncio
+async def test_centralized_common_checks_unresolvable_team_without_grant_is_refused():
+    """The store restricts the team to gpt-4o-mini and the read of it fails, so the
+    only surviving team record is the token's own, which carries ``team_models=[]``
+    and reads as every model. The request must be refused with the original lookup
+    error. Pre-fix it was served."""
+    import litellm.proxy.proxy_server as _proxy_server_mod
+    from fastapi import HTTPException, Request
+    from starlette.datastructures import URL
+
+    token = UserAPIKeyAuth(
+        api_key="sk-test",
+        team_id="restricted-team",
+        models=[],
+        team_models=[],
+    )
+    request = Request(scope={"type": "http"})
+    request._url = URL(url="/chat/completions")
+    request._body = json.dumps({"model": "gpt-4.1"}).encode()
+
+    team_read_failure = HTTPException(
+        status_code=404,
+        detail={"error": "Team doesn't exist in db. Team=restricted-team."},
+    )
+
+    attrs = _proxy_attrs_for_centralized_checks(user_custom_auth=None)
+    originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
+    try:
+        for k, v in attrs.items():
+            setattr(_proxy_server_mod, k, v)
+        with patch(
+            "litellm.proxy.auth.user_api_key_auth.get_team_object",
+            new_callable=AsyncMock,
+            side_effect=team_read_failure,
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await _run_centralized_common_checks(
+                    user_api_key_auth_obj=token,
+                    request=request,
+                    request_data={"model": "gpt-4.1"},
+                    route="/chat/completions",
+                )
+        assert exc_info.value is team_read_failure
+    finally:
+        for k, v in originals.items():
+            setattr(_proxy_server_mod, k, v)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("token_team_models", [[], ["gpt-4.1"]])
+async def test_centralized_common_checks_absent_team_refused_despite_db_unavailable_optout(token_team_models):
+    """A team that is provably gone is a definitive answer, not a degraded read.
+    ``allow_requests_on_db_unavailable`` is a static settings read, so without the
+    absent-versus-unreadable distinction it would hand a deleted team's key the
+    old permissive fallback while the database is perfectly healthy. Refused in
+    both token shapes, including the one whose grant would otherwise vouch.
+
+    Imported from the module under test rather than from ``auth_checks``: other
+    tests in this suite ``importlib.reload`` that module, which rebinds the class
+    and would leave this raising a type the guard has never seen."""
+    import litellm.proxy.proxy_server as _proxy_server_mod
+    from fastapi import HTTPException, Request
+    from starlette.datastructures import URL
+
+    from litellm.proxy.auth.user_api_key_auth import TeamNotFoundError
+
+    token = UserAPIKeyAuth(
+        api_key="sk-test",
+        team_id="deleted-team",
+        models=[],
+        team_models=token_team_models,
+    )
+    request = Request(scope={"type": "http"})
+    request._url = URL(url="/chat/completions")
+    request._body = json.dumps({"model": "gpt-4.1"}).encode()
+
+    team_absent = TeamNotFoundError(team_id="deleted-team")
+
+    attrs = _proxy_attrs_for_centralized_checks(user_custom_auth=None)
+    attrs["general_settings"] = {"allow_requests_on_db_unavailable": True}
+    originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
+    try:
+        for k, v in attrs.items():
+            setattr(_proxy_server_mod, k, v)
+        with patch(
+            "litellm.proxy.auth.user_api_key_auth.get_team_object",
+            new_callable=AsyncMock,
+            side_effect=team_absent,
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await _run_centralized_common_checks(
+                    user_api_key_auth_obj=token,
+                    request=request,
+                    request_data={"model": "gpt-4.1"},
+                    route="/chat/completions",
+                )
+        assert exc_info.value is team_absent
+    finally:
+        for k, v in originals.items():
+            setattr(_proxy_server_mod, k, v)
+
+
+@pytest.mark.asyncio
+async def test_centralized_common_checks_unreadable_team_keeps_db_unavailable_optout():
+    """The counterpart: an unreadable team leaves the grant unknown rather than
+    answered, so an operator who has accepted degraded authorization during a
+    database fault still gets the fallback. Without this the fix would trade the
+    widening for a lockout with no way out."""
+    import litellm.proxy.proxy_server as _proxy_server_mod
+    from fastapi import HTTPException as _HTTPException
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    from litellm.proxy._types import LiteLLM_TeamTableCachedObj
+
+    token = UserAPIKeyAuth(api_key="sk-test", team_id="unreadable-team", models=[], team_models=[])
+    request = Request(scope={"type": "http"})
+    request._url = URL(url="/chat/completions")
+    request._body = json.dumps({"model": "gpt-4.1"}).encode()
+
+    received_team_objects: list[LiteLLM_TeamTableCachedObj | None] = []
+
+    async def _capturing_common_checks(*_args, **kwargs) -> bool:
+        received_team_objects.append(kwargs.get("team_object"))
+        return True
+
+    attrs = _proxy_attrs_for_centralized_checks(user_custom_auth=None)
+    attrs["general_settings"] = {"allow_requests_on_db_unavailable": True}
+    originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
+    try:
+        for k, v in attrs.items():
+            setattr(_proxy_server_mod, k, v)
+        with (
+            patch(
+                "litellm.proxy.auth.user_api_key_auth.get_team_object",
+                new_callable=AsyncMock,
+                side_effect=_HTTPException(status_code=404, detail={"error": "team unreadable"}),
+            ),
+            patch(
+                "litellm.proxy.auth.user_api_key_auth.common_checks",
+                _capturing_common_checks,
+            ),
+        ):
+            await _run_centralized_common_checks(
+                user_api_key_auth_obj=token,
+                request=request,
+                request_data={"model": "gpt-4.1"},
+                route="/chat/completions",
+            )
+        assert len(received_team_objects) == 1
+        received_team_object = received_team_objects[0]
+        assert received_team_object is not None
+        assert received_team_object.team_id == "unreadable-team"
+    finally:
+        for k, v in originals.items():
+            setattr(_proxy_server_mod, k, v)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "requested_model, is_granted",
+    [("gpt-4o-mini", True), ("gpt-4.1", False)],
+)
+async def test_centralized_common_checks_unresolvable_team_with_grant_enforces_it(requested_model, is_granted):
+    """Mirror of the refusal above: a token that does carry a team model grant keeps
+    the fallback, and the reconstructed team must still enforce that grant rather
+    than wave the request through."""
+    import litellm.proxy.proxy_server as _proxy_server_mod
+    from fastapi import HTTPException, Request
+    from starlette.datastructures import URL
+
+    from litellm.proxy._types import ProxyErrorTypes, ProxyException
+
+    token = UserAPIKeyAuth(
+        api_key="sk-test",
+        team_id="restricted-team",
+        models=[],
+        team_models=["gpt-4o-mini"],
+    )
+    request = Request(scope={"type": "http"})
+    request._url = URL(url="/chat/completions")
+    request._body = json.dumps({"model": requested_model}).encode()
+
+    attrs = _proxy_attrs_for_centralized_checks(user_custom_auth=None)
+    originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
+    try:
+        for k, v in attrs.items():
+            setattr(_proxy_server_mod, k, v)
+        with patch(
+            "litellm.proxy.auth.user_api_key_auth.get_team_object",
+            new_callable=AsyncMock,
+            side_effect=HTTPException(status_code=404, detail={"error": "team unreadable"}),
+        ):
+            if is_granted:
+                await _run_centralized_common_checks(
+                    user_api_key_auth_obj=token,
+                    request=request,
+                    request_data={"model": requested_model},
+                    route="/chat/completions",
+                )
+            else:
+                with pytest.raises(ProxyException) as exc_info:
+                    await _run_centralized_common_checks(
+                        user_api_key_auth_obj=token,
+                        request=request,
+                        request_data={"model": requested_model},
+                        route="/chat/completions",
+                    )
+                assert exc_info.value.type == ProxyErrorTypes.team_model_access_denied
+    finally:
+        for k, v in originals.items():
+            setattr(_proxy_server_mod, k, v)
+
+
+@pytest.mark.asyncio
+async def test_centralized_common_checks_ui_sentinel_team_vouches_despite_absent_row():
+    """The Admin UI mints every session key against the ``UI_TEAM_ID`` sentinel,
+    which by design never has a ``LiteLLM_TeamTable`` row, so ``get_team_object``
+    always raises ``TeamNotFoundError`` for it. That must NOT be read as "team
+    provably gone, refuse" the way it is for a real team_id: PR #36837 made that
+    exact mistake and PR #36982 reverted it because every dashboard request
+    404'd. The sentinel must keep vouching from the token unconditionally."""
+    import litellm.proxy.proxy_server as _proxy_server_mod
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    from litellm.proxy._types import UI_TEAM_ID, LiteLLM_TeamTableCachedObj
+    from litellm.proxy.auth.user_api_key_auth import TeamNotFoundError
+
+    token = UserAPIKeyAuth(
+        api_key="sk-test",
+        user_id="ui-session-user",
+        team_id=UI_TEAM_ID,
+        models=[],
+        team_models=[],
+    )
+    request = Request(scope={"type": "http"})
+    request._url = URL(url="/user/info")
+    request._body = b"{}"
+
+    received_team_objects: list[LiteLLM_TeamTableCachedObj | None] = []
+
+    async def _capturing_common_checks(*_args, **kwargs) -> bool:
+        received_team_objects.append(kwargs.get("team_object"))
+        return True
+
+    attrs = _proxy_attrs_for_centralized_checks(user_custom_auth=None)
+    originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
+    try:
+        for k, v in attrs.items():
+            setattr(_proxy_server_mod, k, v)
+        with (
+            patch(
+                "litellm.proxy.auth.user_api_key_auth.get_team_object",
+                new_callable=AsyncMock,
+                side_effect=TeamNotFoundError(team_id=UI_TEAM_ID),
+            ),
+            patch(
+                "litellm.proxy.auth.user_api_key_auth.common_checks",
+                _capturing_common_checks,
+            ),
+        ):
+            await _run_centralized_common_checks(
+                user_api_key_auth_obj=token,
+                request=request,
+                request_data={},
+                route="/user/info",
+            )
+        assert len(received_team_objects) == 1
+        received_team_object = received_team_objects[0]
+        assert received_team_object is not None
+        assert received_team_object.team_id == UI_TEAM_ID
     finally:
         for k, v in originals.items():
             setattr(_proxy_server_mod, k, v)
@@ -6227,3 +6696,42 @@ async def test_unlicensed_jwt_auth_is_forbidden_not_unauthorized():
 
     assert error.code == "403"
     assert "enterprise" in error.message.lower()
+
+
+class TestLitellmReceivedAtStamping:
+    """request.state.litellm_received_at must be stamped unconditionally at the
+    top of auth (LIT-6012), so request-latency Prometheus metrics don't depend
+    on OTEL being configured to see a true request-arrival timestamp."""
+
+    def test_stamped_even_when_otel_is_not_configured(self, monkeypatch):
+        monkeypatch.setattr(
+            "litellm.proxy.proxy_server.open_telemetry_logger", None
+        )
+        request = MagicMock()
+        request.state = SimpleNamespace()
+
+        _ensure_parent_otel_span_on_request_state(request)
+
+        assert isinstance(request.state.litellm_received_at, datetime)
+
+    def test_helper_is_idempotent(self):
+        request = MagicMock()
+        request.state = SimpleNamespace()
+
+        first = _ensure_litellm_received_at_on_request_state(request)
+        second = _ensure_litellm_received_at_on_request_state(request)
+
+        assert first == second
+        assert request.state.litellm_received_at == first
+
+    def test_does_not_overwrite_an_earlier_stamp(self):
+        """Body-parse failures must not shorten the measured window: a value
+        already on request.state (stamped earlier) must win."""
+        request = MagicMock()
+        earlier = datetime(2020, 1, 1)
+        request.state = SimpleNamespace(litellm_received_at=earlier)
+
+        result = _ensure_litellm_received_at_on_request_state(request)
+
+        assert result == earlier
+        assert request.state.litellm_received_at == earlier

@@ -2846,7 +2846,7 @@ class StandardLoggingRoutingDecision(TypedDict, total=False):
     classifier_cost: float
     escalated: bool
     tier_boundaries: StandardLoggingRoutingDecisionTierBoundaries
-    reasoning_override_min_score: ReadOnly[float]
+    reasoning_override_min_score: float  # writable-ok: Pydantic warns on ReadOnly TypedDict fields
     conversation_continuing: bool
     savings_baseline_model: str
     savings_baseline_deployment_id: str
@@ -3299,6 +3299,11 @@ class StandardCallbackDynamicParams(TypedDict, total=False):
     dd_site: str | None
     dd_agent_host: str | None
     dd_agent_port: str | None
+
+    # New Relic dynamic params (proxy-stamped team/key callback vars only;
+    # request-supplied values are blocked)
+    newrelic_api_key: str | None  # writable-ok: initialize_standard_callback_dynamic_params assigns into the dict
+    newrelic_region: str | None  # writable-ok: initialize_standard_callback_dynamic_params assigns into the dict
 
     # Logging settings
     turn_off_message_logging: bool | None  # when true will not log messages

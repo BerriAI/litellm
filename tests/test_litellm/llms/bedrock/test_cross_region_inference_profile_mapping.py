@@ -1,15 +1,12 @@
 """Test Bedrock cross-region inference profile model mapping"""
 
 import json
-import os
-import sys
 from functools import lru_cache
 from pathlib import Path
 from typing import NamedTuple
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../.."))
 
 import litellm
 from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig

@@ -2,16 +2,12 @@ import contextlib
 import copy
 import json
 import os
-import sys
 
 import httpx
 import pytest
 import respx
 from fastapi.testclient import TestClient
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 
 import urllib.parse
 from unittest.mock import MagicMock, patch
@@ -851,6 +847,36 @@ def test_responses_api_bridge_check_gpt_5_4_tools_with_default_reasoning_routes_
         )
 
     assert model == "gpt-5.4"
+    assert model_info.get("mode") == "responses"
+
+
+@pytest.mark.parametrize("model_name", ["gpt-5.6-sol", "gpt-5.6-luna", "gpt-5.6-terra"])
+def test_responses_api_bridge_check_gpt_5_6_tools_with_default_reasoning_routes_to_responses(
+    monkeypatch, model_name
+):
+    """
+    The whole gpt-5.6 family must bridge on function tools alone. The bridge used to
+    require an explicit reasoning_effort, so a gpt-5.6 call carrying tools and no effort
+    was rejected with "Function tools with reasoning_effort are not supported for
+    gpt-5.6-sol in /v1/chat/completions".
+    """
+    import litellm
+    from litellm.main import responses_api_bridge_check
+
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.delenv("OPENAI_API_BASE", raising=False)
+    monkeypatch.setattr(litellm, "api_base", None)
+
+    with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
+        mock_get_model_info.return_value = {"max_tokens": 128000}
+        model_info, model = responses_api_bridge_check(
+            model=model_name,
+            custom_llm_provider="openai",
+            tools=[{"type": "function", "function": {"name": "get_capital"}}],
+            reasoning_effort=None,
+        )
+
+    assert model == model_name
     assert model_info.get("mode") == "responses"
 
 
@@ -2756,6 +2782,53 @@ def test_completion_default_api_base_sends_prompt_cache_breakpoint_for_gpt_5_6()
     assert request_body["extra_body"]["prompt_cache_options"] == {"mode": "explicit"}
 
 
+_SUBSCRIPTION_OAUTH_CREDENTIAL = "Bearer sk-ant-oat01-fake-subscription-token-for-testing-0123456789"
+
+
+def _scoped_headers_for_oauth_request():
+    from litellm.types.utils import ProviderSpecificHeader
+
+    return [
+        ProviderSpecificHeader(
+            custom_llm_provider="anthropic,bedrock,vertex_ai",
+            extra_headers={"anthropic-version": "2023-06-01"},
+        ),
+        ProviderSpecificHeader(
+            custom_llm_provider="anthropic",
+            extra_headers={"authorization": _SUBSCRIPTION_OAUTH_CREDENTIAL},
+        ),
+    ]
+
+
+def _run_anthropic_hop_with_shared_headers(shared_headers):
+    litellm.completion(
+        model="anthropic/claude-3-5-sonnet-20240620",
+        messages=[{"role": "user", "content": "Say OK"}],
+        extra_headers=shared_headers,
+        provider_specific_header=_scoped_headers_for_oauth_request(),
+        api_key="sk-fake-anthropic-key",
+        mock_response="OK",
+    )
+
+
+def test_completion_does_not_mutate_caller_supplied_headers():
+    shared_headers = {"x-tenant": "acme"}
+
+    _run_anthropic_hop_with_shared_headers(shared_headers)
+
+    assert shared_headers == {"x-tenant": "acme"}
+
+
+def test_anthropic_oauth_credential_does_not_persist_into_next_provider_hop():
+    shared_headers = {"x-tenant": "acme"}
+
+    _run_anthropic_hop_with_shared_headers(shared_headers)
+
+    leaked = [name for name, value in shared_headers.items() if value == _SUBSCRIPTION_OAUTH_CREDENTIAL]
+    assert leaked == []
+    assert "anthropic-version" not in shared_headers
+
+
 STREAM_COST_MODEL = "gpt-4o"
 STREAMED_USAGE = {"prompt_tokens": 137, "completion_tokens": 42, "total_tokens": 179}
 
@@ -2790,9 +2863,17 @@ def _priced_at(prompt_tokens, completion_tokens):
 @pytest.fixture
 def local_cost_map(monkeypatch):
     """The prices these tests assert are the checked-in ones. Setting the environment
-    variable alone does not reload the map, so pin the map itself."""
+    variable alone does not reload the map, so pin the map itself.
+
+    ``get_model_info`` is lru_cached, so pinning ``model_cost`` is not enough on its
+    own: a cached entry warmed against the network-fetched map keeps its old prices
+    and ``completion_cost`` bills at those while the assertions read the pinned map.
+    Clear on the way in and out so entries never leak across tests in either direction."""
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+    litellm.get_model_info.cache_clear()
+    yield
+    litellm.get_model_info.cache_clear()
 
 
 def test_a_streamed_response_bills_the_usage_the_provider_reported(local_cost_map):

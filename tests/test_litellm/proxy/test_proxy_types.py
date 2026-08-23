@@ -1,10 +1,8 @@
 import asyncio
 import importlib
 import json
-import os
 import socket
 import subprocess
-import sys
 from unittest import mock
 from unittest.mock import AsyncMock, MagicMock, mock_open, patch
 
@@ -15,9 +13,6 @@ import yaml
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system-path
 
 
 def test_audit_log_masking():

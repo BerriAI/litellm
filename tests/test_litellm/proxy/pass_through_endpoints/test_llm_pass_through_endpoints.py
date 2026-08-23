@@ -1,7 +1,6 @@
 import contextlib
 import json
 import os
-import sys
 import traceback
 from collections.abc import Mapping
 from types import MappingProxyType, SimpleNamespace
@@ -14,9 +13,6 @@ import pytest
 from fastapi import HTTPException, Request, Response
 from fastapi.testclient import TestClient
 
-sys.path.insert(
-    0, os.path.abspath("../../../..")
-)  # Adds the parent directory to the system path
 
 import litellm
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (

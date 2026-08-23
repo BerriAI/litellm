@@ -18,7 +18,6 @@ from litellm.proxy._experimental.mcp_server.exceptions import (
 from litellm.proxy._experimental.mcp_server.faults.list_outcomes import ServerListFault
 
 # Add the parent directory to the path so we can import litellm
-sys.path.insert(0, "../../../../../")
 
 
 import httpx
