@@ -6,11 +6,8 @@ API docs: https://docs.aws.amazon.com/bedrock/latest/userguide/bedrock-mantle.ht
 """
 
 import json
-import os
-import sys
 from unittest.mock import patch
 
-sys.path.insert(0, os.path.abspath("../../../../.."))
 
 import httpx
 import pytest

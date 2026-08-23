@@ -1,14 +1,11 @@
 """Tests for the Slack alerting model deprecation hook."""
 
 import asyncio
-import os
-import sys
 from itertools import chain, repeat
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../.."))
 
 import litellm
 from litellm.constants import SLACK_MODEL_DEPRECATION_LOCK_ID

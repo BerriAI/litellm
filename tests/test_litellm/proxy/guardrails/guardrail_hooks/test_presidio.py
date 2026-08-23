@@ -4,14 +4,11 @@ Tests PII detection and masking for different message formats
 """
 
 import asyncio
-import os
-import sys
 from contextlib import asynccontextmanager
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../../../.."))
 
 import litellm
 from litellm.caching.caching import DualCache
@@ -583,6 +580,52 @@ async def test_logging_hook_multiple_content_items(presidio_guardrail):
     assert "[EMAIL]" in content_items[1]["text"]
 
     print("✓ Logging hook multiple content items test passed")
+
+
+@pytest.mark.asyncio
+async def test_logging_hook_masks_the_response_too(presidio_guardrail):
+    """
+    Regression: async_logging_hook only masked kwargs["messages"] (the request) and
+    left `result` (the model's response) completely untouched, so in `logging_only`
+    mode any PII in the assistant's reply was logged to langfuse/datadog/etc. in the
+    clear. The hook's own docstring promises masking "before logging" for both input
+    and output.
+    """
+
+    async def mock_check_pii(text, output_parse_pii, presidio_config, request_data):
+        return text.replace("4111-1111-1111-1111", "[CREDIT_CARD]")
+
+    presidio_guardrail.check_pii = mock_check_pii
+
+    test_kwargs = {
+        "messages": [{"role": "user", "content": "hello"}],
+        "model": "gpt-4",
+    }
+    response = ModelResponse(
+        id="1",
+        object="chat.completion",
+        created=0,
+        model="gpt-test",
+        choices=[
+            Choices(
+                message=Message(
+                    role="assistant",
+                    content="Sure, your card is 4111-1111-1111-1111",
+                ),
+                index=0,
+                finish_reason="stop",
+            )
+        ],
+    )
+
+    _, result_response = await presidio_guardrail.async_logging_hook(
+        kwargs=test_kwargs,
+        result=response,
+        call_type="completion",
+    )
+
+    assert "[CREDIT_CARD]" in result_response.choices[0].message.content
+    assert "4111-1111-1111-1111" not in result_response.choices[0].message.content
 
 
 @pytest.mark.asyncio

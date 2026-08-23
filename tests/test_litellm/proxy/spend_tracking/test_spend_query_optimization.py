@@ -6,14 +6,11 @@ GitHub Issue: #17487
 """
 
 import datetime
-import os
-import sys
 from datetime import timezone
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../.."))
 
 from litellm.proxy.spend_tracking.spend_tracking_utils import (
     get_spend_by_team,

@@ -6,6 +6,7 @@ import galileoLogo from "../../public/assets/logos/galileo.ico";
 import lagoLogo from "../../public/assets/logos/lago.svg";
 import langfuseLogo from "../../public/assets/logos/langfuse.png";
 import langsmithLogo from "../../public/assets/logos/langsmith.png";
+import newrelicLogo from "../../public/assets/logos/newrelic.png";
 import openmeterLogo from "../../public/assets/logos/openmeter.png";
 import otelLogo from "../../public/assets/logos/otel.png";
 
@@ -76,6 +77,17 @@ export const CALLBACK_CONFIGS: CallbackConfig[] = [
       dd_site: "text",
     },
     description: "Datadog Logging Integration",
+  },
+  {
+    id: "newrelic",
+    displayName: "New Relic",
+    logo: newrelicLogo.src,
+    supports_key_team_logging: true,
+    dynamic_params: {
+      newrelic_api_key: "password",
+      newrelic_region: "text",
+    },
+    description: "New Relic Logging Integration",
   },
   {
     id: "lago",
