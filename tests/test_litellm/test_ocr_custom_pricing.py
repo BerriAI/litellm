@@ -111,3 +111,33 @@ def test_ocr_custom_pricing_end_to_end_through_completion_cost() -> None:
         litellm_logging_obj=logging_obj,
     )
     assert cost == pytest.approx(CUSTOM_COST_PER_PAGE * 3)
+
+
+def test_ocr_custom_pricing_end_to_end_via_litellm_metadata() -> None:
+    """Router OCR calls go through `_ageneric_api_call_with_fallbacks`, which
+    stores the deployment's model_info under `litellm_metadata` rather than
+    `metadata`. The extraction must read that key too."""
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
+
+    logging_obj = LiteLLMLogging(
+        model=UNMAPPED_MODEL,
+        messages=[],
+        stream=False,
+        call_type="ocr",
+        start_time=None,
+        litellm_call_id="test-ocr-custom-pricing-litellm-metadata",
+        function_id="1234",
+    )
+    logging_obj.litellm_params = {
+        "litellm_metadata": {"model_info": {"ocr_cost_per_page": CUSTOM_COST_PER_PAGE}},
+    }
+
+    cost = completion_cost(
+        completion_response=_ocr_response(UNMAPPED_MODEL, pages_processed=3),
+        model=UNMAPPED_MODEL,
+        custom_llm_provider="azure_ai",
+        call_type="ocr",
+        custom_pricing=True,
+        litellm_logging_obj=logging_obj,
+    )
+    assert cost == pytest.approx(CUSTOM_COST_PER_PAGE * 3)

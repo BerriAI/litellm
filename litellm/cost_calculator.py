@@ -1593,13 +1593,18 @@ def completion_cost(
                 # (e.g. OCR per-page pricing). Same extraction as the video path
                 # above, minus its `or {}` default: truthiness on the value adds
                 # no mutable-collection construction (LIT002) and reads the same.
+                # Checked under both keys: router calls that go through
+                # `_ageneric_api_call_with_fallbacks` (OCR included) store the
+                # deployment's model_info under `litellm_metadata`, not `metadata`.
                 _custom_model_info: ModelInfo | None = None
                 if custom_pricing and litellm_logging_obj is not None:
                     _cm_litellm_params = getattr(litellm_logging_obj, "litellm_params", None)
                     if _cm_litellm_params is not None:
-                        _cm_metadata = _cm_litellm_params.get("metadata")
-                        if _cm_metadata:
-                            _custom_model_info = _cm_metadata.get("model_info", None)
+                        for _cm_metadata_key in ("metadata", "litellm_metadata"):
+                            _cm_metadata = _cm_litellm_params.get(_cm_metadata_key)
+                            if _cm_metadata and _cm_metadata.get("model_info") is not None:
+                                _custom_model_info = _cm_metadata.get("model_info")
+                                break
 
                 (
                     prompt_tokens_cost_usd_dollar,
