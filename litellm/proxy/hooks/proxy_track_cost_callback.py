@@ -318,22 +318,52 @@ class _ProxyDBLogger(CustomLogger):
                 elif budget_reservation is not None:
                     await _release_budget_reservation(budget_reservation=budget_reservation)
             else:
-                await _release_budget_reservation(budget_reservation=budget_reservation)
                 # Non-model call types (health checks, afile_delete) have no model or standard_logging_object.
                 # Use .get() for "stream" to avoid KeyError on health checks.
                 # WS session wrappers (_aresponses_websocket, _arealtime) also reach here with
                 # result=None; their per-turn costs are tracked on the inner aresponses/realtime calls.
-                if sl_object is None and (
+                skippable_non_model_call = sl_object is None and (
                     not kwargs.get("model") or kwargs.get("call_type") in ("_aresponses_websocket", "_arealtime")
-                ):
+                )
+                completed_call = kwargs.get("stream") is not True or (
+                    kwargs.get("stream") is True
+                    and ("complete_streaming_response" in kwargs or "async_complete_streaming_response" in kwargs)
+                )
+                if skippable_non_model_call:
+                    await _release_budget_reservation(budget_reservation=budget_reservation)
                     verbose_proxy_logger.warning(
                         "Cost tracking - skipping, no standard_logging_object for call_type=%s",
                         kwargs.get("call_type", "unknown"),
                     )
                     return
-                if kwargs.get("stream") is not True or (
-                    kwargs.get("stream") is True and "complete_streaming_response" in kwargs
-                ):
+                if completed_call:
+                    # Releasing to $0 treats the call as free. Leaving the hold
+                    # open is also wrong: the next priced request only
+                    # reconciles its own reservation, so this one would keep
+                    # blocking shared counters until TTL. Settle at the
+                    # admission estimate instead. No spend-log row — there is
+                    # no real cost to write.
+                    reserved_cost = float((budget_reservation or {}).get("reserved_cost") or 0.0)
+                    try:
+                        await _reconcile_budget_reservation(
+                            budget_reservation=budget_reservation,
+                            actual_cost=reserved_cost,
+                        )
+                    except Exception:  # noqa: BLE001  # settle can fail on cache/redis; still raise cost-tracking after invalidating
+                        verbose_proxy_logger.exception(
+                            "Failed to settle budget reservation after unpriced successful call"
+                        )
+                        try:
+                            await _invalidate_budget_reservation_counters(
+                                budget_reservation=budget_reservation,
+                            )
+                        except Exception:  # noqa: BLE001  # invalidate is best-effort so the outer cost-tracking error still surfaces
+                            verbose_proxy_logger.exception(
+                                "Failed to invalidate budget reservation counters after settle failed"
+                            )
+                        finally:
+                            if budget_reservation is not None:
+                                budget_reservation["finalized"] = True
                     if sl_object is not None:
                         cost_tracking_failure_debug_info: dict | str = (
                             sl_object["response_cost_failure_debug_info"]
@@ -345,6 +375,7 @@ class _ProxyDBLogger(CustomLogger):
                     raise Exception(
                         f"Cost tracking failed for model={model}.\nDebug info - {cost_tracking_failure_debug_info}\nAdd custom pricing - https://docs.litellm.ai/docs/proxy/custom_pricing"
                     )
+                await _release_budget_reservation(budget_reservation=budget_reservation)
         except Exception as e:
             error_msg = f"Error in tracking cost callback - {e}\n Traceback:{traceback.format_exc()}"
             model = kwargs.get("model", "")
@@ -597,6 +628,23 @@ async def _release_budget_reservation(budget_reservation: dict | None) -> None:
 
     await release_budget_reservation(
         budget_reservation=budget_reservation,
+    )
+
+
+async def _reconcile_budget_reservation(
+    budget_reservation: dict | None,
+    actual_cost: float,
+) -> None:
+    if budget_reservation is None:
+        return
+
+    from litellm.proxy.spend_tracking.budget_reservation import (
+        reconcile_budget_reservation,
+    )
+
+    await reconcile_budget_reservation(
+        budget_reservation=budget_reservation,
+        actual_cost=actual_cost,
     )
 
 

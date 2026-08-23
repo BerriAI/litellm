@@ -1,4 +1,3 @@
-
 import pytest
 
 
@@ -70,9 +69,7 @@ async def test_async_post_call_failure_hook():
 
         # Check that metadata was properly updated
         assert "litellm_params" in call_args["kwargs"]
-        assert call_args["kwargs"]["litellm_params"]["proxy_server_request"] == {
-            "request_id": "test_request_id"
-        }
+        assert call_args["kwargs"]["litellm_params"]["proxy_server_request"] == {"request_id": "test_request_id"}
         metadata = call_args["kwargs"]["litellm_params"]["metadata"]
         assert metadata["user_api_key"] == "test_api_key"
         assert metadata["status"] == "failure"
@@ -336,9 +333,7 @@ async def test_should_continue_failure_tracking_when_budget_release_fails():
         )
         assert mock_invalidate_budget_reservation_counters.await_count == 1
         assert (
-            mock_invalidate_budget_reservation_counters.await_args.kwargs[
-                "budget_reservation"
-            ]
+            mock_invalidate_budget_reservation_counters.await_args.kwargs["budget_reservation"]
             is user_api_key_dict.budget_reservation
         )
         assert user_api_key_dict.budget_reservation["finalized"] is True
@@ -383,7 +378,13 @@ async def test_track_cost_callback_releases_budget_reservation_when_spend_tracki
 
 
 @pytest.mark.asyncio
-async def test_track_cost_callback_releases_budget_reservation_when_response_cost_missing():
+async def test_track_cost_callback_settles_budget_reservation_when_response_cost_missing():
+    """A successful unpriced model call must not be refunded to $0.
+
+    Settling at the admission estimate converts the hold into budget spend
+    without inventing a spend-log row. Health checks still release, covered
+    separately.
+    """
     logger = _ProxyDBLogger()
     budget_reservation = {"reserved_cost": 0.5, "entries": []}
     user_api_key_auth = UserAPIKeyAuth(budget_reservation=budget_reservation)
@@ -412,9 +413,175 @@ async def test_track_cost_callback_releases_budget_reservation_when_response_cos
             "litellm.proxy.spend_tracking.budget_reservation.release_budget_reservation",
             new_callable=AsyncMock,
         ) as mock_release_budget_reservation,
+        patch(
+            "litellm.proxy.spend_tracking.budget_reservation.reconcile_budget_reservation",
+            new_callable=AsyncMock,
+        ) as mock_reconcile_budget_reservation,
+        patch(
+            "litellm.proxy.db.db_spend_update_writer.DBSpendUpdateWriter.update_database",
+            new_callable=AsyncMock,
+        ) as mock_update_database,
     ):
         mock_proxy_logging.failed_tracking_alert = AsyncMock()
 
+        await logger._PROXY_track_cost_callback(
+            kwargs=kwargs,
+            completion_response=None,
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+        )
+
+        mock_release_budget_reservation.assert_not_awaited()
+        mock_reconcile_budget_reservation.assert_awaited_once_with(
+            budget_reservation=budget_reservation,
+            actual_cost=0.5,
+        )
+        mock_update_database.assert_not_called()
+        mock_proxy_logging.failed_tracking_alert.assert_called()
+
+
+@pytest.mark.asyncio
+async def test_track_cost_callback_settles_async_stream_when_response_cost_missing():
+    """Async streams record completion on async_complete_streaming_response."""
+    logger = _ProxyDBLogger()
+    budget_reservation = {"reserved_cost": 0.5, "entries": []}
+    user_api_key_auth = UserAPIKeyAuth(budget_reservation=budget_reservation)
+
+    kwargs = {
+        "model": "gpt-4",
+        "call_type": "acompletion",
+        "stream": True,
+        "async_complete_streaming_response": {"usage": {"total_tokens": 10}},
+        "litellm_params": {
+            "metadata": {
+                "user_api_key_auth": user_api_key_auth,
+            },
+        },
+        "standard_logging_object": {
+            "response_cost": None,
+            "response_cost_failure_debug_info": "missing custom price",
+            "request_tags": None,
+        },
+    }
+
+    with (
+        patch(
+            "litellm.proxy.proxy_server.proxy_logging_obj",
+        ) as mock_proxy_logging,
+        patch(
+            "litellm.proxy.spend_tracking.budget_reservation.release_budget_reservation",
+            new_callable=AsyncMock,
+        ) as mock_release_budget_reservation,
+        patch(
+            "litellm.proxy.spend_tracking.budget_reservation.reconcile_budget_reservation",
+            new_callable=AsyncMock,
+        ) as mock_reconcile_budget_reservation,
+        patch(
+            "litellm.proxy.db.db_spend_update_writer.DBSpendUpdateWriter.update_database",
+            new_callable=AsyncMock,
+        ) as mock_update_database,
+    ):
+        mock_proxy_logging.failed_tracking_alert = AsyncMock()
+
+        await logger._PROXY_track_cost_callback(
+            kwargs=kwargs,
+            completion_response=None,
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+        )
+
+        mock_release_budget_reservation.assert_not_awaited()
+        mock_reconcile_budget_reservation.assert_awaited_once_with(
+            budget_reservation=budget_reservation,
+            actual_cost=0.5,
+        )
+        mock_update_database.assert_not_called()
+        mock_proxy_logging.failed_tracking_alert.assert_called()
+
+
+@pytest.mark.asyncio
+async def test_track_cost_callback_invalidates_reservation_when_settle_fails():
+    """A failed settle must not leave the hold pinning later traffic until TTL."""
+    logger = _ProxyDBLogger()
+    budget_reservation = {"reserved_cost": 0.5, "entries": []}
+    user_api_key_auth = UserAPIKeyAuth(budget_reservation=budget_reservation)
+
+    kwargs = {
+        "model": "gpt-4",
+        "call_type": "acompletion",
+        "litellm_params": {
+            "metadata": {
+                "user_api_key_auth": user_api_key_auth,
+            },
+        },
+        "standard_logging_object": {
+            "response_cost": None,
+            "response_cost_failure_debug_info": "missing custom price",
+            "request_tags": None,
+        },
+        "stream": False,
+    }
+
+    with (
+        patch(
+            "litellm.proxy.proxy_server.proxy_logging_obj",
+        ) as mock_proxy_logging,
+        patch(
+            "litellm.proxy.spend_tracking.budget_reservation.release_budget_reservation",
+            new_callable=AsyncMock,
+        ) as mock_release_budget_reservation,
+        patch(
+            "litellm.proxy.spend_tracking.budget_reservation.reconcile_budget_reservation",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("redis down"),
+        ),
+        patch(
+            "litellm.proxy.spend_tracking.budget_reservation.invalidate_budget_reservation_counters",
+            new_callable=AsyncMock,
+        ) as mock_invalidate_budget_reservation_counters,
+        patch(
+            "litellm.proxy.db.db_spend_update_writer.DBSpendUpdateWriter.update_database",
+            new_callable=AsyncMock,
+        ) as mock_update_database,
+    ):
+        mock_proxy_logging.failed_tracking_alert = AsyncMock()
+
+        await logger._PROXY_track_cost_callback(
+            kwargs=kwargs,
+            completion_response=None,
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+        )
+
+        mock_release_budget_reservation.assert_not_awaited()
+        mock_invalidate_budget_reservation_counters.assert_awaited_once()
+        settled = mock_invalidate_budget_reservation_counters.await_args.kwargs["budget_reservation"]
+        assert settled["reserved_cost"] == 0.5
+        assert settled["finalized"] is True
+        mock_update_database.assert_not_called()
+        mock_proxy_logging.failed_tracking_alert.assert_called()
+
+
+@pytest.mark.asyncio
+async def test_track_cost_callback_releases_budget_reservation_for_non_model_calls():
+    logger = _ProxyDBLogger()
+    budget_reservation = {"reserved_cost": 0.5, "entries": []}
+    user_api_key_auth = UserAPIKeyAuth(budget_reservation=budget_reservation)
+
+    kwargs = {
+        "call_type": "health",
+        "litellm_params": {
+            "metadata": {
+                "user_api_key_auth": user_api_key_auth,
+            },
+        },
+        "stream": False,
+    }
+
+    with patch(
+        "litellm.proxy.spend_tracking.budget_reservation.release_budget_reservation",
+        new_callable=AsyncMock,
+    ) as mock_release_budget_reservation:
         await logger._PROXY_track_cost_callback(
             kwargs=kwargs,
             completion_response=None,
@@ -433,36 +600,21 @@ def test_get_budget_reservation_from_metadata_handles_dict_auth_object():
         "entries": [{"counter_key": "spend:key:test_api_key"}],
     }
 
+    assert _get_budget_reservation_from_metadata(metadata={"user_api_key_auth": dict(UserAPIKeyAuth())}) is None
     assert (
         _get_budget_reservation_from_metadata(
-            metadata={"user_api_key_auth": dict(UserAPIKeyAuth())}
-        )
-        is None
-    )
-    assert (
-        _get_budget_reservation_from_metadata(
-            metadata={
-                "user_api_key_auth": UserAPIKeyAuth(
-                    budget_reservation=budget_reservation
-                )
-            }
+            metadata={"user_api_key_auth": UserAPIKeyAuth(budget_reservation=budget_reservation)}
         )
         == budget_reservation
     )
     assert (
         _get_budget_reservation_from_metadata(
-            metadata={
-                "user_api_key_auth": dict(
-                    UserAPIKeyAuth(budget_reservation=budget_reservation)
-                )
-            }
+            metadata={"user_api_key_auth": dict(UserAPIKeyAuth(budget_reservation=budget_reservation))}
         )
         == budget_reservation
     )
     assert (
-        _get_budget_reservation_from_metadata(
-            metadata={"user_api_key_budget_reservation": budget_reservation}
-        )
+        _get_budget_reservation_from_metadata(metadata={"user_api_key_budget_reservation": budget_reservation})
         is budget_reservation
     )
 
@@ -470,9 +622,7 @@ def test_get_budget_reservation_from_metadata_handles_dict_auth_object():
 @pytest.mark.asyncio
 async def test_update_database_and_spend_counters_releases_reservation_when_db_update_fails():
     proxy_logging_obj = MagicMock()
-    proxy_logging_obj.db_spend_update_writer.update_database = AsyncMock(
-        side_effect=Exception("db unavailable")
-    )
+    proxy_logging_obj.db_spend_update_writer.update_database = AsyncMock(side_effect=Exception("db unavailable"))
     increment_spend_counters = AsyncMock()
     budget_reservation = {"reserved_cost": 0.5, "entries": []}
 
@@ -508,9 +658,7 @@ async def test_update_database_and_spend_counters_releases_reservation_when_db_u
 async def test_update_database_and_spend_counters_preserves_db_exception_when_release_fails():
     proxy_logging_obj = MagicMock()
     db_exception = RuntimeError("db unavailable")
-    proxy_logging_obj.db_spend_update_writer.update_database = AsyncMock(
-        side_effect=db_exception
-    )
+    proxy_logging_obj.db_spend_update_writer.update_database = AsyncMock(side_effect=db_exception)
     increment_spend_counters = AsyncMock()
     budget_reservation = {"reserved_cost": 0.5, "entries": []}
 
@@ -554,12 +702,8 @@ async def test_update_database_and_spend_counters_preserves_db_exception_when_re
             budget_reservation=budget_reservation,
         )
         assert mock_log_exception.call_count == 2
-        mock_log_exception.assert_any_call(
-            "Failed to release budget reservation after database update failed"
-        )
-        mock_log_exception.assert_any_call(
-            "Failed to invalidate budget reservation counters after release failed"
-        )
+        mock_log_exception.assert_any_call("Failed to release budget reservation after database update failed")
+        mock_log_exception.assert_any_call("Failed to invalidate budget reservation counters after release failed")
 
     increment_spend_counters.assert_not_awaited()
 
@@ -785,10 +929,7 @@ async def test_async_post_call_failure_hook_propagates_trace_id_from_logging_obj
 
         # standard_logging_object should have been propagated from logging obj
         assert call_kwargs.get("standard_logging_object") is not None
-        assert (
-            call_kwargs["standard_logging_object"]["trace_id"]
-            == "trace-id-from-logging-obj"
-        )
+        assert call_kwargs["standard_logging_object"]["trace_id"] == "trace-id-from-logging-obj"
         # litellm_trace_id should also be propagated as a fallback
         assert call_kwargs.get("litellm_trace_id") == "trace-id-from-logging-obj"
 
@@ -1375,9 +1516,7 @@ async def test_async_post_call_failure_hook_records_recovered_partial_spend():
         "metadata": {},
         "proxy_server_request": {"request_id": "rid"},
         "response_cost": 3.5e-05,
-        "combined_usage_object": Usage(
-            prompt_tokens=30, completion_tokens=1, total_tokens=31
-        ),
+        "combined_usage_object": Usage(prompt_tokens=30, completion_tokens=1, total_tokens=31),
     }
 
     with patch(
@@ -1456,15 +1595,10 @@ async def test_track_cost_callback_enriches_user_id_for_mcp_style_metadata():
         assert mock_increment.call_args.kwargs["team_id"] == "team-123"
         assert mock_increment.call_args.kwargs["org_id"] == "org-456"
 
-        update_kwargs = (
-            mock_proxy_logging.db_spend_update_writer.update_database.await_args.kwargs
-        )
+        update_kwargs = mock_proxy_logging.db_spend_update_writer.update_database.await_args.kwargs
         assert update_kwargs["user_id"] == "mcp-user@example.com"
         assert update_kwargs["team_id"] == "team-123"
-        assert (
-            kwargs["litellm_params"]["metadata"]["user_api_key_user_id"]
-            == "mcp-user@example.com"
-        )
+        assert kwargs["litellm_params"]["metadata"]["user_api_key_user_id"] == "mcp-user@example.com"
 
 
 @pytest.mark.parametrize(
@@ -1512,9 +1646,7 @@ def test_should_track_cost_callback_pass_through_without_owner(call_type, expect
     ],
 )
 @pytest.mark.asyncio
-async def test_track_cost_callback_logs_unauthenticated_pass_through_request(
-    call_type, expect_spend_log
-):
+async def test_track_cost_callback_logs_unauthenticated_pass_through_request(call_type, expect_spend_log):
     """Regression for LIT-3782: a pass-through request with auth=false reaches the
     cost callback with no key/user/team/end-user. Before the fix the spend-log
     write was skipped and the request never appeared in request/usage logs. It
@@ -1560,6 +1692,4 @@ async def test_track_cost_callback_logs_unauthenticated_pass_through_request(
             end_time=datetime.now(),
         )
 
-        assert mock_proxy_logging.db_spend_update_writer.update_database.await_count == (
-            1 if expect_spend_log else 0
-        )
+        assert mock_proxy_logging.db_spend_update_writer.update_database.await_count == (1 if expect_spend_log else 0)
