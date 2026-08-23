@@ -5999,7 +5999,7 @@ def _get_traceback_str_for_error(error_str: str) -> str:
 from decimal import Decimal
 
 # used for unit testing
-from typing import Any, Optional, Union
+from typing import Any, Optional
 
 
 def create_dummy_standard_logging_payload() -> StandardLoggingPayload:
