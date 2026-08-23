@@ -1426,7 +1426,7 @@ class ProxyBaseLLMRequestProcessing:
 
     @staticmethod
     def _merge_passthrough_streaming_headers(
-        response_headers: Any | None,
+        response_headers: httpx.Headers | dict | None,
         custom_headers: dict,
     ) -> dict:
         """
