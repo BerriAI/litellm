@@ -779,6 +779,110 @@ async def test_update_key_personal_non_admin_denied_access_groups(
     assert "Access groups" in str(exc.value.detail)
 
 
+def _team_key_update_fixtures():
+    team_obj = LiteLLM_TeamTableCachedObj(
+        team_id="team-a",
+        members_with_roles=[
+            Member(user_id="user-a", role="user"),
+            Member(user_id="user-b", role="admin"),
+        ],
+    )
+    existing_key_row = MagicMock(
+        token="hashed_user_a_team_key",
+        user_id="user-a",
+        team_id="team-a",
+        created_by="user-a",
+        max_budget=None,
+        organization_id=None,
+        project_id=None,
+        metadata=None,
+        object_permission_id=None,
+        models=[],
+    )
+    return team_obj, existing_key_row
+
+
+@pytest.mark.asyncio
+async def test_update_key_team_admin_can_update_member_key(monkeypatch):
+    """A team admin must be able to update another member's key on their team
+    (e.g. change its expiration). Regression test for the
+    'User can only create keys for themselves' 403 on /key/update."""
+    team_obj, existing_key_row = _team_key_update_fixtures()
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.jsonify_object = lambda data: data  # type: ignore
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.get_team_object",
+        AsyncMock(return_value=team_obj),
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.management_helpers.team_member_permission_checks.get_team_object",
+        AsyncMock(return_value=team_obj),
+    )
+
+    result = await _validate_update_key_data(
+        data=UpdateKeyRequest(key="sk-user-a-team-key", duration="30d"),
+        existing_key_row=existing_key_row,
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.INTERNAL_USER,
+            api_key="sk-user-b",
+            user_id="user-b",
+        ),
+        llm_router=None,
+        premium_user=True,
+        prisma_client=mock_prisma_client,
+        user_api_key_cache=MagicMock(),
+    )
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_update_key_non_admin_member_still_denied(monkeypatch):
+    """A regular team member (not team admin) must still be blocked from
+    updating another member's key."""
+    team_obj, existing_key_row = _team_key_update_fixtures()
+    team_obj.team_member_permissions = ["/key/update"]
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.jsonify_object = lambda data: data  # type: ignore
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.get_team_object",
+        AsyncMock(return_value=team_obj),
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.management_helpers.team_member_permission_checks.get_team_object",
+        AsyncMock(return_value=team_obj),
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await _validate_update_key_data(
+            data=UpdateKeyRequest(key="sk-user-b-team-key", duration="30d"),
+            existing_key_row=MagicMock(
+                token="hashed_user_b_team_key",
+                user_id="user-b",
+                team_id="team-a",
+                created_by="user-b",
+                max_budget=None,
+                organization_id=None,
+                project_id=None,
+                metadata=None,
+                object_permission_id=None,
+                models=[],
+            ),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.INTERNAL_USER,
+                api_key="sk-user-a",
+                user_id="user-a",
+            ),
+            llm_router=None,
+            premium_user=True,
+            prisma_client=mock_prisma_client,
+            user_api_key_cache=MagicMock(),
+        )
+    assert exc.value.status_code == 403
+    assert "User can only create keys for themselves" in str(exc.value.detail)
+
+
 @pytest.mark.asyncio
 async def test_generate_key_helper_fn_with_access_group_ids(monkeypatch):
     """Ensure generate_key_helper_fn passes access_group_ids into the key insert payload."""

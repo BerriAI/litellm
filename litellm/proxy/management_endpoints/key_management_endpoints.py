@@ -571,26 +571,28 @@ def common_key_access_checks(
     llm_router: Router | None,
     premium_user: bool,
     user_id: str | None = None,
+    enforce_self_key_restriction: bool = True,
 ) -> Literal[True]:
     """
     Check if user is allowed to make a key request, for this key
     """
-    try:
-        _is_allowed_to_make_key_request(
-            user_api_key_dict=user_api_key_dict,
-            user_id=user_id or data.user_id,
-            team_id=data.team_id,
-        )
-    except AssertionError as e:
-        raise HTTPException(
-            status_code=403,
-            detail=str(e),
-        )
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=str(e),
-        )
+    if enforce_self_key_restriction:
+        try:
+            _is_allowed_to_make_key_request(
+                user_api_key_dict=user_api_key_dict,
+                user_id=user_id or data.user_id,
+                team_id=data.team_id,
+            )
+        except AssertionError as e:
+            raise HTTPException(
+                status_code=403,
+                detail=str(e),
+            )
+        except Exception as e:
+            raise HTTPException(
+                status_code=500,
+                detail=str(e),
+            )
 
     _check_model_access_group(
         models=data.models,
@@ -2491,6 +2493,29 @@ async def _validate_mcp_servers_for_key_update(
     return normalized_object_permission
 
 
+async def _caller_is_team_or_org_admin_for_key(
+    user_api_key_dict: UserAPIKeyAuth,
+    existing_key_row: LiteLLM_VerificationToken,
+    prisma_client: PrismaClient | None,
+    user_api_key_cache: UserApiKeyCache,
+) -> bool:
+    """Team admins and org admins may update keys owned by other members of the key's team."""
+    if existing_key_row.team_id is None or prisma_client is None:
+        return False
+    try:
+        team_obj: Final = await get_team_object(
+            team_id=existing_key_row.team_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            check_db_only=True,
+        )
+    except HTTPException:
+        return False
+    if _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_obj):
+        return True
+    return await _is_user_org_admin_for_team(user_api_key_dict=user_api_key_dict, team_obj=team_obj)
+
+
 async def _validate_update_key_data(
     data: UpdateKeyRequest,
     existing_key_row: LiteLLM_VerificationToken,
@@ -2527,12 +2552,20 @@ async def _validate_update_key_data(
         user_api_key_dict=user_api_key_dict,
     )
 
+    _caller_is_key_team_admin: Final = await _caller_is_team_or_org_admin_for_key(
+        user_api_key_dict=user_api_key_dict,
+        existing_key_row=existing_key_row,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+    )
+
     common_key_access_checks(
         user_api_key_dict=user_api_key_dict,
         data=data,
         user_id=existing_key_row.user_id,
         llm_router=llm_router,
         premium_user=premium_user,
+        enforce_self_key_restriction=not _caller_is_key_team_admin,
     )
 
     await TeamMemberPermissionChecks.can_team_member_execute_key_management_endpoint(
