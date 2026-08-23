@@ -479,3 +479,131 @@ class TestGigaChatPassthroughConfig:
         config = GigaChatPassthroughConfig()
         result = config.get_models()
         assert result == []
+
+    def test_logging_non_streaming_chat_raises_when_no_config(self):
+        """Test raise when ProviderConfigManager returns None for chat."""
+        config = GigaChatPassthroughConfig()
+        logging_obj = MagicMock()
+
+        with patch(
+            "litellm.utils.ProviderConfigManager.get_provider_chat_config",
+            return_value=None,
+        ):
+            with pytest.raises(ValueError, match="No provider config found for model"):
+                config.logging_non_streaming_response(
+                    model="gigachat/GigaChat",
+                    custom_llm_provider="gigachat",
+                    httpx_response=_make_httpx_response(_gigachat_chat_completion_body()),
+                    request_data={
+                        "model": "gigachat/GigaChat",
+                        "messages": [{"role": "user", "content": "hi"}],
+                    },
+                    logging_obj=logging_obj,
+                    endpoint="chat/completions",
+                )
+
+    def test_logging_non_streaming_embedding_raises_when_no_config(self):
+        """Test raise when ProviderConfigManager returns None for embeddings."""
+        config = GigaChatPassthroughConfig()
+        logging_obj = MagicMock()
+
+        with patch(
+            "litellm.utils.ProviderConfigManager.get_provider_embedding_config",
+            return_value=None,
+        ):
+            with pytest.raises(ValueError, match="No provider config found for model"):
+                config.logging_non_streaming_response(
+                    model="gigachat/Embeddings",
+                    custom_llm_provider="gigachat",
+                    httpx_response=_make_httpx_response(_gigachat_embedding_body()),
+                    request_data={
+                        "input": ["hello"],
+                        "model": "gigachat/Embeddings",
+                    },
+                    logging_obj=logging_obj,
+                    endpoint="embeddings",
+                )
+
+    def test_handle_logging_collected_chunks_with_model_response_stream_chunk(self):
+        """Test that a chunk returning ModelResponseStream from chunk_parser is handled.
+
+        Requires patching GigaChatModelResponseIterator.chunk_parser to return
+        a ModelResponseStream so the elif branch is exercised.
+        """
+        config = GigaChatPassthroughConfig()
+        logging_obj = MagicMock()
+
+        from litellm.types.utils import ModelResponseStream
+
+        stream_chunk = ModelResponseStream(
+            choices=[
+                {
+                    "index": 0,
+                    "delta": {"content": "streamed"},
+                    "finish_reason": None,
+                }
+            ]
+        )
+
+        chunks = [
+            '{"choices": [{"delta": {"content": "streamed"}, "index": 0}]}',
+            '{"choices": [{"delta": {}, "finish_reason": "stop", "index": 0}], "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}}',
+        ]
+
+        with patch(
+            "litellm.llms.gigachat.passthrough.transformation.GigaChatModelResponseIterator.chunk_parser",
+            return_value=stream_chunk,
+        ):
+            result = config.handle_logging_collected_chunks(
+                all_chunks=chunks,
+                litellm_logging_obj=logging_obj,
+                model="gigachat/GigaChat",
+                custom_llm_provider="gigachat",
+                endpoint="chat/completions",
+            )
+
+        assert isinstance(result, ModelResponse)
+        assert result.choices[0].message.content == "streamedstreamed"
+
+    def test_handle_logging_collected_chunks_skips_unknown_chunk_type(self):
+        """Test that chunk_parser returning an unknown type is skipped."""
+        config = GigaChatPassthroughConfig()
+        logging_obj = MagicMock()
+
+        chunks = [
+            '{"choices": [{"delta": {"content": "good"}, "index": 0}]}',
+            '{"choices": [{"delta": {}, "finish_reason": "stop", "index": 0}], "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}}',
+        ]
+
+        with patch(
+            "litellm.llms.gigachat.passthrough.transformation.GigaChatModelResponseIterator.chunk_parser",
+            return_value=12345,  # not dict and not ModelResponseStream
+        ):
+            result = config.handle_logging_collected_chunks(
+                all_chunks=chunks,
+                litellm_logging_obj=logging_obj,
+                model="gigachat/GigaChat",
+                custom_llm_provider="gigachat",
+                endpoint="chat/completions",
+            )
+
+        # All chunks skipped, returns None
+        assert result is None
+
+    def test_handle_logging_collected_chunks_skips_unsupported_chunk_type(self):
+        """Test that unsupported chunk types (int, float, etc.) are skipped."""
+        config = GigaChatPassthroughConfig()
+        logging_obj = MagicMock()
+
+        # The chunk is an int which doesn't match str/bytes/dict
+        chunks: list = [42, "not-a-real-chunk"]
+
+        result = config.handle_logging_collected_chunks(
+            all_chunks=chunks,
+            litellm_logging_obj=logging_obj,
+            model="gigachat/GigaChat",
+            custom_llm_provider="gigachat",
+            endpoint="chat/completions",
+        )
+
+        assert result is None
