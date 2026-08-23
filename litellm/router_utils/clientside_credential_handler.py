@@ -67,10 +67,13 @@ def _admin_config_fields_to_clear_on_base_override() -> list[str]:
         # ``api_base`` for the same reason as the OCI entries above.
         "nvcf_function_id",
         "use_ssl",
-        # Anthropic workload-identity federation minting fields. Not declared on
-        # CredentialLiteLLMParams, so listed here: a federation token minted for a
-        # client-redirected api_base would send the workload's OIDC assertion, and
-        # then the minted bearer, to the caller-chosen host.
+        # Anthropic workload-identity federation minting fields, restated here from
+        # anthropic_wif_litellm_params the same way azure_ad_token above is restated
+        # despite also being declared on CredentialLiteLLMParams (hence covered by
+        # typed_fields too): a federation token minted for a client-redirected api_base
+        # would send the workload's OIDC assertion, and then the minted bearer, to the
+        # caller-chosen host, so this list must stay correct even if a field is ever
+        # dropped from the typed model.
         *_ANTHROPIC_WIF_CLEAR_ON_BASE_OVERRIDE,
     ]
     return typed_fields + kwargs_only_fields

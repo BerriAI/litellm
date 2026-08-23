@@ -35,6 +35,21 @@ ANTHROPIC_WIF_KWARGS_KEYS: Final = frozenset(
         "anthropic_workspace_id",
         "anthropic_identity_token_file",
         "anthropic_identity_token",
+        # Identity-source selection (Phase 1): absent means the legacy
+        # token_file/env resolver above, byte-identical to today.
+        "anthropic_identity_source",
+        # internal_issuer: litellm self-signs the workload assertion.
+        "anthropic_issuer_url",
+        "anthropic_issuer_subject",
+        "anthropic_issuer_audience",
+        "anthropic_issuer_ttl_seconds",
+        "anthropic_issuer_signing_key_ref",
+        # keycloak: litellm fetches the assertion via client_credentials.
+        "anthropic_keycloak_token_url",
+        "anthropic_keycloak_client_id",
+        "anthropic_keycloak_auth_method",
+        "anthropic_keycloak_client_secret_ref",
+        "anthropic_keycloak_scope",
     }
 )
 

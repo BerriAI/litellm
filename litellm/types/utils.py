@@ -3479,14 +3479,17 @@ bedrock_batch_litellm_params: Final = (
 # Anthropic workload identity federation config, read from litellm_params by the
 # Anthropic auth tier. Listed for the same reason as the fields above: an
 # unrecognized top-level key is swept into extra_body and sent to /v1/messages.
-anthropic_wif_litellm_params: Final = (
-    "anthropic_federation_rule_id",
-    "anthropic_organization_id",
-    "anthropic_service_account_id",
-    "anthropic_workspace_id",
-    "anthropic_identity_token_file",
-    "anthropic_identity_token",
+# Derived from get_litellm_params.ANTHROPIC_WIF_KWARGS_KEYS (not hand-typed) so the
+# request-body ban list and the clear-on-api_base-override list can never drift from
+# the set the kwargs funnel actually forwards. Imported here rather than at module top:
+# get_litellm_params.py's own import chain (llms/openai/data_residency -> llms/__init__)
+# reaches back into this module for CallTypes, which by this point in the file is
+# already bound on the partially-initialized module.
+from ..litellm_core_utils.get_litellm_params import (  # noqa: E402  # deferred past CallTypes to break the import cycle
+    ANTHROPIC_WIF_KWARGS_KEYS,
 )
+
+anthropic_wif_litellm_params: Final = tuple(sorted(ANTHROPIC_WIF_KWARGS_KEYS))
 
 all_litellm_params = (
     agentic_loop_internal_litellm_params

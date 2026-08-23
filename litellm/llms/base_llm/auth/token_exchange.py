@@ -26,6 +26,7 @@ from typing_extensions import assert_never
 from litellm._logging import verbose_logger
 from litellm.llms.base_llm.auth.types import (
     AssertionReader,
+    AssertionSource,
     AssertionSourceError,
     ExchangeError,
     ExchangeResult,
@@ -92,12 +93,16 @@ def redact_oauth_error_body(status_code: int, body_text: str, assertion: SecretS
 
 def _drop_reflected_assertion(rendered: str, assertion: SecretStr | None) -> str:
     """A token endpoint that echoes the submitted assertion back would otherwise put it in the
-    operator log and in the error handed to the caller."""
+    operator log and in the error handed to the caller. The probe caps at
+    ``_REFLECTION_PROBE_LENGTH`` for a long assertion (a JWT), but a short reflected value (e.g. a
+    Keycloak client_secret under that length) still needs the whole thing checked -- capping the
+    minimum here too would silently stop redacting exactly the short secrets most likely to be
+    hand-set rather than generated."""
     if assertion is None:
         return rendered
     secret: Final = assertion.get_secret_value()
     probe: Final = secret[:_REFLECTION_PROBE_LENGTH]
-    if len(probe) < _REFLECTION_PROBE_LENGTH or probe not in rendered:
+    if not probe or probe not in rendered:
         return rendered
     return _REFLECTED_VALUE_MESSAGE
 
@@ -165,15 +170,23 @@ def _cache_key(spec: TokenExchangeSpec) -> str:
     ).hexdigest()
 
 
-def _read_assertion(reader: AssertionReader, ref: str) -> SecretStr | AssertionSourceError:
+def _assertion_fetch(reader: AssertionReader, spec: TokenExchangeSpec) -> AssertionSource:
+    """``spec.assertion_source`` (an identity source's own fetch/mint closure) takes priority over
+    the engine-level reader when set; either way, failures are reported against ``spec.assertion_ref``."""
+    if spec.assertion_source is not None:
+        return spec.assertion_source
+    return lambda: reader(spec.assertion_ref)
+
+
+def _read_assertion(fetch: AssertionSource, ref: str) -> SecretStr | AssertionSourceError:
     from litellm.secret_managers.main import OidcPathNotAllowedError
 
     try:
-        raw: Final = reader(ref)
+        raw: Final = fetch()
     except OidcPathNotAllowedError:
         return AssertionSourceError(kind="disallowed_path", source_ref=ref)
-    except ValueError:
-        return AssertionSourceError(kind="unreadable", source_ref=ref)
+    except ValueError as e:
+        return AssertionSourceError(kind="unreadable", source_ref=ref, detail=str(e)[:_REDACTION_CAP])
     except Exception:  # noqa: BLE001  # injected readers (secret managers) raise arbitrarily; all failures become values
         return AssertionSourceError(kind="unreadable", source_ref=ref)
     if raw is None:
@@ -501,11 +514,11 @@ class JwtBearerTokenExchangeEngine:
 
     def _reread_assertion(self, spec: TokenExchangeSpec) -> SecretStr | None:
         """Best-effort re-read, purely so a reflected assertion can be recognized in an error body."""
-        reread: Final = _read_assertion(self._assertion_reader, spec.assertion_ref)
+        reread: Final = _read_assertion(_assertion_fetch(self._assertion_reader, spec), spec.assertion_ref)
         return reread if isinstance(reread, SecretStr) else None
 
     def _attempt_exchange(self, spec: TokenExchangeSpec) -> "ExchangeResult | _Unauthorized":
-        assertion: Final = _read_assertion(self._assertion_reader, spec.assertion_ref)
+        assertion: Final = _read_assertion(_assertion_fetch(self._assertion_reader, spec), spec.assertion_ref)
         if isinstance(assertion, AssertionSourceError):
             return assertion
         url_check: Final = validate_token_endpoint_url(spec.token_url)

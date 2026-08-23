@@ -8,6 +8,8 @@ import httpx
 from pydantic import SecretStr
 
 BodyEncoding: TypeAlias = Literal["json", "form"]
+AssertionReader: TypeAlias = Callable[[str], str | None]  # mutable-ok: Callable param-list syntax, not a list
+AssertionSource: TypeAlias = Callable[[], str | None]  # mutable-ok: Callable param-list syntax, not a list
 
 
 @dataclass(frozen=True, slots=True)
@@ -16,6 +18,12 @@ class TokenExchangeSpec:
 
     ``token_url`` must be derived from deployment config/env only, never per-request caller
     input. ``assertion_ref`` is a ``oidc/...`` get_secret ref resolved fresh on every exchange.
+
+    ``assertion_source``, when set, is a zero-arg per-config fetch/mint closure that the engine
+    prefers over its own engine-level ``AssertionReader`` -- the dispatch mechanism identity
+    sources beyond token_file/env (e.g. ``internal_issuer``, ``keycloak``) use to plug into the
+    shared engine without a global registry. ``assertion_ref`` still names the cache-key
+    discriminator and the ref echoed into operator-facing errors either way.
     """
 
     token_url: str
@@ -26,6 +34,7 @@ class TokenExchangeSpec:
     request_headers: Mapping[str, str]
     cache_key_identity: tuple[str, ...]
     timeout_seconds: float = 30.0
+    assertion_source: AssertionSource | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,6 +47,7 @@ class MintedToken:
 class AssertionSourceError:
     kind: Literal["missing", "empty", "oversized", "unreadable", "disallowed_path"]
     source_ref: str
+    detail: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,6 +81,3 @@ class SyncTokenPoster(Protocol):
     """Returns the response for ANY status; never raises for status."""
 
     def post(self, url: str, *, content: bytes, headers: Mapping[str, str], timeout: float) -> httpx.Response: ...
-
-
-AssertionReader: TypeAlias = Callable[[str], str | None]  # mutable-ok: Callable param-list syntax, not a list

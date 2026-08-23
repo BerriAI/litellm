@@ -2,11 +2,16 @@ import pytest
 
 from litellm.types.router import (
     SPECIAL_MODEL_INFO_PARAMS,
+    CredentialLiteLLMParams,
     Deployment,
     LiteLLM_Params,
     ModelInfo,
 )
-from litellm.types.utils import CustomPricingLiteLLMParams, MirroredPricingParams
+from litellm.types.utils import (
+    CustomPricingLiteLLMParams,
+    MirroredPricingParams,
+    anthropic_wif_litellm_params,
+)
 
 
 def test_model_info_declares_mirrored_pricing_fields():
@@ -89,3 +94,21 @@ def test_pricing_strings_are_coerced_to_float():
 def test_invalid_pricing_is_rejected():
     with pytest.raises(ValueError, match='validation error for ModelInfo'):
         ModelInfo(id="x", input_cost_per_token="free")
+
+
+def test_credential_litellm_params_declares_every_anthropic_wif_field():
+    """Without these, get_deployment_credentials_with_provider round-trips litellm_params
+    through a strict Pydantic dump and silently drops every WIF field before files/batches/
+    passthrough callers see it -- the same #30235-shaped gap azure_ad_token closed above."""
+    for field in anthropic_wif_litellm_params:
+        assert field in CredentialLiteLLMParams.model_fields, field
+
+
+def test_anthropic_wif_fields_round_trip_through_model_dump():
+    values = {field: f"value-for-{field}" for field in anthropic_wif_litellm_params}
+    values["anthropic_issuer_ttl_seconds"] = 300
+
+    dumped = CredentialLiteLLMParams(**values).model_dump(exclude_none=True)
+
+    for field, value in values.items():
+        assert dumped[field] == value, field

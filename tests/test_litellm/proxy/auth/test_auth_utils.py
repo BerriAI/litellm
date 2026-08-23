@@ -29,6 +29,20 @@ from litellm.proxy.auth.auth_utils import (
 )
 
 
+def test_every_anthropic_wif_kwarg_key_is_request_banned():
+    """anthropic_wif_litellm_params (types/utils.py) is derived from ANTHROPIC_WIF_KWARGS_KEYS
+    (get_litellm_params.py) precisely so a new WIF field can never be added to the kwargs funnel
+    without automatically joining the request-body ban list; this guards that invariant itself,
+    independent of today's field count, so it fails if the derivation is ever reverted to a
+    hand-typed list that drifts."""
+    from litellm.litellm_core_utils.get_litellm_params import ANTHROPIC_WIF_KWARGS_KEYS
+    from litellm.proxy.auth.auth_utils import _ANTHROPIC_WIF_UNCONDITIONAL_BANNED
+
+    unconditionally_bannable = ANTHROPIC_WIF_KWARGS_KEYS - {"anthropic_workspace_id"}
+
+    assert unconditionally_bannable <= set(_ANTHROPIC_WIF_UNCONDITIONAL_BANNED)
+
+
 class TestCustomAuthCommonChecksWarning:
     """custom_auth_common_checks_warning only warns when custom auth is configured
     and the common-checks opt-in is off, since that is the only state where

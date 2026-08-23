@@ -9,10 +9,11 @@ from typing import Final
 from urllib.parse import parse_qsl
 
 import httpx
-from pydantic import SecretStr
 import pytest
+from pydantic import SecretStr
 
 from litellm.llms.base_llm.auth.token_exchange import (
+    _REDACTION_CAP,
     ADVISORY_REFRESH_BACKOFF_SECONDS,
     FALLBACK_TOKEN_TTL_SECONDS,
     MAX_ASSERTION_BYTES,
@@ -628,6 +629,108 @@ class TestAssertionGuards:
         assert isinstance(result, AssertionSourceError)
         assert result.kind == expected_kind
         assert len(poster.requests) == 0
+
+    def test_value_error_message_is_captured_as_detail(self):
+        poster = ScriptedPoster([token_response()])
+
+        def reader(ref: str) -> str | None:
+            raise ValueError("Keycloak token endpoint returned invalid_client")
+
+        result = make_engine(poster, reader=reader).get_token(make_spec())
+
+        assert isinstance(result, AssertionSourceError)
+        assert result.detail == "Keycloak token endpoint returned invalid_client"
+
+    @pytest.mark.parametrize(
+        "raised",
+        [OidcPathNotAllowedError("path outside allowed credential directories"), OSError("permission denied")],
+    )
+    def test_non_value_error_never_populates_detail(self, raised: Exception):
+        """Only the ValueError branch carries operator-diagnosable text; every other reader failure
+        stays detail=None, matching today's file/env behavior byte-for-byte."""
+        poster = ScriptedPoster([token_response()])
+
+        def reader(ref: str) -> str | None:
+            raise raised
+
+        result = make_engine(poster, reader=reader).get_token(make_spec())
+
+        assert isinstance(result, AssertionSourceError)
+        assert result.detail is None
+
+    def test_value_error_detail_is_capped(self):
+        poster = ScriptedPoster([token_response()])
+        overlong_message = "x" * (_REDACTION_CAP + 100)
+
+        def reader(ref: str) -> str | None:
+            raise ValueError(overlong_message)
+
+        result = make_engine(poster, reader=reader).get_token(make_spec())
+
+        assert isinstance(result, AssertionSourceError)
+        assert result.detail == overlong_message[:_REDACTION_CAP]
+        assert len(result.detail) == _REDACTION_CAP
+
+
+class TestAssertionSourceOverridesEngineReader:
+    """``TokenExchangeSpec.assertion_source`` is the dispatch mechanism a per-config identity
+    source (internal_issuer, keycloak) plugs into the shared engine with -- it must win over the
+    engine-level reader, and failures must still be reported against ``assertion_ref``."""
+
+    def test_assertion_source_is_used_instead_of_the_reader(self):
+        poster = ScriptedPoster([token_response()])
+        engine = make_engine(poster, reader=lambda ref: "from-engine-reader")
+        spec = make_spec(assertion_source=lambda: "from-assertion-source")
+
+        result = mint(engine, spec)
+
+        assert result.access_token.get_secret_value() == "sk-ant-oat01-minted"
+        assert poster.requests[0].json_body()["assertion"] == "from-assertion-source"
+
+    def test_reader_is_never_called_when_assertion_source_is_set(self):
+        poster = ScriptedPoster([token_response()])
+        calls: list[str] = []
+
+        def reader(ref: str) -> str | None:
+            calls.append(ref)
+            return "from-engine-reader"
+
+        engine = make_engine(poster, reader=reader)
+        spec = make_spec(assertion_source=lambda: "from-assertion-source")
+
+        mint(engine, spec)
+
+        assert calls == []
+
+    def test_assertion_source_failure_is_reported_against_assertion_ref(self):
+        poster = ScriptedPoster([token_response()])
+        engine = make_engine(poster, reader=lambda ref: "from-engine-reader")
+
+        def raising_source() -> str | None:
+            raise ValueError("keycloak token endpoint returned invalid_client")
+
+        spec = make_spec(assertion_source=raising_source, assertion_ref="oidc/keycloak/abc123")
+
+        result = engine.get_token(spec)
+
+        assert isinstance(result, AssertionSourceError)
+        assert result.source_ref == "oidc/keycloak/abc123"
+        assert result.detail == "keycloak token endpoint returned invalid_client"
+        assert len(poster.requests) == 0
+
+    def test_assertion_source_is_re_invoked_on_401_retry(self):
+        """The 401-retry re-read (``_reread_assertion``) must also prefer ``assertion_source``,
+        not silently fall back to the engine reader for the reflected-assertion check."""
+        values = iter(["assertion-v1", "assertion-v2"])
+        poster = ScriptedPoster([httpx.Response(401, json={"error": "invalid_grant"}), token_response()])
+        engine = make_engine(poster, reader=lambda ref: "from-engine-reader")
+        spec = make_spec(assertion_source=lambda: next(values))
+
+        result = mint(engine, spec)
+
+        assert result.access_token.get_secret_value() == "sk-ant-oat01-minted"
+        assert poster.requests[0].json_body()["assertion"] == "assertion-v1"
+        assert poster.requests[1].json_body()["assertion"] == "assertion-v2"
 
 
 class TestOidcFilePathAllowlistRaisesTypedError:

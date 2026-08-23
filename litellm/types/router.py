@@ -272,6 +272,28 @@ class CredentialLiteLLMParams(BaseModel):
     ## IBM WATSONX ##
     watsonx_region_name: str | None = None
 
+    ## ANTHROPIC WORKLOAD IDENTITY FEDERATION ##
+    # Without these, get_deployment_credentials_with_provider silently drops a
+    # litellm_params-configured WIF setup before files/batches/passthrough callers see
+    # it, the same #30235-shaped gap azure_ad_token above was added to close.
+    anthropic_federation_rule_id: str | None = None
+    anthropic_organization_id: str | None = None
+    anthropic_service_account_id: str | None = None
+    anthropic_workspace_id: str | None = None
+    anthropic_identity_token_file: str | None = None
+    anthropic_identity_token: str | None = None
+    anthropic_identity_source: str | None = None
+    anthropic_issuer_url: str | None = None
+    anthropic_issuer_subject: str | None = None
+    anthropic_issuer_audience: str | None = None
+    anthropic_issuer_ttl_seconds: int | None = None
+    anthropic_issuer_signing_key_ref: str | None = None
+    anthropic_keycloak_token_url: str | None = None
+    anthropic_keycloak_client_id: str | None = None
+    anthropic_keycloak_auth_method: str | None = None
+    anthropic_keycloak_client_secret_ref: str | None = None
+    anthropic_keycloak_scope: str | None = None
+
 
 _RESERVED_INIT_KEYS: Final = frozenset({"self", "params", "__class__"})
 

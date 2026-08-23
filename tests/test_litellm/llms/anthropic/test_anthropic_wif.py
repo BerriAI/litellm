@@ -5,7 +5,10 @@ from pathlib import Path
 from typing import Final
 
 import httpx
+import jwt
 import pytest
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import ec
 
 import litellm
 from litellm.llms.anthropic.wif import (
@@ -15,6 +18,12 @@ from litellm.llms.anthropic.wif import (
     get_anthropic_wif_token,
     resolve_anthropic_wif_params,
 )
+from litellm.llms.base_llm.auth.identity_source import (
+    InternalIssuerSource,
+    KeycloakSource,
+    identity_source_ref,
+)
+from litellm.llms.base_llm.auth.jwt_signing import build_jwks, rfc7638_thumbprint
 from litellm.llms.base_llm.auth.token_exchange import JwtBearerTokenExchangeEngine
 from litellm.llms.base_llm.auth.types import (
     AssertionSourceError,
@@ -32,6 +41,7 @@ WIF_ENV_VARS: Final = (
     "ANTHROPIC_WORKSPACE_ID",
     "ANTHROPIC_IDENTITY_TOKEN_FILE",
     "ANTHROPIC_IDENTITY_TOKEN",
+    "ANTHROPIC_IDENTITY_SOURCE",
     "ANTHROPIC_SCOPE",
     "ANTHROPIC_API_BASE",
     "ANTHROPIC_BASE_URL",
@@ -534,6 +544,31 @@ class TestErrorMappingExhaustive:
         assert exc_info.value.llm_provider == "anthropic"
         assert exc_info.value.model == "claude-sonnet-4-5"
 
+    def test_assertion_source_error_detail_is_rendered_when_present(self):
+        with pytest.raises(litellm.AuthenticationError) as exc_info:
+            _raise_anthropic_wif_error(
+                AssertionSourceError(kind="unreadable", source_ref="oidc/keycloak/abc123", detail="invalid_client"),
+                model="claude-sonnet-4-5",
+                workspace_id_set=True,
+            )
+
+        assert "invalid_client" in exc_info.value.message
+
+    def test_assertion_source_error_without_detail_is_unchanged(self):
+        """Regression floor: the token_file/env path never populates detail, so its message must stay
+        byte-identical to before the field existed."""
+        with pytest.raises(litellm.AuthenticationError) as exc_info:
+            _raise_anthropic_wif_error(
+                AssertionSourceError(kind="unreadable", source_ref="oidc/env/ANTHROPIC_IDENTITY_TOKEN"),
+                model="claude-sonnet-4-5",
+                workspace_id_set=True,
+            )
+
+        assert exc_info.value.message == (
+            "litellm.AuthenticationError: Anthropic workload identity federation failed. Could not obtain "
+            "the OIDC identity token (unreadable) from oidc/env/ANTHROPIC_IDENTITY_TOKEN."
+        )
+
     def test_endpoint_error_raised_through_facade(self, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setenv("ANTHROPIC_IDENTITY_TOKEN", "inline-jwt")
         poster = ScriptedPoster([httpx.Response(500, json={"error": "server_error"})])
@@ -635,3 +670,324 @@ class TestFileRereadOnRefresh:
         assert second == "sk-ant-oat01-second"
         assert len(poster.requests) == 2
         assert poster.requests[1].json_body()["assertion"] == "second-assertion"
+
+
+_ISSUER_PRIVATE_VALUE: Final = 55566677788899900011122233344455566677788899900011122233344455
+ISSUER_SIGNING_KEY_REF: Final = "oidc/env/ISSUER_SIGNING_KEY_PEM"
+KEYCLOAK_TOKEN_URL: Final = "https://keycloak.internal.example/realms/litellm/protocol/openid-connect/token"
+
+
+def _issuer_signing_key() -> ec.EllipticCurvePrivateKey:
+    return ec.derive_private_key(_ISSUER_PRIVATE_VALUE, ec.SECP256R1())
+
+
+def _issuer_signing_key_pem() -> str:
+    return (
+        _issuer_signing_key()
+        .private_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PrivateFormat.PKCS8,
+            encryption_algorithm=serialization.NoEncryption(),
+        )
+        .decode()
+    )
+
+
+def _get_secret_str_returning(pem: str, ref: str) -> Callable[..., str | None]:
+    def fake_get_secret_str(secret_name: str, default_value: str | None = None) -> str | None:
+        return pem if secret_name == ref else default_value
+
+    return fake_get_secret_str
+
+
+class TestIdentitySourceDiscriminatorAbsentIsByteIdenticalToLegacy:
+    """anthropic_identity_source unset must resolve exactly like today: no new dispatch code
+    runs, and no assertion_source closure is attached, so the engine falls back to its own
+    reader precisely as it always has."""
+
+    def test_file_config_carries_no_assertion_source(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setenv("LITELLM_OIDC_ALLOWED_CREDENTIAL_DIRS", str(tmp_path))
+        token_file = write_token_file(tmp_path, "jwt-assertion-value")
+
+        params = resolve_anthropic_wif_params(
+            {
+                "anthropic_federation_rule_id": "fdrl_1",
+                "anthropic_organization_id": "org-1",
+                "anthropic_identity_token_file": str(token_file),
+            }
+        )
+
+        assert params == AnthropicWifParams(
+            federation_rule_id="fdrl_1",
+            organization_id="org-1",
+            assertion_ref=f"oidc/file/{token_file}",
+        )
+        assert params.assertion_source is None
+
+    def test_env_config_carries_no_assertion_source(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setenv("ANTHROPIC_FEDERATION_RULE_ID", "fdrl_env")
+        monkeypatch.setenv("ANTHROPIC_ORGANIZATION_ID", "org-env")
+        monkeypatch.setenv("ANTHROPIC_IDENTITY_TOKEN", "raw-env-jwt")
+
+        params = resolve_anthropic_wif_params(None)
+
+        assert params is not None
+        assert params.assertion_ref == "oidc/env/ANTHROPIC_IDENTITY_TOKEN"
+        assert params.assertion_source is None
+
+
+class TestInternalIssuerIdentitySourceDispatch:
+    """A config.yaml-shaped litellm_params block for the internal_issuer identity source."""
+
+    LITELLM_PARAMS: Final = {
+        "anthropic_federation_rule_id": "fdrl_1",
+        "anthropic_organization_id": "org-1",
+        "anthropic_identity_source": "internal_issuer",
+        "anthropic_issuer_url": "https://issuer.internal.example",
+        "anthropic_issuer_subject": "workload-a",
+        "anthropic_issuer_ttl_seconds": 300,
+        "anthropic_issuer_signing_key_ref": ISSUER_SIGNING_KEY_REF,
+    }
+
+    def test_assertion_ref_matches_the_identity_source_hash(self):
+        params = resolve_anthropic_wif_params(self.LITELLM_PARAMS)
+
+        assert params is not None
+        expected_config = InternalIssuerSource(
+            issuer_url="https://issuer.internal.example",
+            subject="workload-a",
+            ttl_seconds=300,
+            signing_key_ref=ISSUER_SIGNING_KEY_REF,
+        )
+        assert params.assertion_ref == identity_source_ref(expected_config)
+        assert params.assertion_ref.startswith("oidc/internal_issuer/")
+
+    def test_ref_is_stable_and_rolls_on_field_change(self):
+        first = resolve_anthropic_wif_params(self.LITELLM_PARAMS)
+        second = resolve_anthropic_wif_params(dict(self.LITELLM_PARAMS))
+        changed = resolve_anthropic_wif_params({**self.LITELLM_PARAMS, "anthropic_issuer_subject": "workload-b"})
+
+        assert first is not None and second is not None and changed is not None
+        assert first.assertion_ref == second.assertion_ref
+        assert first.assertion_ref != changed.assertion_ref
+
+    def test_assertion_source_mints_a_verifiable_jwt(self, monkeypatch: pytest.MonkeyPatch):
+        pem = _issuer_signing_key_pem()
+        monkeypatch.setattr(
+            "litellm.secret_managers.main.get_secret_str",
+            _get_secret_str_returning(pem, ISSUER_SIGNING_KEY_REF),
+        )
+
+        params = resolve_anthropic_wif_params(self.LITELLM_PARAMS)
+        assert params is not None
+        assert params.assertion_source is not None
+
+        assertion = params.assertion_source()
+
+        assert assertion is not None
+        public_key = _issuer_signing_key().public_key()
+        expected_kid = build_jwks(public_key)["keys"][0]["kid"]
+        assert jwt.get_unverified_header(assertion)["kid"] == expected_kid
+        assert expected_kid == rfc7638_thumbprint(public_key)
+        claims = jwt.decode(assertion, public_key, algorithms=["ES256"], options={"verify_aud": False})
+        assert claims["sub"] == "workload-a"
+        assert claims["iss"] == "https://issuer.internal.example"
+
+    def test_full_exchange_sends_the_minted_assertion(self, monkeypatch: pytest.MonkeyPatch):
+        pem = _issuer_signing_key_pem()
+        monkeypatch.setattr(
+            "litellm.secret_managers.main.get_secret_str",
+            _get_secret_str_returning(pem, ISSUER_SIGNING_KEY_REF),
+        )
+        poster = ScriptedPoster([token_response()])
+        engine = make_engine(poster)
+
+        token = get_anthropic_wif_token(self.LITELLM_PARAMS, "https://api.anthropic.com", "claude-sonnet-4-5", engine)
+
+        assert token == "sk-ant-oat01-minted"
+        sent_assertion = poster.requests[0].json_body()["assertion"]
+        jwt.decode(
+            sent_assertion, _issuer_signing_key().public_key(), algorithms=["ES256"], options={"verify_aud": False}
+        )
+
+
+class TestKeycloakIdentitySourceDispatch:
+    """A config.yaml-shaped litellm_params block for the keycloak identity source. The minted
+    closure's own network behavior is covered by test_client_credentials.py's DI-poster tests;
+    this only proves wif.py threads the fields into the right config and hash."""
+
+    LITELLM_PARAMS: Final = {
+        "anthropic_federation_rule_id": "fdrl_1",
+        "anthropic_organization_id": "org-1",
+        "anthropic_identity_source": "keycloak",
+        "anthropic_keycloak_token_url": KEYCLOAK_TOKEN_URL,
+        "anthropic_keycloak_client_id": "litellm",
+        "anthropic_keycloak_client_secret_ref": "oidc/env/KEYCLOAK_CLIENT_SECRET",
+    }
+
+    def test_assertion_ref_matches_the_identity_source_hash(self):
+        params = resolve_anthropic_wif_params(self.LITELLM_PARAMS)
+
+        assert params is not None
+        expected_config = KeycloakSource(
+            token_url=KEYCLOAK_TOKEN_URL,
+            client_id="litellm",
+            client_secret_ref="oidc/env/KEYCLOAK_CLIENT_SECRET",
+        )
+        assert params.assertion_ref == identity_source_ref(expected_config)
+        assert params.assertion_ref.startswith("oidc/keycloak/")
+
+    def test_assertion_source_is_a_fresh_closure(self):
+        params = resolve_anthropic_wif_params(self.LITELLM_PARAMS)
+
+        assert params is not None
+        assert params.assertion_source is not None
+        assert callable(params.assertion_source)
+
+    def test_auth_method_change_rolls_the_ref(self):
+        default_method = resolve_anthropic_wif_params(self.LITELLM_PARAMS)
+        post_method = resolve_anthropic_wif_params(
+            {**self.LITELLM_PARAMS, "anthropic_keycloak_auth_method": "client_secret_post"}
+        )
+
+        assert default_method is not None and post_method is not None
+        assert default_method.assertion_ref != post_method.assertion_ref
+
+    def test_client_secret_ref_pointer_name_change_rolls_the_ref_without_resolving_it(self):
+        """The hash covers the pointer NAME, never a resolved secret (decision 7) -- true even
+        though nothing in this test ever calls get_secret_str."""
+        first = resolve_anthropic_wif_params(self.LITELLM_PARAMS)
+        second = resolve_anthropic_wif_params(
+            {**self.LITELLM_PARAMS, "anthropic_keycloak_client_secret_ref": "oidc/env/OTHER_SECRET_NAME"}
+        )
+
+        assert first is not None and second is not None
+        assert first.assertion_ref != second.assertion_ref
+
+
+class TestIdentitySourceValidationFailsClosed:
+    """Unknown discriminator, a missing required variant field, and a field belonging to the
+    other variant are all hard config errors at resolution time -- never a silent fallback to
+    token_file (decision 5)."""
+
+    def test_unknown_discriminator_raises(self):
+        with pytest.raises(litellm.AuthenticationError, match="anthropic_identity_source"):
+            resolve_anthropic_wif_params(
+                {
+                    "anthropic_federation_rule_id": "fdrl_1",
+                    "anthropic_organization_id": "org-1",
+                    "anthropic_identity_source": "bogus",
+                }
+            )
+
+    def test_internal_issuer_missing_required_fields_raises(self):
+        with pytest.raises(litellm.AuthenticationError):
+            resolve_anthropic_wif_params(
+                {
+                    "anthropic_federation_rule_id": "fdrl_1",
+                    "anthropic_organization_id": "org-1",
+                    "anthropic_identity_source": "internal_issuer",
+                    "anthropic_issuer_url": "https://issuer.internal.example",
+                }
+            )
+
+    def test_keycloak_missing_required_fields_raises(self):
+        with pytest.raises(litellm.AuthenticationError):
+            resolve_anthropic_wif_params(
+                {
+                    "anthropic_federation_rule_id": "fdrl_1",
+                    "anthropic_organization_id": "org-1",
+                    "anthropic_identity_source": "keycloak",
+                    "anthropic_keycloak_client_id": "litellm",
+                }
+            )
+
+    def test_mixed_variant_fields_raise(self):
+        with pytest.raises(litellm.AuthenticationError, match="belongs to a different identity source"):
+            resolve_anthropic_wif_params(
+                {
+                    "anthropic_federation_rule_id": "fdrl_1",
+                    "anthropic_organization_id": "org-1",
+                    "anthropic_identity_source": "internal_issuer",
+                    "anthropic_issuer_url": "https://issuer.internal.example",
+                    "anthropic_issuer_subject": "workload-a",
+                    "anthropic_issuer_signing_key_ref": ISSUER_SIGNING_KEY_REF,
+                    "anthropic_keycloak_client_id": "leaked-from-other-variant",
+                }
+            )
+
+    def test_secret_pasted_into_wrong_field_never_appears_in_the_error(self):
+        secret_value = "super-secret-client-value-xyz"
+        with pytest.raises(litellm.AuthenticationError) as exc_info:
+            resolve_anthropic_wif_params(
+                {
+                    "anthropic_federation_rule_id": "fdrl_1",
+                    "anthropic_organization_id": "org-1",
+                    "anthropic_identity_source": "internal_issuer",
+                    "anthropic_issuer_url": "https://issuer.internal.example",
+                    "anthropic_issuer_subject": "workload-a",
+                    "anthropic_issuer_signing_key_ref": ISSUER_SIGNING_KEY_REF,
+                    "anthropic_issuer_ttl_seconds": secret_value,
+                }
+            )
+
+        assert secret_value not in exc_info.value.message
+
+
+class TestConfigYamlShapedIdentitySources:
+    """One litellm_params dict per identity source, shaped exactly like the
+    model_list[].litellm_params block a proxy config.yaml carries -- proving an operator can
+    configure each of Phase 1's supported sources."""
+
+    def test_legacy_token_file_source(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setenv("LITELLM_OIDC_ALLOWED_CREDENTIAL_DIRS", str(tmp_path))
+        token_file = write_token_file(tmp_path, "jwt-assertion-value")
+        litellm_params = {
+            "model": "anthropic/claude-sonnet-4-5",
+            "anthropic_federation_rule_id": "fdrl_prod",
+            "anthropic_organization_id": "org_prod",
+            "anthropic_identity_token_file": str(token_file),
+        }
+
+        params = resolve_anthropic_wif_params(litellm_params)
+
+        assert params is not None
+        assert params.assertion_ref == f"oidc/file/{token_file}"
+        assert params.assertion_source is None
+
+    def test_internal_issuer_source(self):
+        litellm_params = {
+            "model": "anthropic/claude-sonnet-4-5",
+            "anthropic_federation_rule_id": "fdrl_prod",
+            "anthropic_organization_id": "org_prod",
+            "anthropic_identity_source": "internal_issuer",
+            "anthropic_issuer_url": "https://litellm.internal.example",
+            "anthropic_issuer_subject": "litellm-proxy",
+            "anthropic_issuer_ttl_seconds": 300,
+            "anthropic_issuer_signing_key_ref": "os.environ/ISSUER_SIGNING_KEY_PEM",
+        }
+
+        params = resolve_anthropic_wif_params(litellm_params)
+
+        assert params is not None
+        assert params.assertion_ref.startswith("oidc/internal_issuer/")
+        assert params.assertion_source is not None
+
+    def test_keycloak_source(self):
+        litellm_params = {
+            "model": "anthropic/claude-sonnet-4-5",
+            "anthropic_federation_rule_id": "fdrl_prod",
+            "anthropic_organization_id": "org_prod",
+            "anthropic_identity_source": "keycloak",
+            "anthropic_keycloak_token_url": KEYCLOAK_TOKEN_URL,
+            "anthropic_keycloak_client_id": "litellm",
+            "anthropic_keycloak_auth_method": "client_secret_post",
+            "anthropic_keycloak_client_secret_ref": "os.environ/KEYCLOAK_CLIENT_SECRET",
+            "anthropic_keycloak_scope": "anthropic-wif",
+        }
+
+        params = resolve_anthropic_wif_params(litellm_params)
+
+        assert params is not None
+        assert params.assertion_ref.startswith("oidc/keycloak/")
+        assert params.assertion_source is not None

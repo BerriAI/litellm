@@ -2993,6 +2993,20 @@ class TestWifServerOwnedParamsAreUnconditional:
             "anthropic_federation_rule_id",
             "anthropic_organization_id",
             "anthropic_service_account_id",
+            # Phase 1 identity-source selection and its two variants' fields: each one
+            # selects a server-side secret or a destination (a signing key, a client
+            # secret, a token endpoint), so every one joins the same unconditional ban.
+            "anthropic_identity_source",
+            "anthropic_issuer_url",
+            "anthropic_issuer_subject",
+            "anthropic_issuer_audience",
+            "anthropic_issuer_ttl_seconds",
+            "anthropic_issuer_signing_key_ref",
+            "anthropic_keycloak_token_url",
+            "anthropic_keycloak_client_id",
+            "anthropic_keycloak_auth_method",
+            "anthropic_keycloak_client_secret_ref",
+            "anthropic_keycloak_scope",
         ],
     )
     def test_rejected_even_with_proxy_wide_opt_in(self, param: str):
@@ -3072,3 +3086,62 @@ class TestWifDisabledOnClientRedirectedBase:
 
         assert resolve_anthropic_wif_params({}) is not None
         assert resolve_anthropic_wif_params({DISABLE_WORKLOAD_IDENTITY_PARAM: True}) is None
+
+    def test_base_override_clears_internal_issuer_fields(self):
+        """Same failure mode the legacy-path test above guards against, for the internal_issuer
+        identity source: a signing_key_ref resolved for a client-chosen api_base would mint an
+        assertion, and then a bearer token, for that host."""
+        from litellm.llms.anthropic.wif import resolve_anthropic_wif_params
+        from litellm.router_utils.clientside_credential_handler import (
+            DISABLE_WORKLOAD_IDENTITY_PARAM,
+            get_dynamic_litellm_params,
+        )
+
+        admin_deployment = {
+            "model": "anthropic/claude-sonnet-5",
+            "anthropic_federation_rule_id": "fdrl_admin",
+            "anthropic_organization_id": "org-admin",
+            "anthropic_identity_source": "internal_issuer",
+            "anthropic_issuer_url": "https://issuer.internal.example",
+            "anthropic_issuer_subject": "workload-a",
+            "anthropic_issuer_signing_key_ref": "oidc/env/ISSUER_SIGNING_KEY_PEM",
+        }
+
+        redirected = get_dynamic_litellm_params(
+            litellm_params=dict(admin_deployment),
+            request_kwargs={"api_base": "https://not-anthropic.example"},
+        )
+
+        assert redirected[DISABLE_WORKLOAD_IDENTITY_PARAM] is True
+        assert "anthropic_identity_source" not in redirected
+        assert "anthropic_issuer_signing_key_ref" not in redirected
+        assert resolve_anthropic_wif_params(redirected) is None
+
+    def test_base_override_clears_keycloak_fields(self):
+        """Same as the internal_issuer case above, for the keycloak identity source: a
+        client_secret_ref resolved for a client-chosen api_base must not follow it there."""
+        from litellm.llms.anthropic.wif import resolve_anthropic_wif_params
+        from litellm.router_utils.clientside_credential_handler import (
+            DISABLE_WORKLOAD_IDENTITY_PARAM,
+            get_dynamic_litellm_params,
+        )
+
+        admin_deployment = {
+            "model": "anthropic/claude-sonnet-5",
+            "anthropic_federation_rule_id": "fdrl_admin",
+            "anthropic_organization_id": "org-admin",
+            "anthropic_identity_source": "keycloak",
+            "anthropic_keycloak_token_url": "https://keycloak.internal.example/realms/r/protocol/openid-connect/token",
+            "anthropic_keycloak_client_id": "litellm",
+            "anthropic_keycloak_client_secret_ref": "oidc/env/KEYCLOAK_CLIENT_SECRET",
+        }
+
+        redirected = get_dynamic_litellm_params(
+            litellm_params=dict(admin_deployment),
+            request_kwargs={"api_base": "https://not-anthropic.example"},
+        )
+
+        assert redirected[DISABLE_WORKLOAD_IDENTITY_PARAM] is True
+        assert "anthropic_identity_source" not in redirected
+        assert "anthropic_keycloak_client_secret_ref" not in redirected
+        assert resolve_anthropic_wif_params(redirected) is None
