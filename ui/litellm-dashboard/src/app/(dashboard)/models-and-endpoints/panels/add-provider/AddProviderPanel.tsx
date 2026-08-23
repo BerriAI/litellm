@@ -257,7 +257,8 @@ export default function AddProviderPanel() {
     }
     setCreationResults(results);
 
-    const additions = aliasAdditionsFromRows(rows);
+    const failedRowIds = new Set(results.filter((r) => r.status === "failed").map((r) => r.row.id));
+    const additions = aliasAdditionsFromRows(rows.filter((row) => !failedRowIds.has(row.id)));
     if (additions.length > 0) {
       try {
         const config = await getCallbacksCall(accessToken, "", "");

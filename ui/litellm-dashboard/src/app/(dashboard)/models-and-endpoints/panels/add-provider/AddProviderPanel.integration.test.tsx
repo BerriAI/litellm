@@ -200,4 +200,42 @@ describe("AddProviderPanel", () => {
     expect(await screen.findByText(/claude-3-opus: skipped/)).toBeInTheDocument();
     expect(createProviderModelCall).not.toHaveBeenCalled();
   });
+
+  it("does not persist an alias for a row whose model creation failed", async () => {
+    discoverProviderModelsCall.mockResolvedValue({ models: ["claude-3-opus", "claude-3-haiku"] });
+    createProviderModelCall.mockImplementation(async (_token: string, payload: { model_name: string }) => {
+      if (payload.model_name === "claude-3-haiku") {
+        throw new Error("upstream rejected");
+      }
+      return { model_id: "new-id" };
+    });
+    const { user } = await setup();
+
+    await chooseProvider(user, "Anthropic");
+    await user.type(screen.getByLabelText("Credential name"), "anthropic-prod");
+    await user.click(screen.getByRole("button", { name: /Next/ }));
+    await user.type(await screen.findByLabelText("API Key"), "sk-ant-test");
+    await user.click(screen.getByRole("button", { name: "Save credential" }));
+
+    expect(await screen.findByText("claude-3-opus")).toBeInTheDocument();
+
+    const opusAltNames = rowFor("claude-3-opus").getByRole("combobox");
+    await user.type(opusAltNames, "gpt-4o");
+    await user.click(await screen.findByText('Create "gpt-4o"'));
+
+    const haikuAltNames = rowFor("claude-3-haiku").getByRole("combobox");
+    await user.type(haikuAltNames, "gpt-4o-mini");
+    await user.click(await screen.findByText('Create "gpt-4o-mini"'));
+
+    await user.click(screen.getByRole("button", { name: "Create 2 models" }));
+
+    expect(await screen.findByText(/claude-3-opus: created/)).toBeInTheDocument();
+    expect(await screen.findByText(/claude-3-haiku: failed/)).toBeInTheDocument();
+
+    await waitFor(() =>
+      expect(setCallbacksCall).toHaveBeenCalledWith("test-access-token", {
+        router_settings: { model_group_alias: { "gpt-4o": "claude-3-opus" } },
+      }),
+    );
+  });
 });

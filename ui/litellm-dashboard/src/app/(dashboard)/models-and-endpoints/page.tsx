@@ -105,8 +105,8 @@ export default function ModelsAndEndpointsPage() {
     () => [
       "",
       ...(canCreate ? (["add"] as const) : []),
-      ...(isAdmin ? (["add-provider"] as const) : []),
       ...(isAdmin || canCreate ? (["auto-routers"] as const) : []),
+      ...(isAdmin ? (["add-provider"] as const) : []),
       ...(isAdmin
         ? (["llm-credentials", "pass-through", "health", "retry-settings", "model-group-alias", "price-data"] as const)
         : []),
