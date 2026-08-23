@@ -425,11 +425,10 @@ def _drop_unsupported_anthropic_messages_params(
     additional_drop_params: Sequence[str] | None = None,
 ) -> Mapping[str, Any]:
     from litellm.llms.anthropic.chat.transformation import AnthropicConfig
-    from litellm.utils import _should_drop_param
 
     additional_drop_params_list: Final = additional_drop_params if isinstance(additional_drop_params, list) else None
-    supports_effort: Final = AnthropicConfig._model_supports_effort_param(model, custom_llm_provider or "anthropic")
-    supports_reasoning: Final = AnthropicConfig._supports_model_capability(
+    supports_effort: Final = AnthropicConfig._model_supports_effort_param(model, custom_llm_provider or "anthropic")  # pyright: ignore[reportPrivateUsage]  # shared Anthropic capability gate
+    supports_reasoning: Final = AnthropicConfig._supports_model_capability(  # pyright: ignore[reportPrivateUsage]  # shared Anthropic capability gate
         model, "supports_reasoning", custom_llm_provider or "anthropic"
     )
     drop_context_management: Final = custom_llm_provider in ("vertex_ai", "bedrock") and "haiku" in model.lower()
@@ -437,7 +436,7 @@ def _drop_unsupported_anthropic_messages_params(
         {
             k: v
             for k, v in anthropic_messages_optional_request_params.items()
-            if not _should_drop_param(k, additional_drop_params_list)
+            if not (additional_drop_params_list is not None and k in additional_drop_params_list)
             and (k != "output_config" or supports_effort)
             and (k != "thinking" or supports_reasoning)
             and (k != "context_management" or not drop_context_management)
