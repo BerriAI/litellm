@@ -1,3 +1,4 @@
+import asyncio
 import json
 from typing import TYPE_CHECKING, Any, Final, cast
 
@@ -104,15 +105,19 @@ class ResponsesSessionHandler:
         if proxy_server_request_dict:
             _response_input_param: Final = proxy_server_request_dict.get("input", None)
             _messages = proxy_server_request_dict.get("messages", None)
-            if isinstance(_response_input_param, str):
+            if isinstance(_response_input_param, (str, list)):
                 response_input_param = _response_input_param
             elif isinstance(_response_input_param, dict):
-                response_input_param = cast(ResponseInputParam, _response_input_param)
+                response_input_param = cast(
+                    ResponseInputParam,
+                    [_response_input_param],  # mutable-ok: a lone input item still has to arrive as a list
+                )
 
         if response_input_param:
             chat_completion_messages = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
                 input=response_input_param,
                 responses_api_request=proxy_server_request_dict or {},
+                replay_reasoning=True,
             )
             chat_completion_message_history.extend(chat_completion_messages)
 
@@ -125,6 +130,7 @@ class ResponsesSessionHandler:
             chat_completion_messages = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
                 input=_messages,
                 responses_api_request=proxy_server_request_dict or {},
+                replay_reasoning=True,
             )
             chat_completion_message_history.extend(chat_completion_messages)
 
@@ -254,13 +260,22 @@ class ResponsesSessionHandler:
         SQL query
 
         SELECT session_id FROM spend_logs WHERE response_id = previous_response_id, SELECT * FROM spend_logs WHERE session_id = session_id
+
+        A just-finished turn gets a short second chance: the worker that served it may
+        still be writing its spend log when the follow-up arrives, and an empty result
+        drops the whole conversation instead of erroring. Deployments that write no spend
+        logs at all have nothing to wait for, so they keep the single original query.
         """
-        from litellm.proxy.proxy_server import prisma_client
+        from litellm.constants import (
+            RESPONSES_SESSION_LOOKUP_MAX_ATTEMPTS,
+            RESPONSES_SESSION_LOOKUP_RETRY_INTERVAL,
+        )
+        from litellm.proxy.proxy_server import disable_spend_logs, prisma_client
 
         verbose_proxy_logger.debug("decoding response id=%s", previous_response_id)
 
         decoded_response_id: Final = ResponsesAPIRequestUtils._decode_responses_api_response_id(previous_response_id)
-        previous_response_id = decoded_response_id.get("response_id", previous_response_id)
+        response_id: Final = decoded_response_id.get("response_id", previous_response_id)
         if prisma_client is None:
             return []
 
@@ -276,12 +291,17 @@ class ResponsesSessionHandler:
             ORDER BY "endTime" ASC;
         """
 
-        spend_logs: Final = await prisma_client.db.query_raw(query, previous_response_id)
+        max_attempts: Final = 1 if disable_spend_logs else RESPONSES_SESSION_LOOKUP_MAX_ATTEMPTS
+        for attempt in range(max_attempts):
+            if attempt:
+                await asyncio.sleep(RESPONSES_SESSION_LOOKUP_RETRY_INTERVAL)
+            if spend_logs := await prisma_client.db.query_raw(query, response_id):
+                verbose_proxy_logger.debug(
+                    "Found the following spend logs for previous response id %s: %s",
+                    response_id,
+                    json.dumps(spend_logs, indent=4, default=str),
+                )
+                return spend_logs
 
-        verbose_proxy_logger.debug(
-            "Found the following spend logs for previous response id %s: %s",
-            previous_response_id,
-            json.dumps(spend_logs, indent=4, default=str),
-        )
-
-        return spend_logs
+        verbose_proxy_logger.debug("Found no spend logs for previous response id %s", response_id)
+        return []  # mutable-ok: an empty result the caller only reads

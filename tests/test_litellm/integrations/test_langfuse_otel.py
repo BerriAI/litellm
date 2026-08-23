@@ -554,7 +554,7 @@ class TestLangfuseOtelKeyDynamicConfig:
         assert tracer is not logger.tracer
         assert len(logger._tracer_provider_cache) == 1
 
-        provider = next(iter(logger._tracer_provider_cache.values()))
+        provider = next(iter(logger._tracer_provider_cache.values())).provider
         span_processors = provider._active_span_processor._span_processors
         assert len(span_processors) == 1
         assert isinstance(span_processors[0], BatchSpanProcessor)
@@ -619,7 +619,7 @@ class TestLangfuseOtelKeyDynamicConfig:
         assert secret not in logged
         assert f"Basic {secret}" not in logged
 
-        provider = next(iter(logger._tracer_provider_cache.values()))
+        provider = next(iter(logger._tracer_provider_cache.values())).provider
         exporter = provider._active_span_processor._span_processors[0].span_exporter
         assert isinstance(exporter, OTLPSpanExporter)
         assert exporter._headers == {

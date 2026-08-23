@@ -1,13 +1,9 @@
 import json
-import os
-import sys
+import re
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 from litellm.integrations.bitbucket.bitbucket_client import BitBucketClient
 from litellm.integrations.bitbucket.bitbucket_prompt_manager import (
@@ -158,7 +154,7 @@ def test_bitbucket_client_get_file_content_access_denied(mock_get):
 
     client = BitBucketClient(config)
 
-    with pytest.raises(Exception, match="Access denied to file 'test.prompt'"):
+    with pytest.raises(Exception, match=re.escape("Access denied to file 'test.prompt'")):
         client.get_file_content("test.prompt")
 
 

@@ -21,18 +21,11 @@ from pydantic import BaseModel, ConfigDict
 from websockets.sync.client import connect
 from websockets.sync.connection import Connection
 
-from e2e_config import PROXY_BASE_URL, unique_marker
+from e2e_config import unique_marker, ws_base_url
 from proxy_client import ProxyClient
 from models import LiteLLMParamsBody
 
 _M = TypeVar("_M", bound=BaseModel)
-
-
-def ws_base_url() -> str:
-    for scheme, ws_scheme in (("https://", "wss://"), ("http://", "ws://")):
-        if PROXY_BASE_URL.startswith(scheme):
-            return ws_scheme + PROXY_BASE_URL[len(scheme) :]
-    return PROXY_BASE_URL
 
 
 def realtime_ws_url(model: str) -> str:

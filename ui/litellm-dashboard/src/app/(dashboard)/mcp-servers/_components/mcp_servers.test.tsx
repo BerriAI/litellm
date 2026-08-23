@@ -19,14 +19,6 @@ vi.mock("@/components/networking", () => ({
   listMCPUserEnvVarStatus: vi.fn().mockResolvedValue([]),
 }));
 
-// Mock NotificationsManager
-vi.mock("@/components/molecules/notifications_manager", () => ({
-  default: {
-    success: vi.fn(),
-    fromBackend: vi.fn(),
-  },
-}));
-
 const createQueryClient = () =>
   new QueryClient({
     defaultOptions: {

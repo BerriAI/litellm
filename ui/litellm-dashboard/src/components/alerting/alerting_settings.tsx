@@ -5,7 +5,7 @@ import React, { useState, useEffect } from "react";
 
 import { alertingSettingsCall, updateConfigFieldSetting } from "../networking";
 import DynamicForm from "./dynamic_form";
-import NotificationsManager from "../molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 interface alertingSettingsItem {
   field_name: string;
   field_type: string;
@@ -73,7 +73,7 @@ const AlertingSettings: React.FC<AlertingSettingsProps> = ({ accessToken, premiu
         }
       }
       // update value in state
-      NotificationsManager.success("Wait 10s for proxy to update.");
+      toast.success("Wait 10s for proxy to update.");
     } catch (error) {
       // do something
     }

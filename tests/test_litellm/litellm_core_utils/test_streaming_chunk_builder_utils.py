@@ -1,12 +1,7 @@
 import json
-import os
-import sys
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 from litellm import ChatCompletionUsageBlock, stream_chunk_builder
 from litellm.types.utils import GenericStreamingChunk
@@ -1262,3 +1257,83 @@ def test_get_combined_tool_content_joins_many_custom_tool_input_fragments_in_ord
     assert isinstance(combined[1], ChatCompletionMessageCustomToolCall)
     assert combined[1].custom.name == "run_script"
     assert combined[1].custom.input == "".join(object_fragments)
+
+
+def _reasoning_stream_chunk() -> ModelResponseStream:
+    return ModelResponseStream(
+        id="chatcmpl-reasoning",
+        model="claude-opus-4-8",
+        choices=[StreamingChoices(finish_reason=None, index=0, delta=Delta(content="10", role="assistant"))],
+    )
+
+
+def test_count_reasoning_tokens_returns_none_for_signature_only_thinking():
+    from litellm.types.utils import Choices, Message, ModelResponse
+
+    processor = ChunkProcessor(chunks=[_reasoning_stream_chunk()])
+    response = ModelResponse(
+        choices=[
+            Choices(
+                finish_reason="stop",
+                index=0,
+                message=Message(content="10", role="assistant", reasoning_content=""),
+            )
+        ]
+    )
+
+    assert processor.count_reasoning_tokens(response) is None
+
+
+def test_count_reasoning_tokens_counts_visible_reasoning():
+    from litellm.types.utils import Choices, Message, ModelResponse
+
+    processor = ChunkProcessor(chunks=[_reasoning_stream_chunk()])
+    response = ModelResponse(
+        choices=[
+            Choices(
+                finish_reason="stop",
+                index=0,
+                message=Message(
+                    content="10",
+                    role="assistant",
+                    reasoning_content="let me count the primes under thirty",
+                ),
+            )
+        ]
+    )
+
+    assert processor.count_reasoning_tokens(response) > 0
+
+
+@pytest.mark.parametrize(
+    "estimated_reasoning_tokens, expected_reasoning_tokens, expected_text_tokens",
+    [(40, 40, 60), (250, 100, 0)],
+)
+def test_calculate_usage_fills_unknown_split_from_reasoning_estimate(
+    estimated_reasoning_tokens, expected_reasoning_tokens, expected_text_tokens
+):
+    from litellm.types.utils import CompletionTokensDetailsWrapper
+
+    chunk = ModelResponseStream(
+        id="chatcmpl-unknown-split",
+        model="claude-opus-4-8",
+        choices=[StreamingChoices(finish_reason="stop", index=0, delta=Delta(content=None, role=None))],
+        usage=Usage(
+            prompt_tokens=50,
+            completion_tokens=100,
+            total_tokens=150,
+            completion_tokens_details=CompletionTokensDetailsWrapper(reasoning_tokens=None, text_tokens=None),
+        ),
+    )
+    processor = ChunkProcessor(chunks=[chunk])
+
+    usage = processor.calculate_usage(
+        chunks=[chunk],
+        model="claude-opus-4-8",
+        completion_output="10",
+        reasoning_tokens=estimated_reasoning_tokens,
+    )
+
+    assert usage.completion_tokens == 100
+    assert usage.completion_tokens_details.reasoning_tokens == expected_reasoning_tokens
+    assert usage.completion_tokens_details.text_tokens == expected_text_tokens

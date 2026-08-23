@@ -3,16 +3,13 @@ Unit tests for Tool Permission Guardrail (OpenAI tool_calls semantics)
 """
 
 import json
-import os
 import re
-import sys
 from unittest.mock import patch
 
 import pytest
 
 from litellm.caching.dual_cache import DualCache
 
-sys.path.insert(0, os.path.abspath("../../../../../.."))
 
 from fastapi import HTTPException
 
@@ -124,7 +121,7 @@ class TestToolPermissionGuardrail:
         assert rule_id is None
 
     def test_rule_requires_name_or_type(self):
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match='validation error for ToolPermissionRule'):
             ToolPermissionGuardrail(
                 guardrail_name="invalid-rule",
                 rules=[{"id": "no_target", "decision": "allow"}],
@@ -1042,7 +1039,7 @@ class TestToolPermissionGuardrailInMemoryUpdate:
         assert guardrail._check_tool_permission("Secret")[0] is False
         assert guardrail._check_tool_permission("Other")[0] is True
 
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="Invalid regex for tool_name in rule 'bad': unterminated"):
             guardrail.update_in_memory_litellm_params(
                 LitellmParams(
                     guardrail="tool_permission",

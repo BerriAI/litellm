@@ -42,6 +42,14 @@ describe("autorouter_presets", () => {
     }
   });
 
+  it("keeps every preset on the shipped scorer knobs, so a preset cannot pin one to today's numbers", () => {
+    for (const { complexity_router_config: config } of getAllPresets()) {
+      expect(config.tier_boundaries).toBeUndefined();
+      expect(config.token_thresholds).toBeUndefined();
+      expect(config.dimension_weights).toBeUndefined();
+    }
+  });
+
   it("keeps the model-family presets on the heuristic classifier", () => {
     for (const key of ["anthropic_family", "openai_family"]) {
       expect(getPresetByKey(key)!.complexity_router_config.classifier_type).toBe("heuristic");

@@ -161,7 +161,7 @@ describe("KeyInfoHeader", () => {
 
     it("should not disable Regenerate button by default", () => {
       render(<KeyInfoHeader data={MOCK_DATA} />);
-      expect(screen.getByRole("button", { name: /regenerate key/i })).not.toBeDisabled();
+      expect(screen.getByRole("button", { name: /regenerate key/i })).toBeEnabled();
     });
   });
 

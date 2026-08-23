@@ -14,6 +14,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { EntityLink } from "@/components/shared/EntityLink";
 import { teamDetailHref } from "@/utils/entityLinks";
 import { KeyInfoHeader } from "./KeyInfoHeader";
+import KeySavingsTab from "./KeySavingsTab";
 import { useEffect, useState } from "react";
 import { isProxyAdminRole, isUserTeamAdminForSingleTeam, rolesWithWriteAccess } from "../../utils/roles";
 import { mapDisplayToInternalNames, mapInternalToDisplayNames } from "../callback_info_helpers";
@@ -24,7 +25,7 @@ import { hasRouterSettings } from "../common_components/routerSettingsPayload";
 import { extractLoggingSettings, formatMetadataForDisplay, stripTagsFromMetadata } from "../key_info_utils";
 import { KeyResponse } from "../key_team_helpers/key_list";
 import LoggingSettingsView from "../logging_settings_view";
-import NotificationManager from "../molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { getPolicyInfoWithGuardrails, keyDeleteCall, keyUpdateCall } from "../networking";
 import { useResetKeySpend } from "@/app/(dashboard)/hooks/keys/useResetKeySpend";
 import { useSetKeyBlockedState } from "@/app/(dashboard)/hooks/keys/useSetKeyBlockedState";
@@ -36,6 +37,7 @@ import { extractMcpEntitlement } from "../mcp_server_management/mcpEntitlement";
 import ObjectPermissionsView from "../object_permissions_view";
 import { RegenerateKeyModal } from "../organisms/RegenerateKeyModal";
 import { parseErrorMessage } from "../shared/errorUtils";
+import { InheritedBudgetHint, inheritedBudgetGates } from "../shared/InheritedBudgetHint";
 import { KeyEditView } from "./key_edit_view";
 
 interface KeyInfoViewProps {
@@ -224,9 +226,7 @@ export default function KeyInfoView({
             (toolsetId) => !(allMcpToolsets ?? []).some((toolset) => toolset.toolset_id === toolsetId),
           );
         if (unresolvableSelection && Object.keys(mcpEntitlement.mcp_tool_permissions).length > 0) {
-          NotificationManager.error(
-            "MCP server or toolset list is unavailable, so MCP permissions cannot be saved yet. Retry.",
-          );
+          toast.error("MCP server or toolset list is unavailable, so MCP permissions cannot be saved yet. Retry.");
           return;
         }
         formValues.object_permission = {
@@ -276,7 +276,7 @@ export default function KeyInfoView({
           };
         } catch (error) {
           console.error("Error parsing metadata JSON:", error);
-          NotificationManager.error("Invalid metadata JSON");
+          toast.error("Invalid metadata JSON");
           return;
         }
       } else {
@@ -322,11 +322,11 @@ export default function KeyInfoView({
       if (onKeyDataUpdate) {
         onKeyDataUpdate(newKeyValues);
       }
-      NotificationManager.success("Key updated successfully");
+      toast.success("Key updated successfully");
       setIsEditing(false);
       // Refresh key data here if needed
     } catch (error) {
-      NotificationManager.fromBackend(parseErrorMessage(error));
+      toast.fromError(parseErrorMessage(error));
       console.error("Error updating key:", error);
     }
   };
@@ -336,7 +336,7 @@ export default function KeyInfoView({
       setDeleteLoading(true);
       if (!accessToken) return;
       await keyDeleteCall(accessToken as string, currentKeyData.token || currentKeyData.token_id);
-      NotificationManager.success("Key deleted successfully");
+      toast.success("Key deleted successfully");
       await queryClient.invalidateQueries({ queryKey: keyKeys.lists() });
       if (onDelete) {
         onDelete();
@@ -344,7 +344,7 @@ export default function KeyInfoView({
       onClose();
     } catch (error) {
       console.error("Error deleting the key:", error);
-      NotificationManager.fromBackend(error);
+      toast.fromError(error);
     } finally {
       setDeleteLoading(false);
       setIsDeleteModalOpen(false);
@@ -421,11 +421,11 @@ export default function KeyInfoView({
         if (onKeyDataUpdate) {
           onKeyDataUpdate({ spend: 0 });
         }
-        NotificationManager.success("Key spend reset to $0");
+        toast.success("Key spend reset to $0");
         setIsResetSpendModalOpen(false);
       },
       onError: (error) => {
-        NotificationManager.fromBackend(parseErrorMessage(error));
+        toast.fromError(parseErrorMessage(error));
         console.error("Error resetting key spend:", error);
       },
     });
@@ -443,11 +443,11 @@ export default function KeyInfoView({
           if (onKeyDataUpdate) {
             onKeyDataUpdate({ blocked });
           }
-          NotificationManager.success(blocked ? "Key blocked" : "Key unblocked");
+          toast.success(blocked ? "Key blocked" : "Key unblocked");
           setIsBlockModalOpen(false);
         },
         onError: (error) => {
-          NotificationManager.fromBackend(parseErrorMessage(error));
+          toast.fromError(parseErrorMessage(error));
           console.error("Error updating key blocked state:", error);
         },
       },
@@ -460,12 +460,9 @@ export default function KeyInfoView({
   const orgId = currentKeyData.organization_id || currentKeyData.org_id || parentTeam?.organization_id || "";
   const parentOrg = orgId ? organizations?.find((org) => org.organization_id === orgId) : null;
 
-  const budgetDisplay =
-    currentKeyData.max_budget !== null
-      ? `$${formatNumberWithCommas(currentKeyData.max_budget, 2)}`
-      : parentTeam?.max_budget != null
-        ? `$${formatNumberWithCommas(parentTeam.max_budget, 2)} (Team: ${parentTeam.team_alias || parentTeam.team_id}${parentTeam.budget_duration ? ` / ${parentTeam.budget_duration}` : ""})`
-        : "Unlimited";
+  const hasOwnBudget = currentKeyData.max_budget !== null;
+  const budgetDisplay = hasOwnBudget ? `$${formatNumberWithCommas(currentKeyData.max_budget, 2)}` : "Unlimited";
+  const inheritedGates = hasOwnBudget ? [] : inheritedBudgetGates(parentTeam, parentOrg);
 
   return (
     <div className="w-full h-full overflow-y-auto p-4">
@@ -603,9 +600,16 @@ export default function KeyInfoView({
       </Dialog>
 
       <Tabs defaultValue="overview">
-        <TabsList className="mb-4">
-          <TabsTrigger value="overview">Overview</TabsTrigger>
-          <TabsTrigger value="settings">Settings</TabsTrigger>
+        <TabsList variant="line" className="mb-4 h-auto w-full justify-start rounded-none border-b p-0">
+          <TabsTrigger value="overview" className="flex-none rounded-none px-4 py-2">
+            Overview
+          </TabsTrigger>
+          <TabsTrigger value="savings" className="flex-none rounded-none px-4 py-2">
+            Savings
+          </TabsTrigger>
+          <TabsTrigger value="settings" className="flex-none rounded-none px-4 py-2">
+            Settings
+          </TabsTrigger>
         </TabsList>
 
         <div>
@@ -616,7 +620,10 @@ export default function KeyInfoView({
                 <p className="text-sm">Spend</p>
                 <div className="mt-2">
                   <h3 className="text-lg font-medium">${formatNumberWithCommas(currentKeyData.spend, 4)}</h3>
-                  <p className="text-sm">of {budgetDisplay}</p>
+                  <p className="text-sm">
+                    of {budgetDisplay}
+                    <InheritedBudgetHint gates={inheritedGates} />
+                  </p>
                   {currentKeyData.budget_reset_at && (
                     <p className="text-sm">Resets {formatTimestamp(currentKeyData.budget_reset_at)}</p>
                   )}
@@ -672,11 +679,11 @@ export default function KeyInfoView({
                     ))}
                   </div>
                 ) : (
-                  <p className="text-sm text-gray-500">No guardrails configured</p>
+                  <p className="text-sm text-muted-foreground">No guardrails configured</p>
                 )}
                 {typeof currentKeyData.metadata?.disable_global_guardrails === "boolean" &&
                   currentKeyData.metadata.disable_global_guardrails === true && (
-                    <div className="mt-3 pt-3 border-t border-gray-200">
+                    <div className="mt-3 pt-3 border-t border-border">
                       <Badge variant="destructive">Global Guardrails Disabled</Badge>
                     </div>
                   )}
@@ -692,11 +699,11 @@ export default function KeyInfoView({
                           <Badge variant="secondary" className="min-w-0 break-words">
                             {policy}
                           </Badge>
-                          {loadingPolicies && <p className="text-xs text-gray-400">Loading guardrails...</p>}
+                          {loadingPolicies && <p className="text-xs text-muted-foreground">Loading guardrails...</p>}
                         </div>
                         {!loadingPolicies && policyGuardrails[policy] && policyGuardrails[policy].length > 0 && (
-                          <div className="ml-4 pl-3 border-l-2 border-gray-200">
-                            <p className="text-xs text-gray-500 mb-1">Resolved Guardrails:</p>
+                          <div className="ml-4 pl-3 border-l-2 border-border">
+                            <p className="text-xs text-muted-foreground mb-1">Resolved Guardrails:</p>
                             <div className="flex flex-wrap gap-1">
                               {policyGuardrails[policy].map((guardrail: string, gIndex: number) => (
                                 <Badge key={gIndex} variant="secondary" className="min-w-0 break-words">
@@ -710,7 +717,7 @@ export default function KeyInfoView({
                     ))}
                   </div>
                 ) : (
-                  <p className="text-sm text-gray-500">No policies configured</p>
+                  <p className="text-sm text-muted-foreground">No policies configured</p>
                 )}
               </Card>
 
@@ -733,6 +740,17 @@ export default function KeyInfoView({
                 variant="card"
               />
             </div>
+          </TabsContent>
+
+          {/* Savings Panel. No keepMounted: this tab sweeps the daily rollup, and staying mounted
+              would fire that request on every key page open for people who never look at it. */}
+          <TabsContent value="savings">
+            <KeySavingsTab
+              accessToken={accessToken}
+              keyToken={currentKeyData.token}
+              userId={userID}
+              userRole={userRole}
+            />
           </TabsContent>
 
           {/* Settings Panel */}
@@ -847,7 +865,7 @@ export default function KeyInfoView({
                     keyRotationAt={currentKeyData.key_rotation_at}
                     nextRotationAt={currentKeyData.next_rotation_at}
                     variant="inline"
-                    className="pt-4 border-t border-gray-200"
+                    className="pt-4 border-t border-border"
                   />
 
                   <div>
@@ -878,9 +896,9 @@ export default function KeyInfoView({
                       <p className="text-sm font-medium">Budget Fallbacks</p>
                       <div className="mt-1 space-y-1">
                         {Object.entries(currentKeyData.budget_fallbacks).map(([model, fallbacks]) => (
-                          <div key={model} className="text-xs text-gray-600">
+                          <div key={model} className="text-xs text-muted-foreground">
                             <span className="font-medium">{model}</span>
-                            <span className="mx-1 text-gray-400">-&gt;</span>
+                            <span className="mx-1 text-muted-foreground">-&gt;</span>
                             {fallbacks.join(", ")}
                           </div>
                         ))}
@@ -902,7 +920,7 @@ export default function KeyInfoView({
                     <div className="flex flex-wrap gap-2 mt-1">
                       {Array.isArray(currentKeyData.metadata?.tags) && currentKeyData.metadata.tags.length > 0
                         ? currentKeyData.metadata.tags.map((tag, index) => (
-                            <span key={index} className="px-2 mr-2 py-1 bg-blue-100 rounded-sm text-xs">
+                            <span key={index} className="px-2 mr-2 py-1 bg-info/15 rounded-sm text-xs">
                               {tag}
                             </span>
                           ))
@@ -915,7 +933,7 @@ export default function KeyInfoView({
                     <p className="text-sm">
                       {Array.isArray(currentKeyData.metadata?.prompts) && currentKeyData.metadata.prompts.length > 0
                         ? currentKeyData.metadata.prompts.map((prompt, index) => (
-                            <span key={index} className="px-2 mr-2 py-1 bg-blue-100 rounded-sm text-xs">
+                            <span key={index} className="px-2 mr-2 py-1 bg-info/15 rounded-sm text-xs">
                               {prompt}
                             </span>
                           ))
@@ -928,7 +946,7 @@ export default function KeyInfoView({
                     <div className="flex flex-wrap gap-2 mt-1">
                       {Array.isArray(currentKeyData.allowed_routes) && currentKeyData.allowed_routes.length > 0 ? (
                         currentKeyData.allowed_routes.map((route, index) => (
-                          <span key={index} className="px-2 py-1 bg-blue-100 rounded-sm text-xs">
+                          <span key={index} className="px-2 py-1 bg-info/15 rounded-sm text-xs">
                             {route}
                           </span>
                         ))
@@ -944,7 +962,7 @@ export default function KeyInfoView({
                       {Array.isArray(currentKeyData.metadata?.allowed_passthrough_routes) &&
                       currentKeyData.metadata.allowed_passthrough_routes.length > 0
                         ? currentKeyData.metadata.allowed_passthrough_routes.map((route, index) => (
-                            <span key={index} className="px-2 mr-2 py-1 bg-blue-100 rounded-sm text-xs">
+                            <span key={index} className="px-2 mr-2 py-1 bg-info/15 rounded-sm text-xs">
                               {route}
                             </span>
                           ))
@@ -968,7 +986,7 @@ export default function KeyInfoView({
                     <div className="flex flex-wrap gap-2 mt-1">
                       {currentKeyData.models && currentKeyData.models.length > 0 ? (
                         currentKeyData.models.map((model, index) => (
-                          <span key={index} className="px-2 py-1 bg-blue-100 rounded-sm text-xs">
+                          <span key={index} className="px-2 py-1 bg-info/15 rounded-sm text-xs">
                             {model}
                           </span>
                         ))
@@ -1027,7 +1045,7 @@ export default function KeyInfoView({
 
                   <div>
                     <p className="text-sm font-medium">Metadata</p>
-                    <pre className="bg-gray-100 p-2 rounded-sm text-xs overflow-auto mt-1">
+                    <pre className="bg-muted p-2 rounded-sm text-xs overflow-auto mt-1">
                       {formatMetadataForDisplay(stripTagsFromMetadata(currentKeyData.metadata))}
                     </pre>
                   </div>
@@ -1035,7 +1053,7 @@ export default function KeyInfoView({
                   <ObjectPermissionsView
                     objectPermission={currentKeyData.object_permission}
                     variant="inline"
-                    className="pt-4 border-t border-gray-200"
+                    className="pt-4 border-t border-border"
                     accessToken={accessToken}
                   />
 
@@ -1047,7 +1065,7 @@ export default function KeyInfoView({
                         : []
                     }
                     variant="inline"
-                    className="pt-4 border-t border-gray-200"
+                    className="pt-4 border-t border-border"
                   />
                 </div>
               )}
