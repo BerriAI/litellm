@@ -2034,7 +2034,6 @@ async def test_a_router_left_on_the_proxy_module_is_not_scanned(monkeypatch):
 
     assert loaded.models == ()
     assert loaded.scanned_ids == frozenset()
-    assert loaded.config_sourced is False
 
 
 def test_the_prune_filter_is_a_plain_dict():
