@@ -1,6 +1,4 @@
 import json
-import os
-import sys
 import traceback
 
 from dotenv import load_dotenv
@@ -9,15 +7,10 @@ load_dotenv()
 import io
 from unittest.mock import AsyncMock, MagicMock, patch
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 import pytest
 import litellm
 
-import pytest
 from litellm.llms.triton.embedding.transformation import TritonEmbeddingConfig
-import litellm
 
 from tests.fake_openai_endpoint import FAKE_OPENAI_API_BASE
 

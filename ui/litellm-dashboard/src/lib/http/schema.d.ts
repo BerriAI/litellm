@@ -36086,6 +36086,10 @@ export interface components {
             user_id?: string | null;
             /** User Max Budget */
             user_max_budget?: number | null;
+            /** User Model Max Budget */
+            user_model_max_budget?: {
+                [key: string]: unknown;
+            } | null;
             user_role?: components["schemas"]["LitellmUserRoles"] | null;
             /** User Rpm Limit */
             user_rpm_limit?: number | null;
@@ -36188,6 +36192,14 @@ export interface components {
             max_budget?: number | null;
             /** Metadata */
             metadata?: {
+                [key: string]: unknown;
+            } | null;
+            /** Model Max Budget */
+            model_max_budget?: {
+                [key: string]: unknown;
+            } | null;
+            /** Model Max Budget Usage */
+            model_max_budget_usage?: {
                 [key: string]: unknown;
             } | null;
             /**
@@ -43132,6 +43144,8 @@ export interface operations {
                 provider?: string | null;
                 target_model_names?: string | null;
                 purpose?: string | null;
+                limit?: number | null;
+                after?: string | null;
             };
             header?: never;
             path?: never;
@@ -58003,6 +58017,8 @@ export interface operations {
                 provider?: string | null;
                 target_model_names?: string | null;
                 purpose?: string | null;
+                limit?: number | null;
+                after?: string | null;
             };
             header?: never;
             path?: never;
@@ -64256,6 +64272,8 @@ export interface operations {
             query?: {
                 target_model_names?: string | null;
                 purpose?: string | null;
+                limit?: number | null;
+                after?: string | null;
             };
             header?: never;
             path: {

@@ -8,8 +8,12 @@ in the test body.
 """
 
 import importlib.util
+import os
+import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _MODULE_PATH = _REPO_ROOT / "scripts" / "check_test_quality.py"
@@ -183,7 +187,7 @@ def test_mock_echo_is_flagged(tmp_path):
         "        run()\n"
         "    mock_completion.assert_called_once()\n"
     )
-    assert _codes(tmp_path, source) == ["TQ002"]
+    assert _codes(tmp_path, source) == ["TQ002", "TQ008"]
 
 
 def test_call_args_inspection_is_mock_echo(tmp_path):
@@ -196,7 +200,7 @@ def test_call_args_inspection_is_mock_echo(tmp_path):
         "        run()\n"
         "    assert mock_completion.call_args[1]['model'] == 'gpt-4o'\n"
     )
-    assert _codes(tmp_path, source) == ["TQ002"]
+    assert _codes(tmp_path, source) == ["TQ002", "TQ008"]
 
 
 def test_patch_decorator_counts_as_installing_a_patch(tmp_path):
@@ -209,7 +213,7 @@ def test_patch_decorator_counts_as_installing_a_patch(tmp_path):
         "    run()\n"
         "    mock_completion.assert_called_once()\n"
     )
-    assert _codes(tmp_path, source) == ["TQ002"]
+    assert _codes(tmp_path, source) == ["TQ002", "TQ008"]
 
 
 def test_patching_but_asserting_the_output_is_not_mock_echo(tmp_path):
@@ -223,7 +227,7 @@ def test_patching_but_asserting_the_output_is_not_mock_echo(tmp_path):
         "    mock_completion.assert_called_once()\n"
         "    assert result.choices[0].message.content == 'pong'\n"
     )
-    assert _codes(tmp_path, source) == []
+    assert _codes(tmp_path, source) == ["TQ008"]
 
 
 def test_asserting_without_patching_is_not_mock_echo(tmp_path):
@@ -240,7 +244,7 @@ def test_a_test_with_no_assertions_is_tq001_not_tq002(tmp_path):
         "    with patch('litellm.completion'):\n"
         "        run()\n"
     )
-    assert _codes(tmp_path, source) == ["TQ001"]
+    assert _codes(tmp_path, source) == ["TQ001", "TQ008"]
 
 
 def test_sys_path_insert_is_flagged(tmp_path):
@@ -548,3 +552,188 @@ def test_the_read_may_sit_a_statement_above_the_store(tmp_path):
 def test_a_loop_storing_under_a_key_that_is_not_the_loop_variable_is_not_an_inventory(tmp_path):
     source = _HELPER_DICT_CONFTEST.replace("state[attr] =", 'state["fixed"] =')
     assert [v.code for v in checker.check_file(_written(tmp_path, source))] == []
+
+
+def test_patching_an_sdk_function_by_string_is_flagged(tmp_path):
+    source = 'from unittest.mock import patch\n\n\n@patch("litellm.completion")\ndef test_x(m):\n    assert m\n'
+    assert "TQ008" in _codes(tmp_path, source)
+
+
+def test_patching_a_deep_sdk_path_is_flagged(tmp_path):
+    source = (
+        "from unittest.mock import patch\n\n\n"
+        "def test_x():\n"
+        '    with patch("litellm.llms.openai.chat.handler.OpenAIChatCompletion.completion"):\n'
+        "        assert True\n"
+    )
+    assert "TQ008" in _codes(tmp_path, source)
+
+
+def test_patch_object_rooted_at_the_sdk_is_flagged(tmp_path):
+    source = (
+        "import litellm\nfrom unittest.mock import patch\n\n\n"
+        "def test_x():\n"
+        '    with patch.object(litellm, "api_key", "x"):\n'
+        "        assert True\n"
+    )
+    assert "TQ008" in _codes(tmp_path, source)
+
+
+def test_patch_object_on_a_from_imported_sdk_module_is_flagged(tmp_path):
+    source = (
+        "from litellm.llms.openai.chat import handler\nfrom unittest.mock import patch\n\n\n"
+        "def test_x():\n"
+        '    with patch.object(handler.OpenAIChatCompletion, "completion"):\n'
+        "        assert True\n"
+    )
+    assert "TQ008" in _codes(tmp_path, source)
+
+
+def test_patch_object_on_an_aliased_sdk_module_is_flagged(tmp_path):
+    source = (
+        "import litellm.llms.openai.chat.handler as oai\nfrom unittest.mock import patch\n\n\n"
+        "def test_x():\n"
+        '    with patch.object(oai.OpenAIChatCompletion, "completion"):\n'
+        "        assert True\n"
+    )
+    assert "TQ008" in _codes(tmp_path, source)
+
+
+def test_patch_object_on_a_renamed_sdk_symbol_is_flagged(tmp_path):
+    source = (
+        "from litellm.utils import get_llm_provider as glp\nfrom unittest.mock import patch\n\n\n"
+        "def test_x():\n"
+        '    with patch.object(glp, "__wrapped__"):\n'
+        "        assert True\n"
+    )
+    assert "TQ008" in _codes(tmp_path, source)
+
+
+def test_the_reported_target_is_the_resolved_sdk_path(tmp_path):
+    source = (
+        "from litellm.llms.openai.chat import handler\nfrom unittest.mock import patch\n\n\n"
+        "def test_x():\n"
+        '    with patch.object(handler.OpenAIChatCompletion, "completion"):\n'
+        "        assert True\n"
+    )
+    reported = [v.message for v in checker.check_file(_written(tmp_path, source)) if v.code == "TQ008"]
+    assert reported
+    assert "litellm.llms.openai.chat.handler.OpenAIChatCompletion" in reported[0]
+
+
+def test_patch_object_on_a_from_imported_third_party_is_not_flagged(tmp_path):
+    source = (
+        "from openai import OpenAI\nfrom unittest.mock import patch\n\n\n"
+        "def test_x():\n"
+        '    with patch.object(OpenAI, "chat"):\n'
+        "        assert True\n"
+    )
+    assert "TQ008" not in _codes(tmp_path, source)
+
+
+def test_a_local_name_with_no_sdk_import_behind_it_is_not_flagged(tmp_path):
+    source = (
+        "from unittest.mock import patch\n\n\n"
+        "def test_x(handler):\n"
+        '    with patch.object(handler, "completion"):\n'
+        "        assert True\n"
+    )
+    assert "TQ008" not in _codes(tmp_path, source)
+
+
+def test_mocking_a_third_party_client_is_not_flagged(tmp_path):
+    source = (
+        "from unittest.mock import patch\n\n\n"
+        "def test_x():\n"
+        '    with patch("openai.OpenAI.chat"):\n'
+        "        assert True\n"
+    )
+    assert "TQ008" not in _codes(tmp_path, source)
+
+
+def test_mocking_the_http_transport_is_not_flagged(tmp_path):
+    source = (
+        "from unittest.mock import patch\n\n\n"
+        "def test_x():\n"
+        '    with patch("httpx.AsyncClient.send"):\n'
+        "        assert True\n"
+    )
+    assert "TQ008" not in _codes(tmp_path, source)
+
+
+def test_a_name_merely_starting_with_litellm_is_not_the_sdk(tmp_path):
+    source = (
+        "from unittest.mock import patch\n\n\n"
+        "def test_x():\n"
+        '    with patch("litellm_enterprise.thing.go"):\n'
+        "        assert True\n"
+    )
+    assert "TQ008" not in _codes(tmp_path, source)
+
+
+def test_an_sdk_patch_can_be_suppressed(tmp_path):
+    source = (
+        "from unittest.mock import patch\n\n\n"
+        "def test_x():\n"
+        '    with patch("litellm.completion"):  # test-quality-ok: pinning the router seam\n'
+        "        assert True\n"
+    )
+    assert "TQ008" not in _codes(tmp_path, source)
+
+
+_FANS_OUT = checker._worker_count(checker.PARALLEL_MIN_PATHS) > 1
+_SERIAL_ONLY = "one usable core, so scan_paths stays serial and there is no fan-out to compare"
+
+
+def _corpus(tmp_path: Path, count: int) -> tuple[Path, ...]:
+    for index in range(count):
+        (tmp_path / f"test_gen_{index}.py").write_text(
+            f"def test_flagged_{index}():\n    compute()\n\n\ndef test_clean_{index}():\n    assert compute() == {index}\n",
+            encoding="utf-8",
+        )
+    return tuple(sorted(tmp_path.rglob("*.py")))
+
+
+def _run_checker(target: Path) -> list[str]:
+    completed = subprocess.run(
+        [sys.executable, str(_MODULE_PATH), str(target)],
+        capture_output=True, text=True, timeout=300,
+    )
+    return completed.stdout.splitlines()
+
+
+def test_worker_count_stays_serial_below_the_threshold():
+    assert checker._worker_count(checker.PARALLEL_MIN_PATHS - 1) == 1
+
+
+def test_worker_count_fans_out_at_the_threshold():
+    assert checker._worker_count(checker.PARALLEL_MIN_PATHS) == max(
+        1, min(os.cpu_count() or 1, checker.MAX_WORKERS)
+    )
+
+
+def test_worker_count_never_exceeds_the_cap():
+    assert checker._worker_count(100_000) <= checker.MAX_WORKERS
+
+
+def test_scan_paths_below_the_threshold_returns_every_violation(tmp_path):
+    paths = _corpus(tmp_path, 3)
+    assert checker._worker_count(len(paths)) == 1
+    assert [v.code for v in checker.scan_paths(paths)] == ["TQ001"] * 3
+
+
+@pytest.mark.skipif(not _FANS_OUT, reason=_SERIAL_ONLY)
+def test_a_fanned_out_run_reports_exactly_what_a_serial_run_reports(tmp_path):
+    paths = _corpus(tmp_path, checker.PARALLEL_MIN_PATHS + 5)
+    serial = [v.render() for v in sorted(v for path in paths for v in checker.check_file(path))]
+    assert serial, "corpus must produce violations or the comparison proves nothing"
+    assert _run_checker(tmp_path) == serial
+
+
+@pytest.mark.skipif(not _FANS_OUT, reason=_SERIAL_ONLY)
+def test_a_fanned_out_run_reports_each_generated_file_exactly_once(tmp_path):
+    paths = _corpus(tmp_path, checker.PARALLEL_MIN_PATHS + 5)
+    reported = _run_checker(tmp_path)
+    assert len(reported) == len(paths)
+    assert len({line.split(":")[0] for line in reported}) == len(paths)
+    assert all(" TQ001 " in line for line in reported)

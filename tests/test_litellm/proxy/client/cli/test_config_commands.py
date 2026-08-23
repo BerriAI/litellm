@@ -1,14 +1,11 @@
 import json
-import os
 import stat
-import sys
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 from click.testing import CliRunner
 
-sys.path.insert(0, os.path.abspath("../../.."))
 
 
 from litellm.proxy.client.cli import cli
