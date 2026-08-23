@@ -23,7 +23,11 @@ from litellm.proxy.anthropic_endpoints.skills_endpoints import (
 )
 from litellm.proxy.openai_files_endpoints.common_utils import extract_model_param
 from litellm.router import Router
-from litellm.skills.main import _azure_skills_api_base, _native_skill_request
+from litellm.skills.main import (
+    _azure_skills_api_base,
+    _native_skill_request,
+    _validate_skill_operation,
+)
 from litellm.types.router import GenericLiteLLMParams
 
 SKILL = {
@@ -446,6 +450,15 @@ def test_native_skill_request_rejects_uninitialized_openai_client() -> None:
                 None,
                 False,
             )
+
+
+@pytest.mark.parametrize(
+    "operation",
+    ["update", "content", "create_version", "list_versions", "version", "delete_version", "version_content"],
+)
+def test_native_only_skill_operations_reject_non_native_providers(operation: str) -> None:
+    with pytest.raises(ValueError, match="only supported for OpenAI and Azure OpenAI"):
+        _validate_skill_operation(operation, "anthropic")
 
 
 def test_extract_model_param_ignores_non_string_body_model() -> None:

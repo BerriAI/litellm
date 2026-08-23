@@ -49,6 +49,7 @@ _NATIVE_SKILL_OPERATIONS: Final = MappingProxyType(
         "version_content": ("skills.versions.content.retrieve", ("skill_id", "version")),
     }
 )
+_NATIVE_ONLY_SKILL_OPERATIONS: Final = frozenset(_NATIVE_SKILL_OPERATIONS) - {"create", "list", "get", "delete"}
 
 # Initialize LiteLLM skills handler (lazy - only used when custom_llm_provider="litellm")
 _litellm_skills_handler = None
@@ -68,6 +69,11 @@ def _azure_skills_api_base(api_base: str | None) -> str | None:
         "",
     )
     return str(url.copy_with(path=path[: -len(suffix)] if suffix else path, query=None)).rstrip("/")
+
+
+def _validate_skill_operation(operation: str, custom_llm_provider: str) -> None:
+    if operation in _NATIVE_ONLY_SKILL_OPERATIONS and custom_llm_provider not in _NATIVE_SKILL_PROVIDERS:
+        raise ValueError(f"{operation} skills operation is only supported for OpenAI and Azure OpenAI")
 
 
 def _native_skill_request(
@@ -274,6 +280,7 @@ def create_skill(
         # Determine provider
         if custom_llm_provider is None:
             custom_llm_provider = "anthropic"
+        _validate_skill_operation(kwargs.get("_skill_operation", "create"), custom_llm_provider)
 
         # Build create request
         create_request: Final[CreateSkillRequest] = {}
@@ -474,6 +481,7 @@ def list_skills(
         # Determine provider
         if custom_llm_provider is None:
             custom_llm_provider = "anthropic"
+        _validate_skill_operation(kwargs.get("_skill_operation", "list"), custom_llm_provider)
 
         # Route to LiteLLM DB if custom_llm_provider="litellm_proxy"
         if custom_llm_provider == LlmProviders.LITELLM_PROXY.value:
@@ -658,6 +666,7 @@ def get_skill(
         # Determine provider
         if custom_llm_provider is None:
             custom_llm_provider = "anthropic"
+        _validate_skill_operation(kwargs.get("_skill_operation", "get"), custom_llm_provider)
 
         # Route to LiteLLM DB if custom_llm_provider="litellm_proxy"
         if custom_llm_provider == LlmProviders.LITELLM_PROXY.value:
@@ -833,6 +842,7 @@ def delete_skill(
         # Determine provider
         if custom_llm_provider is None:
             custom_llm_provider = "anthropic"
+        _validate_skill_operation(kwargs.get("_skill_operation", "delete"), custom_llm_provider)
 
         # Route to LiteLLM DB if custom_llm_provider="litellm_proxy"
         if custom_llm_provider == LlmProviders.LITELLM_PROXY.value:
