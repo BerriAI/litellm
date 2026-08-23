@@ -4,8 +4,6 @@ Test A2A model routing in proxy.
 Maps to: litellm/proxy/agent_endpoints/a2a_routing.py
 """
 
-
-
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
@@ -70,6 +68,118 @@ async def test_route_a2a_model_bypasses_router():
             call_kwargs = mock_acompletion.call_args.kwargs
             assert call_kwargs["model"] == "a2a/test-agent"
             assert call_kwargs["api_base"] == "http://agent.example.com"
+
+
+@pytest.mark.asyncio
+async def test_route_a2a_model_uses_registered_provider():
+    from litellm.types.agents import AgentResponse
+
+    agent = AgentResponse(
+        agent_id="test-agent-id",
+        agent_name="test-agent",
+        agent_card_params={"url": "http://agent.example.com"},
+        litellm_params={"custom_llm_provider": "pydantic_ai_agents"},
+    )
+    data = {
+        "model": "a2a/test-agent",
+        "messages": [{"role": "user", "content": "Hello"}],
+    }
+    bridge_response = {
+        "jsonrpc": "2.0",
+        "id": "request-id",
+        "result": {
+            "kind": "message",
+            "role": "agent",
+            "parts": [{"kind": "text", "text": "Hello back"}],
+            "messageId": "message-id",
+        },
+    }
+
+    with (
+        patch(  # test-quality-ok: registry lookup is the routing seam
+            "litellm.proxy.common_utils.registry_read_through.get_agent_with_read_through",
+            AsyncMock(return_value=agent),
+        ),
+        patch(  # test-quality-ok: access control is outside this routing test
+            "litellm.proxy.agent_endpoints.auth.agent_permission_handler.AgentRequestHandler.is_agent_allowed",
+            AsyncMock(return_value=True),
+        ),
+        patch(  # test-quality-ok: provider dispatch is the tested seam
+            "litellm.a2a_protocol.litellm_completion_bridge.handler.A2ACompletionBridgeHandler.handle_non_streaming",
+            AsyncMock(return_value=bridge_response),
+        ) as bridge,
+        patch(  # test-quality-ok: generic dispatch must stay unused
+            "litellm.acompletion", AsyncMock()
+        ) as generic_completion,
+    ):
+        call = await route_a2a_agent_request(data, "acompletion")
+        response = await call
+
+    bridge.assert_awaited_once()
+    generic_completion.assert_not_called()
+    assert response.choices[0].message.content == "Hello back"
+
+
+@pytest.mark.asyncio
+async def test_route_a2a_stream_uses_registered_provider():
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.types.agents import AgentResponse
+
+    agent = AgentResponse(
+        agent_id="test-agent-id",
+        agent_name="test-agent",
+        agent_card_params={"url": "http://agent.example.com"},
+        litellm_params={"custom_llm_provider": "pydantic_ai_agents"},
+    )
+    logging_obj = Mock(spec=Logging)
+    data = {
+        "model": "a2a/test-agent",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "stream": True,
+        "litellm_logging_obj": logging_obj,
+    }
+    provider_stream = object()
+    completion_stream = object()
+    wrapper = object()
+
+    with (
+        patch(  # test-quality-ok: registry lookup is the routing seam
+            "litellm.proxy.common_utils.registry_read_through.get_agent_with_read_through",
+            AsyncMock(return_value=agent),
+        ),
+        patch(  # test-quality-ok: access control is outside this routing test
+            "litellm.proxy.agent_endpoints.auth.agent_permission_handler.AgentRequestHandler.is_agent_allowed",
+            AsyncMock(return_value=True),
+        ),
+        patch(  # test-quality-ok: provider dispatch is the tested seam
+            "litellm.a2a_protocol.litellm_completion_bridge.handler.A2ACompletionBridgeHandler.handle_streaming",
+            Mock(return_value=provider_stream),
+        ) as bridge,
+        patch(  # test-quality-ok: iterator wiring is the tested seam
+            "litellm.llms.a2a.chat.streaming_iterator.A2AModelResponseIterator",
+            Mock(return_value=completion_stream),
+        ),
+        patch(  # test-quality-ok: wrapper wiring is the tested seam
+            "litellm.litellm_core_utils.streaming_handler.CustomStreamWrapper",
+            Mock(return_value=wrapper),
+        ) as stream_wrapper,
+        patch(  # test-quality-ok: generic dispatch must stay unused
+            "litellm.acompletion", AsyncMock()
+        ) as generic_completion,
+    ):
+        call = await route_a2a_agent_request(data, "acompletion")
+        response = await call
+
+    bridge.assert_called_once()
+    stream_wrapper.assert_called_once_with(
+        completion_stream=completion_stream,
+        model="a2a/test-agent",
+        custom_llm_provider="a2a",
+        logging_obj=logging_obj,
+        stream_options=None,
+    )
+    generic_completion.assert_not_called()
+    assert response is wrapper
 
 
 @pytest.mark.asyncio
