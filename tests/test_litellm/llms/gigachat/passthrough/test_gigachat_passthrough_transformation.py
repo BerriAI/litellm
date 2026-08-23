@@ -6,14 +6,10 @@ streaming detection, authentication handling, and logging response transformatio
 """
 
 import json
-import os
-import sys
 from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
-
-sys.path.insert(0, os.path.abspath("../../../../.."))
 
 from litellm.llms.gigachat.passthrough.transformation import GigaChatPassthroughConfig
 from litellm.types.utils import EmbeddingResponse, ModelResponse
@@ -132,7 +128,7 @@ class TestGigaChatPassthroughConfig:
         assert str(complete_url) == "https://custom.gigachat.ru/api/v1/chat/completions"
         assert base_target_url == api_base
 
-    @patch(
+    @patch(  # test-quality-ok: patching litellm internal for unit test isolation
         "litellm.llms.gigachat.passthrough.transformation.get_secret_str"
     )
     def test_get_complete_url_with_env_api_base(self, mock_get_secret):
@@ -155,7 +151,7 @@ class TestGigaChatPassthroughConfig:
         assert base_target_url == env_api_base
         mock_get_secret.assert_called_once_with("GIGACHAT_API_BASE")
 
-    @patch(
+    @patch(  # test-quality-ok: patching litellm internal for unit test isolation
         "litellm.llms.gigachat.passthrough.transformation.get_secret_str"
     )
     def test_get_complete_url_fallback_to_default(self, mock_get_secret):
@@ -180,11 +176,11 @@ class TestGigaChatPassthroughConfig:
         """Test that exception is raised when no api_base can be resolved."""
         config = GigaChatPassthroughConfig()
         with patch(
-            "litellm.llms.gigachat.passthrough.transformation.get_secret_str",
+            "litellm.llms.gigachat.passthrough.transformation.get_secret_str",  # test-quality-ok: patching litellm internal for unit test isolation
             return_value=None,
         ):
             with patch(
-                "litellm.llms.gigachat.passthrough.transformation.GIGACHAT_BASE_URL",
+                "litellm.llms.gigachat.passthrough.transformation.GIGACHAT_BASE_URL",  # test-quality-ok: patching litellm internal for unit test isolation
                 None,
             ):
                 with pytest.raises(Exception, match="GigaChat api base not found"):
@@ -197,7 +193,7 @@ class TestGigaChatPassthroughConfig:
                         litellm_params={},
                     )
 
-    @patch(
+    @patch(  # test-quality-ok: patching litellm internal for unit test isolation
         "litellm.llms.gigachat.passthrough.transformation.get_access_token"
     )
     def test_validate_environment(self, mock_get_access_token):
@@ -417,7 +413,7 @@ class TestGigaChatPassthroughConfig:
         assert isinstance(result, ModelResponse)
         assert result.choices[0].message.content == "valid"
 
-    @patch(
+    @patch(  # test-quality-ok: patching litellm internal for unit test isolation
         "litellm.llms.gigachat.passthrough.transformation.get_secret_str"
     )
     def test_get_api_base_with_explicit_value(self, mock_get_secret):
@@ -427,7 +423,7 @@ class TestGigaChatPassthroughConfig:
         assert result == explicit_base
         mock_get_secret.assert_not_called()
 
-    @patch(
+    @patch(  # test-quality-ok: patching litellm internal for unit test isolation
         "litellm.llms.gigachat.passthrough.transformation.get_secret_str"
     )
     def test_get_api_base_from_environment(self, mock_get_secret):
@@ -438,7 +434,7 @@ class TestGigaChatPassthroughConfig:
         assert result == env_base
         mock_get_secret.assert_called_once_with("GIGACHAT_API_BASE")
 
-    @patch(
+    @patch(  # test-quality-ok: patching litellm internal for unit test isolation
         "litellm.llms.gigachat.passthrough.transformation.get_secret_str"
     )
     def test_get_api_base_fallback_to_default(self, mock_get_secret):
@@ -447,7 +443,7 @@ class TestGigaChatPassthroughConfig:
         result = GigaChatPassthroughConfig.get_api_base(api_base=None)
         assert result == "https://gigachat.devices.sberbank.ru/api/v1"
 
-    @patch(
+    @patch(  # test-quality-ok: patching litellm internal for unit test isolation
         "litellm.llms.gigachat.passthrough.transformation.get_secret_str"
     )
     def test_get_api_key_with_explicit_value(self, mock_get_secret):
@@ -457,7 +453,7 @@ class TestGigaChatPassthroughConfig:
         assert result == explicit_key
         mock_get_secret.assert_not_called()
 
-    @patch(
+    @patch(  # test-quality-ok: patching litellm internal for unit test isolation
         "litellm.llms.gigachat.passthrough.transformation.get_secret_str"
     )
     def test_get_api_key_from_environment(self, mock_get_secret):
@@ -486,7 +482,7 @@ class TestGigaChatPassthroughConfig:
         logging_obj = MagicMock()
 
         with patch(
-            "litellm.utils.ProviderConfigManager.get_provider_chat_config",
+            "litellm.utils.ProviderConfigManager.get_provider_chat_config",  # test-quality-ok: patching litellm internal for unit test isolation
             return_value=None,
         ):
             with pytest.raises(ValueError, match="No provider config found for model"):
@@ -508,7 +504,7 @@ class TestGigaChatPassthroughConfig:
         logging_obj = MagicMock()
 
         with patch(
-            "litellm.utils.ProviderConfigManager.get_provider_embedding_config",
+            "litellm.utils.ProviderConfigManager.get_provider_embedding_config",  # test-quality-ok: patching litellm internal for unit test isolation
             return_value=None,
         ):
             with pytest.raises(ValueError, match="No provider config found for model"):
@@ -551,7 +547,7 @@ class TestGigaChatPassthroughConfig:
         ]
 
         with patch(
-            "litellm.llms.gigachat.passthrough.transformation.GigaChatModelResponseIterator.chunk_parser",
+            "litellm.llms.gigachat.passthrough.transformation.GigaChatModelResponseIterator.chunk_parser",  # test-quality-ok: patching litellm internal for unit test isolation
             return_value=stream_chunk,
         ):
             result = config.handle_logging_collected_chunks(
@@ -576,7 +572,7 @@ class TestGigaChatPassthroughConfig:
         ]
 
         with patch(
-            "litellm.llms.gigachat.passthrough.transformation.GigaChatModelResponseIterator.chunk_parser",
+            "litellm.llms.gigachat.passthrough.transformation.GigaChatModelResponseIterator.chunk_parser",  # test-quality-ok: patching litellm internal for unit test isolation
             return_value=12345,  # not dict and not ModelResponseStream
         ):
             result = config.handle_logging_collected_chunks(

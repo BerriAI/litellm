@@ -2,11 +2,6 @@
 Tests for litellm.llms.gigachat.utils
 """
 
-import os
-import sys
-
-sys.path.insert(0, os.path.abspath("../../.."))
-
 import pytest
 from litellm.llms.gigachat.utils import convert_usage
 from litellm.types.utils import PromptTokensDetailsWrapper, Usage

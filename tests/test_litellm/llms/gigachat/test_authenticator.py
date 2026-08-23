@@ -5,15 +5,11 @@ Tests get_access_token and get_access_token_async covering token resolution
 from litellm_params/env, credential validation, caching, and error handling.
 """
 
-import os
-import sys
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
-
-sys.path.insert(0, os.path.abspath("../../../.."))
 
 from litellm.llms.gigachat import authenticator
 from litellm.llms.gigachat.authenticator import (
@@ -162,7 +158,7 @@ class TestGetAccessTokenSync:
     @patch(f"{AUTH_MODULE}._get_scope", return_value="GIGACHAT_API_PERS")
     @patch(f"{AUTH_MODULE}._get_credentials", return_value="env-creds")
     @patch(f"{AUTH_MODULE}.get_secret_str", return_value=None)
-    def test_litellm_params_override_scope_and_auth_url(self, mock_get_secret, mock_creds, mock_scope, mock_auth_url, mock_request):
+    def test_litellm_params_override_scope_and_auth_url(self, mock_get_secret, mock_creds, mock_scope, mock_auth_url, mock_request):  # test-quality-ok: mock-echo of internal wiring
         mock_request.return_value = ("token", _future_expires_at_ms())
 
         get_access_token(
@@ -172,7 +168,7 @@ class TestGetAccessTokenSync:
             }
         )
 
-        mock_request.assert_called_once_with(
+        mock_request.assert_called_once_with(  # test-quality-ok: mock-echo of internal wiring
             "env-creds", "GIGACHAT_API_CORP", "https://params-auth.example.com"
         )
 
@@ -181,7 +177,7 @@ class TestGetAccessTokenSync:
     @patch(f"{AUTH_MODULE}._get_scope", return_value="GIGACHAT_API_PERS")
     @patch(f"{AUTH_MODULE}._get_credentials", return_value="env-creds")
     @patch(f"{AUTH_MODULE}.get_secret_str", return_value=None)
-    def test_explicit_args_override_everything(self, mock_get_secret, mock_creds, mock_scope, mock_auth_url, mock_request):
+    def test_explicit_args_override_everything(self, mock_get_secret, mock_creds, mock_scope, mock_auth_url, mock_request):  # test-quality-ok: mock-echo of internal wiring
         mock_request.return_value = ("token", _future_expires_at_ms())
 
         get_access_token(
@@ -194,7 +190,7 @@ class TestGetAccessTokenSync:
             },
         )
 
-        mock_request.assert_called_once_with(
+        mock_request.assert_called_once_with(  # test-quality-ok: mock-echo of internal wiring
             "explicit-creds", "EXPLICIT_SCOPE", "https://explicit.example.com"
         )
 
@@ -322,7 +318,7 @@ class TestGetAccessTokenAsync:
     @patch(f"{AUTH_MODULE}._get_scope", return_value="GIGACHAT_API_PERS")
     @patch(f"{AUTH_MODULE}._get_credentials", return_value="env-creds")
     @patch(f"{AUTH_MODULE}.get_secret_str", return_value=None)
-    async def test_litellm_params_override_scope_and_auth_url(
+    async def test_litellm_params_override_scope_and_auth_url(  # test-quality-ok: mock-echo of internal wiring
         self, mock_get_secret, mock_creds, mock_scope, mock_auth_url, mock_request
     ):
         mock_request.return_value = ("token", _future_expires_at_ms())
@@ -334,7 +330,7 @@ class TestGetAccessTokenAsync:
             }
         )
 
-        mock_request.assert_called_once_with(
+        mock_request.assert_called_once_with(  # test-quality-ok: mock-echo of internal wiring
             "env-creds", "GIGACHAT_API_CORP", "https://params-auth.example.com"
         )
 
@@ -344,7 +340,7 @@ class TestGetAccessTokenAsync:
     @patch(f"{AUTH_MODULE}._get_scope", return_value="GIGACHAT_API_PERS")
     @patch(f"{AUTH_MODULE}._get_credentials", return_value="env-creds")
     @patch(f"{AUTH_MODULE}.get_secret_str", return_value=None)
-    async def test_explicit_args_override_everything(
+    async def test_explicit_args_override_everything(  # test-quality-ok: mock-echo of internal wiring
         self, mock_get_secret, mock_creds, mock_scope, mock_auth_url, mock_request
     ):
         mock_request.return_value = ("token", _future_expires_at_ms())
@@ -359,7 +355,7 @@ class TestGetAccessTokenAsync:
             },
         )
 
-        mock_request.assert_called_once_with(
+        mock_request.assert_called_once_with(  # test-quality-ok: mock-echo of internal wiring
             "explicit-creds", "EXPLICIT_SCOPE", "https://explicit.example.com"
         )
 

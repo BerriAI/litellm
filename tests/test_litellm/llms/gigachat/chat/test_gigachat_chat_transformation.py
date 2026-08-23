@@ -8,14 +8,10 @@ get_model_response_iterator, and get_error_class.
 """
 
 import json
-import os
-import sys
 from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
-
-sys.path.insert(0, os.path.abspath("../../../../.."))
 
 from litellm.llms.gigachat.chat.transformation import (
     GigaChatConfig,
@@ -147,7 +143,7 @@ class TestValidateEnvironment:
 
     @patch(f"{TRANSFORM_MODULE}.get_access_token", return_value="token")
     @patch(f"{TRANSFORM_MODULE}.get_secret_str")
-    def test_falls_back_to_env_for_credentials(
+    def test_falls_back_to_env_for_credentials(  # test-quality-ok: mock-echo of internal wiring
         self, mock_get_secret, mock_get_token
     ):
         mock_get_secret.return_value = "env-creds"
@@ -160,7 +156,7 @@ class TestValidateEnvironment:
             api_key=None,
             api_base=None,
         )
-        mock_get_secret.assert_any_call("GIGACHAT_CREDENTIALS")
+        mock_get_secret.assert_any_call("GIGACHAT_CREDENTIALS")  # test-quality-ok: mock-echo of internal wiring
 
 
 class TestGetSupportedOpenAiParams:
