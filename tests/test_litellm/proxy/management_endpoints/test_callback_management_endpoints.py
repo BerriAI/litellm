@@ -338,13 +338,16 @@ class TestNewRelicTeamCallbackValidation:
         monkeypatch.delenv("LITELLM_OTEL_V2", raising=False)
         is_otel_v2_enabled.cache_clear()
         try:
-            _validate_team_callback(self._data({}))
-            _validate_team_callback(
-                AddTeamCallback(
-                    callback_name="langfuse",
-                    callback_type="success",
-                    callback_vars={"langfuse_public_key": "pk", "langfuse_secret_key": "sk"},
+            assert _validate_team_callback(self._data({})) is None
+            assert (
+                _validate_team_callback(
+                    AddTeamCallback(
+                        callback_name="langfuse",
+                        callback_type="success",
+                        callback_vars={"langfuse_public_key": "pk", "langfuse_secret_key": "sk"},
+                    )
                 )
+                is None
             )
         finally:
             is_otel_v2_enabled.cache_clear()
@@ -394,12 +397,15 @@ class TestNewRelicKeyLoggingValidation:
         monkeypatch.delenv("LITELLM_OTEL_V2", raising=False)
         is_otel_v2_enabled.cache_clear()
         try:
-            raise_on_invalid_key_logging_config(None)
-            raise_on_invalid_key_logging_config({"logging": "not-a-list"})
-            raise_on_invalid_key_logging_config({"tags": ["a"]})
-            raise_on_invalid_key_logging_config(self._metadata({}))
-            raise_on_invalid_key_logging_config(
-                {"logging": [{"callback_name": "langfuse", "callback_vars": {"langfuse_public_key": "pk"}}]}
+            assert raise_on_invalid_key_logging_config(None) is None
+            assert raise_on_invalid_key_logging_config({"logging": "not-a-list"}) is None
+            assert raise_on_invalid_key_logging_config({"tags": ["a"]}) is None
+            assert raise_on_invalid_key_logging_config(self._metadata({})) is None
+            assert (
+                raise_on_invalid_key_logging_config(
+                    {"logging": [{"callback_name": "langfuse", "callback_vars": {"langfuse_public_key": "pk"}}]}
+                )
+                is None
             )
         finally:
             is_otel_v2_enabled.cache_clear()
