@@ -6222,6 +6222,9 @@ def embedding(
             or custom_llm_provider == "together_ai"
             or custom_llm_provider == "nvidia_nim"
             or custom_llm_provider == "litellm_proxy"
+            or custom_llm_provider == "byteplus"
+            or custom_llm_provider == "digitalocean"
+            or custom_llm_provider == "siliconflow"
             or (model in litellm.open_ai_embedding_models and custom_llm_provider is None)
         ):
             api_base = (
