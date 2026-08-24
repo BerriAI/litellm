@@ -13,7 +13,7 @@ import hashlib
 import os
 import uuid
 from dataclasses import dataclass
-from typing import Any, Final, Literal
+from typing import Final, Literal
 
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import (
@@ -137,7 +137,7 @@ class ConductGuardrail(CustomGuardrail):
         fail_mode: FailMode = "fail_closed",
         tool_name: str = "llm_call",
         timeout: float = 8.0,
-        **kwargs: Any,
+        **kwargs,
     ) -> None:
         kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
         super().__init__(**kwargs)
@@ -162,8 +162,8 @@ class ConductGuardrail(CustomGuardrail):
     async def async_pre_call_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
-        cache: Any,
-        data: dict[str, Any],
+        cache: object,
+        data: dict,
         call_type: Literal[
             "completion",
             "text_completion",
@@ -172,7 +172,7 @@ class ConductGuardrail(CustomGuardrail):
             "moderation",
             "audio_transcription",
         ],
-    ) -> dict[str, Any] | None:
+    ) -> dict | None:
         decision = await self._check(data=data, call_type=call_type)
 
         if decision.verdict in ("block", "approval"):
@@ -185,12 +185,12 @@ class ConductGuardrail(CustomGuardrail):
 
     # ── Guard check ─────────────────────────────────────────────────
 
-    async def _check(self, *, data: dict[str, Any], call_type: str) -> GuardDecision:
+    async def _check(self, *, data: dict, call_type: str) -> GuardDecision:
         tool_input = _build_tool_input(data, call_type)
         session_id = _extract_session_id(data)
         prompt = _extract_prompt_text(data)
 
-        arguments: dict[str, Any] = {
+        arguments: dict = {
             "tool_name": self._tool_name,
             "tool_input": tool_input,
         }
@@ -255,7 +255,7 @@ class ConductGuardrail(CustomGuardrail):
 # ── Helpers ─────────────────────────────────────────────────────────
 
 
-def _extract_session_id(data: dict[str, Any]) -> str | None:
+def _extract_session_id(data: dict) -> str | None:
     metadata = data.get("litellm_metadata") or data.get("metadata") or {}
     for key in ("trace_id", "X-Conduct-Session-Id", "conduct_session_id"):
         val = metadata.get(key)
@@ -274,7 +274,7 @@ def _extract_session_id(data: dict[str, Any]) -> str | None:
     return f"litellm-{digest[:16]}"
 
 
-def _extract_prompt_text(data: dict[str, Any]) -> str | None:
+def _extract_prompt_text(data: dict) -> str | None:
     for m in reversed(data.get("messages") or []):
         if isinstance(m, dict) and m.get("role") == "user":
             content = m.get("content")
@@ -286,7 +286,7 @@ def _extract_prompt_text(data: dict[str, Any]) -> str | None:
     return None
 
 
-def _build_tool_input(data: dict[str, Any], call_type: str) -> dict[str, Any]:
+def _build_tool_input(data: dict, call_type: str) -> dict:
     messages = data.get("messages") or []
     return {
         "model": data.get("model"),
