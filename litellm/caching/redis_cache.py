@@ -401,9 +401,21 @@ class RedisCache(BaseCache):
         """
         # Create a stable representation of redis_kwargs for hashing
         # Sort keys to ensure consistent hash regardless of parameter order
-        sorted_kwargs: Final = sorted(self.redis_kwargs.items())
+        redis_kwargs: Final[dict[str, object]] = self.redis_kwargs
+        provider: Final = redis_kwargs.get("credential_provider")
+        redis_connect_func: Final = redis_kwargs.get("redis_connect_func")
+        sorted_kwargs: Final = sorted(
+            item for item in redis_kwargs.items() if item[0] not in {"credential_provider", "redis_connect_func"}
+        )
         kwargs_str: Final = json.dumps(sorted_kwargs, sort_keys=True)
-        kwargs_hash: Final = hashlib.sha256(kwargs_str.encode()).hexdigest()[:16]
+        identity_suffix: Final = (
+            ""
+            if provider is None and redis_connect_func is None
+            else f":provider-{id(provider)}"
+            if provider is not None
+            else f":connect-func-{id(redis_connect_func)}"
+        )
+        kwargs_hash: Final = hashlib.sha256(f"{kwargs_str}{identity_suffix}".encode()).hexdigest()[:16]
         return f"async-redis-client-{kwargs_hash}"
 
     def init_async_client(
@@ -1384,10 +1396,10 @@ class RedisCache(BaseCache):
             dict: {"status": "success" | "failed", "message": str, "error": Optional[str]}
         """
         try:
-            import redis.asyncio as redis_async
+            from .._redis import get_redis_async_client
 
             # Create a fresh Redis client with current settings
-            redis_client: Final = redis_async.Redis(**self.redis_kwargs)
+            redis_client: Final = get_redis_async_client(**self.redis_kwargs)
 
             # Test the connection
             ping_result: Final = await redis_client.ping()
