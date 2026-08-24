@@ -425,6 +425,18 @@ class TestStoredRoutines:
         sql = self.DEFINITION + 'SELECT "other"();\n'
         assert _keywords(tmp_path, sql) == ()
 
+    def test_a_quoted_column_sharing_the_routine_name_is_not_a_call(self, tmp_path):
+        sql = self.DEFINITION + 'ALTER TABLE "Foo" ADD COLUMN "backfill" int;\n'
+        assert _keywords(tmp_path, sql) == ()
+
+    def test_a_quoted_index_target_sharing_the_routine_name_is_not_a_call(self, tmp_path):
+        sql = self.DEFINITION + 'CREATE INDEX ON "Foo" ("backfill");\n'
+        assert _keywords(tmp_path, sql) == ()
+
+    def test_a_quoted_call_with_space_before_its_parenthesis_still_counts(self, tmp_path):
+        sql = self.DEFINITION + 'SELECT "backfill" ();\n'
+        assert _keywords(tmp_path, sql) == ("UPDATE",)
+
     def test_a_trigger_wiring_the_function_up_counts_as_a_call(self, tmp_path):
         sql = self.DEFINITION + 'CREATE TRIGGER t AFTER INSERT ON "Foo" EXECUTE FUNCTION backfill();\n'
         assert _keywords(tmp_path, sql) == ("UPDATE",)

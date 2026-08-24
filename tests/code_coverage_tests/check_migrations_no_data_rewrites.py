@@ -127,6 +127,7 @@ DEFINES_A_ROUTINE = re.compile(
 )
 QUALIFIED_NAME = r"(?:\"[^\"]*\"|[A-Za-z_][A-Za-z0-9_$]*)"
 ROUTINE_NAME = re.compile(rf"\s*(?:{QUALIFIED_NAME}\s*\.\s*)?({QUALIFIED_NAME})")
+OPENS_A_CALL = re.compile(r"\s*\(")
 
 REWRITES_ROWS = frozenset({"UPDATE", "DELETE", "MERGE"})
 
@@ -264,8 +265,10 @@ def mask(
 ) -> tuple[str, tuple[tuple[int, int], ...], tuple[tuple[int, int], ...], tuple[tuple[int, int], ...]]:
     """Blank comments and quoted text, keeping offsets, and locate the spans that can still
     hold SQL: dollar-quoted bodies, and the single-quoted literals `EXECUTE` runs. Also locate
-    the double-quoted identifiers, so a routine called through one can be found by name even
-    though the call is blanked here the way every other quoted run of text is."""
+    the double-quoted identifiers that open a call (`"backfill"(`), so a routine invoked through
+    one can be found by name even though the call is blanked here the way every other quoted run
+    of text is. A double-quoted identifier that is not a call site, a column, table, index, or
+    constraint name, is left out, so it never masquerades as a call to a like-named routine."""
     chunks: list[str] = []
     bodies: list[tuple[int, int]] = []
     literals: list[tuple[int, int]] = []
@@ -296,7 +299,7 @@ def mask(
             if character == "'":
                 closed = sql[stop - 1 : stop] == character
                 literals.append((index + 1, max(index + 1, stop - 1 if closed else stop)))
-            else:
+            elif OPENS_A_CALL.match(sql, stop):
                 identifiers.append((index, stop))
             chunks.append(blank(sql[index:stop]))
             index = stop
@@ -722,8 +725,10 @@ def runs_when_applied(
     found in the masked text, where one written inside a comment has already been blanked, and
     the name is read from the region at those same offsets, since masking blanks a quoted
     identifier in place. A call written as a quoted identifier is blanked there too, and
-    `\"backfill\"()` is the same call as `backfill()` in Postgres, so the double-quoted identifiers
-    are put back before the search and a routine invoked through one is found. A definition whose
+    `\"backfill\"()` is the same call as `backfill()` in Postgres, so the double-quoted call sites
+    are put back before the search and a routine invoked through one is found. A quoted name that
+    opens no call, a column or table sharing the routine's name, stays blanked and cannot be read
+    as a call it never makes. A definition whose
     own name needs those quotes is read rather than trusted, since matching such a name once it is
     put back in the open would be unreliable."""
     start, end = body
@@ -756,8 +761,9 @@ def outside_definition(
     runs one as SQL and the call can be written inside it. A single-quoted payload is undoubled as
     it goes back, so a `--` or `/*` in one of its nested strings blanks nothing and the call after
     it stays visible, and it is padded to the span it fills so the later offsets still land. The
-    double-quoted identifiers come back verbatim, so a routine invoked as `\"backfill\"()` reads as
-    the call it is. The definition is blanked after they are restored, which takes its own body and
+    double-quoted call sites come back verbatim, so a routine invoked as `\"backfill\"()` reads as
+    the call it is, while a like-named identifier that opens no call was never collected and stays
+    blanked. The definition is blanked after they are restored, which takes its own body and
     any identifier standing inside it with it, so a routine that names itself recursively does not
     thereby count as called."""
     text = list(masked)
