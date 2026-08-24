@@ -22,11 +22,17 @@ func Provider() *schema.Provider {
 			"litellm_fallback":                resourceLiteLLMFallback(),
 			"litellm_key_block":               resourceLiteLLMKeyBlock(),
 			"litellm_team_block":              resourceLiteLLMTeamBlock(),
+			"litellm_access_group":            resourceLiteLLMAccessGroup(),
+			"litellm_unified_access_group":    resourceLiteLLMUnifiedAccessGroup(),
 		},
 		DataSourcesMap: map[string]*schema.Resource{
-			"litellm_credential":   dataSourceLiteLLMCredential(),
-			"litellm_vector_store": dataSourceLiteLLMVectorStore(),
-			"litellm_fallback":     dataSourceLiteLLMFallback(),
+			"litellm_credential":            dataSourceLiteLLMCredential(),
+			"litellm_vector_store":          dataSourceLiteLLMVectorStore(),
+			"litellm_fallback":              dataSourceLiteLLMFallback(),
+			"litellm_access_group":          dataSourceLiteLLMAccessGroup(),
+			"litellm_access_groups":         dataSourceLiteLLMAccessGroups(),
+			"litellm_unified_access_group":  dataSourceLiteLLMUnifiedAccessGroup(),
+			"litellm_unified_access_groups": dataSourceLiteLLMUnifiedAccessGroups(),
 		},
 		Schema: map[string]*schema.Schema{
 			"api_base": {
