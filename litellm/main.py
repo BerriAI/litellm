@@ -62,6 +62,7 @@ if TYPE_CHECKING:
 from litellm.constants import (
     DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT,
     DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT,
+    OPPER_API_BASE,
 )
 from litellm.exceptions import LiteLLMUnknownProvider
 from litellm.integrations.custom_logger import CustomLogger
@@ -3434,9 +3435,7 @@ def _complete_opper(ctx: _CompletionDispatchContext) -> _CompletionDispatchResul
     stream: Final = ctx.stream
     timeout: Final = ctx.timeout
 
-    api_base: Final = (
-        ctx.api_base or litellm.api_base or get_secret_str("OPPER_API_BASE") or "https://api.opper.ai/v3/compat"
-    )
+    api_base: Final = ctx.api_base or litellm.api_base or get_secret_str("OPPER_API_BASE") or OPPER_API_BASE
     api_key: Final = ctx.api_key or litellm.api_key or get_secret_str("OPPER_API_KEY")
     headers: Final = ctx.headers or litellm.headers
 

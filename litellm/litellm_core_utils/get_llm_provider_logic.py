@@ -2,7 +2,11 @@ from typing import Final, cast
 from urllib.parse import urlparse
 
 import litellm
-from litellm.constants import PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO, REPLICATE_MODEL_NAME_WITH_ID_LENGTH
+from litellm.constants import (
+    OPPER_API_BASE,
+    PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO,
+    REPLICATE_MODEL_NAME_WITH_ID_LENGTH,
+)
 from litellm.litellm_core_utils.fallback_generalizations import (
     match_routing_generalization,
 )
@@ -688,8 +692,10 @@ def _get_openai_compatible_provider_info(
 
         dynamic_api_key = api_key or get_secret_str("TENCENT_API_KEY")
     elif custom_llm_provider == "opper":
-        api_base = api_base or get_secret("OPPER_API_BASE") or "https://api.opper.ai/v3/compat"
+        # rebind-ok: provider chain assigns api_base per branch
+        api_base = api_base or get_secret("OPPER_API_BASE") or OPPER_API_BASE
 
+        # rebind-ok: provider chain assigns dynamic_api_key per branch
         dynamic_api_key = api_key or get_secret_str("OPPER_API_KEY")
     elif custom_llm_provider == "fireworks_ai":
         # fireworks is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.fireworks.ai/inference/v1
