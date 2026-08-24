@@ -878,6 +878,15 @@ class TestDynamicSql:
         sql = "DO $$\nBEGIN\n    EXECUTE 'SELECT 1 -- UPDATE \"Foo\" SET \"a\" = 1';\nEND $$;"
         assert _keywords(tmp_path, sql) == ()
 
+    def test_a_rewrite_below_escaped_quotes_in_a_multiline_payload_reports_its_own_line(self, tmp_path):
+        sql = (
+            "DO $$\nBEGIN\n    EXECUTE '\n"
+            "SELECT ''a'', ''b'', ''c'', ''d'', ''e''\n"
+            "; UPDATE \"Foo\" SET \"a\" = 1';\nEND $$;"
+        )
+        assert _keywords(tmp_path, sql) == ("UPDATE",)
+        assert _scan(tmp_path, sql)[0].line == 5
+
     def test_a_rewrite_in_a_later_command_before_bind_values_is_flagged(self, tmp_path):
         sql = "DO $$\nBEGIN\n    EXECUTE 'SELECT 1; DELETE FROM \"Foo\" WHERE \"a\" = $1' USING 1;\nEND $$;"
         assert _keywords(tmp_path, sql) == ("DELETE",)
