@@ -13,7 +13,7 @@ def extract_model_from_target_model_names(target_model_names: Any) -> str | None
     return target_model_names[0] if target_model_names else None
 
 
-def _video_reference_to_id(video_ref: object) -> str:
+def video_reference_to_id(video_ref: object) -> str:
     if isinstance(video_ref, dict):
         return video_ref.get("id", "")
     if not isinstance(video_ref, str):
@@ -23,16 +23,6 @@ def _video_reference_to_id(video_ref: object) -> str:
     except orjson.JSONDecodeError:
         return video_ref
     return parsed_ref.get("id", "") if isinstance(parsed_ref, dict) else video_ref
-
-
-def pop_video_reference_to_video_id(data: dict[str, Any]) -> None:
-    """
-    Normalize OpenAI video edit/extension payloads into ``video_id``.
-
-    JSON bodies use ``video: {"id": ...}``. Multipart and form-urlencoded bodies
-    may send a bare id string or a JSON-encoded reference object as a string field.
-    """
-    data["video_id"] = _video_reference_to_id(data.pop("video", {}))
 
 
 def get_custom_provider_from_data(data: dict[str, Any]) -> str | None:

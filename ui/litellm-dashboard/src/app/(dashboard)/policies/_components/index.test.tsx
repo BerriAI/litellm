@@ -10,16 +10,6 @@ import PoliciesPanel from "./index";
  * In jsdom it may still run; we mock confirm as a no-op so the test fails until the panel
  * uses a controlled DeleteResourceModal instead of Modal.confirm.
  */
-vi.mock("antd", async (importOriginal) => {
-  const mod = await importOriginal<typeof import("antd")>();
-  return {
-    ...mod,
-    Modal: Object.assign(mod.Modal, {
-      confirm: vi.fn(),
-    }),
-  };
-});
-
 const EXPECTED_ATTACHMENT_ID = "att-11111111-2222-3333-4444-555555555555" as const;
 
 const networkingMocks = vi.hoisted(() => ({
@@ -55,33 +45,6 @@ vi.mock("@/components/networking", () => ({
 vi.mock("./impact_popover", () => ({
   default: () => <button type="button" aria-label="View blast radius" />,
 }));
-
-vi.mock("@tremor/react", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@tremor/react")>();
-  return {
-    ...actual,
-    Button: React.forwardRef<HTMLButtonElement, any>(({ children, ...props }, ref) =>
-      React.createElement("button", { ...props, ref }, children),
-    ),
-    Tooltip: ({ children }: { children?: React.ReactNode }) => React.createElement(React.Fragment, null, children),
-    Switch: ({
-      checked,
-      onChange,
-      className,
-    }: {
-      checked?: boolean;
-      onChange?: (v: boolean) => void;
-      className?: string;
-    }) =>
-      React.createElement("input", {
-        type: "checkbox",
-        role: "switch",
-        checked,
-        onChange: (e: React.ChangeEvent<HTMLInputElement>) => onChange?.(e.target.checked),
-        className,
-      }),
-  };
-});
 
 vi.mock("./policy_templates", () => ({
   __esModule: true,
@@ -156,8 +119,8 @@ describe("PoliciesPanel attachment delete", () => {
 
     await waitFor(() => {
       expect(networkingMocks.deletePolicyAttachmentCall).toHaveBeenCalledTimes(1);
-      expect(networkingMocks.deletePolicyAttachmentCall).toHaveBeenCalledWith("test-token", EXPECTED_ATTACHMENT_ID);
     });
+    expect(networkingMocks.deletePolicyAttachmentCall).toHaveBeenCalledWith("test-token", EXPECTED_ATTACHMENT_ID);
   });
 
   it("should show mutation pending state while attachment delete is in flight", async () => {

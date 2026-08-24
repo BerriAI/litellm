@@ -11,14 +11,17 @@ Symbols pinned here:
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Dict, List
+from contextlib import suppress
+from typing import Any, Dict, Final, List
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from litellm.proxy.utils import (
+    MAX_SPEND_LOG_DRAIN_ITERATIONS,
     _monitor_spend_logs_queue,
     _raise_failed_update_spend_exception,
+    drain_spend_logs_queue,
     update_daily_tag_spend,
     update_spend,
     update_spend_logs_job,
@@ -264,6 +267,198 @@ async def test_update_spend_logs_job_processes_and_clears_queue(
 
 
 @pytest.mark.asyncio
+async def test_update_spend_logs_job_requeues_popped_rows_when_write_cancelled(
+    mock_prisma_client: Any, make_spend_log_row: Any
+) -> None:
+    proxy_logging = MagicMock()
+    proxy_logging.failure_handler = AsyncMock()
+    mock_prisma_client.spend_log_transactions = [
+        make_spend_log_row(request_id="r1"),
+        make_spend_log_row(request_id="r2"),
+    ]
+
+    row_arriving_mid_flush = make_spend_log_row(request_id="r3")
+
+    async def _cancel_mid_write(*args: Any, **kwargs: Any) -> None:
+        mock_prisma_client.spend_log_transactions.append(row_arriving_mid_flush)
+        raise asyncio.CancelledError()
+
+    mock_prisma_client.db.litellm_spendlogs.create_many = AsyncMock(
+        side_effect=_cancel_mid_write
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await update_spend_logs_job(
+            prisma_client=mock_prisma_client,
+            db_writer_client=None,
+            proxy_logging_obj=proxy_logging,
+        )
+
+    assert [
+        row["request_id"] for row in mock_prisma_client.spend_log_transactions
+    ] == ["r1", "r2", "r3"]
+
+
+@pytest.mark.asyncio
+async def test_update_spend_logs_job_does_not_requeue_when_cancelled_after_write(
+    mock_prisma_client: Any, make_spend_log_row: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Rows are already committed once guardrail tracking runs, so replaying
+    them would double-count the non-idempotent daily guardrail increments.
+    """
+    import litellm.proxy.guardrails.usage_tracking as guard_mod
+
+    proxy_logging = MagicMock()
+    proxy_logging.failure_handler = AsyncMock()
+    mock_prisma_client.spend_log_transactions = [make_spend_log_row(request_id="r1")]
+    mock_prisma_client.db.litellm_spendlogs.create_many = AsyncMock()
+
+    monkeypatch.setattr(
+        guard_mod,
+        "process_spend_logs_guardrail_usage",
+        AsyncMock(side_effect=asyncio.CancelledError()),
+        raising=False,
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await update_spend_logs_job(
+            prisma_client=mock_prisma_client,
+            db_writer_client=None,
+            proxy_logging_obj=proxy_logging,
+        )
+
+    assert mock_prisma_client.spend_log_transactions == []
+
+
+@pytest.mark.asyncio
+async def test_drain_spend_logs_queue_flushes_rows_queued_while_draining(
+    mock_prisma_client: Any, make_spend_log_row: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import litellm.proxy.db.spend_log_tool_index as tool_mod
+    import litellm.proxy.guardrails.usage_tracking as guard_mod
+
+    monkeypatch.setattr(
+        guard_mod, "process_spend_logs_guardrail_usage", AsyncMock(), raising=False
+    )
+    monkeypatch.setattr(
+        tool_mod, "process_spend_logs_tool_usage", AsyncMock(), raising=False
+    )
+
+    proxy_logging = MagicMock()
+    proxy_logging.failure_handler = AsyncMock()
+    mock_prisma_client.spend_log_transactions = [make_spend_log_row(request_id="r1")]
+
+    written: list[str] = []
+
+    async def _write(*args: Any, **kwargs: Any) -> None:
+        written.extend(row["request_id"] for row in kwargs["data"])
+        if len(written) == 1:
+            mock_prisma_client.spend_log_transactions.append(
+                make_spend_log_row(request_id="r2")
+            )
+
+    mock_prisma_client.db.litellm_spendlogs.create_many = AsyncMock(side_effect=_write)
+
+    await drain_spend_logs_queue(
+        prisma_client=mock_prisma_client,
+        db_writer_client=None,
+        proxy_logging_obj=proxy_logging,
+    )
+
+    assert written == ["r1", "r2"]
+    assert mock_prisma_client.spend_log_transactions == []
+
+
+@pytest.mark.asyncio
+async def test_drain_spend_logs_queue_stops_monitor_and_keeps_its_popped_rows(
+    mock_prisma_client: Any, make_spend_log_row: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import litellm.proxy.db.spend_log_tool_index as tool_mod
+    import litellm.proxy.guardrails.usage_tracking as guard_mod
+
+    monkeypatch.setattr(
+        guard_mod, "process_spend_logs_guardrail_usage", AsyncMock(), raising=False
+    )
+    monkeypatch.setattr(
+        tool_mod, "process_spend_logs_tool_usage", AsyncMock(), raising=False
+    )
+
+    proxy_logging = MagicMock()
+    proxy_logging.failure_handler = AsyncMock()
+    mock_prisma_client.spend_log_transactions = [make_spend_log_row(request_id="r1")]
+
+    write_started = asyncio.Event()
+    written: list[str] = []
+    write_calls = {"n": 0}
+
+    async def _write(*args: Any, **kwargs: Any) -> None:
+        write_calls["n"] += 1
+        if write_calls["n"] == 1:
+            write_started.set()
+            await asyncio.Event().wait()
+        written.extend(row["request_id"] for row in kwargs["data"])
+
+    mock_prisma_client.db.litellm_spendlogs.create_many = AsyncMock(side_effect=_write)
+
+    async def _monitor() -> None:
+        await update_spend_logs_job(
+            prisma_client=mock_prisma_client,
+            db_writer_client=None,
+            proxy_logging_obj=proxy_logging,
+        )
+
+    mock_prisma_client.spend_logs_queue_monitor_task = asyncio.create_task(_monitor())
+    await write_started.wait()
+
+    await drain_spend_logs_queue(
+        prisma_client=mock_prisma_client,
+        db_writer_client=None,
+        proxy_logging_obj=proxy_logging,
+    )
+
+    assert written == ["r1"]
+    assert mock_prisma_client.spend_log_transactions == []
+    assert mock_prisma_client.spend_logs_queue_monitor_task is None
+
+
+@pytest.mark.asyncio
+async def test_drain_spend_logs_queue_gives_up_after_max_passes(
+    mock_prisma_client: Any, make_spend_log_row: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import litellm.proxy.db.spend_log_tool_index as tool_mod
+    import litellm.proxy.guardrails.usage_tracking as guard_mod
+
+    monkeypatch.setattr(
+        guard_mod, "process_spend_logs_guardrail_usage", AsyncMock(), raising=False
+    )
+    monkeypatch.setattr(
+        tool_mod, "process_spend_logs_tool_usage", AsyncMock(), raising=False
+    )
+
+    proxy_logging = MagicMock()
+    proxy_logging.failure_handler = AsyncMock()
+    mock_prisma_client.spend_log_transactions = [make_spend_log_row(request_id="r1")]
+
+    async def _write_and_refill(*args: Any, **kwargs: Any) -> None:
+        mock_prisma_client.spend_log_transactions.append(make_spend_log_row())
+
+    mock_prisma_client.db.litellm_spendlogs.create_many = AsyncMock(
+        side_effect=_write_and_refill
+    )
+
+    await drain_spend_logs_queue(
+        prisma_client=mock_prisma_client,
+        db_writer_client=None,
+        proxy_logging_obj=proxy_logging,
+    )
+
+    assert (
+        mock_prisma_client.db.litellm_spendlogs.create_many.await_count
+        == MAX_SPEND_LOG_DRAIN_ITERATIONS
+    )
+
+
+@pytest.mark.asyncio
 async def test_monitor_spend_logs_queue_invokes_job_when_queue_nonempty(
     mock_prisma_client: Any,
     make_spend_log_row: Any,
@@ -330,6 +525,53 @@ async def test_monitor_spend_logs_queue_swallows_errors_and_backs_off(
             proxy_logging_obj=proxy_logging,
         )
     assert sleep_count["n"] == 3
+
+
+@pytest.mark.asyncio
+async def test_monitor_spend_logs_queue_flushes_as_soon_as_one_is_requested(
+    mock_prisma_client: Any,
+    make_spend_log_row: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A requested flush wakes the monitor mid-poll, so a Responses row reaches the DB
+    before the client can chain a `previous_response_id` off it.
+    """
+    import litellm.constants as constants_mod
+    import litellm.proxy.utils as utils_mod
+    from litellm.proxy.utils import PrismaClient, request_spend_log_flush
+
+    monkeypatch.setattr(constants_mod, "SPEND_LOG_QUEUE_POLL_INTERVAL", 30.0, raising=False)
+    PrismaClient.spend_log_flush_requested.clear()
+    mock_prisma_client.spend_log_transactions = []
+    mock_prisma_client.tool_usage_transactions = []
+
+    flushed: Final = asyncio.Event()
+
+    async def _fake_job(*args: Any, **kwargs: Any) -> None:
+        flushed.set()
+
+    monkeypatch.setattr(utils_mod, "update_spend_logs_job", _fake_job)
+
+    monitor: Final = asyncio.create_task(
+        _monitor_spend_logs_queue(
+            prisma_client=mock_prisma_client,
+            db_writer_client=None,
+            proxy_logging_obj=MagicMock(),
+        )
+    )
+    try:
+        await asyncio.sleep(0.05)
+        assert not flushed.is_set()
+
+        mock_prisma_client.spend_log_transactions.append(make_spend_log_row(request_id="r1"))
+        request_spend_log_flush()
+
+        await asyncio.wait_for(flushed.wait(), timeout=5.0)
+    finally:
+        monitor.cancel()
+        with suppress(asyncio.CancelledError):
+            await monitor
+        PrismaClient.spend_log_flush_requested.clear()
 
 
 def test_raise_failed_update_spend_exception_emits_failure_handler() -> None:

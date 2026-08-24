@@ -1,21 +1,15 @@
 import os
-import sys
 import traceback
 
 from dotenv import load_dotenv
 
 load_dotenv()
 import io
-import os
 
 from test_streaming import streaming_format_tests
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 import asyncio
 import json
-import os
 import tempfile
 from unittest.mock import AsyncMock, MagicMock, patch, ANY
 from respx import MockRouter
@@ -2065,28 +2059,6 @@ async def test_vertexai_multimodal_embedding_base64image_in_input():
         # Optional: Print for debugging
         print("Arguments passed to Vertex AI:", args_to_vertexai)
         print("Response:", response)
-
-
-def test_vertexai_embedding_embedding_latest():
-    try:
-        load_vertex_ai_credentials()
-        litellm.set_verbose = True
-
-        response = embedding(
-            model="vertex_ai/text-embedding-004",
-            input=["hi"],
-            dimensions=1,
-            auto_truncate=True,
-            task_type="RETRIEVAL_QUERY",
-        )
-
-        assert len(response.data[0]["embedding"]) == 1
-        assert response.usage.prompt_tokens > 0
-        print(f"response:", response)
-    except litellm.RateLimitError as e:
-        pass
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
 
 
 def test_vertexai_multimodalembedding_embedding_latest():

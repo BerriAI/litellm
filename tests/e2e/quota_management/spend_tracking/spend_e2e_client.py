@@ -26,7 +26,6 @@ from e2e_http import (
     is_ok,
     unwrap,
 )
-from proxy_client import ProxyClient
 from models import (
     AnthropicMessagesBody,
     ChatBody,
@@ -45,15 +44,16 @@ from models import (
     SpendTagsResponse,
     TagSpend,
 )
+from proxy_client import ProxyClient
 
 __all__ = [
+    "ProbeResult",
     "SpendClient",
+    "SpendLogRow",
     "build_client",
+    "is_ok",
     "unique_marker",
     "unwrap",
-    "is_ok",
-    "SpendLogRow",
-    "ProbeResult",
 ]
 
 
@@ -65,6 +65,7 @@ def _chat_body(
     tags: list[str] | None = None,
     user: str | None = None,
     stream: bool = False,
+    cache: dict[str, bool] | None = {"no-cache": True},
 ) -> ChatBody:
     return ChatBody(
         model=model,
@@ -73,6 +74,7 @@ def _chat_body(
         stream=stream,
         user=user,
         metadata=ChatMetadata(tags=tags) if tags else None,
+        cache=cache,
     )
 
 
@@ -89,9 +91,11 @@ class SpendClient:
         max_tokens: int | None = None,
         tags: list[str] | None = None,
         user: str | None = None,
+        cache: dict[str, bool] | None = {"no-cache": True},
     ) -> Result[ChatResponse]:
         return self.proxy.chat(
-            key, _chat_body(model, content, max_tokens=max_tokens, tags=tags, user=user)
+            key,
+            _chat_body(model, content, max_tokens=max_tokens, tags=tags, user=user, cache=cache),
         )
 
     def chat_stream(

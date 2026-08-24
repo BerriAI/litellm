@@ -1,12 +1,8 @@
-import os
-import sys
+import re
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 from litellm.integrations.gitlab.gitlab_client import GitLabClient
 from litellm.integrations.gitlab.gitlab_prompt_manager import (
@@ -172,7 +168,7 @@ def test_gitlab_client_get_file_content_access_denied(mock_get):
     mock_get.side_effect = err
 
     client = GitLabClient({"project": "g/s/r", "access_token": "tok"})
-    with pytest.raises(Exception, match="Access denied to file 'test.prompt'"):
+    with pytest.raises(Exception, match=re.escape("Access denied to file 'test.prompt'")):
         client.get_file_content("test.prompt")
 
 

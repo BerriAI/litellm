@@ -26,8 +26,6 @@ patched with autospec so the real __init__ still stores self.data (captured via 
 mock's call args), and a brand-new kwarg added to this layer surfaces as a failure.
 """
 
-import os
-import sys
 from contextlib import ExitStack
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
@@ -36,7 +34,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import orjson
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../.."))
 
 import litellm.proxy.proxy_server as proxy_server
 import litellm.proxy.video_endpoints.endpoints as endpoints

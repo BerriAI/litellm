@@ -1,19 +1,18 @@
 import json
 import os
-import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    TOOL_RESULT_IMAGE_BOUNDARY,
+    TOOL_RESULT_IMAGE_PLACEHOLDER,
     add_system_prompt_to_messages,
     get_file_ids_from_messages,
     get_format_from_file_id,
     handle_any_messages_to_chat_completion_str_messages_conversion,
+    hoist_images_from_tool_messages,
     split_concatenated_json_objects,
     update_messages_with_model_file_ids,
 )
@@ -76,19 +75,6 @@ def test_handle_any_messages_to_chat_completion_str_messages_conversion_list():
         {"role": "user", "content": "Hello"},
         {"role": "assistant", "content": "Hi there"},
     ]
-    result = handle_any_messages_to_chat_completion_str_messages_conversion(messages)
-    assert len(result) == 2
-    assert result[0] == messages[0]
-    assert result[1] == messages[1]
-
-
-def test_handle_any_messages_to_chat_completion_str_messages_conversion_list_infinite_loop():
-    # Test that list handling doesn't cause infinite recursion
-    messages = [
-        {"role": "user", "content": "Hello"},
-        {"role": "assistant", "content": "Hi there"},
-    ]
-    # This should complete without stack overflow
     result = handle_any_messages_to_chat_completion_str_messages_conversion(messages)
     assert len(result) == 2
     assert result[0] == messages[0]
@@ -251,10 +237,32 @@ def test_split_concatenated_json_non_dict_value():
     assert result == [{}]
 
 
-def test_split_concatenated_json_invalid_raises():
-    """Completely invalid JSON raises JSONDecodeError."""
-    with pytest.raises(json.JSONDecodeError):
-        split_concatenated_json_objects("not json at all")
+def test_split_concatenated_json_wholly_invalid_returns_empty():
+    """
+    Wholly unparseable JSON degrades to an empty list instead of raising.
+
+    Regression for https://github.com/BerriAI/litellm/issues/18667: a raise
+    here propagated out of `_convert_to_bedrock_tool_call_invoke` and turned
+    every replayed conversation into a 500.
+    """
+    assert split_concatenated_json_objects("not json at all") == []
+
+
+def test_split_concatenated_json_malformed_object_returns_empty():
+    """
+    A single malformed object (missing comma between keys) degrades to an
+    empty list rather than raising `Expecting ',' delimiter`.
+    """
+    assert split_concatenated_json_objects('{"location": "Boston" "unit": "celsius"}') == []
+
+
+def test_split_concatenated_json_salvages_prefix_before_truncated_tail():
+    """
+    Complete objects parsed before an unparseable/truncated tail are kept;
+    only the bad tail is discarded.
+    """
+    result = split_concatenated_json_objects('{"a": 1}{"b": 2}{"c":')
+    assert result == [{"a": 1}, {"b": 2}]
 
 
 # ---------------------------------------------------------------------------
@@ -764,6 +772,159 @@ class TestTextCompletionPromptToMessages:
 
         with pytest.raises(ValueError, match="non-empty string or a non-empty list of strings"):
             text_completion_prompt_to_messages(prompt)
+
+
+DATA_URI_PNG = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg=="
+BOUNDARY_PART = {"type": "text", "text": TOOL_RESULT_IMAGE_BOUNDARY}
+
+
+def _tool_msg(content, tool_call_id="call_1"):
+    return {"role": "tool", "tool_call_id": tool_call_id, "content": content}
+
+
+def _assistant_tool_call_msg(*tool_call_ids):
+    return {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [
+            {"id": tid, "type": "function", "function": {"name": "read_image", "arguments": "{}"}}
+            for tid in tool_call_ids
+        ],
+    }
+
+
+def test_hoist_images_from_tool_messages_bare_data_uri_string_passes_through():
+    messages = [
+        {"role": "user", "content": "read the image"},
+        _assistant_tool_call_msg("call_1"),
+        _tool_msg(DATA_URI_PNG),
+    ]
+
+    result = hoist_images_from_tool_messages(messages)
+
+    assert result is messages
+
+
+def test_hoist_images_from_tool_messages_structured_image_part():
+    messages = [
+        _assistant_tool_call_msg("call_1"),
+        _tool_msg([{"type": "image_url", "image_url": {"url": DATA_URI_PNG}}]),
+    ]
+
+    result = hoist_images_from_tool_messages(messages)
+
+    assert len(result) == 3
+    assert result[1]["content"] == TOOL_RESULT_IMAGE_PLACEHOLDER
+    assert result[2]["role"] == "user"
+    assert result[2]["content"] == [BOUNDARY_PART, {"type": "image_url", "image_url": {"url": DATA_URI_PNG}}]
+
+
+def test_hoist_images_from_tool_messages_keeps_text_parts_in_tool_message():
+    messages = [
+        _assistant_tool_call_msg("call_1"),
+        _tool_msg(
+            [
+                {"type": "text", "text": "screenshot follows"},
+                {"type": "image_url", "image_url": {"url": DATA_URI_PNG}},
+            ]
+        ),
+    ]
+
+    result = hoist_images_from_tool_messages(messages)
+
+    assert result[1]["content"] == [{"type": "text", "text": "screenshot follows"}]
+    assert result[2]["content"] == [BOUNDARY_PART, {"type": "image_url", "image_url": {"url": DATA_URI_PNG}}]
+
+
+def test_hoist_images_from_tool_messages_parallel_tool_calls_insert_after_run():
+    messages = [
+        _assistant_tool_call_msg("call_1", "call_2"),
+        _tool_msg([{"type": "image_url", "image_url": {"url": DATA_URI_PNG}}], tool_call_id="call_1"),
+        _tool_msg([{"type": "image_url", "image_url": {"url": "https://example.com/pic.png"}}], tool_call_id="call_2"),
+        {"role": "assistant", "content": "looking"},
+    ]
+
+    result = hoist_images_from_tool_messages(messages)
+
+    roles = [m["role"] for m in result]
+    assert roles == ["assistant", "tool", "tool", "user", "assistant"]
+    assert result[1]["content"] == TOOL_RESULT_IMAGE_PLACEHOLDER
+    assert result[2]["content"] == TOOL_RESULT_IMAGE_PLACEHOLDER
+    assert result[3]["content"] == [
+        BOUNDARY_PART,
+        {"type": "image_url", "image_url": {"url": DATA_URI_PNG}},
+        {"type": "image_url", "image_url": {"url": "https://example.com/pic.png"}},
+    ]
+
+
+def test_hoist_images_from_tool_messages_no_tool_messages_returns_input_unchanged():
+    messages = [
+        {"role": "user", "content": [{"type": "image_url", "image_url": {"url": DATA_URI_PNG}}]},
+        {"role": "assistant", "content": "a cat"},
+    ]
+
+    result = hoist_images_from_tool_messages(messages)
+
+    assert result is messages
+
+
+def test_hoist_images_from_tool_messages_text_only_tool_message_unchanged():
+    messages = [
+        _assistant_tool_call_msg("call_1"),
+        _tool_msg("plain text result"),
+        _tool_msg([{"type": "text", "text": "another"}], tool_call_id="call_2"),
+    ]
+
+    result = hoist_images_from_tool_messages(messages)
+
+    assert result is messages
+
+
+def test_hoist_images_from_tool_messages_does_not_mutate_input():
+    tool_message = _tool_msg([{"type": "image_url", "image_url": {"url": DATA_URI_PNG}}])
+    messages = [_assistant_tool_call_msg("call_1"), tool_message]
+
+    hoist_images_from_tool_messages(messages)
+
+    assert tool_message["content"] == [{"type": "image_url", "image_url": {"url": DATA_URI_PNG}}]
+    assert len(messages) == 2
+
+
+@pytest.mark.parametrize(
+    "sibling_content",
+    [None, [{"type": "text", "text": "42 files"}]],
+    ids=["none_content", "text_only_list"],
+)
+def test_hoist_images_from_tool_messages_imageless_sibling_in_image_run_unchanged(sibling_content):
+    imageless_tool_msg = _tool_msg(sibling_content, tool_call_id="call_2")
+    messages = [
+        _assistant_tool_call_msg("call_1", "call_2"),
+        _tool_msg([{"type": "image_url", "image_url": {"url": DATA_URI_PNG}}]),
+        imageless_tool_msg,
+    ]
+
+    result = hoist_images_from_tool_messages(messages)
+
+    assert [m["role"] for m in result] == ["assistant", "tool", "tool", "user"]
+    assert result[1]["content"] == TOOL_RESULT_IMAGE_PLACEHOLDER
+    assert result[2] is imageless_tool_msg
+    assert result[3]["content"] == [BOUNDARY_PART, {"type": "image_url", "image_url": {"url": DATA_URI_PNG}}]
+
+
+def test_hoist_images_from_tool_messages_earlier_tool_run_without_images_unchanged():
+    messages = [
+        _assistant_tool_call_msg("call_1"),
+        _tool_msg("plain text result"),
+        _assistant_tool_call_msg("call_2"),
+        _tool_msg([{"type": "image_url", "image_url": {"url": DATA_URI_PNG}}], tool_call_id="call_2"),
+    ]
+
+    result = hoist_images_from_tool_messages(messages)
+
+    assert [m["role"] for m in result] == ["assistant", "tool", "assistant", "tool", "user"]
+    assert result[1]["content"] == "plain text result"
+    assert result[3]["content"] == TOOL_RESULT_IMAGE_PLACEHOLDER
+    assert result[4]["content"] == [BOUNDARY_PART, {"type": "image_url", "image_url": {"url": DATA_URI_PNG}}]
 
 
 class TestCustomToolFormatShapeConversion:

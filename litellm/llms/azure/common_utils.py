@@ -2,11 +2,12 @@ import asyncio
 import hashlib
 import json
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Any, Final, Literal, NamedTuple, cast
 
 import httpx
 from openai import AsyncAzureOpenAI, AsyncOpenAI, AzureOpenAI, OpenAI
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
@@ -21,6 +22,22 @@ from litellm.types.router import GenericLiteLLMParams
 from litellm.utils import _add_path_to_api_base
 
 azure_ad_cache: Final = DualCache()
+
+
+class _AzureAdTokenJson(TypedDict, total=False):
+    access_token: ReadOnly[str]
+    expires_in: ReadOnly[int]
+
+
+class _AzureV1ClientParams(TypedDict, total=False, extra_items=object):
+    base_url: ReadOnly[str]
+
+
+class _AzureGatewayClientParams(TypedDict, total=False, extra_items=object):
+    api_version: ReadOnly[str]
+    base_url: ReadOnly[str]
+    max_retries: ReadOnly[int]
+    timeout: ReadOnly[float | httpx.Timeout]
 
 
 class AzureOpenAIError(BaseLLMException):
@@ -220,7 +237,7 @@ def get_azure_ad_token_from_oidc(
             message=req_token.text,
         )
 
-    azure_ad_token_json: Final = req_token.json()
+    azure_ad_token_json: Final[_AzureAdTokenJson] = req_token.json()
     azure_ad_token_access_token = azure_ad_token_json.get("access_token", None)
     azure_ad_token_expires_in: Final = azure_ad_token_json.get("expires_in", None)
 
@@ -486,7 +503,7 @@ class BaseAzureLLM(BaseOpenAILLM):
 
                 v1_api_key = _async_v1_api_key
 
-            v1_params: Final[dict[str, Any]] = {
+            v1_params: Final[_AzureV1ClientParams] = {
                 "api_key": v1_api_key,
                 "base_url": f"{api_base}/openai/v1/",
             }
@@ -643,7 +660,7 @@ class BaseAzureLLM(BaseOpenAILLM):
                 api_base += "/"
             api_base += f"{model}"
 
-            azure_client_params: Final[dict[str, Any]] = {
+            azure_client_params: Final[_AzureGatewayClientParams] = {
                 "api_version": api_version,
                 "base_url": f"{api_base}",
                 "http_client": litellm.client_session,
@@ -702,7 +719,7 @@ class BaseAzureLLM(BaseOpenAILLM):
     @staticmethod
     def _get_base_azure_url(
         api_base: str | None,
-        litellm_params: GenericLiteLLMParams | dict[str, Any] | None,
+        litellm_params: GenericLiteLLMParams | Mapping[str, object] | None,
         route: Literal["/openai/responses", "/openai/vector_stores"] | str,
         default_api_version: str | Literal["latest", "preview"] | None = None,
     ) -> str:
@@ -757,7 +774,9 @@ class BaseAzureLLM(BaseOpenAILLM):
             return False
         return api_version in {"preview", "latest", "v1"}
 
-    def _resolve_env_var(self, litellm_params: dict[str, Any], param_key: str, env_var_key: str) -> str | None:
+    def _resolve_env_var(
+        self, litellm_params: Mapping[str, str | None], param_key: str, env_var_key: str
+    ) -> str | None:
         """Resolve the environment variable for a given parameter key.
 
         The logic here is different from `params.get(key, os.getenv(env_var))` because
