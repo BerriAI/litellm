@@ -990,7 +990,7 @@ def test_bedrock_chat_invoke_eager_input_streaming_beta_not_duplicated_with_clie
     assert result["anthropic_beta"] == [FINE_GRAINED_TOOL_STREAMING_BETA]
 
 
-def _mid_conversation_system_conversation():
+def _mid_conversation_system_conversation() -> list[dict]:
     return [
         {"role": "system", "content": [{"type": "text", "text": "You are terse.", "cache_control": {"type": "ephemeral"}}]},
         {"role": "user", "content": "First question"},
