@@ -633,8 +633,7 @@ def scan_region(
     always counted against the whole document, so a statement nested in a dollar-quoted body
     reports its real file line and lines up with the markers read from that file. A single-quoted
     literal that `DO` or `EXECUTE` runs as SQL is undoubled before it is scanned, so a `--` or `/*`
-    in one of its nested strings blanks nothing and the statement after it stays visible, and it is
-    padded back to its span so the offsets still land."""
+    in one of its nested strings blanks nothing and the statement after it stays visible."""
     masked, bodies, literals = mask(region)
     executed = executed_names(masked)
     runnable = executed_literals(masked, literals, executed)
@@ -649,7 +648,7 @@ def scan_region(
                     if base <= start and end <= commands_end:
                         yield from scan_region(
                             document,
-                            undouble(region[start:end]).ljust(end - start),
+                            undouble(region[start:end]),
                             migration,
                             markers,
                             offset + start,
