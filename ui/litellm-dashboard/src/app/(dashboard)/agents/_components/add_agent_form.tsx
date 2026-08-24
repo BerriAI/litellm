@@ -5,6 +5,7 @@ import { Logo } from "@/components/molecules/logo/Logo";
 import { Bot, Check, CircleCheck, Key, LayoutGrid } from "lucide-react";
 import CreatedKeyDisplay from "@/components/shared/CreatedKeyDisplay";
 import { Badge } from "@/components/ui/badge";
+import { StatusBadge } from "@/components/shared/table_cells/status_badge";
 import { Button } from "@/components/ui/button";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { Input } from "@/components/ui/input";
@@ -764,9 +765,7 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
                 <span className="block">
                   <span className="flex items-center gap-2">
                     <span className="font-medium text-warning">Custom / Other</span>
-                    <Badge variant="warning" className="h-4 px-1 text-[10px]">
-                      GENERIC
-                    </Badge>
+                    <StatusBadge tone="warning" label="GENERIC" className="h-4 px-1 text-[10px]" />
                   </span>
                   <span className="block text-xs whitespace-normal text-warning">
                     For agents that don&apos;t follow a standard protocol, just needs a virtual key
@@ -935,7 +934,7 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
                   )}
                 </div>
               </div>
-              <Badge variant="success">Recommended</Badge>
+              <StatusBadge tone="success" label="Recommended" />
             </div>
           </div>
 
