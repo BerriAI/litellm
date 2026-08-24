@@ -83,6 +83,18 @@ class MistralConfig(OpenAIGPTConfig):
     def get_config(cls):
         return super().get_config()
 
+    def _is_mistral_reasoning_model(self, model: str) -> bool:
+        """Return True for Mistral chat models that support reasoning_effort."""
+        if not model:
+            return False
+
+        normalized = model.lower()
+
+        if "magistral" in normalized:
+            return True
+
+        return "mistral-medium-3-5" in normalized or "mistral-small-latest" in normalized
+
     def get_supported_openai_params(self, model: str) -> list[str]:
         supported_params: Final = [
             "stream",
@@ -98,8 +110,9 @@ class MistralConfig(OpenAIGPTConfig):
             "parallel_tool_calls",
         ]
 
-        # Add reasoning support for magistral models
-        if "magistral" in model.lower():
+        # Add reasoning support for Mistral models that Mistral documents as
+        # supporting reasoning_effort / thinking.
+        if self._is_mistral_reasoning_model(model):
             supported_params.extend(["thinking", "reasoning_effort"])
 
         return supported_params
@@ -168,10 +181,10 @@ class MistralConfig(OpenAIGPTConfig):
                 optional_params["extra_body"] = {"random_seed": value}
             if param == "response_format":
                 optional_params["response_format"] = value
-            if param == "reasoning_effort" and "magistral" in model.lower():
+            if param == "reasoning_effort" and self._is_mistral_reasoning_model(model):
                 # Flag that we need to add reasoning system prompt
                 optional_params["_add_reasoning_prompt"] = True
-            if param == "thinking" and "magistral" in model.lower():
+            if param == "thinking" and self._is_mistral_reasoning_model(model):
                 # Flag that we need to add reasoning system prompt
                 optional_params["_add_reasoning_prompt"] = True
             if param == "parallel_tool_calls":
@@ -522,14 +535,18 @@ class MistralConfig(OpenAIGPTConfig):
     ) -> dict:
         """
         Transform the overall request to be sent to the API.
-        For magistral models, adds reasoning system prompt when reasoning_effort is specified.
+        For Mistral reasoning models, adds reasoning system prompt when reasoning_effort is specified.
 
         Returns:
             dict: The transformed request. Sent as the body of the API call.
         """
-        # Add reasoning system prompt if needed (for magistral models)
-        if "magistral" in model.lower() and optional_params.get("_add_reasoning_prompt", False):
+        # Add reasoning system prompt if needed for Mistral reasoning models.
+        # On any other model, strip the internal flag so it never leaks into the
+        # provider payload.
+        if self._is_mistral_reasoning_model(model):
             messages = self._add_reasoning_system_prompt_if_needed(messages, optional_params)
+        else:
+            optional_params.pop("_add_reasoning_prompt", None)
 
         # Call parent transform_request which handles _transform_messages
         return super().transform_request(
