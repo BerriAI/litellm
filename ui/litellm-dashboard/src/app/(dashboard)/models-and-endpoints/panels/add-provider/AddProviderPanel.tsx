@@ -90,12 +90,13 @@ export default function AddProviderPanel() {
   const [step, setStep] = React.useState<WizardStep>("provider");
   const [selectedProvider, setSelectedProvider] = React.useState<Providers | null>(null);
   const [credentialName, setCredentialName] = React.useState("");
-  const [credentialSaved, setCredentialSaved] = React.useState(false);
+  const [savedCredentialName, setSavedCredentialName] = React.useState<string | null>(null);
   const [savedValues, setSavedValues] = React.useState<Record<string, unknown>>({});
   const [federationRuleId, setFederationRuleId] = React.useState("");
   const [jwks, setJwks] = React.useState<AnthropicJwks | null>(null);
   const [jwksError, setJwksError] = React.useState<string | null>(null);
   const [discoveryError, setDiscoveryError] = React.useState<string | null>(null);
+  const [createError, setCreateError] = React.useState<string | null>(null);
   const [isDiscovering, setIsDiscovering] = React.useState(false);
   const [rows, setRows] = React.useState<DiscoveredModelRow[]>([]);
   const [isCreating, setIsCreating] = React.useState(false);
@@ -124,8 +125,11 @@ export default function AddProviderPanel() {
   );
   const litellmProvider = selectedProviderInfo?.litellm_provider ?? "";
 
+  const credentialSaved = savedCredentialName !== null && savedCredentialName === credentialName;
+
   const nameCollision =
     credentialName.length > 0 &&
+    credentialName !== savedCredentialName &&
     (credentialsResponse?.credentials ?? []).some((c) => c.credential_name === credentialName);
 
   const goTo = (next: WizardStep) => setStep(next);
@@ -160,7 +164,7 @@ export default function AddProviderPanel() {
         await credentialUpdateCall(accessToken, credentialName, updatePayload);
       }
       setSavedValues(values);
-      setCredentialSaved(true);
+      setSavedCredentialName(credentialName);
       setFederationRuleId(
         typeof values.anthropic_federation_rule_id === "string" ? values.anthropic_federation_rule_id : "",
       );
@@ -231,13 +235,19 @@ export default function AddProviderPanel() {
     setIsCreating(true);
     setCreationResults([]);
     setAliasCollisions([]);
+    setCreateError(null);
     goTo("creating");
 
-    let existing: DeploymentInfoRow[] = [];
+    let existing: DeploymentInfoRow[];
     try {
       existing = (await listAllModelsCall(accessToken)).data;
-    } catch {
-      existing = [];
+    } catch (error) {
+      setIsCreating(false);
+      setCreateError(
+        `Could not read the existing deployments, so creating now could duplicate ones already saved. ${extractProxyErrorMessage(error)}`,
+      );
+      goTo("review");
+      return;
     }
     const pending = rowsPendingCreation(rows, litellmProvider, credentialName, existing);
     const pendingIds = new Set(pending.map((r) => r.id));
@@ -346,6 +356,7 @@ export default function AddProviderPanel() {
         <ReviewModelsStep
           rows={rows}
           setRows={setRows}
+          createError={createError}
           onBack={() => {
             goTo("discover");
             void runDiscovery();

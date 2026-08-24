@@ -333,4 +333,80 @@ describe("AddProviderPanel", () => {
     );
     expect(await screen.findByText("claude-3-opus")).toBeInTheDocument();
   });
+  it("refuses to create when the deployment lookup fails, rather than duplicating saved rows", async () => {
+    discoverProviderModelsCall.mockResolvedValue({ models: ["claude-3-opus"] });
+    listAllModelsCall.mockRejectedValue(new Error("proxy unreachable"));
+    const { user } = await setup();
+
+    await chooseProvider(user, "Anthropic");
+    await user.type(screen.getByLabelText("Credential name"), "anthropic-prod");
+    await user.click(screen.getByRole("button", { name: /Next/ }));
+    await user.type(await screen.findByLabelText("API Key"), "sk-ant-test");
+    await user.click(screen.getByRole("button", { name: "Save credential" }));
+
+    await screen.findByText("claude-3-opus");
+    await user.click(screen.getByRole("button", { name: "Create 1 model" }));
+
+    expect(await screen.findByText(/could duplicate ones already saved/i)).toBeInTheDocument();
+    expect(createProviderModelCall).not.toHaveBeenCalled();
+  });
+
+  it("creates rather than PATCHes after the credential name changes following a save", async () => {
+    discoverProviderModelsCall.mockResolvedValue({ models: ["claude-3-opus"] });
+    const { user } = await setup();
+
+    await chooseProvider(user, "Anthropic");
+    await user.type(screen.getByLabelText("Credential name"), "anthropic-first");
+    await user.click(screen.getByRole("button", { name: /Next/ }));
+
+    await chooseSelectOption(
+      user,
+      await screen.findByRole("combobox", { name: "Authentication method" }),
+      "Workload Identity Federation (LiteLLM-signed)",
+    );
+    fireEvent.change(await screen.findByLabelText("Organization ID"), { target: { value: "org-1" } });
+    fireEvent.change(screen.getByLabelText("Issuer URL"), { target: { value: "https://proxy.example.com" } });
+    fireEvent.change(screen.getByLabelText("Issuer Subject"), { target: { value: "litellm-proxy" } });
+    fireEvent.change(screen.getByLabelText("Signing Key Reference"), { target: { value: "os.environ/SIGNING_KEY" } });
+    await user.click(screen.getByRole("button", { name: "Save credential" }));
+
+    // The JWKS step is the one place the wizard pauses after a save, so it is the route back to
+    // the name field. Renaming there must create the new credential, never PATCH the old name.
+    await screen.findByText("Register this JWKS with Anthropic");
+    await user.click(screen.getByRole("button", { name: /Back/ }));
+    await user.click(await screen.findByRole("button", { name: /Back/ }));
+
+    const nameInput = await screen.findByLabelText("Credential name");
+    await user.clear(nameInput);
+    await user.type(nameInput, "anthropic-second");
+    await user.click(screen.getByRole("button", { name: /Next/ }));
+
+    credentialCreateCall.mockClear();
+    credentialUpdateCall.mockClear();
+    await user.click(await screen.findByRole("button", { name: /Save credential/ }));
+
+    await waitFor(() =>
+      expect(credentialCreateCall).toHaveBeenCalledWith(
+        "test-access-token",
+        expect.objectContaining({ credential_name: "anthropic-second" }),
+      ),
+    );
+    expect(credentialUpdateCall).not.toHaveBeenCalled();
+  });
+
+  it("blocks creation while any model name is blank", async () => {
+    discoverProviderModelsCall.mockResolvedValue({ models: ["claude-3-opus"] });
+    const { user } = await setup();
+
+    await chooseProvider(user, "Anthropic");
+    await user.type(screen.getByLabelText("Credential name"), "anthropic-prod");
+    await user.click(screen.getByRole("button", { name: /Next/ }));
+    await user.type(await screen.findByLabelText("API Key"), "sk-ant-test");
+    await user.click(screen.getByRole("button", { name: "Save credential" }));
+
+    const nameCell = await screen.findByDisplayValue("claude-3-opus");
+    await user.clear(nameCell);
+
+    expect(screen.getByRole("button", { name: /Create 1 model/ })).toBeDisabled();
+  });
 });

@@ -13,12 +13,15 @@ import { buildManualRow, type DiscoveredModelRow } from "./wizardLogic";
 interface ReviewModelsStepProps {
   rows: DiscoveredModelRow[];
   setRows: React.Dispatch<React.SetStateAction<DiscoveredModelRow[]>>;
+  createError: string | null;
   onBack: () => void;
   onCreateModels: () => void;
 }
 
-const ReviewModelsStep: React.FC<ReviewModelsStepProps> = ({ rows, setRows, onBack, onCreateModels }) => {
+const ReviewModelsStep: React.FC<ReviewModelsStepProps> = ({ rows, setRows, createError, onBack, onCreateModels }) => {
   const [manualId, setManualId] = React.useState("");
+
+  const hasBlankName = rows.some((row) => row.modelName.trim() === "");
 
   const updateRow = (id: string, patch: Partial<DiscoveredModelRow>) =>
     setRows((current) => current.map((row) => (row.id === id ? { ...row, ...patch } : row)));
@@ -113,11 +116,13 @@ const ReviewModelsStep: React.FC<ReviewModelsStepProps> = ({ rows, setRows, onBa
           </Button>
         </div>
 
+        {createError && <p className="text-sm text-destructive">{createError}</p>}
+
         <div className="flex justify-between">
           <Button type="button" variant="outline" onClick={onBack}>
             <ArrowLeft className="mr-1 size-4" /> Back
           </Button>
-          <Button disabled={rows.length === 0} onClick={onCreateModels}>
+          <Button disabled={rows.length === 0 || hasBlankName} onClick={onCreateModels}>
             Create {rows.length} model{rows.length === 1 ? "" : "s"}
           </Button>
         </div>
