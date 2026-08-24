@@ -2,6 +2,7 @@ from collections.abc import Mapping
 from typing import Final
 
 import litellm
+from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 
 
 def _form_field_value(value: object) -> str:
@@ -12,13 +13,17 @@ def _form_field_value(value: object) -> str:
     return str(value)
 
 
-def _flatten_form_field(key: str, value: object) -> tuple[tuple[str, str], ...]:
+def _flatten_form_field(key: str, value: object, depth: int = 0) -> tuple[tuple[str, str], ...]:
+    if depth > DEFAULT_MAX_RECURSE_DEPTH:
+        raise ValueError("Form field value exceeds maximum nesting depth")
     if isinstance(value, Mapping):
         return tuple(
-            item for subkey, subvalue in value.items() for item in _flatten_form_field(f"{key}[{subkey}]", subvalue)
+            item
+            for subkey, subvalue in value.items()
+            for item in _flatten_form_field(f"{key}[{subkey}]", subvalue, depth + 1)
         )
     if isinstance(value, (list, tuple)):
-        return tuple(item for entry in value for item in _flatten_form_field(f"{key}[]", entry))
+        return tuple(item for entry in value for item in _flatten_form_field(f"{key}[]", entry, depth + 1))
     if value is None:
         return ()
     serialized: Final = _form_field_value(value)
@@ -31,18 +36,20 @@ def _is_form_scalar(value: object) -> bool:
     return value is not None and not isinstance(value, (Mapping, list, tuple))
 
 
-def _flatten_form_data_field(key: str, value: object) -> tuple[tuple[str, str | tuple[str, ...]], ...]:
+def _flatten_form_data_field(key: str, value: object, depth: int = 0) -> tuple[tuple[str, str | tuple[str, ...]], ...]:
+    if depth > DEFAULT_MAX_RECURSE_DEPTH:
+        raise ValueError("Form field value exceeds maximum nesting depth")
     if isinstance(value, Mapping):
         return tuple(
             item
             for subkey, subvalue in value.items()
-            for item in _flatten_form_data_field(f"{key}[{subkey}]", subvalue)
+            for item in _flatten_form_data_field(f"{key}[{subkey}]", subvalue, depth + 1)
         )
     if isinstance(value, (list, tuple)):
         if all(_is_form_scalar(entry) for entry in value):
             serialized_fields: Final = tuple(field for entry in value if (field := _form_field_value(entry)))
             return ((key, serialized_fields),) if serialized_fields else ()
-        return tuple(item for entry in value for item in _flatten_form_data_field(f"{key}[]", entry))
+        return tuple(item for entry in value for item in _flatten_form_data_field(f"{key}[]", entry, depth + 1))
     if value is None:
         return ()
     serialized: Final = _form_field_value(value)

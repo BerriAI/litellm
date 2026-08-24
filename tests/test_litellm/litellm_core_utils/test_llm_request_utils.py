@@ -1,4 +1,5 @@
 import httpx
+import pytest
 
 from litellm.litellm_core_utils.llm_request_utils import (
     flatten_form_field_values,
@@ -97,3 +98,13 @@ def test_flatten_form_field_values_scalar_list_survives_update_into_multipart():
 
     assert names.count("loras") == 2
     assert names.count("model") == 1
+
+
+def test_form_field_serializers_reject_cyclic_values():
+    cyclic: dict[str, object] = {}
+    cyclic["self"] = cyclic
+
+    with pytest.raises(ValueError, match="maximum nesting depth"):
+        flatten_form_field_values({"metadata": cyclic})
+    with pytest.raises(ValueError, match="maximum nesting depth"):
+        serialize_multipart_form_fields({"metadata": cyclic})

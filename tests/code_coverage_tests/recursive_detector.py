@@ -60,8 +60,8 @@ IGNORE_FUNCTIONS = [
     "json_string_leaves",  # max depth set (MAX_STRUCTURED_CONTENT_SCAN_DEPTH); fails closed by raising at the cap so nothing goes unscanned.
     "with_json_string_leaves",  # transitively bounded: only runs on a tree json_string_leaves already walked under the cap.
     "json_unrewritable_labels",  # max depth set (MAX_STRUCTURED_CONTENT_SCAN_DEPTH); returns the None sentinel at the cap so the caller blocks.
-    "_flatten_form_field",  # bounded by the nesting depth of the already-parsed request body (a finite JSON tree, no cycles possible).
-    "_flatten_form_data_field",  # bounded by the nesting depth of the already-parsed request body (a finite JSON tree, no cycles possible).
+    "_flatten_form_field",  # bounded by DEFAULT_MAX_RECURSE_DEPTH; raises at the cap.
+    "_flatten_form_data_field",  # bounded by DEFAULT_MAX_RECURSE_DEPTH; raises at the cap.
 ]
 
 
