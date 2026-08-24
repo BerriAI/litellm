@@ -584,10 +584,16 @@ def names_a_relation(before: str) -> bool:
     precede a call. `ON` is the ambiguous one, since it introduces the table of a `CREATE INDEX`
     but also a join condition that may itself be a call, so it counts only inside a statement
     that creates an index, leaving `JOIN ... ON f()` and an index predicate's `WHERE f()` as
-    calls."""
+    calls. A bare schema qualifier is read through: `INSERT INTO public."Foo"` parks the table's
+    introducing word a hop back behind `public.`, so a dot touching the word before the name means
+    that word is the qualifier and the one before it decides. A quoted schema blanks to spaces and
+    leaves the introducing word already adjacent, so only a dot with no space counts, and a genuine
+    `SELECT public."f"()` still reaches its `SELECT` and reads as a call."""
     word = PRECEDING_WORD.search(before)
     if word is None:
         return False
+    if before[word.end(1) : word.end(1) + 1] == ".":
+        return names_a_relation(before[: word.start(1)])
     keyword = word.group(1).upper()
     if keyword in INTRODUCES_A_RELATION:
         return True
