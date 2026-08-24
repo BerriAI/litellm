@@ -1742,19 +1742,27 @@ def _bearer_stripped(value: str) -> str:
     return value
 
 
+_HEADERS_NEVER_FORWARDED_TO_VERTEX: Final = frozenset(
+    {"content-length", "host", "x-litellm-api-key", "api-key", "x-api-key"}
+)
+
+
 def _forwarded_headers_for_credentialless_vertex_passthrough(request: Request) -> Mapping[str, str]:
     """
     Header set to forward on the bring-your-own-credentials Vertex passthrough
     branch, used when the proxy has no Vertex credential configured.
 
-    The LiteLLM virtual key that authenticated the caller is never forwarded to
-    Google. LiteLLM accepts that key from several headers (``Authorization``,
-    ``x-litellm-api-key``, ``x-goog-api-key``, ``api-key``, ``x-api-key``), and
-    ``x-goog-api-key`` doubles as a genuine Google credential, so the key is dropped
-    by value across every header rather than by name. A caller may still bring their
-    own Google credential in the ``Authorization`` (OAuth token) or ``x-goog-api-key``
-    header; when neither survives the request is rejected so the virtual key cannot
-    leak upstream.
+    No credential the proxy accepts for caller authentication is forwarded to
+    Google. LiteLLM reads the caller's virtual key from ``x-litellm-api-key``,
+    ``api-key``, ``x-api-key``, ``Authorization``, and ``x-goog-api-key``. Vertex
+    only ever authenticates with an OAuth token in ``Authorization`` or an API key
+    in ``x-goog-api-key``, so ``x-litellm-api-key`` / ``api-key`` / ``x-api-key``
+    can only carry caller auth material and are dropped by name. ``Authorization``
+    and ``x-goog-api-key`` may instead carry a genuine bring-your-own Google
+    credential, so they are kept unless their value is the caller's virtual key,
+    which is dropped by value (normalizing any ``Bearer`` prefix). When neither a
+    surviving ``Authorization`` nor ``x-goog-api-key`` remains the request is
+    rejected so the virtual key cannot leak upstream.
     """
     incoming: Final = _safe_get_request_headers(request)
     caller_virtual_key: Final = _bearer_stripped(get_litellm_virtual_key(request))
@@ -1762,7 +1770,7 @@ def _forwarded_headers_for_credentialless_vertex_passthrough(request: Request) -
         {
             name: value
             for name, value in incoming.items()
-            if name not in ("content-length", "host", "x-litellm-api-key")
+            if name not in _HEADERS_NEVER_FORWARDED_TO_VERTEX
             and not (caller_virtual_key and _bearer_stripped(value) == caller_virtual_key)
         }
     )
