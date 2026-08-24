@@ -7,6 +7,7 @@ import httpx
 import pytest
 
 
+import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.openai_passthrough_logging_handler import (
     OpenAIPassthroughLoggingHandler,
@@ -14,6 +15,7 @@ from litellm.proxy.pass_through_endpoints.llm_provider_handlers.openai_passthrou
 from litellm.proxy.pass_through_endpoints.success_handler import (
     PassThroughEndpointLogging,
 )
+from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     PassthroughStandardLoggingPayload,
 )
@@ -1807,6 +1809,230 @@ class TestOpenAIPassthroughIntegration:
         assert mock_logging_obj.model_call_details["response_cost"] == 0.020
         assert mock_logging_obj.model_call_details["model"] == "dall-e-2"
         assert mock_logging_obj.model_call_details["custom_llm_provider"] == "openai"
+
+
+class TestOpenAIPassthroughResponsesStreamingSpendLog:
+    """A streamed OpenAI-passthrough `/v1/responses` call must write a priced spend
+    log row (#36523).
+
+    `_handle_logging_openai_collected_chunks` received `url_route` and ignored it, so
+    a Responses SSE stream was reassembled by the chat-completions chunk parser. The
+    assembled object carried a synthetic `chatcmpl-` id, `model=None` and zero usage,
+    and the spend row landed at zero tokens and zero spend while the identical
+    buffered call priced exactly.
+    """
+
+    RESPONSE_ID = "resp_0c72ddebf05f8751"
+    MODEL_MAP_KEY = "gpt-4o-mini-2024-07-18"
+    INPUT_TOKENS = 14
+    OUTPUT_TOKENS = 2
+
+    def setup_method(self):
+        self.start_time = datetime.now()
+        self.end_time = datetime.now()
+        rates = litellm.model_cost[self.MODEL_MAP_KEY]
+        self.expected_spend = (
+            self.INPUT_TOKENS * rates["input_cost_per_token"]
+            + self.OUTPUT_TOKENS * rates["output_cost_per_token"]
+        )
+
+    def _responses_stream_chunks(self) -> List[str]:
+        """Usage arrives only on the terminal `response.completed` event, nested under
+        `response` as `input_tokens` / `output_tokens`. No event carries a top-level
+        `id`, `model` or `usage`."""
+        response_body = {
+            "id": self.RESPONSE_ID,
+            "object": "response",
+            "created_at": 1786374786,
+            "model": self.MODEL_MAP_KEY,
+            "error": None,
+            "incomplete_details": None,
+            "instructions": None,
+            "metadata": {},
+            "parallel_tool_calls": True,
+            "temperature": 1.0,
+            "tool_choice": "auto",
+            "tools": [],
+            "top_p": 1.0,
+        }
+        created_event = {
+            "type": "response.created",
+            "sequence_number": 0,
+            "response": {**response_body, "status": "in_progress", "output": [], "usage": None},
+        }
+        delta_event = {
+            "type": "response.output_text.delta",
+            "sequence_number": 3,
+            "item_id": "msg_abc",
+            "output_index": 0,
+            "content_index": 0,
+            "delta": "OK",
+        }
+        completed_event = {
+            "type": "response.completed",
+            "sequence_number": 8,
+            "response": {
+                **response_body,
+                "status": "completed",
+                "output": [
+                    {
+                        "id": "msg_abc",
+                        "type": "message",
+                        "status": "completed",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "OK", "annotations": []}],
+                    }
+                ],
+                "usage": {
+                    "input_tokens": self.INPUT_TOKENS,
+                    "input_tokens_details": {"cached_tokens": 0},
+                    "output_tokens": self.OUTPUT_TOKENS,
+                    "output_tokens_details": {"reasoning_tokens": 0},
+                    "total_tokens": self.INPUT_TOKENS + self.OUTPUT_TOKENS,
+                },
+            },
+        }
+        return [
+            f"data: {json.dumps(created_event)}",
+            f"data: {json.dumps(delta_event)}",
+            f"data: {json.dumps(completed_event)}",
+            "data: [DONE]",
+        ]
+
+    def _logging_obj(self) -> LiteLLMLoggingObj:
+        logging_obj = LiteLLMLoggingObj(
+            model="gpt-4o-mini",
+            messages=[],
+            stream=True,
+            call_type="pass_through_endpoint",
+            start_time=self.start_time,
+            litellm_call_id="323dfe4f-2741-4473-b6e2-000000000000",
+            function_id="1234",
+        )
+        logging_obj.model_call_details["custom_llm_provider"] = "openai"
+        return logging_obj
+
+    def test_streamed_responses_passthrough_spend_log_is_priced(self):
+        """The spend row books the same tokens, spend and `resp_` id as the buffered call."""
+        result = OpenAIPassthroughLoggingHandler._handle_logging_openai_collected_chunks(
+            litellm_logging_obj=self._logging_obj(),
+            passthrough_success_handler_obj=None,
+            url_route="https://api.openai.com/v1/responses",
+            request_body={
+                "model": "gpt-4o-mini",
+                "input": "Say hi in one word.",
+                "max_output_tokens": 16,
+                "stream": True,
+            },
+            endpoint_type=None,
+            start_time=self.start_time,
+            all_chunks=self._responses_stream_chunks(),
+            end_time=self.end_time,
+        )
+
+        spend_log_row = get_logging_payload(
+            kwargs=result["kwargs"],
+            response_obj=result["result"],
+            start_time=self.start_time,
+            end_time=self.end_time,
+        )
+
+        assert spend_log_row["prompt_tokens"] == self.INPUT_TOKENS
+        assert spend_log_row["completion_tokens"] == self.OUTPUT_TOKENS
+        assert spend_log_row["total_tokens"] == self.INPUT_TOKENS + self.OUTPUT_TOKENS
+        assert spend_log_row["spend"] == self.expected_spend
+        assert spend_log_row["request_id"] == self.RESPONSE_ID
+        assert spend_log_row["model"] == "gpt-4o-mini"
+
+        row_metadata = json.loads(spend_log_row["metadata"])
+        assert row_metadata["model_map_information"]["model_map_key"] == self.MODEL_MAP_KEY
+
+
+class TestOpenAIPassthroughEmbeddingsSpendLog:
+    """An OpenAI-passthrough `/v1/embeddings` call must write a priced spend log row
+    (#36646).
+
+    `_is_supported_openai_endpoint` ORed four route predicates, none of which matched
+    `/v1/embeddings`, so the dispatcher never entered the OpenAI handler and billable
+    embedding tokens produced no spend row at all, under-enforcing key budgets.
+    """
+
+    EMBEDDINGS_URL = "https://api.openai.com/v1/embeddings"
+    MODEL = "text-embedding-3-small"
+    PROMPT_TOKENS = 14
+    CALL_ID = "11024cc3-b143-4a63-954a-ec06081df768"
+
+    def setup_method(self):
+        self.start_time = datetime.now()
+        self.end_time = datetime.now()
+        self.expected_spend = self.PROMPT_TOKENS * litellm.model_cost[self.MODEL]["input_cost_per_token"]
+        self.response_body = {
+            "object": "list",
+            "data": [{"object": "embedding", "index": 0, "embedding": [0.0, 1.0]}],
+            "model": self.MODEL,
+            "usage": {"prompt_tokens": self.PROMPT_TOKENS, "total_tokens": self.PROMPT_TOKENS},
+        }
+        self.request_body = {"model": self.MODEL, "input": "hello"}
+
+    def _create_mock_httpx_response(self) -> httpx.Response:
+        mock_response = MagicMock(spec=httpx.Response)
+        mock_response.status_code = 200
+        mock_response.text = json.dumps(self.response_body)
+        mock_response.json.return_value = self.response_body
+        mock_response.headers = {"content-type": "application/json"}
+        return mock_response
+
+    def _logging_obj(self) -> LiteLLMLoggingObj:
+        logging_obj = LiteLLMLoggingObj(
+            model=self.MODEL,
+            messages=[],
+            stream=False,
+            call_type="pass_through_endpoint",
+            start_time=self.start_time,
+            litellm_call_id=self.CALL_ID,
+            function_id="1234",
+        )
+        logging_obj.model_call_details["passthrough_logging_payload"] = PassthroughStandardLoggingPayload(
+            url=self.EMBEDDINGS_URL,
+            request_body=self.request_body,
+            request_method="POST",
+        )
+        return logging_obj
+
+    def test_embeddings_passthrough_spend_log_is_priced(self):
+        """The dispatched call books prompt tokens and cost onto the spend row."""
+        dispatched = PassThroughEndpointLogging().normalize_llm_passthrough_logging_payload(
+            httpx_response=self._create_mock_httpx_response(),
+            response_body=self.response_body,
+            request_body=self.request_body,
+            logging_obj=self._logging_obj(),
+            url_route=self.EMBEDDINGS_URL,
+            result="",
+            start_time=self.start_time,
+            end_time=self.end_time,
+            cache_hit=False,
+            custom_llm_provider="openai",
+            litellm_call_id=self.CALL_ID,
+            litellm_params={},
+            call_type="pass_through_endpoint",
+        )
+
+        assert dispatched["standard_logging_response_object"] is not None
+        assert dispatched["kwargs"]["response_cost"] == self.expected_spend
+
+        spend_log_row = get_logging_payload(
+            kwargs=dispatched["kwargs"],
+            response_obj=dispatched["standard_logging_response_object"],
+            start_time=self.start_time,
+            end_time=self.end_time,
+        )
+
+        assert spend_log_row["prompt_tokens"] == self.PROMPT_TOKENS
+        assert spend_log_row["total_tokens"] == self.PROMPT_TOKENS
+        assert spend_log_row["spend"] == self.expected_spend
+        assert spend_log_row["model"] == self.MODEL
+        assert spend_log_row["custom_llm_provider"] == "openai"
+        assert spend_log_row["request_id"] == self.CALL_ID
 
 
 if __name__ == "__main__":

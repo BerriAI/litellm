@@ -233,6 +233,7 @@ class ChatBody(BaseModel):
     tool_choice: str | None = None
     guardrails: list[str] | None = None
     response_format: dict[str, object] | None = None
+    cache: dict[str, bool] | None = {"no-cache": True}
 
 
 class RouterSettingsOverride(BaseModel):
@@ -431,6 +432,7 @@ class AnthropicMessagesBody(BaseModel):
     stream: bool | None = None
     tools: list[AnthropicTool] | None = None
     guardrails: list[str] | None = None
+    cache: dict[str, bool] | None = {"no-cache": True}
 
 
 class CountTokensBody(BaseModel):
@@ -496,6 +498,7 @@ class McpServerInfo(BaseModel):
 class EmbedBody(BaseModel):
     model: str
     input: str
+    cache: dict[str, bool] | None = {"no-cache": True}
 
 
 class EmbedResponse(BaseModel):
