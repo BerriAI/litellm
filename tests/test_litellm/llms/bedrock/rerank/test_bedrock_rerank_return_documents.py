@@ -165,3 +165,45 @@ async def test_bedrock_rerank_return_documents_false_async():
     assert response.results is not None
     for result in response.results:
         assert "document" not in result, f"return_documents=False must omit document, got {result}"
+
+
+def test_bedrock_rerank_dict_document_without_text_key_skips_back_fill():
+    from litellm.llms.bedrock.rerank.transformation import BedrockRerankConfig
+
+    json_documents = [
+        {"title": "zero", "body": "json zero body"},
+        {"title": "one", "body": "json one body"},
+        {"title": "two", "body": "json two body"},
+    ]
+    response = BedrockRerankConfig()._transform_response(
+        BEDROCK_RESPONSE, documents=json_documents, return_documents=True
+    )
+    assert response.results is not None
+    for result in response.results:
+        assert "document" not in result, f"dict documents without 'text' key have no back-fill target, got {result}"
+
+
+def test_bedrock_rerank_non_integer_index_skips_back_fill():
+    from litellm.llms.bedrock.rerank.transformation import BedrockRerankConfig
+
+    response = BedrockRerankConfig()._transform_response(
+        {"results": [{"index": "2", "relevanceScore": 0.9}]},
+        documents=DOCUMENTS,
+        return_documents=True,
+    )
+    assert response.results is not None
+    assert len(response.results) == 1
+    assert "document" not in response.results[0]
+
+
+def test_bedrock_rerank_out_of_range_index_skips_back_fill():
+    from litellm.llms.bedrock.rerank.transformation import BedrockRerankConfig
+
+    response = BedrockRerankConfig()._transform_response(
+        {"results": [{"index": 99, "relevanceScore": 0.9}]},
+        documents=DOCUMENTS,
+        return_documents=True,
+    )
+    assert response.results is not None
+    assert len(response.results) == 1
+    assert "document" not in response.results[0]

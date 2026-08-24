@@ -30,10 +30,10 @@ class BedrockRerankHandler(BaseAWSLLM):
     async def arerank(
         self,
         prepared_request: BedrockPreparedRequest,
-        documents: Sequence[str | dict[str, Any]],
-        return_documents: bool,
         timeout: float | httpx.Timeout | None = None,
         client: AsyncHTTPHandler | None = None,
+        documents: Sequence[str | dict[str, Any]] | None = None,
+        return_documents: bool = True,
     ):
         if client is None:
             client = get_async_httpx_client(llm_provider=litellm.LlmProviders.BEDROCK)
