@@ -2098,13 +2098,13 @@ class OpenAIRealtimeContentPartDone(TypedDict):
 
 
 class OpenAIRealtimeFunctionCallArgumentsDelta(TypedDict):
-    type: Literal["response.function_call_arguments.delta"]
-    event_id: str
-    response_id: str
-    item_id: str
-    output_index: int
-    call_id: str
-    delta: str
+    type: ReadOnly[Literal["response.function_call_arguments.delta"]]
+    event_id: ReadOnly[str]
+    response_id: ReadOnly[str]
+    item_id: ReadOnly[str]
+    output_index: ReadOnly[int]
+    call_id: ReadOnly[str]
+    delta: ReadOnly[str]
 
 
 class OpenAIRealtimeFunctionCallArgumentsDone(TypedDict):

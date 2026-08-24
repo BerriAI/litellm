@@ -1223,7 +1223,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
                 type="conversation.item.added",
                 event_id=f"event_{uuid.uuid4()}",
                 previous_item_id=None,
-                item=OpenAIRealtimeStreamResponseOutputItem({**pending_item}),
+                item=pending_item,
             ),
             # Nova Sonic delivers the whole argument payload at once; emit one delta anyway
             # so clients that accumulate deltas rather than read `.done` still get the args.
@@ -1251,7 +1251,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
                 event_id=f"event_{uuid.uuid4()}",
                 response_id=response_id,
                 output_index=0,
-                item=OpenAIRealtimeStreamResponseOutputItem({**function_call_item}),
+                item=function_call_item,
             ),
             OpenAIRealtimeDoneEvent(
                 type="response.done",
@@ -1260,7 +1260,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
                     object="realtime.response",
                     id=response_id,
                     status="completed",
-                    output=[OpenAIRealtimeStreamResponseOutputItem({**function_call_item})],
+                    output=[function_call_item],
                     conversation_id=conversation_id,
                     usage=self.consume_usage_for_response_done(),
                 ),
