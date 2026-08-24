@@ -1,0 +1,40 @@
+# Web search via Microsoft Foundry: Grounding with Bing Search / the built-in
+# web_search tool, called through the Foundry Responses API.
+# See litellm/llms/azure/search/transformation.py for details.
+#
+# Required environment variables (the search router forwards only
+# search_provider / api_key / api_base from the litellm_params block, so
+# provider configuration rides env vars):
+#   BING_GROUNDING_PROJECT_ENDPOINT: the Foundry project endpoint, e.g.
+#     https://<account>.services.ai.azure.com/api/projects/<project>
+#   BING_GROUNDING_MODEL: a model deployment in that project (e.g. gpt-4.1);
+#     it runs the grounded search, its tokens are billed on that deployment
+# Optional:
+#   BING_GROUNDING_CONNECTION_ID: a Grounding with Bing Search project
+#     connection id; set it to use the bing_grounding tool ($35 per 1,000
+#     transactions on the G1 SKU). Without it the project's built-in
+#     web_search tool is used
+#   BING_GROUNDING_TOKEN: an Entra bearer token for scope
+#     https://ai.azure.com/.default. Without it (and without api_key below)
+#     the token is minted via azure-identity (AZURE_CLIENT_ID /
+#     AZURE_CLIENT_SECRET / AZURE_TENANT_ID, managed identity, or any other
+#     DefaultAzureCredential source)
+
+model_list:
+  - model_name: claude-sonnet
+    litellm_params:
+      model: bedrock/us.anthropic.claude-sonnet-5
+      aws_region_name: us-east-1
+
+search_tools:
+  - search_tool_name: bing-grounding-search
+    litellm_params:
+      search_provider: bing_grounding
+      # Alternative to BING_GROUNDING_TOKEN / azure-identity:
+      # api_key: os.environ/BING_GROUNDING_TOKEN
+
+litellm_settings:
+  callbacks: ["websearch_interception"]
+  websearch_interception_params:
+    enabled_providers: ["bedrock"]
+    search_tool_name: bing-grounding-search
