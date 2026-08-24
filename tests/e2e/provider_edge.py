@@ -628,33 +628,38 @@ def _persist(
 def _recording_steps(
     backend: RecordEdge, test_key: str, request: RecordedRequest, head: StreamHead
 ) -> Generator[StreamStep, None, None]:
-    """Record mode's step source: hand each upstream chunk downstream as it arrives
-    while collecting it, then persist the whole sequence once, under the lock.
-    Relaying incrementally keeps record exercising the proxy's incremental parser
-    the way a live run does.
+    """Record mode's step source: hand each upstream chunk downstream and record it
+    only once that write has returned, then persist the whole sequence once, under
+    the lock. Relaying incrementally keeps record exercising the proxy's incremental
+    parser the way a live run does.
 
-    The ``finally`` also covers the proxy hanging up mid-stream, which closes this
-    generator: what arrived is still recorded, marked truncated, because recording a
-    cut-short stream as a clean one would let a later replay serve a well-terminated
-    fraction of the response and pass a test that should have gone red."""
+    A chunk is appended after its ``yield`` returns, so a downstream that hangs up
+    mid-relay records exactly the chunks it took and never the one whose write
+    raised. The ``except`` covers that downstream close and the proxy hanging up
+    mid-stream; either way the ``finally`` persists what arrived, marked truncated,
+    because recording a cut-short stream as a clean one would let a later replay
+    serve a well-terminated fraction of the response and pass a test that should
+    have gone red."""
     collected: list[bytes] = []
     truncated: str | None = None
-    delivered = False
     try:
         with closing(head.steps) as steps:
             for step in steps:
                 match step:
-                    case StreamChunk(data=data):
-                        collected.append(data)
+                    case StreamChunk():
+                        pass
                     case StreamTruncation(reason=reason):
                         truncated = f"upstream: {reason}"
                     case _:
                         assert_never(step)
                 yield step
-        delivered = True
-    finally:
-        if not delivered and truncated is None:
+                if isinstance(step, StreamChunk):
+                    collected.append(step.data)
+    except GeneratorExit:
+        if truncated is None:
             truncated = f"downstream: relay closed after {len(collected)} chunks"
+        raise
+    finally:
         _persist(
             backend,
             test_key,

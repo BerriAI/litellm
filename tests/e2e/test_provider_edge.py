@@ -36,7 +36,7 @@ from typing import Final
 import pytest
 from pydantic import TypeAdapter
 
-from e2e_http import RawResponse, forward
+from e2e_http import RawResponse, StreamChunk, forward
 from fixture_canonical import canonicalize
 from fixture_bundle import (
     BundleRecorder,
@@ -54,6 +54,7 @@ from provider_edge import (
     REPLAY_MISS_STATUS,
     EdgeBackend,
     EdgeReply,
+    EdgeStream,
     ProviderEdge,
     RecordEdge,
     ReplayEdge,
@@ -1076,6 +1077,41 @@ class TestStreamingFidelity:
         assert stream_chunks(recorded) == list(SSE_CHUNKS[:2])
         assert recorded.truncated is not None
         assert recorded.truncated.startswith("upstream: ")
+
+    def test_a_downstream_disconnect_mid_relay_records_only_the_delivered_chunks(
+        self, tmp_path: Path
+    ) -> None:
+        """The provider keeps sending, but the proxy the edge relays to hangs up after
+        two chunks. The chunk whose downstream write never landed must stay out of the
+        recording, or replay would hand back a byte the record run never delivered.
+
+        Driven through the pure ``handle_edge_request`` core because a socket client
+        cannot force these tiny chunks to block mid-write, so closing the relay
+        generator is the faithful stand-in for the downstream write raising: it lands
+        the generator on the same suspended yield a broken pipe would."""
+        root = tmp_path / "bundle"
+        with chunked_provider() as provider:
+            outcome = handle_edge_request(
+                record_backend(root),
+                {"openai": provider_url(provider)},
+                "POST",
+                STREAM_PATH,
+                {"content-type": "application/json"},
+                STREAM_BODY,
+                timeout=10.0,
+            )
+            assert isinstance(outcome, EdgeStream)
+            steps = outcome.steps
+            first = next(steps)
+            second = next(steps)
+            assert isinstance(first, StreamChunk) and isinstance(second, StreamChunk)
+            assert (first.data, second.data) == (SSE_CHUNKS[0], SSE_CHUNKS[1])
+            steps.close()
+
+        recorded = recorded_stream(root)
+        assert recorded.status_code == 200
+        assert stream_chunks(recorded) == [SSE_CHUNKS[0]]
+        assert recorded.truncated == "downstream: relay closed after 1 chunks"
 
     def test_a_truncated_recording_replays_as_a_truncated_stream(self, tmp_path: Path) -> None:
         root = tmp_path / "bundle"
