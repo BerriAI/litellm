@@ -520,7 +520,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                         "type": "json_schema",
                         "name": "structured_output",
                         "schema": schema,
-                        "strict": True,
+                        "strict": bool(output_format.get("strict")),
                     }
                 }
 
