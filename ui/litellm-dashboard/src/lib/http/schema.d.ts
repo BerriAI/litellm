@@ -777,6 +777,11 @@ export interface paths {
          *     overlaps it: its last turn is on or after start_date and its first turn is on or before
          *     end_date. Overall hit rate is over telemetry-bearing turns; each bucket's hit rate is
          *     over that bucket's turns.
+         *
+         *     The rollup supplies the measures, never the list. Which routers appear comes from the
+         *     model registry, so one shows up as soon as it is configured and reads zero until it
+         *     serves traffic, and `routers_in_scope` counts those too rather than only the routers the
+         *     window recorded.
          */
         get: operations["get_auto_router_benchmarks_auto_router_benchmarks_get"];
         put?: never;
@@ -21965,9 +21970,15 @@ export interface components {
              * @description Window end day, YYYY-MM-DD UTC, inclusive
              */
             end_date: string;
-            /** Groups */
+            /**
+             * Groups
+             * @description One entry per auto-router, listed from the model registry rather than from the rollup, so a router appears as soon as it is configured and reads zero until it serves traffic. Semantic auto-routers are absent: they record no routing decision, so no session can ever be attributed to them
+             */
             groups: components["schemas"]["AutoRouterBenchmarkGroup"][];
-            /** Routers In Scope */
+            /**
+             * Routers In Scope
+             * @description How many groups this response carries. Every auto-router configured on the proxy counts, whether or not it served anything in the window. To count only the routers that did serve traffic, filter `groups` to the entries whose `sessions` is above zero
+             */
             routers_in_scope: number;
             /**
              * Start Date
