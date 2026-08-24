@@ -417,6 +417,14 @@ class TestStoredRoutines:
         sql = self.DEFINITION + "DO $$ BEGIN PERFORM backfill(); END; $$;\n"
         assert _keywords(tmp_path, sql) == ("UPDATE",)
 
+    def test_a_call_through_a_quoted_identifier_still_counts(self, tmp_path):
+        sql = self.DEFINITION + 'SELECT "backfill"();\n'
+        assert _keywords(tmp_path, sql) == ("UPDATE",)
+
+    def test_an_unrelated_quoted_identifier_is_not_a_call(self, tmp_path):
+        sql = self.DEFINITION + 'SELECT "other"();\n'
+        assert _keywords(tmp_path, sql) == ()
+
     def test_a_trigger_wiring_the_function_up_counts_as_a_call(self, tmp_path):
         sql = self.DEFINITION + 'CREATE TRIGGER t AFTER INSERT ON "Foo" EXECUTE FUNCTION backfill();\n'
         assert _keywords(tmp_path, sql) == ("UPDATE",)
