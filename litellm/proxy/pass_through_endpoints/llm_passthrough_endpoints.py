@@ -9,7 +9,7 @@ Use litellm with Anthropic SDK, Vertex AI SDK, Cohere SDK, etc.
 import json
 import os
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Any, Final, cast
 
@@ -1726,6 +1726,42 @@ def _override_vertex_params_from_router_credentials(
     return vertex_project, vertex_location
 
 
+_CREDENTIALLESS_VERTEX_MISSING_CREDENTIAL_DETAIL: Final = (
+    "No Vertex AI credential is configured on this proxy and the request carried no upstream "
+    "Google credential. The LiteLLM virtual key is not forwarded to Google. Configure a Vertex "
+    "credential (DEFAULT_VERTEXAI_PROJECT / DEFAULT_VERTEXAI_LOCATION / DEFAULT_VERTEXAI_CREDENTIALS, "
+    "or a model with use_in_pass_through: true), or send your own Google OAuth token in the "
+    "Authorization header."
+)
+
+
+def _forwarded_headers_for_credentialless_vertex_passthrough(request: Request) -> Mapping[str, str]:
+    """
+    Header set to forward on the bring-your-own-credentials Vertex passthrough
+    branch, used when the proxy has no Vertex credential configured.
+
+    The LiteLLM virtual key that authenticated the caller is never forwarded to
+    Google: whichever header carried it (``x-litellm-api-key``, or ``Authorization``
+    when that is what ``get_litellm_virtual_key`` consumed) is dropped. A caller may
+    still bring their own Google credential in the ``Authorization`` (OAuth token) or
+    ``x-goog-api-key`` header; when neither is present the request is rejected so the
+    virtual key cannot leak upstream.
+    """
+    incoming: Final = _safe_get_request_headers(request)
+    litellm_virtual_key: Final = get_litellm_virtual_key(request)
+    forwarded: Final = MappingProxyType(
+        {
+            name: value
+            for name, value in incoming.items()
+            if name not in ("content-length", "host", "x-litellm-api-key")
+            and not (name == "authorization" and value == litellm_virtual_key)
+        }
+    )
+    if "authorization" not in forwarded and "x-goog-api-key" not in forwarded:
+        raise HTTPException(status_code=401, detail=_CREDENTIALLESS_VERTEX_MISSING_CREDENTIAL_DETAIL)
+    return forwarded
+
+
 async def _prepare_vertex_auth_headers(
     request: Request,
     vertex_credentials: Any | None,
@@ -1734,7 +1770,7 @@ async def _prepare_vertex_auth_headers(
     vertex_location: str | None,
     base_target_url: str | None,
     get_vertex_pass_through_handler: BaseVertexAIPassThroughHandler,
-) -> tuple[dict, str | None, bool, str | None, str | None]:
+) -> tuple[Mapping[str, str], str | None, bool, str | None, str | None]:
     """
     Prepare authentication headers for Vertex AI pass-through requests.
 
@@ -1760,11 +1796,11 @@ async def _prepare_vertex_auth_headers(
 
     # Use headers from the incoming request if no vertex credentials are found
     if (vertex_credentials is None or vertex_credentials.vertex_project is None) and router_credentials is None:
-        headers = _safe_get_request_headers(request).copy()
+        headers = _forwarded_headers_for_credentialless_vertex_passthrough(request)
         headers_passed_through = True
-        verbose_proxy_logger.debug("default_vertex_config  not set, incoming request headers %s", headers)
-        headers.pop("content-length", None)
-        headers.pop("host", None)
+        verbose_proxy_logger.debug(
+            "default_vertex_config not set, forwarding caller-provided headers %s", tuple(headers.keys())
+        )
     else:
         if router_credentials is not None:
             vertex_credentials_str = None
@@ -1850,7 +1886,7 @@ async def _base_vertex_proxy_route(
 
     encoded_endpoint = httpx.URL(endpoint).path
     verbose_proxy_logger.debug("requested endpoint %s", endpoint)
-    headers: dict = {}
+    headers: Mapping[str, str] = {}
     api_key_to_use = get_litellm_virtual_key(request=request)
     user_api_key_dict = await user_api_key_auth(
         request=request,
