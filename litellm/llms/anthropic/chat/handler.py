@@ -183,6 +183,7 @@ def make_sync_call(
         speed=speed,
         tool_name_reverse_map=tool_name_reverse_map,
     )
+    completion_stream.http_response = response
 
     # LOGGING
     logging_obj.post_call(
@@ -635,6 +636,7 @@ class ModelResponseIterator:
     ):
         self.streaming_response = streaming_response
         self.response_iterator = self.streaming_response
+        self.sync_stream = sync_stream
         self.http_response: httpx.Response | None = None
         self.content_blocks: list[ContentBlockDelta] = []
         self.tool_index = -1
@@ -693,6 +695,9 @@ class ModelResponseIterator:
         response: Final = self.http_response
         self.http_response = None
         if response is None:
+            return
+        if self.sync_stream:
+            response.close()
             return
         await response.aclose()
 

@@ -1,6 +1,6 @@
 import json
 import threading
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -12,7 +12,11 @@ import pytest
 import litellm
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
-from litellm.llms.anthropic.chat.handler import ModelResponseIterator, make_call
+from litellm.llms.anthropic.chat.handler import (
+    ModelResponseIterator,
+    make_call,
+    make_sync_call,
+)
 from litellm.types.llms.openai import (
     ChatCompletionToolCallChunk,
     ChatCompletionToolCallFunctionChunk,
@@ -30,6 +34,17 @@ class _RecordingAsyncByteStream(httpx.AsyncByteStream):
     async def aclose(self) -> None:
         await anyio.sleep(0)
         self.aclose_calls += 1
+
+
+class _RecordingSyncByteStream(httpx.SyncByteStream):
+    def __init__(self) -> None:
+        self.close_calls: int = 0
+
+    def __iter__(self) -> Iterator[bytes]:
+        yield b'data: {"type":"message_start"}\n\n'
+
+    def close(self) -> None:
+        self.close_calls += 1
 
 
 @pytest.mark.asyncio
@@ -98,6 +113,41 @@ async def test_make_call_stream_cleanup_closes_http_response_once_under_cancella
     assert response.is_closed is True
     assert completion_stream.http_response is None
     assert stream.aclose_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_make_sync_call_stream_cleanup_closes_http_response_once():
+    stream: Final = _RecordingSyncByteStream()
+    response: Final = httpx.Response(200, stream=stream)
+    mock_client: Final = MagicMock()
+    mock_client.post.return_value = response
+    logging_obj: Final = MagicMock(model_call_details={"litellm_params": {}})
+
+    completion_stream, _ = make_sync_call(
+        client=mock_client,
+        api_base="https://api.anthropic.com/v1/messages",
+        headers={},
+        data="{}",
+        model="claude-haiku-4-5",
+        messages=[{"role": "user", "content": "Hi"}],
+        logging_obj=logging_obj,
+        timeout=60.0,
+        json_mode=False,
+    )
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=completion_stream,
+        model="claude-haiku-4-5",
+        custom_llm_provider="anthropic",
+        logging_obj=logging_obj,
+    )
+
+    await wrapper.aclose()
+    await wrapper.aclose()
+    await completion_stream.aclose()
+
+    assert response.is_closed is True
+    assert completion_stream.http_response is None
+    assert stream.close_calls == 1
 
 
 def test_redacted_thinking_content_block_delta():
