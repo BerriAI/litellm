@@ -9,13 +9,10 @@ just like router.completion() does, which properly sets up metadata and allows
 default_litellm_params (including headers) to be propagated.
 """
 
-import os
-import sys
 from unittest.mock import MagicMock, patch, AsyncMock
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 from litellm import Router
 

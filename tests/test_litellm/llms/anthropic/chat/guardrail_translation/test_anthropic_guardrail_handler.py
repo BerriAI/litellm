@@ -6,16 +6,11 @@ with guardrail transformations, specifically testing edge cases with empty choic
 """
 
 import json
-import os
-import sys
 from typing import Any, Literal, Optional
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../../../../..")
-)  # Adds the parent directory to the system path
 
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.llms.anthropic.chat.guardrail_translation.handler import (
