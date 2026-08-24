@@ -3311,6 +3311,7 @@ class TestVertexRawPredictStreamingClassification:
                 "path": f"/vertex_ai/{endpoint}",
                 "headers": [
                     (b"content-type", b"application/json"),
+                    (b"x-litellm-api-key", b"test-key"),
                     (b"authorization", b"Bearer ya29.byo-google-oauth"),
                 ],
                 "query_string": b"",
