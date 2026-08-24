@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 import litellm
+from litellm.llms.hosted_vllm.videos import get_hosted_vllm_video_config
 from litellm.llms.hosted_vllm.videos.transformation import (
     HostedVLLMVideoConfig,
     _serialize_form_value,
@@ -29,6 +30,7 @@ def test_provider_config_registration():
 
     assert config is not None
     assert isinstance(config, HostedVLLMVideoConfig)
+    assert isinstance(get_hosted_vllm_video_config("MiniMax-H3"), HostedVLLMVideoConfig)
 
 
 def test_get_complete_url_appends_videos():
