@@ -66,7 +66,13 @@ variable "image_tag" {
 
 # TLS — provide DNS names for a managed cert, or opt into HTTP-only for dev.
 variable "lb_domains" {
-  description = "DNS names (already pointing at lb_ip) for a Google-managed cert in EXTERNAL_MANAGED mode. Empty → no TLS."
+  description = "TLS hostnames. EXTERNAL_MANAGED creates a Google-managed cert; INTERNAL_MANAGED requires this plus certificate_manager_certificates. Empty -> no TLS."
+  type        = list(string)
+  default     = []
+}
+
+variable "certificate_manager_certificates" {
+  description = "Pre-existing Certificate Manager certificate self_links for INTERNAL_MANAGED TLS."
   type        = list(string)
   default     = []
 }

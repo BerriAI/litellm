@@ -308,14 +308,30 @@ variable "db_username" {
 
 variable "lb_domains" {
   description = <<-EOT
-    DNS names for a Google-managed SSL certificate fronting the LB. When
-    non-empty, the stack provisions a 443 forwarding rule + HTTPS target
-    proxy + managed cert covering these domains, and the existing 80
-    forwarding rule serves a permanent 301 redirect to HTTPS. Leave empty
-    ([]) to disable TLS (must combine with `allow_plaintext_lb = true` for
-    the plan to succeed — see README.md "TLS"). Each domain must already
-    resolve to the LB's anycast IP (`lb_ip` output) for managed-cert
-    provisioning to succeed.
+    DNS names fronting the LB when TLS is enabled.
+
+    EXTERNAL_MANAGED: when non-empty, the stack provisions a Google-managed
+    SSL certificate covering these domains, creates a 443 forwarding rule,
+    and rewrites port 80 to a permanent HTTPS redirect.
+
+    INTERNAL_MANAGED: when enabling TLS, `lb_domains` must be non-empty and
+    `certificate_manager_certificates` must also be provided.
+
+    Leave empty ([]) to disable TLS (must combine with
+    `allow_plaintext_lb = true` for the plan to succeed — see README.md
+    "TLS").
+  EOT
+  type        = list(string)
+  default     = []
+}
+
+variable "certificate_manager_certificates" {
+  description = <<-EOT
+    Pre-existing Certificate Manager certificate resource references for
+    INTERNAL_MANAGED TLS. Provide full certificate self_links.
+
+    This input is ignored for EXTERNAL_MANAGED, where `lb_domains` continues
+    to drive Google-managed SSL certificate creation in this module.
   EOT
   type        = list(string)
   default     = []

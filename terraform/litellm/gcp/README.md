@@ -319,13 +319,15 @@ vpcaccess, compute, servicenetworking, storage, artifactregistry).
 
 ## TLS
 
-TLS and `lb_domains` apply only when `load_balancing_scheme = "EXTERNAL_MANAGED"`.
-For `INTERNAL_MANAGED`, set `lb_domains = []` (or leave it unset) and `allow_plaintext_lb = true`.
+TLS is supported for both LB schemes, with different certificate inputs:
+
+- `EXTERNAL_MANAGED`: set `lb_domains`; this module creates a Google-managed cert
+- `INTERNAL_MANAGED`: set both `lb_domains` and `certificate_manager_certificates`; this module uses your pre-existing Certificate Manager certificates
 
 `terraform plan` refuses to provision an HTTP-only LB by default — TLS
 is the supported posture. Two paths:
 
-**Production / staging — set `lb_domains`:**
+**Production / staging (INTERNAL_MANAGED) — set `lb_domains`:**
 
 1. `terraform apply` once with `allow_plaintext_lb = true` (intentional
    chicken-and-egg escape hatch) to provision the LB and read the anycast
@@ -341,10 +343,22 @@ managed cert sits in `PROVISIONING` for ~15-60 min on first apply until
 DNS propagation completes — `gcloud compute ssl-certificates describe
 <tenant>-litellm-<env>-cert` shows the state.
 
+**Production / staging (INTERNAL_MANAGED) — set both hostnames and cert refs:**
+
+Set:
+
+- `lb_domains = ["proxy.internal.example.com"]`
+- `certificate_manager_certificates = ["projects/<project>/locations/global/certificates/<name>"]`
+
+Result: a 443 internal forwarding rule and HTTPS target proxy using the
+provided certificates. If exactly one of the two variables is set,
+`terraform plan` fails with a clear precondition error.
+
 **Trial / dev — explicitly opt into HTTP-only:**
 
-Set `allow_plaintext_lb = true` and leave `lb_domains = []`. Without the
-flag, plan fails with a clear error pointing at the precondition.
+Set `allow_plaintext_lb = true`, leave `lb_domains = []`, and leave
+`certificate_manager_certificates = []`. Without the flag, plan fails
+with a clear error pointing at the precondition.
 Intended for short-lived trial / dev stacks only.
 
 ## Using as a module

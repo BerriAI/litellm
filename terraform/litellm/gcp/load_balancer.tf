@@ -12,9 +12,12 @@
 # is rewritten to redirect HTTP→HTTPS via a redirect-only URL map.
 
 locals {
-  tls_enabled = length(var.lb_domains) > 0
   is_external = var.load_balancing_scheme == "EXTERNAL_MANAGED"
   is_internal = var.load_balancing_scheme == "INTERNAL_MANAGED"
+
+  external_tls_enabled = local.is_external && length(var.lb_domains) > 0
+  internal_tls_enabled = local.is_internal && length(var.lb_domains) > 0 && length(var.certificate_manager_certificates) > 0
+  tls_enabled          = local.external_tls_enabled || local.internal_tls_enabled
 }
 
 resource "google_compute_global_address" "lb" {
@@ -124,7 +127,7 @@ resource "google_compute_url_map" "this" {
 # target proxy when TLS is enabled; otherwise the regular path-routing
 # URL map is attached to the HTTP proxy and everything stays plaintext.
 resource "google_compute_url_map" "https_redirect" {
-  count = local.is_external && local.tls_enabled ? 1 : 0
+  count = local.tls_enabled ? 1 : 0
   name  = "${local.name}-redirect"
 
   default_url_redirect {
@@ -142,8 +145,11 @@ resource "google_compute_target_http_proxy" "this" {
   # Operators must either supply DNS names or explicitly opt in.
   lifecycle {
     precondition {
-      condition     = var.load_balancing_scheme != "INTERNAL_MANAGED" || length(var.lb_domains) == 0
-      error_message = "INTERNAL_MANAGED does not support lb_domains/TLS in this module. Set load_balancing_scheme = \"EXTERNAL_MANAGED\" to use lb_domains, or leave lb_domains empty for INTERNAL_MANAGED."
+      condition = !local.is_internal || (
+        (length(var.lb_domains) == 0 && length(var.certificate_manager_certificates) == 0) ||
+        (length(var.lb_domains) > 0 && length(var.certificate_manager_certificates) > 0)
+      )
+      error_message = "INTERNAL_MANAGED TLS requires both `lb_domains` and `certificate_manager_certificates` to be set (or both empty for HTTP-only)."
     }
 
     precondition {
@@ -187,7 +193,7 @@ resource "google_compute_global_forwarding_rule" "http_internal" {
 # transitions to ACTIVE.
 
 resource "google_compute_managed_ssl_certificate" "this" {
-  count = local.is_external && local.tls_enabled ? 1 : 0
+  count = local.external_tls_enabled ? 1 : 0
 
   # A managed cert's `domains` is immutable, so changing var.lb_domains
   # forces replacement, and the cert is referenced by the HTTPS target
@@ -207,19 +213,28 @@ resource "google_compute_managed_ssl_certificate" "this" {
 }
 
 resource "google_compute_target_https_proxy" "this" {
-  count            = local.is_external && local.tls_enabled ? 1 : 0
-  name             = "${local.name}-https"
-  url_map          = google_compute_url_map.this.id
-  ssl_certificates = [google_compute_managed_ssl_certificate.this[0].id]
+  count                            = local.tls_enabled ? 1 : 0
+  name                             = "${local.name}-https"
+  url_map                          = google_compute_url_map.this.id
+  ssl_certificates                 = local.is_external ? [google_compute_managed_ssl_certificate.this[0].id] : null
+  certificate_manager_certificates = local.is_internal ? var.certificate_manager_certificates : null
 }
 
 resource "google_compute_global_forwarding_rule" "https" {
-  count                 = local.is_external && local.tls_enabled ? 1 : 0
+  count                 = local.external_tls_enabled ? 1 : 0
   name                  = "${local.name}-https"
   ip_protocol           = "TCP"
   port_range            = "443"
   load_balancing_scheme = var.load_balancing_scheme
-  ip_address            = google_compute_global_address.lb[0].address
   target                = google_compute_target_https_proxy.this[0].id
   labels                = local.labels
+
+  # Configuration for Global External LB
+  ip_address            = local.is_external ? google_compute_global_address.lb[0].address : null
+
+  # Configuration for Global Internal LB
+  network               = local.is_internal ? google_compute_network.this.id : null
+  subnetwork            = local.is_internal ? google_compute_subnetwork.this.id : null
+
+  depends_on = [google_compute_subnetwork.managed_proxy]
 }

@@ -4,7 +4,7 @@ output "lb_ip" {
 }
 
 output "lb_url" {
-  description = "Proxy URL. Switches scheme based on whether lb_domains is set; when TLS is enabled the URL points at the first listed domain (since managed certs are tied to the hostname, not the anycast IP). The dashboard is served at /, the API at /v1/*."
+  description = "Proxy URL. Switches scheme based on whether TLS is enabled; when TLS is enabled the URL points at the first domain in lb_domains. The dashboard is served at /, the API at /v1/*."
   value = local.tls_enabled ? "https://${var.lb_domains[0]}" : format(
     "http://%s",
     var.load_balancing_scheme == "EXTERNAL_MANAGED" ? google_compute_global_address.lb[0].address : google_compute_global_forwarding_rule.http_internal[0].ip_address,
