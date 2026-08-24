@@ -45,7 +45,8 @@ def test_map_openai_params_passes_thinking_dict_through():
             drop_params=False,
         )
 
-    assert result["thinking"] == {"type": "enabled", "budget_tokens": 1024}
+    assert "thinking" not in result
+    assert result["extra_body"]["thinking"] == {"type": "enabled", "budget_tokens": 1024}
 
 
 def test_map_openai_params_converts_reasoning_effort_to_thinking():
@@ -61,10 +62,11 @@ def test_map_openai_params_converts_reasoning_effort_to_thinking():
             drop_params=False,
         )
 
-    assert result["thinking"] == {"type": "enabled"}
+    assert "thinking" not in result
+    assert result["extra_body"]["thinking"] == {"type": "enabled"}
 
 
-def test_map_openai_params_drops_none_reasoning_effort():
+def test_map_openai_params_none_reasoning_effort_disables_thinking():
     config = TencentChatConfig()
     with patch(
         "litellm.llms.tencent.chat.transformation.supports_reasoning",
@@ -78,6 +80,7 @@ def test_map_openai_params_drops_none_reasoning_effort():
         )
 
     assert "thinking" not in result
+    assert result["extra_body"]["thinking"] == {"type": "disabled"}
     assert "reasoning_effort" not in result
 
 
@@ -97,7 +100,8 @@ def test_map_openai_params_thinking_priority_over_reasoning_effort():
             drop_params=False,
         )
 
-    assert result["thinking"] == {"type": "enabled", "budget_tokens": 2048}
+    assert "thinking" not in result
+    assert result["extra_body"]["thinking"] == {"type": "enabled", "budget_tokens": 2048}
 
 
 def test_map_openai_params_extracts_thinking_and_effort_from_optional_params():
@@ -109,8 +113,132 @@ def test_map_openai_params_extracts_thinking_and_effort_from_optional_params():
         drop_params=False,
     )
 
-    assert "thinking" in result
+    assert "thinking" not in result
+    assert result["extra_body"]["thinking"] == {"type": "enabled"}
     assert "reasoning_effort" not in result
+
+
+def test_map_openai_params_merges_into_existing_extra_body():
+    config = TencentChatConfig()
+    result = config.map_openai_params(
+        non_default_params={},
+        optional_params={
+            "thinking": {"type": "enabled"},
+            "extra_body": {"custom_flag": True},
+        },
+        model="tencent/deepseek-v4-pro",
+        drop_params=False,
+    )
+
+    assert result["extra_body"] == {"custom_flag": True, "thinking": {"type": "enabled"}}
+
+
+def test_transform_request_never_passes_thinking_as_top_level_kwarg():
+    """
+    Regression test: tencent routes through the OpenAI SDK's
+    chat.completions.create(**data), which raises TypeError on unknown kwargs.
+    `thinking` must be nested inside extra_body, never top-level.
+    """
+    config = TencentChatConfig()
+    optional_params = config.map_openai_params(
+        non_default_params={"thinking": {"type": "enabled", "budget_tokens": 1024}},
+        optional_params={},
+        model="tencent/deepseek-v4-pro",
+        drop_params=False,
+    )
+
+    data = config.transform_request(
+        model="deepseek-v4-pro",
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    assert "thinking" not in data
+    assert data["extra_body"]["thinking"] == {"type": "enabled", "budget_tokens": 1024}
+
+
+class TestMinimaxThinkingCoercion:
+    """
+    MiniMax models on TokenHub only accept thinking.type "adaptive"/"disabled" —
+    "enabled" returns a 400. Ref: https://www.tencentcloud.com/document/product/1300/82345
+    """
+
+    def test_reasoning_effort_maps_to_adaptive_for_minimax(self):
+        config = TencentChatConfig()
+        with patch(
+            "litellm.llms.tencent.chat.transformation.supports_reasoning",
+            return_value=True,
+        ):
+            result = config.map_openai_params(
+                non_default_params={"reasoning_effort": "medium"},
+                optional_params={},
+                model="tencent/minimax-m3",
+                drop_params=False,
+            )
+
+        assert result["extra_body"]["thinking"] == {"type": "adaptive"}
+
+    def test_explicit_enabled_thinking_coerced_to_adaptive_for_minimax(self):
+        config = TencentChatConfig()
+        with patch(
+            "litellm.llms.tencent.chat.transformation.supports_reasoning",
+            return_value=True,
+        ):
+            result = config.map_openai_params(
+                non_default_params={"thinking": {"type": "enabled", "budget_tokens": 4096}},
+                optional_params={},
+                model="minimax-m3",
+                drop_params=False,
+            )
+
+        assert result["extra_body"]["thinking"] == {"type": "adaptive", "budget_tokens": 4096}
+
+    def test_disabled_thinking_kept_for_minimax(self):
+        config = TencentChatConfig()
+        with patch(
+            "litellm.llms.tencent.chat.transformation.supports_reasoning",
+            return_value=True,
+        ):
+            result = config.map_openai_params(
+                non_default_params={"thinking": {"type": "disabled"}},
+                optional_params={},
+                model="tencent/minimax-m3",
+                drop_params=False,
+            )
+
+        assert result["extra_body"]["thinking"] == {"type": "disabled"}
+
+    def test_none_reasoning_effort_disables_thinking_for_minimax(self):
+        config = TencentChatConfig()
+        with patch(
+            "litellm.llms.tencent.chat.transformation.supports_reasoning",
+            return_value=True,
+        ):
+            result = config.map_openai_params(
+                non_default_params={"reasoning_effort": "none"},
+                optional_params={},
+                model="tencent/minimax-m3",
+                drop_params=False,
+            )
+
+        assert result["extra_body"]["thinking"] == {"type": "disabled"}
+
+    def test_non_minimax_model_keeps_enabled(self):
+        config = TencentChatConfig()
+        with patch(
+            "litellm.llms.tencent.chat.transformation.supports_reasoning",
+            return_value=True,
+        ):
+            result = config.map_openai_params(
+                non_default_params={"reasoning_effort": "high"},
+                optional_params={},
+                model="tencent/kimi-k3",
+                drop_params=False,
+            )
+
+        assert result["extra_body"]["thinking"] == {"type": "enabled"}
 
 
 def test_get_complete_url_default():
