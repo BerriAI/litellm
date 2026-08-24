@@ -101,10 +101,13 @@ def test_flatten_form_field_values_scalar_list_survives_update_into_multipart():
 
 
 def test_form_field_serializers_reject_cyclic_values():
-    cyclic: dict[str, object] = {}
-    cyclic["self"] = cyclic
+    cyclic_mapping: dict[str, object] = {}
+    cyclic_mapping["self"] = cyclic_mapping
+    cyclic_list: list[object] = []
+    cyclic_list.append(cyclic_list)
 
-    with pytest.raises(ValueError, match="maximum nesting depth"):
-        flatten_form_field_values({"metadata": cyclic})
-    with pytest.raises(ValueError, match="maximum nesting depth"):
-        serialize_multipart_form_fields({"metadata": cyclic})
+    for cyclic in (cyclic_mapping, cyclic_list):
+        with pytest.raises(ValueError, match="maximum nesting depth"):
+            flatten_form_field_values({"metadata": cyclic})
+        with pytest.raises(ValueError, match="maximum nesting depth"):
+            serialize_multipart_form_fields({"metadata": cyclic})
