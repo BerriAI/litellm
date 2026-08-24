@@ -4,6 +4,7 @@ Transformation logic from Cohere's /v1/rerank format to Infinity's  `/v1/rerank`
 Why separate file? Make it easy to see how transformation works
 """
 
+from collections.abc import Mapping
 from typing import Final
 
 import httpx
@@ -46,6 +47,7 @@ class InfinityRerankConfig(CohereRerankConfig):
         model: str,
         api_key: str | None = None,
         optional_params: dict | None = None,
+        litellm_params: Mapping[str, object] | None = None,
     ) -> dict:
         if api_key is None:
             api_key = get_secret_str("INFINITY_API_KEY") or get_secret_str("INFINITY_API_KEY") or litellm.infinity_key
