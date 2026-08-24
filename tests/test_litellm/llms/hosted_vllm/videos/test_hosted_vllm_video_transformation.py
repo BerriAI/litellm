@@ -349,3 +349,60 @@ def test_file_scheme_media_reference_is_rejected():
             litellm_params=GenericLiteLLMParams(),
             headers={},
         )
+
+
+def _transform_with_references(config: HostedVLLMVideoConfig, **references: object):
+    return config.transform_video_create_request(
+        model="MiniMax-H3",
+        prompt="a person singing",
+        api_base="http://localhost:8091/v1/videos",
+        video_create_optional_request_params=references,
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+
+def test_oversized_content_length_is_rejected_before_body():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            content=b"",
+            headers={"content-type": "video/mp4", "content-length": str(51 * 1024 * 1024)},
+        )
+
+    config = HostedVLLMVideoConfig(media_http_client=_http_handler_for(handler))
+    with pytest.raises(ValueError, match="Content-Length"):
+        _transform_with_references(config, video_reference={"video_url": "http://1.1.1.1/clip.mp4"})
+
+
+def test_streamed_body_over_per_url_cap_is_rejected():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            content=iter((b"1234", b"5678")),
+            headers={"content-type": "image/png"},
+        )
+
+    config = HostedVLLMVideoConfig(
+        media_http_client=_http_handler_for(handler),
+        max_media_bytes_per_url=4,
+        max_media_bytes_per_request=4,
+    )
+    with pytest.raises(ValueError, match="exceeded the maximum allowed size"):
+        _transform_with_references(config, image_reference={"image_url": "http://1.1.1.1/face.png"})
+
+
+def test_too_many_remote_media_urls_are_rejected():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=b"ok", headers={"content-type": "image/png"})
+
+    config = HostedVLLMVideoConfig(
+        media_http_client=_http_handler_for(handler),
+        max_media_urls_per_request=1,
+    )
+    with pytest.raises(ValueError, match="too many remote media URL references"):
+        _transform_with_references(
+            config,
+            image_reference={"image_url": "http://1.1.1.1/a.png"},
+            audio_reference={"audio_url": "http://1.1.1.1/b.mp3"},
+        )
