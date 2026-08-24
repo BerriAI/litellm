@@ -241,6 +241,19 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                         if btype == "text":
                             asst_parts.append({"type": "output_text", "text": block.get("text", "")})
                         elif btype == "tool_use":
+                            # Flush text/thinking before the tool call so Responses
+                            # input keeps message/reasoning → function_call order.
+                            # Without this, Claude Code turns (thinking + tool_use)
+                            # emit function_call first and the thinking message after.
+                            if asst_parts:
+                                input_items.append(
+                                    {
+                                        "type": "message",
+                                        "role": "assistant",
+                                        "content": asst_parts,
+                                    }
+                                )
+                                asst_parts = []
                             # tool_use becomes a top-level function_call item
                             input_items.append(
                                 {

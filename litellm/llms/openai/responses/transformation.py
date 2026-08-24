@@ -159,7 +159,90 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             ResponsesAPIRequestParams(model=model, input=input, **response_api_optional_request_params)
         )
 
+        if self._is_kimi_reasoning_model_responses(model):
+            final_request_params = self._shape_kimi_responses_request(final_request_params)
+
         return final_request_params
+
+    @staticmethod
+    def _normalize_responses_model_id(model: str) -> str:
+        return (model or "").split("/")[-1].lower()
+
+    def _is_kimi_reasoning_model_responses(self, model: str) -> bool:
+        model_id = self._normalize_responses_model_id(model)
+        return (
+            model_id.startswith("fw-kimi")
+            or model_id.startswith("kimi-k2.")
+            or "kimi-k3" in model_id
+        )
+
+    def _shape_kimi_responses_request(self, request: dict) -> dict:
+        """Drop fixed sampling / bad reasoning.effort; ensure reasoning before tool calls."""
+        shaped = dict(request)
+        for param in (
+            "temperature",
+            "top_p",
+            "n",
+            "presence_penalty",
+            "frequency_penalty",
+        ):
+            shaped.pop(param, None)
+        reasoning = shaped.get("reasoning")
+        if isinstance(reasoning, dict):
+            effort = reasoning.get("effort")
+            if effort not in ("low", "high", "max"):
+                shaped.pop("reasoning", None)
+        inp = shaped.get("input")
+        if isinstance(inp, list):
+            shaped["input"] = self._shape_kimi_responses_input(inp)
+        return shaped
+
+    def _shape_kimi_responses_input(self, items: list) -> list:
+        """
+        Claude Code history often has thinking + tool_use. After adapter flush,
+        that is message(assistant/output_text) then function_call. Foundry/Kimi
+        expects a reasoning item before tool calls.
+        """
+        shaped: list = []
+        i = 0
+        n = len(items)
+        while i < n:
+            item = items[i]
+            nxt = items[i + 1] if i + 1 < n else None
+            if (
+                isinstance(item, dict)
+                and item.get("type") == "message"
+                and item.get("role") == "assistant"
+                and isinstance(nxt, dict)
+                and nxt.get("type") == "function_call"
+            ):
+                texts = []
+                for part in item.get("content") or []:
+                    if isinstance(part, dict) and part.get("type") == "output_text":
+                        texts.append(part.get("text") or "")
+                text = "\n".join(t for t in texts if t).strip() or " "
+                shaped.append(
+                    {
+                        "type": "reasoning",
+                        "summary": [{"type": "summary_text", "text": text[:2000]}],
+                    }
+                )
+                i += 1
+                continue
+            if isinstance(item, dict) and item.get("type") == "function_call":
+                if not shaped or shaped[-1].get("type") != "reasoning":
+                    shaped.append(
+                        {
+                            "type": "reasoning",
+                            "summary": [{"type": "summary_text", "text": " "}],
+                        }
+                    )
+                shaped.append(item)
+                i += 1
+                continue
+            shaped.append(item)
+            i += 1
+        return shaped
 
     def remove_cache_control_flag_from_input_and_tools(
         self,

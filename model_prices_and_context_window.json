@@ -10037,6 +10037,29 @@
         "output_cost_per_token": 7e-07,
         "supports_tool_choice": true
     },
+    "azure_ai/FW-Kimi-K3": {
+        "input_cost_per_token": 3.3e-06,
+        "output_cost_per_token": 1.65e-05,
+        "cache_read_input_token_cost": 3.3e-07,
+        "litellm_provider": "azure_ai",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 262144,
+        "max_tokens": 1048576,
+        "mode": "chat",
+        "source": "https://techcommunity.microsoft.com/blog/azure-ai-foundry-blog/introducing-kimi-k3-through-fireworks-ai-on-microsoft-foundry/4540187",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
     "azure_ai/kimi-k2.5": {
         "deprecation_date": "2027-01-26",
         "input_cost_per_token": 6e-07,
