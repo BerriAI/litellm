@@ -31,10 +31,16 @@ action.
 
 import base64
 import json
+import re
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+from pydantic import BaseModel
+
+import litellm.llms.bedrock.base_aws_llm as _bedrock_base
+from litellm.llms.bedrock.base_aws_llm import build_bedrock_session_policy
 
 # Actions the Claude Platform on AWS service is documented to call.
 # Source: AWS IAM action reference + the #27678 surface area.
@@ -308,3 +314,116 @@ class TestPolicyTransportConditions:
             "ClaudePlatformLiteLLM must require aws:SecureTransport=true "
             "to keep parity with the bedrock statement"
         )
+
+
+# Every Bedrock runtime path LiteLLM builds, mapped to the IAM action that
+# authorizes it. The session policy is a ceiling, so a route whose action is
+# absent here 403s on OIDC auth no matter what the role's identity policy
+# grants. Three incidents share this shape: #30200 (claude_platform ->
+# aws-external-anthropic:*), Bedrock Mantle, and #33142/#37336
+# (/count-tokens -> bedrock:CountTokens).
+#
+# Converse maps to bedrock:InvokeModel because AWS originally authorized the
+# Converse API through the InvokeModel action; the dedicated bedrock:Converse
+# action came later and is granted too, per the inference prerequisites doc.
+# https://docs.aws.amazon.com/bedrock/latest/userguide/inference-prereq.html
+_ROUTE_SUFFIX_TO_ACTION = {
+    "invoke": "bedrock:InvokeModel",
+    "invoke-with-response-stream": "bedrock:InvokeModelWithResponseStream",
+    "converse": "bedrock:InvokeModel",
+    "converse-stream": "bedrock:InvokeModelWithResponseStream",
+    "count-tokens": "bedrock:CountTokens",
+    "async-invoke": "bedrock:StartAsyncInvoke",
+    "agents": "bedrock:InvokeAgent",
+    "knowledgebases": "bedrock:Retrieve",
+    "rerank": "bedrock:Rerank",
+}
+
+_BEDROCK_ACTIONS = frozenset(
+    {
+        "bedrock:InvokeModel",
+        "bedrock:InvokeModelWithResponseStream",
+        "bedrock:Converse",
+        "bedrock:ConverseStream",
+        "bedrock:CountTokens",
+        "bedrock:StartAsyncInvoke",
+        "bedrock:InvokeAgent",
+        "bedrock:Rerank",
+        "bedrock:Retrieve",
+        "bedrock:GetAsyncInvoke",
+        "bedrock:ListAsyncInvokes",
+        "bedrock:ApplyGuardrail",
+        "bedrock:GetGuardrail",
+        "bedrock:ListGuardrails",
+    }
+)
+
+# Matches the runtime path suffixes the bedrock package builds, e.g.
+# f"{endpoint_url}/model/{modelId}/converse" or f"{endpoint_url}/async-invoke".
+_ROUTE_URL_RE = re.compile(r"\{(?:proxy_)?endpoint_url[^}]*\}(?:/model/\{[^}]+\})?/([a-z][a-z-]*)")
+
+
+def _routes_built_by_bedrock_package() -> set[str]:
+    """Scan the bedrock package for the runtime path suffixes it constructs.
+
+    Source-derived rather than hardcoded so a newly added route fails this
+    test until its IAM action is mapped, which is the omission the three
+    incidents above all share.
+    """
+    package = Path(_bedrock_base.__file__).parent
+    return {
+        match.group(1)
+        for path in package.rglob("*.py")
+        for match in _ROUTE_URL_RE.finditer(path.read_text(encoding="utf-8"))
+    }
+
+
+class _PolicyStatement(BaseModel):
+    Sid: str
+    Effect: str
+    Action: list[str]
+
+
+class _SessionPolicy(BaseModel):
+    Version: str
+    Statement: list[_PolicyStatement]
+
+
+def _bedrock_granted_actions() -> set[str]:
+    policy = _SessionPolicy.model_validate(build_bedrock_session_policy())
+    statement = next(s for s in policy.Statement if s.Sid == "BedrockLiteLLM")
+    assert statement.Effect == "Allow"
+    return set(statement.Action)
+
+
+class TestSessionPolicyCoversEveryBedrockRoute:
+    """The ceiling must authorize every route the package can actually call."""
+
+    def test_every_built_route_has_a_mapped_action(self):
+        unmapped = _routes_built_by_bedrock_package() - _ROUTE_SUFFIX_TO_ACTION.keys()
+        assert not unmapped, (
+            f"Bedrock routes {sorted(unmapped)} are built by litellm/llms/bedrock but have no "
+            "IAM action mapped in _ROUTE_SUFFIX_TO_ACTION. Add the mapping, then make sure the "
+            "action is granted in the BedrockLiteLLM session-policy statement, or OIDC-auth "
+            "callers will 403 on that route (#30200, #33142, #37336)."
+        )
+
+    @pytest.mark.parametrize(
+        ("suffix", "action"), sorted(_ROUTE_SUFFIX_TO_ACTION.items())
+    )
+    def test_route_action_is_granted_by_the_ceiling(self, suffix: str, action: str):
+        granted = _bedrock_granted_actions()
+        assert action in granted, (
+            f"Route /{suffix} needs {action}, which the BedrockLiteLLM session policy does not "
+            f"grant. A session policy is an intersection, so this 403s on OIDC auth even when "
+            f"the IAM role allows it. Granted: {sorted(granted)}"
+        )
+
+    def test_bedrock_action_set_is_pinned(self):
+        """Any edit to the granted actions must be a deliberate test edit."""
+        assert _bedrock_granted_actions() == set(_BEDROCK_ACTIONS)
+
+    def test_async_invoke_route_is_actually_built(self):
+        """Guards the scanner: if the regex silently stops matching, the
+        omission test above passes vacuously."""
+        assert "async-invoke" in _routes_built_by_bedrock_package()
