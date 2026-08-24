@@ -2218,11 +2218,6 @@
       "count": 1
     }
   },
-  "src/components/ui/meter.tsx": {
-    "local/filename-pascal-case": {
-      "count": 1
-    }
-  },
   "src/components/ui/popover.tsx": {
     "local/filename-pascal-case": {
       "count": 1
@@ -2249,11 +2244,6 @@
     }
   },
   "src/components/ui/sheet.tsx": {
-    "local/filename-pascal-case": {
-      "count": 1
-    }
-  },
-  "src/components/ui/sidebar.tsx": {
     "local/filename-pascal-case": {
       "count": 1
     }

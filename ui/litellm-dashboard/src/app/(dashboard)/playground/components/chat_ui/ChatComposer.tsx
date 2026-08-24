@@ -94,7 +94,16 @@ export function ChatComposer({
             />
           )}
 
-          <InputGroupAddon align="block-end" className="justify-between gap-2 px-3 pb-3 pt-1">
+          <InputGroupAddon
+            align="block-end"
+            className="justify-between gap-2 px-3 pb-3 pt-1"
+            onClick={(event) => {
+              if ((event.target as HTMLElement).closest("button")) {
+                return;
+              }
+              event.currentTarget.parentElement?.querySelector<HTMLElement>("[data-slot=input-group-control]")?.focus();
+            }}
+          >
             <div className="flex min-w-0 items-center gap-1">{tools}</div>
 
             {isLoading && onCancel ? (
