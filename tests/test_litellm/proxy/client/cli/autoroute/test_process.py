@@ -331,8 +331,7 @@ class TestTerminateHardKillSignal:
         this same "already dead or inaccessible" case.
         """
 
-        def fake_kill(pid: int, sig: int) -> None:
-            raise raised
+        def fake_kill: Final = Mock(side_effect=raised)
 
         monkeypatch.setattr(process_module.os, "kill", fake_kill)
         monkeypatch.setattr(process_module, "is_running", lambda pid: True)
@@ -340,6 +339,7 @@ class TestTerminateHardKillSignal:
 
         terminate(4242, grace_period=0.0)
 
+        assert _signals_sent(fake_kill) == (signal.SIGTERM, getattr(signal, "SIGKILL", signal.SIGTERM))
 
 class TestPollLiveliness:
     def test_succeeds_when_health_check_returns_200_quickly(self, monkeypatch, tmp_path):
