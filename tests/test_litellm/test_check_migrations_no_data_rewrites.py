@@ -236,6 +236,18 @@ class TestInsert:
         sql = 'INSERT INTO "Foo" ("id") (TABLE "Bar") RETURNING (SELECT count(*) FROM "Baz");'
         assert _keywords(tmp_path, sql) == ("INSERT ... TABLE",)
 
+    def test_a_select_term_wrapped_beside_a_values_term_is_flagged(self, tmp_path):
+        sql = 'INSERT INTO "Foo" ("id") (VALUES (1) UNION ALL SELECT "id" FROM "Bar");'
+        assert _keywords(tmp_path, sql) == ("INSERT ... SELECT",)
+
+    def test_a_table_term_wrapped_beside_a_values_term_is_flagged(self, tmp_path):
+        sql = 'INSERT INTO "Foo" ("id") (VALUES (1) UNION ALL TABLE "Bar");'
+        assert _keywords(tmp_path, sql) == ("INSERT ... TABLE",)
+
+    def test_a_wrapped_set_operation_of_values_lists_stays_bounded(self, tmp_path):
+        sql = 'INSERT INTO "Foo" ("id") (VALUES (1) UNION ALL VALUES (2));'
+        assert _keywords(tmp_path, sql) == ()
+
 
 class TestCommonTableExpressions:
     def test_cte_led_update_is_flagged(self, tmp_path):
@@ -419,6 +431,26 @@ class TestStoredRoutines:
     def test_the_name_written_only_in_a_comment_is_not_a_call(self, tmp_path):
         sql = self.DEFINITION + "-- backfill() is run by hand after the deploy\n"
         assert _keywords(tmp_path, sql) == ()
+
+    def test_the_name_written_only_in_a_do_body_comment_is_not_a_call(self, tmp_path):
+        sql = self.DEFINITION + "DO $$ BEGIN\n-- backfill() is run by hand after the deploy\nPERFORM 1;\nEND; $$;\n"
+        assert _keywords(tmp_path, sql) == ()
+
+    def test_the_name_written_only_in_a_do_body_block_comment_is_not_a_call(self, tmp_path):
+        sql = self.DEFINITION + "DO $$ BEGIN /* backfill() runs later */ PERFORM 1; END; $$;\n"
+        assert _keywords(tmp_path, sql) == ()
+
+    def test_the_name_written_only_in_a_nested_body_comment_is_not_a_call(self, tmp_path):
+        sql = self.DEFINITION + "DO $$ BEGIN EXECUTE $q$SELECT 1 -- backfill() runs later\n$q$; END; $$;\n"
+        assert _keywords(tmp_path, sql) == ()
+
+    def test_the_name_written_in_an_executed_literal_counts_as_a_call(self, tmp_path):
+        sql = self.DEFINITION + "DO $$ BEGIN EXECUTE 'SELECT backfill()'; END; $$;\n"
+        assert _keywords(tmp_path, sql) == ("UPDATE",)
+
+    def test_a_call_after_a_literal_holding_comment_dashes_still_counts(self, tmp_path):
+        sql = self.DEFINITION + "DO $$ BEGIN RAISE NOTICE '--'; PERFORM backfill(); END; $$;\n"
+        assert _keywords(tmp_path, sql) == ("UPDATE",)
 
     def test_a_recursive_call_does_not_count_as_the_migration_calling_it(self, tmp_path):
         sql = (
