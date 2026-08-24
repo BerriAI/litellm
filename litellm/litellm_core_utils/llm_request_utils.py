@@ -1,6 +1,45 @@
+from collections.abc import Mapping
 from typing import Final
 
 import litellm
+
+
+def _form_field_value(value: object) -> str:
+    if value is True:
+        return "true"
+    if value is False:
+        return "false"
+    return str(value)
+
+
+def _flatten_form_field(key: str, value: object) -> tuple[tuple[str, str], ...]:
+    if isinstance(value, Mapping):
+        return tuple(
+            item for subkey, subvalue in value.items() for item in _flatten_form_field(f"{key}[{subkey}]", subvalue)
+        )
+    if isinstance(value, (list, tuple)):
+        return tuple(item for entry in value for item in _flatten_form_field(f"{key}[]", entry))
+    if value is None:
+        return ()
+    serialized: Final = _form_field_value(value)
+    if not serialized:
+        return ()
+    return ((key, serialized),)
+
+
+def serialize_multipart_form_fields(data: Mapping[str, object]) -> tuple[tuple[str, tuple[None, str]], ...]:
+    """
+    Encode a JSON-shaped body as httpx file-tuples so a request with no file
+    parts is still sent as multipart/form-data (httpx downgrades a file-less
+    ``data=`` payload to application/x-www-form-urlencoded). Nested values are
+    flattened the way the OpenAI SDK serializes multipart bodies: dicts as
+    ``key[subkey]``, lists as ``key[]``, booleans lowercased, None dropped.
+    """
+    return tuple(
+        (key, (None, serialized))
+        for top_key, top_value in data.items()
+        for key, serialized in _flatten_form_field(top_key, top_value)
+    )
 
 
 def _ensure_extra_body_is_safe(extra_body: dict | None) -> dict | None:

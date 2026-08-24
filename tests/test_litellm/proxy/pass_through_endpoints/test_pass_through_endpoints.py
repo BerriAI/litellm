@@ -187,6 +187,43 @@ async def test_make_multipart_http_request_forwards_repeated_fields():
 
 
 @pytest.mark.asyncio
+async def test_make_multipart_http_request_fileless_form_stays_multipart():
+    """
+    Regression for #36493: a multipart form with no file parts was forwarded
+    through httpx's ``data=`` alone, which downgrades the request to
+    application/x-www-form-urlencoded. Every field must go through ``files``
+    as a ``(field_name, (None, value))`` tuple so httpx keeps the
+    multipart/form-data encoding the client sent.
+    """
+    request = MagicMock(spec=Request)
+    request.method = "POST"
+    form_data = FormData([("prompt", "a cat surfing"), ("model", "sora-2"), ("seconds", "4")])
+    request.form = AsyncMock(return_value=form_data)
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    async_client = MagicMock()
+    async_client.request = AsyncMock(return_value=mock_response)
+
+    await HttpPassThroughEndpointHelpers.make_multipart_http_request(
+        request=request,
+        async_client=async_client,
+        url=httpx.URL("http://test.com"),
+        headers={},
+        requested_query_params=None,
+    )
+
+    call_args = async_client.request.call_args[1]
+
+    assert call_args["files"] == (
+        ("prompt", (None, "a cat surfing")),
+        ("model", (None, "sora-2")),
+        ("seconds", (None, "4")),
+    )
+    assert call_args["data"] is None
+
+
+@pytest.mark.asyncio
 async def test_make_multipart_http_request_removes_content_type_header():
     """
     Test that make_multipart_http_request removes the content-type header
