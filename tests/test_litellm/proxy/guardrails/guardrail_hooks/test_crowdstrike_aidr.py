@@ -93,16 +93,13 @@ async def test_apply_guardrail_fails_open_on_4xx() -> None:
         "structured_messages": [{"role": "user", "content": "core dump: raw bytes"}],
     }
     request_data = {"messages": inputs["structured_messages"]}
-    endpoint = f"{guardrail.api_base}/v1/guard_chat_completions"
 
-    with patch(
-        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
-        return_value=httpx.Response(
-            status_code=400,
-            json={"error": "guard api error"},
-            request=httpx.Request(method="POST", url=endpoint),
-        ),
-    ):
+    transport = httpx.MockTransport(
+        lambda request: httpx.Response(status_code=400, json={"error": "guard api error"}, request=request)
+    )
+    async with httpx.AsyncClient(transport=transport) as client:
+        await guardrail.async_handler.close()
+        guardrail.async_handler.client = client
         result = await guardrail.apply_guardrail(
             inputs=inputs,
             request_data=request_data,
