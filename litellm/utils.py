@@ -6527,21 +6527,10 @@ def acreate(*args, **kwargs):  ## Thin client to handle the acreate langchain ca
 
 
 def prompt_token_calculator(model, messages):
-    # use tiktoken or anthropic's tokenizer depending on the model
     text: Final = " ".join(message["content"] for message in messages)
-    num_tokens = 0
     if "claude" in model:
-        try:
-            import anthropic
-        except Exception:
-            Exception("Anthropic import failed please run `pip install anthropic`")
-        from anthropic import AI_PROMPT, HUMAN_PROMPT, Anthropic
-
-        anthropic_obj: Final = Anthropic()
-        num_tokens = anthropic_obj.count_tokens(text)
-    else:
-        num_tokens = len(_get_default_encoding().encode(text))
-    return num_tokens
+        return token_counter(model=model, text=text)
+    return len(_get_default_encoding().encode(text))
 
 
 def valid_model(model):
