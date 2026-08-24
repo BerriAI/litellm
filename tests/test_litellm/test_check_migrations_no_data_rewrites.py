@@ -865,6 +865,19 @@ class TestDynamicSql:
         sql = "DO $$\nBEGIN\n    EXECUTE 'SELECT ''x''; UPDATE \"Foo\" SET \"a\" = 1';\nEND $$;"
         assert _keywords(tmp_path, sql) == ("UPDATE",)
 
+    def test_a_comment_dash_inside_a_doubled_quote_does_not_hide_a_later_rewrite(self, tmp_path):
+        sql = "DO $$\nBEGIN\n    EXECUTE 'SELECT ''--''; UPDATE \"Foo\" SET \"a\" = 1';\nEND $$;"
+        assert _keywords(tmp_path, sql) == ("UPDATE",)
+        assert _scan(tmp_path, sql)[0].line == 3
+
+    def test_a_block_comment_open_inside_a_doubled_quote_does_not_hide_a_later_rewrite(self, tmp_path):
+        sql = "DO $$\nBEGIN\n    EXECUTE 'SELECT ''/*''; DELETE FROM \"Foo\"';\nEND $$;"
+        assert _keywords(tmp_path, sql) == ("DELETE",)
+
+    def test_a_rewrite_genuinely_commented_out_inside_executed_sql_is_not_run(self, tmp_path):
+        sql = "DO $$\nBEGIN\n    EXECUTE 'SELECT 1 -- UPDATE \"Foo\" SET \"a\" = 1';\nEND $$;"
+        assert _keywords(tmp_path, sql) == ()
+
     def test_a_rewrite_in_a_later_command_before_bind_values_is_flagged(self, tmp_path):
         sql = "DO $$\nBEGIN\n    EXECUTE 'SELECT 1; DELETE FROM \"Foo\" WHERE \"a\" = $1' USING 1;\nEND $$;"
         assert _keywords(tmp_path, sql) == ("DELETE",)
