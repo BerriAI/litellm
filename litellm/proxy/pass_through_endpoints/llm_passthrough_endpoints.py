@@ -1735,26 +1735,35 @@ _CREDENTIALLESS_VERTEX_MISSING_CREDENTIAL_DETAIL: Final = (
 )
 
 
+def _bearer_stripped(value: str) -> str:
+    parts: Final = value.split(None, 1)
+    if len(parts) == 2 and parts[0].lower() == "bearer":
+        return parts[1]
+    return value
+
+
 def _forwarded_headers_for_credentialless_vertex_passthrough(request: Request) -> Mapping[str, str]:
     """
     Header set to forward on the bring-your-own-credentials Vertex passthrough
     branch, used when the proxy has no Vertex credential configured.
 
     The LiteLLM virtual key that authenticated the caller is never forwarded to
-    Google: whichever header carried it (``x-litellm-api-key``, or ``Authorization``
-    when that is what ``get_litellm_virtual_key`` consumed) is dropped. A caller may
-    still bring their own Google credential in the ``Authorization`` (OAuth token) or
-    ``x-goog-api-key`` header; when neither is present the request is rejected so the
-    virtual key cannot leak upstream.
+    Google. LiteLLM accepts that key from several headers (``Authorization``,
+    ``x-litellm-api-key``, ``x-goog-api-key``, ``api-key``, ``x-api-key``), and
+    ``x-goog-api-key`` doubles as a genuine Google credential, so the key is dropped
+    by value across every header rather than by name. A caller may still bring their
+    own Google credential in the ``Authorization`` (OAuth token) or ``x-goog-api-key``
+    header; when neither survives the request is rejected so the virtual key cannot
+    leak upstream.
     """
     incoming: Final = _safe_get_request_headers(request)
-    litellm_virtual_key: Final = get_litellm_virtual_key(request)
+    caller_virtual_key: Final = _bearer_stripped(get_litellm_virtual_key(request))
     forwarded: Final = MappingProxyType(
         {
             name: value
             for name, value in incoming.items()
             if name not in ("content-length", "host", "x-litellm-api-key")
-            and not (name == "authorization" and value == litellm_virtual_key)
+            and not (caller_virtual_key and _bearer_stripped(value) == caller_virtual_key)
         }
     )
     if "authorization" not in forwarded and "x-goog-api-key" not in forwarded:

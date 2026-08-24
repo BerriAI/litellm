@@ -3535,6 +3535,19 @@ class TestVertexCredentiallessPassthroughVirtualKeyLeak:
         assert raised is not None and raised.status_code == 401
 
     @pytest.mark.asyncio
+    async def test_x_goog_api_key_carrying_virtual_key_is_rejected_not_forwarded(self, monkeypatch):
+        raised, forwarded = await self._run(
+            monkeypatch,
+            [
+                (b"x-litellm-api-key", self.VKEY.encode()),
+                (b"x-goog-api-key", self.VKEY.encode()),
+                (b"content-type", b"application/json"),
+            ],
+        )
+        assert forwarded is None, "the virtual key in x-goog-api-key must not satisfy the gate nor be forwarded"
+        assert raised is not None and raised.status_code == 401
+
+    @pytest.mark.asyncio
     async def test_byo_google_oauth_token_still_forwards_without_virtual_key(self, monkeypatch):
         raised, forwarded = await self._run(
             monkeypatch,
