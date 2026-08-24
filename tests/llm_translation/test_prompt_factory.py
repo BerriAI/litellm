@@ -1,11 +1,8 @@
 #### What this tests ####
 #    This tests if prompts are being correctly formatted
-import os
-import sys
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 from typing import List
 
@@ -20,6 +17,8 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     convert_to_anthropic_tool_invoke,
     convert_url_to_base64,
     create_anthropic_image_param,
+    get_tool_calls_from_response,
+    has_tool_with_name,
     llama_2_chat_pt,
     prompt_factory,
 )
@@ -1286,7 +1285,8 @@ def test_just_system_message():
             model="anthropic.claude-3-sonnet-20240229-v1:0",
             llm_provider="bedrock",
         )
-        assert "bedrock requires at least one non-system message" in str(e.value)
+
+    assert "bedrock requires at least one non-system message" in str(e.value)
 
 
 def test_convert_generic_image_chunk_to_openai_image_obj():
@@ -1842,7 +1842,7 @@ def test_parse_tool_call_arguments_malformed_json():
         parse_tool_call_arguments,
     )
 
-    with pytest.raises(ValueError) as exc_info:
+    with pytest.raises(ValueError, match="Failed to parse tool call arguments for tool 'load_skill") as exc_info:
         parse_tool_call_arguments(
             '{"skill_name": "pptx',
             tool_name="load_skill",
@@ -1874,7 +1874,7 @@ def test_convert_to_anthropic_tool_invoke_malformed_json():
         }
     ]
 
-    with pytest.raises(ValueError) as exc_info:
+    with pytest.raises(ValueError, match="Failed to parse tool call arguments for tool 'bad_tool") as exc_info:
         convert_to_anthropic_tool_invoke(tool_calls)
 
     error_msg = str(exc_info.value)
@@ -2020,7 +2020,7 @@ def test_parse_tool_call_arguments_still_raises_for_unrepairable():
         parse_tool_call_arguments,
     )
 
-    with pytest.raises(ValueError) as exc_info:
+    with pytest.raises(ValueError, match="Failed to parse tool call arguments for tool 'test_tool") as exc_info:
         parse_tool_call_arguments(
             '{"key": "unterminated',
             tool_name="test_tool",
@@ -2385,3 +2385,100 @@ def test_anthropic_messages_pt_list_content_with_thinking_preserves_order():
     # Verify signatures preserved in correct positions
     assert content[0]["signature"] == "sig_1"
     assert content[3]["signature"] == "sig_2"
+
+
+def test_get_tool_calls_from_response_chat_completions():
+    response = MagicMock()
+    response.output = None
+    response.content = None
+    tool_call = MagicMock()
+    tool_call.id = "call_abc"
+    tool_call.function.name = "my_tool"
+    tool_call.function.arguments = '{"x": 1}'
+    response.choices = [MagicMock(message=MagicMock(tool_calls=[tool_call]))]
+
+    result = get_tool_calls_from_response(response)
+
+    assert result == [{"id": "call_abc", "name": "my_tool", "arguments": {"x": 1}}]
+
+
+def test_get_tool_calls_from_response_responses_api():
+    response = MagicMock()
+    response.choices = None
+    response.content = None
+    response.output = [
+        {
+            "type": "function_call",
+            "id": "fc_1",
+            "call_id": "call_1",
+            "name": "my_tool",
+            "arguments": '{"x": 2}',
+        }
+    ]
+
+    result = get_tool_calls_from_response(response)
+
+    assert result == [{"id": "call_1", "name": "my_tool", "arguments": {"x": 2}}]
+
+
+def test_get_tool_calls_from_response_anthropic_messages():
+    response = MagicMock()
+    response.choices = None
+    response.output = None
+    response.content = [
+        {"type": "tool_use", "id": "toolu_1", "name": "my_tool", "input": {"x": 3}},
+    ]
+
+    result = get_tool_calls_from_response(response)
+
+    assert result == [{"id": "toolu_1", "name": "my_tool", "arguments": {"x": 3}}]
+
+
+def test_get_tool_calls_from_response_anthropic_messages_plain_dict():
+    # AnthropicMessagesResponse is a TypedDict -- real responses are plain
+    # dicts at runtime, not objects with attribute access. A MagicMock-only
+    # test would pass even if the extractor used bare getattr() and silently
+    # returned nothing for a real response.
+    response = {
+        "content": [
+            {"type": "tool_use", "id": "toolu_1", "name": "my_tool", "input": {"x": 3}},
+        ]
+    }
+
+    result = get_tool_calls_from_response(response)
+
+    assert result == [{"id": "toolu_1", "name": "my_tool", "arguments": {"x": 3}}]
+
+
+def test_get_tool_calls_from_response_no_tool_calls():
+    response = MagicMock()
+    response.choices = None
+    response.output = None
+    response.content = None
+
+    assert get_tool_calls_from_response(response) == []
+
+
+def test_has_tool_with_name_openai_function_shape():
+    tools = [{"type": "function", "function": {"name": "my_tool"}}]
+    assert has_tool_with_name(tools, "my_tool")
+    assert not has_tool_with_name(tools, "other_tool")
+
+
+def test_has_tool_with_name_anthropic_custom_shape():
+    tools = [{"type": "custom", "name": "my_tool", "input_schema": {}}]
+    assert has_tool_with_name(tools, "my_tool")
+    assert not has_tool_with_name(tools, "other_tool")
+
+
+def test_has_tool_with_name_anthropic_shape_without_type_field():
+    # Anthropic's documented client tool format is just name + input_schema;
+    # "type" isn't required at all (type: "custom" is only one possible value).
+    tools = [{"name": "my_tool", "input_schema": {}}]
+    assert has_tool_with_name(tools, "my_tool")
+    assert not has_tool_with_name(tools, "other_tool")
+
+
+def test_has_tool_with_name_not_a_list():
+    assert not has_tool_with_name(None, "my_tool")
+    assert not has_tool_with_name("not a list", "my_tool")

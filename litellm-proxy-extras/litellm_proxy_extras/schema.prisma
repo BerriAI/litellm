@@ -30,7 +30,7 @@ model LiteLLM_BudgetTable {
   end_users LiteLLM_EndUserTable[] // multiple end-users can have the same budget
   tags LiteLLM_TagTable[] // multiple tags can have the same budget
   team_membership LiteLLM_TeamMembership[] // budgets of Users within a Team 
-  organization_membership LiteLLM_OrganizationMembership[] // budgets of Users within a Organization 
+  organization_membership LiteLLM_OrganizationMembership[] // budgets of Users within a Organization
 }
 
 // Models on proxy
@@ -279,6 +279,7 @@ model LiteLLM_ObjectPermissionTable {
   blocked_tools         String[]       @default([]) // Tool names blocked for any key/team/user with this permission
   mcp_toolsets          String[]       @default([]) // Toolset IDs granted to this key/team/user
   search_tools          String[]       @default([]) // search_tool_name values this key/team/user may call
+  mcp_tool_search_enabled Boolean?
   teams                 LiteLLM_TeamTable[]
   projects              LiteLLM_ProjectTable[]
   verification_tokens   LiteLLM_VerificationToken[]
@@ -324,19 +325,28 @@ model LiteLLM_MCPServerTable {
   command      String?
   args         String[]       @default([])
   env          Json?          @default("{}")
+  issuer             String?
   authorization_url  String?
   token_url          String?
   registration_url   String?
   oauth2_flow        String?
+  token_exchange_endpoint String?
+  // Named for the RFC 8693 "audience" token-exchange request parameter (that flow only).
+  // RFC 8707 resource indicators are a separate concept, named "resource" in the v2 egress types.
+  audience           String?
+  subject_token_type String?
+  token_exchange_profile String?
   allow_all_keys Boolean @default(false)
   available_on_public_internet Boolean @default(true)
   delegate_auth_to_upstream Boolean @default(false)
   oauth_passthrough Boolean @default(false)
+  dcr_bridge Boolean?
   is_byok               Boolean  @default(false)
   byok_description      String[] @default([])
   byok_api_key_help_url String?
   source_url            String?
   timeout               Float?
+  max_concurrent_requests Int?
   // BYOM submission lifecycle
   approval_status  String?   @default("active")
   submitted_by     String?
@@ -386,6 +396,22 @@ model LiteLLM_MCPUserEnvVars {
   @@index([server_id])
 }
 
+model LiteLLM_MCPServerOAuthClient {
+  server_id   String   @id
+  credentials Json?
+  created_at  DateTime @default(now()) @map("created_at")
+  updated_at  DateTime @default(now()) @updatedAt @map("updated_at")
+}
+
+// The enterprise IdP identity assertion captured at SSO login, one row per user.
+// assertion_b64 is an encrypted JSON payload: {id_token, refresh_token?, issuer?, expires_at?}.
+model LiteLLM_SSOIdentityAssertion {
+  user_id       String   @id
+  assertion_b64 String
+  created_at    DateTime @default(now()) @map("created_at")
+  updated_at    DateTime @default(now()) @updatedAt @map("updated_at")
+}
+
 // Generate Tokens for Proxy
 model LiteLLM_VerificationToken {
     token      String   @id
@@ -413,10 +439,12 @@ model LiteLLM_VerificationToken {
     budget_reset_at DateTime?
     allowed_cache_controls String[] @default([])
     allowed_routes   String[] @default([])
+    key_type         String?
     policies         String[] @default([])
     access_group_ids String[] @default([])
     model_spend      Json @default("{}")
     model_max_budget Json @default("{}")
+    budget_fallbacks Json @default("{}")
     budget_id String?
     organization_id String?
     object_permission_id String?
@@ -424,6 +452,7 @@ model LiteLLM_VerificationToken {
     created_by String?
     updated_at      DateTime?               @default(now()) @updatedAt @map("updated_at")
     updated_by String?
+    settings_updated_at DateTime?             @map("settings_updated_at")
     last_active     DateTime?  // When this key was last used
     rotation_count   Int?       @default(0) // Number of times key has been rotated
     auto_rotate      Boolean?   @default(false) // Whether this key should be auto-rotated
@@ -506,10 +535,12 @@ model LiteLLM_DeletedVerificationToken {
     budget_reset_at         DateTime?
     allowed_cache_controls  String[] @default([])
     allowed_routes          String[] @default([])
+    key_type                String?
     policies                String[] @default([])
     access_group_ids String[] @default([])
     model_spend             Json     @default("{}")
     model_max_budget        Json     @default("{}")
+    budget_fallbacks        Json     @default("{}")
     router_settings  Json? @default("{}")
     budget_id               String?
     organization_id         String?
@@ -518,6 +549,7 @@ model LiteLLM_DeletedVerificationToken {
     created_by              String?   // Original creator
     updated_at              DateTime? // Last update timestamp before deletion
     updated_by              String?   // Last user who updated before deletion
+    settings_updated_at       DateTime? // Last configuration change before deletion
     last_active             DateTime? // When this key was last used before deletion
     rotation_count          Int?      @default(0)
     auto_rotate             Boolean?  @default(false)
@@ -571,6 +603,8 @@ model LiteLLM_TagTable {
 model LiteLLM_Config {
   param_name String @id
   param_value Json?
+  last_run_at DateTime?
+  reload_revision BigInt @default(0)
 }
 
 // View spend, model, api_key per request
@@ -607,6 +641,8 @@ model LiteLLM_SpendLogs {
   mcp_namespaced_tool_name String? 
   agent_id            String?
   proxy_server_request Json?     @default("{}")
+  created_at          DateTime   @default(now()) @map("created_at")
+  updated_at          DateTime   @default(now()) @updatedAt @map("updated_at")
   @@index([startTime])
   @@index([startTime, request_id])
   @@index([end_user])
@@ -715,6 +751,10 @@ model LiteLLM_DailyUserSpend {
   completion_tokens   BigInt      @default(0)
   cache_read_input_tokens     BigInt      @default(0)
   cache_creation_input_tokens BigInt      @default(0)
+  compression_saved_tokens    BigInt      @default(0)
+  compression_savings_spend    Float       @default(0.0)
+  prompt_caching_savings_spend Float       @default(0.0)
+  autorouter_savings_spend     Float       @default(0.0)
   spend               Float    @default(0.0)
   api_requests        BigInt      @default(0)
   successful_requests BigInt      @default(0)
@@ -746,6 +786,10 @@ model LiteLLM_DailyOrganizationSpend {
   completion_tokens   BigInt      @default(0)
   cache_read_input_tokens     BigInt      @default(0)
   cache_creation_input_tokens BigInt      @default(0)
+  compression_saved_tokens    BigInt      @default(0)
+  compression_savings_spend    Float       @default(0.0)
+  prompt_caching_savings_spend Float       @default(0.0)
+  autorouter_savings_spend     Float       @default(0.0)
   spend               Float    @default(0.0)
   api_requests        BigInt      @default(0)
   successful_requests BigInt      @default(0)
@@ -777,6 +821,10 @@ model LiteLLM_DailyEndUserSpend {
   completion_tokens   BigInt      @default(0)
   cache_read_input_tokens     BigInt      @default(0)
   cache_creation_input_tokens BigInt      @default(0)
+  compression_saved_tokens    BigInt      @default(0)
+  compression_savings_spend    Float       @default(0.0)
+  prompt_caching_savings_spend Float       @default(0.0)
+  autorouter_savings_spend     Float       @default(0.0)
   spend               Float    @default(0.0)
   api_requests        BigInt      @default(0)
   successful_requests BigInt      @default(0)
@@ -807,6 +855,10 @@ model LiteLLM_DailyAgentSpend {
   completion_tokens   BigInt      @default(0)
   cache_read_input_tokens     BigInt      @default(0)
   cache_creation_input_tokens BigInt      @default(0)
+  compression_saved_tokens    BigInt      @default(0)
+  compression_savings_spend    Float       @default(0.0)
+  prompt_caching_savings_spend Float       @default(0.0)
+  autorouter_savings_spend     Float       @default(0.0)
   spend               Float    @default(0.0)
   api_requests        BigInt      @default(0)
   successful_requests BigInt      @default(0)
@@ -837,10 +889,15 @@ model LiteLLM_DailyTeamSpend {
   completion_tokens   BigInt      @default(0)
   cache_read_input_tokens     BigInt      @default(0)
   cache_creation_input_tokens BigInt      @default(0)
+  compression_saved_tokens    BigInt      @default(0)
+  compression_savings_spend    Float       @default(0.0)
+  prompt_caching_savings_spend Float       @default(0.0)
+  autorouter_savings_spend     Float       @default(0.0)
   spend               Float    @default(0.0)
   api_requests        BigInt      @default(0)
   successful_requests BigInt      @default(0)
   failed_requests     BigInt      @default(0)
+  ptu_flat_cost       Float    @default(0.0)
   created_at          DateTime @default(now())
   updated_at          DateTime @updatedAt
 
@@ -869,6 +926,10 @@ model LiteLLM_DailyTagSpend {
   completion_tokens   BigInt      @default(0)
   cache_read_input_tokens     BigInt      @default(0)
   cache_creation_input_tokens BigInt      @default(0)
+  compression_saved_tokens    BigInt      @default(0)
+  compression_savings_spend    Float       @default(0.0)
+  prompt_caching_savings_spend Float       @default(0.0)
+  autorouter_savings_spend     Float       @default(0.0)
   spend               Float    @default(0.0)
   api_requests        BigInt      @default(0)
   successful_requests BigInt      @default(0)
@@ -885,6 +946,17 @@ model LiteLLM_DailyTagSpend {
   @@index([endpoint])
 }
 
+
+// One row per live proxy worker process. Workers upsert their row on a fixed
+// heartbeat; counting rows with a recent heartbeat tells how many workers share
+// this database, which lets the Admin UI hide its "no Redis" warning for
+// deployments that are provably a single worker.
+model LiteLLM_ProxyWorkerHeartbeat {
+  worker_id         String   @id
+  hostname          String
+  started_at        DateTime @default(now())
+  last_heartbeat_at DateTime @default(now())
+}
 
 // Track the status of cron jobs running. Only allow one pod to run the job at a time
 model LiteLLM_CronJob {
@@ -929,6 +1001,8 @@ model LiteLLM_ManagedObjectTable { // for batches or finetuning jobs which use t
   created_at DateTime @default(now())
   created_by String?
   team_id String?
+  api_key String?
+  request_tags Json? @default("[]")
   updated_at DateTime @updatedAt
   updated_by String?
 
@@ -1008,6 +1082,21 @@ model LiteLLM_DailyGuardrailMetrics {
   @@index([guardrail_id])
 }
 
+// Daily guardrail billable usage units (one row per guardrail/day/team/key/unit type)
+model LiteLLM_DailyGuardrailUsageUnits {
+  guardrail_id String
+  date         String   // YYYY-MM-DD
+  team_id      String   // empty string when the request had no team
+  api_key      String   // hashed virtual key; empty string when unknown
+  usage_unit   String   // provider counter name, e.g. Bedrock's contentPolicyUnits
+  units        BigInt   @default(0)
+  created_at   DateTime @default(now())
+  updated_at   DateTime @updatedAt
+
+  @@id([guardrail_id, date, team_id, api_key, usage_unit])
+  @@index([date])
+}
+
 // Daily policy metrics for usage dashboard (one row per policy per day)
 model LiteLLM_DailyPolicyMetrics {
   policy_id           String
@@ -1046,6 +1135,40 @@ model LiteLLM_SpendLogToolIndex {
 
   @@id([request_id, tool_name])
   @@index([tool_name, start_time])
+  @@index([start_time])
+}
+
+// Daily tool spend rollup (one row per tool per day) – the Cost Optimization card reads this, never SpendLogs
+model LiteLLM_DailyToolSpend {
+  date          String
+  tool_name     String
+  spend         Float    @default(0.0)
+  total_tokens  BigInt   @default(0)
+  request_count BigInt   @default(0)
+  created_at    DateTime @default(now())
+  updated_at    DateTime @updatedAt
+
+  @@id([date, tool_name])
+}
+
+// Gateway request counts recorded at the ASGI edge by
+// BillableRequestMetricsMiddleware. This is the source of truth for SGR
+// (successful gateway requests): it counts what the proxy actually answered,
+// independent of whether the request reached litellm's logging callbacks.
+// The key carries no deployment or caller dimension. Every part of it is
+// chosen by the proxy and drawn from a closed set, so the table is bounded by
+// (days x categories x routes) rather than by anything a caller can vary.
+model LiteLLM_DailyGatewayRequests {
+  date                String
+  category            String
+  route               String
+  successful_requests BigInt   @default(0)
+  failed_requests     BigInt   @default(0)
+  created_at          DateTime @default(now())
+  updated_at          DateTime @updatedAt
+
+  @@id([date, category, route])
+  @@index([date])
 }
 
 // Prompt table for storing prompt configurations
@@ -1321,6 +1444,93 @@ model LiteLLM_AdaptiveRouterSession {
 
   @@id([session_id, router_name, model_name])
   @@index([last_activity_at], map: "idx_adaptive_router_session_activity")
+}
+
+model LiteLLM_AutoRouterSession {
+  api_key               String
+  session_id            String
+  router_name           String
+  router_type           String
+  first_turn_at         DateTime
+  last_turn_at          DateTime
+  last_model            String
+  models                Json     @default("{}")
+  turns                 Int      @default(0)
+  unordered_turns       Int      @default(0)
+  covered_turns         Int      @default(0)
+  cache_hits            Int      @default(0)
+  same_model_turns      Int      @default(0)
+  same_model_hits       Int      @default(0)
+  first_visit_turns     Int      @default(0)
+  first_visit_hits      Int      @default(0)
+  return_turns          Int      @default(0)
+  return_hits           Int      @default(0)
+  return_expired_misses Int      @default(0)
+  return_within_ttl_misses  Int      @default(0)
+  ttl_5m_turns          Int      @default(0)
+  ttl_1h_turns          Int      @default(0)
+  total_tokens          BigInt   @default(0)
+  spend                 Float    @default(0)
+  saved_spend           Float    @default(0)
+  tier_turns            Json     @default("{}")
+
+  @@id([api_key, session_id, router_name])
+  @@index([last_turn_at], map: "idx_autorouter_session_last_turn")
+}
+
+// Shadow eval: evaluation of an auto-router against one or more keys' live traffic, in
+// either direction. forward duplicates the requests the keys did not route through the
+// router through it, answering whether they should adopt it; reverse duplicates the
+// requests the router did serve against a fixed baseline model, answering whether a key
+// already on it still benefits. Either way a sampled slice runs in a detached task and an
+// LLM judge compares real vs shadow responses blind. Each row is ONE key's leg of a job:
+// immutable config plus that key's own turn budget and stop state, so one key exhausting
+// its budget never ends a sibling's sampling. A job is the set of legs sharing group_id
+// (the id the API reports), written together by one atomic create_many with identical
+// config; single-key jobs predating group_id were backfilled group_id = id. "One active
+// job per (key, direction)" is a partial unique index on (api_key_id, direction) WHERE
+// stopped_at IS NULL, expressed only in the migration because schema.prisma cannot state
+// partial indexes; it is what makes a concurrent start on another pod race-safe rather
+// than read-then-create. Every count, status, and spend figure is derived from the
+// append-only attempt rows, so nothing can disagree across pods or stop races.
+model LiteLLM_ShadowEvalJob {
+  id                String   @id @default(cuid())
+  group_id          String   // legs of one job share this; the API's job id
+  api_key_id        String   // hashed virtual key whose traffic this leg shadows
+  router_name       String   // the auto-router under evaluation, in either direction
+  direction         String   @default("forward") // forward | reverse
+  baseline_model    String?  // reverse only: the fixed model the router is judged against
+  judge_model       String
+  shadow_percentage Float
+  max_turns         Int      // sample-count ceiling: the whole budget on pre-max_budget jobs, the error-loop valve otherwise
+  max_budget        Float?   // per-key USD cap on the eval's own shadow + judge spend; null on jobs from before spend budgets
+  created_at        DateTime @default(now())
+  created_by        String?
+  ends_at           DateTime
+  stopped_at        DateTime?
+  stopped_by        String?  // operator who stopped it early; null when it ended on its own
+
+  @@index([group_id])
+  @@index([api_key_id])
+  @@index([created_at])
+}
+
+// One row per sampled pipeline: a blind verdict (real | shadow | tie) or an error.
+model LiteLLM_ShadowEvalAttempt {
+  id           String   @id @default(cuid())
+  job_id       String
+  request_id   String   // the judged real request
+  outcome      String   // real | shadow | tie | error
+  tier         String?  // router's tier for the prompt, when classified
+  real_model   String?
+  shadow_model String?
+  confidence   Float?
+  judge_cost   Float    @default(0)
+  shadow_cost  Float    @default(0)
+  error        String?
+  created_at   DateTime @default(now())
+
+  @@index([job_id])
 }
 
 // ---------------------------------------------------------------------------

@@ -62,12 +62,17 @@ fn parse_members(manifest: &str) -> BTreeSet<String> {
     members
 }
 
-/// The immediate subdirectory names under `crates/`.
+/// The crate subdirectory names under `crates/`.
+///
+/// A directory counts as a crate only when it holds a `Cargo.toml`; non-crate
+/// directories (e.g. docs like `CODING_STANDARDS/`) are ignored so they can live
+/// under `crates/` without tripping the crate-proliferation guard.
 fn crate_dirs(root: &Path) -> BTreeSet<String> {
     fs::read_dir(root.join("crates"))
         .expect("crates/ directory should exist")
         .filter_map(Result::ok)
         .filter(|entry| entry.file_type().map(|ty| ty.is_dir()).unwrap_or(false))
+        .filter(|entry| entry.path().join("Cargo.toml").is_file())
         .map(|entry| entry.file_name().to_string_lossy().into_owned())
         .collect()
 }

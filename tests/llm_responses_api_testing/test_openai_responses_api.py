@@ -1,5 +1,4 @@
 import os
-import sys
 import pytest
 import asyncio
 from typing import Optional, cast
@@ -10,10 +9,8 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 import time
 import json
 
-sys.path.insert(0, os.path.abspath("../.."))
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
-import json
 from litellm.types.utils import StandardLoggingPayload
 from litellm.types.llms.openai import (
     ResponseCompletedEvent,
@@ -1628,23 +1625,30 @@ async def test_openai_responses_api_token_limit_error():
     """
     Relevant issue: https://github.com/BerriAI/litellm/issues/15785
 
-
-    When this fails you'll see:
-    "pydantic_core._pydantic_core.ValidationError: 3 validation errors for ErrorEvent"
-    in the console.
+    Parsing the in-stream ErrorEvent must not raise
+    "pydantic_core._pydantic_core.ValidationError: 3 validation errors for ErrorEvent".
+    The iterator now surfaces the event as litellm.APIError with status 400
+    (invalid_request_error is a non-retriable client error, so no
+    MidStreamFallbackError wrapping) carrying the provider's message.
     """
     litellm._turn_on_debug()
 
     # Generate text with >400k tokens to trigger token limit error
     oversized_text = "This is a test sentence. " * 50000  # ~400k tokens
 
-    # This will raise ValidationError instead of showing the real error
     response = await litellm.aresponses(
         model="gpt-5-mini", input=oversized_text, stream=True
     )
 
-    async for event in response:
-        print(event)  # Never reaches here - ValidationError is raised
+    async def _drain():
+        async for event in response:
+            print(event)
+
+    with pytest.raises(litellm.APIError) as exc_info:
+        await _drain()
+
+    assert exc_info.value.status_code == 400
+    assert "exceeds the context window" in str(exc_info.value)
 
 
 async def test_openai_streaming_logging():

@@ -12,12 +12,9 @@ is encode_character_id_with_provider, which runs for real; encoding assertions
 are checked by the genuine decode round-trip.
 """
 
-import os
-import sys
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../.."))
 
 from litellm.proxy.video_endpoints.utils import (
     encode_character_id_in_response,

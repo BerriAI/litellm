@@ -1,5 +1,6 @@
-import { processSSOSettingsPayload } from "./utils";
+import { detectSSOProvider, processSSOSettingsPayload } from "./utils";
 import { describe, it, expect } from "vitest";
+import type { SSOSettingsValues } from "@/app/(dashboard)/hooks/sso/useSSOSettings";
 
 describe("processSSOSettingsPayload", () => {
   describe("without role mappings", () => {
@@ -426,5 +427,28 @@ describe("processSSOSettingsPayload", () => {
         array_field: [1, 2, 3],
       });
     });
+  });
+});
+
+describe("detectSSOProvider with SAML", () => {
+  it("returns saml when a SAML IdP metadata URL is configured", () => {
+    expect(detectSSOProvider({ saml_idp_metadata_url: "https://idp.example.com/metadata" } as SSOSettingsValues)).toBe(
+      "saml",
+    );
+  });
+
+  it("returns saml when only inline SAML metadata XML is configured", () => {
+    expect(detectSSOProvider({ saml_idp_metadata_xml: "<EntityDescriptor/>" } as SSOSettingsValues)).toBe("saml");
+  });
+});
+
+describe("processSSOSettingsPayload with SAML", () => {
+  it("maps the boolean allow-unsolicited toggle to a 'true'/'false' string", () => {
+    expect(
+      processSSOSettingsPayload({ sso_provider: "saml", saml_allow_unsolicited: true }).saml_allow_unsolicited,
+    ).toBe("true");
+    expect(
+      processSSOSettingsPayload({ sso_provider: "saml", saml_allow_unsolicited: false }).saml_allow_unsolicited,
+    ).toBe("false");
   });
 });

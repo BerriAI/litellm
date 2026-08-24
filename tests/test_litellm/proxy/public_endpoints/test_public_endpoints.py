@@ -1,11 +1,8 @@
-import os
-import sys
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../.."))
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -241,6 +238,92 @@ def test_bedrock_mantle_provider_fields():
 
     # api_base override so admins can target a custom Mantle host without env access.
     assert fields_by_key["api_base"]["field_type"] == "text"
+
+
+def test_vllm_provider_display_names_are_distinct():
+    """Hosted and local vLLM must not share a dropdown label.
+
+    The Add Model provider dropdown is driven by /public/providers/fields.
+    Both entries previously rendered as near-identical "vllm"/"Vllm" rows
+    with the same logo, so admins could not tell them apart.
+    """
+    app_instance = FastAPI()
+    app_instance.include_router(router)
+    test_client = TestClient(app_instance)
+
+    response = test_client.get("/public/providers/fields")
+    assert response.status_code == 200
+    providers = response.json()
+
+    hosted = next((p for p in providers if p["provider"] == "Hosted_Vllm"), None)
+    local = next((p for p in providers if p["provider"] == "VLLM"), None)
+    assert hosted is not None, "Hosted vLLM provider entry not found"
+    assert local is not None, "Local vLLM provider entry not found"
+
+    assert hosted["provider_display_name"] == "Hosted vLLM"
+    assert local["provider_display_name"] == "Local vLLM"
+    assert hosted["provider_display_name"].casefold() != local["provider_display_name"].casefold()
+    assert hosted["litellm_provider"] == "hosted_vllm"
+    assert local["litellm_provider"] == "vllm"
+
+
+def test_nvidia_riva_provider_fields():
+    app_instance = FastAPI()
+    app_instance.include_router(router)
+    test_client = TestClient(app_instance)
+
+    response = test_client.get("/public/providers/fields")
+    assert response.status_code == 200
+    providers = response.json()
+
+    riva = next((p for p in providers if p["provider"] == "NVIDIA_RIVA"), None)
+    assert riva is not None, "NVIDIA Riva provider entry not found"
+
+    assert riva["provider_display_name"] == "Nvidia Riva"
+    assert riva["litellm_provider"] == LlmProviders.NVIDIA_RIVA.value
+    assert riva["default_model_placeholder"].startswith("nvidia_riva/")
+
+    fields_by_key = {f["key"]: f for f in riva["credential_fields"]}
+
+    assert fields_by_key["api_base"]["required"] is True
+    assert fields_by_key["api_base"]["field_type"] == "text"
+
+    assert fields_by_key["api_key"]["required"] is False
+    assert fields_by_key["api_key"]["field_type"] == "password"
+
+    assert "nvcf_function_id" in fields_by_key
+    assert fields_by_key["nvcf_function_id"]["required"] is False
+
+
+def test_cognition_provider_fields():
+    """Cognition must be selectable in the Add Model flow (LIT-5348).
+
+    The dropdown is driven entirely by /public/providers/fields, so without an
+    entry here admins have to fall back to the generic OpenAI-compatible route,
+    which is exactly the provider identity mix-up this feature removes.
+    """
+    app_instance = FastAPI()
+    app_instance.include_router(router)
+    test_client = TestClient(app_instance)
+
+    response = test_client.get("/public/providers/fields")
+    assert response.status_code == 200
+    providers = response.json()
+
+    cognition = next((p for p in providers if p["provider"] == "Cognition"), None)
+    assert cognition is not None, "Cognition provider entry not found"
+
+    assert cognition["provider_display_name"] == "Cognition"
+    assert cognition["litellm_provider"] == "cognition"
+    assert cognition["default_model_placeholder"].startswith("cognition/")
+
+    fields_by_key = {f["key"]: f for f in cognition["credential_fields"]}
+
+    assert fields_by_key["api_key"]["required"] is True
+    assert fields_by_key["api_key"]["field_type"] == "password"
+
+    assert fields_by_key["api_base"]["field_type"] == "text"
+    assert fields_by_key["api_base"]["required"] is False
 
 
 def test_google_ai_studio_provider_fields_expose_api_base():
@@ -582,6 +665,7 @@ def test_public_agent_hub_rewrites_upstream_url_to_proxy():
 
     mock_registry = MagicMock()
     mock_registry.get_public_agent_list.return_value = [agent]
+    mock_registry.ids_for_agent = MagicMock(side_effect=lambda agent_id: frozenset({agent_id}))
 
     with (
         patch("litellm.public_agent_groups", ["agent-123"]),
@@ -598,6 +682,57 @@ def test_public_agent_hub_rewrites_upstream_url_to_proxy():
     card = payload[0]
     assert upstream_url not in card.get("url", "")
     assert card["url"].endswith("/a2a/agent-123")
+
+
+def test_public_agent_hub_serializes_http_security_scheme_without_bearer_format():
+    """Regression: agents created through the UI carry an auto-generated
+    ``securitySchemes.LiteLLMKey`` of ``{"type": "http", "scheme": "bearer"}``
+    with no ``bearerFormat``. The endpoint response_model must accept this
+    optional-field-omitted scheme; otherwise response validation raises and
+    /public/agent_hub returns 500, which the frontend swallows into an empty
+    list and hides the Agent Hub tab."""
+    from litellm.types.agents import AgentResponse
+
+    agent = AgentResponse(
+        agent_id="agent-123",
+        agent_name="public-agent",
+        agent_card_params={
+            "name": "public-agent",
+            "url": "https://upstream.internal.example.com/a2a",
+            "securitySchemes": {
+                "LiteLLMKey": {
+                    "type": "http",
+                    "scheme": "bearer",
+                    "description": "LiteLLM virtual key",
+                }
+            },
+        },
+    )
+
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+
+    mock_registry = MagicMock()
+    mock_registry.get_public_agent_list.return_value = [agent]
+    mock_registry.ids_for_agent = MagicMock(side_effect=lambda agent_id: frozenset({agent_id}))
+
+    with (
+        patch("litellm.public_agent_groups", ["agent-123"]),
+        patch(
+            "litellm.proxy.agent_endpoints.agent_registry.global_agent_registry",
+            mock_registry,
+        ),
+    ):
+        response = client.get("/public/agent_hub")
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert len(payload) == 1
+    scheme = payload[0]["securitySchemes"]["LiteLLMKey"]
+    assert scheme["type"] == "http"
+    assert scheme["scheme"] == "bearer"
+    assert "bearerFormat" not in scheme
 
 
 def test_public_agent_hub_returns_empty_when_no_public_groups():

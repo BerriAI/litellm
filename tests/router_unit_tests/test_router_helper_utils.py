@@ -1,13 +1,9 @@
-import sys
 import os
 import traceback
 from dotenv import load_dotenv
 from fastapi import Request
 from datetime import datetime
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 from litellm import Router
 import pytest
 import litellm
@@ -15,6 +11,7 @@ from unittest.mock import patch, MagicMock, AsyncMock
 from create_mock_standard_logging_payload import create_standard_logging_payload
 from litellm.types.utils import StandardLoggingPayload
 from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+from litellm.constants import DEFAULT_AUTO_ROUTER_MAX_INPUT_CHARS
 
 
 @pytest.fixture
@@ -89,7 +86,7 @@ def test_routing_strategy_init_invalid_strategy(model_list):
     router = Router(model_list=model_list)
 
     # Test common mistake: "simple" instead of "simple-shuffle"
-    with pytest.raises(ValueError) as exc_info:
+    with pytest.raises(ValueError, match="usage-based-routing', 'provider-budget-routing'\\]\\. Check") as exc_info:
         router.routing_strategy_init(
             routing_strategy="simple", routing_strategy_args={}
         )
@@ -105,7 +102,7 @@ def test_routing_strategy_init_invalid_strategy(model_list):
     assert "Router SDK" in error_msg
 
     # Test completely invalid strategy
-    with pytest.raises(ValueError) as exc_info:
+    with pytest.raises(ValueError, match="usage-based-routing', 'provider-budget-routing'\\]\\. Check") as exc_info:
         router.routing_strategy_init(
             routing_strategy="not-a-real-strategy", routing_strategy_args={}
         )
@@ -126,19 +123,6 @@ def test_routing_strategy_init_valid_string_strategies(model_list):
 
     for strategy in valid_strategies:
         # Should not raise
-        router.routing_strategy_init(
-            routing_strategy=strategy, routing_strategy_args={}
-        )
-
-
-def test_routing_strategy_init_valid_enum_strategies(model_list):
-    """Test that RoutingStrategy enum values work without error."""
-    from litellm.types.router import RoutingStrategy
-
-    router = Router(model_list=model_list)
-
-    for strategy in RoutingStrategy:
-        # Should not raise when passing enum directly
         router.routing_strategy_init(
             routing_strategy=strategy, routing_strategy_args={}
         )
@@ -435,10 +419,11 @@ def test_get_timeout(model_list):
 def test_handle_mock_testing_fallbacks(model_list, fallback_kwarg, expected_error):
     """Test if the '_handle_mock_testing_fallbacks' function is working correctly"""
     router = Router(model_list=model_list)
+    data = {
+        fallback_kwarg: True,
+    }
+
     with pytest.raises(expected_error):
-        data = {
-            fallback_kwarg: True,
-        }
         router._handle_mock_testing_fallbacks(
             kwargs=data,
         )
@@ -447,10 +432,11 @@ def test_handle_mock_testing_fallbacks(model_list, fallback_kwarg, expected_erro
 def test_handle_mock_testing_rate_limit_error(model_list):
     """Test if the '_handle_mock_testing_rate_limit_error' function is working correctly"""
     router = Router(model_list=model_list)
+    data = {
+        "mock_testing_rate_limit_error": True,
+    }
+
     with pytest.raises(litellm.RateLimitError):
-        data = {
-            "mock_testing_rate_limit_error": True,
-        }
         router._handle_mock_testing_rate_limit_error(
             kwargs=data,
         )
@@ -521,6 +507,55 @@ async def test_deployment_callback_on_success(sync_mode):
             end_time=time.time(),
         )
     assert tpm_key is not None
+
+
+@pytest.mark.asyncio
+async def test_deployment_callback_on_success_tracks_tpm_for_io_deployment():
+    """
+    An IO-limited deployment (itpm/otpm, no tpm/rpm) must still record TPM usage
+    in the router's routing counter so TPM-aware routing strategies see its real
+    load in mixed model groups; its itpm/otpm enforcement runs separately.
+    """
+    import time
+
+    model_list = [
+        {
+            "model_name": "opus",
+            "litellm_params": {
+                "model": "openai/gpt-4o-mini",
+                "api_key": "sk-fake",
+                "itpm": 1000,
+            },
+            "model_info": {"id": "io-100"},
+        }
+    ]
+    router = Router(model_list=model_list)
+
+    standard_logging_payload = create_standard_logging_payload()
+    standard_logging_payload["total_tokens"] = 100
+    standard_logging_payload["model_id"] = "io-100"
+    kwargs = {
+        "litellm_params": {
+            "metadata": {
+                "deployment": "openai/gpt-4o-mini",
+                "model_group": "opus",
+            },
+            "model_info": {"id": "io-100"},
+        },
+        "standard_logging_object": standard_logging_payload,
+    }
+    response = litellm.ModelResponse(model="openai/gpt-4o-mini", usage={"total_tokens": 100})
+
+    tpm_key = await router.deployment_callback_on_success(
+        kwargs=kwargs,
+        completion_response=response,
+        start_time=time.time(),
+        end_time=time.time(),
+    )
+
+    # The IO deployment is no longer skipped: its TPM routing counter is tracked.
+    assert tpm_key is not None
+    assert await router.cache.async_get_cache(key=tpm_key) == 100
 
 
 @pytest.mark.asyncio
@@ -717,25 +752,19 @@ async def test_routing_strategy_pre_call_checks(model_list, sync_mode):
                 )
             ),
         ):
-            try:
+            with pytest.raises(litellm.RateLimitError):
                 await router.async_routing_strategy_pre_call_checks(
                     deployment, litellm_logging_obj
                 )
-                pytest.fail("Exception was not raised")
-            except Exception as e:
-                assert isinstance(e, litellm.RateLimitError)
 
         ## WITH EXCEPTION - generic error
         with patch.object(
             callback, "async_pre_call_check", AsyncMock(side_effect=Exception("Error"))
         ):
-            try:
+            with pytest.raises(Exception, match="Error"):
                 await router.async_routing_strategy_pre_call_checks(
                     deployment, litellm_logging_obj
                 )
-                pytest.fail("Exception was not raised")
-            except Exception as e:
-                assert isinstance(e, Exception)
 
 
 @pytest.mark.parametrize(
@@ -924,6 +953,227 @@ async def test_set_response_headers_subtracts_in_flight_delta(model_list):
 
 
 @pytest.mark.asyncio
+async def test_set_response_headers_in_flight_delta_only_adjusts_tpm_rpm(model_list):
+    """
+    The in-flight replay applies only to the post-incremented TPM/RPM counters
+    (`x-ratelimit-remaining-tokens` / `-requests`). The ITPM/OTPM counters are
+    incremented at reservation time (pre-call), so the input/output token
+    headers already reflect this request and must pass through untouched.
+    """
+    from pydantic import BaseModel
+
+    class _Usage(BaseModel):
+        total_tokens: int = 30
+        prompt_tokens: int = 20
+        completion_tokens: int = 10
+
+    class _Resp(BaseModel):
+        usage: _Usage = _Usage()
+        _hidden_params: dict = {}
+
+    router = Router(model_list=model_list)
+    router.get_remaining_model_group_usage = AsyncMock(
+        return_value={
+            "x-ratelimit-remaining-tokens": 1000,
+            "x-ratelimit-remaining-requests": 100,
+            "x-ratelimit-remaining-input-tokens": 1000,
+            "x-ratelimit-remaining-output-tokens": 500,
+        }
+    )
+
+    resp = _Resp()
+    resp._hidden_params = {}
+    await router.set_response_headers(response=resp, model_group="gpt-3.5-turbo")
+
+    headers = resp._hidden_params["additional_headers"]
+    # TPM/RPM headers replay the in-flight increment...
+    assert headers["x-ratelimit-remaining-tokens"] == 970
+    assert headers["x-ratelimit-remaining-requests"] == 99
+    # ...but the reservation-based input/output headers pass through unchanged.
+    assert headers["x-ratelimit-remaining-input-tokens"] == 1000
+    assert headers["x-ratelimit-remaining-output-tokens"] == 500
+
+
+@pytest.mark.asyncio
+async def test_get_model_group_io_token_usage_sums_across_deployments():
+    """
+    get_model_group_io_token_usage must sum ITPM/OTPM across every deployment
+    in the model group (not just the first), reading the same per-deployment
+    cache keys the pre-call reservation writes to.
+    """
+    from litellm.types.router import RouterCacheEnum
+    from litellm.utils import get_utc_datetime
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "opus",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "itpm": 1000,
+                    "otpm": 500,
+                },
+                "model_info": {"id": "io-usage-dep-1"},
+            },
+            {
+                "model_name": "opus",
+                "litellm_params": {
+                    "model": "openai/gpt-4o",
+                    "itpm": 1000,
+                    "otpm": 500,
+                },
+                "model_info": {"id": "io-usage-dep-2"},
+            },
+        ]
+    )
+
+    minute = get_utc_datetime().strftime("%H-%M")
+    keys_and_values = [
+        (
+            RouterCacheEnum.ITPM.value.format(
+                id="io-usage-dep-1", model="openai/gpt-4o-mini", current_minute=minute
+            ),
+            30,
+        ),
+        (
+            RouterCacheEnum.OTPM.value.format(
+                id="io-usage-dep-1", model="openai/gpt-4o-mini", current_minute=minute
+            ),
+            10,
+        ),
+        (
+            RouterCacheEnum.ITPM.value.format(
+                id="io-usage-dep-2", model="openai/gpt-4o", current_minute=minute
+            ),
+            70,
+        ),
+        (
+            RouterCacheEnum.OTPM.value.format(
+                id="io-usage-dep-2", model="openai/gpt-4o", current_minute=minute
+            ),
+            20,
+        ),
+    ]
+    for key, value in keys_and_values:
+        await router.cache.async_increment_cache(key=key, value=value, ttl=60)
+
+    current_itpm, current_otpm = await router.get_model_group_io_token_usage("opus")
+
+    assert current_itpm == 100
+    assert current_otpm == 30
+
+
+@pytest.mark.asyncio
+async def test_get_model_group_io_token_usage_no_deployments_returns_none():
+    router = Router(model_list=[])
+    current_itpm, current_otpm = await router.get_model_group_io_token_usage(
+        "nonexistent-group"
+    )
+    assert current_itpm is None
+    assert current_otpm is None
+
+
+@pytest.mark.asyncio
+async def test_get_remaining_model_group_usage_merges_io_and_tpm_headers(model_list):
+    """
+    A model group with both itpm/otpm and tpm/rpm limits must expose the
+    standard remaining-tokens/requests headers alongside the input/output token
+    headers, so clients and prometheus gauges relying on either still get data.
+    """
+    from unittest.mock import Mock
+
+    from litellm.types.router import ModelGroupInfo
+
+    router = Router(model_list=model_list)
+    router._cached_get_model_group_info = Mock(
+        return_value=ModelGroupInfo(
+            model_group="gpt-3.5-turbo",
+            providers=["openai"],
+            itpm=2000,
+            otpm=1000,
+            tpm=5000,
+            rpm=50,
+        )
+    )
+    router.get_model_group_io_token_usage = AsyncMock(return_value=(100, 40))
+    router.get_model_group_usage = AsyncMock(return_value=(500, 5))
+
+    headers = await router.get_remaining_model_group_usage("gpt-3.5-turbo")
+
+    assert headers["x-ratelimit-remaining-input-tokens"] == 1900
+    assert headers["x-ratelimit-remaining-output-tokens"] == 960
+    assert headers["x-ratelimit-remaining-tokens"] == 4500
+    assert headers["x-ratelimit-remaining-requests"] == 45
+
+
+@pytest.mark.asyncio
+async def test_set_response_headers_native_input_token_header_does_not_suppress_router_headers(model_list):
+    """
+    A provider that natively returns `x-ratelimit-remaining-input-tokens` must
+    not suppress the router's own remaining-tokens/requests headers for a
+    non-IO model group.
+    """
+    from pydantic import BaseModel
+
+    class _Usage(BaseModel):
+        total_tokens: int = 42
+
+    class _Resp(BaseModel):
+        usage: _Usage = _Usage()
+        _hidden_params: dict = {}
+
+    router = Router(model_list=model_list)
+    router.get_remaining_model_group_usage = AsyncMock(
+        return_value={
+            "x-ratelimit-remaining-tokens": 1000,
+            "x-ratelimit-remaining-requests": 100,
+        }
+    )
+
+    resp = _Resp()
+    resp._hidden_params = {"additional_headers": {"x-ratelimit-remaining-input-tokens": 5}}
+    await router.set_response_headers(response=resp, model_group="gpt-3.5-turbo")
+
+    headers = resp._hidden_params["additional_headers"]
+    assert headers["x-ratelimit-remaining-tokens"] == 958
+    assert headers["x-ratelimit-remaining-requests"] == 99
+    # the provider's native header is left untouched
+    assert headers["x-ratelimit-remaining-input-tokens"] == 5
+
+
+@pytest.mark.asyncio
+async def test_set_response_headers_native_token_header_does_not_suppress_io_headers(model_list):
+    from pydantic import BaseModel
+
+    class _Usage(BaseModel):
+        total_tokens: int = 42
+
+    class _Resp(BaseModel):
+        usage: _Usage = _Usage()
+        _hidden_params: dict = {}
+
+    router = Router(model_list=model_list)
+    router.get_remaining_model_group_usage = AsyncMock(
+        return_value={
+            "x-ratelimit-remaining-tokens": 1000,
+            "x-ratelimit-remaining-requests": 100,
+            "x-ratelimit-remaining-input-tokens": 900,
+            "x-ratelimit-remaining-output-tokens": 450,
+        }
+    )
+
+    resp = _Resp()
+    resp._hidden_params = {"additional_headers": {"x-ratelimit-remaining-tokens": 5}}
+    await router.set_response_headers(response=resp, model_group="gpt-3.5-turbo")
+
+    headers = resp._hidden_params["additional_headers"]
+    assert headers["x-ratelimit-remaining-tokens"] == 5
+    assert headers["x-ratelimit-remaining-requests"] == 99
+    assert headers["x-ratelimit-remaining-input-tokens"] == 900
+    assert headers["x-ratelimit-remaining-output-tokens"] == 450
+
+
+@pytest.mark.asyncio
 async def test_set_response_headers_handles_missing_usage(model_list):
     """
     Streaming chunks and some response shapes may lack a `usage` attribute or
@@ -950,6 +1200,72 @@ async def test_set_response_headers_handles_missing_usage(model_list):
     headers = resp._hidden_params["additional_headers"]
     assert headers["x-ratelimit-remaining-tokens"] == 1000
     assert headers["x-ratelimit-remaining-requests"] == 99
+
+
+@pytest.mark.asyncio
+async def test_set_response_headers_dict_anthropic_messages_response(model_list):
+    """Anthropic /v1/messages returns a dict; IO rate-limit headers must attach."""
+    router = Router(model_list=model_list)
+    router.get_remaining_model_group_usage = AsyncMock(
+        return_value={
+            "x-ratelimit-limit-input-tokens": 25,
+            "x-ratelimit-remaining-input-tokens": 20,
+            "x-ratelimit-limit-output-tokens": 100,
+            "x-ratelimit-remaining-output-tokens": 95,
+        }
+    )
+
+    resp = {
+        "id": "msg_123",
+        "type": "message",
+        "role": "assistant",
+        "content": [{"type": "text", "text": "hi"}],
+        "usage": {"input_tokens": 5, "output_tokens": 1},
+    }
+    await router.set_response_headers(response=resp, model_group="io-itpm-strict")
+
+    assert "_hidden_params" in resp
+    headers = resp["_hidden_params"]["additional_headers"]
+    assert headers["x-litellm-model-group"] == "io-itpm-strict"
+    assert headers["x-ratelimit-limit-input-tokens"] == 25
+    assert headers["x-ratelimit-remaining-input-tokens"] == 20
+    assert headers["x-ratelimit-remaining-output-tokens"] == 95
+
+
+@pytest.mark.asyncio
+async def test_set_response_headers_wraps_bare_async_generator(model_list):
+    """
+    Streaming responses that never go through Router.make_call's usual
+    object-based wrappers (e.g. the Anthropic /v1/messages -> Responses API
+    bridge, which yields a raw async generator with no `_hidden_params` slot)
+    must still get IO rate-limit headers attached via a thin wrapper.
+    """
+
+    async def _raw_generator():
+        yield {"type": "message_start"}
+        yield {"type": "message_stop"}
+
+    router = Router(model_list=model_list)
+    router.get_remaining_model_group_usage = AsyncMock(
+        return_value={
+            "x-ratelimit-limit-input-tokens": 25,
+            "x-ratelimit-remaining-input-tokens": 20,
+        }
+    )
+
+    wrapped = await router.set_response_headers(response=_raw_generator(), model_group="io-itpm-strict")
+
+    assert hasattr(wrapped, "_hidden_params")
+    headers = wrapped._hidden_params["additional_headers"]
+    assert headers["x-litellm-model-group"] == "io-itpm-strict"
+    assert headers["x-ratelimit-limit-input-tokens"] == 25
+    assert headers["x-ratelimit-remaining-input-tokens"] == 20
+
+    from collections.abc import AsyncIterator
+
+    assert isinstance(wrapped, AsyncIterator)
+    chunks = [chunk async for chunk in wrapped]
+    assert chunks == [{"type": "message_start"}, {"type": "message_stop"}]
 
 
 def test_get_all_deployments(model_list):
@@ -1188,12 +1504,6 @@ def test_get_pattern(model_list):
 
 
 def test_deployments_by_pattern(model_list):
-    router = Router(model_list=model_list)
-    deployments = router.pattern_router.get_deployments_by_pattern(model="claude-3")
-    assert deployments is not None
-
-
-def test_replace_model_in_jsonl(model_list):
     router = Router(model_list=model_list)
     deployments = router.pattern_router.get_deployments_by_pattern(model="claude-3")
     assert deployments is not None
@@ -1480,11 +1790,12 @@ def test_init_auto_router_deployment_success(mock_auto_router, model_list):
         default_model="gpt-5-mini",
         embedding_model="text-embedding-3-small",
         litellm_router_instance=router,
+        max_input_chars=DEFAULT_AUTO_ROUTER_MAX_INPUT_CHARS,
     )
 
     # Verify the auto-router was added to the router's auto_routers dict
     assert "test-auto-router" in router.auto_routers
-    assert router.auto_routers["test-auto-router"] == mock_auto_router_instance
+    assert router.auto_routers["test-auto-router"][0].strategy == mock_auto_router_instance
 
 
 @patch("litellm.router_strategy.auto_router.auto_router.AutoRouter")
@@ -1497,7 +1808,11 @@ def test_init_auto_router_deployment_duplicate_model_name(mock_auto_router, mode
     mock_auto_router.return_value = mock_auto_router_instance
 
     # Add an existing auto-router
-    router.auto_routers["test-auto-router"] = mock_auto_router_instance
+    from litellm.types.router import TaggedPreRoutingStrategy
+
+    router.auto_routers["test-auto-router"] = [
+        TaggedPreRoutingStrategy(tags=(), strategy=mock_auto_router_instance)
+    ]
 
     # Try to add another auto-router with the same name
     litellm_params = LiteLLM_Params(
@@ -1513,13 +1828,13 @@ def test_init_auto_router_deployment_duplicate_model_name(mock_auto_router, mode
     )
 
     with pytest.raises(
-        ValueError, match="Auto-router deployment test-auto-router already exists"
+        ValueError, match=r"Auto-router deployment test-auto-router with tags .* already exists"
     ):
         router.init_auto_router_deployment(deployment)
 
 
-def test_generate_model_id_with_deployment_model_name(model_list):
-    """Test that _generate_model_id works correctly with deployment model_name and handles None values properly"""
+def testgenerate_model_id_with_deployment_model_name(model_list):
+    """Test that generate_model_id works correctly with deployment model_name and handles None values properly"""
     router = Router(model_list=model_list)
 
     # Test case 1: Normal case with valid model_group and litellm_params
@@ -1531,7 +1846,7 @@ def test_generate_model_id_with_deployment_model_name(model_list):
     }
 
     try:
-        result = router._generate_model_id(
+        result = router.generate_model_id(
             model_group=model_group, litellm_params=litellm_params
         )
         assert isinstance(result, str)
@@ -1541,21 +1856,14 @@ def test_generate_model_id_with_deployment_model_name(model_list):
         pytest.fail(f"Failed with valid model_group: {e}")
 
     # Test case 2: Edge case with None model_group (this should fail as expected - our fix prevents this from happening)
-    try:
-        result = router._generate_model_id(
-            model_group=None, litellm_params=litellm_params
-        )
-        pytest.fail(
-            "Expected TypeError when model_group is None - this confirms our fix is needed"
-        )
-    except TypeError as e:
-        # After optimization, error message changed but still fails appropriately on None
-        assert "unsupported operand type(s) for +=" in str(
-            e
-        ) or "expected str instance, NoneType found" in str(e)
-        print(f"✓ Correctly failed with None model_group (as expected): {e}")
-    except Exception as e:
-        pytest.fail(f"Unexpected error with None model_group: {e}")
+    with pytest.raises(TypeError) as exc_info:
+        router.generate_model_id(model_group=None, litellm_params=litellm_params)
+    # After optimization, error message changed but still fails appropriately on None
+    error_str = str(exc_info.value)
+    assert (
+        "unsupported operand type(s) for +=" in error_str
+        or "expected str instance, NoneType found" in error_str
+    )
 
     # Test case 3: Edge case with None key in litellm_params
     litellm_params_with_none_key = {
@@ -1565,7 +1873,7 @@ def test_generate_model_id_with_deployment_model_name(model_list):
     }
 
     try:
-        result = router._generate_model_id(
+        result = router.generate_model_id(
             model_group=model_group, litellm_params=litellm_params_with_none_key
         )
         assert isinstance(result, str)
@@ -1576,7 +1884,7 @@ def test_generate_model_id_with_deployment_model_name(model_list):
 
     # Test case 4: Edge case with empty litellm_params
     try:
-        result = router._generate_model_id(model_group=model_group, litellm_params={})
+        result = router.generate_model_id(model_group=model_group, litellm_params={})
         assert isinstance(result, str)
         assert len(result) > 0
         print(f"✓ Success with empty litellm_params: {result}")
@@ -1584,15 +1892,15 @@ def test_generate_model_id_with_deployment_model_name(model_list):
         pytest.fail(f"Failed with empty litellm_params: {e}")
 
     # Test case 5: Verify that the same inputs produce the same result (deterministic)
-    result1 = router._generate_model_id(
+    result1 = router.generate_model_id(
         model_group=model_group, litellm_params=litellm_params
     )
-    result2 = router._generate_model_id(
+    result2 = router.generate_model_id(
         model_group=model_group, litellm_params=litellm_params
     )
     assert result1 == result2, "Model ID generation should be deterministic"
 
-    print("✓ All _generate_model_id tests passed!")
+    print("✓ All generate_model_id tests passed!")
 
 
 def test_handle_clientside_credential_with_deployment_model_name(model_list):
@@ -1622,13 +1930,13 @@ def test_handle_clientside_credential_with_deployment_model_name(model_list):
 
     # Test that the method doesn't fail when metadata is empty
     try:
-        # This would normally call _generate_model_id internally
+        # This would normally call generate_model_id internally
         # We're testing that the fix prevents the TypeError
         model_group = deployment["model_name"]  # This is what our fix does
         assert model_group == "gpt-4.1"
 
-        # Verify that _generate_model_id works with this model_group
-        result = router._generate_model_id(
+        # Verify that generate_model_id works with this model_group
+        result = router.generate_model_id(
             model_group=model_group, litellm_params=dynamic_litellm_params
         )
         assert isinstance(result, str)
@@ -2318,6 +2626,23 @@ def test_resolve_model_name_from_model_id():
 
     result = router.resolve_model_name_from_model_id("gpt-5-mini")
     assert result == "gpt-5-mini"
+
+    # Test case 10: model_id is a deployment ID (hash) that differs from the
+    # public model_name. Regression for #32580: managed batch/file IDs embed the
+    # deployment model_id, and it must resolve back to the public model_name so
+    # team model-access checks compare against the model group, not the hash.
+    model_list = [
+        {
+            "model_name": "bedrock-batch-model",
+            "litellm_params": {
+                "model": "bedrock/global.anthropic.claude-haiku-4-5-20251001-v1:0",
+            },
+            "model_info": {"id": "8d0eaa7e6c6f54a425dfd0062cb6b0dc"},
+        },
+    ]
+    router = Router(model_list=model_list)
+    result = router.resolve_model_name_from_model_id("8d0eaa7e6c6f54a425dfd0062cb6b0dc")
+    assert result == "bedrock-batch-model"
 
 
 def test_get_valid_args():

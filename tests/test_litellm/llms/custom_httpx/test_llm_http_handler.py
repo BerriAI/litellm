@@ -1,24 +1,34 @@
 import asyncio
-import os
-import sys
+import json
+import logging
+import time
 from unittest.mock import AsyncMock, Mock, patch
 
 import httpx
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../.."))  # Adds the parent directory to the system path
 import litellm
+from litellm._logging import verbose_logger
 from litellm.integrations.code_interpreter_interception.handler import (
     CodeInterpreterInterceptionLogger,
     LITELLM_CODE_EXECUTION_TOOL_NAME,
 )
+from litellm.llms.base_llm.audio_transcription.transformation import (
+    AudioTranscriptionRequestData,
+    BaseAudioTranscriptionConfig,
+)
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import (
     BaseLLMHTTPHandler,
+    _collect_ws_project_quota_callbacks,
     _google_genai_streaming_hidden_params,
+    _has_pre_call_deployment_hook,
+    _rust_responses_websocket_enabled,
 )
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.router import GenericLiteLLMParams
+from litellm.types.utils import TranscriptionResponse
 
 _ACTIVE_KEY = "_code_interpreter_interception_active"
 _SANDBOX_KEY = "_code_interpreter_interception_sandbox_key"
@@ -433,6 +443,227 @@ async def test_async_anthropic_messages_handler_extra_headers():
         assert captured_headers["X-Custom-Header"] == "from-kwargs"
         assert "X-Auth-Token" in captured_headers
         assert captured_headers["X-Auth-Token"] == "token123"
+
+
+@pytest.mark.asyncio
+async def test_async_anthropic_messages_handler_streaming_forwards_provider_response_headers():
+    """
+    Regression test for LIT-3724 (issue 2): streaming /v1/messages responses
+    dropped the upstream provider's HTTP response headers, so Bedrock's
+    x-amzn-requestid / x-amzn-trace-id never reached clients even with
+    `return_response_headers: true`. The returned stream object must carry
+    them in `_hidden_params["additional_headers"]` (llm_provider-* prefixed),
+    which the proxy merges into the client-facing response headers.
+    """
+    from collections.abc import AsyncIterator as ABCAsyncIterator
+
+    from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
+        AnthropicMessagesConfig,
+    )
+
+    handler = BaseLLMHTTPHandler()
+
+    sse_body = (
+        b'event: message_start\ndata: {"type": "message_start"}\n\n'
+        b'event: message_stop\ndata: {"type": "message_stop"}\n\n'
+    )
+    upstream_response = httpx.Response(
+        200,
+        headers={
+            "x-amzn-requestid": "amzn-req-123",
+            "x-amzn-trace-id": "Root=1-abc-def",
+        },
+        content=sse_body,
+        request=httpx.Request("POST", "https://api.anthropic.com/v1/messages"),
+    )
+    mock_client = AsyncMock(spec=AsyncHTTPHandler)
+    mock_client.post = AsyncMock(return_value=upstream_response)
+
+    mock_logging_obj = Mock()
+    mock_logging_obj.model_call_details = {}
+
+    result = await handler.async_anthropic_messages_handler(
+        model="claude-sonnet-4-20250514",
+        messages=[{"role": "user", "content": "Hello"}],
+        anthropic_messages_provider_config=AnthropicMessagesConfig(),
+        anthropic_messages_optional_request_params={"max_tokens": 32},
+        custom_llm_provider="anthropic",
+        litellm_params=GenericLiteLLMParams(),
+        logging_obj=mock_logging_obj,
+        client=mock_client,
+        api_key="sk-test",
+        stream=True,
+        kwargs={},
+    )
+
+    assert isinstance(result, ABCAsyncIterator)
+
+    additional_headers = result._hidden_params["additional_headers"]
+    assert additional_headers["llm_provider-x-amzn-requestid"] == "amzn-req-123"
+    assert additional_headers["llm_provider-x-amzn-trace-id"] == "Root=1-abc-def"
+
+    collected = b"".join([chunk async for chunk in result])
+    assert b"message_start" in collected
+    assert b"message_stop" in collected
+
+
+@pytest.mark.asyncio
+async def test_async_anthropic_messages_handler_agentic_streaming_forwards_provider_response_headers():
+    """
+    Companion to the test above for the agentic branch: when a callback
+    overrides async_should_run_agentic_loop, the handler wraps
+    AgenticAnthropicStreamingIterator in AnthropicMessagesStreamingResponse.
+    That wrapping must still expose the provider headers and delegate
+    iteration through the two-phase agentic iterator unchanged.
+    """
+    from collections.abc import AsyncIterator as ABCAsyncIterator
+
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.llms.anthropic.experimental_pass_through.messages.agentic_streaming_iterator import (
+        AgenticAnthropicStreamingIterator,
+    )
+    from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
+        AnthropicMessagesConfig,
+    )
+
+    class NoOpAgenticCallback(CustomLogger):
+        async def async_should_run_agentic_loop(
+            self,
+            response,
+            model,
+            messages,
+            tools,
+            stream,
+            custom_llm_provider,
+            kwargs,
+        ):
+            return False, {}
+
+    handler = BaseLLMHTTPHandler()
+
+    sse_body = (
+        b'event: message_start\ndata: {"type": "message_start"}\n\n'
+        b'event: message_stop\ndata: {"type": "message_stop"}\n\n'
+    )
+    upstream_response = httpx.Response(
+        200,
+        headers={"x-amzn-requestid": "amzn-req-456"},
+        content=sse_body,
+        request=httpx.Request("POST", "https://api.anthropic.com/v1/messages"),
+    )
+    mock_client = AsyncMock(spec=AsyncHTTPHandler)
+    mock_client.post = AsyncMock(return_value=upstream_response)
+
+    mock_logging_obj = Mock()
+    mock_logging_obj.model_call_details = {}
+    mock_logging_obj.dynamic_success_callbacks = [NoOpAgenticCallback()]
+
+    result = await handler.async_anthropic_messages_handler(
+        model="claude-sonnet-4-20250514",
+        messages=[{"role": "user", "content": "Hello"}],
+        anthropic_messages_provider_config=AnthropicMessagesConfig(),
+        anthropic_messages_optional_request_params={"max_tokens": 32},
+        custom_llm_provider="anthropic",
+        litellm_params=GenericLiteLLMParams(),
+        logging_obj=mock_logging_obj,
+        client=mock_client,
+        api_key="sk-test",
+        stream=True,
+        kwargs={},
+    )
+
+    assert isinstance(result, ABCAsyncIterator)
+    assert isinstance(result.completion_stream, AgenticAnthropicStreamingIterator)
+    assert result._hidden_params["additional_headers"]["llm_provider-x-amzn-requestid"] == "amzn-req-456"
+
+    collected = b"".join([chunk async for chunk in result])
+    assert b"message_start" in collected
+    assert b"message_stop" in collected
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_streaming_response_aclose_closes_upstream_stream():
+    """
+    Regression test: the proxy's streaming cleanup calls aclose on the
+    handler's return value (see _finalize_streaming_generator_cleanup's
+    hasattr(response, "aclose") check). The wrapper must forward aclose to
+    the upstream stream so provider connections are released on client
+    disconnect instead of lingering until garbage collection.
+    """
+    from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator import (
+        AnthropicMessagesStreamingResponse,
+    )
+
+    class UpstreamTracker:
+        def __init__(self):
+            self.closed = False
+
+    tracker = UpstreamTracker()
+
+    async def upstream():
+        try:
+            yield b'data: {"type": "message_start"}\n\n'
+            yield b'data: {"type": "message_stop"}\n\n'
+        finally:
+            tracker.closed = True
+
+    stream = AnthropicMessagesStreamingResponse(
+        completion_stream=upstream(),
+        hidden_params={"additional_headers": {}},
+    )
+
+    first_chunk = await stream.__anext__()
+    assert b"message_start" in first_chunk
+    assert tracker.closed is False
+
+    await stream.aclose()
+    assert tracker.closed is True
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_streaming_response_aclose_closes_agentic_upstream_stream():
+    from litellm.llms.anthropic.experimental_pass_through.messages.agentic_streaming_iterator import (
+        AgenticAnthropicStreamingIterator,
+    )
+    from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator import (
+        AnthropicMessagesStreamingResponse,
+    )
+
+    class UpstreamTracker:
+        def __init__(self):
+            self.closed = False
+
+    tracker = UpstreamTracker()
+
+    async def upstream():
+        try:
+            yield b'data: {"type": "message_start"}\n\n'
+            yield b'data: {"type": "message_stop"}\n\n'
+        finally:
+            tracker.closed = True
+
+    agentic_iterator = AgenticAnthropicStreamingIterator(
+        completion_stream=upstream(),
+        http_handler=Mock(),
+        model="claude-sonnet-4-20250514",
+        messages=[{"role": "user", "content": "Hello"}],
+        anthropic_messages_provider_config=Mock(),
+        anthropic_messages_optional_request_params={},
+        logging_obj=Mock(),
+        custom_llm_provider="anthropic",
+        kwargs={},
+    )
+    stream = AnthropicMessagesStreamingResponse(
+        completion_stream=agentic_iterator,
+        hidden_params={"additional_headers": {}},
+    )
+
+    first_chunk = await stream.__anext__()
+    assert b"message_start" in first_chunk
+    assert tracker.closed is False
+
+    await stream.aclose()
+    assert tracker.closed is True
 
 
 @pytest.mark.asyncio
@@ -856,6 +1087,147 @@ def test_sync_delete_responses_sets_json_content_type():
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize(
+    "litellm_params_kwargs, stream, global_timeout, expected",
+    [
+        ({"timeout": 12.0}, False, None, 12.0),
+        ({"request_timeout": 30.0}, False, None, 30.0),
+        ({}, False, 1500.0, 1500.0),
+        ({"timeout": 5.0, "stream_timeout": 50.0}, True, None, 50.0),
+        ({"timeout": 5.0, "stream_timeout": 50.0}, False, None, 5.0),
+        ({"timeout": 5.0, "request_timeout": 30.0}, False, None, 5.0),
+        ({}, False, None, None),
+        ({}, True, None, None),
+    ],
+)
+def test_resolve_anthropic_messages_timeout(
+    monkeypatch, litellm_params_kwargs, stream, global_timeout, expected
+):
+    from litellm.constants import DEFAULT_REQUEST_TIMEOUT_SECONDS
+
+    if global_timeout is None:
+        monkeypatch.setattr(
+            "litellm.request_timeout",
+            float(DEFAULT_REQUEST_TIMEOUT_SECONDS),
+            raising=False,
+        )
+        monkeypatch.setattr(
+            "litellm.request_timeout_explicitly_set",
+            False,
+            raising=False,
+        )
+    else:
+        monkeypatch.setattr("litellm.request_timeout", global_timeout, raising=False)
+        monkeypatch.setattr(
+            "litellm.request_timeout_explicitly_set", True, raising=False
+        )
+
+    resolved = BaseLLMHTTPHandler._resolve_anthropic_messages_timeout(
+        litellm_params=GenericLiteLLMParams(**litellm_params_kwargs),
+        stream=stream,
+        custom_llm_provider="anthropic",
+    )
+
+    assert resolved == expected
+
+
+@pytest.mark.asyncio
+async def test_async_anthropic_messages_handler_forwards_request_timeout(monkeypatch):
+    from litellm.constants import DEFAULT_REQUEST_TIMEOUT_SECONDS
+
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(litellm, "request_timeout", float(DEFAULT_REQUEST_TIMEOUT_SECONDS))
+    monkeypatch.setattr(litellm, "request_timeout_explicitly_set", False)
+    handler = BaseLLMHTTPHandler()
+
+    mock_config = Mock()
+    mock_config.validate_anthropic_messages_environment = Mock(
+        return_value=({"x-api-key": "k"}, "https://api.anthropic.com")
+    )
+    mock_config.should_filter_anthropic_beta_headers = Mock(return_value=False)
+    mock_config.transform_anthropic_messages_request = Mock(
+        return_value={"model": "claude", "messages": []}
+    )
+    mock_config.get_complete_url = Mock(return_value="https://api.anthropic.com/v1/messages")
+    mock_config.sign_request = Mock(return_value=({"x-api-key": "k"}, None))
+    mock_config.max_retry_on_anthropic_messages_http_error = 1
+    expected_response = {"id": "msg_1", "content": []}
+    mock_config.transform_anthropic_messages_response = Mock(return_value=expected_response)
+
+    ok_response = Mock()
+    ok_response.raise_for_status = Mock(return_value=None)
+    mock_client = AsyncMock(spec=AsyncHTTPHandler)
+    mock_client.post = AsyncMock(return_value=ok_response)
+
+    logging_obj = Mock()
+    logging_obj.model_call_details = {}
+    logging_obj.dynamic_success_callbacks = []
+
+    result = await handler.async_anthropic_messages_handler(
+        model="claude",
+        messages=[{"role": "user", "content": "hi"}],
+        anthropic_messages_provider_config=mock_config,
+        anthropic_messages_optional_request_params={},
+        custom_llm_provider="anthropic",
+        litellm_params=GenericLiteLLMParams(request_timeout=0.3),
+        logging_obj=logging_obj,
+        client=mock_client,
+        kwargs={},
+    )
+
+    assert result is expected_response
+    assert mock_client.post.await_args.kwargs["timeout"] == 0.3
+
+
+@pytest.mark.asyncio
+async def test_async_anthropic_messages_handler_forwards_stream_timeout(monkeypatch):
+    from litellm.constants import DEFAULT_REQUEST_TIMEOUT_SECONDS
+
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(litellm, "request_timeout", float(DEFAULT_REQUEST_TIMEOUT_SECONDS))
+    monkeypatch.setattr(litellm, "request_timeout_explicitly_set", False)
+    handler = BaseLLMHTTPHandler()
+
+    mock_config = Mock()
+    mock_config.validate_anthropic_messages_environment = Mock(
+        return_value=({"x-api-key": "k"}, "https://api.anthropic.com")
+    )
+    mock_config.should_filter_anthropic_beta_headers = Mock(return_value=False)
+    mock_config.transform_anthropic_messages_request = Mock(
+        return_value={"model": "claude", "messages": []}
+    )
+    mock_config.get_complete_url = Mock(return_value="https://api.anthropic.com/v1/messages")
+    mock_config.sign_request = Mock(return_value=({"x-api-key": "k"}, None))
+    mock_config.max_retry_on_anthropic_messages_http_error = 1
+    mock_config.get_async_streaming_response_iterator = Mock(return_value=Mock())
+
+    ok_response = Mock()
+    ok_response.raise_for_status = Mock(return_value=None)
+    ok_response.headers = httpx.Headers({})
+    mock_client = AsyncMock(spec=AsyncHTTPHandler)
+    mock_client.post = AsyncMock(return_value=ok_response)
+
+    logging_obj = Mock()
+    logging_obj.model_call_details = {}
+    logging_obj.dynamic_success_callbacks = []
+
+    await handler.async_anthropic_messages_handler(
+        model="claude",
+        messages=[{"role": "user", "content": "hi"}],
+        anthropic_messages_provider_config=mock_config,
+        anthropic_messages_optional_request_params={},
+        custom_llm_provider="anthropic",
+        litellm_params=GenericLiteLLMParams(timeout=9.0, stream_timeout=0.7),
+        logging_obj=logging_obj,
+        client=mock_client,
+        stream=True,
+        kwargs={},
+    )
+
+    assert mock_client.post.await_args.kwargs["stream"] is True
+    assert mock_client.post.await_args.kwargs["timeout"] == 0.7
+
+
 @pytest.mark.asyncio
 async def test_anthropic_post_uses_prebuilt_body_without_redumping():
     """When the caller passes a pre-serialized (unsigned) body, attempt 0 must
@@ -1212,6 +1584,73 @@ def test_async_compact_handler_sends_json_when_not_signed():
     assert "data" not in kwargs
 
 
+@pytest.mark.asyncio
+async def test_async_anthropic_messages_handler_passes_api_key_to_agentic_hooks():
+    """
+    Regression: async_anthropic_messages_handler must inject api_key into the
+    kwargs dict forwarded to _call_agentic_completion_hooks.
+
+    Without this, follow-up calls made by agentic hooks (e.g. websearch
+    interception's second LLM call after executing searches) have no api_key
+    and fail with "x-api-key header is required".
+    """
+    handler = BaseLLMHTTPHandler()
+
+    mock_config = Mock()
+    mock_config.validate_anthropic_messages_environment = Mock(
+        return_value=({"x-api-key": "sk-test"}, "https://api.anthropic.com")
+    )
+    mock_config.transform_anthropic_messages_request = Mock(
+        return_value={"model": "claude-haiku", "messages": [], "max_tokens": 16}
+    )
+    mock_config.sign_request = Mock(return_value=({}, None))
+
+    fake_raw_response = {"id": "msg_1", "type": "message", "role": "assistant", "content": [], "stop_reason": "end_turn"}
+    mock_config.transform_anthropic_messages_response = Mock(return_value=fake_raw_response)
+
+    mock_logging_obj = Mock()
+    mock_logging_obj.update_environment_variables = Mock()
+    mock_logging_obj.model_call_details = {}
+    mock_logging_obj.stream = False
+    mock_logging_obj.dynamic_success_callbacks = None
+
+    captured_kwargs: dict = {}
+    sentinel_response = object()
+
+    async def fake_agentic_hooks(**call_kwargs):
+        captured_kwargs.update(call_kwargs)
+        return sentinel_response
+
+    mock_httpx_response = Mock()
+    mock_httpx_response.status_code = 200
+
+    with (
+        patch.object(handler, "_async_post_anthropic_messages_with_http_error_retry", new=AsyncMock(return_value=mock_httpx_response)),
+        patch.object(handler, "_call_agentic_completion_hooks", side_effect=fake_agentic_hooks),
+        patch("litellm.llms.custom_httpx.llm_http_handler.get_async_httpx_client"),
+        patch("litellm.litellm_core_utils.get_provider_specific_headers.ProviderSpecificHeaderUtils.get_provider_specific_headers", return_value=None),
+    ):
+        result = await handler.async_anthropic_messages_handler(
+            model="claude-haiku",
+            messages=[{"role": "user", "content": "hi"}],
+            anthropic_messages_provider_config=mock_config,
+            anthropic_messages_optional_request_params={"stream": False},
+            custom_llm_provider="anthropic",
+            litellm_params=GenericLiteLLMParams(api_key="sk-real-anthropic-key"),
+            logging_obj=mock_logging_obj,
+            api_key="sk-real-anthropic-key",
+            stream=False,
+        )
+
+    assert result is sentinel_response
+    assert "kwargs" in captured_kwargs, "_call_agentic_completion_hooks not called"
+    forwarded = captured_kwargs["kwargs"]
+    assert forwarded.get("api_key") == "sk-real-anthropic-key", (
+        "api_key must be injected into kwargs passed to _call_agentic_completion_hooks "
+        "so follow-up calls in agentic hooks (e.g. websearch) can authenticate"
+    )
+
+
 class _FakeWSExceptions:
     class WebSocketException(Exception):
         pass
@@ -1297,3 +1736,791 @@ async def test_realtime_backend_open_does_not_retry_auth_failure(rejection):
         await BaseLLMHTTPHandler._open_realtime_backend_ws(fake, "wss://backend.example/live", {}, None)
 
     assert fake.attempts == 1
+
+
+class _FakeClientWebSocket:
+    def __init__(self, send_error=None):
+        self.events = []
+        self._send_error = send_error
+
+    async def send_text(self, payload):
+        if self._send_error is not None:
+            raise self._send_error
+        self.events.append(("send_text", payload))
+
+    async def close(self, code=None, reason=None):
+        self.events.append(("close", (code, reason)))
+
+
+async def _run_async_realtime_with_backend_failure(client_ws):
+    import websockets.exceptions  # noqa: F401  # binds the submodule so async_realtime's except clause resolves, as in the proxy process
+
+    handler = BaseLLMHTTPHandler()
+    provider_config = Mock()
+    provider_config.get_complete_url.return_value = "wss://backend.example/live"
+    provider_config.validate_environment.return_value = {}
+
+    with patch.object(
+        handler,
+        "_open_realtime_backend_ws",
+        AsyncMock(side_effect=Exception("vertex token refresh exploded")),
+    ):
+        await handler.async_realtime(
+            model="gemini-live-2.5-flash",
+            websocket=client_ws,
+            logging_obj=Mock(),
+            provider_config=provider_config,
+            headers={},
+        )
+
+
+@pytest.mark.asyncio
+async def test_async_realtime_generic_failure_sends_error_event_then_reasoned_close():
+    """Regression for the realtime accept-then-silence hang: a generic backend
+    failure used to close the client socket without any error event, so callers
+    only saw a bare 1011. The client must receive an OpenAI-style error event
+    before the reasoned close."""
+    client_ws = _FakeClientWebSocket()
+
+    await _run_async_realtime_with_backend_failure(client_ws)
+
+    assert [name for name, _ in client_ws.events] == ["send_text", "close"]
+
+    error_event = json.loads(client_ws.events[0][1])
+    assert error_event["type"] == "error"
+    assert error_event["error"]["type"] == "server_error"
+    assert "vertex token refresh exploded" in error_event["error"]["message"]
+
+    assert client_ws.events[1][1] == (1011, "Internal server error: vertex token refresh exploded")
+
+
+@pytest.mark.asyncio
+async def test_async_realtime_error_event_send_failure_still_closes():
+    """A client socket that already dropped must not turn the loud-failure path
+    into a new exception: the error-event send may fail, but the reasoned close
+    must still be attempted."""
+    client_ws = _FakeClientWebSocket(send_error=RuntimeError("client already disconnected"))
+
+    await _run_async_realtime_with_backend_failure(client_ws)
+
+    assert client_ws.events == [("close", (1011, "Internal server error: vertex token refresh exploded"))]
+
+
+class _JSONBodyAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
+    def get_supported_openai_params(self, model):
+        return []
+
+    def map_openai_params(self, non_default_params, optional_params, model, drop_params):
+        return optional_params
+
+    def validate_environment(
+        self,
+        headers,
+        model,
+        messages,
+        optional_params,
+        litellm_params,
+        api_key=None,
+        api_base=None,
+    ):
+        return {**headers, "Authorization": "Bearer test-token"}
+
+    def get_complete_url(self, api_base, api_key, model, optional_params, litellm_params, stream=None):
+        return "https://transcription.example/recognize"
+
+    def transform_audio_transcription_request(self, model, audio_file, optional_params, litellm_params):
+        return AudioTranscriptionRequestData(data={"config": {"model": model}, "content": "YXVkaW8="})
+
+    def transform_audio_transcription_response(self, raw_response):
+        return TranscriptionResponse(text=raw_response.json()["text"])
+
+    def get_error_class(self, error_message, status_code, headers):
+        return BaseLLMException(message=error_message, status_code=status_code, headers=headers)
+
+
+def _json_transcription_call_kwargs(provider_config):
+    return {
+        "model": "test-model",
+        "audio_file": b"raw-audio",
+        "optional_params": {},
+        "litellm_params": {},
+        "model_response": TranscriptionResponse(),
+        "timeout": 10.0,
+        "max_retries": 0,
+        "logging_obj": Mock(),
+        "api_key": None,
+        "api_base": None,
+        "custom_llm_provider": "custom",
+        "headers": {},
+        "provider_config": provider_config,
+    }
+
+
+def _capture_json_transcription_request(captured):
+    def respond(request):
+        captured["content_type"] = request.headers.get("content-type")
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(200, json={"text": "transcribed"})
+
+    return respond
+
+
+def test_audio_transcriptions_sends_dict_data_as_json_body():
+    """Regression: dict request data was passed to httpx's data= param, which
+    form-encodes it and silently ignores json=; JSON-body providers (e.g.
+    Google Speech-to-Text) need an application/json body."""
+    captured = {}
+    client = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_capture_json_transcription_request(captured))))
+
+    response = BaseLLMHTTPHandler().audio_transcriptions(
+        client=client,
+        atranscription=False,
+        **_json_transcription_call_kwargs(_JSONBodyAudioTranscriptionConfig()),
+    )
+
+    assert captured["content_type"] == "application/json"
+    assert captured["body"] == {"config": {"model": "test-model"}, "content": "YXVkaW8="}
+    assert response.text == "transcribed"
+
+
+@pytest.mark.asyncio
+async def test_async_audio_transcriptions_sends_dict_data_as_json_body():
+    captured = {}
+    client = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=httpx.MockTransport(_capture_json_transcription_request(captured)))
+
+    response = await BaseLLMHTTPHandler().async_audio_transcriptions(
+        client=client,
+        **_json_transcription_call_kwargs(_JSONBodyAudioTranscriptionConfig()),
+    )
+
+    assert captured["content_type"] == "application/json"
+    assert captured["body"] == {"config": {"model": "test-model"}, "content": "YXVkaW8="}
+    assert response.text == "transcribed"
+
+
+@pytest.mark.asyncio
+async def test_async_retrieve_file_content_raises_on_http_error():
+    """
+    LIT-4008 regression: a provider error response (e.g. Anthropic's 400
+    "File id must have `file_` prefix") must raise instead of being wrapped
+    as file content, which downstream batch cost tracking would parse as an
+    empty results file and bill $0.
+    """
+    from litellm.llms.anthropic.common_utils import AnthropicError
+    from litellm.llms.anthropic.files.transformation import AnthropicFilesConfig
+
+    handler = BaseLLMHTTPHandler()
+    client = Mock(spec=AsyncHTTPHandler)
+    client.get = AsyncMock(
+        return_value=httpx.Response(
+            status_code=400,
+            content=b'{"type":"error","error":{"type":"invalid_request_error","message":"File id must have `file_` prefix."}}',
+        )
+    )
+
+    with pytest.raises(AnthropicError) as exc_info:
+        await handler.async_retrieve_file_content(
+            file_content_request={"file_id": "msgbatch_123"},
+            provider_config=AnthropicFilesConfig(),
+            litellm_params={"api_key": "sk-test"},
+            headers={},
+            logging_obj=Mock(),
+            client=client,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "file_" in str(exc_info.value)
+
+
+def test_sync_retrieve_file_content_raises_on_http_error():
+    from litellm.llms.anthropic.common_utils import AnthropicError
+    from litellm.llms.anthropic.files.transformation import AnthropicFilesConfig
+
+    handler = BaseLLMHTTPHandler()
+    client = Mock(spec=HTTPHandler)
+    client.get = Mock(
+        return_value=httpx.Response(
+            status_code=404,
+            content=b'{"type":"error","error":{"type":"not_found_error","message":"not found"}}',
+        )
+    )
+
+    with pytest.raises(AnthropicError) as exc_info:
+        handler.retrieve_file_content(
+            file_content_request={"file_id": "file-abc"},
+            provider_config=AnthropicFilesConfig(),
+            litellm_params={"api_key": "sk-test"},
+            headers={},
+            logging_obj=Mock(),
+            client=client,
+        )
+
+    assert exc_info.value.status_code == 404
+
+
+_UPSTREAM_NOT_FOUND_BODY = {
+    "error": {
+        "message": "Response with id 'resp_abc' not found.",
+        "type": "invalid_request_error",
+        "param": None,
+        "code": None,
+    }
+}
+
+
+def _async_handler_returning(status_code: int, body: dict) -> AsyncHTTPHandler:
+    handler = AsyncHTTPHandler()
+    handler.client = httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda request: httpx.Response(status_code, json=body))
+    )
+    return handler
+
+
+def _sync_handler_returning(status_code: int, body: dict) -> HTTPHandler:
+    handler = HTTPHandler()
+    handler.client = httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(status_code, json=body)))
+    return handler
+
+
+@pytest.mark.asyncio
+async def test_aget_responses_surfaces_upstream_error_status_instead_of_500():
+    client = _async_handler_returning(404, _UPSTREAM_NOT_FOUND_BODY)
+
+    with pytest.raises(litellm.NotFoundError) as excinfo:
+        await litellm.aget_responses(
+            response_id="resp_abc",
+            custom_llm_provider="azure",
+            api_base="https://test.openai.azure.com",
+            api_key="test-key",
+            api_version="2025-03-01-preview",
+            client=client,
+        )
+
+    assert excinfo.value.status_code == 404
+    assert "Response with id 'resp_abc' not found." in excinfo.value.message
+
+
+def test_get_responses_surfaces_upstream_error_status_instead_of_500():
+    client = _sync_handler_returning(404, _UPSTREAM_NOT_FOUND_BODY)
+
+    with pytest.raises(litellm.NotFoundError) as excinfo:
+        litellm.get_responses(
+            response_id="resp_abc",
+            custom_llm_provider="azure",
+            api_base="https://test.openai.azure.com",
+            api_key="test-key",
+            api_version="2025-03-01-preview",
+            client=client,
+        )
+
+    assert excinfo.value.status_code == 404
+    assert "Response with id 'resp_abc' not found." in excinfo.value.message
+
+
+def test_list_input_items_surfaces_upstream_error_status():
+    client = _sync_handler_returning(404, _UPSTREAM_NOT_FOUND_BODY)
+
+    with pytest.raises(litellm.NotFoundError) as excinfo:
+        litellm.list_input_items(
+            response_id="resp_abc",
+            custom_llm_provider="azure",
+            api_base="https://test.openai.azure.com",
+            api_key="test-key",
+            api_version="2025-03-01-preview",
+            client=client,
+        )
+
+    assert excinfo.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_alist_input_items_surfaces_upstream_error_status():
+    client = _async_handler_returning(404, _UPSTREAM_NOT_FOUND_BODY)
+
+    with pytest.raises(litellm.NotFoundError) as excinfo:
+        await litellm.alist_input_items(
+            response_id="resp_abc",
+            custom_llm_provider="azure",
+            api_base="https://test.openai.azure.com",
+            api_key="test-key",
+            api_version="2025-03-01-preview",
+            client=client,
+        )
+
+    assert excinfo.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_anthropic_invalid_thinking_signature_retry_resigns_bedrock_request(monkeypatch):
+    """Regression: after Bedrock rejects a replayed thinking block (400 invalid signature),
+    the strip-and-retry re-sign must not inherit attempt 1's SigV4 Authorization/X-Amz-Date;
+    reusing them over the new stripped body makes AWS return 403 SignatureDoesNotMatch."""
+    from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
+        AmazonAnthropicClaudeMessagesConfig,
+    )
+
+    for env_var in ("AWS_BEARER_TOKEN_BEDROCK", "AWS_SESSION_TOKEN", "AWS_PROFILE"):
+        monkeypatch.delenv(env_var, raising=False)
+
+    handler = BaseLLMHTTPHandler()
+    provider_config = AmazonAnthropicClaudeMessagesConfig()
+    litellm_params = GenericLiteLLMParams(
+        aws_access_key_id="AKIAIOSFODNN7EXAMPLE",
+        aws_secret_access_key="wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+        aws_region_name="us-east-1",
+    )
+    request_url = "https://bedrock-runtime.us-east-1.amazonaws.com/model/test-model/invoke"
+    request_body = {
+        "anthropic_version": "bedrock-2023-05-31",
+        "max_tokens": 100,
+        "messages": [
+            {"role": "user", "content": "hi"},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": "x", "signature": ""},
+                    {"type": "text", "text": "ok"},
+                ],
+            },
+            {"role": "user", "content": "continue"},
+        ],
+    }
+    first_attempt_headers, signed_json_body = provider_config.sign_request(
+        headers={"Content-Type": "application/json"},
+        optional_params=dict(litellm_params),
+        request_data=request_body,
+        api_base=request_url,
+        api_key=None,
+        stream=False,
+        fake_stream=False,
+        model="test-model",
+    )
+
+    posts: list = []
+    invalid_signature_response = httpx.Response(
+        400,
+        text='{"message": "messages.1.content.0: Invalid `signature` in `thinking` block"}',
+        request=httpx.Request("POST", request_url),
+    )
+    ok_response = httpx.Response(200, json={"id": "msg_1"}, request=httpx.Request("POST", request_url))
+
+    class FakeAsyncClient:
+        async def post(
+            self, url, headers, data, stream=False, logging_obj=None, timeout=None
+        ):
+            posts.append({"headers": dict(headers), "data": data})
+            return invalid_signature_response if len(posts) == 1 else ok_response
+
+    logging_obj = Mock()
+    logging_obj.model_call_details = {}
+
+    response = await handler._async_post_anthropic_messages_with_http_error_retry(
+        async_httpx_client=FakeAsyncClient(),
+        request_url=request_url,
+        headers=dict(first_attempt_headers),
+        signed_json_body=signed_json_body,
+        request_body=request_body,
+        stream=False,
+        logging_obj=logging_obj,
+        provider_config=provider_config,
+        litellm_params=litellm_params,
+        api_key=None,
+        model="test-model",
+    )
+
+    assert response.status_code == 200
+    assert len(posts) == 2
+    retry_payload = json.loads(posts[1]["data"])
+    retry_blocks = [
+        block
+        for message in retry_payload["messages"]
+        if isinstance(message.get("content"), list)
+        for block in message["content"]
+    ]
+    assert retry_blocks and all(block["type"] != "thinking" for block in retry_blocks)
+    retry_authorization = posts[1]["headers"]["Authorization"]
+    assert retry_authorization.startswith("AWS4-HMAC-SHA256")
+    assert retry_authorization != first_attempt_headers["Authorization"]
+
+
+def _make_stub_direct_vector_store_config(response):
+    from litellm.llms.base_llm.vector_store.transformation import (
+        BaseDirectVectorStoreConfig,
+    )
+
+    class StubDirectVectorStoreConfig(BaseDirectVectorStoreConfig):
+        def __init__(self):
+            super().__init__()
+            self.sync_calls = []
+            self.async_calls = []
+
+        def execute_search_vector_store_request(self, **kwargs):
+            self.sync_calls.append(kwargs)
+            return response
+
+        async def aexecute_search_vector_store_request(self, **kwargs):
+            self.async_calls.append(kwargs)
+            return response
+
+    return StubDirectVectorStoreConfig()
+
+
+def test_vector_store_search_handler_direct_config_sync_skips_http():
+    handler = BaseLLMHTTPHandler()
+    stub_response = {"object": "vector_store.search_results.page", "search_query": "q", "data": []}
+    config = _make_stub_direct_vector_store_config(stub_response)
+    logging_obj = Mock()
+
+    with patch("litellm.llms.custom_httpx.llm_http_handler._get_httpx_client") as mock_get_client:
+        result = handler.vector_store_search_handler(
+            vector_store_id="vs_direct",
+            query="q",
+            vector_store_search_optional_params={"max_num_results": 4},
+            vector_store_provider_config=config,
+            custom_llm_provider="valkey",
+            litellm_params=GenericLiteLLMParams(valkey_host="localhost"),
+            logging_obj=logging_obj,
+            timeout=12.5,
+            _is_async=False,
+        )
+
+    assert result is stub_response
+    mock_get_client.assert_not_called()
+    assert len(config.sync_calls) == 1
+    call = config.sync_calls[0]
+    assert call["vector_store_id"] == "vs_direct"
+    assert call["query"] == "q"
+    assert call["timeout"] == 12.5
+    assert call["vector_store_search_optional_params"] == {"max_num_results": 4}
+    assert isinstance(call["litellm_params"], dict)
+    assert call["litellm_params"]["valkey_host"] == "localhost"
+    pre_call_args = logging_obj.pre_call.call_args.kwargs["additional_args"]
+    assert pre_call_args["query"] == "q"
+    assert pre_call_args["vector_store_id"] == "vs_direct"
+
+
+@pytest.mark.asyncio
+async def test_vector_store_search_handler_direct_config_async_skips_http():
+    handler = BaseLLMHTTPHandler()
+    stub_response = {"object": "vector_store.search_results.page", "search_query": "q", "data": []}
+    config = _make_stub_direct_vector_store_config(stub_response)
+    logging_obj = Mock()
+
+    with patch("litellm.llms.custom_httpx.llm_http_handler.get_async_httpx_client") as mock_get_client:
+        result = await handler.vector_store_search_handler(
+            vector_store_id="vs_direct",
+            query=["q1", "q2"],
+            vector_store_search_optional_params={},
+            vector_store_provider_config=config,
+            custom_llm_provider="valkey",
+            litellm_params=GenericLiteLLMParams(valkey_host="localhost"),
+            logging_obj=logging_obj,
+            timeout=7.0,
+            _is_async=True,
+        )
+
+    assert result is stub_response
+    mock_get_client.assert_not_called()
+    assert len(config.async_calls) == 1
+    assert config.async_calls[0]["query"] == ["q1", "q2"]
+    assert config.async_calls[0]["litellm_params"]["valkey_host"] == "localhost"
+    assert config.async_calls[0]["timeout"] == 7.0
+    pre_call_args = logging_obj.pre_call.call_args.kwargs["additional_args"]
+    assert pre_call_args["query"] == ["q1", "q2"]
+    assert pre_call_args["vector_store_id"] == "vs_direct"
+
+
+def _direct_vector_store_debug_logging_obj():
+    from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
+
+    logging_obj = LitellmLogging(
+        model="valkey",
+        messages=[{"role": "user", "content": "q"}],
+        stream=False,
+        call_type="vector_store_search",
+        start_time=time.time(),
+        litellm_call_id="vs-debug-call-id",
+        function_id="vs-debug-function-id",
+        log_raw_request_response=True,
+    )
+    logging_obj.update_environment_variables(
+        model="valkey",
+        optional_params={"vector_store_id": "vs_direct", "query": "q"},
+        litellm_params={
+            "litellm_call_id": "vs-debug-call-id",
+            "vector_store_id": "vs_direct",
+            "litellm_request_debug": True,
+            "metadata": {"user_api_key_alias": "vs-test-key"},
+            "valkey_host": "valkey.internal",
+            "valkey_password": "sup3r-s3cret-valkey-pw",
+            "litellm_embedding_config": {"api_key": "sk-embedding-s3cret"},
+        },
+    )
+    return logging_obj
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+def test_direct_vector_store_search_debug_log_omits_stored_credentials(caplog, is_async):
+    """Regression: an empty api_base made pre_call dump the whole model_call_details, so every
+    search shipped the stored valkey_password / embedding api_key into the raw_request metadata."""
+    handler = BaseLLMHTTPHandler()
+    stub_response = {"object": "vector_store.search_results.page", "search_query": "q", "data": []}
+    config = _make_stub_direct_vector_store_config(stub_response)
+    logging_obj = _direct_vector_store_debug_logging_obj()
+
+    with caplog.at_level(logging.DEBUG, logger=verbose_logger.name):
+        result = handler.vector_store_search_handler(
+            vector_store_id="vs_direct",
+            query="q",
+            vector_store_search_optional_params={"max_num_results": 4},
+            vector_store_provider_config=config,
+            custom_llm_provider="valkey",
+            litellm_params=GenericLiteLLMParams(
+                valkey_host="valkey.internal",
+                valkey_password="sup3r-s3cret-valkey-pw",
+            ),
+            logging_obj=logging_obj,
+            _is_async=is_async,
+        )
+        if is_async:
+            result = asyncio.run(result)
+
+    assert result is stub_response
+    raw_request = logging_obj.model_call_details["litellm_params"]["metadata"]["raw_request"]
+    assert "sup3r-s3cret-valkey-pw" not in raw_request
+    assert "sk-embedding-s3cret" not in raw_request
+    assert "valkey://vs_direct" in raw_request
+    logged = "\n".join(record.getMessage() for record in caplog.records)
+    assert "sup3r-s3cret-valkey-pw" not in logged
+    assert "sk-embedding-s3cret" not in logged
+
+
+@pytest.mark.asyncio
+async def test_async_anthropic_messages_handler_carries_deployment_vertex_location_for_pricing(monkeypatch):
+    """
+    The proxy pre-creates the logging object before the router picks a deployment, so the
+    native /v1/messages path must copy the deployment's vertex_location into the logging
+    params it updates; otherwise cost resolution falls back to the environment and every
+    call on this surface prices with the regional uplift (#34393).
+    """
+    import contextlib
+    from datetime import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import (
+        Logging,
+        _resolve_vertex_location_for_cost,
+    )
+
+    monkeypatch.setenv("VERTEXAI_LOCATION", "us-east5")
+    monkeypatch.setattr(litellm, "vertex_location", None)
+
+    handler = BaseLLMHTTPHandler()
+
+    async def logging_obj_after_handler(generic_params):
+        logging_obj = Logging(
+            model="vertex_ai/claude-haiku-4-5@20251001",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=False,
+            call_type="anthropic_messages",
+            start_time=datetime.now(),
+            litellm_call_id="vertex-messages-location",
+            function_id="f",
+        )
+        logging_obj.update_environment_variables(
+            model="vertex_ai/claude-haiku-4-5@20251001",
+            user="",
+            optional_params={},
+            litellm_params={"api_base": ""},
+            custom_llm_provider="vertex_ai",
+        )
+        mock_config = Mock()
+        mock_config.validate_anthropic_messages_environment = Mock(
+            return_value=({"authorization": "Bearer t"}, "https://us-east5-aiplatform.googleapis.com")
+        )
+        mock_config.transform_anthropic_messages_request = Mock(
+            return_value={"model": "claude-haiku-4-5@20251001", "messages": []}
+        )
+        with contextlib.suppress(Exception):
+            await handler.async_anthropic_messages_handler(
+                model="claude-haiku-4-5@20251001",
+                messages=[{"role": "user", "content": "hi"}],
+                anthropic_messages_provider_config=mock_config,
+                anthropic_messages_optional_request_params={"max_tokens": 10},
+                custom_llm_provider="vertex_ai",
+                litellm_params=generic_params,
+                logging_obj=logging_obj,
+                client=AsyncMock(),
+                kwargs={},
+            )
+        return logging_obj
+
+    global_deployment = await logging_obj_after_handler(GenericLiteLLMParams(vertex_location="global"))
+    assert global_deployment.litellm_params["vertex_location"] == "global"
+    assert (
+        _resolve_vertex_location_for_cost(
+            custom_llm_provider="vertex_ai",
+            litellm_params=global_deployment.litellm_params,
+            optional_params=global_deployment.optional_params,
+            model="claude-haiku-4-5@20251001",
+        )
+        == "global"
+    )
+
+    unconfigured_deployment = await logging_obj_after_handler(GenericLiteLLMParams())
+    assert "vertex_location" not in unconfigured_deployment.litellm_params
+
+
+_GENERIC_STREAM_SSE = (
+    b'data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1,'
+    b'"model":"test-model","choices":[{"index":0,"delta":{"content":"hi"},'
+    b'"finish_reason":null}]}\n\n'
+    b"data: [DONE]\n\n"
+)
+
+
+def _generic_stream_upstream_response() -> httpx.Response:
+    return httpx.Response(
+        200,
+        headers={
+            "x-request-id": "generic-req-123",
+            "x-ratelimit-remaining-requests": "42",
+        },
+        content=_GENERIC_STREAM_SSE,
+        request=httpx.Request("POST", "https://fake-vllm.test/v1/chat/completions"),
+    )
+
+
+def test_generic_http_handler_sync_streaming_forwards_provider_response_headers():
+    """
+    Regression test for the generic BaseLLMHTTPHandler streaming path used by
+    ~30 providers (deepseek, groq, hosted_vllm, databricks, openrouter, ...).
+
+    The sync `completion()` streaming branch builds the CustomStreamWrapper from
+    `make_sync_call`, which returns the upstream response headers alongside the
+    stream. Those headers must reach the caller as `llm_provider-*` entries in
+    `_hidden_params["additional_headers"]`, which is what the proxy merges into
+    the client-facing response headers.
+    """
+    mock_client = Mock(spec=HTTPHandler)
+    mock_client.post = Mock(return_value=_generic_stream_upstream_response())
+
+    response = litellm.completion(
+        model="hosted_vllm/test-model",
+        messages=[{"role": "user", "content": "Hello"}],
+        api_base="https://fake-vllm.test/v1",
+        api_key="sk-test",
+        stream=True,
+        client=mock_client,
+    )
+
+    additional_headers = response._hidden_params["additional_headers"]
+    assert additional_headers["llm_provider-x-request-id"] == "generic-req-123"
+    assert additional_headers["llm_provider-x-ratelimit-remaining-requests"] == "42"
+
+    assert "".join([chunk.choices[0].delta.content or "" for chunk in response]) == "hi"
+
+
+@pytest.mark.asyncio
+async def test_generic_http_handler_async_streaming_forwards_provider_response_headers():
+    """
+    Companion to the sync test above for `acompletion_stream_function`, which
+    builds its CustomStreamWrapper from `make_async_call_stream_helper`.
+    """
+    mock_client = AsyncMock(spec=AsyncHTTPHandler)
+    mock_client.post = AsyncMock(return_value=_generic_stream_upstream_response())
+
+    response = await litellm.acompletion(
+        model="hosted_vllm/test-model",
+        messages=[{"role": "user", "content": "Hello"}],
+        api_base="https://fake-vllm.test/v1",
+        api_key="sk-test",
+        stream=True,
+        client=mock_client,
+    )
+
+    additional_headers = response._hidden_params["additional_headers"]
+    assert additional_headers["llm_provider-x-request-id"] == "generic-req-123"
+    assert additional_headers["llm_provider-x-ratelimit-remaining-requests"] == "42"
+
+    collected = [chunk async for chunk in response]
+    assert "".join([chunk.choices[0].delta.content or "" for chunk in collected]) == "hi"
+
+
+@pytest.mark.parametrize(
+    "custom_llm_provider, litellm_params, expected",
+    [
+        ("openai", GenericLiteLLMParams(rust=True), True),
+        ("openai", GenericLiteLLMParams(), False),
+        ("openai", GenericLiteLLMParams(rust=False), False),
+        ("azure", GenericLiteLLMParams(rust=True), False),
+        ("hosted_vllm", GenericLiteLLMParams(rust=True), False),
+        (None, GenericLiteLLMParams(rust=True), False),
+    ],
+)
+def test_the_rust_responses_websocket_needs_both_openai_and_the_rust_flag(
+    custom_llm_provider, litellm_params, expected
+):
+    assert _rust_responses_websocket_enabled(custom_llm_provider, litellm_params) is expected
+
+
+def test_a_plain_callback_does_not_advertise_a_pre_call_deployment_hook(monkeypatch):
+    from litellm.integrations.custom_logger import CustomLogger
+
+    class _PlainLogger(CustomLogger):
+        pass
+
+    logging_obj = Mock()
+    logging_obj.dynamic_success_callbacks = []
+
+    monkeypatch.setattr(litellm, "callbacks", [])
+    assert _has_pre_call_deployment_hook(logging_obj) is False
+
+    monkeypatch.setattr(litellm, "callbacks", [_PlainLogger()])
+    assert _has_pre_call_deployment_hook(logging_obj) is False
+
+
+def test_a_callback_that_overrides_the_deployment_hook_is_detected(monkeypatch):
+    from litellm.integrations.custom_logger import CustomLogger
+
+    class _DeploymentHookLogger(CustomLogger):
+        async def async_pre_call_deployment_hook(self, kwargs, call_type):
+            return None
+
+    class _InheritsTheHook(_DeploymentHookLogger):
+        pass
+
+    logging_obj = Mock()
+    logging_obj.dynamic_success_callbacks = []
+
+    monkeypatch.setattr(litellm, "callbacks", [_DeploymentHookLogger()])
+    assert _has_pre_call_deployment_hook(logging_obj) is True
+
+    monkeypatch.setattr(litellm, "callbacks", [_InheritsTheHook()])
+    assert _has_pre_call_deployment_hook(logging_obj) is True
+
+    monkeypatch.setattr(litellm, "callbacks", [])
+    logging_obj.dynamic_success_callbacks = [_DeploymentHookLogger()]
+    assert _has_pre_call_deployment_hook(logging_obj) is True
+
+
+def test_only_callbacks_that_can_charge_a_frame_are_collected_for_ws_quota(monkeypatch):
+    from litellm.integrations.custom_logger import CustomLogger
+
+    class _PlainLogger(CustomLogger):
+        pass
+
+    class _QuotaLogger(CustomLogger):
+        async def enforce_project_io_token_quota_for_frame(self, *args, **kwargs):
+            return None
+
+    class _NotCallableAttribute:
+        enforce_project_io_token_quota_for_frame = "not a method"
+
+    plain, quota, decoy = _PlainLogger(), _QuotaLogger(), _NotCallableAttribute()
+
+    monkeypatch.setattr(litellm, "callbacks", [plain, decoy])
+    assert _collect_ws_project_quota_callbacks() == ()
+
+    monkeypatch.setattr(litellm, "callbacks", [plain, quota, decoy])
+    assert _collect_ws_project_quota_callbacks() == (quota,)

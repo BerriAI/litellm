@@ -1,6 +1,6 @@
 import json
 import os
-import sys
+import re
 import traceback
 
 import openai
@@ -9,9 +9,6 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import litellm
@@ -314,7 +311,6 @@ def test_openai_azure_embedding():
         pytest.fail(f"Error occurred: {e}")
 
 
-from openai.types.embedding import Embedding
 
 
 def _openai_mock_response(*args, **kwargs):
@@ -537,13 +533,19 @@ def test_demo_tokens_as_input_to_embeddings_fails_for_titan():
 
     with pytest.raises(
         litellm.BadRequestError,
-        match='litellm.BadRequestError: BedrockException - {"message":"Malformed input request: expected type: String, found: JSONArray, please reformat your input and try again."}',
+        match=re.escape(
+            'litellm.BadRequestError: BedrockException - {"message":"Malformed input request: '
+            'expected type: String, found: JSONArray, please reformat your input and try again."}'
+        ),
     ):
         litellm.embedding(model="amazon.titan-embed-text-v1", input=[[1]])
 
     with pytest.raises(
         litellm.BadRequestError,
-        match='litellm.BadRequestError: BedrockException - {"message":"Malformed input request: expected type: String, found: Integer, please reformat your input and try again."}',
+        match=re.escape(
+            'litellm.BadRequestError: BedrockException - {"message":"Malformed input request: '
+            'expected type: String, found: Integer, please reformat your input and try again."}'
+        ),
     ):
         litellm.embedding(
             model="amazon.titan-embed-text-v1",
@@ -570,7 +572,6 @@ def test_hf_embedding():
 
 # test_hf_embedding()
 
-from unittest.mock import MagicMock, patch
 
 
 def tgi_mock_post(*args, **kwargs):
@@ -765,6 +766,10 @@ def test_fireworks_embeddings():
         pass
     except litellm.InternalServerError as e:
         pass
+    except litellm.APIError as e:
+        if "suspended" in str(e):
+            pytest.skip(f"Fireworks account suspended: {e}")
+        pytest.fail(f"Error occurred: {e}")
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 

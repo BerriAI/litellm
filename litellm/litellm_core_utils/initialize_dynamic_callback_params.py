@@ -1,6 +1,23 @@
-from typing import Dict, Optional
+from collections.abc import Iterator, Mapping
+from typing import Any, Final
 
-from litellm.types.utils import StandardCallbackDynamicParams
+from litellm.types.utils import TRUSTED_CALLBACK_VARS_FIELD, StandardCallbackDynamicParams
+
+_CLIENT_CALLBACK_METADATA_SLOTS: Final[tuple[str, ...]] = ("litellm_metadata", "metadata")
+
+
+def iter_client_callback_metadata_dicts(
+    kwargs: dict[str, Any],
+) -> Iterator[tuple[str, dict[str, Any]]]:
+    litellm_params: Final = kwargs.get("litellm_params")
+    if isinstance(litellm_params, dict):
+        nested: Final = litellm_params.get("metadata")
+        if isinstance(nested, dict):
+            yield "litellm_params.metadata", nested
+    for key in _CLIENT_CALLBACK_METADATA_SLOTS:
+        candidate = kwargs.get(key)
+        if isinstance(candidate, dict):
+            yield key, candidate
 
 
 def _is_env_reference(value: object) -> bool:
@@ -29,7 +46,7 @@ def validate_no_callback_env_reference(param: str, value: object, *, source: str
 
 
 # Hardcoded list of supported callback params to avoid runtime inspection issues with TypedDict
-_supported_callback_params = [
+_supported_callback_params: Final[tuple[str, ...]] = (
     "langfuse_public_key",
     "langfuse_secret",
     "langfuse_secret_key",
@@ -55,20 +72,55 @@ _supported_callback_params = [
     "dd_site",
     "dd_agent_host",
     "dd_agent_port",
-]
+    "newrelic_api_key",
+    "newrelic_region",
+    "turn_off_message_logging",
+)
 
-_request_blocked_callback_params = {
-    "gcs_bucket_name",
-    "gcs_path_service_account",
-    "dd_api_key",
-    "dd_site",
-    "dd_agent_host",
-    "dd_agent_port",
-}
+_request_blocked_callback_params: Final = frozenset(
+    {
+        "gcs_bucket_name",
+        "gcs_path_service_account",
+        "dd_api_key",
+        "dd_site",
+        "dd_agent_host",
+        "dd_agent_port",
+        "newrelic_api_key",
+        "newrelic_region",
+    }
+)
+
+# Request-blocked params that must still reach ``standard_callback_dynamic_params``
+# when the proxy itself stamped them from admin-configured team/key callback
+# settings (the trusted-vars channel). The OTel per-tenant tracer routing reads
+# ``standard_callback_dynamic_params``, so without this overlay a blocked param
+# could never drive routing at all.
+_trusted_overlay_callback_params: Final = frozenset(
+    {
+        "newrelic_api_key",
+        "newrelic_region",
+    }
+)
+
+
+def get_trusted_callback_params(kwargs: Mapping[str, Any] | None) -> tuple[tuple[str, str], ...]:
+    """
+    Read callback params the proxy itself stamped from admin-configured team/key callback settings.
+
+    Request-body values never reach this field: the proxy strips it from client input before
+    setting it, so callbacks can consume credentials and destinations here without re-validating.
+
+    Returned as pairs rather than a mapping because the caller keeps this on the Logging object,
+    which the proxy deep-copies; a mappingproxy is not copyable and a dict would be mutable.
+    """
+    trusted_vars: Final = kwargs.get(TRUSTED_CALLBACK_VARS_FIELD) if kwargs else None
+    if not isinstance(trusted_vars, Mapping):
+        return ()
+    return tuple((key, str(value)) for key, value in trusted_vars.items() if isinstance(key, str))
 
 
 def initialize_standard_callback_dynamic_params(
-    kwargs: Optional[Dict] = None,
+    kwargs: dict | None = None,
 ) -> StandardCallbackDynamicParams:
     """
     Initialize the standard callback dynamic params from the kwargs
@@ -76,7 +128,7 @@ def initialize_standard_callback_dynamic_params(
     checks supported request callback params in kwargs and sets the corresponding attributes in StandardCallbackDynamicParams
     """
 
-    standard_callback_dynamic_params = StandardCallbackDynamicParams()
+    standard_callback_dynamic_params: Final = StandardCallbackDynamicParams()
     if kwargs:
         # 1. Check top-level kwargs
         for param in _supported_callback_params:
@@ -85,21 +137,23 @@ def initialize_standard_callback_dynamic_params(
             if param in kwargs:
                 _param_value = kwargs.get(param)
                 validate_no_callback_env_reference(param, _param_value, source="request body")
-                standard_callback_dynamic_params[param] = _param_value  # type: ignore
+                standard_callback_dynamic_params[param] = (  # pyright: ignore[reportGeneralTypeIssues]  # several supported params predate their StandardCallbackDynamicParams fields
+                    _param_value
+                )
 
-        # 2. Fallback: check "metadata" or "litellm_params" -> "metadata"
-        metadata = (kwargs.get("metadata") or {}).copy()
-        litellm_params = kwargs.get("litellm_params") or {}
-        if isinstance(litellm_params, dict):
-            metadata.update(litellm_params.get("metadata") or {})
-
-        if isinstance(metadata, dict):
+        for slot_label, metadata in iter_client_callback_metadata_dicts(kwargs):
             for param in _supported_callback_params:
                 if param in _request_blocked_callback_params:
                     continue
                 if param not in standard_callback_dynamic_params and param in metadata:
                     _param_value = metadata.get(param)
-                    validate_no_callback_env_reference(param, _param_value, source="metadata")
-                    standard_callback_dynamic_params[param] = _param_value  # type: ignore
+                    validate_no_callback_env_reference(param, _param_value, source=slot_label)
+                    standard_callback_dynamic_params[param] = (  # pyright: ignore[reportGeneralTypeIssues]  # several supported params predate their StandardCallbackDynamicParams fields
+                        _param_value
+                    )
+
+        for param, trusted_value in get_trusted_callback_params(kwargs):
+            if param in _trusted_overlay_callback_params:
+                standard_callback_dynamic_params[param] = trusted_value
 
     return standard_callback_dynamic_params

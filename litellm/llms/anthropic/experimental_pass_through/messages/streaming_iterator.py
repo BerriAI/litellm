@@ -1,16 +1,110 @@
 import asyncio
 import json
+from collections.abc import AsyncIterator
 from datetime import datetime
-from typing import Any, AsyncIterator, List, Union
+from typing import Any, Final, Protocol, runtime_checkable
 
+import httpx
+from pydantic import TypeAdapter
+from typing_extensions import TypedDict
+
+from litellm.litellm_core_utils.core_helpers import process_response_headers
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.proxy.pass_through_endpoints.success_handler import (
     PassThroughEndpointLogging,
 )
 from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointType
 from litellm.types.utils import GenericStreamingChunk, ModelResponseStream
 
-GLOBAL_PASS_THROUGH_SUCCESS_HANDLER_OBJ = PassThroughEndpointLogging()
+GLOBAL_PASS_THROUGH_SUCCESS_HANDLER_OBJ: Final = PassThroughEndpointLogging()
+
+INCOMPLETE_STREAM_ERROR_MESSAGE: Final = (
+    "Provider stream ended before emitting a message_stop event; "
+    "the response is incomplete and any partial content (e.g. tool_use input JSON) may be truncated."
+)
+
+
+def _is_message_stop_chunk(chunk: object) -> bool:
+    if isinstance(chunk, dict):
+        return chunk.get("type") == "message_stop"
+    if isinstance(chunk, (bytes, bytearray)):
+        return any(line == b"event: message_stop" for line in chunk.splitlines())
+    return False
+
+
+def _is_provider_error_chunk(chunk: object) -> bool:
+    if isinstance(chunk, dict):
+        return chunk.get("type") == "error"
+    if isinstance(chunk, (bytes, bytearray)):
+        return any(line == b"event: error" for line in chunk.splitlines())
+    return False
+
+
+def _is_terminal_stream_chunk(chunk: object) -> bool:
+    return _is_message_stop_chunk(chunk) or _is_provider_error_chunk(chunk)
+
+
+def _incomplete_stream_error_sse_event() -> bytes:
+    payload: Final = json.dumps(
+        {
+            "type": "error",
+            "error": {"type": "api_error", "message": INCOMPLETE_STREAM_ERROR_MESSAGE},
+        }
+    )
+    return f"event: error\ndata: {payload}\n\n".encode()
+
+
+class AnthropicMessagesStreamHiddenParams(TypedDict):
+    additional_headers: dict[str, str]
+
+
+@runtime_checkable
+class SupportsAclose(Protocol):
+    async def aclose(self) -> None: ...
+
+
+async def aclose_if_supported(stream: object) -> None:
+    if isinstance(stream, SupportsAclose):
+        await stream.aclose()
+
+
+_RESPONSE_HEADERS_ADAPTER: Final[TypeAdapter[dict[str, str]]] = TypeAdapter(dict[str, str])
+
+
+def anthropic_messages_stream_hidden_params(
+    response_headers: httpx.Headers,
+) -> AnthropicMessagesStreamHiddenParams:
+    return AnthropicMessagesStreamHiddenParams(
+        additional_headers=_RESPONSE_HEADERS_ADAPTER.validate_python(process_response_headers(response_headers))
+    )
+
+
+class AnthropicMessagesStreamingResponse:
+    """
+    Wraps the /v1/messages SSE byte stream so upstream provider response
+    headers (e.g. Bedrock's x-amzn-requestid / x-amzn-trace-id) survive as
+    ``_hidden_params["additional_headers"]``, which the proxy forwards to
+    clients as ``llm_provider-*`` response headers. Bare async generators
+    cannot carry attributes, so header context was previously dropped.
+    """
+
+    def __init__(
+        self,
+        completion_stream: AsyncIterator[bytes],
+        hidden_params: AnthropicMessagesStreamHiddenParams,
+    ) -> None:
+        self.completion_stream = completion_stream
+        self._hidden_params = hidden_params
+
+    def __aiter__(self) -> "AnthropicMessagesStreamingResponse":
+        return self
+
+    async def __anext__(self) -> bytes:
+        return await self.completion_stream.__anext__()
+
+    async def aclose(self) -> None:
+        await aclose_if_supported(self.completion_stream)
 
 
 class BaseAnthropicMessagesStreamingIterator:
@@ -29,20 +123,23 @@ class BaseAnthropicMessagesStreamingIterator:
         self.start_time = datetime.now()
         self.completion_start_time: datetime | None = None
 
-    async def _handle_streaming_logging(self, collected_chunks: List[bytes]):
+    async def _handle_streaming_logging(self, collected_chunks: list[bytes]):
         """Handle the logging after all chunks have been collected."""
         from litellm.proxy.pass_through_endpoints.streaming_handler import (
             PassThroughStreamingHandler,
         )
 
-        end_time = datetime.now()
+        end_time: Final = datetime.now()
         # Set completion_start_time so TTFT is calculated from the first
         # chunk rather than falling back to end_time in async_success_handler.
         if self.completion_start_time is not None:
             self.litellm_logging_obj.completion_start_time = self.completion_start_time
             self.litellm_logging_obj.model_call_details["completion_start_time"] = self.completion_start_time
-        asyncio.create_task(
-            PassThroughStreamingHandler._route_streaming_logging_to_handler(
+        # Enqueue on the rooted logging worker rather than asyncio.create_task:
+        # this also runs during generator teardown after a client disconnect,
+        # where an unrooted task could be garbage-collected before it bills.
+        GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
+            async_coroutine=PassThroughStreamingHandler._route_streaming_logging_to_handler(
                 litellm_logging_obj=self.litellm_logging_obj,
                 passthrough_success_handler_obj=GLOBAL_PASS_THROUGH_SUCCESS_HANDLER_OBJ,
                 url_route="/v1/messages",
@@ -76,7 +173,7 @@ class BaseAnthropicMessagesStreamingIterator:
             url_route="/v1/messages",
         )
 
-    def _convert_chunk_to_sse_format(self, chunk: Union[dict, Any]) -> bytes:
+    def _convert_chunk_to_sse_format(self, chunk: dict | Any) -> bytes:
         """
         Convert a chunk to Server-Sent Events format.
 
@@ -84,8 +181,8 @@ class BaseAnthropicMessagesStreamingIterator:
         chunk formatting logic.
         """
         if isinstance(chunk, dict):
-            event_type: str = str(chunk.get("type", "message"))
-            payload = f"event: {event_type}\ndata: {json.dumps(chunk)}\n\n"
+            event_type: Final[str] = str(chunk.get("type", "message"))
+            payload: Final = f"event: {event_type}\ndata: {json.dumps(chunk)}\n\n"
             return payload.encode()
         else:
             # For non-dict chunks, return as is
@@ -93,7 +190,7 @@ class BaseAnthropicMessagesStreamingIterator:
 
     async def async_sse_wrapper(
         self,
-        completion_stream: AsyncIterator[Union[bytes, GenericStreamingChunk, ModelResponseStream, dict]],
+        completion_stream: AsyncIterator[bytes | GenericStreamingChunk | ModelResponseStream | dict],
     ) -> AsyncIterator[bytes]:
         """
         Generic async SSE wrapper that converts streaming chunks to SSE format
@@ -101,14 +198,27 @@ class BaseAnthropicMessagesStreamingIterator:
 
         This method provides the common logic for both Anthropic and Bedrock implementations.
         """
-        collected_chunks = []
+        collected_chunks: Final = []
+        saw_terminal_event = False
 
-        async for chunk in completion_stream:
-            if self.completion_start_time is None:
-                self.completion_start_time = datetime.now()
-            encoded_chunk = self._convert_chunk_to_sse_format(chunk)
-            collected_chunks.append(encoded_chunk)
-            yield encoded_chunk
+        try:
+            async for chunk in completion_stream:
+                if self.completion_start_time is None:
+                    self.completion_start_time = datetime.now()
+                saw_terminal_event = saw_terminal_event or _is_terminal_stream_chunk(chunk)
+                encoded_chunk = self._convert_chunk_to_sse_format(chunk)
+                collected_chunks.append(encoded_chunk)
+                yield encoded_chunk
+        except (GeneratorExit, asyncio.CancelledError):
+            # A client disconnect tears the generator down at the yield, so the
+            # post-loop logging below never runs and the tokens already streamed
+            # (and billed by the provider) would never reach spend tracking. See LIT-5839.
+            if collected_chunks:
+                await self._handle_streaming_logging(collected_chunks)
+            raise
+
+        if not saw_terminal_event:
+            yield _incomplete_stream_error_sse_event()
 
         # Handle logging after all chunks are processed
         await self._handle_streaming_logging(collected_chunks)

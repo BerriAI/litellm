@@ -1,41 +1,47 @@
 "use client";
 
 import {
-  HIDE_AGENT_PLATFORM_BANNER_KEY,
-  useHideAgentPlatformBanner,
-} from "@/app/(dashboard)/hooks/useHideAgentPlatformBanner";
+  HIDE_AUTO_ROUTER_ANNOUNCEMENT_KEY,
+  useHideAutoRouterAnnouncement,
+} from "@/app/(dashboard)/hooks/useHideAutoRouterAnnouncement";
 import { emitLocalStorageChange, setLocalStorageItem } from "@/utils/localStorageUtils";
-import { BellOutlined } from "@ant-design/icons";
-import { Badge, Button, Popover, Typography } from "antd";
+import { Badge } from "@/components/ui/badge";
+import { Button, buttonVariants } from "@/components/ui/button";
+import { Popover, PopoverContent, PopoverDescription, PopoverTitle, PopoverTrigger } from "@/components/ui/popover";
+import { cn } from "@/lib/cva.config";
+import { Bell } from "lucide-react";
 import React, { useState } from "react";
 
-export const AGENT_PLATFORM_URL = "https://github.com/BerriAI/litellm-agent-platform";
+export const AUTO_ROUTER_DOCS_URL = "https://docs.litellm.ai/docs/proxy/auto_routing";
 
 export const NotificationsBell: React.FC = () => {
-  const hidden = useHideAgentPlatformBanner();
+  const hidden = useHideAutoRouterAnnouncement();
   const hasUnread = !hidden;
   const [open, setOpen] = useState(false);
 
   const markDismissed = () => {
-    setLocalStorageItem(HIDE_AGENT_PLATFORM_BANNER_KEY, "true");
-    emitLocalStorageChange(HIDE_AGENT_PLATFORM_BANNER_KEY);
+    setLocalStorageItem(HIDE_AUTO_ROUTER_ANNOUNCEMENT_KEY, "true");
+    emitLocalStorageChange(HIDE_AUTO_ROUTER_ANNOUNCEMENT_KEY);
     setOpen(false);
   };
 
   const content = (
     <div className="max-w-[280px]">
-      <Typography.Title level={5} className="!mt-0 !mb-2">
-        LiteLLM Agent Platform
-      </Typography.Title>
-      <Typography.Paragraph type="secondary" className="!mb-3 text-sm leading-snug">
-        Open-source agent infra — sandboxes, durable sessions, and workers on AWS Fargate.
-      </Typography.Paragraph>
+      <PopoverTitle className="mt-0! mb-2!">LiteLLM Auto Router</PopoverTitle>
+      <PopoverDescription className="mb-3! text-sm leading-snug">
+        Route every request to the cheapest model that can handle it, no prompt changes needed.
+      </PopoverDescription>
       <div className="flex flex-wrap items-center gap-2">
-        <Button type="primary" size="small" href={AGENT_PLATFORM_URL} target="_blank" rel="noopener noreferrer">
-          GitHub
-        </Button>
+        <a
+          className={cn(buttonVariants({ size: "sm" }))}
+          href={AUTO_ROUTER_DOCS_URL}
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          Read the docs
+        </a>
         {hasUnread ? (
-          <Button type="link" size="small" className="!px-1" onClick={markDismissed}>
+          <Button variant="link" size="sm" className="px-1!" onClick={markDismissed}>
             Mark as read
           </Button>
         ) : null}
@@ -44,16 +50,17 @@ export const NotificationsBell: React.FC = () => {
   );
 
   return (
-    <Popover content={content} trigger="click" open={open} onOpenChange={setOpen} placement="bottomRight">
-      <Button
-        type="text"
-        className="!flex !h-9 !w-9 items-center justify-center !rounded-md text-gray-600 transition-colors hover:!bg-gray-100 hover:!text-gray-900"
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger
+        className="flex! h-9! w-9! items-center justify-center rounded-md! text-muted-foreground transition-colors hover:bg-accent! hover:text-foreground!"
         aria-label="Notifications"
       >
-        <Badge dot={hasUnread} color="#1677ff" size="small" offset={[8, 2]}>
-          <BellOutlined className="text-base" aria-hidden />
-        </Badge>
-      </Button>
+        <span className="relative inline-flex">
+          <Bell className="size-4" aria-hidden />
+          {hasUnread ? <Badge className="absolute -top-0.5 -right-1 size-1.5 p-0" aria-hidden /> : null}
+        </span>
+      </PopoverTrigger>
+      <PopoverContent align="end">{content}</PopoverContent>
     </Popover>
   );
 };

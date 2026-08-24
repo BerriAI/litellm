@@ -1,22 +1,9 @@
 import React, { useState, useEffect } from "react";
-import {
-  Title,
-  Subtitle,
-  Table,
-  TableHead,
-  TableRow,
-  TableHeaderCell,
-  TableBody,
-  TableCell,
-  BarChart,
-  Text,
-  Button,
-  Tab,
-  TabGroup,
-  TabList,
-  TabPanel,
-  TabPanels,
-} from "@tremor/react";
+import type { ColumnDef } from "@tanstack/react-table";
+import { BarChart } from "@/components/shared/charts";
+import { DataTable } from "@/components/shared/DataTable";
+import { Button } from "@/components/ui/button";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { perUserAnalyticsCall } from "./networking";
 
 interface PerUserMetrics {
@@ -55,13 +42,11 @@ const PerUserUsage: React.FC<PerUserUsageProps> = ({ accessToken, selectedTags, 
     total_pages: 0,
   });
 
-  const [loading, setLoading] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
 
   const fetchPerUserData = async () => {
     if (!accessToken) return;
 
-    setLoading(true);
     try {
       const response = await perUserAnalyticsCall(
         accessToken,
@@ -72,8 +57,6 @@ const PerUserUsage: React.FC<PerUserUsageProps> = ({ accessToken, selectedTags, 
       setPerUserData(response);
     } catch (error) {
       console.error("Failed to fetch per-user data:", error);
-    } finally {
-      setLoading(false);
     }
   };
 
@@ -93,166 +76,177 @@ const PerUserUsage: React.FC<PerUserUsageProps> = ({ accessToken, selectedTags, 
     }
   };
 
+  const columns: ColumnDef<PerUserMetrics>[] = [
+    {
+      header: "User ID",
+      accessorKey: "user_id",
+      cell: ({ row }) => <span className="font-medium">{row.original.user_id}</span>,
+    },
+    {
+      header: "User Email",
+      accessorKey: "user_email",
+      cell: ({ row }) => row.original.user_email || "N/A",
+    },
+    {
+      header: "User Agent",
+      accessorKey: "user_agent",
+      cell: ({ row }) => row.original.user_agent || "Unknown",
+    },
+    {
+      header: "Success Generations",
+      accessorKey: "successful_requests",
+      meta: { numeric: true },
+      cell: ({ row }) => formatAbbreviatedNumber(row.original.successful_requests),
+    },
+    {
+      header: "Total Tokens",
+      accessorKey: "total_tokens",
+      meta: { numeric: true },
+      cell: ({ row }) => formatAbbreviatedNumber(row.original.total_tokens),
+    },
+    {
+      header: "Failed Requests",
+      accessorKey: "failed_requests",
+      meta: { numeric: true },
+      cell: ({ row }) => formatAbbreviatedNumber(row.original.failed_requests),
+    },
+    {
+      header: "Total Cost",
+      accessorKey: "spend",
+      meta: { numeric: true },
+      cell: ({ row }) => `$${formatAbbreviatedNumber(row.original.spend, 4)}`,
+    },
+  ];
+
   return (
     <div className="mb-6">
-      <Title>Per User Usage</Title>
-      <Subtitle>Individual developer usage metrics</Subtitle>
+      <h3 className="text-lg font-medium text-foreground">Per User Usage</h3>
+      <p className="text-sm text-muted-foreground">Individual developer usage metrics</p>
 
-      <TabGroup>
-        <TabList className="mb-6">
-          <Tab>User Details</Tab>
-          <Tab>Usage Distribution</Tab>
-        </TabList>
+      <Tabs defaultValue="details">
+        <TabsList variant="line" className="mb-6 h-auto w-full justify-start rounded-none border-b p-0">
+          <TabsTrigger value="details" className="flex-none rounded-none px-4 py-2">
+            User Details
+          </TabsTrigger>
+          <TabsTrigger value="distribution" className="flex-none rounded-none px-4 py-2">
+            Usage Distribution
+          </TabsTrigger>
+        </TabsList>
 
-        <TabPanels>
-          {/* Tab 1: Existing User Details Table */}
-          <TabPanel>
-            <Table>
-              <TableHead>
-                <TableRow>
-                  <TableHeaderCell>User ID</TableHeaderCell>
-                  <TableHeaderCell>User Email</TableHeaderCell>
-                  <TableHeaderCell>User Agent</TableHeaderCell>
-                  <TableHeaderCell className="text-right">Success Generations</TableHeaderCell>
-                  <TableHeaderCell className="text-right">Total Tokens</TableHeaderCell>
-                  <TableHeaderCell className="text-right">Failed Requests</TableHeaderCell>
-                  <TableHeaderCell className="text-right">Total Cost</TableHeaderCell>
-                </TableRow>
-              </TableHead>
-              <TableBody>
-                {perUserData.results.slice(0, 10).map((item: PerUserMetrics, index: number) => (
-                  <TableRow key={index}>
-                    <TableCell>
-                      <Text className="font-medium">{item.user_id}</Text>
-                    </TableCell>
-                    <TableCell>
-                      <Text>{item.user_email || "N/A"}</Text>
-                    </TableCell>
-                    <TableCell>
-                      <Text>{item.user_agent || "Unknown"}</Text>
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <Text>{formatAbbreviatedNumber(item.successful_requests)}</Text>
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <Text>{formatAbbreviatedNumber(item.total_tokens)}</Text>
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <Text>{formatAbbreviatedNumber(item.failed_requests)}</Text>
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <Text>${formatAbbreviatedNumber(item.spend, 4)}</Text>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+        {/* Tab 1: Existing User Details Table */}
+        <TabsContent value="details" keepMounted>
+          <DataTable
+            columns={columns}
+            data={perUserData.results.slice(0, 10)}
+            getRowId={(row) => row.user_id}
+            noDataMessage="No per-user usage data"
+            size="compact"
+          />
 
-            {perUserData.results.length > 10 && (
-              <div className="mt-4 flex justify-between items-center">
-                <Text className="text-sm text-gray-500">Showing 10 of {perUserData.total_count} results</Text>
-                <div className="flex gap-2">
-                  <Button size="sm" variant="secondary" onClick={handlePrevPage} disabled={currentPage === 1}>
-                    Previous
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="secondary"
-                    onClick={handleNextPage}
-                    disabled={currentPage >= perUserData.total_pages}
-                  >
-                    Next
-                  </Button>
-                </div>
+          {perUserData.results.length > 10 && (
+            <div className="mt-4 flex justify-between items-center">
+              <p className="text-sm text-muted-foreground">Showing 10 of {perUserData.total_count} results</p>
+              <div className="flex gap-2">
+                <Button size="sm" variant="secondary" onClick={handlePrevPage} disabled={currentPage === 1}>
+                  Previous
+                </Button>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={handleNextPage}
+                  disabled={currentPage >= perUserData.total_pages}
+                >
+                  Next
+                </Button>
               </div>
-            )}
-          </TabPanel>
-
-          {/* Tab 2: Usage Distribution Histogram */}
-          <TabPanel>
-            <div className="mb-4">
-              <Title className="text-lg">User Usage Distribution</Title>
-              <Subtitle>Number of users by successful request frequency</Subtitle>
             </div>
+          )}
+        </TabsContent>
 
-            <BarChart
-              data={(() => {
-                // Get top user agents by frequency first
-                const userAgentCounts = new Map<string, number>();
-                perUserData.results.forEach((item: PerUserMetrics) => {
-                  const agent = item.user_agent || "Unknown";
-                  userAgentCounts.set(agent, (userAgentCounts.get(agent) || 0) + 1);
-                });
+        {/* Tab 2: Usage Distribution Histogram */}
+        <TabsContent value="distribution" keepMounted>
+          <div className="mb-4">
+            <h4 className="text-lg font-medium text-foreground">User Usage Distribution</h4>
+            <p className="text-sm text-muted-foreground">Number of users by successful request frequency</p>
+          </div>
 
-                const topUserAgents = Array.from(userAgentCounts.entries())
-                  .sort(([, a], [, b]) => b - a)
-                  .slice(0, MAX_USER_AGENTS)
-                  .map(([agent]) => agent);
+          <BarChart
+            data={(() => {
+              // Get top user agents by frequency first
+              const userAgentCounts = new Map<string, number>();
+              perUserData.results.forEach((item: PerUserMetrics) => {
+                const agent = item.user_agent || "Unknown";
+                userAgentCounts.set(agent, (userAgentCounts.get(agent) || 0) + 1);
+              });
 
-                // Categorize users by successful request count and user agent
-                const categories = {
-                  "1-9 requests": { range: [1, 9], agents: {} as Record<string, number> },
-                  "10-99 requests": { range: [10, 99], agents: {} as Record<string, number> },
-                  "100-999 requests": { range: [100, 999], agents: {} as Record<string, number> },
-                  "1K-9.9K requests": { range: [1000, 9999], agents: {} as Record<string, number> },
-                  "10K-99.9K requests": { range: [10000, 99999], agents: {} as Record<string, number> },
-                  "100K+ requests": { range: [100000, Infinity], agents: {} as Record<string, number> },
-                };
+              const topUserAgents = Array.from(userAgentCounts.entries())
+                .sort(([, a], [, b]) => b - a)
+                .slice(0, MAX_USER_AGENTS)
+                .map(([agent]) => agent);
 
-                // Count users in each category by user agent (only for top user agents)
-                perUserData.results.forEach((item: PerUserMetrics) => {
-                  const successCount = item.successful_requests;
-                  const userAgent = item.user_agent || "Unknown";
+              // Categorize users by successful request count and user agent
+              const categories = {
+                "1-9 requests": { range: [1, 9], agents: {} as Record<string, number> },
+                "10-99 requests": { range: [10, 99], agents: {} as Record<string, number> },
+                "100-999 requests": { range: [100, 999], agents: {} as Record<string, number> },
+                "1K-9.9K requests": { range: [1000, 9999], agents: {} as Record<string, number> },
+                "10K-99.9K requests": { range: [10000, 99999], agents: {} as Record<string, number> },
+                "100K+ requests": { range: [100000, Infinity], agents: {} as Record<string, number> },
+              };
 
-                  // Only process if this is one of the top user agents
-                  if (topUserAgents.includes(userAgent)) {
-                    Object.entries(categories).forEach(([categoryName, category]) => {
-                      if (successCount >= category.range[0] && successCount <= category.range[1]) {
-                        if (!category.agents[userAgent]) {
-                          category.agents[userAgent] = 0;
-                        }
-                        category.agents[userAgent]++;
+              // Count users in each category by user agent (only for top user agents)
+              perUserData.results.forEach((item: PerUserMetrics) => {
+                const successCount = item.successful_requests;
+                const userAgent = item.user_agent || "Unknown";
+
+                // Only process if this is one of the top user agents
+                if (topUserAgents.includes(userAgent)) {
+                  Object.entries(categories).forEach(([categoryName, category]) => {
+                    if (successCount >= category.range[0] && successCount <= category.range[1]) {
+                      if (!category.agents[userAgent]) {
+                        category.agents[userAgent] = 0;
                       }
-                    });
-                  }
-                });
-
-                // Convert to chart data format for stacked bar chart
-                return Object.entries(categories).map(([categoryName, category]) => {
-                  const dataPoint: Record<string, any> = { category: categoryName };
-
-                  // Add count for each top user agent
-                  topUserAgents.forEach((agent) => {
-                    dataPoint[agent] = category.agents[agent] || 0;
+                      category.agents[userAgent]++;
+                    }
                   });
+                }
+              });
 
-                  return dataPoint;
-                });
-              })()}
-              index="category"
-              categories={(() => {
-                // Count user agents by frequency and get top ones
-                const userAgentCounts = new Map<string, number>();
-                perUserData.results.forEach((item: PerUserMetrics) => {
-                  const agent = item.user_agent || "Unknown";
-                  userAgentCounts.set(agent, (userAgentCounts.get(agent) || 0) + 1);
+              // Convert to chart data format for stacked bar chart
+              return Object.entries(categories).map(([categoryName, category]) => {
+                const dataPoint: Record<string, any> = { category: categoryName };
+
+                // Add count for each top user agent
+                topUserAgents.forEach((agent) => {
+                  dataPoint[agent] = category.agents[agent] || 0;
                 });
 
-                // Sort by frequency (most common first) and limit to top MAX_USER_AGENTS
-                return Array.from(userAgentCounts.entries())
-                  .sort(([, a], [, b]) => b - a)
-                  .slice(0, MAX_USER_AGENTS)
-                  .map(([agent]) => agent);
-              })()}
-              colors={["blue", "green", "orange", "red", "purple", "yellow", "pink", "indigo"]}
-              valueFormatter={(value: number) => `${value} users`}
-              yAxisWidth={80}
-              showLegend={true}
-              stack={true}
-            />
-          </TabPanel>
-        </TabPanels>
-      </TabGroup>
+                return dataPoint;
+              });
+            })()}
+            index="category"
+            categories={(() => {
+              // Count user agents by frequency and get top ones
+              const userAgentCounts = new Map<string, number>();
+              perUserData.results.forEach((item: PerUserMetrics) => {
+                const agent = item.user_agent || "Unknown";
+                userAgentCounts.set(agent, (userAgentCounts.get(agent) || 0) + 1);
+              });
+
+              // Sort by frequency (most common first) and limit to top MAX_USER_AGENTS
+              return Array.from(userAgentCounts.entries())
+                .sort(([, a], [, b]) => b - a)
+                .slice(0, MAX_USER_AGENTS)
+                .map(([agent]) => agent);
+            })()}
+            colors={["blue", "green", "orange", "red", "purple", "yellow", "pink", "indigo"]}
+            valueFormatter={(value: number) => `${value} users`}
+            yAxisWidth={80}
+            showLegend={true}
+            stack={true}
+          />
+        </TabsContent>
+      </Tabs>
     </div>
   );
 };

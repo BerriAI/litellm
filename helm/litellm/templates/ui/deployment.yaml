@@ -18,9 +18,16 @@ spec:
       {{- end }}
       labels:
         {{- include "litellm.ui.selectorLabels" . | nindent 8 }}
+        {{- with .Values.ui.podLabels }}
+        {{- include "litellm.podLabels" (dict "podLabels" . "componentName" "ui") | nindent 8 }}
+        {{- end }}
     spec:
       serviceAccountName: {{ include "litellm.ui.serviceAccountName" . }}
       automountServiceAccountToken: {{ .Values.serviceAccounts.ui.automount }}
+      {{- with .Values.ui.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
@@ -29,6 +36,10 @@ spec:
         - name: ui
           image: "{{ .Values.ui.image.repository }}:{{ .Values.ui.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.ui.image.pullPolicy }}
+          {{- with .Values.ui.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           ports:
             - name: http
               containerPort: 3000
@@ -46,6 +57,10 @@ spec:
             {{- toYaml . | nindent 12 }}
             {{- end }}
           {{- include "litellm.envFrom" .Values.ui | nindent 10 }}
+          {{- with .Values.ui.volumeMounts }}
+          volumeMounts:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           {{- with .Values.ui.livenessProbe }}
           livenessProbe:
             {{- toYaml . | nindent 12 }}
@@ -54,8 +69,23 @@ spec:
           readinessProbe:
             {{- toYaml . | nindent 12 }}
           {{- end }}
+          {{- with .Values.ui.startupProbe }}
+          startupProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.ui.lifecycle }}
+          lifecycle:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           resources:
             {{- toYaml .Values.ui.resources | nindent 12 }}
+      {{- with .Values.ui.extraContainers }}
+        {{- tpl (toYaml .) $ | nindent 8 }}
+      {{- end }}
+      {{- with .Values.ui.volumes }}
+      volumes:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       {{- with .Values.ui.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
@@ -67,5 +97,13 @@ spec:
       {{- with .Values.ui.tolerations }}
       tolerations:
         {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.ui.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- $gracePeriod := .Values.ui.terminationGracePeriodSeconds }}
+      {{- if not (or (kindIs "invalid" $gracePeriod) (eq (printf "%v" $gracePeriod) "")) }}
+      terminationGracePeriodSeconds: {{ $gracePeriod }}
       {{- end }}
 {{- end }}

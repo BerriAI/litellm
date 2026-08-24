@@ -5,21 +5,26 @@ Tests for LiteLLMAnthropicToResponsesAPIAdapter
 
 import json
 import os
-import sys
 from typing import Any, Dict, List
 from unittest.mock import MagicMock
 
-sys.path.insert(0, os.path.abspath("../../../../../../.."))
+import pytest
+
 
 from litellm.constants import (
     DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
 )
+from litellm.litellm_core_utils.prompt_templates.common_utils import TOOL_RESULT_IMAGE_BOUNDARY
 from litellm.llms.anthropic.experimental_pass_through.responses_adapters.transformation import (
     LiteLLMAnthropicToResponsesAPIAdapter,
 )
-from litellm.types.llms.anthropic import AnthropicMessagesRequest
+from litellm.types.llms.anthropic import (
+    AllAnthropicToolsValues,
+    AnthropicMessagesRequest,
+)
+from litellm.types.llms.openai import ResponseAPIUsage
 
 
 def _make_request(**overrides) -> AnthropicMessagesRequest:
@@ -99,17 +104,11 @@ class TestContextManagementConversion:
             }
         )
         kwargs = _ADAPTER.translate_request(req)
-        assert kwargs["context_management"] == [
-            {"type": "compaction", "compact_threshold": 100000}
-        ]
+        assert kwargs["context_management"] == [{"type": "compaction", "compact_threshold": 100000}]
 
     def test_translate_request_drops_anthropic_only_context_management(self):
         """context_management with only unknown edit types is omitted from kwargs."""
-        req = _make_request(
-            context_management={
-                "edits": [{"type": "clear_thinking_20251015", "keep": "all"}]
-            }
-        )
+        req = _make_request(context_management={"edits": [{"type": "clear_thinking_20251015", "keep": "all"}]})
         kwargs = _ADAPTER.translate_request(req)
         assert "context_management" not in kwargs
 
@@ -134,9 +133,7 @@ class TestOutputConfigStructuredOutput:
 
     def test_output_config_format_json_schema_converted(self):
         """output_config.format.json_schema is converted to OpenAI text.format."""
-        req = _make_request(
-            output_config={"format": {"type": "json_schema", "schema": self._SCHEMA}}
-        )
+        req = _make_request(output_config={"format": {"type": "json_schema", "schema": self._SCHEMA}})
         kwargs = _ADAPTER.translate_request(req)
         assert "text" in kwargs
         fmt = kwargs["text"]["format"]
@@ -153,9 +150,7 @@ class TestOutputConfigStructuredOutput:
 
     def test_output_format_still_works(self):
         """The original output_format field still takes precedence when present."""
-        req = _make_request(
-            output_format={"type": "json_schema", "schema": self._SCHEMA}
-        )
+        req = _make_request(output_format={"type": "json_schema", "schema": self._SCHEMA})
         kwargs = _ADAPTER.translate_request(req)
         assert "text" in kwargs
         assert kwargs["text"]["format"]["type"] == "json_schema"
@@ -231,6 +226,106 @@ class TestTranslateMessagesToResponsesInput:
             {"type": "input_text", "text": "Second part."},
         ]
 
+    @pytest.mark.parametrize(
+        "system_content",
+        [
+            "Use the corrected result.",
+            [{"type": "text", "text": "Use the corrected result."}],
+            [
+                {"type": "image", "source": {"type": "url", "url": "https://example.com/a.png"}},
+                {"type": "text", "text": "Use the corrected result."},
+            ],
+        ],
+    )
+    def test_midturn_system_correction_stays_system_in_sequence(self, system_content: object):
+        messages = [
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "toolu_01234",
+                        "name": "get_weather",
+                        "input": {"location": "Boston"},
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "toolu_01234",
+                        "content": "Rainy, 55°F",
+                    }
+                ],
+            },
+            {"role": "system", "content": system_content},
+            {"role": "user", "content": "Continue."},
+        ]
+
+        result = _translate_messages(messages)
+
+        assert result == [
+            {
+                "type": "function_call",
+                "call_id": "toolu_01234",
+                "name": "get_weather",
+                "arguments": '{"location": "Boston"}',
+            },
+            {
+                "type": "function_call_output",
+                "call_id": "toolu_01234",
+                "output": "Rainy, 55°F",
+            },
+            {
+                "type": "message",
+                "role": "system",
+                "content": [{"type": "input_text", "text": "Use the corrected result."}],
+            },
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "Continue."}],
+            },
+        ]
+
+    def test_midturn_system_correction_keeps_multiple_text_blocks(self):
+        messages = [
+            {
+                "role": "system",
+                "content": [
+                    {"type": "text", "text": "First correction."},
+                    {"type": "text", "text": "Second correction."},
+                ],
+            }
+        ]
+
+        assert _translate_messages(messages) == [
+            {
+                "type": "message",
+                "role": "system",
+                "content": [
+                    {"type": "input_text", "text": "First correction."},
+                    {"type": "input_text", "text": "Second correction."},
+                ],
+            }
+        ]
+
+    @pytest.mark.parametrize(
+        "system_content",
+        [
+            "",
+            [{"type": "text", "text": ""}],
+            [{"type": "image", "source": {"type": "url", "url": "https://example.com/a.png"}}],
+            None,
+        ],
+    )
+    def test_empty_or_unsupported_midturn_system_correction_is_dropped(self, system_content: object):
+        messages = [{"role": "system", "content": system_content}]
+
+        assert _translate_messages(messages) == []
+
     def test_user_base64_image(self):
         """User message with base64 image source becomes input_image with data URL."""
         messages = [
@@ -250,9 +345,7 @@ class TestTranslateMessagesToResponsesInput:
         ]
         result = _translate_messages(messages)
         assert len(result) == 1
-        assert result[0]["content"] == [
-            {"type": "input_image", "image_url": "data:image/png;base64,abc123"}
-        ]
+        assert result[0]["content"] == [{"type": "input_image", "image_url": "data:image/png;base64,abc123"}]
 
     def test_user_url_image(self):
         """User message with URL image source becomes input_image with the URL."""
@@ -268,9 +361,7 @@ class TestTranslateMessagesToResponsesInput:
             }
         ]
         result = _translate_messages(messages)
-        assert result[0]["content"] == [
-            {"type": "input_image", "image_url": "https://example.com/img.jpg"}
-        ]
+        assert result[0]["content"] == [{"type": "input_image", "image_url": "https://example.com/img.jpg"}]
 
     def test_user_base64_image_empty_data_skipped(self):
         """Base64 image with empty data is skipped (no URL can be formed)."""
@@ -341,9 +432,7 @@ class TestTranslateMessagesToResponsesInput:
         messages = [
             {
                 "role": "user",
-                "content": [
-                    {"type": "tool_result", "tool_use_id": "call_null", "content": None}
-                ],
+                "content": [{"type": "tool_result", "tool_use_id": "call_null", "content": None}],
             }
         ]
         result = _translate_messages(messages)
@@ -370,9 +459,7 @@ class TestTranslateMessagesToResponsesInput:
             }
         ]
         result = _translate_messages(messages)
-        assert result[0]["content"] == [
-            {"type": "output_text", "text": "Here is the answer."}
-        ]
+        assert result[0]["content"] == [{"type": "output_text", "text": "Here is the answer."}]
 
     def test_assistant_tool_use_becomes_function_call(self):
         """Assistant tool_use block becomes a top-level function_call item."""
@@ -404,15 +491,11 @@ class TestTranslateMessagesToResponsesInput:
         messages = [
             {
                 "role": "assistant",
-                "content": [
-                    {"type": "thinking", "thinking": "Let me reason step by step."}
-                ],
+                "content": [{"type": "thinking", "thinking": "Let me reason step by step."}],
             }
         ]
         result = _translate_messages(messages)
-        assert result[0]["content"] == [
-            {"type": "output_text", "text": "Let me reason step by step."}
-        ]
+        assert result[0]["content"] == [{"type": "output_text", "text": "Let me reason step by step."}]
 
     def test_assistant_empty_thinking_block_skipped(self):
         """Assistant thinking block with empty thinking text is skipped."""
@@ -524,11 +607,66 @@ class TestTranslateToolsToResponsesAPI:
             {
                 "type": "function",
                 "name": "get_weather",
+                "strict": False,
                 "description": "Get current weather for a city.",
                 "parameters": {
                     "type": "object",
                     "properties": {"city": {"type": "string"}},
                     "required": ["city"],
+                },
+            }
+        ]
+
+    def test_tool_with_optional_properties_stays_non_strict(self):
+        """Regression: an unset Anthropic `strict` must not become the Responses strict default,
+        which would rewrite `required` to include every optional property."""
+        tools: List[AllAnthropicToolsValues] = [
+            {
+                "name": "search",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string"},
+                        "cursor": {"type": "string"},
+                    },
+                    "required": ["query"],
+                    "additionalProperties": False,
+                },
+            }
+        ]
+
+        result = _ADAPTER.translate_tools_to_responses_api(tools)
+
+        assert result[0]["strict"] is False
+        assert result[0]["parameters"]["required"] == ["query"]
+
+    def test_tool_forwards_explicit_strict_true(self):
+        """An explicit Anthropic `strict: True` still reaches Responses as True."""
+        tools: List[AllAnthropicToolsValues] = [
+            {
+                "name": "search",
+                "strict": True,
+                "input_schema": {
+                    "type": "object",
+                    "properties": {"query": {"type": "string"}},
+                    "required": ["query"],
+                    "additionalProperties": False,
+                },
+            }
+        ]
+
+        result = _ADAPTER.translate_tools_to_responses_api(tools)
+
+        assert result == [
+            {
+                "type": "function",
+                "name": "search",
+                "strict": True,
+                "parameters": {
+                    "type": "object",
+                    "properties": {"query": {"type": "string"}},
+                    "required": ["query"],
+                    "additionalProperties": False,
                 },
             }
         ]
@@ -584,27 +722,26 @@ class TestTranslateToolsToResponsesAPI:
 
 
 class TestTranslateToolChoiceToResponsesAPI:
-    """Anthropic tool_choice -> Responses API tool_choice."""
+    """Anthropic tool_choice -> Responses API tool_choice.
 
-    def test_auto_maps_to_auto(self):
-        assert _ADAPTER.translate_tool_choice_to_responses_api({"type": "auto"}) == {
-            "type": "auto"
-        }
+    The Responses API's tool_choice schema (openai.types.responses.tool_choice_options)
+    is a bare Literal["none", "auto", "required"] for these simple cases - not an
+    object like {"type": "auto"}. Sending the object shape to an OpenAI-compatible
+    server gets rejected with a pydantic validation error.
+    """
 
-    def test_any_maps_to_required(self):
-        assert _ADAPTER.translate_tool_choice_to_responses_api({"type": "any"}) == {
-            "type": "required"
-        }
+    def test_auto_maps_to_bare_string_auto(self):
+        assert _ADAPTER.translate_tool_choice_to_responses_api({"type": "auto"}) == "auto"
+
+    def test_any_maps_to_bare_string_required(self):
+        assert _ADAPTER.translate_tool_choice_to_responses_api({"type": "any"}) == "required"
+
+    def test_none_maps_to_bare_string_none(self):
+        assert _ADAPTER.translate_tool_choice_to_responses_api({"type": "none"}) == "none"
 
     def test_specific_tool_maps_to_function(self):
-        result = _ADAPTER.translate_tool_choice_to_responses_api(
-            {"type": "tool", "name": "get_weather"}
-        )
+        result = _ADAPTER.translate_tool_choice_to_responses_api({"type": "tool", "name": "get_weather"})
         assert result == {"type": "function", "name": "get_weather"}
-
-    def test_unknown_type_defaults_to_auto(self):
-        result = _ADAPTER.translate_tool_choice_to_responses_api({"type": "none"})
-        assert result == {"type": "auto"}
 
 
 # ---------------------------------------------------------------------------
@@ -616,17 +753,13 @@ class TestTranslateThinkingToReasoning:
     """Anthropic thinking param -> Responses API reasoning param."""
 
     def test_budget_high_effort(self):
-        result = _ADAPTER.translate_thinking_to_reasoning(
-            {"type": "enabled", "budget_tokens": 10000}
-        )
+        result = _ADAPTER.translate_thinking_to_reasoning({"type": "enabled", "budget_tokens": 10000})
         # Default (reasoning_auto_summary=False): only effort, no summary
         assert result == {"effort": "high"}
         assert result is not None and "summary" not in result
 
     def test_budget_above_threshold_high_effort(self):
-        result = _ADAPTER.translate_thinking_to_reasoning(
-            {"type": "enabled", "budget_tokens": 50000}
-        )
+        result = _ADAPTER.translate_thinking_to_reasoning({"type": "enabled", "budget_tokens": 50000})
         assert result is not None
         assert result["effort"] == "high"
         assert "summary" not in result
@@ -652,9 +785,7 @@ class TestTranslateThinkingToReasoning:
         assert result is not None and "summary" not in result
 
     def test_budget_minimal_effort(self):
-        result = _ADAPTER.translate_thinking_to_reasoning(
-            {"type": "enabled", "budget_tokens": 500}
-        )
+        result = _ADAPTER.translate_thinking_to_reasoning({"type": "enabled", "budget_tokens": 500})
         assert result == {"effort": "minimal"}
         assert result is not None and "summary" not in result
 
@@ -707,21 +838,19 @@ class TestTranslateThinkingToReasoning:
         original = litellm.reasoning_auto_summary
         try:
             litellm.reasoning_auto_summary = True
-            result = _ADAPTER.translate_thinking_to_reasoning(
-                {"type": "enabled", "budget_tokens": 10000}
-            )
+            result = _ADAPTER.translate_thinking_to_reasoning({"type": "enabled", "budget_tokens": 10000})
             assert result == {"effort": "high", "summary": "detailed"}
         finally:
             litellm.reasoning_auto_summary = original
 
-    def test_summary_added_when_env_var_set(self):
+    def test_summary_added_when_env_var_set(self, monkeypatch):
         """When LITELLM_REASONING_AUTO_SUMMARY env var is true, summary is included."""
         import litellm
 
         original = litellm.reasoning_auto_summary
         try:
             litellm.reasoning_auto_summary = False
-            os.environ["LITELLM_REASONING_AUTO_SUMMARY"] = "true"
+            monkeypatch.setenv("LITELLM_REASONING_AUTO_SUMMARY", "true")
             result = _ADAPTER.translate_thinking_to_reasoning(
                 {
                     "type": "enabled",
@@ -752,6 +881,42 @@ class TestTranslateRequestBroaderCoverage:
         req = _make_request(system="You are a helpful assistant.")
         kwargs = _ADAPTER.translate_request(req)
         assert kwargs["instructions"] == "You are a helpful assistant."
+
+    def test_top_level_system_and_midturn_correction_are_not_duplicated(self):
+        """
+        Request level: the trusted top-level prompt goes to `instructions` only, and the
+        in-sequence correction stays a `role: "system"` input item in its original position.
+        Neither appears twice, and the surrounding turns keep their order.
+        """
+        req = _make_request(
+            system="Trusted top-level prompt.",
+            messages=[
+                {"role": "user", "content": "First question."},
+                {"role": "system", "content": "Use the corrected result."},
+                {"role": "user", "content": "Continue."},
+            ],
+        )
+
+        kwargs = _ADAPTER.translate_request(req)
+
+        assert kwargs["instructions"] == "Trusted top-level prompt."
+        assert kwargs["input"] == [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "First question."}],
+            },
+            {
+                "type": "message",
+                "role": "system",
+                "content": [{"type": "input_text", "text": "Use the corrected result."}],
+            },
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "Continue."}],
+            },
+        ]
 
     def test_system_list_of_text_blocks_joined(self):
         req = _make_request(
@@ -789,11 +954,7 @@ class TestTranslateRequestBroaderCoverage:
         assert kwargs["top_p"] == 0.9
 
     def test_tools_translated(self):
-        req = _make_request(
-            tools=[
-                {"name": "calculator", "description": "Does math.", "input_schema": {}}
-            ]
-        )
+        req = _make_request(tools=[{"name": "calculator", "description": "Does math.", "input_schema": {}}])
         kwargs = _ADAPTER.translate_request(req)
         assert len(kwargs["tools"]) == 1
         assert kwargs["tools"][0]["name"] == "calculator"
@@ -829,6 +990,29 @@ class TestTranslateRequestBroaderCoverage:
         kwargs = _ADAPTER.translate_request(req)
         assert len(kwargs["user"]) == 64
 
+    def test_metadata_user_id_mapped_to_prompt_cache_key(self):
+        req = _make_request(metadata={"user_id": "user-42"})
+        kwargs = _ADAPTER.translate_request(req)
+        assert kwargs["prompt_cache_key"] == "user-42"
+
+    def test_metadata_user_id_prompt_cache_key_truncated_to_first_64_chars(self):
+        long_id = "".join(str(i % 10) for i in range(100))
+        req = _make_request(metadata={"user_id": long_id})
+        kwargs = _ADAPTER.translate_request(req)
+        assert kwargs["prompt_cache_key"] == long_id[:64]
+        assert len(kwargs["prompt_cache_key"]) == 64
+
+    def test_metadata_empty_user_id_sets_no_prompt_cache_key(self):
+        req = _make_request(metadata={"user_id": ""})
+        kwargs = _ADAPTER.translate_request(req)
+        assert kwargs["user"] == ""
+        assert "prompt_cache_key" not in kwargs
+
+    def test_metadata_null_user_id_sets_no_prompt_cache_key(self):
+        req = _make_request(metadata={"user_id": None})
+        kwargs = _ADAPTER.translate_request(req)
+        assert "prompt_cache_key" not in kwargs
+
     def test_no_optional_fields_does_not_add_spurious_keys(self):
         req = _make_request()
         kwargs = _ADAPTER.translate_request(req)
@@ -842,6 +1026,7 @@ class TestTranslateRequestBroaderCoverage:
             "text",
             "context_management",
             "user",
+            "prompt_cache_key",
         ):
             assert key not in kwargs, f"unexpected key: {key}"
 
@@ -858,11 +1043,19 @@ def _make_mock_response(
     model: str = "gpt-4o",
     input_tokens: int = 100,
     output_tokens: int = 50,
+    cached_tokens: int = 0,
+    cache_write_tokens: int = 0,
 ) -> MagicMock:
     """Build a minimal mock ResponsesAPIResponse."""
-    usage = MagicMock()
-    usage.input_tokens = input_tokens
-    usage.output_tokens = output_tokens
+    usage = ResponseAPIUsage(
+        input_tokens=input_tokens,
+        input_tokens_details={
+            "cached_tokens": cached_tokens,
+            "cache_write_tokens": cache_write_tokens,
+        },
+        output_tokens=output_tokens,
+        total_tokens=input_tokens + output_tokens,
+    )
 
     resp = MagicMock()
     resp.id = response_id
@@ -929,9 +1122,7 @@ class TestTranslateResponse:
 
     def test_multiple_text_parts(self):
         """Multiple output_text parts become multiple text content blocks."""
-        response = _make_mock_response(
-            output=[_make_output_message(["Part 1", "Part 2"])]
-        )
+        response = _make_mock_response(output=[_make_output_message(["Part 1", "Part 2"])])
         result: Any = _ADAPTER.translate_response(response)
         assert len(result["content"]) == 2
         assert result["content"][0]["text"] == "Part 1"
@@ -997,6 +1188,32 @@ class TestTranslateResponse:
         result: Any = _ADAPTER.translate_response(response)
         assert result["usage"]["input_tokens"] == 200
         assert result["usage"]["output_tokens"] == 75
+
+    def test_cache_tokens_mapped_to_anthropic_usage(self):
+        """Cache reads/writes reported by the Responses API must survive the
+        Anthropic mapping, and input_tokens must exclude them so spend is not
+        billed at the uncached input rate."""
+        response = _make_mock_response(
+            output=[_make_output_message(["OK"])],
+            input_tokens=4017,
+            output_tokens=5,
+            cached_tokens=4004,
+            cache_write_tokens=10,
+        )
+        result: Any = _ADAPTER.translate_response(response)
+        assert result["usage"] == {
+            "input_tokens": 3,
+            "output_tokens": 5,
+            "cache_creation_input_tokens": 10,
+            "cache_read_input_tokens": 4004,
+        }
+
+    def test_missing_usage_maps_to_zero_tokens(self):
+        """A response without a usage object must map to zeroed Anthropic usage."""
+        assert LiteLLMAnthropicToResponsesAPIAdapter.translate_responses_api_usage_to_anthropic_usage(None) == {
+            "input_tokens": 0,
+            "output_tokens": 0,
+        }
 
     def test_model_and_id_preserved(self):
         """Model and response ID from the Responses API are forwarded."""
@@ -1071,3 +1288,302 @@ class TestTranslateResponse:
         assert "text" in types
         assert "tool_use" in types
         assert result["stop_reason"] == "tool_use"
+
+
+class TestToolResultImages:
+    """Images inside tool_result blocks must survive translation: the
+    function_call_output carries a text placeholder and the image is sent as an
+    input_image part in a user message emitted after the tool outputs."""
+
+    B64_DATA = "iVBORw0KGgoAAAANSUhEUg=="
+    DATA_URI = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg=="
+    HTTP_URL = "https://example.com/screenshot.png"
+
+    def _messages(self, tool_result_content):
+        return [
+            {"role": "user", "content": "read the screenshot"},
+            {
+                "role": "assistant",
+                "content": [{"type": "tool_use", "id": "toolu_01", "name": "read", "input": {}}],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {"type": "tool_result", "tool_use_id": "toolu_01", "content": tool_result_content}
+                ],
+            },
+        ]
+
+    def _translate(self, tool_result_content):
+        return _ADAPTER.translate_messages_to_responses_input(self._messages(tool_result_content))
+
+    @staticmethod
+    def _input_images(items):
+        return [
+            part
+            for item in items
+            if item.get("type") == "message" and item.get("role") == "user"
+            for part in item.get("content", [])
+            if part.get("type") == "input_image"
+        ]
+
+    @staticmethod
+    def _image_message(items):
+        return next(
+            item
+            for item in items
+            if item.get("type") == "message"
+            and any(part.get("type") == "input_image" for part in item.get("content", []))
+        )
+
+    def test_base64_image_survives(self):
+        items = self._translate(
+            [{"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": self.B64_DATA}}]
+        )
+
+        images = self._input_images(items)
+        assert len(images) == 1
+        assert images[0]["image_url"] == self.DATA_URI
+
+        outputs = [item for item in items if item.get("type") == "function_call_output"]
+        assert len(outputs) == 1
+        assert outputs[0]["call_id"] == "toolu_01"
+        assert "image" in outputs[0]["output"]
+
+    def test_url_image_survives(self):
+        items = self._translate([{"type": "image", "source": {"type": "url", "url": self.HTTP_URL}}])
+
+        images = self._input_images(items)
+        assert len(images) == 1
+        assert images[0]["image_url"] == self.HTTP_URL
+
+    def test_text_and_image_keeps_text_in_output(self):
+        items = self._translate(
+            [
+                {"type": "text", "text": "screenshot saved"},
+                {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": self.B64_DATA}},
+            ]
+        )
+
+        outputs = [item for item in items if item.get("type") == "function_call_output"]
+        assert outputs[0]["output"].startswith("screenshot saved")
+        assert len(self._input_images(items)) == 1
+
+    def test_two_images_both_survive(self):
+        items = self._translate(
+            [
+                {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": self.B64_DATA}},
+                {"type": "image", "source": {"type": "url", "url": self.HTTP_URL}},
+            ]
+        )
+
+        images = self._input_images(items)
+        assert [img["image_url"] for img in images] == [self.DATA_URI, self.HTTP_URL]
+
+    def test_image_user_message_comes_after_function_call_output(self):
+        items = self._translate(
+            [{"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": self.B64_DATA}}]
+        )
+
+        fco_index = next(i for i, item in enumerate(items) if item.get("type") == "function_call_output")
+        assert fco_index < items.index(self._image_message(items))
+
+    def test_boundary_text_precedes_hoisted_images(self):
+        items = self._translate(
+            [{"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": self.B64_DATA}}]
+        )
+
+        assert self._image_message(items)["content"] == [
+            {"type": "input_text", "text": TOOL_RESULT_IMAGE_BOUNDARY},
+            {"type": "input_image", "image_url": self.DATA_URI},
+        ]
+
+    def test_sibling_user_blocks_stay_out_of_boundary_message(self):
+        messages = self._messages(
+            [{"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": self.B64_DATA}}]
+        )
+        messages[-1]["content"].append({"type": "text", "text": "what changed?"})
+
+        items = _ADAPTER.translate_messages_to_responses_input(messages)
+
+        assert self._image_message(items)["content"] == [
+            {"type": "input_text", "text": TOOL_RESULT_IMAGE_BOUNDARY},
+            {"type": "input_image", "image_url": self.DATA_URI},
+        ]
+        assert any(
+            part == {"type": "input_text", "text": "what changed?"}
+            for item in items
+            if item.get("type") == "message"
+            for part in item.get("content", [])
+        )
+
+    def test_text_only_tool_result_unchanged(self):
+        items = self._translate([{"type": "text", "text": "plain result"}])
+
+        outputs = [item for item in items if item.get("type") == "function_call_output"]
+        assert outputs[0]["output"] == "plain result"
+        assert self._input_images(items) == []
+
+    def test_image_without_source_dict_keeps_plain_text_output(self):
+        items = self._translate(
+            [
+                {"type": "text", "text": "screenshot saved"},
+                {"type": "image", "source": self.HTTP_URL},
+            ]
+        )
+
+        outputs = [item for item in items if item.get("type") == "function_call_output"]
+        assert outputs[0]["output"] == "screenshot saved"
+        assert self._input_images(items) == []
+
+
+def _contains_key(value, key) -> bool:
+    if isinstance(value, dict):
+        return key in value or any(_contains_key(v, key) for v in value.values())
+    if isinstance(value, list):
+        return any(_contains_key(v, key) for v in value)
+    return False
+
+
+class TestPromptCacheBreakpointToResponses:
+    """OpenAI `prompt_cache_breakpoint` markers ride through the /v1/messages -> Responses bridge (#37509)."""
+
+    EXPLICIT = {"mode": "explicit"}
+
+    def test_system_with_breakpoint_becomes_leading_developer_message(self):
+        request = _make_request(
+            model="openai/gpt-5.6",
+            system=[
+                {"type": "text", "text": "Be concise."},
+                {"type": "text", "text": "Be helpful.", "prompt_cache_breakpoint": self.EXPLICIT},
+            ],
+        )
+        kwargs = _ADAPTER.translate_request(request)
+        assert "instructions" not in kwargs
+        assert kwargs["input"] == [
+            {
+                "type": "message",
+                "role": "developer",
+                "content": [
+                    {"type": "input_text", "text": "Be concise."},
+                    {"type": "input_text", "text": "Be helpful.", "prompt_cache_breakpoint": self.EXPLICIT},
+                ],
+            },
+            {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hello"}]},
+        ]
+
+    def test_system_without_breakpoint_still_becomes_instructions(self):
+        request = _make_request(system=[{"type": "text", "text": "Be concise."}, {"type": "text", "text": "Be helpful."}])
+        kwargs = _ADAPTER.translate_request(request)
+        assert kwargs["instructions"] == "Be concise.\nBe helpful."
+        assert kwargs["input"] == [
+            {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hello"}]}
+        ]
+
+    def test_system_string_still_becomes_instructions(self):
+        kwargs = _ADAPTER.translate_request(_make_request(system="Be concise."))
+        assert kwargs["instructions"] == "Be concise."
+        assert kwargs["input"][0]["role"] == "user"
+
+    def test_system_with_breakpoint_skips_non_text_blocks(self):
+        request = _make_request(
+            system=[
+                {"type": "image", "source": {"type": "url", "url": "https://example.com/a.png"}},
+                {"type": "text", "text": "only", "prompt_cache_breakpoint": self.EXPLICIT},
+            ]
+        )
+        kwargs = _ADAPTER.translate_request(request)
+        assert kwargs["input"][0] == {
+            "type": "message",
+            "role": "developer",
+            "content": [{"type": "input_text", "text": "only", "prompt_cache_breakpoint": self.EXPLICIT}],
+        }
+
+    def test_user_text_and_image_blocks_carry_breakpoint(self):
+        items = _ADAPTER.translate_messages_to_responses_input(
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "look", "prompt_cache_breakpoint": self.EXPLICIT},
+                        {
+                            "type": "image",
+                            "source": {"type": "url", "url": "https://example.com/a.png"},
+                            "prompt_cache_breakpoint": self.EXPLICIT,
+                        },
+                    ],
+                }
+            ]
+        )
+        assert items == [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "look", "prompt_cache_breakpoint": self.EXPLICIT},
+                    {
+                        "type": "input_image",
+                        "image_url": "https://example.com/a.png",
+                        "prompt_cache_breakpoint": self.EXPLICIT,
+                    },
+                ],
+            }
+        ]
+
+    def test_user_blocks_without_breakpoint_are_unchanged(self):
+        items = _ADAPTER.translate_messages_to_responses_input(
+            [{"role": "user", "content": [{"type": "text", "text": "look"}]}]
+        )
+        assert items == [{"type": "message", "role": "user", "content": [{"type": "input_text", "text": "look"}]}]
+
+    def test_midturn_system_block_carries_breakpoint(self):
+        items = _ADAPTER.translate_messages_to_responses_input(
+            [{"role": "system", "content": [{"type": "text", "text": "fix", "prompt_cache_breakpoint": self.EXPLICIT}]}]
+        )
+        assert items == [
+            {
+                "type": "message",
+                "role": "system",
+                "content": [{"type": "input_text", "text": "fix", "prompt_cache_breakpoint": self.EXPLICIT}],
+            }
+        ]
+
+    def test_assistant_and_tool_result_blocks_drop_breakpoint(self):
+        items = _ADAPTER.translate_messages_to_responses_input(
+            [
+                {"role": "user", "content": [{"type": "text", "text": "q"}]},
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "text", "text": "a", "prompt_cache_breakpoint": self.EXPLICIT},
+                        {"type": "tool_use", "id": "toolu_01", "name": "t", "input": {}},
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "toolu_01",
+                            "content": "r",
+                            "prompt_cache_breakpoint": self.EXPLICIT,
+                        }
+                    ],
+                },
+            ]
+        )
+        assert len(items) == 4
+        assert not _contains_key(items, "prompt_cache_breakpoint")
+
+    def test_prompt_cache_options_forwarded_to_responses_kwargs(self):
+        from litellm.llms.anthropic.experimental_pass_through.responses_adapters.handler import (
+            _build_responses_kwargs,
+        )
+
+        kwargs = _build_responses_kwargs(
+            max_tokens=16,
+            messages=[{"role": "user", "content": "hi"}],
+            model="openai/gpt-5.6",
+            extra_kwargs={"prompt_cache_options": {"mode": "explicit"}},
+        )
+        assert kwargs["prompt_cache_options"] == {"mode": "explicit"}

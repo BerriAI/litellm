@@ -1,16 +1,10 @@
-import os
-import sys
 import traceback
 
 from dotenv import load_dotenv
 
 load_dotenv()
 import io
-import os
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system-path
 from typing import Literal
 
 import pytest
@@ -101,7 +95,16 @@ def test_run(model: str):
         pytest.skip(
             "LLM API returning inconsistent usage"
         )  # handles transient openai errors
-    streaming_cost_calc = completion_cost(response) * 100
+    streaming_cost_calc = (
+        completion_cost(
+            response,
+            custom_cost_per_token={
+                "input_cost_per_token": kwargs["input_cost_per_token"],
+                "output_cost_per_token": kwargs["output_cost_per_token"],
+            },
+        )
+        * 100
+    )
     print(f"Stream output    : {output}")
 
     print(f"Stream usage     : {response.usage}")  # type: ignore

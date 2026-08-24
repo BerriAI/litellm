@@ -1,14 +1,49 @@
-from typing import Any
+from typing import Any, Final, Protocol
 
 from litellm import verbose_logger
 
 _db = Any
 
+
+class SupportsExecuteRaw(Protocol):
+    """The one database operation create_view_tolerating_race needs.
+
+    Narrower than the `_db = Any` the rest of this module still uses, so the
+    helper's contract is checkable at its call sites without retyping every
+    function here.
+    """
+
+    async def execute_raw(self, query: str, *args: object) -> int: ...
+
+
 # Markers that indicate a view/relation does not yet exist in the database.
 # Keeping these in one place avoids repeating the check across all view blocks
 # and prevents overly broad matches (e.g. bare 'undefined' would also match
 # 'undefined function' or 'column undefined_col referenced in query').
-_VIEW_NOT_FOUND_MARKERS = ("does not exist", "no such table", "undefined table")
+_VIEW_NOT_FOUND_MARKERS: Final = ("does not exist", "no such table", "undefined table")
+
+# Markers for the inverse condition: another replica created the view between
+# our existence probe and our CREATE.
+_VIEW_ALREADY_EXISTS_MARKERS: Final = ("already exists", "duplicate object", "duplicate table")
+
+
+async def create_view_tolerating_race(db: SupportsExecuteRaw, view_name: str, ddl: str) -> None:
+    """
+    Create a view, treating "a concurrent creator won" as success.
+
+    Every replica booting against the same fresh database observes the view as
+    absent and issues the CREATE; Postgres fails all but one with a
+    duplicate-object error. The desired end state is still reached, so losing
+    that race is success. Without this, the loser's exception propagates out of
+    a detached startup task and the remaining views are never created.
+    """
+    try:
+        await db.execute_raw(ddl)
+        verbose_logger.debug("%s Created!", view_name)
+    except Exception as e:
+        if not any(marker in str(e).lower() for marker in _VIEW_ALREADY_EXISTS_MARKERS):
+            raise
+        verbose_logger.debug("%s already created by a concurrent replica", view_name)
 
 
 async def create_missing_views(db: _db):
@@ -34,7 +69,10 @@ async def create_missing_views(db: _db):
         if not any(marker in error_msg for marker in _VIEW_NOT_FOUND_MARKERS):
             raise
         # If an error occurs, the view does not exist, so create it
-        await db.execute_raw("""
+        await create_view_tolerating_race(
+            db,
+            "LiteLLM_VerificationTokenView",
+            """
                 CREATE VIEW "LiteLLM_VerificationTokenView" AS
                 SELECT
                 v.*,
@@ -46,9 +84,8 @@ async def create_missing_views(db: _db):
                 FROM "LiteLLM_VerificationToken" v
                 LEFT JOIN "LiteLLM_TeamTable" t ON v.team_id = t.team_id
                 LEFT JOIN "LiteLLM_ProjectTable" p ON v.project_id = p.project_id;
-            """)
-
-        verbose_logger.debug("LiteLLM_VerificationTokenView Created!")
+            """,
+        )
 
     try:
         await db.query_raw("""SELECT 1 FROM "MonthlyGlobalSpend" LIMIT 1""")
@@ -69,9 +106,7 @@ async def create_missing_views(db: _db):
         GROUP BY 
         DATE("startTime");
         """
-        await db.execute_raw(query=sql_query)
-
-        verbose_logger.debug("MonthlyGlobalSpend Created!")
+        await create_view_tolerating_race(db, "MonthlyGlobalSpend", sql_query)
 
     try:
         await db.query_raw("""SELECT 1 FROM "Last30dKeysBySpend" LIMIT 1""")
@@ -100,9 +135,7 @@ async def create_missing_views(db: _db):
         ORDER BY
         total_spend DESC;
         """
-        await db.execute_raw(query=sql_query)
-
-        verbose_logger.debug("Last30dKeysBySpend Created!")
+        await create_view_tolerating_race(db, "Last30dKeysBySpend", sql_query)
 
     try:
         await db.query_raw("""SELECT 1 FROM "Last30dModelsBySpend" LIMIT 1""")
@@ -126,9 +159,7 @@ async def create_missing_views(db: _db):
         ORDER BY
         total_spend DESC;
         """
-        await db.execute_raw(query=sql_query)
-
-        verbose_logger.debug("Last30dModelsBySpend Created!")
+        await create_view_tolerating_race(db, "Last30dModelsBySpend", sql_query)
     try:
         await db.query_raw("""SELECT 1 FROM "MonthlyGlobalSpendPerKey" LIMIT 1""")
         verbose_logger.debug("MonthlyGlobalSpendPerKey Exists!")
@@ -150,9 +181,7 @@ async def create_missing_views(db: _db):
             DATE("startTime"),
             api_key;
         """
-        await db.execute_raw(query=sql_query)
-
-        verbose_logger.debug("MonthlyGlobalSpendPerKey Created!")
+        await create_view_tolerating_race(db, "MonthlyGlobalSpendPerKey", sql_query)
     try:
         await db.query_raw("""SELECT 1 FROM "MonthlyGlobalSpendPerUserPerKey" LIMIT 1""")
         verbose_logger.debug("MonthlyGlobalSpendPerUserPerKey Exists!")
@@ -176,9 +205,7 @@ async def create_missing_views(db: _db):
             "user",
             api_key;
         """
-        await db.execute_raw(query=sql_query)
-
-        verbose_logger.debug("MonthlyGlobalSpendPerUserPerKey Created!")
+        await create_view_tolerating_race(db, "MonthlyGlobalSpendPerUserPerKey", sql_query)
 
     try:
         await db.query_raw("""SELECT 1 FROM "DailyTagSpend" LIMIT 1""")
@@ -197,9 +224,7 @@ async def create_missing_views(db: _db):
         FROM "LiteLLM_SpendLogs" s
         GROUP BY individual_request_tag, DATE(s."startTime");
         """
-        await db.execute_raw(query=sql_query)
-
-        verbose_logger.debug("DailyTagSpend Created!")
+        await create_view_tolerating_race(db, "DailyTagSpend", sql_query)
 
     try:
         await db.query_raw("""SELECT 1 FROM "Last30dTopEndUsersSpend" LIMIT 1""")
@@ -218,11 +243,7 @@ async def create_missing_views(db: _db):
         ORDER BY total_spend DESC
         LIMIT 100;
         """
-        await db.execute_raw(query=sql_query)
-
-        verbose_logger.debug("Last30dTopEndUsersSpend Created!")
-
-    return
+        await create_view_tolerating_race(db, "Last30dTopEndUsersSpend", sql_query)
 
 
 async def should_create_missing_views(db: _db) -> bool:
@@ -232,15 +253,15 @@ async def should_create_missing_views(db: _db) -> bool:
     If SpendLogs table already has values, then don't create views on startup.
     """
 
-    sql_query = """
+    sql_query: Final = """
     SELECT reltuples::BIGINT
     FROM pg_class
     WHERE oid = '"LiteLLM_SpendLogs"'::regclass;
     """
 
-    result = await db.query_raw(query=sql_query)
+    result: Final = await db.query_raw(query=sql_query)
 
-    verbose_logger.debug("Estimated Row count of LiteLLM_SpendLogs = {}".format(result))
+    verbose_logger.debug("Estimated Row count of LiteLLM_SpendLogs = %s", result)
     if (
         result
         and isinstance(result, list)

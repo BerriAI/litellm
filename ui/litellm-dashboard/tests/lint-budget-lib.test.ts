@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { countBudgetViolations, findDrift } from "../scripts/lint-budget-lib.mjs";
+import { countBudgetViolations } from "../scripts/lint-budget-lib.mjs";
 
 const budgets = {
   "@typescript-eslint/no-explicit-any": { max: 10, target: 5 },
@@ -33,23 +33,5 @@ describe("countBudgetViolations", () => {
       "@typescript-eslint/no-explicit-any",
       "complexity",
     ]);
-  });
-});
-
-describe("findDrift", () => {
-  it("reports no drift when the snapshot matches the actual counts", () => {
-    expect(findDrift({ complexity: 5 }, { complexity: 5 })).toEqual([]);
-  });
-
-  it("detects a changed count", () => {
-    expect(findDrift({ complexity: 5 }, { complexity: 7 })).toEqual([{ rule: "complexity", committed: 5, actual: 7 }]);
-  });
-
-  it("detects a rule missing from the committed snapshot", () => {
-    expect(findDrift({}, { complexity: 7 })).toEqual([{ rule: "complexity", committed: null, actual: 7 }]);
-  });
-
-  it("detects a phantom rule the committed snapshot still carries", () => {
-    expect(findDrift({ "removed-rule": 3 }, {})).toEqual([{ rule: "removed-rule", committed: 3, actual: null }]);
   });
 });

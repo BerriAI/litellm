@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { Tooltip } from "antd";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   checkEuAiActCompliance,
   checkGdprCompliance,
@@ -57,39 +57,42 @@ const ComplianceCard = ({
   const [expanded, setExpanded] = useState(false);
 
   return (
-    <div className="border border-gray-200 rounded-lg bg-white">
+    <div className="border border-border rounded-lg bg-card">
       <div
-        className="flex items-center justify-between px-4 py-3 cursor-pointer hover:bg-gray-50 transition-colors"
+        className="flex items-center justify-between px-4 py-3 cursor-pointer hover:bg-accent transition-colors"
         onClick={() => setExpanded(!expanded)}
       >
         <div className="flex items-center gap-2">
           {loading ? (
             <SpinnerIcon />
           ) : error ? (
-            <Tooltip title={error}>
-              <span className="text-gray-400 text-sm">--</span>
-            </Tooltip>
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger render={<span className="text-muted-foreground text-sm" />}>--</TooltipTrigger>
+                <TooltipContent>{error}</TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
           ) : data?.compliant ? (
             <CheckIcon />
           ) : (
             <CrossIcon />
           )}
-          <span className="font-medium text-sm text-gray-900">{title}</span>
+          <span className="font-medium text-sm text-foreground">{title}</span>
         </div>
         <div className="flex items-center gap-2">
           {!loading && !error && data && (
             <span
               className={`px-2 py-0.5 rounded text-[11px] font-semibold uppercase ${
                 data.compliant
-                  ? "bg-green-100 text-green-700 border border-green-200"
-                  : "bg-red-100 text-red-700 border border-red-200"
+                  ? "bg-success/15 text-success border border-success/20"
+                  : "bg-destructive/15 text-destructive border border-destructive/20"
               }`}
             >
               {data.compliant ? "COMPLIANT" : "NON-COMPLIANT"}
             </span>
           )}
           {error && (
-            <span className="px-2 py-0.5 rounded text-[11px] font-medium bg-gray-100 text-gray-500 border border-gray-200">
+            <span className="px-2 py-0.5 rounded-sm text-[11px] font-medium bg-muted text-muted-foreground border border-border">
               UNAVAILABLE
             </span>
           )}
@@ -106,20 +109,20 @@ const ComplianceCard = ({
       </div>
 
       {expanded && (
-        <div className="border-t border-gray-100 px-4 py-3">
-          {loading && <p className="text-sm text-gray-500">Checking compliance...</p>}
-          {error && <p className="text-sm text-red-600">{error}</p>}
+        <div className="border-t border-border px-4 py-3">
+          {loading && <p className="text-sm text-muted-foreground">Checking compliance...</p>}
+          {error && <p className="text-sm text-destructive">{error}</p>}
           {data && (
             <div className="space-y-2">
               {data.checks.map((check, idx) => (
                 <div key={idx} className="flex items-start gap-2">
-                  <div className="flex-shrink-0 mt-0.5">{check.passed ? <CheckIcon /> : <CrossIcon />}</div>
+                  <div className="shrink-0 mt-0.5">{check.passed ? <CheckIcon /> : <CrossIcon />}</div>
                   <div className="min-w-0">
                     <div className="flex items-center gap-2">
-                      <span className="text-sm font-medium text-gray-900">{check.check_name}</span>
-                      <span className="text-[10px] font-mono text-gray-400">{check.article}</span>
+                      <span className="text-sm font-medium text-foreground">{check.check_name}</span>
+                      <span className="text-[10px] font-mono text-muted-foreground">{check.article}</span>
                     </div>
-                    <p className="text-xs text-gray-500 mt-0.5">{check.detail}</p>
+                    <p className="text-xs text-muted-foreground mt-0.5">{check.detail}</p>
                   </div>
                 </div>
               ))}
@@ -169,7 +172,9 @@ const CompliancePanel: React.FC<CompliancePanelProps> = ({ accessToken, logEntry
 
   return (
     <div>
-      <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-4">Regulatory Compliance</h4>
+      <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-4">
+        Regulatory Compliance
+      </h4>
       <div className="space-y-3">
         <ComplianceCard title="EU AI Act" data={euAiActData} loading={euAiActLoading} error={euAiActError} />
         <ComplianceCard title="GDPR" data={gdprData} loading={gdprLoading} error={gdprError} />
