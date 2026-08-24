@@ -9,7 +9,7 @@ Use litellm with Anthropic SDK, Vertex AI SDK, Cohere SDK, etc.
 import json
 import os
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Any, Final, cast
 
@@ -104,6 +104,28 @@ def is_passthrough_request_streaming(request_body: object) -> bool:
     if not isinstance(request_body, dict):
         return False
     return bool(request_body.get("stream", False))
+
+
+def get_passthrough_router_request_metadata(user_api_key_dict: UserAPIKeyAuth) -> Mapping[str, Any]:
+    """
+    Build the request metadata carrying key-level spend attribution and the
+    pre-call budget reservation for a router-model passthrough request.
+
+    Router-model passthrough branches call ``allm_passthrough_route`` directly,
+    bypassing ``add_litellm_data_to_request``. Without this metadata the cost
+    callback cannot attribute spend to the calling key and never releases the
+    budget reservation minted at auth time, so the shared spend counter drifts
+    up until the key falsely trips ``BudgetExceededError``.
+    """
+    from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+
+    request_data: Final = {"metadata": {}}  # mutable-ok: attribution builder + litellm mutate this dict in place
+    LiteLLMProxyRequestSetup.add_user_api_key_auth_to_request_metadata(
+        data=request_data,
+        user_api_key_dict=user_api_key_dict,
+        _metadata_variable_name="metadata",
+    )
+    return request_data["metadata"]
 
 
 async def llm_passthrough_factory_proxy_route(
@@ -346,6 +368,7 @@ async def vllm_proxy_route(
                 params=None,
                 headers=None,
                 cookies=None,
+                metadata=get_passthrough_router_request_metadata(user_api_key_dict),
             ),
         )
 
@@ -1475,6 +1498,7 @@ async def azure_proxy_route(
                     params=None,
                     headers=None,
                     cookies=None,
+                    metadata=get_passthrough_router_request_metadata(user_api_key_dict),
                 )
 
                 if is_streaming_request:
