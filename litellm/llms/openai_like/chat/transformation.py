@@ -21,6 +21,17 @@ else:
 
 
 class OpenAILikeChatConfig(OpenAIGPTConfig):
+    def get_supported_openai_params(self, model: str) -> List[str]:
+        params = super().get_supported_openai_params(model)
+        # Self-hosted servers (vLLM, SGLang, LMDeploy, ...) run reasoning models
+        # behind this generic provider. Template-driven models (GLM, Qwen3,
+        # DeepSeek-R1, Granite) read the effort from `chat_template_kwargs`
+        # (injected by the proxy pre-call layer); declaring `reasoning_effort`
+        # supported keeps the top-level field on the body for the vLLM Harmony
+        # (gpt-oss) path too.
+        params.extend(["reasoning_effort"])
+        return params
+
     def _get_openai_compatible_provider_info(
         self,
         api_base: Optional[str],

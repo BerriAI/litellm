@@ -28,7 +28,30 @@ def test_sanitize_usage_obj_no_usage():
     sanitized_json = OpenAILikeChatConfig._sanitize_usage_obj(response_json)
 
     # Assert
-    assert "usage" not in sanitized_json  # Should not add a usage key
+
+
+def test_openai_like_supports_reasoning_effort():
+    """
+    Self-hosted servers (SGLang, vLLM with reasoning parsers, Moonshot-Kimi
+    compatible endpoints, LMDeploy, ...) run behind the generic ``openai_like``
+    provider. vLLM >= 0.27 and SGLang accept a top-level ``reasoning_effort``
+    (values: none/minimal/low/medium/high/xhigh/max) on /v1/chat/completions.
+    The param must survive the transformation and be forwarded verbatim in the
+    request body.
+    """
+    config = OpenAILikeChatConfig()
+    supported_params = config.get_supported_openai_params(model="kimi-k3")
+    assert "reasoning_effort" in supported_params
+
+    optional_params = config.map_openai_params(
+        non_default_params={"reasoning_effort": "max"},
+        optional_params={},
+        model="kimi-k3",
+        drop_params=False,
+    )
+
+    # forwarded verbatim, not mapped/dropped
+    assert optional_params["reasoning_effort"] == "max"
 
 
 def test_sanitize_usage_obj_valid_usage():

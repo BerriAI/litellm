@@ -180,6 +180,121 @@ def test_get_enforced_params(
 
 
 @pytest.mark.asyncio
+async def test_add_litellm_data_to_request_injects_default_thinking_effort():
+    """
+    general_settings["default_thinking_effort"] (e.g. "low") is injected onto the
+    two channels reasoning backends read on /v1/chat/completions: top-level
+    ``reasoning_effort`` (vLLM Harmony / gpt-oss) and ``chat_template_kwargs``
+    (the Jinja-template bridge for GLM/Qwen3/DeepSeek/Granite). A client-supplied
+    effort always wins; an absent setting injects nothing (no behavior change for
+    existing deployments).
+    """
+    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+
+    request_mock = MagicMock(spec=Request)
+    request_mock.url = MagicMock()
+    request_mock.url.__str__.return_value = "http://localhost/v1/chat/completions"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {"Content-Type": "application/json"}
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="hashed-key",
+        metadata={},
+        team_metadata={},
+        spend=0.0,
+        max_budget=100.0,
+        model_max_budget={},
+        team_spend=0.0,
+        team_max_budget=200.0,
+    )
+
+    base = {"model": "kimi-k3", "messages": [{"role": "user", "content": "hello"}]}
+
+    async def call(body: dict, general_settings: dict) -> dict:
+        data = dict(body)
+        await add_litellm_data_to_request(
+            data=data,
+            request=request_mock,
+            user_api_key_dict=user_api_key_dict,
+            proxy_config=MagicMock(),
+            general_settings=general_settings,
+            version="test-version",
+        )
+        return data
+
+    # 1. default injected when client sent nothing; lands on both channels and
+    #    both template flag names (thinking / enable_thinking)
+    data = await call(base, {"default_thinking_effort": "low"})
+    assert data["reasoning_effort"] == "low"
+    assert data["chat_template_kwargs"]["reasoning_effort"] == "low"
+    assert data["chat_template_kwargs"]["enable_thinking"] is True
+    assert data["chat_template_kwargs"]["thinking"] is True
+    assert "thinking_effort" not in data  # never leak the alias name downstream
+
+    # 2. client-supplied value wins over the default on both channels
+    data = await call({**base, "reasoning_effort": "max"}, {"default_thinking_effort": "low"})
+    assert data["reasoning_effort"] == "max"
+    assert data["chat_template_kwargs"]["reasoning_effort"] == "max"
+    assert data["chat_template_kwargs"]["enable_thinking"] is True
+    assert data["chat_template_kwargs"]["thinking"] is True
+
+    # 3. no default configured -> nothing injected, no chat_template_kwargs created
+    data = await call(base, {})
+    assert "reasoning_effort" not in data
+    assert "chat_template_kwargs" not in data
+
+    # 4. non-chat requests (no `messages`, e.g. embeddings) are not injected
+    data = await call({"model": "text-embedding-3-small", "input": "hi"}, {"default_thinking_effort": "low"})
+    assert "reasoning_effort" not in data
+    assert "chat_template_kwargs" not in data
+
+    # 5. clients may already send the new name; normalize it to the wire name,
+    #    and it must take precedence over the configured default
+    data = await call({**base, "thinking_effort": "high"}, {"default_thinking_effort": "low"})
+    assert data["reasoning_effort"] == "high"
+    assert data["chat_template_kwargs"]["reasoning_effort"] == "high"
+    assert "thinking_effort" not in data
+
+    # 6. "none" disables thinking on both template flag names
+    data = await call({**base, "reasoning_effort": "none"}, {})
+    assert data["chat_template_kwargs"]["enable_thinking"] is False
+    assert data["chat_template_kwargs"]["thinking"] is False
+
+    # 7. a pre-existing client chat_template_kwargs is preserved and augmented,
+    #    not clobbered; an explicit client flag wins over the proxy default
+    data = await call(
+        {**base, "chat_template_kwargs": {"enable_thinking": True, "custom_flag": 7}},
+        {"default_thinking_effort": "low"},
+    )
+    ctk = data["chat_template_kwargs"]
+    assert ctk["custom_flag"] == 7
+    assert ctk["enable_thinking"] is True
+    assert ctk["reasoning_effort"] == "low"
+    # "thinking" was absent from the client's kwargs, so the proxy fills it
+    assert ctk["thinking"] is True
+
+    # 8. values outside the unified set are dropped, never forwarded. The proxy
+    #    is model-agnostic and refuses to emit values it does not recognize,
+    #    rather than pass an unknown tier to a backend that may warn/error.
+    for _bad in ("minimal", "xhigh", "default", "turbo"):
+        data = await call({**base, "reasoning_effort": _bad}, {})
+        assert "reasoning_effort" not in data, _bad
+        assert "chat_template_kwargs" not in data, _bad
+
+    # 9. an unsupported admin default is also dropped (no injection)
+    data = await call(base, {"default_thinking_effort": "minimal"})
+    assert "reasoning_effort" not in data
+    assert "chat_template_kwargs" not in data
+
+    # 10. "max" (kept for backends like SGLang Kimi-K3) is accepted and forwarded
+    data = await call({**base, "reasoning_effort": "max"}, {})
+    assert data["reasoning_effort"] == "max"
+    assert data["chat_template_kwargs"]["reasoning_effort"] == "max"
+
+
 async def test_add_litellm_data_to_request_parses_string_metadata():
     from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
 

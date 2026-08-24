@@ -105,6 +105,12 @@ class MoonshotChatConfig(OpenAIGPTConfig):
             if param not in excluded_params:
                 final_params.append(param)
 
+        # Kimi-K2/K3 read the graded effort from the Jinja chat template via
+        # `chat_template_kwargs` (injected by the proxy pre-call layer). Declaring
+        # `reasoning_effort` supported keeps the top-level field on the request
+        # body for the vLLM Harmony (gpt-oss) path too.
+        final_params.extend(["reasoning_effort"])
+
         return final_params
 
     def map_openai_params(

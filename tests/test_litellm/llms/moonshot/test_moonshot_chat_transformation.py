@@ -22,6 +22,50 @@ from litellm.llms.moonshot.chat.transformation import MoonshotChatConfig
 class TestMoonshotConfig:
     """Test class for Moonshot AI functionality"""
 
+    def test_supports_reasoning_effort(self):
+        """
+        Kimi-K2/K3 backends (hosted Moonshot or self-hosted vLLM/SGLang with the
+        ``kimi_k3`` reasoning parser) accept ``reasoning_effort`` (low..max) on
+        /v1/chat/completions. The param must be declared supported and forwarded
+        verbatim.
+        """
+        config = MoonshotChatConfig()
+        supported_params = config.get_supported_openai_params(model="kimi-k2.6")
+        assert "reasoning_effort" in supported_params
+
+        with patch(
+            "litellm.llms.moonshot.chat.transformation.supports_reasoning",
+            return_value=False,
+        ):
+            optional_params = config.map_openai_params(
+                non_default_params={"reasoning_effort": "max"},
+                optional_params={},
+                model="kimi-k2.6",
+                drop_params=False,
+            )
+
+        assert optional_params["reasoning_effort"] == "max"
+
+    def test_reasoning_effort_survives_thinking_model_temperature_drop(self):
+        """
+        For reasoning models Moonshot drops ``temperature``; the same call must
+        still forward ``reasoning_effort`` (thinking control is orthogonal to
+        sampling temperature).
+        """
+        config = MoonshotChatConfig()
+        with patch(
+            "litellm.llms.moonshot.chat.transformation.supports_reasoning",
+            return_value=True,
+        ):
+            optional_params = config.map_openai_params(
+                non_default_params={"reasoning_effort": "low", "temperature": 0.5},
+                optional_params={},
+                model="kimi-k2-thinking",
+                drop_params=False,
+            )
+        assert "temperature" not in optional_params
+        assert optional_params["reasoning_effort"] == "low"
+
     def test_default_api_base(self):
         """Test that default API base is used when none is provided"""
         config = MoonshotChatConfig()

@@ -46,6 +46,14 @@ _EXPLICIT_SESSION_HEADERS = frozenset({"x-litellm-trace-id", "x-litellm-session-
 # (covers UUIDs and most common session-id formats).
 _SESSION_ID_VALUE_RE = re.compile(r"^[a-zA-Z0-9_\-]{8,}$")
 
+# The unified set of reasoning-effort values the proxy pre-call layer accepts
+# and forwards. Scoped to this layer only: provider transformations (Vertex
+# Gemini, OpenRouter, Bedrock, Anthropic) still accept their own supersets
+# (e.g. "minimal", "xhigh") via the SDK-level REASONING_EFFORT Literal, which is
+# intentionally left untouched. The proxy is model-agnostic: values pass through
+# verbatim, no per-backend translation.
+_PROXY_REASONING_EFFORT_VALUES = frozenset({"none", "low", "medium", "high", "max"})
+
 
 def _sanitize_for_log(value: Any) -> str:
     """
@@ -1337,6 +1345,57 @@ async def add_litellm_data_to_request(
         verbose_proxy_logger.debug(
             "Setting client-provided x-api-key as api_key parameter (will override deployment key)"
         )
+
+    # Normalize `thinking_effort` (friendlier alias) and `reasoning_effort` to a
+    # single resolved value, then emit it on the two channels reasoning backends
+    # actually read on /v1/chat/completions:
+    #   - top-level `reasoning_effort`: consumed by vLLM's Harmony path (gpt-oss).
+    #     For every other model vLLM validates this field and then ignores it; it
+    #     is never forwarded into the Jinja chat-template context.
+    #   - `chat_template_kwargs`: the sole bridge to the Jinja template for
+    #     template-driven reasoning models (GLM, Qwen3, DeepSeek-R1, Granite, ...).
+    #     Different families read different flag names ("thinking" for DeepSeek-V3
+    #     / Kimi-K2, "enable_thinking" for Qwen3 / GLM / Nemotron / Intern-S1), so
+    #     both are set; "reasoning_effort" carries the graded value for templates
+    #     that distinguish effort levels (e.g. GLM high vs max). SGLang does this
+    #     same mapping itself from the top-level field, so on SGLang the injection
+    #     is redundant-but-harmless; on vLLM (no auto-mapping except gpt-oss) it is
+    #     required.
+    # A client-supplied effort always wins over the proxy-configured
+    # `default_thinking_effort`. Only chat-style requests (those carrying
+    # `messages`) get the injection, so embeddings/audio/etc. are unaffected when
+    # an admin sets the default. The resolved value must be one of the unified
+    # set (see _PROXY_REASONING_EFFORT_VALUES); anything else is dropped with a
+    # warning rather than forwarded, since the proxy is model-agnostic and does
+    # no per-backend translation.
+    if "messages" in data:
+        _thinking_effort = data.pop("thinking_effort", None) or data.get("reasoning_effort")
+        if _thinking_effort is None and general_settings is not None:
+            _thinking_effort = general_settings.get("default_thinking_effort")
+        if _thinking_effort is not None:
+            if _thinking_effort not in _PROXY_REASONING_EFFORT_VALUES:
+                verbose_proxy_logger.warning(
+                    "Ignoring unsupported reasoning_effort=%r; accepted values: %s",
+                    _thinking_effort,
+                    sorted(_PROXY_REASONING_EFFORT_VALUES),
+                )
+                data.pop("reasoning_effort", None)
+                _thinking_effort = None
+            else:
+                data["reasoning_effort"] = _thinking_effort
+                _ctk = data.get("chat_template_kwargs")
+                if not isinstance(_ctk, dict):
+                    _ctk = {}
+                    data["chat_template_kwargs"] = _ctk
+                # Template-driven models read different flag names: "thinking" for
+                # DeepSeek-V3 / Kimi-K2, "enable_thinking" for Qwen3 / GLM / Nemotron
+                # / Intern-S1. Set both (mirroring SGLang's own mapping) so whichever
+                # the active template reads is present; the graded "reasoning_effort"
+                # covers templates that distinguish effort levels (e.g. GLM high vs
+                # max).
+                _ctk.setdefault("enable_thinking", _thinking_effort != "none")
+                _ctk.setdefault("thinking", _thinking_effort != "none")
+                _ctk.setdefault("reasoning_effort", _thinking_effort)
 
     ##########################################################
     # Init - Proxy Server Request
