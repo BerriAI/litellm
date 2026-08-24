@@ -259,6 +259,17 @@
       ]
     },
     {
+      "name": "parallel_search",
+      "title": "Parallel Search",
+      "description": "AI-optimized web search and extraction for agents",
+      "icon_url": "https://assets.parallel.ai/dark-parallel-avatar-270.png",
+      "category": "Search",
+      "registry_url": null,
+      "transport": "http",
+      "url": "https://search.parallel.ai/mcp",
+      "env_vars": []
+    },
+    {
       "name": "tavily",
       "title": "Tavily",
       "description": "AI-optimized search engine for research and retrieval",
