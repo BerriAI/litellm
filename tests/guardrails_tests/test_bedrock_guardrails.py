@@ -28,6 +28,55 @@ def test_bedrock_guardrail_uses_active_metadata_bucket_for_team_id():
     router.get_model_list.assert_called_once_with(model_name="team-alias", team_id="active-team")
 
 
+def test_bedrock_guardrail_uses_proxy_team_when_alternate_metadata_is_empty():
+    router = MagicMock()
+    router.get_model_list.return_value = [
+        {"litellm_params": {"custom_llm_provider": "bedrock"}, "model_info": {}}
+    ]
+    request_data = {
+        "model": "team-alias",
+        "metadata": {"user_api_key_team_id": "proxy-team"},
+        "litellm_metadata": {},
+    }
+
+    with patch("litellm.proxy.proxy_server.llm_router", router):
+        assert BedrockGuardrail._router_allows_bedrock(request_data) is True
+
+    router.get_model_list.assert_called_once_with(model_name="team-alias", team_id="proxy-team")
+
+
+def test_bedrock_guardrail_resolves_router_model_id():
+    router = MagicMock()
+    router.get_model_list.return_value = []
+    router.has_model_id.return_value = True
+    deployment = MagicMock()
+    deployment.model_dump.return_value = {
+        "litellm_params": {"custom_llm_provider": "bedrock"},
+        "model_info": {},
+    }
+    router.get_deployment.return_value = deployment
+
+    with patch("litellm.proxy.proxy_server.llm_router", router):
+        assert BedrockGuardrail._router_allows_bedrock({"model": "deployment-id"}) is True
+
+    router.get_deployment.assert_called_once_with(model_id="deployment-id")
+    deployment.model_dump.assert_called_once_with(exclude_none=True)
+
+
+def test_bedrock_guardrail_filters_access_group_deployments():
+    router = MagicMock()
+    router.get_model_list.return_value = [
+        {"litellm_params": {"custom_llm_provider": "openai"}, "model_info": {}},
+        {"litellm_params": {"custom_llm_provider": "bedrock"}, "model_info": {}},
+    ]
+    router._filter_deployments_by_model_access_groups.return_value = [
+        {"litellm_params": {"custom_llm_provider": "bedrock"}, "model_info": {}}
+    ]
+
+    with patch("litellm.proxy.proxy_server.llm_router", router):
+        assert BedrockGuardrail._router_allows_bedrock({"model": "scoped-alias"}) is True
+
+
 def test_bedrock_guardrail_ignores_blocked_deployments():
     router = MagicMock()
     router.get_model_list.return_value = [

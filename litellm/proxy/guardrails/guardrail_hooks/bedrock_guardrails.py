@@ -31,7 +31,6 @@ from litellm.constants import BEDROCK_APPLY_GUARDRAIL_CHUNK_BUDGET_CHARS
 from litellm.exceptions import ModifyResponseException
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.core_helpers import (
-    get_metadata_variable_name_from_kwargs,
     redact_nested_match_and_regex_keys,
 )
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import bedrock_guardrail_cost
@@ -693,16 +692,51 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         if llm_router is None:
             return None
 
-        metadata_key: Final = get_metadata_variable_name_from_kwargs(dict(request_data))
-        metadata: Final = request_data.get(metadata_key)
-        team_id: Final[object | None] = (
-            metadata.get("user_api_key_team_id") if isinstance(metadata, Mapping) else None
+        team_id: Final[object | None] = next(
+            (
+                metadata.get("user_api_key_team_id")
+                for metadata in (request_data.get("litellm_metadata"), request_data.get("metadata"))
+                if isinstance(metadata, Mapping) and isinstance(metadata.get("user_api_key_team_id"), str)
+            ),
+            None,
         )
         try:
-            deployments: Final = llm_router.get_model_list(
-                model_name=model,
-                team_id=team_id if isinstance(team_id, str) else None,
-            ) or []
+            resolved_team_id: Final = team_id if isinstance(team_id, str) else None
+            listed_deployments: Final = (
+                llm_router.get_model_list(
+                    model_name=model,
+                    team_id=resolved_team_id,
+                )
+                or []
+            )
+            model_id_deployment: Final = (
+                llm_router.get_deployment(model_id=model)
+                if not listed_deployments and llm_router.has_model_id(model) is True
+                else None
+            )
+            model_id_deployment_row: Final = (
+                model_id_deployment.model_dump(exclude_none=True)
+                if model_id_deployment is not None and hasattr(model_id_deployment, "model_dump")
+                else model_id_deployment
+            )
+            candidate_deployments: Final = (
+                [model_id_deployment_row] if model_id_deployment_row is not None else listed_deployments
+            )
+
+            filter_deployments: Final = getattr(llm_router, "_filter_deployments_by_model_access_groups", None)
+            filtered_deployments: Final = (
+                filter_deployments(
+                    model=model,
+                    healthy_deployments=candidate_deployments,
+                    request_kwargs=dict(request_data),
+                    request_team_id=resolved_team_id,
+                )
+                if callable(filter_deployments) and isinstance(candidate_deployments, list)
+                else None
+            )
+            deployments: Final = (
+                filtered_deployments if isinstance(filtered_deployments, list) else candidate_deployments
+            )
         except Exception:
             return False
         active_deployments = []
@@ -713,9 +747,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 else getattr(deployment, "model_info", None)
             )
             blocked = (
-                model_info.get("blocked")
-                if isinstance(model_info, Mapping)
-                else getattr(model_info, "blocked", None)
+                model_info.get("blocked") if isinstance(model_info, Mapping) else getattr(model_info, "blocked", None)
             )
             if blocked is not True:
                 active_deployments.append(deployment)
@@ -724,10 +756,20 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
         providers: list[str] = []
         for deployment in active_deployments:
-            params: object = deployment.get("litellm_params") if isinstance(deployment, Mapping) else None
-            provider: object = params.get("custom_llm_provider") if isinstance(params, Mapping) else None
-            if not isinstance(provider, str) and isinstance(params, Mapping):
-                deployment_model: Final[object | None] = params.get("model")
+            params: object = (
+                deployment.get("litellm_params")
+                if isinstance(deployment, Mapping)
+                else getattr(deployment, "litellm_params", None)
+            )
+            provider: object = (
+                params.get("custom_llm_provider")
+                if isinstance(params, Mapping)
+                else getattr(params, "custom_llm_provider", None)
+            )
+            if not isinstance(provider, str):
+                deployment_model: Final[object | None] = (
+                    params.get("model") if isinstance(params, Mapping) else getattr(params, "model", None)
+                )
                 provider = (
                     BedrockGuardrail._resolve_model_provider(deployment_model)
                     if isinstance(deployment_model, str)
