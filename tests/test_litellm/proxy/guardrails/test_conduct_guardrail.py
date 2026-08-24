@@ -14,6 +14,14 @@ import sys
 
 import pytest
 
+# The Conduct guardrail imports its runtime from `conduct-litellm-guard`
+# on PyPI. When the package is not installed in the CI environment,
+# skip — the wiring smoke tests only make sense against the real dep.
+pytest.importorskip(
+    "conduct_litellm_guard",
+    reason="Install `conduct-litellm-guard` to test the Conduct guardrail integration.",
+)
+
 
 def test_import_module() -> None:
     """The wrapper module imports without side effects."""
