@@ -19,6 +19,7 @@ Admins can opt out via two ``litellm`` globals (wired from proxy config):
   check but still resolve DNS and still rewrite HTTP to the resolved IP.
 """
 
+import asyncio
 import socket
 from ipaddress import ip_address, ip_network
 from typing import Any, Final
@@ -413,14 +414,21 @@ def safe_get(client: Any, url: str, **kwargs: Any) -> Any:
 
 
 async def async_safe_get(client: Any, url: str, **kwargs: Any) -> Any:
-    """Async version of safe_get."""
+    """Async version of safe_get.
+
+    ``validate_url`` resolves DNS through the blocking ``socket.getaddrinfo``,
+    and the hostname comes from the caller-supplied URL, so run it in a worker
+    thread. Resolving on the event loop lets one URL pointed at a stalling
+    nameserver pin the loop for the resolver timeout and stall every other
+    in-flight request on the worker.
+    """
     if not getattr(litellm, "user_url_validation", True):
         kwargs.setdefault("follow_redirects", True)
         return await client.get(url, **kwargs)
     kwargs.pop("follow_redirects", None)
     caller_headers: Final = kwargs.pop("headers", {})
     for _ in range(_MAX_REDIRECTS):
-        validated_url, original_host = validate_url(url)
+        validated_url, original_host = await asyncio.to_thread(validate_url, url)
         response = await client.get(
             validated_url,
             headers={**caller_headers, "Host": original_host},
