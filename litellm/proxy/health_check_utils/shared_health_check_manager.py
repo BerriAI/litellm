@@ -185,7 +185,7 @@ class SharedHealthCheckManager:
         details: bool = True,
         max_concurrency: int | None = None,
         health_check_skip_disabled_background_models: bool = False,
-    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any], bool]:
         """
         Perform health check with shared state coordination.
 
@@ -203,7 +203,7 @@ class SharedHealthCheckManager:
             health_check_skip_disabled_background_models: Remove models with disable_background_health_check: true
 
         Returns:
-            Tuple of (healthy_endpoints, unhealthy_endpoints)
+            Tuple of (healthy_endpoints, unhealthy_endpoints, exceptions_by_model_id, should_persist)
         """
         # First, try to get cached results
         cached_results = await self.get_cached_health_check_results()
@@ -212,6 +212,7 @@ class SharedHealthCheckManager:
                 cached_results.get("healthy_endpoints", []),
                 cached_results.get("unhealthy_endpoints", []),
                 {},
+                False,
             )
 
         # No recent cache, try to acquire lock
@@ -240,7 +241,7 @@ class SharedHealthCheckManager:
                 # Cache the results
                 await self.cache_health_check_results(healthy_endpoints, unhealthy_endpoints)
 
-                return healthy_endpoints, unhealthy_endpoints, exceptions_by_model_id
+                return healthy_endpoints, unhealthy_endpoints, exceptions_by_model_id, True
 
             finally:
                 # Always release the lock
@@ -249,12 +250,13 @@ class SharedHealthCheckManager:
             # If Redis is not configured, skip polling — there is no cache
             # to wait for.
             if self.redis_cache is None:
-                return await perform_health_check(
+                healthy_endpoints, unhealthy_endpoints, exceptions_by_model_id = await perform_health_check(
                     model_list=model_list,
                     details=details,
                     max_concurrency=max_concurrency,
                     health_check_skip_disabled_background_models=health_check_skip_disabled_background_models,
                 )
+                return healthy_endpoints, unhealthy_endpoints, exceptions_by_model_id, True
 
             # Lock not acquired — poll for cached results until the lock
             # holder finishes or the lock expires, rather than falling back
@@ -280,6 +282,7 @@ class SharedHealthCheckManager:
                         cached_results.get("healthy_endpoints", []),
                         cached_results.get("unhealthy_endpoints", []),
                         {},
+                        False,
                     )
 
                 # Check if the lock is still held — if it was released without
@@ -304,12 +307,13 @@ class SharedHealthCheckManager:
                 elapsed,
             )
 
-            return await perform_health_check(
+            healthy_endpoints, unhealthy_endpoints, exceptions_by_model_id = await perform_health_check(
                 model_list=model_list,
                 details=details,
                 max_concurrency=max_concurrency,
                 health_check_skip_disabled_background_models=health_check_skip_disabled_background_models,
             )
+            return healthy_endpoints, unhealthy_endpoints, exceptions_by_model_id, True
 
     async def is_health_check_in_progress(self) -> bool:
         """

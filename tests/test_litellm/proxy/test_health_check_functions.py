@@ -419,6 +419,43 @@ async def test_save_background_health_checks_to_db():
 
 
 @pytest.mark.asyncio
+async def test_save_background_health_checks_to_db_waits_for_model_writes():
+    write_started = asyncio.Event()
+    release_write = asyncio.Event()
+
+    async def slow_save(**_kwargs):
+        write_started.set()
+        await release_write.wait()
+
+    mock_prisma = MagicMock()
+    mock_prisma.save_health_check_result = AsyncMock(side_effect=slow_save)
+    mock_prisma.get_all_latest_health_checks = AsyncMock(return_value=[])
+    save_task = asyncio.create_task(
+        _save_background_health_checks_to_db(
+            mock_prisma,
+            [
+                {
+                    "model_name": "gpt-3.5-turbo",
+                    "model_info": {"id": "model-123"},
+                    "litellm_params": {"model": "gpt-3.5-turbo"},
+                }
+            ],
+            [{"model": "gpt-3.5-turbo"}],
+            [],
+            time.time(),
+            "background_health_check",
+        )
+    )
+
+    await write_started.wait()
+
+    assert save_task.done() is False
+
+    release_write.set()
+    await save_task
+
+
+@pytest.mark.asyncio
 async def test_save_background_health_checks_to_db_no_prisma():
     """Test graceful handling when no prisma client"""
     result = await _save_background_health_checks_to_db(

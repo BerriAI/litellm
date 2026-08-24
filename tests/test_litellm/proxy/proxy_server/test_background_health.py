@@ -220,6 +220,30 @@ def test_schedule_background_health_check_db_save_noop_when_prisma_none():
 
 
 @pytest.mark.asyncio
+async def test_schedule_background_health_check_db_save_noop_for_cached_results(
+    monkeypatch,
+):
+    save = AsyncMock()
+
+    import litellm.proxy.health_endpoints._health_endpoints as he
+
+    monkeypatch.setattr(he, "_save_background_health_checks_to_db", save)
+
+    _schedule_background_health_check_db_save(
+        prisma_client=MagicMock(),
+        shared_health_manager=SimpleNamespace(pod_id="cache-reader"),
+        model_list=[{"model_name": "gpt-4"}],
+        healthy_endpoints=[{"model_id": "h1"}],
+        unhealthy_endpoints=[],
+        should_persist=False,
+    )
+
+    await asyncio.sleep(0)
+
+    save.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_schedule_background_health_check_db_save_invalid_no_event_loop_raises(
     monkeypatch,
 ):

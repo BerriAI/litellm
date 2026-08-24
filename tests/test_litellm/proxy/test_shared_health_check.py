@@ -270,7 +270,7 @@ class TestSharedHealthCheckManager:
         with patch(
             "litellm.proxy.health_check_utils.shared_health_check_manager.perform_health_check"
         ) as mock_perform:
-            healthy, unhealthy, _ = (
+            healthy, unhealthy, _, should_persist = (
                 await shared_health_manager.perform_shared_health_check(
                     model_list, details=True
                 )
@@ -279,6 +279,7 @@ class TestSharedHealthCheckManager:
         # Should return cached results, not call perform_health_check
         assert healthy == [{"model": "cached-model"}]
         assert unhealthy == []
+        assert should_persist is False
         mock_perform.assert_not_called()
 
     @pytest.mark.asyncio
@@ -302,7 +303,7 @@ class TestSharedHealthCheckManager:
         ) as mock_perform:
             mock_perform.return_value = (expected_healthy, expected_unhealthy, {})
 
-            healthy, unhealthy, _ = (
+            healthy, unhealthy, _, should_persist = (
                 await shared_health_manager.perform_shared_health_check(
                     model_list, details=True
                 )
@@ -317,6 +318,7 @@ class TestSharedHealthCheckManager:
         )
         assert healthy == expected_healthy
         assert unhealthy == expected_unhealthy
+        assert should_persist is True
 
         # Should cache the results
         assert mock_redis_cache.async_set_cache.call_count >= 2  # Lock + cache
@@ -347,7 +349,7 @@ class TestSharedHealthCheckManager:
         ]
 
         with patch("asyncio.sleep") as mock_sleep:  # Mock sleep to avoid actual delay
-            healthy, unhealthy, _ = (
+            healthy, unhealthy, _, should_persist = (
                 await shared_health_manager.perform_shared_health_check(
                     model_list, details=True
                 )
@@ -357,6 +359,7 @@ class TestSharedHealthCheckManager:
         mock_sleep.assert_called_once_with(5)
         assert healthy == [{"model": "cached-model"}]
         assert unhealthy == []
+        assert should_persist is False
 
     @pytest.mark.asyncio
     async def test_perform_shared_health_check_fallback(self, mock_redis_cache):
@@ -392,7 +395,7 @@ class TestSharedHealthCheckManager:
         ):
             mock_perform.return_value = (expected_healthy, expected_unhealthy, {})
 
-            healthy, unhealthy, _ = await manager.perform_shared_health_check(
+            healthy, unhealthy, _, should_persist = await manager.perform_shared_health_check(
                 model_list, details=True
             )
 
@@ -407,6 +410,7 @@ class TestSharedHealthCheckManager:
         )
         assert healthy == expected_healthy
         assert unhealthy == expected_unhealthy
+        assert should_persist is True
 
     @pytest.mark.asyncio
     async def test_perform_shared_health_check_early_exit_orphaned_lock(
@@ -434,7 +438,7 @@ class TestSharedHealthCheckManager:
         ):
             mock_perform.return_value = (expected_healthy, expected_unhealthy, {})
 
-            healthy, unhealthy, _ = (
+            healthy, unhealthy, _, should_persist = (
                 await shared_health_manager.perform_shared_health_check(
                     model_list, details=True
                 )
@@ -450,6 +454,7 @@ class TestSharedHealthCheckManager:
         )
         assert healthy == expected_healthy
         assert unhealthy == expected_unhealthy
+        assert should_persist is True
 
     @pytest.mark.asyncio
     async def test_perform_shared_health_check_redis_error_during_polling(
@@ -478,7 +483,7 @@ class TestSharedHealthCheckManager:
         ]
 
         with patch("asyncio.sleep") as mock_sleep:
-            healthy, unhealthy, _ = (
+            healthy, unhealthy, _, should_persist = (
                 await shared_health_manager.perform_shared_health_check(
                     model_list, details=True
                 )
@@ -488,6 +493,7 @@ class TestSharedHealthCheckManager:
         assert mock_sleep.call_count == 2
         assert healthy == [{"model": "cached-model"}]
         assert unhealthy == []
+        assert should_persist is False
 
     @pytest.mark.asyncio
     async def test_perform_shared_health_check_no_redis_skips_polling(self):
@@ -508,7 +514,7 @@ class TestSharedHealthCheckManager:
         ):
             mock_perform.return_value = (expected_healthy, expected_unhealthy, {})
 
-            healthy, unhealthy, _ = await manager.perform_shared_health_check(
+            healthy, unhealthy, _, should_persist = await manager.perform_shared_health_check(
                 model_list, details=True
             )
 
@@ -522,6 +528,7 @@ class TestSharedHealthCheckManager:
         )
         assert healthy == expected_healthy
         assert unhealthy == expected_unhealthy
+        assert should_persist is True
 
     @pytest.mark.asyncio
     async def test_is_health_check_in_progress_true(

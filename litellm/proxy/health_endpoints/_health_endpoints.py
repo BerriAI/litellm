@@ -692,18 +692,16 @@ async def _save_health_check_results_if_changed(
                         should_save = False
 
         if should_save:
-            asyncio.create_task(
-                prisma_client.save_health_check_result(
-                    model_name=result["model_name"],
-                    model_id=result["model_id"],
-                    status=new_status,
-                    healthy_count=result["healthy_count"],
-                    unhealthy_count=result["unhealthy_count"],
-                    error_message=result["error_message"],
-                    response_time_ms=(time.time() - start_time) * 1000,
-                    details=None,
-                    checked_by=checked_by,
-                )
+            await prisma_client.save_health_check_result(
+                model_name=result["model_name"],
+                model_id=result["model_id"],
+                status=new_status,
+                healthy_count=result["healthy_count"],
+                unhealthy_count=result["unhealthy_count"],
+                error_message=result["error_message"],
+                response_time_ms=(time.time() - start_time) * 1000,
+                details=None,
+                checked_by=checked_by,
             )
 
 

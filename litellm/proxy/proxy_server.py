@@ -3420,9 +3420,10 @@ def _schedule_background_health_check_db_save(
     model_list: list,
     healthy_endpoints: list,
     unhealthy_endpoints: list,
+    should_persist: bool = True,
 ):
     """Fire-and-forget: persist health check results to DB if prisma is available."""
-    if prisma_client is None:
+    if prisma_client is None or not should_persist:
         return
     import time as time_module
 
@@ -3662,6 +3663,7 @@ async def _run_background_health_check():
                     healthy_endpoints,
                     unhealthy_endpoints,
                     _exceptions_by_model_id,
+                    should_persist_health_check_results,
                 ) = await shared_health_manager.perform_shared_health_check(
                     model_list=_llm_model_list,
                     details=details_bool,
@@ -3683,6 +3685,7 @@ async def _run_background_health_check():
                     health_check_concurrency,
                     instrumentation_context,
                 )
+                should_persist_health_check_results = True
         else:
             (
                 healthy_endpoints,
@@ -3694,6 +3697,7 @@ async def _run_background_health_check():
                 health_check_concurrency,
                 instrumentation_context,
             )
+            should_persist_health_check_results = True
 
         # Update the global variable with the health check results
         health_check_results["healthy_endpoints"] = healthy_endpoints
@@ -3727,6 +3731,7 @@ async def _run_background_health_check():
             _llm_model_list,
             healthy_endpoints,
             unhealthy_endpoints,
+            should_persist=should_persist_health_check_results,
         )
 
         # Write health state to router cache for health-check-driven routing
