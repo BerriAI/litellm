@@ -20,6 +20,7 @@ longer signal it.
 
 ### Fixed
 
+- **key**: Honor caller-supplied write-only key values when creating `litellm_key` resources without overwriting token IDs during updates
 - **team**: Read now decodes the `team_info` envelope `/team/info` actually returns, so team attributes refresh from the proxy instead of always falling back to the prior state
 
 ### Changed

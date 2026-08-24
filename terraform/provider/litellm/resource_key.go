@@ -145,6 +145,12 @@ func resourceKeyCreate(ctx context.Context, d *schema.ResourceData, m interface{
 
 	key := &Key{}
 	mapResourceDataToKey(d, key)
+	if rawConfig := d.GetRawConfig(); !rawConfig.IsNull() {
+		rawKey := rawConfig.GetAttr("key")
+		if rawKey.IsKnown() && !rawKey.IsNull() {
+			key.Key = rawKey.AsString()
+		}
+	}
 
 	createdKey, err := c.CreateKey(key)
 	if err != nil {
