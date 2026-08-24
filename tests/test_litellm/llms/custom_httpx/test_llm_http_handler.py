@@ -26,6 +26,7 @@ from litellm.llms.custom_httpx.llm_http_handler import (
     _has_pre_call_deployment_hook,
     _rust_responses_websocket_enabled,
 )
+from litellm.llms.azure.videos.transformation import AzureVideoConfig
 from litellm.llms.openai.videos.transformation import OpenAIVideoConfig
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.router import GenericLiteLLMParams
@@ -2594,6 +2595,27 @@ async def test_async_video_generation_without_file_sends_multipart_form_data():
     result = await BaseLLMHTTPHandler().async_video_generation_handler(
         client=client, **_video_create_call_kwargs(OpenAIVideoConfig())
     )
+
+    assert captured["content_type"].startswith("multipart/form-data")
+    assert _multipart_text_fields(captured["content_type"], captured["body"]) == {
+        "model": "sora-2",
+        "prompt": "a cat surfing",
+        "seconds": "4",
+    }
+    assert result.status == "queued"
+
+
+def test_azure_video_generation_without_file_sends_multipart_form_data():
+    """AzureVideoConfig subclasses OpenAIVideoConfig, so it inherits the
+    file-less multipart behavior. Azure's /openai/v1/videos surface is
+    OpenAI-SDK-compatible (the SDK sends multipart there too), so this is
+    intentional; lock it so the inherited flip can't silently regress to JSON."""
+    assert AzureVideoConfig().use_multipart_form_data() is True
+
+    captured = {}
+    client = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_capture_video_create_request(captured))))
+
+    result = BaseLLMHTTPHandler().video_generation_handler(client=client, **_video_create_call_kwargs(AzureVideoConfig()))
 
     assert captured["content_type"].startswith("multipart/form-data")
     assert _multipart_text_fields(captured["content_type"], captured["body"]) == {
