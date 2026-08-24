@@ -9531,9 +9531,7 @@ class ProxyStartupEvent:
 
             for attempt in range(3):
                 try:
-                    result = await global_agent_registry.migrate_legacy_grant_ids(
-                        table=object_permission_table(client)
-                    )
+                    result = await global_agent_registry.migrate_legacy_grant_ids(table=object_permission_table(client))
                     if result.rewritten:
                         verbose_proxy_logger.info(
                             "Rewrote %s object_permission rows from legacy config agent ids", result.rewritten

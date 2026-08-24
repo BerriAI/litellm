@@ -7,10 +7,11 @@ import time
 import traceback
 from collections.abc import Iterable, Mapping
 from datetime import datetime, timedelta
-from typing import Any, Final, Literal, NotRequired, ReadOnly, TypedDict, cast
+from typing import Any, Final, Literal, NotRequired, TypedDict, cast
 
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from typing_extensions import ReadOnly
 
 import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
@@ -1662,10 +1663,7 @@ async def _resolve_public_readiness_db(response: Response) -> str:
         return "disconnected" if initial_recovery_pending else "Not connected"
 
     db_health_status: Final = await _db_health_readiness_check()
-    if (
-        db_health_status["status"] != "connected"
-        and _readiness_can_fail_open(db_health_status) is False
-    ):
+    if db_health_status["status"] != "connected" and _readiness_can_fail_open(db_health_status) is False:
         response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
     return db_health_status["status"]
 
