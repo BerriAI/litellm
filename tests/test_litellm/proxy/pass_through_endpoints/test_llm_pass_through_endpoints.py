@@ -3554,6 +3554,18 @@ class TestVertexCredentiallessPassthroughVirtualKeyLeak:
         assert raised is not None and raised.status_code == 401
 
     @pytest.mark.asyncio
+    async def test_virtual_key_authenticated_solely_via_x_goog_api_key_is_rejected(self, monkeypatch):
+        raised, forwarded = await self._run(
+            monkeypatch,
+            [
+                (b"x-goog-api-key", self.VKEY.encode()),
+                (b"content-type", b"application/json"),
+            ],
+        )
+        assert forwarded is None, "a virtual key that authenticated via x-goog-api-key must be stripped, not forwarded"
+        assert raised is not None and raised.status_code == 401
+
+    @pytest.mark.asyncio
     async def test_byo_google_oauth_token_still_forwards_without_virtual_key(self, monkeypatch):
         raised, forwarded = await self._run(
             monkeypatch,
@@ -3611,12 +3623,16 @@ class TestVertexCredentiallessPassthroughVirtualKeyLeak:
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "credential_header",
-        sorted(SpecialHeaders.litellm_credential_header_names() - {"authorization", "x-goog-api-key"}),
+        sorted(
+            SpecialHeaders.litellm_credential_header_names()
+            - {"authorization", "x-goog-api-key", "x-litellm-api-key"}
+        ),
     )
     async def test_every_non_google_credential_header_is_dropped_by_name(self, monkeypatch, credential_header):
         raised, forwarded = await self._run(
             monkeypatch,
             [
+                (b"x-litellm-api-key", self.VKEY.encode()),
                 (b"x-goog-api-key", b"AIza-real-google-api-key"),
                 (credential_header.encode(), b"some-distinct-caller-secret-value"),
                 (b"content-type", b"application/json"),
@@ -3626,9 +3642,10 @@ class TestVertexCredentiallessPassthroughVirtualKeyLeak:
         assert forwarded is not None
         assert forwarded.get("x-goog-api-key") == "AIza-real-google-api-key"
         assert credential_header not in forwarded
-        assert "some-distinct-caller-secret-value" not in " ".join(
-            f"{name}:{value}" for name, value in forwarded.items()
-        )
+        assert "x-litellm-api-key" not in forwarded
+        forwarded_blob = " ".join(f"{name}:{value}" for name, value in forwarded.items())
+        assert self.VKEY not in forwarded_blob
+        assert "some-distinct-caller-secret-value" not in forwarded_blob
 
     @pytest.mark.asyncio
     async def test_virtual_key_in_operator_configured_header_is_stripped(self, monkeypatch):

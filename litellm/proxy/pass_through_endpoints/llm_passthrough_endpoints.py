@@ -1748,23 +1748,42 @@ _HEADERS_NEVER_FORWARDED_TO_VERTEX: Final = frozenset({"content-length", "host"}
 )
 
 
-def _credentialless_caller_key_values(request: Request) -> frozenset[str]:
-    """Every header value the proxy would accept as this caller's LiteLLM key.
+_VERTEX_CALLER_KEY_HEADER_PRECEDENCE: Final = (
+    SpecialHeaders.custom_litellm_api_key.value.lower(),
+    SpecialHeaders.openai_authorization.value.lower(),
+    SpecialHeaders.azure_authorization.value.lower(),
+    SpecialHeaders.anthropic_authorization.value.lower(),
+    SpecialHeaders.google_ai_studio_authorization.value.lower(),
+    SpecialHeaders.azure_apim_authorization.value.lower(),
+)
 
-    Beyond the built-in ``x-litellm-api-key`` / ``Authorization`` that
-    ``get_litellm_virtual_key`` reads, ``user_api_key_auth`` also authenticates a
-    caller from the operator-configured ``general_settings.litellm_key_header_name``
-    when one is set, reading that header straight off the request. Any of those
-    values equals the virtual key and must never be forwarded to Google.
+
+def _authenticated_caller_key_values(request: Request) -> frozenset[str]:
+    """The value ``user_api_key_auth`` would accept as this caller's LiteLLM key.
+
+    The Vertex route authenticates through ``Depends(user_api_key_auth)``, which
+    resolves the key from the first present of the credential headers in
+    ``get_api_key``'s precedence order, with the operator-configured
+    ``general_settings.litellm_key_header_name`` overriding all of them. Some of
+    those headers (``Authorization``, ``x-goog-api-key``) are also kept as genuine
+    bring-your-own Google credentials, so returning only the value that actually
+    authenticated lets the filter strip that value wherever it appears while
+    leaving a real Google credential in place. An empty set means no caller key
+    was found, so nothing is value-stripped.
     """
     from litellm.proxy.proxy_server import general_settings
 
-    custom_key_header_name: Final = general_settings.get("litellm_key_header_name") or ""
-    candidates: Final = (
-        get_litellm_virtual_key(request),
-        request.headers.get(custom_key_header_name, "") if custom_key_header_name else "",
+    incoming: Final = _safe_get_request_headers(request)
+    custom_key_header_name: Final = (general_settings.get("litellm_key_header_name") or "").lower()
+    ordered_names: Final = (
+        (custom_key_header_name,) if custom_key_header_name else ()
+    ) + _VERTEX_CALLER_KEY_HEADER_PRECEDENCE
+    present_values: Final = (incoming[name] for name in ordered_names if incoming.get(name))
+    authenticated_key: Final = next(
+        (stripped for value in present_values if (stripped := _bearer_stripped(value))),
+        "",
     )
-    return frozenset(_bearer_stripped(value) for value in candidates if _bearer_stripped(value))
+    return frozenset({authenticated_key}) if authenticated_key else frozenset()
 
 
 def _forwarded_headers_for_credentialless_vertex_passthrough(request: Request) -> Mapping[str, str]:
@@ -1780,15 +1799,18 @@ def _forwarded_headers_for_credentialless_vertex_passthrough(request: Request) -
     (everything in that set except those two, e.g. ``x-litellm-api-key`` /
     ``api-key`` / ``x-api-key`` / ``Ocp-Apim-Subscription-Key``) are dropped by
     name. ``Authorization`` and ``x-goog-api-key`` may instead carry a genuine
-    bring-your-own Google credential, so they are kept unless their value is one of
-    the caller's LiteLLM key values, which are dropped by value (normalizing any
-    ``Bearer`` prefix). Dropping by value also covers a virtual key sent in the
-    operator-configured ``litellm_key_header_name``, whatever that header is named.
-    When neither a surviving ``Authorization`` nor ``x-goog-api-key`` remains the
-    request is rejected so the virtual key cannot leak upstream.
+    bring-your-own Google credential, so they are kept unless their value is the
+    caller's authenticated LiteLLM key, which is dropped by value (normalizing any
+    ``Bearer`` prefix). Because the value that authenticated is resolved by the
+    same precedence ``user_api_key_auth`` uses, a virtual key sent only in
+    ``x-goog-api-key`` (or in the operator-configured ``litellm_key_header_name``)
+    is dropped too, while a real Google key in ``x-goog-api-key`` alongside a
+    virtual key in a higher-precedence header is preserved. When neither a
+    surviving ``Authorization`` nor ``x-goog-api-key`` remains the request is
+    rejected so the virtual key cannot leak upstream.
     """
     incoming: Final = _safe_get_request_headers(request)
-    caller_key_values: Final = _credentialless_caller_key_values(request)
+    caller_key_values: Final = _authenticated_caller_key_values(request)
     forwarded: Final = MappingProxyType(
         {
             name: value
