@@ -2,12 +2,6 @@ from collections.abc import Mapping, Sequence
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
-
-from litellm.types.llms.openai import (
-    ALL_RESPONSES_API_TOOL_PARAMS,
-    ChatCompletionToolParam,
-)
-
 from .base import GuardrailConfigModel
 
 
@@ -40,7 +34,7 @@ class SingulrGuardrailPayload(BaseModel):
     guardrail_scope: str | None = None
     messages: Sequence[Any] | None = None
     images: Sequence[str] | None = None
-    tools: Sequence[ChatCompletionToolParam | ALL_RESPONSES_API_TOOL_PARAMS] | None = None
+    tools: Sequence[Any] | None = None  # pyright: ignore[reportExplicitAny]
     response: Any = None  # pyright: ignore[reportExplicitAny]  # logging_only reports raw litellm callback results (ModelResponse, EmbeddingResponse, etc.)
     metadata: Mapping[str, Any] | None = None
 
