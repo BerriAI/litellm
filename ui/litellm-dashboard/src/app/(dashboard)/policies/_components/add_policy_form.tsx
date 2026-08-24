@@ -7,7 +7,7 @@ import { toast } from "@/lib/toast";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { MultiSelect } from "@/components/shared/MultiSelect";
 import { SearchSelect } from "@/components/shared/SearchSelect";
-import { FieldGroup } from "@/components/shared/form/field";
+import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { Badge } from "@/components/ui/badge";
 import { StatusBadge } from "@/components/shared/table_cells/status_badge";
