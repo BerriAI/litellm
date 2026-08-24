@@ -428,7 +428,10 @@ def row_source_keyword(statement: str) -> str | None:
     an insert is allowed to carry. A wrapped `VALUES` list is the row source as much as a
     wrapped query is, so it ends the search rather than being skipped over: reading past it
     reaches a `RETURNING (SELECT ...)` or a `DO UPDATE SET "a" = (SELECT ...)` written after
-    it and calls that scalar subquery the rows the insert copies."""
+    it and calls that scalar subquery the rows the insert copies. The group is read on its
+    own terms before it is allowed to end the search, because a `VALUES` list joined to a
+    query by a set operation inside the group supplies every row the query does, and
+    stopping on the word `VALUES` alone would pass the whole copy."""
     outer = strip_parens(statement)
     joined = row_source_in(outer)
     if joined is not None:
@@ -442,11 +445,11 @@ def row_source_keyword(statement: str) -> str | None:
     if not groups:
         return row_source_in(statement)
     for group in groups:
-        if contains(strip_parens(group), "VALUES"):
-            return None
         source = row_source_keyword(group)
         if source is not None:
             return source
+        if contains(strip_parens(group), "VALUES"):
+            return None
     return None
 
 
@@ -676,14 +679,68 @@ def outside_definition(
 ) -> str:
     """The migration's text with one routine definition blanked out and every dollar-quoted body
     put back. Masking blanks the bodies alike, and a `DO` block is the ordinary way a migration
-    runs a routine it has just defined, so a call written inside one has to stay readable. The
-    definition is blanked after they are restored, which takes its own body with it, so a
-    routine that names itself recursively does not thereby count as called."""
+    runs a routine it has just defined, so a call written inside one has to stay readable. Each
+    body comes back with its comments blanked, since a name written in a comment is
+    documentation rather than a call, while its string literals stay readable because `EXECUTE`
+    runs one as SQL and the call can be written inside it. The definition is blanked after they
+    are restored, which takes its own body with it, so a routine that names itself recursively
+    does not thereby count as called."""
     text = list(masked)
     for start, end in bodies:
-        text[start:end] = region[start:end]
+        text[start:end] = without_comments(region[start:end])
     text[opens:closes] = blank(region[opens:closes])
     return "".join(text)
+
+
+def without_comments(sql: str) -> str:
+    """The text with its comments blanked in place and everything else kept, read with the same
+    lexing as `mask` so a `--` inside a string literal blanks nothing. A dollar-quoted body
+    nested within is read the same way on its own, which keeps a stray quote inside it from
+    reaching past its closing tag."""
+    chunks: list[str] = []
+    index = 0
+    length = len(sql)
+
+    while index < length:
+        pair = sql[index : index + 2]
+
+        if pair == "--":
+            stop = sql.find("\n", index)
+            stop = length if stop == -1 else stop
+            chunks.append(blank(sql[index:stop]))
+            index = stop
+            continue
+
+        if pair == "/*":
+            stop = skip_block_comment(sql, index)
+            chunks.append(blank(sql[index:stop]))
+            index = stop
+            continue
+
+        character = sql[index]
+
+        if character in "'\"":
+            stop = skip_quoted(sql, index, character)
+            chunks.append(sql[index:stop])
+            index = stop
+            continue
+
+        if character == "$":
+            tag = DOLLAR_TAG.match(sql, index)
+            if tag is not None:
+                closing = sql.find(tag.group(), tag.end())
+                body_end = length if closing == -1 else closing
+                stop = length if closing == -1 else closing + len(tag.group())
+                chunks.append(sql[index : tag.end()])
+                chunks.append(without_comments(sql[tag.end() : body_end]))
+                chunks.append(sql[body_end:stop])
+                index = stop
+                continue
+
+        chunks.append(character)
+        index += 1
+
+    return "".join(chunks)
 
 
 def clauses(statement: str, start: int) -> Iterator[tuple[str, int]]:
