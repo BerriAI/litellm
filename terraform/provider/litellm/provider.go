@@ -30,6 +30,8 @@ func Provider() *schema.Provider {
 			"litellm_search_tool":             resourceLiteLLMSearchTool(),
 			"litellm_user":                    resourceLiteLLMUser(),
 			"litellm_budget":                  resourceLiteLLMBudget(),
+			"litellm_tag":                     resourceLiteLLMTag(),
+			"litellm_project":                 resourceLiteLLMProject(),
 		},
 		DataSourcesMap: map[string]*schema.Resource{
 			"litellm_credential":            dataSourceLiteLLMCredential(),
@@ -51,6 +53,10 @@ func Provider() *schema.Provider {
 			"litellm_users":                 dataSourceLiteLLMUsers(),
 			"litellm_budget":                dataSourceLiteLLMBudget(),
 			"litellm_budgets":               dataSourceLiteLLMBudgets(),
+			"litellm_tag":                   dataSourceLiteLLMTag(),
+			"litellm_tags":                  dataSourceLiteLLMTags(),
+			"litellm_project":               dataSourceLiteLLMProject(),
+			"litellm_projects":              dataSourceLiteLLMProjects(),
 		},
 		Schema: map[string]*schema.Schema{
 			"api_base": {
