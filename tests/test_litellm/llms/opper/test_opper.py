@@ -1,11 +1,34 @@
 import json
 import os
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
-import httpx
 import pytest
 
 OPPER_API_BASE = "https://api.opper.ai/v3/compat"
+
+
+@pytest.fixture(autouse=True)
+def _without_ambient_opper_credentials(monkeypatch):
+    """A developer's own OPPER_* environment must not decide where these tests point."""
+    monkeypatch.delenv("OPPER_API_KEY", raising=False)
+    monkeypatch.delenv("OPPER_API_BASE", raising=False)
+
+
+def _completion_body(usage: dict) -> dict:
+    return {
+        "id": "chatcmpl-123",
+        "object": "chat.completion",
+        "created": 1677652288,
+        "model": "anthropic/claude-haiku-4-5",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "Hello!"},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": usage,
+    }
 
 
 def test_opper_provider_registered():
@@ -54,120 +77,48 @@ def test_opper_chat_config_registered():
     assert isinstance(config, litellm.OpperConfig)
 
 
-def test_opper_cost_tracking_non_streaming():
-    """usage.cost from the response body is surfaced as the provider-reported response cost."""
+@pytest.mark.respx()
+def test_opper_cost_tracking_non_streaming(respx_mock, monkeypatch):
+    """usage.cost from the gateway body is surfaced as the provider-reported response cost."""
     import litellm
-    from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
-    from litellm.types.utils import Choices, Message, ModelResponse, Usage
 
-    config = litellm.OpperConfig()
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
 
-    mock_response = Mock(spec=httpx.Response)
-    mock_response.json.return_value = {
-        "id": "chatcmpl-123",
-        "model": "anthropic/claude-haiku-4-5",
-        "choices": [
-            {
-                "message": {"role": "assistant", "content": "Hello!"},
-                "finish_reason": "stop",
-                "index": 0,
-            }
-        ],
-        "usage": {
-            "prompt_tokens": 10,
-            "completion_tokens": 20,
-            "total_tokens": 30,
-            "cost": 3.3e-05,
-        },
-    }
-    mock_response.headers = {}
-
-    model_response = ModelResponse(
-        id="chatcmpl-123",
-        choices=[
-            Choices(
-                finish_reason="stop",
-                index=0,
-                message=Message(content="Hello!", role="assistant"),
-            )
-        ],
-        created=1234567890,
-        model="anthropic/claude-haiku-4-5",
-        object="chat.completion",
-        usage=Usage(prompt_tokens=10, completion_tokens=20, total_tokens=30),
+    respx_mock.post(f"{OPPER_API_BASE}/chat/completions").respond(
+        status_code=200,
+        json=_completion_body({"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30, "cost": 3.3e-05}),
     )
 
-    with patch.object(OpenAIGPTConfig, "transform_response", return_value=model_response):
-        result = config.transform_response(
-            model="anthropic/claude-haiku-4-5",
-            raw_response=mock_response,
-            model_response=model_response,
-            logging_obj=Mock(),
-            request_data={},
-            messages=[{"role": "user", "content": "Hello"}],
-            optional_params={},
-            litellm_params={},
-            encoding=None,
-        )
-
-    assert result._hidden_params["additional_headers"]["llm_provider-x-litellm-response-cost"] == 3.3e-05
-
-
-def test_opper_missing_cost_does_not_fail_response():
-    import litellm
-    from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
-    from litellm.types.utils import Choices, Message, ModelResponse, Usage
-
-    config = litellm.OpperConfig()
-
-    mock_response = Mock(spec=httpx.Response)
-    mock_response.json.return_value = {"usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}}
-    mock_response.headers = {}
-
-    model_response = ModelResponse(
-        id="chatcmpl-123",
-        choices=[
-            Choices(
-                finish_reason="stop",
-                index=0,
-                message=Message(content="Hello!", role="assistant"),
-            )
-        ],
-        created=1234567890,
-        model="anthropic/claude-haiku-4-5",
-        object="chat.completion",
-        usage=Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+    response = litellm.completion(
+        model="opper/anthropic/claude-haiku-4-5",
+        messages=[{"role": "user", "content": "Hello"}],
+        api_key="test-key",
     )
 
-    with patch.object(OpenAIGPTConfig, "transform_response", return_value=model_response):
-        result = config.transform_response(
-            model="anthropic/claude-haiku-4-5",
-            raw_response=mock_response,
-            model_response=model_response,
-            logging_obj=Mock(),
-            request_data={},
-            messages=[{"role": "user", "content": "Hello"}],
-            optional_params={},
-            litellm_params={},
-            encoding=None,
-        )
+    assert response._hidden_params["additional_headers"]["llm_provider-x-litellm-response-cost"] == 3.3e-05
 
-    assert "llm_provider-x-litellm-response-cost" not in result._hidden_params.get("additional_headers", {})
 
-    mock_response.json.side_effect = ValueError("malformed body")
-    with patch.object(OpenAIGPTConfig, "transform_response", return_value=model_response):
-        result = config.transform_response(
-            model="anthropic/claude-haiku-4-5",
-            raw_response=mock_response,
-            model_response=model_response,
-            logging_obj=Mock(),
-            request_data={},
-            messages=[{"role": "user", "content": "Hello"}],
-            optional_params={},
-            litellm_params={},
-            encoding=None,
-        )
-    assert "llm_provider-x-litellm-response-cost" not in result._hidden_params.get("additional_headers", {})
+@pytest.mark.respx()
+def test_opper_missing_cost_does_not_fail_response(respx_mock, monkeypatch):
+    """A gateway body without usage.cost still returns content, with no cost claimed."""
+    import litellm
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+
+    respx_mock.post(f"{OPPER_API_BASE}/chat/completions").respond(
+        status_code=200,
+        json=_completion_body({"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}),
+    )
+
+    response = litellm.completion(
+        model="opper/anthropic/claude-haiku-4-5",
+        messages=[{"role": "user", "content": "Hello"}],
+        api_key="test-key",
+    )
+
+    assert response.choices[0].message.content == "Hello!"
+    additional_headers = response._hidden_params.get("additional_headers") or {}
+    assert "llm_provider-x-litellm-response-cost" not in additional_headers
 
 
 def test_opper_streaming_requests_usage_by_default():
@@ -206,11 +157,11 @@ def test_opper_streaming_requests_usage_by_default():
 
 
 @pytest.mark.respx()
-def test_opper_streaming_dispatch_carries_cost(respx_mock):
+def test_opper_streaming_dispatch_carries_cost(respx_mock, monkeypatch):
     """usage.cost from the terminal usage chunk survives dispatch into stream assembly."""
     import litellm
 
-    litellm.disable_aiohttp_transport = True
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
 
     mock_chunks = [
         "data: "
@@ -282,11 +233,11 @@ def test_opper_streaming_dispatch_carries_cost(respx_mock):
 
 
 @pytest.mark.respx()
-def test_opper_reasoning_effort_passes_through(respx_mock):
+def test_opper_reasoning_effort_passes_through(respx_mock, monkeypatch):
     """reasoning_effort is not rejected client-side and reaches the request body."""
     import litellm
 
-    litellm.disable_aiohttp_transport = True
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
 
     config = litellm.OpperConfig()
     assert "reasoning_effort" in config.get_supported_openai_params(model="anthropic/claude-haiku-4-5")
@@ -409,11 +360,11 @@ def test_opper_supported_params_dispatch():
 
 
 @pytest.mark.respx()
-def test_opper_unknown_model_raises_not_found(respx_mock):
+def test_opper_unknown_model_raises_not_found(respx_mock, monkeypatch):
     """A 404 from the gateway maps to a non-retryable NotFoundError."""
     import litellm
 
-    litellm.disable_aiohttp_transport = True
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
 
     respx_mock.post(f"{OPPER_API_BASE}/chat/completions").respond(
         status_code=404,
@@ -434,13 +385,13 @@ def test_opper_unknown_model_raises_not_found(respx_mock):
 
 
 @pytest.mark.respx()
-def test_opper_async_completion_and_streaming(respx_mock):
+def test_opper_async_completion_and_streaming(respx_mock, monkeypatch):
     """acompletion works non-streaming and streaming through the async dispatch path."""
     import asyncio
 
     import litellm
 
-    litellm.disable_aiohttp_transport = True
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
 
     respx_mock.post(f"{OPPER_API_BASE}/chat/completions").respond(
         status_code=200,
@@ -517,3 +468,111 @@ def test_opper_async_completion_and_streaming(respx_mock):
     stream, chunks = asyncio.run(consume_stream())
     assert any(c.choices and c.choices[0].delta.content == "Hi" for c in chunks)
     assert any(getattr(c, "usage", None) is not None and c.usage.cost == 1.1e-05 for c in stream.chunks)
+
+
+@pytest.mark.respx()
+def test_opper_get_models_prefixes_the_live_catalog(respx_mock):
+    """The model list is fetched from the gateway, so it tracks the catalog instead of a static table."""
+    import litellm
+
+    route = respx_mock.get(f"{OPPER_API_BASE}/models").respond(
+        status_code=200,
+        json={
+            "object": "list",
+            "data": [
+                {"id": "anthropic/claude-haiku-4-5", "object": "model"},
+                {"id": "openai/gpt-5.6", "object": "model"},
+            ],
+        },
+    )
+
+    models = litellm.OpperConfig().get_models(api_key="test-key")
+
+    assert models == ["opper/anthropic/claude-haiku-4-5", "opper/openai/gpt-5.6"]
+    assert route.calls.last.request.headers["Authorization"] == "Bearer test-key"
+
+
+@pytest.mark.respx()
+def test_opper_get_models_keeps_the_gateway_path(respx_mock):
+    """The catalog lives under the gateway path, not at the host root like plain OpenAI."""
+    import litellm
+
+    route = respx_mock.get("https://gw.example.com/v3/compat/models").respond(
+        status_code=200,
+        json={"object": "list", "data": [{"id": "mistral/mistral-large", "object": "model"}]},
+    )
+
+    models = litellm.OpperConfig().get_models(api_key="test-key", api_base="https://gw.example.com/v3/compat/")
+
+    assert models == ["opper/mistral/mistral-large"]
+    assert route.called
+
+
+@pytest.mark.respx()
+def test_opper_get_models_raises_on_error_status(respx_mock):
+    import litellm
+
+    respx_mock.get(f"{OPPER_API_BASE}/models").respond(
+        status_code=401,
+        json={"error": "missing authorization header"},
+    )
+
+    with pytest.raises(ValueError, match="401"):
+        litellm.OpperConfig().get_models(api_key="bad-key")
+
+
+def test_opper_get_models_requires_an_api_key():
+    import litellm
+
+    with pytest.raises(ValueError, match="OPPER_API_KEY"):
+        litellm.OpperConfig().get_models()
+
+
+@pytest.mark.respx()
+def test_opper_valid_models_come_from_the_provider_endpoint(respx_mock):
+    """get_valid_models reaches the gateway catalog through the registered provider config."""
+    import litellm
+
+    api_base = "https://valid-models.example.com/v3/compat"
+    respx_mock.get(f"{api_base}/models").respond(
+        status_code=200,
+        json={
+            "object": "list",
+            "data": [
+                {"id": "anthropic/claude-sonnet-5", "object": "model"},
+                {"id": "gemini/gemini-3-flash-preview", "object": "model"},
+            ],
+        },
+    )
+
+    models = litellm.get_valid_models(
+        check_provider_endpoint=True,
+        custom_llm_provider="opper",
+        api_key="test-key",
+        api_base=api_base,
+    )
+
+    assert models == ["opper/anthropic/claude-sonnet-5", "opper/gemini/gemini-3-flash-preview"]
+
+
+def test_opper_is_selectable_in_the_add_model_form():
+    from pathlib import Path
+
+    import litellm
+
+    path = Path(litellm.__file__).parent / "proxy" / "public_endpoints" / "provider_create_fields.json"
+    with open(path) as f:
+        entries = [e for e in json.load(f) if e["litellm_provider"] == "opper"]
+
+    assert len(entries) == 1, "opper must appear exactly once in provider_create_fields.json"
+
+    entry = entries[0]
+    assert entry["provider"] == "Opper"
+    assert entry["provider_display_name"] == "Opper"
+    assert entry["default_model_placeholder"].startswith("opper/")
+
+    fields = {f["key"]: f for f in entry["credential_fields"]}
+    assert fields["api_key"]["required"] is True
+    assert fields["api_key"]["field_type"] == "password"
+    assert fields["api_base"]["required"] is False
+    assert fields["api_base"]["placeholder"] == OPPER_API_BASE
