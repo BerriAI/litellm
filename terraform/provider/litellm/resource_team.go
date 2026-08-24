@@ -26,6 +26,9 @@ func ResourceLiteLLMTeam() *schema.Resource {
 		Read:   resourceLiteLLMTeamRead,
 		Update: resourceLiteLLMTeamUpdate,
 		Delete: resourceLiteLLMTeamDelete,
+		Importer: &schema.ResourceImporter{
+			StateContext: schema.ImportStatePassthroughContext,
+		},
 
 		Schema: map[string]*schema.Schema{
 			"team_alias": {
@@ -89,6 +92,69 @@ func ResourceLiteLLMTeam() *schema.Resource {
 				Elem:        &schema.Schema{Type: schema.TypeString},
 				Description: "Email addresses alerted when the team crosses soft_budget",
 			},
+			"model_aliases": {
+				Type:     schema.TypeMap,
+				Optional: true,
+				Elem:     &schema.Schema{Type: schema.TypeString},
+			},
+			"guardrails": {
+				Type:     schema.TypeList,
+				Optional: true,
+				Elem:     &schema.Schema{Type: schema.TypeString},
+			},
+			"prompts": {
+				Type:     schema.TypeList,
+				Optional: true,
+				Elem:     &schema.Schema{Type: schema.TypeString},
+			},
+			"team_member_budget": {
+				Type:        schema.TypeFloat,
+				Optional:    true,
+				Description: "Budget applied to every team member",
+			},
+			"team_member_budget_duration": {
+				Type:     schema.TypeString,
+				Optional: true,
+			},
+			"team_member_rpm_limit": {
+				Type:     schema.TypeInt,
+				Optional: true,
+			},
+			"team_member_tpm_limit": {
+				Type:     schema.TypeInt,
+				Optional: true,
+			},
+			"team_member_key_duration": {
+				Type:     schema.TypeString,
+				Optional: true,
+			},
+			"model_rpm_limit": {
+				Type:     schema.TypeMap,
+				Optional: true,
+				Elem:     &schema.Schema{Type: schema.TypeInt},
+			},
+			"model_tpm_limit": {
+				Type:     schema.TypeMap,
+				Optional: true,
+				Elem:     &schema.Schema{Type: schema.TypeInt},
+			},
+			"allowed_passthrough_routes": {
+				Type:     schema.TypeList,
+				Optional: true,
+				Elem:     &schema.Schema{Type: schema.TypeString},
+			},
+			"rpm_limit_type": {
+				Type:        schema.TypeString,
+				Optional:    true,
+				ForceNew:    true,
+				Description: "One of 'guaranteed_throughput' or 'best_effort_throughput'; only settable at creation",
+			},
+			"tpm_limit_type": {
+				Type:        schema.TypeString,
+				Optional:    true,
+				ForceNew:    true,
+				Description: "One of 'guaranteed_throughput' or 'best_effort_throughput'; only settable at creation",
+			},
 		},
 	}
 }
@@ -98,6 +164,13 @@ func resourceLiteLLMTeamCreate(d *schema.ResourceData, m interface{}) error {
 
 	teamID := uuid.New().String()
 	teamData := buildTeamData(d, teamID)
+
+	// Throughput limit types are only accepted by /team/new, not /team/update.
+	for _, key := range []string{"rpm_limit_type", "tpm_limit_type"} {
+		if v, ok := d.GetOk(key); ok {
+			teamData[key] = v
+		}
+	}
 
 	log.Printf("[DEBUG] Create team request payload: %+v", teamData)
 
@@ -169,6 +242,36 @@ func resourceLiteLLMTeamRead(d *schema.ResourceData, m interface{}) error {
 	}
 
 	d.Set("blocked", GetBoolValue(teamResp.Blocked, d.Get("blocked").(bool)))
+
+	if teamResp.ModelAliases != nil {
+		d.Set("model_aliases", teamResp.ModelAliases)
+	}
+	if teamResp.Guardrails != nil {
+		d.Set("guardrails", teamResp.Guardrails)
+	}
+	if teamResp.Prompts != nil {
+		d.Set("prompts", teamResp.Prompts)
+	}
+	if teamResp.TeamMemberBudget != nil {
+		d.Set("team_member_budget", *teamResp.TeamMemberBudget)
+	}
+	d.Set("team_member_budget_duration", GetStringValue(teamResp.TeamMemberBudgetDuration, d.Get("team_member_budget_duration").(string)))
+	if teamResp.TeamMemberRPMLimit != nil {
+		d.Set("team_member_rpm_limit", *teamResp.TeamMemberRPMLimit)
+	}
+	if teamResp.TeamMemberTPMLimit != nil {
+		d.Set("team_member_tpm_limit", *teamResp.TeamMemberTPMLimit)
+	}
+	d.Set("team_member_key_duration", GetStringValue(teamResp.TeamMemberKeyDuration, d.Get("team_member_key_duration").(string)))
+	if teamResp.ModelRPMLimit != nil {
+		d.Set("model_rpm_limit", teamResp.ModelRPMLimit)
+	}
+	if teamResp.ModelTPMLimit != nil {
+		d.Set("model_tpm_limit", teamResp.ModelTPMLimit)
+	}
+	if teamResp.AllowedPassthroughRoutes != nil {
+		d.Set("allowed_passthrough_routes", teamResp.AllowedPassthroughRoutes)
+	}
 
 	// Explicitly fetch the current permissions from the API
 	permResp, err := getTeamPermissions(client, d.Id())
@@ -257,7 +360,13 @@ func buildTeamData(d *schema.ResourceData, teamID string) map[string]interface{}
 		"team_alias": d.Get("team_alias").(string),
 	}
 
-	for _, key := range []string{"organization_id", "tpm_limit", "rpm_limit", "max_budget", "budget_duration", "models", "blocked", "team_member_permissions"} {
+	for _, key := range []string{
+		"organization_id", "tpm_limit", "rpm_limit", "max_budget", "budget_duration", "models",
+		"blocked", "team_member_permissions", "model_aliases", "guardrails", "prompts",
+		"team_member_budget", "team_member_budget_duration", "team_member_rpm_limit",
+		"team_member_tpm_limit", "team_member_key_duration", "model_rpm_limit",
+		"model_tpm_limit", "allowed_passthrough_routes",
+	} {
 		if v, ok := d.GetOk(key); ok {
 			teamData[key] = v
 		}
