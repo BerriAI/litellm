@@ -107,7 +107,7 @@ export function RegenerateKeyModal({ selectedToken, visible, onClose, onKeyUpdat
       // formatted preview, otherwise downstream expiry parsing breaks.
       const updatedKeyData: Partial<KeyResponse> = {
         ...response,
-        token: response.token || response.key_id || selectedToken.token,
+        token: response.token_id || response.token || selectedToken.token,
         key_name: response.key,
         max_budget: formValues.max_budget,
         tpm_limit: formValues.tpm_limit,
