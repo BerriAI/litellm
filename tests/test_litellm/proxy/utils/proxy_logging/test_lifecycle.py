@@ -1,5 +1,5 @@
 """Pin ProxyLogging lifecycle: ``__init__``, ``startup_event``,
-``update_values``, ``_add_proxy_hooks``, ``get_proxy_hook``, and
+``update_values``, ``add_missing_proxy_hooks``, ``get_proxy_hook``, and
 ``_init_litellm_callbacks``.
 
 Also covers ``update_request_status`` and ``_convert_user_api_key_auth_to_dict``
@@ -211,7 +211,7 @@ async def test_startup_event_skips_the_daily_report_when_it_is_not_an_alert_type
 
 
 # ---------------------------------------------------------------------------
-# _add_proxy_hooks
+# add_missing_proxy_hooks
 # ---------------------------------------------------------------------------
 
 
@@ -243,7 +243,7 @@ def test_add_proxy_hooks_registers_callbacks(proxy_logging, monkeypatch):
     )
 
     with patch("litellm.proxy.proxy_server.prisma_client", None):
-        proxy_logging._add_proxy_hooks(llm_router=None)
+        proxy_logging.add_missing_proxy_hooks(llm_router=None)
 
     keys = list(proxy_logging.proxy_hook_mapping.keys())
     snapshot = {
@@ -294,7 +294,7 @@ def test_add_proxy_hooks_skips_prisma_requiring_hook_when_no_db(proxy_logging, m
     )
 
     with patch("litellm.proxy.proxy_server.prisma_client", None):
-        proxy_logging._add_proxy_hooks(llm_router=None)
+        proxy_logging.add_missing_proxy_hooks(llm_router=None)
 
     snapshot = {
         "mapping_keys": list(proxy_logging.proxy_hook_mapping.keys()),
@@ -326,7 +326,7 @@ def test_add_proxy_hooks_registers_prisma_requiring_hook_with_db(proxy_logging, 
     )
 
     with patch("litellm.proxy.proxy_server.prisma_client", fake_prisma):
-        proxy_logging._add_proxy_hooks(llm_router=None)
+        proxy_logging.add_missing_proxy_hooks(llm_router=None)
 
     snapshot = {
         "mapping_keys": list(proxy_logging.proxy_hook_mapping.keys()),
@@ -342,6 +342,65 @@ def test_add_proxy_hooks_registers_prisma_requiring_hook_with_db(proxy_logging, 
     }
 
 
+def test_add_proxy_hooks_after_db_recovery_only_registers_missing_hooks(proxy_logging, monkeypatch):
+    hook_classes = _stub_hook_classes()
+    registered: List[Any] = []
+    success_callbacks: List[Any] = []
+    failure_callbacks: List[Any] = []
+    async_success_callbacks: List[Any] = []
+    async_failure_callbacks: List[Any] = []
+    fake_prisma = MagicMock()
+
+    from litellm.proxy import proxy_server as proxy_server_module
+    from litellm.proxy import utils as utils_mod
+
+    monkeypatch.setattr(utils_mod, "PROXY_HOOKS", list(hook_classes.keys()))
+    monkeypatch.setattr(utils_mod, "get_proxy_hook", hook_classes.__getitem__)
+    monkeypatch.setattr(
+        litellm.logging_callback_manager,
+        "add_litellm_callback",
+        lambda callback: registered.append(callback),
+    )
+    monkeypatch.setattr(
+        litellm.logging_callback_manager,
+        "add_litellm_success_callback",
+        lambda callback: success_callbacks.append(callback),
+    )
+    monkeypatch.setattr(
+        litellm.logging_callback_manager,
+        "add_litellm_failure_callback",
+        lambda callback: failure_callbacks.append(callback),
+    )
+    monkeypatch.setattr(
+        litellm.logging_callback_manager,
+        "add_litellm_async_success_callback",
+        lambda callback: async_success_callbacks.append(callback),
+    )
+    monkeypatch.setattr(
+        litellm.logging_callback_manager,
+        "add_litellm_async_failure_callback",
+        lambda callback: async_failure_callbacks.append(callback),
+    )
+
+    monkeypatch.setattr(proxy_server_module, "prisma_client", None)
+    proxy_logging.add_missing_proxy_hooks(llm_router=None)
+    monkeypatch.setattr(proxy_server_module, "prisma_client", fake_prisma)
+    proxy_logging.add_missing_proxy_hooks(llm_router=None)
+    proxy_logging.add_missing_proxy_hooks(llm_router=None)
+
+    assert list(proxy_logging.proxy_hook_mapping) == ["cache_control_check", "needs_db_hook", "db_only_hook"]
+    expected_callback_types = [
+        "_PrismaFreeHook",
+        "_PrismaRequiringHook",
+        "_PrismaOnlyHook",
+    ]
+    assert [type(callback).__name__ for callback in registered] == expected_callback_types
+    assert [type(callback).__name__ for callback in success_callbacks] == expected_callback_types
+    assert [type(callback).__name__ for callback in failure_callbacks] == expected_callback_types
+    assert [type(callback).__name__ for callback in async_success_callbacks] == expected_callback_types
+    assert [type(callback).__name__ for callback in async_failure_callbacks] == expected_callback_types
+
+
 def test_add_proxy_hooks_unknown_hook_raises(proxy_logging, monkeypatch):
     from litellm.proxy import utils as utils_mod
 
@@ -352,7 +411,7 @@ def test_add_proxy_hooks_unknown_hook_raises(proxy_logging, monkeypatch):
 
     monkeypatch.setattr(utils_mod, "get_proxy_hook", bad_resolver)
     with pytest.raises(KeyError):
-        proxy_logging._add_proxy_hooks(llm_router=None)
+        proxy_logging.add_missing_proxy_hooks(llm_router=None)
 
 
 # ---------------------------------------------------------------------------

@@ -11,10 +11,12 @@ import pytest
 import respx
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from prisma.engine.errors import BinaryNotFoundError
 from prisma.errors import ClientNotConnectedError, HTTPClientClosedError, PrismaError
 
 import litellm
 import litellm.proxy.health_endpoints._health_endpoints as _health_endpoints_module
+import litellm.proxy.proxy_server as proxy_server_module
 from litellm.litellm_core_utils.health_check_helpers import TEST_IMAGE_BASE64
 from litellm.models.credentials import CredentialItem
 from litellm.proxy._types import LitellmUserRoles, ProxyException, UserAPIKeyAuth
@@ -2308,8 +2310,8 @@ async def test_health_readiness_returns_200_when_db_down_and_allow_requests_on_d
     from litellm.proxy.health_endpoints._health_endpoints import health_readiness
 
     mock_prisma = MagicMock()
-    mock_prisma.health_check = AsyncMock(side_effect=PrismaError("nope"))
-    mock_prisma.attempt_db_reconnect = AsyncMock(side_effect=Exception("still nope"))
+    mock_prisma.health_check = AsyncMock(side_effect=httpx.ConnectError("connection refused"))
+    mock_prisma.attempt_db_reconnect = AsyncMock(side_effect=httpx.ConnectError("still unavailable"))
 
     _health_endpoints_module.db_health_cache = {
         "status": "unknown",
@@ -2346,8 +2348,8 @@ async def test_health_readiness_details_returns_200_when_db_down_and_allow_reque
     )
 
     mock_prisma = MagicMock()
-    mock_prisma.health_check = AsyncMock(side_effect=PrismaError("nope"))
-    mock_prisma.attempt_db_reconnect = AsyncMock(side_effect=Exception("still nope"))
+    mock_prisma.health_check = AsyncMock(side_effect=httpx.ConnectError("connection refused"))
+    mock_prisma.attempt_db_reconnect = AsyncMock(side_effect=httpx.ConnectError("still unavailable"))
 
     _health_endpoints_module.db_health_cache = {
         "status": "unknown",
@@ -3104,3 +3106,172 @@ def test_test_model_connection_accepts_image_edit_mode(monkeypatch):
 
     assert response.status_code == 200, response.text
     assert response.json()["status"] == "success"
+
+
+@pytest.mark.asyncio
+async def test_health_readiness_stays_ready_when_db_disconnected_and_fail_open_enabled(monkeypatch):
+    from fastapi import Response
+
+    from litellm.proxy.health_endpoints._health_endpoints import health_readiness
+
+    mock_prisma = MagicMock()
+    mock_prisma.health_check = AsyncMock(side_effect=httpx.ConnectError("connection refused"))
+    mock_prisma.attempt_db_reconnect = AsyncMock(return_value=False)
+
+    _health_endpoints_module.db_health_cache = {
+        "status": "unknown",
+        "last_updated": datetime.now() - timedelta(seconds=60),
+    }
+
+    response = Response()
+    monkeypatch.setattr(proxy_server_module, "prisma_client", mock_prisma)
+    monkeypatch.setattr(
+        proxy_server_module,
+        "general_settings",
+        {"allow_requests_on_db_unavailable": True},
+    )
+    result = await health_readiness(response=response)
+
+    assert response.status_code == 200
+    assert result == {"status": "healthy", "db": "disconnected"}
+
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "permanent_error",
+    [
+        PrismaError("query engine fault"),
+        BinaryNotFoundError("query engine binary not found"),
+    ],
+)
+async def test_health_readiness_fail_open_rejects_permanent_database_fault(monkeypatch, permanent_error):
+    from fastapi import Response
+
+    from litellm.proxy.health_endpoints._health_endpoints import health_readiness
+
+    mock_prisma = MagicMock()
+    mock_prisma.health_check = AsyncMock(side_effect=permanent_error)
+    mock_prisma.attempt_db_reconnect = AsyncMock()
+
+    _health_endpoints_module.db_health_cache = {
+        "status": "unknown",
+        "last_updated": datetime.now() - timedelta(seconds=60),
+    }
+
+    monkeypatch.setattr(proxy_server_module, "prisma_client", mock_prisma)
+    monkeypatch.setattr(
+        proxy_server_module,
+        "general_settings",
+        {"allow_requests_on_db_unavailable": True},
+    )
+    response = Response()
+    result = await health_readiness(response=response)
+
+    assert response.status_code == 503
+    assert result == {"status": "healthy", "db": "disconnected"}
+    mock_prisma.attempt_db_reconnect.assert_not_called()
+
+
+
+@pytest.mark.asyncio
+async def test_health_readiness_uses_final_reconnect_failure_for_fail_open_policy(monkeypatch):
+    from fastapi import Response
+
+    from litellm.proxy.health_endpoints._health_endpoints import health_readiness
+
+    mock_prisma = MagicMock()
+    mock_prisma.health_check = AsyncMock(
+        side_effect=[
+            httpx.ConnectError("connection refused"),
+            BinaryNotFoundError("query engine binary not found"),
+        ]
+    )
+    mock_prisma.attempt_db_reconnect = AsyncMock(return_value=False)
+
+    _health_endpoints_module.db_health_cache = {
+        "status": "unknown",
+        "last_updated": datetime.now() - timedelta(seconds=60),
+    }
+    monkeypatch.setattr(proxy_server_module, "prisma_client", mock_prisma)
+    monkeypatch.setattr(
+        proxy_server_module,
+        "general_settings",
+        {"allow_requests_on_db_unavailable": True},
+    )
+
+    response = Response()
+    result = await health_readiness(response=response)
+
+    assert response.status_code == 503
+    assert result == {"status": "healthy", "db": "disconnected"}
+
+
+
+@pytest.mark.asyncio
+async def test_health_readiness_distinguishes_initial_recovery_from_no_database(monkeypatch):
+    from fastapi import Response
+
+    from litellm.proxy.health_endpoints._health_endpoints import health_readiness
+
+    monkeypatch.setattr(proxy_server_module, "prisma_client", None)
+    monkeypatch.setattr(proxy_server_module, "is_prisma_initial_connect_recovery_pending", lambda: True)
+    monkeypatch.setattr(
+        proxy_server_module,
+        "general_settings",
+        {"allow_requests_on_db_unavailable": True},
+    )
+
+    response = Response()
+    result = await health_readiness(response=response)
+
+    assert response.status_code == 200
+    assert result == {"status": "healthy", "db": "disconnected"}
+
+
+
+@pytest.mark.asyncio
+async def test_health_readiness_returns_503_if_fail_open_is_disabled_during_initial_recovery(monkeypatch):
+    from fastapi import Response
+
+    from litellm.proxy.health_endpoints._health_endpoints import health_readiness
+
+    monkeypatch.setattr(proxy_server_module, "prisma_client", None)
+    monkeypatch.setattr(proxy_server_module, "is_prisma_initial_connect_recovery_pending", lambda: True)
+    monkeypatch.setattr(
+        proxy_server_module,
+        "general_settings",
+        {"allow_requests_on_db_unavailable": False},
+    )
+
+    response = Response()
+    result = await health_readiness(response=response)
+
+    assert response.status_code == 503
+    assert result == {"status": "healthy", "db": "disconnected"}
+
+
+
+@pytest.mark.asyncio
+async def test_detailed_readiness_stays_ready_for_disconnected_db_when_fail_open_enabled(monkeypatch):
+    from fastapi import Response
+
+    mock_prisma = MagicMock()
+    monkeypatch.setattr(proxy_server_module, "prisma_client", mock_prisma)
+    monkeypatch.setattr(proxy_server_module, "redis_usage_cache", MagicMock())
+    monkeypatch.setattr(
+        proxy_server_module,
+        "general_settings",
+        {"allow_requests_on_db_unavailable": True},
+    )
+    monkeypatch.setattr(
+        _health_endpoints_module,
+        "_db_health_readiness_check",
+        AsyncMock(return_value={"status": "disconnected", "fail_open_safe": True}),
+    )
+
+    response = Response()
+    result = await _health_endpoints_module._get_health_readiness_details(response=response)
+
+    assert response.status_code == 200
+    assert result["db"] == "disconnected"

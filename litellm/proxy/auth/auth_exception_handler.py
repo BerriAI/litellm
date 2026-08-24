@@ -24,6 +24,7 @@ from litellm.proxy.auth.auth_utils import (
     is_invalid_virtual_key_error,
     mark_invalid_virtual_key_error,
 )
+from litellm.proxy.auth.resolvers.exceptions import NoDatabaseConnectionError
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.types.services import ServiceTypes
 
@@ -41,7 +42,7 @@ else:
     Span = Any
 
 
-def _as_proxy_exception(e: Exception) -> ProxyException:
+def _as_proxy_exception(e: Exception, *, configured_database_without_client: bool = False) -> ProxyException:
     """Convert an authentication failure into the ProxyException the client receives."""
     if isinstance(e, litellm.BudgetExceededError):
         return ProxyException(
@@ -59,9 +60,13 @@ def _as_proxy_exception(e: Exception) -> ProxyException:
         )
     if isinstance(e, ProxyException):
         return e
-    if PrismaDBExceptionHandler.is_database_service_unavailable_error(e):
+    if PrismaDBExceptionHandler.is_database_service_unavailable_error(e) or configured_database_without_client:
         return ProxyException(
-            message=PrismaDBExceptionHandler.database_unavailable_message(e),
+            message=(
+                "Service Unavailable, the authentication database is temporarily unreachable. Please retry shortly."
+                if configured_database_without_client
+                else PrismaDBExceptionHandler.database_unavailable_message(e)
+            ),
             type=ProxyErrorTypes.no_db_connection,
             param="None",
             code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -114,12 +119,20 @@ class UserAPIKeyAuthExceptionHandler:
         """
         from litellm.proxy.proxy_server import (
             general_settings,
+            is_prisma_initial_connect_recovery_pending,
+            prisma_client,
             proxy_logging_obj,
         )
 
+        configured_database_without_client: Final = isinstance(e, NoDatabaseConnectionError) and (
+            is_prisma_initial_connect_recovery_pending() or prisma_client is not None
+        )
+        database_unavailable: Final = (
+            PrismaDBExceptionHandler.is_database_connection_error(e) or configured_database_without_client
+        )
         if (
             PrismaDBExceptionHandler.should_allow_request_on_db_unavailable()
-            and PrismaDBExceptionHandler.is_database_connection_error(e)
+            and database_unavailable
         ):
             # log this as a DB failure on prometheus
             proxy_logging_obj.service_logging_obj.service_failure_hook(
@@ -210,7 +223,7 @@ class UserAPIKeyAuthExceptionHandler:
             if transformed_exception is not None:
                 e = transformed_exception
 
-            final_exception: Final = mark_invalid_virtual_key_error(_as_proxy_exception(e), is_invalid_virtual_key)
+            final_exception: Final = mark_invalid_virtual_key_error(_as_proxy_exception(e, configured_database_without_client=configured_database_without_client), is_invalid_virtual_key)
             # If a quiet-logged malformed-key transform yields non-401, escalate to ERROR
             if is_quiet_log and str(final_exception.code) != str(status.HTTP_401_UNAUTHORIZED):
                 verbose_proxy_logger.error(

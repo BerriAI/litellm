@@ -100,12 +100,12 @@ class IdentityStore:
         return principal.source_key
 
     async def _resolve_key(self, hashed_token: str) -> UserAPIKeyAuth:
-        if self._prisma is None:
-            raise NoDatabaseConnectionError()
-
         cached: Final = await self._cache.async_get_cache(key=hashed_token, model_type=UserAPIKeyAuth)
         if cached is not None:
             return _copy_user_api_key_auth_for_cache(user_api_key_obj=cached)
+
+        if self._prisma is None:
+            raise NoDatabaseConnectionError()
 
         if self._check_cache_only:
             raise KeyNotInCacheError(hashed_token)

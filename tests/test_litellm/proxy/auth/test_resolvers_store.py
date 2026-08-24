@@ -16,8 +16,7 @@ from litellm.proxy.auth.resolvers.store import IdentityStore
 
 class _FakeCache:
     """Stands in for the DualCache get_key_object reads. It returns a cache hit
-    before the DB is touched, so seeding it exercises resolve without a database
-    (a non-None prisma client is still required; it is never reached on a hit)."""
+    before the DB is touched, so seeding it exercises resolve without a database."""
 
     def __init__(self, entries: Optional[Dict[str, object]] = None) -> None:
         self._entries = entries or {}
@@ -62,6 +61,18 @@ def test_key_from_principal_raises_when_no_source_key_is_carried():
     )
     with pytest.raises(PrincipalMissingSourceKeyError):
         IdentityStore.key_from_principal(bare)
+
+
+async def test_resolve_returns_cached_key_without_a_db_connection():
+    token_hash = hash_token("sk-cached-before-outage")
+    key = UserAPIKeyAuth(token=token_hash, user_id="u-cached", team_id="t-cached")
+    store = IdentityStore(None, _FakeCache({token_hash: key}))
+
+    principal = await store.resolve(hashed_token=token_hash)
+
+    assert principal.source_key is not None
+    assert principal.source_key.user_id == "u-cached"
+    assert principal.source_key.team_id == "t-cached"
 
 
 async def test_resolve_raises_without_a_db_connection():
