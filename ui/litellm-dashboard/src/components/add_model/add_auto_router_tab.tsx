@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useWatch } from "react-hook-form";
 import { ChevronDown, ChevronRight, CircleHelp } from "lucide-react";
 import { z } from "zod/v4";
-import { FieldGroup } from "@/components/shared/form/field";
+import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";

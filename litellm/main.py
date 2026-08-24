@@ -6828,6 +6828,8 @@ def embedding(
                 aembedding=aembedding,
             )
         elif custom_llm_provider == "azure_ai":
+            from litellm.llms.azure_ai.common_utils import get_azure_ai_entra_token
+
             api_base = (
                 api_base  # for deepinfra/perplexity/anyscale/groq/friendliai we check in get_llm_provider and pass in the api base from there
                 or litellm.api_base
@@ -6837,8 +6839,8 @@ def embedding(
             api_key = (
                 api_key
                 or litellm.api_key  # for deepinfra/perplexity/anyscale/friendliai we check in get_llm_provider and pass in the api key from there
-                or litellm.openai_key
                 or get_secret_str("AZURE_AI_API_KEY")
+                or get_azure_ai_entra_token(litellm_params=litellm_params_dict)
             )
 
             ## EMBEDDING CALL

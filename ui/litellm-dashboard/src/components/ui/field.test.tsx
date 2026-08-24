@@ -123,3 +123,38 @@ describe("field primitives forward refs to their DOM node", () => {
     expect(ref.current).toBeInstanceOf(HTMLDivElement);
   });
 });
+
+describe("FieldLabel wrapping a nested Field", () => {
+  const NESTED_FIELD_CUES = [
+    "has-[>[data-slot=field]]:not-has-[:disabled,[data-disabled]]:hover:bg-muted/50",
+    "has-[>[data-slot=field]]:has-[:focus-visible]:border-ring",
+    "has-[>[data-slot=field]]:has-[:focus-visible]:ring-3",
+    "has-[>[data-slot=field]]:has-[:focus-visible]:ring-ring/50",
+  ];
+
+  it("carries the hover, focus-visible and disabled cues the card layout depends on", () => {
+    render(
+      <FieldLabel data-testid="card-label">
+        <Field>
+          <input />
+        </Field>
+      </FieldLabel>,
+    );
+
+    expect(screen.getByTestId("card-label")).toHaveClass(...NESTED_FIELD_CUES);
+  });
+
+  it("keeps the cues addressable when a caller passes its own className", () => {
+    render(
+      <FieldLabel data-testid="card-label" className="mt-2">
+        <Field>
+          <input />
+        </Field>
+      </FieldLabel>,
+    );
+    const label = screen.getByTestId("card-label");
+
+    expect(label).toHaveClass(...NESTED_FIELD_CUES);
+    expect(label).toHaveClass("mt-2");
+  });
+});

@@ -300,6 +300,7 @@ def test_azure_ai_strips_non_openai_spec_message_fields():
                     "cache_control": {"type": "ephemeral"},
                 }
             ],
+            "reasoning_content": "The user wants me to read a file.",
             "provider_specific_fields": {"thought_signature": "sig-top"},
             "tool_calls": [
                 {
@@ -327,6 +328,7 @@ def test_azure_ai_strips_non_openai_spec_message_fields():
     transformed_messages = request["messages"]
 
     assert not _find_key_anywhere(transformed_messages, "thinking_blocks")
+    assert not _find_key_anywhere(transformed_messages, "reasoning_content")
     assert not _find_key_anywhere(transformed_messages, "provider_specific_fields")
     assert not _find_key_anywhere(transformed_messages, "cache_control")
 
