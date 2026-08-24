@@ -48,15 +48,11 @@ class GcsPubSubLogger(CustomBatchLogger):
 
         _premium_user_check()
 
-        self.async_httpx_client = get_async_httpx_client(
-            llm_provider=httpxSpecialProvider.LoggingCallback
-        )
+        self.async_httpx_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.LoggingCallback)
 
         self.project_id = project_id or os.getenv("GCS_PUBSUB_PROJECT_ID")
         self.topic_id = topic_id or os.getenv("GCS_PUBSUB_TOPIC_ID")
-        self.path_service_account_json = credentials_path or os.getenv(
-            "GCS_PATH_SERVICE_ACCOUNT"
-        )
+        self.path_service_account_json = credentials_path or os.getenv("GCS_PATH_SERVICE_ACCOUNT")
 
         if not self.project_id or not self.topic_id:
             raise ValueError("Both project_id and topic_id must be provided")
@@ -116,9 +112,7 @@ class GcsPubSubLogger(CustomBatchLogger):
         _premium_user_check()
 
         try:
-            verbose_logger.debug(
-                "PubSub: Logging - Enters logging function for model %s", kwargs
-            )
+            verbose_logger.debug("PubSub: Logging - Enters logging function for model %s", kwargs)
             standard_logging_payload = kwargs.get("standard_logging_object", None)
 
             # Backwards compatibility with old logging payload
@@ -138,9 +132,7 @@ class GcsPubSubLogger(CustomBatchLogger):
                 await self.async_send_batch()
 
         except Exception as e:
-            verbose_logger.exception(
-                f"PubSub Layer Error - {str(e)}\n{traceback.format_exc()}"
-            )
+            verbose_logger.exception(f"PubSub Layer Error - {str(e)}\n{traceback.format_exc()}")
             pass
 
     async def async_send_batch(self):
@@ -151,17 +143,13 @@ class GcsPubSubLogger(CustomBatchLogger):
             if not self.log_queue:
                 return
 
-            verbose_logger.debug(
-                f"PubSub - about to flush {len(self.log_queue)} events"
-            )
+            verbose_logger.debug(f"PubSub - about to flush {len(self.log_queue)} events")
 
             for message in self.log_queue:
                 await self.publish_message(message)
 
         except Exception as e:
-            verbose_logger.exception(
-                f"PubSub Error sending batch - {str(e)}\n{traceback.format_exc()}"
-            )
+            verbose_logger.exception(f"PubSub Error sending batch - {str(e)}\n{traceback.format_exc()}")
         finally:
             self.log_queue.clear()
 
@@ -189,18 +177,14 @@ class GcsPubSubLogger(CustomBatchLogger):
             # Base64 encode the message
             import base64
 
-            encoded_message = base64.b64encode(message_data.encode("utf-8")).decode(
-                "utf-8"
-            )
+            encoded_message = base64.b64encode(message_data.encode("utf-8")).decode("utf-8")
 
             # Construct request body
             request_body = {"messages": [{"data": encoded_message}]}
 
             url = f"https://pubsub.googleapis.com/v1/projects/{self.project_id}/topics/{self.topic_id}:publish"
 
-            response = await self.async_httpx_client.post(
-                url=url, headers=headers, json=request_body
-            )
+            response = await self.async_httpx_client.post(url=url, headers=headers, json=request_body)
 
             if response.status_code not in [200, 202]:
                 verbose_logger.error("Pub/Sub publish error: %s", str(response.text))

@@ -3,7 +3,6 @@
  */
 import React, { useState, useEffect } from "react";
 
-
 import { alertingSettingsCall, updateConfigFieldSetting } from "../networking";
 import DynamicForm from "./dynamic_form";
 import NotificationsManager from "../molecules/notifications_manager";

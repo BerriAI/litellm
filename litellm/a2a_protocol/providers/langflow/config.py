@@ -22,8 +22,7 @@ class LangFlowA2AConfig(BaseA2AProviderConfig):
         litellm_params = kwargs.get("litellm_params")
         if not litellm_params:
             raise ValueError(
-                "litellm_params is required for LangFlowA2AConfig "
-                "(must contain custom_llm_provider and model)"
+                "litellm_params is required for LangFlowA2AConfig (must contain custom_llm_provider and model)"
             )
         litellm_params = merge_a2a_session_into_litellm_params(
             litellm_params, params, litellm_params.get(A2A_USER_API_KEY_HASH_PARAM)
@@ -46,8 +45,7 @@ class LangFlowA2AConfig(BaseA2AProviderConfig):
         litellm_params = kwargs.get("litellm_params")
         if not litellm_params:
             raise ValueError(
-                "litellm_params is required for LangFlowA2AConfig "
-                "(must contain custom_llm_provider and model)"
+                "litellm_params is required for LangFlowA2AConfig (must contain custom_llm_provider and model)"
             )
         litellm_params = merge_a2a_session_into_litellm_params(
             litellm_params, params, litellm_params.get(A2A_USER_API_KEY_HASH_PARAM)

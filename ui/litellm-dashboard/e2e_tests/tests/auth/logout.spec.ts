@@ -13,9 +13,12 @@ test.describe("Logout", () => {
     // is declared with trigger={["click"]}, so a plain click opens the popup.
     await page.getByRole("button", { name: /Account menu/i }).click();
 
-    const popup = page.locator(".ant-dropdown:visible").filter({
-      has: page.locator(".bg-white.rounded-lg.shadow-lg"),
-    }).first();
+    const popup = page
+      .locator(".ant-dropdown:visible")
+      .filter({
+        has: page.locator(".bg-white.rounded-lg.shadow-lg"),
+      })
+      .first();
     await expect(popup).toBeVisible({ timeout: 5_000 });
 
     // Click Logout — the handler clears the auth cookie and navigates via

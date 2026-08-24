@@ -11,9 +11,7 @@ from litellm.llms.custom_httpx.http_handler import HTTPHandler
 def _sanitize_id(identifier: str) -> str:
     """Reject path traversal characters and URL-encode the identifier."""
     if any(c in identifier for c in ("/", "\\", "#", "?")):
-        raise ValueError(
-            f"Invalid identifier {identifier!r}: contains disallowed characters"
-        )
+        raise ValueError(f"Invalid identifier {identifier!r}: contains disallowed characters")
     if ".." in identifier:
         raise ValueError(f"Invalid identifier {identifier!r}: path traversal detected")
     return urllib.parse.quote(identifier, safe="")
@@ -87,17 +85,11 @@ class ArizePhoenixClient:
                         f"Access denied to prompt version '{prompt_version_id}'. Check your Arize Phoenix permissions."
                     )
                 elif response.status_code == 401:
-                    raise Exception(
-                        "Authentication failed. Check your Arize Phoenix API key and permissions."
-                    )
+                    raise Exception("Authentication failed. Check your Arize Phoenix API key and permissions.")
                 else:
-                    raise Exception(
-                        f"Failed to fetch prompt version '{prompt_version_id}': {e}"
-                    )
+                    raise Exception(f"Failed to fetch prompt version '{prompt_version_id}': {e}")
             else:
-                raise Exception(
-                    f"Error fetching prompt version '{prompt_version_id}': {e}"
-                )
+                raise Exception(f"Error fetching prompt version '{prompt_version_id}': {e}")
 
     def test_connection(self) -> bool:
         """

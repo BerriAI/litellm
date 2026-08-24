@@ -67,10 +67,7 @@ class SkillsSandboxExecutor:
         try:
             from llm_sandbox import SandboxSession
         except ImportError:
-            verbose_logger.error(
-                "SkillsSandboxExecutor: llm-sandbox not installed. "
-                "Install `llm-sandbox`."
-            )
+            verbose_logger.error("SkillsSandboxExecutor: llm-sandbox not installed. Install `llm-sandbox`.")
             return {
                 "success": False,
                 "output": "",
@@ -99,9 +96,7 @@ class SkillsSandboxExecutor:
                         # Create the file in temp directory
                         local_path = os.path.abspath(os.path.join(tmpdir, path))
                         if not local_path.startswith(tmpdir_abs + os.sep):
-                            verbose_logger.warning(
-                                f"SkillsSandboxExecutor: Skipping file with invalid path: {path}"
-                            )
+                            verbose_logger.warning(f"SkillsSandboxExecutor: Skipping file with invalid path: {path}")
                             continue
                         os.makedirs(os.path.dirname(local_path), exist_ok=True)
                         with open(local_path, "wb") as f:
@@ -111,9 +106,7 @@ class SkillsSandboxExecutor:
                         sandbox_path = f"/sandbox/{path}"
                         session.copy_to_runtime(local_path, sandbox_path)
 
-                verbose_logger.debug(
-                    f"SkillsSandboxExecutor: Copied {len(skill_files)} files to sandbox"
-                )
+                verbose_logger.debug(f"SkillsSandboxExecutor: Copied {len(skill_files)} files to sandbox")
 
                 # 2. Install requirements if present. Let pip parse the
                 # requirements file inside the sandbox so standard syntax like
@@ -149,18 +142,14 @@ subprocess.run(
 """
                     install_result = session.run(pip_code)
                     if install_result.exit_code != 0:
-                        verbose_logger.debug(
-                            "SkillsSandboxExecutor: Requirements installation failed"
-                        )
+                        verbose_logger.debug("SkillsSandboxExecutor: Requirements installation failed")
                         return {
                             "success": False,
                             "output": install_result.stdout or "",
                             "error": install_result.stderr or "",
                             "files": [],
                         }
-                    verbose_logger.debug(
-                        "SkillsSandboxExecutor: Installed requirements"
-                    )
+                    verbose_logger.debug("SkillsSandboxExecutor: Installed requirements")
 
                 # 3. Execute the code
                 # Wrap code to run from /sandbox directory
@@ -179,19 +168,13 @@ sys.path.insert(0, '/sandbox')
                 error = result.stderr or ""
 
                 if success:
-                    verbose_logger.debug(
-                        "SkillsSandboxExecutor: Code execution succeeded"
-                    )
+                    verbose_logger.debug("SkillsSandboxExecutor: Code execution succeeded")
                 else:
                     verbose_logger.debug(
                         f"SkillsSandboxExecutor: Code execution failed with exit code {result.exit_code}"
                     )
-                    verbose_logger.debug(
-                        f"SkillsSandboxExecutor: stderr: {error[:500] if error else 'No stderr'}"
-                    )
-                    verbose_logger.debug(
-                        f"SkillsSandboxExecutor: stdout: {output[:500] if output else 'No stdout'}"
-                    )
+                    verbose_logger.debug(f"SkillsSandboxExecutor: stderr: {error[:500] if error else 'No stderr'}")
+                    verbose_logger.debug(f"SkillsSandboxExecutor: stdout: {output[:500] if output else 'No stdout'}")
 
                 # 4. Collect generated files
                 generated_files = self._collect_generated_files(session, skill_files)
@@ -287,21 +270,15 @@ print(json.dumps(files))
                             }
                         )
 
-                        verbose_logger.debug(
-                            f"SkillsSandboxExecutor: Collected generated file: {rel_path}"
-                        )
+                        verbose_logger.debug(f"SkillsSandboxExecutor: Collected generated file: {rel_path}")
                     except Exception as e:
-                        verbose_logger.warning(
-                            f"SkillsSandboxExecutor: Error copying file {filepath}: {e}"
-                        )
+                        verbose_logger.warning(f"SkillsSandboxExecutor: Error copying file {filepath}: {e}")
                     finally:
                         if os.path.exists(tmp_path):
                             os.unlink(tmp_path)
 
         except Exception as e:
-            verbose_logger.warning(
-                f"SkillsSandboxExecutor: Error collecting generated files: {e}"
-            )
+            verbose_logger.warning(f"SkillsSandboxExecutor: Error collecting generated files: {e}")
 
         return generated_files
 

@@ -48,11 +48,7 @@ class VertexAIGeminiImageEditConfig(BaseImageEditConfig, VertexLLM):
         drop_params: bool,
     ) -> Dict[str, Any]:
         supported_params = self.get_supported_openai_params(model)
-        filtered_params = {
-            key: value
-            for key, value in image_edit_optional_params.items()
-            if key in supported_params
-        }
+        filtered_params = {key: value for key, value in image_edit_optional_params.items() if key in supported_params}
 
         mapped_params: Dict[str, Any] = {}
 
@@ -109,14 +105,8 @@ class VertexAIGeminiImageEditConfig(BaseImageEditConfig, VertexLLM):
 
         # First check litellm_params (where vertex_ai_project/vertex_ai_credentials are passed)
         # then fall back to environment variables and other sources
-        vertex_project = (
-            self.safe_get_vertex_ai_project(litellm_params)
-            or self._resolve_vertex_project()
-        )
-        vertex_credentials = (
-            self.safe_get_vertex_ai_credentials(litellm_params)
-            or self._resolve_vertex_credentials()
-        )
+        vertex_project = self.safe_get_vertex_ai_project(litellm_params) or self._resolve_vertex_project()
+        vertex_credentials = self.safe_get_vertex_ai_credentials(litellm_params) or self._resolve_vertex_credentials()
         access_token, _ = self._ensure_access_token(
             credentials=vertex_credentials,
             project_id=vertex_project,
@@ -145,19 +135,11 @@ class VertexAIGeminiImageEditConfig(BaseImageEditConfig, VertexLLM):
 
         # First check litellm_params (where vertex_ai_project/vertex_ai_location are passed)
         # then fall back to environment variables and other sources
-        vertex_project = (
-            self.safe_get_vertex_ai_project(litellm_params)
-            or self._resolve_vertex_project()
-        )
-        vertex_location = (
-            self.safe_get_vertex_ai_location(litellm_params)
-            or self._resolve_vertex_location()
-        )
+        vertex_project = self.safe_get_vertex_ai_project(litellm_params) or self._resolve_vertex_project()
+        vertex_location = self.safe_get_vertex_ai_location(litellm_params) or self._resolve_vertex_location()
 
         if not vertex_project or not vertex_location:
-            raise ValueError(
-                "vertex_project and vertex_location are required for Vertex AI"
-            )
+            raise ValueError("vertex_project and vertex_location are required for Vertex AI")
 
         base_url = get_vertex_base_url(vertex_location)
 
@@ -192,9 +174,7 @@ class VertexAIGeminiImageEditConfig(BaseImageEditConfig, VertexLLM):
         # Add image-specific configuration
         image_config: Dict[str, Any] = {}
         if "aspectRatio" in image_edit_optional_request_params:
-            image_config["aspect_ratio"] = image_edit_optional_request_params[
-                "aspectRatio"
-            ]
+            image_config["aspect_ratio"] = image_edit_optional_request_params["aspectRatio"]
 
         if image_config:
             generation_config["image_config"] = image_config
@@ -203,9 +183,7 @@ class VertexAIGeminiImageEditConfig(BaseImageEditConfig, VertexLLM):
 
         payload: Any = json.dumps(request_body)
         empty_files = cast(RequestFiles, [])
-        return cast(
-            Tuple[Dict[str, Any], Optional[RequestFiles]], (payload, empty_files)
-        )
+        return cast(Tuple[Dict[str, Any], Optional[RequestFiles]], (payload, empty_files))
 
     def transform_image_edit_response(
         self,
@@ -253,9 +231,7 @@ class VertexAIGeminiImageEditConfig(BaseImageEditConfig, VertexLLM):
         }
         return aspect_ratio_map.get(size, "1:1")
 
-    def _prepare_inline_image_parts(
-        self, image: Union[FileTypes, List[FileTypes]]
-    ) -> List[Dict[str, Any]]:
+    def _prepare_inline_image_parts(self, image: Union[FileTypes, List[FileTypes]]) -> List[Dict[str, Any]]:
         images: List[FileTypes]
         if isinstance(image, list):
             images = image

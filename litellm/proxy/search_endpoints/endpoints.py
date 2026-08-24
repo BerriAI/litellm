@@ -170,9 +170,7 @@ async def search(
                     team_object=team_object,
                 )
         except Exception as e:
-            verbose_proxy_logger.error(
-                f"Search tool authorization failed for {search_tool_name_value}: {str(e)}"
-            )
+            verbose_proxy_logger.error(f"Search tool authorization failed for {search_tool_name_value}: {str(e)}")
             raise
 
         if llm_router is not None and hasattr(llm_router, "search_tools"):
@@ -183,16 +181,12 @@ async def search(
             )
 
             matching_tools = [
-                tool
-                for tool in llm_router.search_tools
-                if tool.get("search_tool_name") == search_tool_name_value
+                tool for tool in llm_router.search_tools if tool.get("search_tool_name") == search_tool_name_value
             ]
 
             if matching_tools:
                 search_tool = matching_tools[0]
-                search_provider = search_tool.get("litellm_params", {}).get(
-                    "search_provider"
-                )
+                search_provider = search_tool.get("litellm_params", {}).get("search_provider")
 
                 if search_provider:
                     data["custom_llm_provider"] = search_provider
@@ -293,9 +287,7 @@ async def list_search_tools(
             for tool in llm_router.search_tools:
                 tool_info = {
                     "search_tool_name": tool.get("search_tool_name"),
-                    "search_provider": tool.get("litellm_params", {}).get(
-                        "search_provider"
-                    ),
+                    "search_provider": tool.get("litellm_params", {}).get("search_provider"),
                 }
 
                 # Add description if available

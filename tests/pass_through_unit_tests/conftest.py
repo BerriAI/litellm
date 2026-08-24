@@ -19,16 +19,7 @@ from tests._vcr_conftest_common import (  # noqa: E402,F401
     vcr_config_dict,
 )
 
-# Tests that observe live cross-call provider state — typically a
-# warm-up call followed by an assertion that the *second* call sees the
-# upstream's prompt-cache (Anthropic / Bedrock prompt-caching). VCR's
-# deterministic replay can't model this: both calls match the same
-# cassette episode, so the second call returns the first call's
-# pre-warmup response. Opt these out so they run live (no caching).
-_VCR_INCOMPATIBLE_NODEID_SUFFIXES = (
-    "::test_prompt_caching_returns_cache_read_tokens_on_second_call",
-    "::test_prompt_caching_streaming_second_call_returns_cache_read",
-)
+_VCR_INCOMPATIBLE_NODEID_SUFFIXES: tuple[str, ...] = ()
 
 
 _verbose_state = VerboseReporterState()

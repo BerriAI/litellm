@@ -17,11 +17,7 @@ interface AgentPermissionsProps {
   accessToken?: string | null;
 }
 
-export function AgentPermissions({ 
-  agents, 
-  agentAccessGroups = [], 
-  accessToken 
-}: AgentPermissionsProps) {
+export function AgentPermissions({ agents, agentAccessGroups = [], accessToken }: AgentPermissionsProps) {
   const [agentDetails, setAgentDetails] = useState<Agent[]>([]);
 
   // Fetch agent details when component mounts
@@ -67,20 +63,20 @@ export function AgentPermissions({
           {totalCount}
         </Badge>
       </div>
-      
+
       {totalCount > 0 ? (
         <div className="max-h-[400px] overflow-y-auto space-y-2 pr-1">
           {mergedItems.map((item, index) => (
             <div key={index} className="space-y-2">
-              <div 
-                className="flex items-center gap-3 py-2 px-3 rounded-lg border border-gray-200 bg-white"
-              >
+              <div className="flex items-center gap-3 py-2 px-3 rounded-lg border border-gray-200 bg-white">
                 <div className="flex items-center gap-2 flex-1 min-w-0">
                   {item.type === "agent" ? (
                     <Tooltip title={`Full ID: ${item.value}`} placement="top">
                       <div className="inline-flex items-center gap-2 min-w-0">
                         <span className="inline-block w-1.5 h-1.5 bg-purple-500 rounded-full flex-shrink-0"></span>
-                        <span className="text-sm font-medium text-gray-900 truncate">{getAgentDisplayName(item.value)}</span>
+                        <span className="text-sm font-medium text-gray-900 truncate">
+                          {getAgentDisplayName(item.value)}
+                        </span>
                       </div>
                     </Tooltip>
                   ) : (
@@ -108,4 +104,3 @@ export function AgentPermissions({
 }
 
 export default AgentPermissions;
-

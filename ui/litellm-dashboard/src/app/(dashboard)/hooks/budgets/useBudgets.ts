@@ -2,7 +2,14 @@ import { useQuery, useMutation, useQueryClient, UseQueryResult } from "@tanstack
 import { createQueryKeys } from "../common/queryKeysFactory";
 import { getBudgetList, budgetCreateCall, budgetUpdateCall, budgetDeleteCall } from "@/components/networking";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
-import { budgetItem } from "@/components/budgets/budget_panel";
+
+export interface budgetItem {
+  budget_id: string;
+  max_budget: number | null;
+  rpm_limit: number | null;
+  tpm_limit: number | null;
+  updated_at: string;
+}
 
 export const budgetKeys = createQueryKeys("budgets");
 

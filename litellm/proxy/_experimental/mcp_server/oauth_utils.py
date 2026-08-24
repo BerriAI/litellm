@@ -379,10 +379,8 @@ def _trusted_redirect_uri_is_allowed(
 ) -> bool:
     if proxy_base:
         proxy_parsed = urlparse(proxy_base)
-        if (
-            parsed.scheme == proxy_parsed.scheme
-            and redirect_netloc
-            == _strip_default_port(proxy_parsed.scheme, proxy_parsed.netloc)
+        if parsed.scheme == proxy_parsed.scheme and redirect_netloc == _strip_default_port(
+            proxy_parsed.scheme, proxy_parsed.netloc
         ):
             return True
 
@@ -418,9 +416,7 @@ def _build_trusted_redirect_rejection_message(
     redirect_origin = _origin_label(parsed.scheme, redirect_netloc)
     proxy_parsed = urlparse(proxy_base) if proxy_base else None
     proxy_netloc_norm = (
-        _strip_default_port(proxy_parsed.scheme, proxy_parsed.netloc)
-        if proxy_parsed and proxy_parsed.netloc
-        else ""
+        _strip_default_port(proxy_parsed.scheme, proxy_parsed.netloc) if proxy_parsed and proxy_parsed.netloc else ""
     )
 
     mismatch_parts: List[str] = []
@@ -433,16 +429,10 @@ def _build_trusted_redirect_rejection_message(
                 "or trust X-Forwarded-Proto from your ingress)"
             )
         if redirect_netloc != proxy_netloc_norm:
-            mismatch_parts.append(
-                f"host/port: redirect_uri {redirect_netloc!r} does not match "
-                "the proxy origin"
-            )
+            mismatch_parts.append(f"host/port: redirect_uri {redirect_netloc!r} does not match the proxy origin")
 
     if mismatch_parts:
-        return (
-            f"redirect_uri origin ({redirect_origin}) does not match the proxy "
-            "origin. " + "; ".join(mismatch_parts)
-        )
+        return f"redirect_uri origin ({redirect_origin}) does not match the proxy origin. " + "; ".join(mismatch_parts)
     return (
         f"redirect_uri ({redirect_uri!r}) is not allowed: not same-origin with "
         f"the proxy origin, not loopback, and not listed in "
@@ -457,9 +447,7 @@ def _raise_trusted_redirect_uri_rejected(
     redirect_netloc: str,
     proxy_base: Optional[str],
 ) -> NoReturn:
-    description = _build_trusted_redirect_rejection_message(
-        redirect_uri, parsed, redirect_netloc, proxy_base
-    )
+    description = _build_trusted_redirect_rejection_message(redirect_uri, parsed, redirect_netloc, proxy_base)
 
     hint = (
         "Align the proxy public URL with the browser URL. Set PROXY_BASE_URL to your "
@@ -525,6 +513,4 @@ def validate_trusted_redirect_uri(request: Request, redirect_uri: str) -> None:
     proxy_base = _resolve_proxy_base_for_redirect(request)
     if _trusted_redirect_uri_is_allowed(parsed, redirect_netloc, proxy_base):
         return
-    _raise_trusted_redirect_uri_rejected(
-        request, redirect_uri, parsed, redirect_netloc, proxy_base
-    )
+    _raise_trusted_redirect_uri_rejected(request, redirect_uri, parsed, redirect_netloc, proxy_base)

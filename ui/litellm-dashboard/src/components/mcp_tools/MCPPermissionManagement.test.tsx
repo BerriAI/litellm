@@ -15,31 +15,31 @@ const defaultProps = {
 };
 
 describe("MCPPermissionManagement", () => {
-const expandPanel = async () => {
-  const user = userEvent.setup();
-  const headerButton = screen.getByRole("button", {
-    name: /permission management/i,
-  });
-  await user.click(headerButton);
-  return user;
-};
-
-const renderWithForm = (props = {}) => {
-  const Wrapper: React.FC = ({ children }) => {
-    const [form] = Form.useForm();
-    return (
-      <Form form={form} initialValues={{ allow_all_keys: false }}>
-        {children}
-      </Form>
-    );
+  const expandPanel = async () => {
+    const user = userEvent.setup();
+    const headerButton = screen.getByRole("button", {
+      name: /permission management/i,
+    });
+    await user.click(headerButton);
+    return user;
   };
 
-  return render(
-    <Wrapper>
-      <MCPPermissionManagement {...defaultProps} {...props} />
-    </Wrapper>,
-  );
-};
+  const renderWithForm = (props = {}) => {
+    const Wrapper: React.FC = ({ children }) => {
+      const [form] = Form.useForm();
+      return (
+        <Form form={form} initialValues={{ allow_all_keys: false }}>
+          {children}
+        </Form>
+      );
+    };
+
+    return render(
+      <Wrapper>
+        <MCPPermissionManagement {...defaultProps} {...props} />
+      </Wrapper>,
+    );
+  };
 
   it("should default allow_all_keys switch to unchecked for new servers", async () => {
     renderWithForm();
@@ -51,10 +51,7 @@ const renderWithForm = (props = {}) => {
     expect(toggle).toHaveAttribute("aria-checked", "false");
   });
 
-  const renderWithInitialValues = (
-    initialValues: Record<string, unknown>,
-    props = {},
-  ) => {
+  const renderWithInitialValues = (initialValues: Record<string, unknown>, props = {}) => {
     const Wrapper: React.FC = ({ children }) => {
       const [form] = Form.useForm();
       return (
@@ -79,9 +76,7 @@ const renderWithForm = (props = {}) => {
   it("shows only the oauth2 PKCE-delegation toggle for oauth2 servers", async () => {
     renderWithInitialValues({ allow_all_keys: false, auth_type: "oauth2" });
     await expandPanel();
-    expect(
-      screen.getByText("Delegate auth to upstream (PKCE passthrough)"),
-    ).toBeInTheDocument();
+    expect(screen.getByText("Delegate auth to upstream (PKCE passthrough)")).toBeInTheDocument();
     // The non-oauth2 pass-through toggle must NOT appear for oauth2 servers.
     expect(screen.queryByText("OAuth pass-through")).not.toBeInTheDocument();
   });
@@ -95,9 +90,7 @@ const renderWithForm = (props = {}) => {
     await expandPanel();
     expect(screen.getByText("OAuth pass-through")).toBeInTheDocument();
     // The oauth2-only PKCE delegation toggle must NOT appear here.
-    expect(
-      screen.queryByText("Delegate auth to upstream (PKCE passthrough)"),
-    ).not.toBeInTheDocument();
+    expect(screen.queryByText("Delegate auth to upstream (PKCE passthrough)")).not.toBeInTheDocument();
   });
 
   it("hides both upstream-auth toggles for none-auth servers without an Authorization header", async () => {
@@ -108,9 +101,7 @@ const renderWithForm = (props = {}) => {
     });
     await expandPanel();
     expect(screen.queryByText("OAuth pass-through")).not.toBeInTheDocument();
-    expect(
-      screen.queryByText("Delegate auth to upstream (PKCE passthrough)"),
-    ).not.toBeInTheDocument();
+    expect(screen.queryByText("Delegate auth to upstream (PKCE passthrough)")).not.toBeInTheDocument();
   });
 
   it("should reflect allow_all_keys when editing an existing server", async () => {

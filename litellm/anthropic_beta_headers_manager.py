@@ -48,9 +48,7 @@ class GetAnthropicBetaHeadersConfig:
         """Load the local backup beta headers config bundled with the package."""
         try:
             content = json.loads(
-                files("litellm")
-                .joinpath("anthropic_beta_headers_config.json")
-                .read_text(encoding="utf-8")
+                files("litellm").joinpath("anthropic_beta_headers_config.json").read_text(encoding="utf-8")
             )
             return content
         except Exception as e:
@@ -70,16 +68,14 @@ class GetAnthropicBetaHeadersConfig:
         """Check if fetched config is a non-empty dict with expected structure."""
         if not isinstance(fetched_config, dict):
             verbose_logger.warning(
-                "LiteLLM: Fetched beta headers config is not a dict (type=%s). "
-                "Falling back to local backup.",
+                "LiteLLM: Fetched beta headers config is not a dict (type=%s). Falling back to local backup.",
                 type(fetched_config).__name__,
             )
             return False
 
         if len(fetched_config) == 0:
             verbose_logger.warning(
-                "LiteLLM: Fetched beta headers config is empty. "
-                "Falling back to local backup.",
+                "LiteLLM: Fetched beta headers config is empty. Falling back to local backup.",
             )
             return False
 
@@ -95,8 +91,7 @@ class GetAnthropicBetaHeadersConfig:
 
         if not has_provider:
             verbose_logger.warning(
-                "LiteLLM: Fetched beta headers config missing provider keys. "
-                "Falling back to local backup.",
+                "LiteLLM: Fetched beta headers config missing provider keys. Falling back to local backup.",
             )
             return False
 
@@ -147,20 +142,16 @@ def get_beta_headers_config(url: str) -> dict:
         content = GetAnthropicBetaHeadersConfig.fetch_remote_beta_headers_config(url)
     except Exception as e:
         verbose_logger.warning(
-            "LiteLLM: Failed to fetch remote beta headers config from %s: %s. "
-            "Falling back to local backup.",
+            "LiteLLM: Failed to fetch remote beta headers config from %s: %s. Falling back to local backup.",
             url,
             str(e),
         )
         return GetAnthropicBetaHeadersConfig.load_local_beta_headers_config()
 
     # Validate the fetched config
-    if not GetAnthropicBetaHeadersConfig.validate_beta_headers_config(
-        fetched_config=content
-    ):
+    if not GetAnthropicBetaHeadersConfig.validate_beta_headers_config(fetched_config=content):
         verbose_logger.warning(
-            "LiteLLM: Fetched beta headers config failed integrity check. "
-            "Using local backup instead. url=%s",
+            "LiteLLM: Fetched beta headers config failed integrity check. Using local backup instead. url=%s",
             url,
         )
         return GetAnthropicBetaHeadersConfig.load_local_beta_headers_config()
@@ -256,9 +247,7 @@ def filter_and_transform_beta_headers(
 
         # Check if header is in the mapping
         if header not in provider_mapping:
-            verbose_logger.debug(
-                f"Dropping unknown beta header '{header}' for provider '{provider}' (not in mapping)"
-            )
+            verbose_logger.debug(f"Dropping unknown beta header '{header}' for provider '{provider}' (not in mapping)")
             continue
 
         # Get the mapped header value
@@ -266,9 +255,7 @@ def filter_and_transform_beta_headers(
 
         # Skip if header is unsupported (null value)
         if mapped_header is None:
-            verbose_logger.debug(
-                f"Dropping unsupported beta header '{header}' for provider '{provider}'"
-            )
+            verbose_logger.debug(f"Dropping unsupported beta header '{header}' for provider '{provider}'")
             continue
 
         # Add the mapped header

@@ -25,9 +25,7 @@ class BaseRoutingStrategy(ABC):
         if should_batch_redis_writes:
             self.setup_sync_task(default_sync_interval)
 
-        self.in_memory_keys_to_update: set[str] = (
-            set()
-        )  # Set with max size of 1000 keys
+        self.in_memory_keys_to_update: set[str] = set()  # Set with max size of 1000 keys
 
     def setup_sync_task(self, default_sync_interval: Optional[Union[int, float]]):
         """Setup the sync task in a way that's compatible with FastAPI"""
@@ -38,9 +36,7 @@ class BaseRoutingStrategy(ABC):
             asyncio.set_event_loop(loop)
 
         self._sync_task = loop.create_task(
-            self.periodic_sync_in_memory_spend_with_redis(
-                default_sync_interval=default_sync_interval
-            )
+            self.periodic_sync_in_memory_spend_with_redis(default_sync_interval=default_sync_interval)
         )
 
     async def cleanup(self):
@@ -60,15 +56,11 @@ class BaseRoutingStrategy(ABC):
         """
         results = []
         for key, value in increment_list:
-            result = await self._increment_value_in_current_window(
-                key=key, value=value, ttl=ttl
-            )
+            result = await self._increment_value_in_current_window(key=key, value=value, ttl=ttl)
             results.append(result)
         return results
 
-    async def _increment_value_in_current_window(
-        self, key: str, value: Union[int, float], ttl: int
-    ):
+    async def _increment_value_in_current_window(self, key: str, value: Union[int, float], ttl: int):
         """
         Increment spend within existing budget window
 
@@ -92,9 +84,7 @@ class BaseRoutingStrategy(ABC):
         self.add_to_in_memory_keys_to_update(key=key)
         return result
 
-    async def periodic_sync_in_memory_spend_with_redis(
-        self, default_sync_interval: Optional[Union[int, float]]
-    ):
+    async def periodic_sync_in_memory_spend_with_redis(self, default_sync_interval: Optional[Union[int, float]]):
         """
         Handler that triggers sync_in_memory_spend_with_redis every DEFAULT_REDIS_SYNC_INTERVAL seconds
 
@@ -133,9 +123,7 @@ class BaseRoutingStrategy(ABC):
                 for idx, op in enumerate(self.redis_increment_operation_queue):
                     if op["key"] in compressed_ops:
                         # Add to existing increment
-                        compressed_ops[op["key"]]["increment_value"] += op[
-                            "increment_value"
-                        ]
+                        compressed_ops[op["key"]]["increment_value"] += op["increment_value"]
                     else:
                         compressed_ops[op["key"]] = op
 
@@ -144,31 +132,22 @@ class BaseRoutingStrategy(ABC):
                 # Convert back to list
                 compressed_queue = list(compressed_ops.values())
 
-                increment_result = (
-                    await self.dual_cache.redis_cache.async_increment_pipeline(
-                        increment_list=compressed_queue,
-                    )
+                increment_result = await self.dual_cache.redis_cache.async_increment_pipeline(
+                    increment_list=compressed_queue,
                 )
 
                 self.redis_increment_operation_queue = [
-                    op
-                    for idx, op in enumerate(self.redis_increment_operation_queue)
-                    if idx not in ops_to_remove
+                    op for idx, op in enumerate(self.redis_increment_operation_queue) if idx not in ops_to_remove
                 ]
 
                 if increment_result is not None:
-                    return_result = {
-                        key["key"]: op
-                        for key, op in zip(compressed_queue, increment_result)
-                    }
+                    return_result = {key["key"]: op for key, op in zip(compressed_queue, increment_result)}
                 else:
                     return_result = {}
                 return return_result
 
         except Exception as e:
-            verbose_router_logger.error(
-                f"Error syncing in-memory cache with Redis: {str(e)}"
-            )
+            verbose_router_logger.error(f"Error syncing in-memory cache with Redis: {str(e)}")
             self.redis_increment_operation_queue = []
 
     def add_to_in_memory_keys_to_update(self, key: str):
@@ -219,11 +198,7 @@ class BaseRoutingStrategy(ABC):
 
             # 1. Snapshot in-memory before
             in_memory_before_dict = {}
-            in_memory_before = (
-                await self.dual_cache.in_memory_cache.async_batch_get_cache(
-                    keys=cache_keys_list
-                )
-            )
+            in_memory_before = await self.dual_cache.in_memory_cache.async_batch_get_cache(keys=cache_keys_list)
             for k, v in zip(cache_keys_list, in_memory_before):
                 in_memory_before_dict[k] = float(v or 0)
 
@@ -236,9 +211,7 @@ class BaseRoutingStrategy(ABC):
             for key in cache_keys_list:
                 redis_val = float(redis_values.get(key, 0) or 0)
                 before = float(in_memory_before_dict.get(key, 0) or 0)
-                after = float(
-                    await self.dual_cache.in_memory_cache.async_get_cache(key=key) or 0
-                )
+                after = float(await self.dual_cache.in_memory_cache.async_get_cache(key=key) or 0)
                 delta = after - before
                 if after <= redis_val:
                     merged = redis_val + delta
@@ -251,11 +224,7 @@ class BaseRoutingStrategy(ABC):
                 #     import os
                 #     os._exit(1)
                 #     raise Exception(f"Redis is behind in-memory cache for key: {key}. This should not happen, since we should be updating redis with in-memory cache.")
-                await self.dual_cache.in_memory_cache.async_set_cache(
-                    key=key, value=merged
-                )
+                await self.dual_cache.in_memory_cache.async_set_cache(key=key, value=merged)
 
         except Exception as e:
-            verbose_router_logger.exception(
-                f"Error syncing in-memory cache with Redis: {str(e)}"
-            )
+            verbose_router_logger.exception(f"Error syncing in-memory cache with Redis: {str(e)}")

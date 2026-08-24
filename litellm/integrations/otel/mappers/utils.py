@@ -47,9 +47,7 @@ def stringify_message(message: object) -> str | None:
 
 def serialize_messages(messages: Sequence[object]) -> str | None:
     """Round-trip a sequence of message dicts through ``stringify_message``."""
-    serialized = [
-        json.loads(s) for s in (stringify_message(m) for m in messages) if s is not None
-    ]
+    serialized = [json.loads(s) for s in (stringify_message(m) for m in messages) if s is not None]
     return json.dumps(serialized) if serialized else None
 
 
@@ -62,11 +60,7 @@ def message_content(message: object) -> str | None:
         return content
     if isinstance(content, list):
         # multimodal: concatenate text parts only
-        parts = [
-            part.get("text", "")
-            for part in content
-            if isinstance(part, dict) and part.get("type") == "text"
-        ]
+        parts = [part.get("text", "") for part in content if isinstance(part, dict) and part.get("type") == "text"]
         return "".join(p for p in parts if isinstance(p, str)) or None
     return None
 

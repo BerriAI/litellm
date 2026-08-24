@@ -1,9 +1,5 @@
 import { describe, it, expect } from "vitest";
-import {
-  selectionsFromSavedAgentCard,
-  selectionsFromUpstreamCard,
-  skillId,
-} from "./agent_discovery_utils";
+import { selectionsFromSavedAgentCard, selectionsFromUpstreamCard, skillId } from "./agent_discovery_utils";
 
 const upstreamCard = {
   name: "Upstream Agent",
@@ -30,15 +26,9 @@ describe("selectionsFromSavedAgentCard", () => {
     expect(result.editedName).toBe("My Agent");
     expect(result.editedDescription).toBe("Saved description");
     expect(result.selectedCapabilities.streaming).toBe(false);
-    expect(result.selectedSkillIds.has(skillId(upstreamCard.skills![0], 0))).toBe(
-      true,
-    );
-    expect(
-      result.selectedSkillIds.has(skillId(upstreamCard.skills![1], 1)),
-    ).toBe(false);
-    expect(
-      result.selectedSkillIds.has(skillId(upstreamCard.skills![2], 2)),
-    ).toBe(false);
+    expect(result.selectedSkillIds.has(skillId(upstreamCard.skills![0], 0))).toBe(true);
+    expect(result.selectedSkillIds.has(skillId(upstreamCard.skills![1], 1))).toBe(false);
+    expect(result.selectedSkillIds.has(skillId(upstreamCard.skills![2], 2))).toBe(false);
   });
 
   it("matches saved skills by name when id is missing", () => {
@@ -48,9 +38,7 @@ describe("selectionsFromSavedAgentCard", () => {
 
     const result = selectionsFromSavedAgentCard(upstreamCard, savedCard);
 
-    expect(
-      result.selectedSkillIds.has(skillId(upstreamCard.skills![1], 1)),
-    ).toBe(true);
+    expect(result.selectedSkillIds.has(skillId(upstreamCard.skills![1], 1))).toBe(true);
     expect(result.selectedSkillIds.size).toBe(1);
   });
 });

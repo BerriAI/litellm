@@ -11,14 +11,7 @@ import {
   SortingState,
   useReactTable,
 } from "@tanstack/react-table";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeaderCell,
-  TableRow,
-} from "@tremor/react";
+import { Table, TableBody, TableCell, TableHead, TableHeaderCell, TableRow } from "@tremor/react";
 import { Tooltip } from "antd";
 import React, { useState } from "react";
 import { KeyResponse } from "../../key_team_helpers/key_list";
@@ -70,9 +63,7 @@ export function DeletedKeysTable({
         const value = info.getValue() as string;
         return (
           <Tooltip title={value}>
-            <span className="font-mono text-blue-500 text-xs truncate block max-w-[250px]">
-              {value || "-"}
-            </span>
+            <span className="font-mono text-blue-500 text-xs truncate block max-w-[250px]">{value || "-"}</span>
           </Tooltip>
         );
       },
@@ -87,9 +78,7 @@ export function DeletedKeysTable({
         const value = info.getValue() as string;
         return (
           <Tooltip title={value}>
-            <span className="font-mono text-xs truncate block max-w-[200px]">
-              {value ?? "-"}
-            </span>
+            <span className="font-mono text-xs truncate block max-w-[200px]">{value ?? "-"}</span>
           </Tooltip>
         );
       },
@@ -102,11 +91,7 @@ export function DeletedKeysTable({
       maxSize: 180,
       cell: (info) => {
         const value = info.getValue() as string;
-        return (
-          <span className="truncate block max-w-[180px]">
-            {value || "-"}
-          </span>
-        );
+        return <span className="truncate block max-w-[180px]">{value || "-"}</span>;
       },
     },
     {
@@ -116,9 +101,7 @@ export function DeletedKeysTable({
       size: 100,
       maxSize: 140,
       cell: (info) => (
-        <span className="block max-w-[140px]">
-          {formatNumberWithCommas(info.getValue() as number, 4)}
-        </span>
+        <span className="block max-w-[140px]">{formatNumberWithCommas(info.getValue() as number, 4)}</span>
       ),
     },
     {
@@ -146,9 +129,7 @@ export function DeletedKeysTable({
         const value = info.getValue() as string;
         return (
           <Tooltip title={value}>
-            <span className="font-mono text-xs truncate block max-w-[250px]">
-              {value ?? "-"}
-            </span>
+            <span className="font-mono text-xs truncate block max-w-[250px]">{value ?? "-"}</span>
           </Tooltip>
         );
       },
@@ -163,9 +144,7 @@ export function DeletedKeysTable({
         const userId = info.getValue() as string | null;
         return (
           <Tooltip title={userId || undefined}>
-            <span className="truncate block max-w-[200px]">
-              {userId || "-"}
-            </span>
+            <span className="truncate block max-w-[200px]">{userId || "-"}</span>
           </Tooltip>
         );
       },
@@ -179,9 +158,7 @@ export function DeletedKeysTable({
       cell: (info) => {
         const value = info.getValue();
         return (
-          <span className="block max-w-[140px]">
-            {value ? new Date(value as string).toLocaleDateString() : "-"}
-          </span>
+          <span className="block max-w-[140px]">{value ? new Date(value as string).toLocaleDateString() : "-"}</span>
         );
       },
     },
@@ -195,9 +172,7 @@ export function DeletedKeysTable({
         const value = (info.row.original as any).created_by as string | null | undefined;
         return (
           <Tooltip title={value || undefined}>
-            <span className="truncate block max-w-[180px]">
-              {value || "-"}
-            </span>
+            <span className="truncate block max-w-[180px]">{value || "-"}</span>
           </Tooltip>
         );
       },
@@ -210,11 +185,7 @@ export function DeletedKeysTable({
       maxSize: 140,
       cell: (info) => {
         const value = (info.row.original as any).deleted_at as string | null | undefined;
-        return (
-          <span className="block max-w-[140px]">
-            {value ? new Date(value).toLocaleDateString() : "-"}
-          </span>
-        );
+        return <span className="block max-w-[140px]">{value ? new Date(value).toLocaleDateString() : "-"}</span>;
       },
     },
     {
@@ -227,9 +198,7 @@ export function DeletedKeysTable({
         const value = (info.row.original as any).deleted_by as string | null | undefined;
         return (
           <Tooltip title={value || undefined}>
-            <span className="truncate block max-w-[180px]">
-              {value || "-"}
-            </span>
+            <span className="truncate block max-w-[180px]">{value || "-"}</span>
           </Tooltip>
         );
       },

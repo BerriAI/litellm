@@ -30,9 +30,7 @@ class CZEntityType(str, Enum):
 class CZRNGenerator:
     """Generate CloudZero Resource Names (CZRNs) for LiteLLM resources."""
 
-    CZRN_REGEX = re.compile(
-        r"^czrn:([a-z0-9-]+):([a-zA-Z0-9-]+):([a-z0-9-]+):([a-z0-9-]+):([a-z0-9-]+):(.+)$"
-    )
+    CZRN_REGEX = re.compile(r"^czrn:([a-z0-9-]+):([a-zA-Z0-9-]+):([a-z0-9-]+):([a-z0-9-]+):([a-z0-9-]+):(.+)$")
 
     def __init__(self):
         """Initialize CZRN generator."""
@@ -138,9 +136,7 @@ class CZRNGenerator:
             return normalized
         return provider_map.get(normalized, normalized)
 
-    def _normalize_component(
-        self, component: str, allow_uppercase: bool = False
-    ) -> str:
+    def _normalize_component(self, component: str, allow_uppercase: bool = False) -> str:
         """Normalize a CZRN component to meet format requirements."""
         if not component:
             return "unknown"

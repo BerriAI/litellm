@@ -8,6 +8,19 @@ locals {
   # the stack can reference local.name.
   name = "${var.tenant}-litellm-${var.env}"
 
+  # Mirrors the AWS stack's local.tags: the module stamps its own
+  # `litellm-stack` / `managed-by` labels onto every label-supporting
+  # resource (Cloud Run, Cloud SQL, Memorystore, Secret Manager, GCS) and
+  # merges var.labels on top. GCP label keys/values are lower-kebab/snake
+  # only, so the key is `litellm-stack`, not AWS's `litellm:stack`.
+  labels = merge(
+    {
+      "litellm-stack" = local.name
+      "managed-by"    = "terraform"
+    },
+    var.labels,
+  )
+
   gateway_path_prefixes = [
     "/v1/chat/*", "/chat/*",
     "/v1/completions*", "/completions*",
@@ -62,11 +75,18 @@ locals {
   ]
 
   proxy_config_enabled = length(keys(var.proxy_config)) > 0
-  proxy_config_b64     = local.proxy_config_enabled ? base64encode(yamlencode(var.proxy_config)) : ""
+  proxy_config_yaml    = local.proxy_config_enabled ? yamlencode(var.proxy_config) : ""
+
+  proxy_config_mount_path = "/etc/litellm"
+  proxy_config_file_name  = "config.yaml"
+  proxy_config_volume     = "proxy-config"
 
   proxy_config_env = local.proxy_config_enabled ? [
-    { name = "LITELLM_PROXY_CONFIG_B64", value = local.proxy_config_b64 },
-    { name = "CONFIG_FILE_PATH", value = "/tmp/litellm-config.yaml" },
+    { name = "CONFIG_FILE_PATH", value = "${local.proxy_config_mount_path}/${local.proxy_config_file_name}" },
+    # Forces a new Cloud Run revision when the YAML changes; gcsfuse only
+    # surfaces the new object on container restart, so without this an
+    # updated proxy_config would sit in the bucket unread.
+    { name = "PROXY_CONFIG_HASH", value = md5(local.proxy_config_yaml) },
   ] : []
 
   # Resolved image URIs: per-component override wins, otherwise compose

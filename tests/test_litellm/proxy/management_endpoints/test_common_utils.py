@@ -158,6 +158,32 @@ class TestUpdateMetadataFieldsEmptyCollections:
         assert updated_kv["metadata"]["guardrails"] == ["my-guardrail"]
 
     @patch("litellm.proxy.management_endpoints.common_utils._premium_user_check")
+    def test_false_boolean_does_not_trigger_premium_check(self, mock_premium_check):
+        """
+        Regression #30285: /team/update sends disable_global_guardrails=False
+        (the UI's unchanged default). A falsy boolean must not trigger the
+        premium check, so non-premium users are not wrongly 403'd.
+        """
+        updated_kv = {"team_id": "test-team", "disable_global_guardrails": False}
+        _update_metadata_fields(updated_kv=updated_kv)
+        mock_premium_check.assert_not_called()
+
+    @patch("litellm.proxy.management_endpoints.common_utils._premium_user_check")
+    def test_false_boolean_still_updates_metadata(self, mock_premium_check):
+        """A falsy boolean must still be moved into metadata so it persists."""
+        updated_kv = {"team_id": "test-team", "disable_global_guardrails": False}
+        _update_metadata_fields(updated_kv=updated_kv)
+        assert "disable_global_guardrails" not in updated_kv
+        assert updated_kv["metadata"]["disable_global_guardrails"] is False
+
+    @patch("litellm.proxy.management_endpoints.common_utils._premium_user_check")
+    def test_true_boolean_triggers_premium_check(self, mock_premium_check):
+        """Control: enabling the premium feature (True) still requires a license."""
+        updated_kv = {"team_id": "test-team", "disable_global_guardrails": True}
+        _update_metadata_fields(updated_kv=updated_kv)
+        mock_premium_check.assert_called()
+
+    @patch("litellm.proxy.management_endpoints.common_utils._premium_user_check")
     def test_ui_typical_payload_does_not_trigger_premium_check(
         self, mock_premium_check
     ):
@@ -544,3 +570,41 @@ class TestRequireCallerUserIdForNonAdmin:
 
         assert exc_info.value.status_code == 403
         assert "Service-account keys" in str(exc_info.value.detail)
+
+
+class TestValidateFiniteSpend:
+    """`validate_finite_spend` rejects NaN/±inf so a non-finite spend cannot
+    bypass `spend >= max_budget` enforcement (NaN/-inf compare false)."""
+
+    def test_none_is_allowed(self):
+        from litellm.proxy.management_endpoints.common_utils import (
+            validate_finite_spend,
+        )
+
+        assert validate_finite_spend(None) is None
+
+    def test_finite_value_is_allowed(self):
+        from litellm.proxy.management_endpoints.common_utils import (
+            validate_finite_spend,
+        )
+
+        assert validate_finite_spend(0.0) is None
+        assert validate_finite_spend(12.5) is None
+        # Negative spend is intentionally allowed. Admins may set a negative
+        # spend counter to grant an entity extra allowance for the current
+        # budget period only (e.g. a large one-time spend grant), effectively
+        # raising their headroom without raising the recurring budget ceiling.
+        # Future changes should continue to allow negative spend counters.
+        assert validate_finite_spend(-50.0) is None
+
+    @pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf")])
+    def test_non_finite_is_rejected(self, bad):
+        from fastapi import HTTPException
+
+        from litellm.proxy.management_endpoints.common_utils import (
+            validate_finite_spend,
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            validate_finite_spend(bad)
+        assert exc_info.value.status_code == 400

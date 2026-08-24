@@ -15,14 +15,25 @@ BEDROCK_MANAGED_S3_PREFIXES = (
     BEDROCK_MANAGED_S3_UPLOAD_PREFIX,
     BEDROCK_MANAGED_S3_OUTPUT_PREFIX,
 )
+MANAGED_CLOUD_STORAGE_SCHEMES = ("s3://", "gs://")
 _MAPPING_PROXY_TYPE: type = type(MappingProxyType({}))
+
+
+def is_managed_cloud_storage_uri(file_id: str) -> bool:
+    """
+    True if file_id is a raw cloud-storage object URI (e.g. ``s3://bucket/key``).
+
+    These are internal provider artifacts. On the multi-tenant proxy they must be
+    retrieved through their managed unified file id so owner/team access is enforced;
+    a raw URI supplied by a caller bypasses that check.
+    """
+    return isinstance(file_id, str) and file_id.startswith(MANAGED_CLOUD_STORAGE_SCHEMES)
+
 
 _SAFE_OBJECT_COMPONENT_PATTERN = re.compile(r"[^A-Za-z0-9._-]+")
 
 
-def sanitize_cloud_object_component(
-    value: Optional[str], fallback: str = "file"
-) -> str:
+def sanitize_cloud_object_component(value: Optional[str], fallback: str = "file") -> str:
     if not isinstance(value, str):
         return fallback
 
@@ -30,9 +41,7 @@ def sanitize_cloud_object_component(
     if component in {"", ".", ".."}:
         return fallback
 
-    component = "".join(
-        "_" if ord(char) < 32 or ord(char) == 127 else char for char in component
-    )
+    component = "".join("_" if ord(char) < 32 or ord(char) == 127 else char for char in component)
     component = _SAFE_OBJECT_COMPONENT_PATTERN.sub("_", component)
     component = component.strip("._")
     if not component:
@@ -55,12 +64,8 @@ def sanitize_cloud_object_path(value: Optional[str], fallback: str = "file") -> 
     return "/".join(segments)
 
 
-def build_managed_cloud_object_name(
-    prefix: str, filename: Optional[str], fallback_filename: str = "file"
-) -> str:
-    safe_filename = sanitize_cloud_object_component(
-        filename, fallback=fallback_filename
-    )
+def build_managed_cloud_object_name(prefix: str, filename: Optional[str], fallback_filename: str = "file") -> str:
+    safe_filename = sanitize_cloud_object_component(filename, fallback=fallback_filename)
     return f"{prefix}{uuid.uuid4().hex}-{safe_filename}"
 
 
@@ -84,9 +89,7 @@ def split_configured_cloud_bucket_name(bucket_name: str) -> Tuple[str, str]:
 
     bucket_name = bucket_name.strip()
     if "://" in bucket_name or "?" in bucket_name or "#" in bucket_name:
-        raise ValueError(
-            "Cloud storage bucket name must not include a URI scheme or query"
-        )
+        raise ValueError("Cloud storage bucket name must not include a URI scheme or query")
     if any(ord(char) < 32 or ord(char) == 127 for char in bucket_name):
         raise ValueError("Cloud storage bucket name contains control characters")
 
@@ -116,13 +119,9 @@ def should_allow_legacy_cloud_file_ids(
 ) -> bool:
     value = None
     if isinstance(litellm_params, Mapping):
-        trusted_model_credentials = litellm_params.get(
-            "_litellm_internal_model_credentials"
-        )
+        trusted_model_credentials = litellm_params.get("_litellm_internal_model_credentials")
         if isinstance(trusted_model_credentials, _MAPPING_PROXY_TYPE):
-            value = cast(Mapping[str, Any], trusted_model_credentials).get(
-                "allow_legacy_cloud_file_ids"
-            )
+            value = cast(Mapping[str, Any], trusted_model_credentials).get("allow_legacy_cloud_file_ids")
 
     if isinstance(value, bool):
         return value
@@ -147,29 +146,21 @@ def validate_managed_cloud_file_id(
         raise ValueError("file_id must include a cloud storage object name")
 
     bucket_name, object_name = full_path.split("/", 1)
-    configured_bucket, configured_prefix = split_configured_cloud_bucket_name(
-        configured_bucket_name
-    )
+    configured_bucket, configured_prefix = split_configured_cloud_bucket_name(configured_bucket_name)
     if bucket_name != configured_bucket:
         raise ValueError("file_id bucket does not match the configured storage bucket")
 
     _validate_cloud_object_path(object_name)
     allowed_prefixes = tuple(allowed_object_prefixes)
     if configured_prefix:
-        allowed_prefixes = tuple(
-            f"{configured_prefix.rstrip('/')}/{prefix}" for prefix in allowed_prefixes
-        )
+        allowed_prefixes = tuple(f"{configured_prefix.rstrip('/')}/{prefix}" for prefix in allowed_prefixes)
 
     if object_name.startswith(allowed_prefixes):
         return bucket_name, object_name
 
     if allow_legacy_cloud_file_ids:
-        if configured_prefix and not object_name.startswith(
-            f"{configured_prefix.rstrip('/')}/"
-        ):
-            raise ValueError(
-                "file_id object does not match the configured storage prefix"
-            )
+        if configured_prefix and not object_name.startswith(f"{configured_prefix.rstrip('/')}/"):
+            raise ValueError("file_id object does not match the configured storage prefix")
         return bucket_name, object_name
 
     raise ValueError("file_id must reference a LiteLLM-managed storage object")

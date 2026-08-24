@@ -32,14 +32,9 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
         super().__init__(bucket_name=bucket_name)
 
         self.batch_size = int(os.getenv("GCS_BATCH_SIZE", GCS_DEFAULT_BATCH_SIZE))
-        self.flush_interval = int(
-            os.getenv("GCS_FLUSH_INTERVAL", GCS_DEFAULT_FLUSH_INTERVAL_SECONDS)
-        )
+        self.flush_interval = int(os.getenv("GCS_FLUSH_INTERVAL", GCS_DEFAULT_FLUSH_INTERVAL_SECONDS))
         self.use_batched_logging = (
-            os.getenv(
-                "GCS_USE_BATCHED_LOGGING", str(GCS_DEFAULT_USE_BATCHED_LOGGING).lower()
-            ).lower()
-            == "true"
+            os.getenv("GCS_USE_BATCHED_LOGGING", str(GCS_DEFAULT_USE_BATCHED_LOGGING).lower()).lower() == "true"
         )
         self.flush_lock = asyncio.Lock()
         super().__init__(
@@ -72,19 +67,13 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
                 kwargs,
                 response_obj,
             )
-            logging_payload: Optional[StandardLoggingPayload] = kwargs.get(
-                "standard_logging_object", None
-            )
+            logging_payload: Optional[StandardLoggingPayload] = kwargs.get("standard_logging_object", None)
             if logging_payload is None:
                 raise ValueError("standard_logging_object not found in kwargs")
             # When queue is at maxsize, flush immediately to make room (no blocking, no data dropped)
             if self.log_queue.full():
                 await self.flush_queue()
-            await self.log_queue.put(
-                GCSLogQueueItem(
-                    payload=logging_payload, kwargs=kwargs, response_obj=response_obj
-                )
-            )
+            await self.log_queue.put(GCSLogQueueItem(payload=logging_payload, kwargs=kwargs, response_obj=response_obj))
 
         except Exception as e:
             verbose_logger.exception(f"GCS Bucket logging error: {str(e)}")
@@ -97,19 +86,13 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
                 response_obj,
             )
 
-            logging_payload: Optional[StandardLoggingPayload] = kwargs.get(
-                "standard_logging_object", None
-            )
+            logging_payload: Optional[StandardLoggingPayload] = kwargs.get("standard_logging_object", None)
             if logging_payload is None:
                 raise ValueError("standard_logging_object not found in kwargs")
             # When queue is at maxsize, flush immediately to make room (no blocking, no data dropped)
             if self.log_queue.full():
                 await self.flush_queue()
-            await self.log_queue.put(
-                GCSLogQueueItem(
-                    payload=logging_payload, kwargs=kwargs, response_obj=response_obj
-                )
-            )
+            await self.log_queue.put(GCSLogQueueItem(payload=logging_payload, kwargs=kwargs, response_obj=response_obj))
 
         except Exception as e:
             verbose_logger.exception(f"GCS Bucket logging error: {str(e)}")
@@ -147,15 +130,9 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
         This key may contain sensitive information (bucket names, paths) - use _sanitize_config_key()
         for logging purposes.
         """
-        standard_callback_dynamic_params = (
-            kwargs.get("standard_callback_dynamic_params", None) or {}
-        )
+        standard_callback_dynamic_params = kwargs.get("standard_callback_dynamic_params", None) or {}
 
-        bucket_name = (
-            standard_callback_dynamic_params.get("gcs_bucket_name", None)
-            or self.BUCKET_NAME
-            or "default"
-        )
+        bucket_name = standard_callback_dynamic_params.get("gcs_bucket_name", None) or self.BUCKET_NAME or "default"
         path_service_account = (
             standard_callback_dynamic_params.get("gcs_path_service_account", None)
             or self.path_service_account_json
@@ -174,9 +151,7 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
         hash_obj = hashlib.sha256(config_key.encode("utf-8"))
         return f"config-{hash_obj.hexdigest()[:8]}"
 
-    def _group_items_by_config(
-        self, items: List[GCSLogQueueItem]
-    ) -> Dict[str, List[GCSLogQueueItem]]:
+    def _group_items_by_config(self, items: List[GCSLogQueueItem]) -> Dict[str, List[GCSLogQueueItem]]:
         """
         Group items by their GCS config (bucket + credentials).
         This ensures items with different configs are processed separately.
@@ -203,9 +178,7 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
             lines.append(json_line)
         return "\n".join(lines)
 
-    async def _send_grouped_batch(
-        self, items: List[GCSLogQueueItem], config_key: str
-    ) -> Tuple[int, int]:
+    async def _send_grouped_batch(self, items: List[GCSLogQueueItem], config_key: str) -> Tuple[int, int]:
         """
         Send a batch of items that share the same GCS config.
 
@@ -218,9 +191,7 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
         first_kwargs = items[0]["kwargs"]
 
         try:
-            gcs_logging_config: GCSLoggingConfig = await self.get_gcs_logging_config(
-                first_kwargs
-            )
+            gcs_logging_config: GCSLoggingConfig = await self.get_gcs_logging_config(first_kwargs)
 
             headers = await self.construct_request_headers(
                 vertex_instance=gcs_logging_config["vertex_instance"],
@@ -228,9 +199,7 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
             )
             bucket_name = gcs_logging_config["bucket_name"]
 
-            current_date = self._get_object_date_from_datetime(
-                datetime.now(timezone.utc)
-            )
+            current_date = self._get_object_date_from_datetime(datetime.now(timezone.utc))
             batch_id = f"{int(time.time() * 1000)}-{uuid.uuid4().hex[:8]}"
             object_name = self._generate_batch_object_name(current_date, batch_id)
             combined_payload = self._combine_payloads_to_ndjson(items)
@@ -249,9 +218,7 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
         except Exception as e:
             success_count = 0
             error_count = len(items)
-            verbose_logger.exception(
-                f"GCS Bucket error logging batch payload to GCS bucket: {str(e)}"
-            )
+            verbose_logger.exception(f"GCS Bucket error logging batch payload to GCS bucket: {str(e)}")
             return (success_count, error_count)
 
     async def _send_individual_logs(self, items: List[GCSLogQueueItem]) -> None:
@@ -267,9 +234,7 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
         Send a single log item to GCS as an individual object.
         """
         try:
-            gcs_logging_config: GCSLoggingConfig = await self.get_gcs_logging_config(
-                item["kwargs"]
-            )
+            gcs_logging_config: GCSLoggingConfig = await self.get_gcs_logging_config(item["kwargs"])
 
             headers = await self.construct_request_headers(
                 vertex_instance=gcs_logging_config["vertex_instance"],
@@ -290,9 +255,7 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
                 logging_payload=item["payload"],
             )
         except Exception as e:
-            verbose_logger.exception(
-                f"GCS Bucket error logging individual payload to GCS bucket: {str(e)}"
-            )
+            verbose_logger.exception(f"GCS Bucket error logging individual payload to GCS bucket: {str(e)}")
 
     async def async_send_batch(self):
         """
@@ -316,9 +279,7 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
         else:
             await self._send_individual_logs(items_to_process)
 
-    def _get_object_name(
-        self, kwargs: Dict, logging_payload: StandardLoggingPayload, response_obj: Any
-    ) -> str:
+    def _get_object_name(self, kwargs: Dict, logging_payload: StandardLoggingPayload, response_obj: Any) -> str:
         """
         Get the object name to use for the current payload
         """
@@ -337,9 +298,7 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
         _litellm_params = kwargs.get("litellm_params", None) or {}
         _metadata = _litellm_params.get("metadata", None) or {}
         if "gcs_log_id" in _metadata:
-            safe_log_id = sanitize_cloud_object_component(
-                _metadata.get("gcs_log_id"), fallback=""
-            )
+            safe_log_id = sanitize_cloud_object_component(_metadata.get("gcs_log_id"), fallback="")
             if safe_log_id:
                 object_name = f"{current_date}/custom-{uuid.uuid4().hex}-{safe_log_id}"
 
@@ -356,9 +315,7 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
         Tries current day, next day, and previous day until it finds the payload
         """
         if start_time_utc is None:
-            raise ValueError(
-                "start_time_utc is required for getting a payload from GCS Bucket"
-            )
+            raise ValueError("start_time_utc is required for getting a payload from GCS Bucket")
 
         dates_to_try = [
             start_time_utc,
@@ -379,9 +336,7 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
                     loaded_response = json.loads(response)
                     return loaded_response
             except Exception as e:
-                verbose_logger.debug(
-                    f"Failed to fetch payload for date {date_str}: {str(e)}"
-                )
+                verbose_logger.debug(f"Failed to fetch payload for date {date_str}: {str(e)}")
                 continue
 
         return None
@@ -415,9 +370,7 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
         """
         while True:
             await asyncio.sleep(self.flush_interval)
-            verbose_logger.debug(
-                f"GCS Bucket periodic flush after {self.flush_interval} seconds"
-            )
+            verbose_logger.debug(f"GCS Bucket periodic flush after {self.flush_interval} seconds")
             await self.flush_queue()
 
     async def async_health_check(self) -> IntegrationHealthCheckStatus:

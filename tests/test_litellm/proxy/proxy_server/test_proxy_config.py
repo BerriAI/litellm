@@ -10,8 +10,8 @@ from __future__ import annotations
 
 import os
 from types import SimpleNamespace
-from typing import Any, Dict, List, Optional
-from unittest.mock import AsyncMock, MagicMock, patch
+from typing import Any, Dict
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -601,6 +601,98 @@ async def test_ProxyConfig_load_config_missing_file_raises(monkeypatch):
         await pc.load_config(router=None, config_file_path="/no/file.yaml")
 
 
+@pytest.mark.asyncio
+async def test_ProxyConfig_load_config_forwards_callback_specific_params(
+    tmp_path, monkeypatch
+):
+    """Regression: callback_settings from config must be forwarded to
+    initialize_callbacks_on_proxy as callback_specific_params.
+
+    Callbacks like DatadogCostManagementLogger read their init params (e.g.
+    cost_tag_keys) from callback_specific_params[<callback_name>]. If the
+    argument is dropped at the call site, they silently initialize with empty
+    params and the configured allowlist never takes effect.
+    """
+    f = tmp_path / "c.yaml"
+    f.write_text(
+        "model_list: []\n"
+        "general_settings: {}\n"
+        "callback_settings:\n"
+        "  datadog_cost_management:\n"
+        "    cost_tag_keys:\n"
+        "      - capability\n"
+        "      - platform\n"
+        "      - ai_product\n"
+        "litellm_settings:\n"
+        '  callbacks: ["datadog_cost_management"]\n'
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
+    monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
+
+    captured = {}
+
+    def _fake_initialize_callbacks_on_proxy(**kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.initialize_callbacks_on_proxy",
+        _fake_initialize_callbacks_on_proxy,
+    )
+
+    pc = ProxyConfig()
+    await pc.load_config(router=None, config_file_path=str(f))
+
+    # The callbacks branch must forward the loaded callback_settings.
+    assert captured.get("callback_specific_params") == {
+        "datadog_cost_management": {
+            "cost_tag_keys": ["capability", "platform", "ai_product"]
+        }
+    }
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_load_config_blank_callback_settings_does_not_crash(
+    tmp_path, monkeypatch
+):
+    """Regression: `callback_settings:` with no body loads as None because
+    dict.get() only falls back to the default when the key is absent. The None
+    was forwarded verbatim to initialize_callbacks_on_proxy, where the first
+    `"<name>" in callback_specific_params` membership test raised
+    TypeError: argument of type 'NoneType' is not iterable, aborting startup.
+    Startup must succeed and the callback must initialize with its defaults.
+    """
+    f = tmp_path / "c.yaml"
+    f.write_text(
+        "model_list: []\n"
+        "general_settings: {}\n"
+        "callback_settings:\n"
+        "litellm_settings:\n"
+        '  callbacks: ["compression_interception"]\n'
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
+    monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
+
+    from litellm.integrations.compression_interception.handler import (
+        CompressionInterceptionLogger,
+    )
+
+    original_callbacks = (
+        list(litellm.callbacks) if isinstance(litellm.callbacks, list) else []
+    )
+    litellm.callbacks = []
+    try:
+        pc = ProxyConfig()
+        await pc.load_config(router=None, config_file_path=str(f))
+
+        assert any(
+            isinstance(c, CompressionInterceptionLogger) for c in litellm.callbacks
+        )
+    finally:
+        litellm.callbacks = original_callbacks
+
+
 # ---------------------------------------------------------------------------
 # ProxyConfig._init_non_llm_configs
 # ---------------------------------------------------------------------------
@@ -795,6 +887,84 @@ def test_ProxyConfig__add_deployment_invalid_litellm_params_skips(monkeypatch):
     assert pc._add_deployment(db_models=[bad]) == 0
 
 
+def test_ProxyConfig__add_deployment_resolves_env_refs_after_db_decrypt(monkeypatch):
+    monkeypatch.setenv("LITELLM_DB_MODEL_API_KEY", "resolved-secret")
+    monkeypatch.setenv("LITELLM_MASTER_KEY", "master-secret")
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.decrypt_value_helper",
+        lambda value, key, return_original_value: value,
+    )
+    fake_router = MagicMock()
+    fake_router.upsert_deployment = MagicMock(return_value=True)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", fake_router)
+    pc = ProxyConfig()
+    db_model = SimpleNamespace(
+        model_id="model-1",
+        model_name="env-model",
+        model_info={"id": "model-1"},
+        litellm_params={
+            "model": "openai/gpt-4o-mini",
+            "api_key": "os.environ/LITELLM_DB_MODEL_API_KEY",
+            "api_base": "os.environ/LITELLM_MASTER_KEY",
+        },
+        blocked=False,
+    )
+
+    added = pc._add_deployment(db_models=[db_model])
+    deployment = fake_router.upsert_deployment.call_args.kwargs["deployment"]
+
+    assert added == 1
+    assert deployment.litellm_params.api_key == "resolved-secret"
+    assert deployment.litellm_params.api_base == "os.environ/LITELLM_MASTER_KEY"
+
+
+def test_ProxyConfig__add_deployment_keeps_team_env_refs_literal(monkeypatch):
+    def fail_on_call(secret_name, *args, **kwargs):
+        raise AssertionError("team DB models should not resolve env refs")
+
+    monkeypatch.setenv("LITELLM_MASTER_KEY", "master-secret")
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.decrypt_value_helper",
+        lambda value, key, return_original_value: value,
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.get_secret", fail_on_call)
+    fake_router = MagicMock()
+    fake_router.upsert_deployment = MagicMock(return_value=True)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", fake_router)
+    pc = ProxyConfig()
+    db_model = SimpleNamespace(
+        model_id="model-1",
+        model_name="model_name_team-1_abc",
+        model_info={"id": "model-1", "team_id": "team-1"},
+        litellm_params={
+            "model": "openai/gpt-4o-mini",
+            "api_key": "os.environ/LITELLM_MASTER_KEY",
+            "api_base": "https://attacker.example",
+        },
+        blocked=False,
+    )
+
+    added = pc._add_deployment(db_models=[db_model])
+    deployment = fake_router.upsert_deployment.call_args.kwargs["deployment"]
+
+    assert added == 1
+    assert deployment.litellm_params.api_key == "os.environ/LITELLM_MASTER_KEY"
+    assert deployment.litellm_params.api_base == "https://attacker.example"
+
+
+def test_ProxyConfig__resolve_db_litellm_param_skips_non_string_values(monkeypatch):
+    def fail_on_call(value, key, return_original_value):
+        raise AssertionError("decrypt_value_helper should only receive strings")
+
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.decrypt_value_helper",
+        fail_on_call,
+    )
+    pc = ProxyConfig()
+
+    assert pc._resolve_db_litellm_param(key="tpm", value=100) == 100
+
+
 # ---------------------------------------------------------------------------
 # ProxyConfig.decrypt_model_list_from_db
 # ---------------------------------------------------------------------------
@@ -825,6 +995,71 @@ def test_ProxyConfig_decrypt_model_list_from_db_returns_decrypted(monkeypatch):
         "params_model": "gpt-4",
         "id_present": True,
     }
+
+
+def test_ProxyConfig_decrypt_model_list_from_db_resolves_env_refs_after_db_decrypt(
+    monkeypatch,
+):
+    monkeypatch.setenv("LITELLM_DB_MODEL_API_KEY", "resolved-secret")
+    monkeypatch.setenv("LITELLM_MASTER_KEY", "master-secret")
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.decrypt_value_helper",
+        lambda value, key, return_original_value: (
+            "os.environ/LITELLM_DB_MODEL_API_KEY"
+            if key == "api_key"
+            else "os.environ/LITELLM_MASTER_KEY" if key == "api_base" else value
+        ),
+    )
+    pc = ProxyConfig()
+    m = SimpleNamespace(
+        model_id="model-1",
+        model_name="env-model",
+        model_info={"id": "model-1"},
+        litellm_params={
+            "api_key": "encrypted-env-ref",
+            "api_base": "encrypted-api-base-env-ref",
+            "model": "openai/gpt-4o-mini",
+        },
+        blocked=False,
+    )
+
+    out = pc.decrypt_model_list_from_db(new_models=[m])
+
+    assert out[0]["litellm_params"]["api_key"] == "resolved-secret"
+    assert out[0]["litellm_params"]["api_base"] == "os.environ/LITELLM_MASTER_KEY"
+
+
+def test_ProxyConfig_decrypt_model_list_from_db_keeps_team_env_refs_literal_after_db_decrypt(
+    monkeypatch,
+):
+    def fail_on_call(secret_name, *args, **kwargs):
+        raise AssertionError("team DB models should not resolve env refs")
+
+    monkeypatch.setenv("LITELLM_MASTER_KEY", "master-secret")
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.decrypt_value_helper",
+        lambda value, key, return_original_value: (
+            "os.environ/LITELLM_MASTER_KEY" if key == "api_key" else value
+        ),
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.get_secret", fail_on_call)
+    pc = ProxyConfig()
+    m = SimpleNamespace(
+        model_id="model-1",
+        model_name="model_name_team-1_abc",
+        model_info={"id": "model-1", "team_id": "team-1"},
+        litellm_params={
+            "api_key": "encrypted-env-ref",
+            "api_base": "https://attacker.example",
+            "model": "openai/gpt-4o-mini",
+        },
+        blocked=False,
+    )
+
+    out = pc.decrypt_model_list_from_db(new_models=[m])
+
+    assert out[0]["litellm_params"]["api_key"] == "os.environ/LITELLM_MASTER_KEY"
+    assert out[0]["litellm_params"]["api_base"] == "https://attacker.example"
 
 
 def test_ProxyConfig_decrypt_model_list_from_db_invalid_params_skips():
@@ -888,7 +1123,7 @@ async def test_ProxyConfig__update_llm_router_bad_proxy_logging_raises(monkeypat
     # Passing None for proxy_logging_obj triggers AttributeError in _add_general_settings_from_db_config
     # when it calls proxy_logging_obj.update_values.
     with pytest.raises(AttributeError):
-        await pc._update_llm_router(new_models=None, proxy_logging_obj=None)  # type: ignore[arg-type]
+        await pc._update_llm_router(new_models=[], proxy_logging_obj=None)  # type: ignore[arg-type]
 
 
 # ---------------------------------------------------------------------------

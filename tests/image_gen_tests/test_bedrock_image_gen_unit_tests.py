@@ -527,12 +527,11 @@ def test_backward_compatibility_regular_nova_model():
     assert result["imageGenerationConfig"]["cfg_scale"] == 7
 
 
-def test_amazon_titan_image_gen():
-    """Test Amazon Titan image generation with cost tracking."""
+def test_amazon_nova_canvas_image_gen():
+    """Test Amazon Nova Canvas image generation with cost tracking."""
     from litellm import image_generation
 
-    # Use v2 as v1 has reached end of life
-    model_id = "bedrock/amazon.titan-image-generator-v2:0"
+    model_id = "bedrock/amazon.nova-canvas-v1:0"
 
     response = litellm.image_generation(
         model=model_id,

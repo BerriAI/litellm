@@ -205,6 +205,12 @@ class PatchAgentRequest(TypedDict, total=False):
 # Request/Response models for CRUD endpoints
 
 
+class AgentKeySummary(BaseModel):
+    token: str
+    key_alias: Optional[str] = None
+    key_name: Optional[str] = None
+
+
 class AgentResponse(BaseModel):
     agent_id: str
     agent_name: str
@@ -218,6 +224,7 @@ class AgentResponse(BaseModel):
     session_rpm_limit: Optional[int] = None
     static_headers: Optional[Dict[str, str]] = None
     extra_headers: Optional[List[str]] = None
+    keys: Optional[List[AgentKeySummary]] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
     created_by: Optional[str] = None
@@ -298,6 +305,23 @@ class MakeAgentsPublicRequest(BaseModel):
     agent_ids: List[str]
 
 
+def _normalize_a2a_jsonrpc_response(
+    response_dict: Dict[str, Any],
+    request_id: Optional[Any] = None,
+) -> Dict[str, Any]:
+    """
+    Ensure JSON-RPC responses include ``id`` when the caller supplied one.
+
+    The a2a SDK may omit ``id`` on error payloads even when the upstream agent
+    returned it. Backfill from the outbound request id so LiteLLM can surface the
+    agent error instead of failing Pydantic validation.
+    """
+    normalized = dict(response_dict)
+    if normalized.get("id") is None and request_id is not None:
+        normalized["id"] = str(request_id)
+    return normalized
+
+
 class LiteLLMSendMessageResponse(LiteLLMPydanticObjectBase):
     """
     LiteLLM wrapper for A2A SendMessageResponse.
@@ -322,31 +346,38 @@ class LiteLLMSendMessageResponse(LiteLLMPydanticObjectBase):
 
     @classmethod
     def from_a2a_response(
-        cls, response: "SendMessageResponse"
+        cls,
+        response: "SendMessageResponse",
+        request_id: Optional[Any] = None,
     ) -> "LiteLLMSendMessageResponse":
         """
         Create a LiteLLMSendMessageResponse from an a2a SDK SendMessageResponse.
 
         Args:
             response: The a2a SDK SendMessageResponse
+            request_id: JSON-RPC request id to backfill when the SDK omits it on errors
 
         Returns:
             LiteLLMSendMessageResponse with _hidden_params support
         """
-        # Convert the a2a response to a dict
         response_dict = response.model_dump(mode="json", exclude_none=True)
-
+        response_dict = _normalize_a2a_jsonrpc_response(response_dict, request_id=request_id)
         return cls(**response_dict)
 
     @classmethod
-    def from_dict(cls, response_dict: Dict[str, Any]) -> "LiteLLMSendMessageResponse":
+    def from_dict(
+        cls,
+        response_dict: Dict[str, Any],
+        request_id: Optional[Any] = None,
+    ) -> "LiteLLMSendMessageResponse":
         """
         Create a LiteLLMSendMessageResponse from a dict.
 
         Args:
             response_dict: Dict with A2A response structure
+            request_id: JSON-RPC request id to backfill when missing on error payloads
 
         Returns:
             LiteLLMSendMessageResponse with _hidden_params support
         """
-        return cls(**response_dict)
+        return cls(**_normalize_a2a_jsonrpc_response(response_dict, request_id=request_id))

@@ -15,10 +15,7 @@ beforeAll(() => {
 
 vi.mock("../../networking", () => ({
   modelHubCall: vi.fn().mockResolvedValue({
-    data: [
-      { model_group: "gpt-4" },
-      { model_group: "claude-3-opus" },
-    ],
+    data: [{ model_group: "gpt-4" }, { model_group: "claude-3-opus" }],
   }),
   usageAiChatStream: vi.fn(),
 }));
@@ -34,9 +31,7 @@ describe("UsageAIChatPanel", () => {
     renderWithProviders(<UsageAIChatPanel {...defaultProps} />);
 
     expect(screen.getByText("Ask AI")).toBeInTheDocument();
-    expect(
-      screen.getByText("Ask about your spend, models, keys, and trends")
-    ).toBeInTheDocument();
+    expect(screen.getByText("Ask about your spend, models, keys, and trends")).toBeInTheDocument();
   });
 
   it("should render model selector", () => {

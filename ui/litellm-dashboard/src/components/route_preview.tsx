@@ -25,8 +25,12 @@ const RoutePreview: React.FC<RoutePreviewProps> = ({ pathValue, targetValue, inc
 
   return (
     <Card className="p-5">
-      <Title level={5} className="text-lg font-semibold text-gray-900 mb-2">Route Preview</Title>
-      <Text type="secondary" className="text-gray-600 mb-5" style={{ display: "block" }}>How your requests will be routed</Text>
+      <Title level={5} className="text-lg font-semibold text-gray-900 mb-2">
+        Route Preview
+      </Title>
+      <Text type="secondary" className="text-gray-600 mb-5" style={{ display: "block" }}>
+        How your requests will be routed
+      </Text>
 
       <div className="space-y-5">
         {/* Basic routing */}

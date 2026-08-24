@@ -154,6 +154,59 @@ class TestHasPostCallGuardrails:
             assert ProxyBaseLLMRequestProcessing._has_post_call_guardrails() is False
 
 
+class TestHasPostCallGuardrailsForPassthrough:
+    """Passthrough buffering must include event_hook=None guardrails.
+
+    Those guardrails run at post_call (should_run_guardrail treats None as
+    matching every hook); skipping the buffer would forward the raw upstream
+    body and bypass output processing. The check is scoped to the request via
+    should_run_guardrail so a guardrail that exists globally but is not
+    configured for this key/team does not turn the stream non-streaming.
+    """
+
+    @staticmethod
+    def _has(data: dict) -> bool:
+        return ProxyBaseLLMRequestProcessing(
+            data=data
+        )._has_post_call_guardrails_for_passthrough()
+
+    def test_returns_true_for_event_hook_none(self):
+        with patch("litellm.callbacks", [AllEventsGuardrail()]):
+            assert self._has({}) is True
+
+    def test_returns_true_for_post_call_guardrail(self):
+        with patch("litellm.callbacks", [PostCallGuardrail()]):
+            assert self._has({}) is True
+
+    def test_returns_false_for_pre_call_only(self):
+        with patch("litellm.callbacks", [PreCallGuardrail()]):
+            assert self._has({}) is False
+
+    def test_returns_false_for_no_callbacks(self):
+        with patch("litellm.callbacks", []):
+            assert self._has({}) is False
+
+    def test_ignores_non_guardrail_callbacks(self):
+        with patch("litellm.callbacks", ["langfuse", CustomLogger()]):
+            assert self._has({}) is False
+
+    def test_request_scoped_guardrail_not_configured_for_key(self):
+        """A non-default-on post_call guardrail must not force buffering for a
+        request whose key/team does not reference it."""
+
+        class OptInPostCall(CustomGuardrail):
+            def __init__(self):
+                super().__init__(
+                    guardrail_name="opt-in-post",
+                    default_on=False,
+                    event_hook=GuardrailEventHooks.post_call,
+                )
+
+        with patch("litellm.callbacks", [OptInPostCall()]):
+            assert self._has({"metadata": {"guardrails": []}}) is False
+            assert self._has({"metadata": {"guardrails": ["opt-in-post"]}}) is True
+
+
 # ---------------------------------------------------------------------------
 # 2. Non-streaming: deferral flag → closure stored, create_task skipped
 # ---------------------------------------------------------------------------

@@ -57,9 +57,7 @@ class PrometheusLabelFactoryContext:
         if enum_values.custom_metadata_labels is not None:
             for key, value in enum_values.custom_metadata_labels.items():
                 sk = _sanitize_prometheus_label_name(key)
-                self._custom_by_sanitized_key[sk] = _sanitize_prometheus_label_value(
-                    value
-                )
+                self._custom_by_sanitized_key[sk] = _sanitize_prometheus_label_value(value)
         self._tag_labels: Dict[str, Optional[str]] = {}
         if enum_values.tags is not None:
             # Late import avoids circular import: ``prometheus`` imports this module.

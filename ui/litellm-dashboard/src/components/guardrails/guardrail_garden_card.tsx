@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { CheckCircleFilled } from "@ant-design/icons";
 import { GuardrailCardInfo } from "./guardrail_garden_data";
+import { resolveLogoSrc } from "@/lib/assetPaths";
 
 const LogoWithFallback: React.FC<{ src: string; name: string }> = ({ src, name }) => {
   const [hasError, setHasError] = useState(false);
@@ -29,7 +30,7 @@ const LogoWithFallback: React.FC<{ src: string; name: string }> = ({ src, name }
 
   return (
     <img
-      src={src}
+      src={resolveLogoSrc(src)}
       alt=""
       style={{ width: 28, height: 28, borderRadius: 6, objectFit: "contain", flexShrink: 0 }}
       onError={() => setHasError(true)}
@@ -65,10 +66,7 @@ const GuardrailCard: React.FC<{ card: GuardrailCardInfo; onClick: () => void }> 
       </div>
 
       {/* Description */}
-      <p
-        className="line-clamp-3"
-        style={{ fontSize: 12, color: "#6b7280", lineHeight: 1.6, margin: 0, flex: 1 }}
-      >
+      <p className="line-clamp-3" style={{ fontSize: 12, color: "#6b7280", lineHeight: 1.6, margin: 0, flex: 1 }}>
         {card.description}
       </p>
 

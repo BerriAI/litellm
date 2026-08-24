@@ -140,9 +140,7 @@ const CredentialsPanel: React.FC<CredentialsPanelProps> = ({ uploadProps }) => {
 
   return (
     <div className="w-full mx-auto flex-auto overflow-y-auto p-2">
-      {canModifyCredentials && (
-        <Button onClick={() => setIsAddModalOpen(true)}>Add Credential</Button>
-      )}
+      {canModifyCredentials && <Button onClick={() => setIsAddModalOpen(true)}>Add Credential</Button>}
       <div className="flex justify-between items-center mt-4 mb-4">
         <Text>Configured credentials for different AI providers. Add and manage your API credentials.</Text>
       </div>

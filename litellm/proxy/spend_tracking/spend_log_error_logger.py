@@ -78,8 +78,6 @@ def spend_log_error(
         return
 
     if exc is not None:
-        verbose_proxy_logger.error(
-            message, *args, exc_info=(type(exc), exc, exc.__traceback__)
-        )
+        verbose_proxy_logger.error(message, *args, exc_info=(type(exc), exc, exc.__traceback__))
     else:
         verbose_proxy_logger.error(message, *args, exc_info=True)

@@ -13,17 +13,8 @@ interface ProjectDropdownProps {
   teamId?: string | null;
 }
 
-const ProjectDropdown: React.FC<ProjectDropdownProps> = ({
-  projects,
-  value,
-  onChange,
-  disabled,
-  loading,
-  teamId,
-}) => {
-  const filtered = teamId
-    ? projects?.filter((p) => p.team_id === teamId)
-    : projects;
+const ProjectDropdown: React.FC<ProjectDropdownProps> = ({ projects, value, onChange, disabled, loading, teamId }) => {
+  const filtered = teamId ? projects?.filter((p) => p.team_id === teamId) : projects;
 
   return (
     <Select

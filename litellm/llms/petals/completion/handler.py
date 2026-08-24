@@ -97,9 +97,7 @@ def completion(
 
         model = model
 
-        tokenizer = AutoTokenizer.from_pretrained(
-            model, use_fast=False, add_bos_token=False
-        )
+        tokenizer = AutoTokenizer.from_pretrained(model, use_fast=False, add_bos_token=False)
         model_obj = AutoDistributedModelForCausalLM.from_pretrained(model)
 
         ## LOGGING
@@ -129,9 +127,7 @@ def completion(
         model_response.choices[0].message.content = output_text  # type: ignore
 
     prompt_tokens = len(encoding.encode(prompt))
-    completion_tokens = len(
-        encoding.encode(model_response["choices"][0]["message"].get("content"))
-    )
+    completion_tokens = len(encoding.encode(model_response["choices"][0]["message"].get("content")))
 
     model_response.created = int(time.time())
     model_response.model = model

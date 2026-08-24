@@ -24,11 +24,13 @@ from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     get_vertex_base_url,
     llm_passthrough_factory_proxy_route,
     milvus_proxy_route,
+    mistral_proxy_route,
     openai_proxy_route,
     vertex_discovery_proxy_route,
     vertex_proxy_route,
     vllm_proxy_route,
 )
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.passthrough_endpoints.vertex_ai import VertexPassThroughCredentials
 
 
@@ -1092,9 +1094,9 @@ class TestVertexAIPassThroughHandler:
 
         assert result is not None
         assert result["result"] is not None
-        assert result["kwargs"].get("custom_llm_provider") == "gemini", (
-            "Google AI Studio embedContent URLs must set custom_llm_provider=gemini, not vertex_ai"
-        )
+        assert (
+            result["kwargs"].get("custom_llm_provider") == "gemini"
+        ), "Google AI Studio embedContent URLs must set custom_llm_provider=gemini, not vertex_ai"
         assert result["kwargs"].get("model") == "gemini-embedding-2-preview"
         mock_completion_cost.assert_called_once()
 
@@ -1259,6 +1261,78 @@ async def test_is_streaming_request_fn():
     mock_request.headers = {"content-type": "multipart/form-data"}
     mock_request.form = AsyncMock(return_value={"stream": "true"})
     assert await is_streaming_request_fn(mock_request) is True
+
+
+@pytest.mark.asyncio
+async def test_mistral_passthrough_accepts_multipart_without_json_parsing():
+    boundary = "----litellm-test-boundary"
+    body = (
+        f"--{boundary}\r\n"
+        'Content-Disposition: form-data; name="purpose"\r\n\r\n'
+        "ocr\r\n"
+        f"--{boundary}\r\n"
+        'Content-Disposition: form-data; name="file"; filename="document.pdf"\r\n'
+        "Content-Type: application/pdf\r\n\r\n"
+        "%PDF-1.4 test\r\n"
+        f"--{boundary}--\r\n"
+    ).encode("utf-8")
+
+    async def receive():
+        return {
+            "type": "http.request",
+            "body": body,
+            "more_body": False,
+        }
+
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/mistral/v1/files",
+            "headers": [
+                (
+                    b"content-type",
+                    f"multipart/form-data; boundary={boundary}".encode("utf-8"),
+                )
+            ],
+            "query_string": b"",
+        },
+        receive=receive,
+    )
+
+    captured_kwargs = {}
+
+    async def fake_endpoint(request, fastapi_response, user_api_key_dict):
+        return {"ok": True}
+
+    def fake_create_pass_through_route(**kwargs):
+        captured_kwargs.update(kwargs)
+        return fake_endpoint
+
+    user_api_key_dict = UserAPIKeyAuth(token="test-key")
+
+    with (
+        patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router.get_credentials",
+            return_value="mistral-test-key",
+        ),
+        patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route",
+            side_effect=fake_create_pass_through_route,
+        ),
+    ):
+        response = await mistral_proxy_route(
+            endpoint="v1/files",
+            request=request,
+            fastapi_response=Response(),
+            user_api_key_dict=user_api_key_dict,
+        )
+
+    assert response == {"ok": True}
+    assert captured_kwargs["is_streaming_request"] is False
+    assert captured_kwargs["custom_headers"] == {
+        "Authorization": "Bearer mistral-test-key"
+    }
 
 
 class TestBedrockLLMProxyRoute:
@@ -1600,6 +1674,56 @@ class TestBedrockLLMProxyRoute:
                 # and they're available in the router's deployment
                 assert mock_process.called
 
+    @pytest.mark.asyncio
+    async def test_key_guardrail_blocks_bedrock_converse_passthrough(self):
+        """
+        Regression: key/team guardrails must fire for /bedrock/model/.../converse requests.
+        Before the fix, CallTypes.allm_passthrough_route was not in the guardrail
+        translation registry, so UnifiedLLMGuardrails silently skipped all guardrails.
+        """
+        from fastapi import HTTPException
+
+        from litellm.integrations.custom_guardrail import CustomGuardrail
+        from litellm.llms.pass_through.guardrail_translation import (
+            guardrail_translation_mappings,
+        )
+        from litellm.types.utils import CallTypes, GenericGuardrailAPIInputs
+
+        assert CallTypes.allm_passthrough_route in guardrail_translation_mappings, (
+            "allm_passthrough_route missing from guardrail_translation_mappings; "
+            "this is the regression that lets guardrails bypass bedrock passthrough"
+        )
+
+        class _BlockingGuardrail(CustomGuardrail):
+            async def apply_guardrail(
+                self,
+                inputs: GenericGuardrailAPIInputs,
+                request_data: dict,
+                input_type: str,
+                logging_obj=None,
+            ) -> GenericGuardrailAPIInputs:
+                raise HTTPException(status_code=400, detail="Blocked by guardrail")
+
+        handler_cls = guardrail_translation_mappings[CallTypes.allm_passthrough_route]
+        handler = handler_cls()
+
+        guardrail = _BlockingGuardrail(guardrail_name="block-all")
+
+        data = {
+            "custom_llm_provider": "bedrock",
+            "endpoint": "model/anthropic.claude-3-sonnet-20240229-v1:0/converse",
+            "model": "anthropic.claude-3-sonnet-20240229-v1:0",
+            "data": {
+                "messages": [{"role": "user", "content": [{"text": "Hello"}]}],
+            },
+        }
+
+        with pytest.raises(HTTPException) as exc_info:
+            await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert exc_info.value.status_code == 400
+        assert "Blocked by guardrail" in str(exc_info.value.detail)
+
 
 class TestLLMPassthroughFactoryProxyRoute:
     @pytest.mark.asyncio
@@ -1803,6 +1927,9 @@ class TestForwardHeaders:
             mock_logging_obj.pre_call_hook = AsyncMock(return_value=mock_request_body)
             mock_logging_obj.post_call_success_hook = AsyncMock()
             mock_logging_obj.post_call_failure_hook = AsyncMock()
+            mock_logging_obj.post_call_response_headers_hook = AsyncMock(
+                return_value={}
+            )
 
             # Call pass_through_request with forward_headers=True
             result = await pass_through_request(
@@ -1901,6 +2028,9 @@ class TestForwardHeaders:
             mock_logging_obj.pre_call_hook = AsyncMock(return_value=mock_request_body)
             mock_logging_obj.post_call_success_hook = AsyncMock()
             mock_logging_obj.post_call_failure_hook = AsyncMock()
+            mock_logging_obj.post_call_response_headers_hook = AsyncMock(
+                return_value={}
+            )
 
             # Call pass_through_request with forward_headers=False (default)
             result = await pass_through_request(

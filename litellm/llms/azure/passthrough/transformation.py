@@ -62,9 +62,7 @@ class AzurePassthroughConfig(BasePassthroughConfig):
     ) -> dict:
         return BaseAzureLLM._base_validate_azure_environment(
             headers=headers,
-            litellm_params=GenericLiteLLMParams(
-                **{**litellm_params, "api_key": api_key}
-            ),
+            litellm_params=GenericLiteLLMParams(**{**litellm_params, "api_key": api_key}),
         )
 
     @staticmethod
@@ -83,9 +81,7 @@ class AzurePassthroughConfig(BasePassthroughConfig):
     def get_base_model(model: str) -> Optional[str]:
         return model
 
-    def get_models(
-        self, api_key: Optional[str] = None, api_base: Optional[str] = None
-    ) -> List[str]:
+    def get_models(self, api_key: Optional[str] = None, api_base: Optional[str] = None) -> List[str]:
         return super().get_models(api_key, api_base)
 
     def logging_non_streaming_response(
