@@ -747,6 +747,7 @@ class LiteLLMParamsBody(BaseModel):
     s3_secret_access_key: str | None = None
     aws_batch_role_arn: str | None = None
     aws_role_name: str | None = None
+    aws_web_identity_token: str | None = None
     aws_session_name: str | None = None
     aws_external_id: str | None = None
     input_cost_per_token: float | None = None

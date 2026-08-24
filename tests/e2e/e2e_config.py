@@ -133,6 +133,17 @@ LOAD_MAX_SERIAL_LATENCY_SECONDS = float(os.environ.get("E2E_LOAD_MAX_SERIAL_LATE
 LOAD_MIN_CONCURRENCY_EFFICIENCY = float(os.environ.get("E2E_LOAD_MIN_CONCURRENCY_EFFICIENCY", "0.8"))
 
 WEEKLY_ANOMALY_OPT_IN_ENV = "E2E_WEEKLY_ANOMALY"
+
+# Bedrock over OIDC/web-identity. Opt-in because the STS session policy this
+# exercises is only reached when the proxy calls AssumeRoleWithWebIdentity
+# itself, which needs an IAM OIDC provider trusting the cluster issuer plus a
+# role granting the Bedrock actions. Ambient IRSA and static keys take other
+# code paths and never apply the policy, so without that infra there is
+# nothing to assert against.
+BEDROCK_OIDC_OPT_IN_ENV = "E2E_BEDROCK_OIDC"
+BEDROCK_OIDC_ROLE_ARN_ENV = "E2E_BEDROCK_OIDC_ROLE_ARN"
+BEDROCK_OIDC_TOKEN_ENV = "E2E_BEDROCK_OIDC_TOKEN"
+BEDROCK_OIDC_DEFAULT_TOKEN = "oidc/file//var/run/secrets/eks.amazonaws.com/serviceaccount/token"
 ANOMALY_SESSIONS = int(os.environ.get("E2E_ANOMALY_SESSIONS", "6"))
 ANOMALY_TURNS_PER_SESSION = int(os.environ.get("E2E_ANOMALY_TURNS_PER_SESSION", "6"))
 ANOMALY_TURN_ATTEMPTS = int(os.environ.get("E2E_ANOMALY_TURN_ATTEMPTS", "3"))
