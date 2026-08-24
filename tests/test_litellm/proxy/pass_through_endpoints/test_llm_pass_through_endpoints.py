@@ -3461,7 +3461,9 @@ class TestVertexCredentiallessPassthroughVirtualKeyLeak:
     proxy-only auth headers Google never consumes (``x-litellm-api-key``,
     ``api-key``, ``x-api-key``) are dropped by name, and the virtual key is dropped
     by value from ``Authorization`` / ``x-goog-api-key``, which may instead carry a
-    genuine bring-your-own Google credential that must still pass through.
+    genuine bring-your-own Google credential that must still pass through. The
+    by-value strip also covers a virtual key sent in the operator-configured
+    ``general_settings.litellm_key_header_name``, whatever that header is named.
     """
 
     VKEY = "sk-litellm-victim-key"
@@ -3605,6 +3607,42 @@ class TestVertexCredentiallessPassthroughVirtualKeyLeak:
         assert self.VKEY not in forwarded_blob
         assert "azure-style-caller-secret" not in forwarded_blob
         assert "anthropic-style-caller-secret" not in forwarded_blob
+
+    @pytest.mark.asyncio
+    async def test_virtual_key_in_operator_configured_header_is_stripped(self, monkeypatch):
+        with mock.patch.dict(  # test-quality-ok: general_settings is the real proxy config surface for litellm_key_header_name; no injection seam exists on this route
+            "litellm.proxy.proxy_server.general_settings",
+            {"litellm_key_header_name": "x-company-key"},
+        ):
+            raised, forwarded = await self._run(
+                monkeypatch,
+                [
+                    (b"x-company-key", f"Bearer {self.VKEY}".encode()),
+                    (b"x-goog-api-key", b"AIza-real-google-api-key"),
+                    (b"content-type", b"application/json"),
+                ],
+            )
+        assert raised is None
+        assert forwarded is not None
+        assert forwarded.get("x-goog-api-key") == "AIza-real-google-api-key"
+        assert "x-company-key" not in forwarded
+        assert self.VKEY not in " ".join(f"{name}:{value}" for name, value in forwarded.items())
+
+    @pytest.mark.asyncio
+    async def test_virtual_key_in_operator_configured_header_alone_is_rejected(self, monkeypatch):
+        with mock.patch.dict(  # test-quality-ok: general_settings is the real proxy config surface for litellm_key_header_name; no injection seam exists on this route
+            "litellm.proxy.proxy_server.general_settings",
+            {"litellm_key_header_name": "x-company-key"},
+        ):
+            raised, forwarded = await self._run(
+                monkeypatch,
+                [
+                    (b"x-company-key", f"Bearer {self.VKEY}".encode()),
+                    (b"content-type", b"application/json"),
+                ],
+            )
+        assert forwarded is None, "a virtual key in the custom auth header must not satisfy the gate nor be forwarded"
+        assert raised is not None and raised.status_code == 401
 
 
 class TestGetAzureAISearchIndexFromEndpoint:
