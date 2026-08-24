@@ -767,7 +767,9 @@ class LiteLLMAnthropicMessagesAdapter:
                 name=truncated_name,
             )
             if "input_schema" in tool:
-                function_chunk["parameters"] = tool["input_schema"]  # type: ignore
+                # Copy input_schema so the fallback loop below and any downstream
+                # mutation cannot write back into the caller's tool dict.
+                function_chunk["parameters"] = {**tool["input_schema"]}  # type: ignore
             if "description" in tool:
                 function_chunk["description"] = tool["description"]  # type: ignore
 
