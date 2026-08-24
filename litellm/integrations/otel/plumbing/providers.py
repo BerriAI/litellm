@@ -206,7 +206,7 @@ def build_metric_reader(config: OpenTelemetryV2Config) -> "MetricReader":
 
     ``console`` (and any unrecognized kind) exports to the console; ``otlp_http``
     and ``otlp_grpc`` export over OTLP with the configured endpoint/headers. The
-    reader exports on a 5s period, matching v1.
+    reader uses the OpenTelemetry SDK's standard ``OTEL_METRIC_EXPORT_INTERVAL`` setting.
 
     Histograms keep the SDK's default cumulative temporality. Prometheus-backed
     OTLP receivers (Grafana Cloud / Mimir, and the Prometheus OTLP endpoint)
@@ -248,7 +248,7 @@ def build_metric_reader(config: OpenTelemetryV2Config) -> "MetricReader":
     else:
         exporter = ConsoleMetricExporter()
 
-    return PeriodicExportingMetricReader(exporter, export_interval_millis=5000)
+    return PeriodicExportingMetricReader(exporter)
 
 
 def _otlp_logs_endpoint(endpoint: str | None) -> str | None:

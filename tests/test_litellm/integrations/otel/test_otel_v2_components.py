@@ -529,6 +529,14 @@ def test_otlp_metric_exporter_uses_cumulative_histogram_temporality():
     assert temporality[Histogram] is AggregationTemporality.CUMULATIVE
 
 
+def test_metric_reader_honors_standard_export_interval(monkeypatch):
+    monkeypatch.setenv("OTEL_METRIC_EXPORT_INTERVAL", "12345")
+
+    reader = providers.build_metric_reader(OpenTelemetryV2Config(exporter="console"))
+
+    assert reader._export_interval_millis == 12345
+
+
 def test_otlp_logs_endpoint_normalization():
     norm = providers._otlp_logs_endpoint
     # A base endpoint gets the signal path appended (the common OTLP env shape).
