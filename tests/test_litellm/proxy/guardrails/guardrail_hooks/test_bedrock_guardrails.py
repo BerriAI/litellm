@@ -1167,6 +1167,46 @@ async def test_make_apply_guardrail_request_scopes_api_key_to_bedrock_provider(
     )
 
 
+def test_bedrock_api_key_rejects_caller_provider_spoofing(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+
+    router = MagicMock()
+    router.get_model_list.return_value = [
+        {"litellm_params": {"model": "gpt-4o", "custom_llm_provider": "openai"}}
+    ]
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+
+    assert (
+        BedrockGuardrail._get_bedrock_api_key(
+            {
+                "model": "shared-alias",
+                "custom_llm_provider": "bedrock",
+                "api_key": "bedrock-key",
+            }
+        )
+        is None
+    )
+
+
+def test_bedrock_api_key_accepts_alias_with_only_bedrock_deployments(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy import proxy_server
+
+    router = MagicMock()
+    router.get_model_list.return_value = [
+        {"litellm_params": {"model": "amazon.nova-lite-v1:0", "custom_llm_provider": "bedrock"}}
+    ]
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+
+    assert (
+        BedrockGuardrail._get_bedrock_api_key(
+            {"model": "bedrock-alias", "api_key": "bedrock-key"}
+        )
+        == "bedrock-key"
+    )
+
+
 @pytest.mark.asyncio
 async def test_bedrock_apply_guardrail_response_uses_OUTPUT_source():
     """input_type='response' must call Bedrock with source=OUTPUT and assistant content.
