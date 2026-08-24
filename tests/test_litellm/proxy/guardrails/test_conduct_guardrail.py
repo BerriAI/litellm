@@ -52,6 +52,47 @@ def test_registries_populated() -> None:
     assert "conduct" in guardrail_initializer_registry
 
 
+def test_initialize_guardrail_returns_wired_callback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``initialize_guardrail`` maps LiteLLM params to Conduct kwargs and
+    registers the callback with ``logging_callback_manager``. This test
+    exercises the full function body so coverage reports don't flag it
+    as dead code."""
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock
+
+    monkeypatch.setenv("CONDUCT_AGENT_TOKEN", "cond_agt_test_placeholder")
+
+    added_callbacks: list[object] = []
+    fake_manager = SimpleNamespace(
+        add_litellm_callback=lambda cb: added_callbacks.append(cb),
+    )
+
+    import litellm
+
+    monkeypatch.setattr(litellm, "logging_callback_manager", fake_manager)
+
+    from litellm.proxy.guardrails.guardrail_hooks.conduct import (
+        ConductGuardrail,
+        initialize_guardrail,
+    )
+
+    litellm_params = SimpleNamespace(
+        api_base=None,
+        api_key=None,
+        mode="pre_call",
+        default_on=True,
+    )
+    guardrail = MagicMock()
+    guardrail.get.return_value = "conduct-guard"
+
+    callback = initialize_guardrail(litellm_params, guardrail)
+
+    assert isinstance(callback, ConductGuardrail)
+    assert added_callbacks == [callback]
+
+
 def test_missing_standalone_package_raises_helpful_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
