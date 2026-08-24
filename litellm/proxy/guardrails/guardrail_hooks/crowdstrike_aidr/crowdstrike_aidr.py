@@ -274,7 +274,7 @@ class CrowdStrikeAIDRHandler(CustomGuardrail):
         )
 
     async def _call_crowdstrike_aidr_guard(
-        self, payload: dict[str, Any], hook_name: str
+        self, payload: Mapping[str, Any], hook_name: str
     ) -> _GuardChatCompletionsResult:
         """
         Makes the API call to the CrowdStrike AIDR AI Guard endpoint.
@@ -364,7 +364,7 @@ class CrowdStrikeAIDRHandler(CustomGuardrail):
         tail: Final = guard_output.messages[-num_assistant_messages:] if num_assistant_messages > 0 else []
         return [_extract_text_from_message(msg) for msg in tail]
 
-    async def _call_or_fail_open(self, payload: dict[str, Any], hook_name: str) -> _GuardChatCompletionsResult:
+    async def _call_or_fail_open(self, payload: Mapping[str, Any], hook_name: str) -> _GuardChatCompletionsResult:
         try:
             return await self._call_crowdstrike_aidr_guard(payload, hook_name)
         except HTTPException:
