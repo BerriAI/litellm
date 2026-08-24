@@ -187,9 +187,10 @@ def _allow_model_level_clientside_configurable_parameters(
 # ``extra_body.aws_web_identity_token``) without re-validating, so the
 # banned-key check has to descend into it the same way it descends into
 # ``litellm_embedding_config``.
-_ANTHROPIC_WIF_UNCONDITIONAL_BANNED: Final[tuple[str, ...]] = tuple(
-    sorted(p for p in anthropic_wif_litellm_params if p != "anthropic_workspace_id")
-)
+_ANTHROPIC_WIF_UNCONDITIONAL_BANNED: Final[tuple[str, ...]] = anthropic_wif_litellm_params
+# The Bedrock Claude Platform route reads a workspace from workspace_id or aws_workspace_id as
+# well, and neither is a federation parameter, so say so rather than leaving that caller stuck.
+_BEDROCK_WORKSPACE_HINT: Final = " On the Bedrock Claude Platform route, pass workspace_id or aws_workspace_id instead."
 
 
 def reject_server_owned_wif_params(body: Mapping[str, object]) -> None:
@@ -201,6 +202,7 @@ def reject_server_owned_wif_params(body: Mapping[str, object]) -> None:
             raise ValueError(
                 f"Rejected Request: {param} is a server-owned workload identity federation parameter "
                 "and cannot be set in a request body; configure it on the deployment instead."
+                + (_BEDROCK_WORKSPACE_HINT if param == "anthropic_workspace_id" else "")
             )
 
 

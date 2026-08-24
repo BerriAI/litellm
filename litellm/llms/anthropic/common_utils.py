@@ -92,9 +92,20 @@ def is_anthropic_oauth_key(value: str | None) -> bool:
     return value.startswith(ANTHROPIC_OAUTH_TOKEN_PREFIX)
 
 
-def merge_anthropic_beta_headers(existing: str | None, new_beta: str | None) -> str:
-    """Merge comma-separated anthropic-beta header values, deduplicated and sorted."""
-    betas: Final = {b.strip() for value in (existing, new_beta) if value for b in value.split(",") if b.strip()}
+def merge_anthropic_beta_headers(existing: str | Sequence[str] | None, new_beta: str | Sequence[str] | None) -> str:
+    """Merge anthropic-beta header values, deduplicated and sorted.
+
+    Either side may arrive as a list rather than a comma-separated string: the Skills surface
+    accepted a list-valued header before it shared this helper, and callers still send one.
+    """
+    values: Final = (
+        entry
+        for side in (existing, new_beta)
+        if side
+        for entry in ((side,) if isinstance(side, str) else side)
+        if isinstance(entry, str)
+    )
+    betas: Final = {b.strip() for value in values for b in value.split(",") if b.strip()}
     return ",".join(sorted(betas))
 
 

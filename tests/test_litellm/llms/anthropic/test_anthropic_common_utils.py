@@ -2254,6 +2254,39 @@ class TestWifHeaderContract:
         assert "oauth-2025-04-20" in headers["anthropic-beta"]
 
 
+class TestMergeAnthropicBetaHeaders:
+    """The Skills surface accepted a list-valued anthropic-beta before it shared this helper,
+    so the helper has to keep taking one: .split() on a list is an AttributeError."""
+
+    def test_list_valued_existing_header_is_merged(self):
+        from litellm.llms.anthropic.common_utils import merge_anthropic_beta_headers
+
+        assert merge_anthropic_beta_headers(["skills-2025-10-02", "files-api-2025-04-14"], "oauth-2025-04-20") == (
+            "files-api-2025-04-14,oauth-2025-04-20,skills-2025-10-02"
+        )
+
+    def test_list_and_comma_string_forms_agree(self):
+        from litellm.llms.anthropic.common_utils import merge_anthropic_beta_headers
+
+        as_list = merge_anthropic_beta_headers(["a", "b"], "c")
+        as_string = merge_anthropic_beta_headers("a,b", "c")
+        assert as_list == as_string == "a,b,c"
+
+    def test_skills_validate_environment_accepts_a_list_header(self, monkeypatch):
+        """End of the regression: the Skills surface itself must not raise on the list form."""
+        from litellm.llms.anthropic.skills.transformation import AnthropicSkillsConfig
+
+        monkeypatch.setenv("ANTHROPIC_API_KEY", FAKE_REGULAR_KEY)
+
+        headers = AnthropicSkillsConfig().validate_environment(
+            headers={"anthropic-beta": ["files-api-2025-04-14"]},
+            litellm_params=None,
+        )
+
+        assert "files-api-2025-04-14" in headers["anthropic-beta"]
+        assert isinstance(headers["anthropic-beta"], str)
+
+
 class TestWifServerOwnedAuthHeaderStrip:
     """A WIF-minted token must never ride alongside a caller-supplied credential
     header, but that stripping must fire only when a mint actually happened."""
@@ -2305,6 +2338,31 @@ class TestWifServerOwnedAuthHeaderStrip:
             headers={header_name.title(): caller_key, "user-agent": "caller/1.0"},
             model="claude-sonnet-4-5",
             messages=[{"role": "user", "content": "Hello"}],
+            optional_params={},
+            litellm_params={},
+            api_key=None,
+            api_base=None,
+        )
+
+        assert headers["authorization"] == f"Bearer {FAKE_MINTED_TOKEN}"
+        assert header_name == "authorization" or header_name not in {name.lower() for name in headers}
+        assert all(caller_key not in value for value in headers.values())
+        assert headers["user-agent"] == "caller/1.0"
+
+    @pytest.mark.parametrize("header_name", PROXY_CREDENTIAL_HEADER_NAMES)
+    def test_batches_surface_strips_caller_credentials_too(self, monkeypatch, wif_engine, header_name):
+        """Batches builds its own headers on the create path, so it needs the same strip: the
+        handler's retrieve path passes none, but this entry point takes the caller's."""
+        from litellm.llms.anthropic.batches.transformation import AnthropicBatchesConfig
+
+        for name, value in WIF_ENV.items():
+            monkeypatch.setenv(name, value)
+        caller_key = "sk-litellm-CALLER-VIRTUAL-KEY"
+
+        headers = AnthropicBatchesConfig().validate_environment(
+            headers={header_name.title(): caller_key, "user-agent": "caller/1.0"},
+            model="claude-sonnet-4-5",
+            messages=[],
             optional_params={},
             litellm_params={},
             api_key=None,
@@ -3211,14 +3269,14 @@ class TestWifExchangeTransportHardening:
 
 class TestWifParamsAreNotClientSettable:
     def test_every_minting_param_is_server_owned(self):
-        """Each of these selects which server-side secret is read; only the inert workspace id is
-        left settable, because Bedrock Claude Platform already accepts that spelling."""
+        """Each of these selects which server-side secret is read, or the scope it is minted for.
+        The workspace id was once carved out here as inert; it is not. It is the scope of the
+        minted org credential, and the router merges request kwargs over deployment params, so a
+        caller who set it picked the scope instead of the administrator."""
         from litellm.proxy.auth.auth_utils import _ANTHROPIC_WIF_UNCONDITIONAL_BANNED
         from litellm.types.utils import anthropic_wif_litellm_params
 
-        assert set(_ANTHROPIC_WIF_UNCONDITIONAL_BANNED) == set(anthropic_wif_litellm_params) - {
-            "anthropic_workspace_id"
-        }
+        assert set(_ANTHROPIC_WIF_UNCONDITIONAL_BANNED) == set(anthropic_wif_litellm_params)
 
 
 class TestWifServerOwnedParamsAreUnconditional:
@@ -3275,20 +3333,50 @@ class TestWifServerOwnedParamsAreUnconditional:
                 model="claude-sonnet-5",
             )
 
-    def test_workspace_id_stays_allowed(self):
-        """It cannot mint anything on its own, and Bedrock Claude Platform already accepts the
-        spelling in a request body."""
+    def test_workspace_id_is_refused_from_a_request_body(self):
+        """Regression, proven live against Anthropic before this was closed: a caller-supplied
+        workspace id reached the token endpoint, which answered "workspace_id is not a well-formed
+        wrkspc_ tagged ID", i.e. the caller's value had become the scope of the minted credential.
+        router.py merges request kwargs OVER deployment params, so it also beat the configured one."""
         from litellm.proxy.auth.auth_utils import is_request_body_safe
 
-        assert (
+        with pytest.raises(Exception, match="server-owned workload identity federation parameter"):
             is_request_body_safe(
                 request_body={"model": "claude-sonnet-5", "anthropic_workspace_id": "wrkspc_abc"},
                 general_settings={},
                 llm_router=None,
                 model="claude-sonnet-5",
             )
-            is True
-        )
+
+    def test_refusal_points_bedrock_callers_at_their_own_spelling(self):
+        """Banning this spelling must not read as "no workspace selection anywhere": the Bedrock
+        Claude Platform route takes workspace_id/aws_workspace_id, neither of which is a
+        federation parameter, so the error names them."""
+        from litellm.proxy.auth.auth_utils import is_request_body_safe
+
+        with pytest.raises(Exception, match="workspace_id or aws_workspace_id"):
+            is_request_body_safe(
+                request_body={"model": "claude-sonnet-5", "anthropic_workspace_id": "wrkspc_abc"},
+                general_settings={},
+                llm_router=None,
+                model="claude-sonnet-5",
+            )
+
+    def test_bedrock_workspace_spellings_are_untouched(self):
+        """The Bedrock route's own spellings stay settable, which is what keeps this ban from
+        removing a pre-existing capability."""
+        from litellm.proxy.auth.auth_utils import is_request_body_safe
+
+        for spelling in ("workspace_id", "aws_workspace_id"):
+            assert (
+                is_request_body_safe(
+                    request_body={"model": "claude-sonnet-5", spelling: "wrkspc_abc"},
+                    general_settings={},
+                    llm_router=None,
+                    model="claude-sonnet-5",
+                )
+                is True
+            )
 
 
 class TestWifDisabledOnClientRedirectedBase:

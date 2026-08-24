@@ -11,7 +11,7 @@ from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.openai import AllMessageValues, CreateBatchRequest
 from litellm.types.utils import LiteLLMBatch, LlmProviders, ModelResponse
 
-from ..common_utils import merge_anthropic_beta_headers
+from ..common_utils import merge_anthropic_beta_headers, without_caller_credential_headers
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -59,15 +59,16 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
             merge_anthropic_beta_headers(headers.get("anthropic-beta"), auth_header.get("anthropic-beta")),
             "message-batches-2024-09-24",
         )
-        _headers: Final = {
+        # The deployment's own credential is applied below, so a caller-supplied one must not
+        # ride along: without this a minted federation Bearer travels beside the caller's x-api-key.
+        return {
+            **without_caller_credential_headers(headers),
             "accept": "application/json",
             "anthropic-version": "2023-06-01",
             "content-type": "application/json",
+            **auth_header,
+            "anthropic-beta": merged_beta,
         }
-        _headers.update(auth_header)
-        headers.update(_headers)
-        headers["anthropic-beta"] = merged_beta
-        return headers
 
     def get_complete_batch_url(
         self,
