@@ -423,24 +423,32 @@ def image_generation(
                 aimg_generation=aimg_generation,
             )
         elif custom_llm_provider == "azure_ai":
-            from litellm.llms.azure_ai.common_utils import AzureFoundryModelInfo
+            from litellm.llms.azure_ai.common_utils import (
+                AzureFoundryModelInfo,
+                get_azure_ai_auth_headers,
+            )
 
             api_base = AzureFoundryModelInfo.get_api_base(api_base)
             api_key = AzureFoundryModelInfo.get_api_key(api_key)
             if extra_headers is not None:
                 optional_params["extra_headers"] = extra_headers
 
-            default_headers = {
+            caller_header_names = frozenset(name.lower() for name in headers)
+            caller_set_auth = "api-key" in caller_header_names or "authorization" in caller_header_names
+            auth_headers = (
+                headers
+                if caller_set_auth
+                else get_azure_ai_auth_headers(
+                    api_key=api_key,
+                    litellm_params=litellm_params_dict,
+                    api_key_header="api-key",
+                )
+            )
+            request_headers: Final = {
                 "Content-Type": "application/json",
+                **auth_headers,
+                **headers,
             }
-            # Only add api-key header if api_key is not None
-            # Azure AD authentication will use Authorization header instead
-            if api_key is not None:
-                default_headers["api-key"] = api_key
-
-            for k, v in default_headers.items():
-                if k not in headers:
-                    headers[k] = v
 
             model_response = azure_chat_completions.image_generation(
                 model=model,
@@ -456,7 +464,7 @@ def image_generation(
                 api_version=api_version,
                 aimg_generation=aimg_generation,
                 client=client,
-                headers=headers,
+                headers=request_headers,
                 litellm_params=litellm_params_dict,
             )
         elif (

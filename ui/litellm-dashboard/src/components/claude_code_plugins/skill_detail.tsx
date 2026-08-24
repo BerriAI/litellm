@@ -343,7 +343,7 @@ const SkillDetail: React.FC<SkillDetailProps> = ({ skill, onBack }) => {
                   padding: 0,
                 }}
               >
-                {copiedKey === "marketplace-cmd" ? <CheckOutlined /> : <CopyOutlined />}
+                {copiedKey === "marketplace-cmd" ? <Check className="size-3" /> : <Copy className="size-3" />}
                 {copiedKey === "marketplace-cmd" ? "Copied" : "Copy"}
               </button>
             </div>

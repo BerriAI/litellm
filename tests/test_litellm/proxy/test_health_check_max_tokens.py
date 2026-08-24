@@ -5,7 +5,7 @@ import pytest
 from litellm.litellm_core_utils.health_check_helpers import HealthCheckHelpers
 from litellm.proxy import health_check as hc_module
 from litellm.proxy.health_check import (
-    _is_semantic_auto_router_deployment,
+    _is_strategy_router_deployment,
     _resolve_health_check_max_tokens,
     _resolve_health_check_mode,
     _update_litellm_params_for_health_check,
@@ -495,33 +495,22 @@ def test_autodetected_embedding_skips_reasoning_effort():
     assert "max_tokens" not in updated
 
 
-# ---------------------------------------------------------------------------
-# auto_router (semantic router) deployments must be skipped by health checks.
-#
-# These are meta-routers that select among real LLM deployments at request
-# time. They have no LLM endpoint to probe. Before this fix, the health check
-# passed model="auto_router/router_1" to get_llm_provider(), which raised
-# BadRequestError: "Unmapped LLM provider for this endpoint" because
-# auto_router is not a real LLM provider.
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.parametrize(
     "model, expected",
     [
         ("auto_router/router_1", True),
         ("auto_router/my_router", True),
-        ("auto_router/complexity_router", False),
-        ("auto_router/adaptive_router", False),
-        ("auto_router/quality_router", False),
-        ("auto_router/adaptive_router/subpath", False),
+        ("auto_router/complexity_router", True),
+        ("auto_router/adaptive_router", True),
+        ("auto_router/quality_router", True),
+        ("auto_router/adaptive_router/subpath", True),
         ("gpt-4", False),
         ("openai/gpt-4", False),
         ("bedrock/claude", False),
     ],
 )
-def test_is_semantic_auto_router_deployment(model, expected):
-    assert _is_semantic_auto_router_deployment({"model": model}) == expected
+def test_is_strategy_router_deployment(model, expected):
+    assert _is_strategy_router_deployment({"model": model}) == expected
 
 
 @pytest.mark.asyncio
@@ -534,6 +523,25 @@ async def test_run_model_health_check_skips_auto_router_deployment():
             "auto_router_config": '{"routes": []}',
             "auto_router_default_model": "gpt-4o-mini",
             "auto_router_embedding_model": "text-embedding-3-small",
+        },
+        "model_info": {},
+    }
+
+    with patch.object(hc_module.litellm, "ahealth_check", fake_ahealth_check):
+        result = await hc_module._run_model_health_check(model)
+
+    fake_ahealth_check.assert_not_called()
+    assert result == {}
+
+
+@pytest.mark.asyncio
+async def test_run_model_health_check_skips_complexity_router_deployment():
+    fake_ahealth_check = AsyncMock(return_value={})
+    model = {
+        "litellm_params": {
+            "model": "auto_router/complexity_router",
+            "complexity_router_config": {"tiers": {"simple": "gpt-4o-mini"}},
+            "complexity_router_default_model": "gpt-4o-mini",
         },
         "model_info": {},
     }
