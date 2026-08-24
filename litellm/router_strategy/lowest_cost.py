@@ -262,6 +262,11 @@ class LowestCostLoggingHandler(CustomLogger):
             if item_output_cost is None:
                 item_output_cost = item_litellm_model_cost_map.get("output_cost_per_token", 5.0)
 
+            # Secondary ranking signal used to break ties on total input+output price.
+            # Fall back to the input cost when a model has no cache-read price, so models
+            # missing that field are not ranked as if their cache reads were free.
+            item_cache_read_cost = item_litellm_model_cost_map.get("cache_read_input_token_cost", item_input_cost)
+
             # if litellm["model"] is not in model_cost map -> use item_cost = $10
 
             item_cost = item_input_cost + item_output_cost
@@ -294,12 +299,12 @@ class LowestCostLoggingHandler(CustomLogger):
             ):  # if user passed in tpm / rpm in the model_list
                 continue
             else:
-                potential_deployments.append((_deployment, item_cost))
+                potential_deployments.append((_deployment, item_cost, item_cache_read_cost))
 
         if len(potential_deployments) == 0:
             return None
 
-        potential_deployments = sorted(potential_deployments, key=lambda x: x[1])
+        potential_deployments = sorted(potential_deployments, key=lambda x: (x[1], x[2]))
 
         selected_deployment: Final = potential_deployments[0][0]
         return selected_deployment
