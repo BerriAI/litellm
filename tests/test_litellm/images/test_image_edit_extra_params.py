@@ -100,6 +100,27 @@ def test_image_edit_flattens_nested_provider_params():
     assert "generation_config" not in fields
 
 
+def test_image_edit_forwards_scalar_array_as_repeated_fields():
+    """A list-valued provider param must reach the backend as one repeated part
+    per element, not collapse to its last element under dict.update."""
+    captured = {}
+    client = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_capture_image_edit_request(captured))))
+
+    litellm.image_edit(
+        model="openai/gpt-image-1",
+        image=PNG_BYTES,
+        prompt="add a hat",
+        api_key="sk-test",
+        api_base="https://edit.example/v1",
+        client=client,
+        loras=["style_a", "style_b", "style_c"],
+    )
+
+    body = captured["body"]
+    assert body.count(b'name="loras"') == 3
+    assert b"style_a" in body and b"style_b" in body and b"style_c" in body
+
+
 @pytest.mark.asyncio
 async def test_aimage_edit_forwards_extra_body():
     """aimage_edit used to drop extra_headers/extra_query/extra_body when
