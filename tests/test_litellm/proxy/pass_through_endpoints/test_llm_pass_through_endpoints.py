@@ -3457,9 +3457,11 @@ class TestVertexCredentiallessPassthroughVirtualKeyLeak:
     leak the proxy's own secret to an upstream provider.
 
     A credential-less request that carries no upstream Google credential must now
-    fail with a clean 401 and never reach ``create_pass_through_route``; a genuine
-    bring-your-own Google credential must still pass through, with the virtual key
-    stripped by value from every forwarded header.
+    fail with a clean 401 and never reach ``create_pass_through_route``. The
+    proxy-only auth headers Google never consumes (``x-litellm-api-key``,
+    ``api-key``, ``x-api-key``) are dropped by name, and the virtual key is dropped
+    by value from ``Authorization`` / ``x-goog-api-key``, which may instead carry a
+    genuine bring-your-own Google credential that must still pass through.
     """
 
     VKEY = "sk-litellm-victim-key"
@@ -3582,14 +3584,14 @@ class TestVertexCredentiallessPassthroughVirtualKeyLeak:
         assert self.VKEY not in " ".join(f"{name}:{value}" for name, value in forwarded.items())
 
     @pytest.mark.asyncio
-    async def test_virtual_key_echoed_in_alternate_auth_headers_is_stripped_by_value(self, monkeypatch):
+    async def test_alternate_proxy_auth_headers_are_never_forwarded_to_google(self, monkeypatch):
         raised, forwarded = await self._run(
             monkeypatch,
             [
                 (b"x-litellm-api-key", self.VKEY.encode()),
                 (b"authorization", b"Bearer ya29.google-oauth-token"),
-                (b"api-key", self.VKEY.encode()),
-                (b"x-api-key", self.VKEY.encode()),
+                (b"api-key", b"azure-style-caller-secret"),
+                (b"x-api-key", b"anthropic-style-caller-secret"),
                 (b"content-type", b"application/json"),
             ],
         )
@@ -3599,7 +3601,10 @@ class TestVertexCredentiallessPassthroughVirtualKeyLeak:
         assert "api-key" not in forwarded
         assert "x-api-key" not in forwarded
         assert "x-litellm-api-key" not in forwarded
-        assert self.VKEY not in " ".join(f"{name}:{value}" for name, value in forwarded.items())
+        forwarded_blob = " ".join(f"{name}:{value}" for name, value in forwarded.items())
+        assert self.VKEY not in forwarded_blob
+        assert "azure-style-caller-secret" not in forwarded_blob
+        assert "anthropic-style-caller-secret" not in forwarded_blob
 
 
 class TestGetAzureAISearchIndexFromEndpoint:
