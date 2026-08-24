@@ -24935,6 +24935,11 @@ export interface components {
              */
             total_flat_cost: number;
             /**
+             * Total Gateway Injected Caching Savings Spend
+             * @default 0
+             */
+            total_gateway_injected_caching_savings_spend: number;
+            /**
              * Total Pages
              * @default 1
              */
@@ -33631,6 +33636,11 @@ export interface components {
              * @default 0
              */
             flat_cost: number;
+            /**
+             * Gateway Injected Caching Savings Spend
+             * @default 0
+             */
+            gateway_injected_caching_savings_spend: number;
             /**
              * Prompt Caching Savings Spend
              * @default 0

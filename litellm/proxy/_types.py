@@ -3551,6 +3551,7 @@ class SpendLogsMetadata(TypedDict):
     cost_breakdown: CostBreakdown | None  # Detailed cost breakdown (input_cost, output_cost, margin, discount, etc.)
     compression_savings: CompressionSavingsMetadata | None
     autorouter_savings: ReadOnly[float | None]  # stamped by the logging payload; None = not auto-routed
+    litellm_gateway_injected_cache: ReadOnly[str | None]
 
 
 class SpendLogsPayload(TypedDict):
@@ -4831,6 +4832,7 @@ class BaseDailySpendTransaction(TypedDict):
     # cost-savings metrics (dollars, priced per request before aggregation)
     compression_savings_spend: float
     prompt_caching_savings_spend: float
+    gateway_injected_caching_savings_spend: float  # writable-ok: the rollup queue accumulates into this key in place, as it does for every sibling spend field
     # Not required: rows queued by a pod running the previous release, or replayed from
     # the Redis buffer across an upgrade, carry no such key. Every reader coalesces a
     # missing value to zero, so requiring it here would describe a shape the aggregation

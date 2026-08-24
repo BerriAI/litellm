@@ -6,6 +6,7 @@ import SummaryCard from "@/components/shared/SummaryCard";
 import {
   autorouterOf,
   cachingOf,
+  gatewayAttributedCachingOf,
   compressionOf,
   savedTokensOf,
   usd,
@@ -25,6 +26,7 @@ export const useSavingsTotals = (results: DailyData[]) =>
       compression,
       caching,
       autorouter,
+      gatewayAttributedCaching: sumOf(gatewayAttributedCachingOf),
       savedTokens: sumOf(savedTokensOf),
       total: compression + caching + autorouter,
     };
@@ -48,9 +50,10 @@ const SavingsTiles = ({ results, isLoading }: { results: DailyData[]; isLoading:
       />
       <SummaryCard
         label="Prompt caching savings"
-        value={usd(totals.caching)}
-        hint="Cache reads, net of write premium"
-        info="What caching saved against paying the input rate for every token: the discount on tokens served from cache, less the premium providers charge to write a cache entry. Can be negative on traffic that writes more cache than it reuses."
+        value={usd(totals.gatewayAttributedCaching)}
+        hint="LiteLLM injected"
+        secondary={{ label: "Total", value: usd(totals.caching) }}
+        info="What caching saved against paying the input rate for every token: the discount on tokens served from cache, less the premium providers charge to write a cache entry. The headline figure is the share LiteLLM earned by inserting the breakpoints itself, through configured injection points or auto prompt caching. The total beside it also counts requests that arrived with their own cache_control and providers that cache implicitly. Either can be negative on traffic that writes more cache than it reuses, which is why the headline is not always the smaller of the two."
       />
       <SummaryCard
         label="Auto-router savings"

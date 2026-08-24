@@ -541,6 +541,7 @@ async def aresponses(
                     prompt_variables=prompt_variables,
                     prompt_label=kwargs.get("prompt_label", None),
                     prompt_version=kwargs.get("prompt_version", None),
+                    request_kwargs=kwargs,
                 )
             input = cast(
                 str | ResponseInputParam,
@@ -664,6 +665,7 @@ def _apply_prompt_management_to_responses_call(
                 prompt_variables=prompt_variables,
                 prompt_label=kwargs.get("prompt_label", None),
                 prompt_version=kwargs.get("prompt_version", None),
+                request_kwargs=kwargs,
             )
         input = cast(
             str | ResponseInputParam,

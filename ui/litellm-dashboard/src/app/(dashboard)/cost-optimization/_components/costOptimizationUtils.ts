@@ -17,6 +17,7 @@ export const shortDate = (iso: string): string =>
 
 export const compressionOf = (m: SpendMetrics): number => m.compression_savings_spend ?? 0;
 export const cachingOf = (m: SpendMetrics): number => m.prompt_caching_savings_spend ?? 0;
+export const gatewayAttributedCachingOf = (m: SpendMetrics): number => m.gateway_injected_caching_savings_spend ?? 0;
 export const autorouterOf = (m: SpendMetrics): number => m.autorouter_savings_spend ?? 0;
 export const savedTokensOf = (m: SpendMetrics): number => m.compression_saved_tokens ?? 0;
 
