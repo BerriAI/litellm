@@ -30847,9 +30847,9 @@
         "source": "https://docs.mistral.ai/models/model-cards/mistral-small-4-0-26-03",
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
+        "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "supports_reasoning": true,
         "supports_vision": true
     },
     "mistral/mistral-small-3-2-2506": {
