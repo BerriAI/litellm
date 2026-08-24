@@ -11,7 +11,7 @@ import contextlib
 import json
 from collections.abc import Mapping
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import TYPE_CHECKING, Any, Final
 
 from pydantic import TypeAdapter
 
@@ -151,7 +151,7 @@ class BedrockRealtime(BaseAWSLLM):
         )
         realtime_streaming: Final = RealTimeStreaming(
             websocket=websocket,
-            backend_ws=cast(Any, object()),  # cast-ok: Bedrock uses AWS SDK stream; backend_ws unused for store/log
+            backend_ws=None,  # Bedrock streams over the AWS SDK; only store/log are used here
             logging_obj=logging_obj,
             model=model,
             user_api_key_dict=user_api_key_dict,
@@ -227,24 +227,6 @@ class BedrockRealtime(BaseAWSLLM):
             except Exception:
                 pass
             raise
-
-    @staticmethod
-    def _collect_tool_call_from_function_call_event(
-        realtime_streaming: RealTimeStreaming,
-        message: object,
-    ) -> None:
-        if not isinstance(message, dict) or message.get("type") != "response.function_call_arguments.done":
-            return
-        realtime_streaming.tool_calls.append(
-            {  # mutable-ok: spend logger tool_calls is a mutable list of JSON dicts
-                "id": message.get("call_id", ""),
-                "type": "function",
-                "function": {  # mutable-ok: nested tool function payload
-                    "name": message.get("name", ""),
-                    "arguments": message.get("arguments", "{}"),
-                },
-            }
-        )
 
     async def _forward_client_to_bedrock(
         self,
@@ -378,7 +360,6 @@ class BedrockRealtime(BaseAWSLLM):
                     for openai_message in openai_messages:
                         if realtime_streaming is not None:
                             realtime_streaming.store_message(openai_message)
-                            self._collect_tool_call_from_function_call_event(realtime_streaming, openai_message)
                         message_json = json.dumps(openai_message)
                         await client_ws.send_text(message_json)
                         verbose_proxy_logger.debug("Bedrock Realtime: Sent to client: %s", message_json[:200])

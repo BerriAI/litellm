@@ -16,6 +16,30 @@ from litellm.llms.bedrock.realtime.transformation import (
 )
 from litellm.llms.bedrock.realtime.trigger_audio import ready_trigger_pcm
 
+# The OpenAI realtime function-call lifecycle a single Nova Sonic toolUse must expand into.
+_TOOL_CALL_EVENT_SEQUENCE = [
+    "response.output_item.added",
+    "conversation.item.added",
+    "response.function_call_arguments.delta",
+    "response.function_call_arguments.done",
+    "response.output_item.done",
+    "response.done",
+]
+
+
+def _only(events, event_type):
+    matches = [event for event in events if event["type"] == event_type]
+    assert len(matches) == 1, f"expected exactly one {event_type}, got {len(matches)}"
+    return matches[0]
+
+
+def _response_id_of(event):
+    if event["type"] == "response.done":
+        return event["response"]["id"]
+    if event["type"] == "conversation.item.added":
+        return None
+    return event["response_id"]
+
 
 class TestBedrockRealtimeConfig:
     """Test suite for BedrockRealtimeConfig class"""
@@ -559,16 +583,11 @@ class TestBedrockRealtimeResponseTransformation:
             },
         )
 
-        # Check for function call event
-        assert len(result["response"]) == 1
-        function_call = result["response"][0]
-        assert function_call["type"] == "response.function_call_arguments.done"
+        assert [msg["type"] for msg in result["response"]] == _TOOL_CALL_EVENT_SEQUENCE
+        function_call = _only(result["response"], "response.function_call_arguments.done")
         assert function_call["call_id"] == "tool_call_123"
         assert function_call["name"] == "get_weather"
-
-        # Verify arguments are properly formatted
-        args = json.loads(function_call["arguments"])
-        assert args["location"] == "San Francisco"
+        assert json.loads(function_call["arguments"]) == {"location": "San Francisco"}
 
     def test_transform_tool_use_response_with_content_field(self):
         """Test toolUse response transformation with Nova 2 Sonic `content` field"""
@@ -601,23 +620,34 @@ class TestBedrockRealtimeResponseTransformation:
             },
         )
 
-        # Check for function call event
-        assert len(result["response"]) == 1
-        function_call = result["response"][0]
-        assert function_call["type"] == "response.function_call_arguments.done"
+        assert [msg["type"] for msg in result["response"]] == _TOOL_CALL_EVENT_SEQUENCE
+        function_call = _only(result["response"], "response.function_call_arguments.done")
         assert function_call["call_id"] == "tool_call_123"
         assert function_call["name"] == "get_weather"
+        assert json.loads(function_call["arguments"]) == {"location": "San Francisco"}
 
-        # Verify arguments are properly formatted
-        args = json.loads(function_call["arguments"])
-        assert args["location"] == "San Francisco"
+        done = _only(result["response"], "response.done")
+        assert done["response"]["id"] == "resp_123"
+        assert done["response"]["output"] == [
+            {
+                "id": "item_123",
+                "object": "realtime.item",
+                "type": "function_call",
+                "status": "completed",
+                "call_id": "tool_call_123",
+                "name": "get_weather",
+                "arguments": function_call["arguments"],
+            }
+        ]
+        assert result["current_response_id"] is None
+        assert result["current_output_item_id"] is None
 
     def test_transform_tool_use_event_directly(self):
-        """Test transform_tool_use_event directly for input parsing and missing IDs"""
+        """transform_tool_use_event emits the full OpenAI function-call lifecycle"""
         config = BedrockRealtimeConfig()
 
-        # Missing IDs still emit a function call (Nova Sonic starts tools with role=TOOL)
-        events, tool_call_id, tool_name, item_id, response_id = config.transform_tool_use_event(
+        # Missing IDs are minted (Nova Sonic starts tool turns with contentStart role=TOOL)
+        events, tool_call_id, tool_name = config.transform_tool_use_event(
             {
                 "toolUse": {
                     "toolUseId": "tool_call_no_ids",
@@ -627,21 +657,41 @@ class TestBedrockRealtimeResponseTransformation:
             },
             None,
             None,
+            "conv_1",
         )
-        assert len(events) == 1
-        assert events[0]["type"] == "response.function_call_arguments.done"
-        assert events[0]["call_id"] == "tool_call_no_ids"
-        assert events[0]["name"] == "get_weather"
-        assert response_id.startswith("resp_")
-        assert item_id.startswith("item_")
-        assert events[0]["response_id"] == response_id
-        assert events[0]["item_id"] == item_id
-        assert json.loads(events[0]["arguments"]) == {"location": "Seattle"}
+        assert [event["type"] for event in events] == _TOOL_CALL_EVENT_SEQUENCE
+        function_call = _only(events, "response.function_call_arguments.done")
+        assert function_call["call_id"] == "tool_call_no_ids"
+        assert function_call["name"] == "get_weather"
+        assert function_call["response_id"].startswith("resp_")
+        assert function_call["item_id"].startswith("item_")
+        assert json.loads(function_call["arguments"]) == {"location": "Seattle"}
         assert tool_call_id == "tool_call_no_ids"
         assert tool_name == "get_weather"
 
-        # JSON string content is parsed and converted to a function call event
-        events, tool_call_id, tool_name, item_id, response_id = config.transform_tool_use_event(
+        # Every event in the turn shares the minted response/item ids
+        assert {_response_id_of(event) for event in events} - {None} == {function_call["response_id"]}
+        assert _only(events, "response.output_item.added")["item"]["id"] == function_call["item_id"]
+        assert _only(events, "response.output_item.done")["item"]["id"] == function_call["item_id"]
+
+        # The added item is in_progress with empty args; the done item carries the parsed args
+        assert _only(events, "response.output_item.added")["item"]["status"] == "in_progress"
+        assert _only(events, "response.output_item.added")["item"]["arguments"] == ""
+        assert _only(events, "conversation.item.added")["item"]["arguments"] == ""
+        assert _only(events, "response.function_call_arguments.delta")["delta"] == function_call["arguments"]
+        assert _only(events, "response.output_item.done")["item"]["status"] == "completed"
+        assert _only(events, "response.output_item.done")["item"]["arguments"] == function_call["arguments"]
+
+        # response.done closes the turn and carries the call so spend logging can harvest it
+        done = _only(events, "response.done")
+        assert done["response"]["id"] == function_call["response_id"]
+        assert done["response"]["conversation_id"] == "conv_1"
+        assert done["response"]["status"] == "completed"
+        assert done["response"]["output"][0]["call_id"] == "tool_call_no_ids"
+        assert done["response"]["output"][0]["type"] == "function_call"
+
+        # Explicit ids are reused rather than minted
+        events, _, _ = config.transform_tool_use_event(
             {
                 "toolUse": {
                     "toolUseId": "tool_call_123",
@@ -651,19 +701,30 @@ class TestBedrockRealtimeResponseTransformation:
             },
             "item_123",
             "resp_123",
+            "conv_1",
         )
-        assert len(events) == 1
-        assert events[0]["type"] == "response.function_call_arguments.done"
-        assert events[0]["call_id"] == "tool_call_123"
-        assert events[0]["name"] == "get_weather"
-        assert response_id == "resp_123"
-        assert item_id == "item_123"
-        assert events[0]["response_id"] == "resp_123"
-        assert events[0]["item_id"] == "item_123"
-        assert json.loads(events[0]["arguments"]) == {"location": "San Francisco"}
+        function_call = _only(events, "response.function_call_arguments.done")
+        assert function_call["response_id"] == "resp_123"
+        assert function_call["item_id"] == "item_123"
+        assert json.loads(function_call["arguments"]) == {"location": "San Francisco"}
+
+        # Legacy `input` field is still honoured when `content` is absent
+        events, _, _ = config.transform_tool_use_event(
+            {
+                "toolUse": {
+                    "toolUseId": "tool_call_legacy",
+                    "toolName": "get_weather",
+                    "input": json.dumps({"location": "Boston"}),
+                }
+            },
+            "item_123",
+            "resp_123",
+            "conv_1",
+        )
+        assert json.loads(_only(events, "response.function_call_arguments.done")["arguments"]) == {"location": "Boston"}
 
         # Invalid JSON content falls back to empty arguments
-        events, _, _, _, _ = config.transform_tool_use_event(
+        events, _, _ = config.transform_tool_use_event(
             {
                 "toolUse": {
                     "toolUseId": "tool_call_124",
@@ -673,9 +734,9 @@ class TestBedrockRealtimeResponseTransformation:
             },
             "item_123",
             "resp_123",
+            "conv_1",
         )
-        assert len(events) == 1
-        assert json.loads(events[0]["arguments"]) == {}
+        assert json.loads(_only(events, "response.function_call_arguments.done")["arguments"]) == {}
 
     def test_transform_realtime_response_persists_minted_tool_ids(self):
         """TOOL-first turns must write minted response/item ids into session state"""
@@ -729,16 +790,18 @@ class TestBedrockRealtimeResponseTransformation:
             realtime_response_transform_input=state,
         )
 
-        assert len(result["response"]) == 1
-        function_call = result["response"][0]
-        assert function_call["type"] == "response.function_call_arguments.done"
-        assert result["current_response_id"] is not None
-        assert result["current_output_item_id"] is not None
-        assert result["current_response_id"].startswith("resp_")
-        assert result["current_output_item_id"].startswith("item_")
-        assert function_call["response_id"] == result["current_response_id"]
-        assert function_call["item_id"] == result["current_output_item_id"]
+        assert [msg["type"] for msg in result["response"]] == _TOOL_CALL_EVENT_SEQUENCE
+        function_call = _only(result["response"], "response.function_call_arguments.done")
+        assert function_call["response_id"].startswith("resp_")
+        assert function_call["item_id"].startswith("item_")
         assert json.loads(function_call["arguments"]) == {"location": "Seattle"}
+
+        # The tool turn closes the response it minted, so no in-progress response is orphaned
+        # and the ids cannot leak into the post-tool assistant turn.
+        tool_done = _only(result["response"], "response.done")
+        assert tool_done["response"]["id"] == function_call["response_id"]
+        assert result["current_response_id"] is None
+        assert result["current_output_item_id"] is None
 
         content_end_message = {
             "event": {
@@ -765,8 +828,9 @@ class TestBedrockRealtimeResponseTransformation:
         assert follow_up["current_response_id"] is None
         assert follow_up["current_output_item_id"] is None
         assert follow_up["current_delta_type"] is None
+        # The tool turn already emitted response.done; TOOL contentEnd must not emit a second
+        # one, nor an unpaired message-shaped output_item.done.
         assert follow_up["response"] == []
-        assert all(msg["type"] != "response.output_item.done" for msg in follow_up["response"])
 
         post_tool_state = {
             "session_configuration_request": follow_up["session_configuration_request"],
@@ -783,12 +847,10 @@ class TestBedrockRealtimeResponseTransformation:
             logging_obj,
             realtime_response_transform_input=post_tool_state,
         )
-        tool_response_id = result["current_response_id"]
-        tool_item_id = result["current_output_item_id"]
         assert assistant_start["current_response_id"] is not None
         assert assistant_start["current_output_item_id"] is not None
-        assert assistant_start["current_response_id"] != tool_response_id
-        assert assistant_start["current_output_item_id"] != tool_item_id
+        assert assistant_start["current_response_id"] != function_call["response_id"]
+        assert assistant_start["current_output_item_id"] != function_call["item_id"]
         created = [msg for msg in assistant_start["response"] if msg["type"] == "response.created"][0]
         added = [msg for msg in assistant_start["response"] if msg["type"] == "response.output_item.added"][0]
         assert created["response"]["id"] == assistant_start["current_response_id"]
@@ -797,7 +859,10 @@ class TestBedrockRealtimeResponseTransformation:
         assert added["item"]["id"] != function_call["item_id"]
 
     def test_tool_content_end_does_not_emit_message_output_item_done(self):
-        """Minted tool ids must not unlock unpaired message output_item.done on TOOL contentEnd"""
+        """
+        TOOL contentEnd must stay silent: the tool turn already closed its own response, and a
+        message-shaped output_item.done here would have no matching output_item.added.
+        """
         config = BedrockRealtimeConfig()
         logging_obj = MagicMock()
         logging_obj.litellm_trace_id = "trace_123"
@@ -816,8 +881,8 @@ class TestBedrockRealtimeResponseTransformation:
             logging_obj,
             realtime_response_transform_input={
                 "session_configuration_request": json.dumps({"configured": True}),
-                "current_output_item_id": "item_minted_for_tool",
-                "current_response_id": "resp_minted_for_tool",
+                "current_output_item_id": "item_open_assistant_turn",
+                "current_response_id": "resp_open_assistant_turn",
                 "current_conversation_id": "conv_123",
                 "current_delta_chunks": [],
                 "current_item_chunks": [],
@@ -826,9 +891,11 @@ class TestBedrockRealtimeResponseTransformation:
         )
 
         assert result["response"] == []
-        assert result["current_response_id"] is None
         assert result["current_output_item_id"] is None
         assert result["current_delta_type"] is None
+        # A TOOL block that produced no toolUse leaves the assistant response open rather than
+        # dropping its id, so the next assistant block reuses it instead of orphaning it.
+        assert result["current_response_id"] == "resp_open_assistant_turn"
 
     def test_transform_content_end_text(self):
         """Test contentEnd for text response"""
@@ -1173,20 +1240,26 @@ class TestBedrockRealtimeContentBlockLifecycle:
                 }
             },
         )
-        assert tool_result["response"][0]["type"] == "response.function_call_arguments.done"
+        assert [msg["type"] for msg in tool_result["response"]] == _TOOL_CALL_EVENT_SEQUENCE
+        # The response the assistant text block opened is closed by the tool turn instead of
+        # being left in_progress forever once the ids are cleared.
+        tool_done = _only(tool_result["response"], "response.done")
+        assert tool_done["response"]["id"] == first_response_id
+        assert tool_done["response"]["output"][0]["call_id"] == "tool_1"
+        assert state["current_response_id"] is None
+        assert state["current_output_item_id"] is None
         assert state["current_delta_chunks"] is None
         assert state["current_delta_type"] is None
 
-        self._apply(
+        tool_content_end = self._apply(
             config,
             logging_obj,
             state,
             {"event": {"contentEnd": {"stopReason": "TOOL_USE", "type": "TOOL"}}},
         )
+        assert tool_content_end["response"] == []
         assert state["current_response_id"] is None
         assert state["current_output_item_id"] is None
-        assert state["current_delta_chunks"] is None
-        assert state["current_delta_type"] is None
 
         post_tool = self._apply(
             config,
@@ -1216,6 +1289,43 @@ class TestBedrockRealtimeContentBlockLifecycle:
         assert any(msg["type"] == "response.done" for msg in done["response"])
         assert state["current_response_id"] is None
         assert state["current_delta_chunks"] is None
+
+    def test_every_created_response_is_closed_across_a_tool_turn(self):
+        """
+        Realtime clients track in-progress responses by id. A tool turn that drops the
+        response id without a matching response.done leaves one open forever.
+        """
+        config = BedrockRealtimeConfig()
+        logging_obj = MagicMock()
+        logging_obj.litellm_trace_id = "trace_123"
+        state = self._state()
+
+        turn = [
+            {"event": {"contentStart": {"role": "ASSISTANT", "type": "TEXT"}}},
+            {"event": {"textOutput": {"content": "Let me check."}}},
+            {"event": {"contentEnd": {"stopReason": "PARTIAL_TURN", "type": "TEXT"}}},
+            {"event": {"contentStart": {"role": "TOOL", "type": "TOOL"}}},
+            {
+                "event": {
+                    "toolUse": {
+                        "toolUseId": "tool_1",
+                        "toolName": "get_weather",
+                        "content": json.dumps({"location": "Seattle"}),
+                    }
+                }
+            },
+            {"event": {"contentEnd": {"stopReason": "TOOL_USE", "type": "TOOL"}}},
+            {"event": {"contentStart": {"role": "ASSISTANT", "type": "TEXT"}}},
+            {"event": {"textOutput": {"content": "It is sunny."}}},
+            {"event": {"contentEnd": {"stopReason": "END_TURN", "type": "TEXT"}}},
+        ]
+        emitted = [msg for event in turn for msg in self._apply(config, logging_obj, state, event)["response"]]
+
+        created = [msg["response"]["id"] for msg in emitted if msg["type"] == "response.created"]
+        done = [msg["response"]["id"] for msg in emitted if msg["type"] == "response.done"]
+        assert len(created) == 2
+        assert created == done
+        assert state["current_response_id"] is None
 
     def test_second_assistant_content_block_reuses_response_not_item(self):
         config = BedrockRealtimeConfig()
@@ -1395,7 +1505,7 @@ class TestBedrockRealtimeUsageAccounting:
         assert usage["total_tokens"] == 35
         assert not config.has_unbilled_usage()
 
-    def test_tool_end_turn_emits_response_done_before_clearing_ids(self):
+    def test_tool_content_end_with_end_turn_stop_reason_emits_response_done(self):
         config = BedrockRealtimeConfig()
         logging_obj = MagicMock()
         logging_obj.litellm_trace_id = "trace_tool_end_turn"
@@ -1428,6 +1538,72 @@ class TestBedrockRealtimeUsageAccounting:
         assert done_events[0]["response"]["usage"]["output_tokens"] == 2
         assert tool_end["current_response_id"] is None
         assert not config.has_unbilled_usage()
+
+    def test_tool_turn_does_not_double_bill_across_late_usage_and_completion_end(self):
+        """The tool response.done, a later usageEvent, and completionEnd must each bill once."""
+        config = BedrockRealtimeConfig()
+        logging_obj = MagicMock()
+        logging_obj.litellm_trace_id = "trace_tool_usage"
+        state = {
+            "session_configuration_request": json.dumps({"configured": True}),
+            "current_output_item_id": "item_1",
+            "current_response_id": "resp_1",
+            "current_conversation_id": "conv_1",
+            "current_delta_chunks": None,
+            "current_item_chunks": [],
+            "current_delta_type": None,
+        }
+
+        config.transform_realtime_response(
+            json.dumps(self._usage_event(input_speech=4, input_text=0, output_speech=6, output_text=0)),
+            "amazon.nova-2-sonic-v1:0",
+            logging_obj,
+            realtime_response_transform_input=state,
+        )
+        tool_result = config.transform_realtime_response(
+            json.dumps(
+                {
+                    "event": {
+                        "toolUse": {
+                            "toolUseId": "tool_1",
+                            "toolName": "get_weather",
+                            "content": json.dumps({"location": "Seattle"}),
+                        }
+                    }
+                }
+            ),
+            "amazon.nova-2-sonic-v1:0",
+            logging_obj,
+            realtime_response_transform_input=state,
+        )
+        tool_usage = _only(tool_result["response"], "response.done")["response"]["usage"]
+        assert tool_usage["input_tokens"] == 4
+        assert tool_usage["output_tokens"] == 6
+        assert not config.has_unbilled_usage()
+        state["current_response_id"] = tool_result["current_response_id"]
+        state["current_output_item_id"] = tool_result["current_output_item_id"]
+
+        # Cumulative usage grows after the tool turn; only the delta may be billed again.
+        late = config.transform_realtime_response(
+            json.dumps(self._usage_event(input_speech=10, input_text=0, output_speech=15, output_text=0)),
+            "amazon.nova-2-sonic-v1:0",
+            logging_obj,
+            realtime_response_transform_input=state,
+        )
+        late_usage = _only(late["response"], "response.done")["response"]["usage"]
+        assert late_usage["input_tokens"] == 6
+        assert late_usage["output_tokens"] == 9
+        state["current_response_id"] = late["current_response_id"]
+
+        completion_end = config.transform_realtime_response(
+            json.dumps({"event": {"completionEnd": {}}}),
+            "amazon.nova-2-sonic-v1:0",
+            logging_obj,
+            realtime_response_transform_input=state,
+        )
+        assert completion_end["response"] == []
+        assert not config.has_unbilled_usage()
+        assert config.flush_pending_usage_as_response_done(None, None) == []
 
     def test_flush_pending_usage_on_session_close(self):
         config = BedrockRealtimeConfig()

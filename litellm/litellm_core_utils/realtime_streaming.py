@@ -59,7 +59,7 @@ class RealTimeStreaming:
     def __init__(
         self,
         websocket: Any,
-        backend_ws: CLIENT_CONNECTION_CLASS,
+        backend_ws: CLIENT_CONNECTION_CLASS | None,
         logging_obj: LiteLLMLogging,
         provider_config: BaseRealtimeConfig | None = None,
         model: str = "",
@@ -70,7 +70,7 @@ class RealTimeStreaming:
         event_normalizer: RealtimeEventNormalizer | None = None,
     ):
         self.websocket: _ClientWebSocket = websocket
-        self.backend_ws = backend_ws
+        self._backend_ws = backend_ws
         self.logging_obj = logging_obj
         self.messages: list[OpenAIRealtimeEvents] = []
         self.input_message: dict = {}
@@ -161,6 +161,19 @@ class RealTimeStreaming:
         "output_text": "text",
         "output_audio": "audio",
     }
+
+    @property
+    def backend_ws(self) -> CLIENT_CONNECTION_CLASS:
+        """
+        The backend websocket, for the forwarding paths that require one.
+
+        Providers that stream over a non-websocket transport (Bedrock uses the AWS SDK
+        bidirectional stream) construct this class only for its message store and spend
+        logging, and pass ``backend_ws=None``; reaching a forwarding path from there is a bug.
+        """
+        if self._backend_ws is None:
+            raise RuntimeError("RealTimeStreaming was constructed without a backend websocket")
+        return self._backend_ws
 
     def _should_store_message(
         self,

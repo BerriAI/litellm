@@ -9,6 +9,7 @@ import pytest
 
 sys.path.insert(0, os.path.abspath("../../../../.."))  # Adds the parent directory to the system path
 
+from litellm.litellm_core_utils.realtime_streaming import RealTimeStreaming
 from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.llms.bedrock.realtime.handler import BedrockRealtime
 from litellm.llms.bedrock.realtime.transformation import BedrockRealtimeConfig
@@ -116,6 +117,37 @@ class EndedBedrockReceiver:
 class EndedBedrockStream:
     async def await_output(self):
         return (None, EndedBedrockReceiver())
+
+
+class ScriptedBedrockChunk:
+    def __init__(self, payload):
+        self.bytes_ = json.dumps(payload).encode("utf-8")
+
+
+class ScriptedBedrockResult:
+    def __init__(self, payload):
+        self.value = ScriptedBedrockChunk(payload)
+
+
+class ScriptedBedrockReceiver:
+    def __init__(self, payloads):
+        self._payloads = list(payloads)
+
+    async def receive(self):
+        if not self._payloads:
+            return None
+        return ScriptedBedrockResult(self._payloads.pop(0))
+
+
+class ScriptedBedrockStream:
+    """Replays a fixed list of Bedrock event payloads, then ends the stream."""
+
+    def __init__(self, payloads):
+        self.input_stream = FakeInputStream()
+        self._receiver = ScriptedBedrockReceiver(payloads)
+
+    async def await_output(self):
+        return (None, self._receiver)
 
 
 class RealtimeClientWS:
@@ -365,6 +397,53 @@ class TestBedrockRealtimeSessionLifecycle:
         assert any(event.get("type") == "session.created" for event in dispatched)
 
     @pytest.mark.asyncio
+    async def test_tool_call_reaches_spend_logging_via_response_done(self):
+        """
+        Bedrock tool calls must be billable through the shared RealTimeStreaming collector,
+        which reads function_call items off response.done, with no Bedrock-specific plumbing.
+        """
+        handler = BedrockRealtime()
+        client_ws = RealtimeClientWS()
+        logging_obj = FakeLogging()
+        realtime_streaming = RealTimeStreaming(
+            websocket=client_ws,
+            backend_ws=None,
+            logging_obj=logging_obj,
+            model="amazon.nova-2-sonic-v1:0",
+        )
+
+        await handler._forward_bedrock_to_client(
+            ScriptedBedrockStream(
+                [
+                    {"event": {"contentStart": {"role": "TOOL", "type": "TOOL"}}},
+                    {
+                        "event": {
+                            "toolUse": {
+                                "toolUseId": "tool_call_1",
+                                "toolName": "get_weather",
+                                "content": json.dumps({"location": "Seattle"}),
+                            }
+                        }
+                    },
+                ]
+            ),
+            client_ws,
+            BedrockRealtimeConfig(),
+            "amazon.nova-2-sonic-v1:0",
+            logging_obj,
+            {},
+            realtime_streaming,
+        )
+
+        assert realtime_streaming.tool_calls == [
+            {
+                "id": "tool_call_1",
+                "type": "function",
+                "function": {"name": "get_weather", "arguments": json.dumps({"location": "Seattle"})},
+            }
+        ]
+
+    @pytest.mark.asyncio
     async def test_session_update_is_acked_with_session_updated(self, stub_aws_models):
         handler = BedrockRealtime()
         config = BedrockRealtimeConfig()
@@ -373,9 +452,7 @@ class TestBedrockRealtimeSessionLifecycle:
             [json.dumps({"type": "session.update", "session": {"instructions": "hi", "modalities": ["text"]}})]
         )
 
-        await handler._forward_client_to_bedrock(
-            client_ws, stream, config, "amazon.nova-sonic-v1:0", {}, FakeLogging()
-        )
+        await handler._forward_client_to_bedrock(client_ws, stream, config, "amazon.nova-sonic-v1:0", {}, FakeLogging())
 
         acked = [json.loads(message) for message in client_ws.sent_to_client]
         updated = [event for event in acked if event["type"] == "session.updated"]
@@ -387,9 +464,7 @@ class TestBedrockRealtimeSessionLifecycle:
         handler = BedrockRealtime()
         config = BedrockRealtimeConfig()
         stream = FakeBedrockStream()
-        client_ws = DisconnectingClientWS(
-            [json.dumps({"type": "session.update", "session": {"instructions": "hi"}})]
-        )
+        client_ws = DisconnectingClientWS([json.dumps({"type": "session.update", "session": {"instructions": "hi"}})])
 
         await handler._forward_client_to_bedrock(client_ws, stream, config, "amazon.nova-sonic-v1:0", {})
 

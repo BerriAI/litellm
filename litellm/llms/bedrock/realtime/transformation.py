@@ -9,7 +9,7 @@ import json
 import uuid as uuid_lib
 from collections.abc import Mapping
 from types import MappingProxyType
-from typing import Any, Final
+from typing import Final
 
 from pydantic import BaseModel
 
@@ -20,8 +20,11 @@ from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
 from litellm.llms.bedrock.realtime.trigger_audio import ready_trigger_pcm
 from litellm.types.llms.openai import (
     OpenAIRealtimeContentPartDone,
+    OpenAIRealtimeConversationItemAdded,
     OpenAIRealtimeDoneEvent,
     OpenAIRealtimeEvents,
+    OpenAIRealtimeFunctionCallArgumentsDelta,
+    OpenAIRealtimeFunctionCallArgumentsDone,
     OpenAIRealtimeOutputItemDone,
     OpenAIRealtimeResponseAudioDone,
     OpenAIRealtimeResponseContentPartAdded,
@@ -29,6 +32,7 @@ from litellm.types.llms.openai import (
     OpenAIRealtimeResponseDoneObject,
     OpenAIRealtimeResponseTextDone,
     OpenAIRealtimeStreamResponseBaseObject,
+    OpenAIRealtimeStreamResponseOutputItem,
     OpenAIRealtimeStreamResponseOutputItemAdded,
     OpenAIRealtimeStreamSession,
     OpenAIRealtimeStreamSessionEvents,
@@ -42,6 +46,17 @@ from litellm.types.realtime import (
 
 class BedrockContentEnd(BaseModel):
     stopReason: str | None = None
+
+
+class BedrockToolUse(BaseModel):
+    toolUseId: str = ""
+    toolName: str = ""
+    content: object | None = None
+    input: object | None = None
+
+    def arguments(self) -> str:
+        """Nova Sonic puts tool args in ``content`` as a JSON string; older payloads use ``input``."""
+        return json.dumps(_parse_bedrock_tool_use_input(self.content if self.content is not None else self.input))
 
 
 TRIGGER_AUDIO_SAMPLE_RATE_HERTZ: Final = 16000
@@ -1133,50 +1148,103 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
         event: dict,
         current_output_item_id: str | None,
         current_response_id: str | None,
-    ) -> tuple[list[OpenAIRealtimeEvents], str, str, str, str]:
+        conversation_id: str,
+    ) -> tuple[list[OpenAIRealtimeEvents], str, str]:
         """
-        Transform Bedrock toolUse event to OpenAI format.
+        Transform a Bedrock toolUse event into the full OpenAI function-call lifecycle.
 
-        Args:
-            event: Bedrock toolUse event
-            current_output_item_id: Current output item ID
-            current_response_id: Current response ID
+        Nova Sonic delivers one tool call, fully formed, in a single event, and starts the
+        block with ``contentStart`` role ``TOOL``, which opens no OpenAI response. Mint the
+        response/item ids when they are missing, emit the item added/delta/done trio the
+        OpenAI realtime protocol requires around ``function_call_arguments.done``, then close
+        the response so no in-progress response is left orphaned and downstream spend logging
+        can harvest the call from ``response.done`` output.
 
         Returns:
-            Tuple of (events, tool_call_id, tool_name, output_item_id, response_id)
-            so the caller can persist any minted IDs into session state
+            Tuple of (events, tool_call_id, tool_name). The caller clears the response and
+            item ids, since this sequence closes the response it emits.
         """
         verbose_logger.debug("Handling toolUse")
-        tool_use: Final = event["toolUse"]
+        tool_use: Final = BedrockToolUse.model_validate(event["toolUse"])
 
         response_id: Final = current_response_id or f"resp_{uuid.uuid4()}"
         item_id: Final = current_output_item_id or f"item_{uuid.uuid4()}"
-        raw_input: Final = tool_use["content"] if "content" in tool_use else tool_use.get("input")
-        tool_input: Final = _parse_bedrock_tool_use_input(raw_input)
+        tool_call_id: Final = tool_use.toolUseId
+        tool_name: Final = tool_use.toolName
+        arguments: Final = tool_use.arguments()
 
-        tool_call_id: Final = tool_use.get("toolUseId", "")
-        tool_name: Final = tool_use.get("toolName", "")
-
-        from typing import cast
-
-        function_call_event: Final[dict[str, Any]] = {
-            "type": "response.function_call_arguments.done",
-            "event_id": f"event_{uuid.uuid4()}",
-            "response_id": response_id,
-            "item_id": item_id,
-            "output_index": 0,
-            "call_id": tool_call_id,
-            "name": tool_name,
-            "arguments": json.dumps(tool_input),
-        }
-
-        return (
-            [cast(OpenAIRealtimeEvents, function_call_event)],
-            tool_call_id,
-            tool_name,
-            item_id,
-            response_id,
+        function_call_item: Final = OpenAIRealtimeStreamResponseOutputItem(
+            id=item_id,
+            object="realtime.item",
+            type="function_call",
+            status="completed",
+            call_id=tool_call_id,
+            name=tool_name,
+            arguments=arguments,
         )
+        pending_item: Final = OpenAIRealtimeStreamResponseOutputItem(
+            {**function_call_item, "status": "in_progress", "arguments": ""}
+        )
+
+        events: Final[list[OpenAIRealtimeEvents]] = [
+            OpenAIRealtimeStreamResponseOutputItemAdded(
+                type="response.output_item.added",
+                event_id=f"event_{uuid.uuid4()}",
+                response_id=response_id,
+                output_index=0,
+                item=pending_item,
+            ),
+            # Pipecat registers call_id from conversation.item.added; without it the
+            # function_call_arguments.done below is dropped as an unknown call.
+            OpenAIRealtimeConversationItemAdded(
+                type="conversation.item.added",
+                event_id=f"event_{uuid.uuid4()}",
+                previous_item_id=None,
+                item=OpenAIRealtimeStreamResponseOutputItem({**pending_item}),
+            ),
+            # Nova Sonic delivers the whole argument payload at once; emit one delta anyway
+            # so clients that accumulate deltas rather than read `.done` still get the args.
+            OpenAIRealtimeFunctionCallArgumentsDelta(
+                type="response.function_call_arguments.delta",
+                event_id=f"event_{uuid.uuid4()}",
+                response_id=response_id,
+                item_id=item_id,
+                output_index=0,
+                call_id=tool_call_id,
+                delta=arguments,
+            ),
+            OpenAIRealtimeFunctionCallArgumentsDone(
+                type="response.function_call_arguments.done",
+                event_id=f"event_{uuid.uuid4()}",
+                response_id=response_id,
+                item_id=item_id,
+                output_index=0,
+                call_id=tool_call_id,
+                name=tool_name,
+                arguments=arguments,
+            ),
+            OpenAIRealtimeOutputItemDone(
+                type="response.output_item.done",
+                event_id=f"event_{uuid.uuid4()}",
+                response_id=response_id,
+                output_index=0,
+                item=OpenAIRealtimeStreamResponseOutputItem({**function_call_item}),
+            ),
+            OpenAIRealtimeDoneEvent(
+                type="response.done",
+                event_id=f"event_{uuid.uuid4()}",
+                response=OpenAIRealtimeResponseDoneObject(
+                    object="realtime.response",
+                    id=response_id,
+                    status="completed",
+                    output=[OpenAIRealtimeStreamResponseOutputItem({**function_call_item})],
+                    conversation_id=conversation_id,
+                    usage=self.consume_usage_for_response_done(),
+                ),
+            ),
+        ]
+
+        return events, tool_call_id, tool_name
 
     def transform_conversation_item_create_tool_result_event(self, json_message: dict) -> list[str]:
         """
@@ -1381,20 +1449,22 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
                 ) = self._response_done_events(current_response_id, current_conversation_id)
                 returned_messages.extend(done_events)
                 current_delta_chunks = None  # rebind-ok: session state machine
-            elif content_end.get("type") == "TOOL":
-                current_response_id = None  # rebind-ok: session state machine
 
         elif "toolUse" in event:
-            (
-                events,
-                tool_call_id,
-                tool_name,
-                tool_output_item_id,
-                tool_response_id,
-            ) = self.transform_tool_use_event(event, current_output_item_id, current_response_id)
+            current_conversation_id = (  # rebind-ok: session state machine
+                current_conversation_id or f"conv_{uuid.uuid4()}"
+            )
+            events, tool_call_id, tool_name = self.transform_tool_use_event(
+                event,
+                current_output_item_id,
+                current_response_id,
+                current_conversation_id,
+            )
             returned_messages.extend(events)
-            current_output_item_id = tool_output_item_id  # rebind-ok: session state machine
-            current_response_id = tool_response_id  # rebind-ok: session state machine
+            # transform_tool_use_event closes the response it emits, so the tool ids must not
+            # survive into the post-tool assistant turn.
+            current_output_item_id = None  # rebind-ok: session state machine
+            current_response_id = None  # rebind-ok: session state machine
             current_delta_chunks = None  # rebind-ok: session state machine
             current_delta_type = None  # rebind-ok: session state machine
             verbose_logger.debug("Tool use event: %s (ID: %s)", tool_name, tool_call_id)
