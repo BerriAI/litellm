@@ -29,13 +29,11 @@ def _flatten_form_field(key: str, value: object) -> tuple[tuple[str, str], ...]:
 
 def flatten_form_field_values(*sources: Mapping[str, object] | None) -> tuple[tuple[str, str], ...]:
     """
-    Flatten JSON-shaped bodies into primitive ``(name, value)`` form fields the
-    way the OpenAI SDK serializes multipart bodies: dicts as ``key[subkey]``,
-    lists as ``key[]``, booleans lowercased, None and empty values dropped.
-    Sources are applied in order, so a later source wins on a key collision when
-    fed to ``dict.update``. Used to funnel provider-specific params into a
-    multipart request without handing the httpx encoder a nested value it
-    rejects with ``Invalid type for value``.
+    Flatten JSON-shaped bodies into primitive ``(name, value)`` form fields the way the
+    OpenAI SDK serializes multipart bodies, applying ``sources`` in order so a later source
+    wins on a key collision under ``dict.update``. Lets provider params reach a multipart
+    request without handing the httpx encoder a nested value it rejects with
+    ``Invalid type for value``.
     """
     return tuple(
         pair
@@ -48,11 +46,9 @@ def flatten_form_field_values(*sources: Mapping[str, object] | None) -> tuple[tu
 
 def serialize_multipart_form_fields(data: Mapping[str, object]) -> tuple[tuple[str, tuple[None, str]], ...]:
     """
-    Encode a JSON-shaped body as httpx file-tuples so a request with no file
-    parts is still sent as multipart/form-data (httpx downgrades a file-less
-    ``data=`` payload to application/x-www-form-urlencoded). Nested values are
-    flattened the way the OpenAI SDK serializes multipart bodies: dicts as
-    ``key[subkey]``, lists as ``key[]``, booleans lowercased, None dropped.
+    Encode a JSON-shaped body as OpenAI-SDK-style multipart file-tuples so a file-less
+    request is still sent as multipart/form-data, working around httpx downgrading a
+    file-less ``data=`` payload to application/x-www-form-urlencoded.
     """
     return tuple(
         (key, (None, serialized))
