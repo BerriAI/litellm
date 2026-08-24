@@ -441,6 +441,12 @@ class CallTypes(str, Enum):
     aquery = "aquery"
 
     #########################################################
+    # Google Interactions API Call Types
+    #########################################################
+    create_interaction = "create_interaction"
+    acreate_interaction = "acreate_interaction"
+
+    #########################################################
     # Container Call Types
     #########################################################
     create_container = "create_container"
