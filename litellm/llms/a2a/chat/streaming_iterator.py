@@ -7,7 +7,7 @@ from typing import Final
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.types.utils import GenericStreamingChunk, ModelResponseStream
 
-from ..common_utils import extract_text_from_a2a_response
+from ..common_utils import A2AError, extract_text_from_a2a_response
 
 
 class A2AModelResponseIterator(BaseModelResponseIterator):
@@ -56,6 +56,15 @@ class A2AModelResponseIterator(BaseModelResponseIterator):
             }
         }
         """
+        if "error" in chunk:
+            error_value: Final = chunk["error"]
+            error_message: Final = (
+                error_value.get("message")
+                if isinstance(error_value, dict) and isinstance(error_value.get("message"), str)
+                else str(error_value)
+            )
+            raise A2AError(status_code=500, message=f"A2A error: {error_message}")
+
         try:
             # Extract text from A2A response
             text: Final = extract_text_from_a2a_response(chunk)

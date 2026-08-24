@@ -89,6 +89,7 @@ async def _route_registered_provider(
     api_base: str | None,
     litellm_params: Mapping[str, object],
     static_headers: Mapping[str, str] | None,
+    dynamic_headers: Mapping[str, str] | None = None,
 ) -> ModelResponse | CustomStreamWrapper:
     from litellm.a2a_protocol.litellm_completion_bridge.handler import (
         A2ACompletionBridgeHandler,
@@ -122,7 +123,10 @@ async def _route_registered_provider(
         _HEADERS_ADAPTER.validate_python(configured_headers) if isinstance(configured_headers, dict) else None
     )
     agent_extra_headers: Final = merge_agent_headers(
-        dynamic_headers=configured_headers_dict,
+        dynamic_headers=merge_agent_headers(
+            dynamic_headers=dynamic_headers,
+            static_headers=configured_headers_dict,
+        ),
         static_headers=static_headers,
     )
     if agent_extra_headers:
@@ -233,6 +237,40 @@ def _merge_agent_guardrails(
     return merged_data
 
 
+def _get_agent_dynamic_headers(
+    data: Mapping[str, object],
+    agent_id: str,
+    agent_name: str,
+    extra_headers: list[str] | None,
+) -> dict[str, str]:
+    proxy_request: Final = data.get("proxy_server_request")
+    raw_headers: object = proxy_request.get("headers") if isinstance(proxy_request, Mapping) else None
+    if not isinstance(raw_headers, Mapping):
+        metadata: Final = data.get("metadata")
+        raw_headers = metadata.get("headers") if isinstance(metadata, Mapping) else None
+    normalized_headers: Final = (
+        {str(key).lower(): str(value) for key, value in raw_headers.items()}
+        if isinstance(raw_headers, Mapping)
+        else {}
+    )
+
+    dynamic_headers: dict[str, str] = {}
+    for header_name in extra_headers or []:
+        header_name_str: Final = str(header_name)
+        value: Final = normalized_headers.get(header_name_str.lower())
+        if value is not None:
+            dynamic_headers[header_name_str] = value
+
+    for alias in (agent_id.lower(), agent_name.lower()):
+        prefix: Final = f"x-a2a-{alias}-"
+        for key, value in normalized_headers.items():
+            if key.startswith(prefix):
+                header_name: Final = key[len(prefix) :]
+                if header_name:
+                    dynamic_headers[header_name] = value
+    return dynamic_headers
+
+
 async def route_a2a_agent_request(
     data: Mapping[str, object],
     route_type: str,
@@ -310,6 +348,12 @@ async def route_a2a_agent_request(
         data=data,
         agent_guardrails=registered_params_value.get("guardrails") if registered_params_value else None,
     )
+    registered_dynamic_headers: Final = _get_agent_dynamic_headers(
+        data=routed_data,
+        agent_id=agent.agent_id,
+        agent_name=agent.agent_name,
+        extra_headers=agent.extra_headers,
+    )
     if (
         registered_provider
         and registered_provider != "a2a"
@@ -323,6 +367,7 @@ async def route_a2a_agent_request(
             api_base=api_base,
             litellm_params=registered_params_value,
             static_headers=agent.static_headers,
+            dynamic_headers=registered_dynamic_headers,
         )
 
     completion_data: Final = MappingProxyType({**routed_data, "api_base": api_base})

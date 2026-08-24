@@ -83,6 +83,7 @@ async def test_route_a2a_model_uses_registered_provider():
             "guardrails": ["agent-guardrail"],
         },
         static_headers={"Authorization": "Bearer static"},
+        extra_headers=["X-Tenant"],
     )
     data = {
         "model": "a2a/test-agent",
@@ -92,6 +93,12 @@ async def test_route_a2a_model_uses_registered_provider():
         "temperature": 0.2,
         "timeout": 12.0,
         "tools": [{"type": "function", "function": {"name": "lookup"}}],
+        "proxy_server_request": {
+            "headers": {
+                "x-tenant": "tenant-1",
+                "x-a2a-test-agent-x-run": "run-1",
+            }
+        },
     }
     bridge_response = {
         "jsonrpc": "2.0",
@@ -133,7 +140,11 @@ async def test_route_a2a_model_uses_registered_provider():
     assert bridge_kwargs["litellm_params"]["timeout"] == 12.0
     assert bridge_kwargs["litellm_params"]["tools"] == data["tools"]
     assert bridge_kwargs["litellm_params"]["guardrails"] == ["request-guardrail", "agent-guardrail"]
-    assert bridge_kwargs["litellm_params"]["extra_headers"] == {"Authorization": "Bearer static"}
+    assert bridge_kwargs["litellm_params"]["extra_headers"] == {
+        "X-Tenant": "tenant-1",
+        "x-run": "run-1",
+        "Authorization": "Bearer static",
+    }
 
 
 @pytest.mark.asyncio
