@@ -1,4 +1,5 @@
 import warnings
+from collections.abc import Mapping, Sequence
 from enum import Enum
 from typing import Final, Literal
 
@@ -24,16 +25,18 @@ def validate_different_content(v: str | dict | list) -> str:
     raise ValueError("Content must be a string")
 
 
-def _has_cache_control(v: str | dict | list) -> bool:
+def _has_cache_control(v: str | Mapping[str, object] | Sequence[object]) -> bool:
     """True if any content block carries a ``cache_control`` breakpoint."""
-    if isinstance(v, dict):
+    if isinstance(v, Mapping):
         return v.get("cache_control") is not None
-    if isinstance(v, list):
-        return any(isinstance(item, dict) and item.get("cache_control") is not None for item in v)
-    return False
+    if isinstance(v, str):
+        return False
+    return any(isinstance(item, Mapping) and item.get("cache_control") is not None for item in v)
 
 
-def validate_cacheable_content(v: str | dict | list) -> str | list:
+def validate_cacheable_content(
+    v: str | Mapping[str, object] | Sequence[object],
+) -> str | Sequence[Mapping[str, object]]:
     """Flatten content to a string, keeping the block form when it is cached.
 
     SAP Orchestration accepts either a plain string or a list of ``text`` blocks for
@@ -45,15 +48,9 @@ def validate_cacheable_content(v: str | dict | list) -> str | list:
     if not _has_cache_control(v):
         return validate_different_content(v)
 
-    blocks: Final = [v] if isinstance(v, dict) else v
-    kept: Final[list] = []
-    for item in blocks:
-        if isinstance(item, str):
-            if item:
-                kept.append({"type": "text", "text": item})
-        elif isinstance(item, dict) and item.get("text"):
-            kept.append(item)
-    return kept
+    blocks: Final = (v,) if isinstance(v, Mapping) else v
+    normalized: Final = ({"type": "text", "text": item} if isinstance(item, str) else item for item in blocks)
+    return [block for block in normalized if isinstance(block, Mapping) and block.get("text")]
 
 
 class CacheControl(BaseModel):
@@ -132,7 +129,7 @@ class SAPMessage(BaseModel):
     """
 
     role: Literal["system", "developer"] = "system"
-    content: str | list[TextContent]
+    content: str | Sequence[TextContent]
 
     _content_validator = field_validator("content", mode="before")(validate_cacheable_content)
 
