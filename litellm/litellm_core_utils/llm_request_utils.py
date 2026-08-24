@@ -27,20 +27,46 @@ def _flatten_form_field(key: str, value: object) -> tuple[tuple[str, str], ...]:
     return ((key, serialized),)
 
 
-def flatten_form_field_values(*sources: Mapping[str, object] | None) -> tuple[tuple[str, str], ...]:
+def _is_form_scalar(value: object) -> bool:
+    return value is not None and not isinstance(value, (Mapping, list, tuple))
+
+
+def _flatten_form_data_field(key: str, value: object) -> tuple[tuple[str, str | tuple[str, ...]], ...]:
+    if isinstance(value, Mapping):
+        return tuple(
+            item
+            for subkey, subvalue in value.items()
+            for item in _flatten_form_data_field(f"{key}[{subkey}]", subvalue)
+        )
+    if isinstance(value, (list, tuple)):
+        if all(_is_form_scalar(entry) for entry in value):
+            serialized_fields: Final = tuple(field for entry in value if (field := _form_field_value(entry)))
+            return ((key, serialized_fields),) if serialized_fields else ()
+        return tuple(item for entry in value for item in _flatten_form_data_field(f"{key}[]", entry))
+    if value is None:
+        return ()
+    serialized: Final = _form_field_value(value)
+    if not serialized:
+        return ()
+    return ((key, serialized),)
+
+
+def flatten_form_field_values(*sources: Mapping[str, object] | None) -> tuple[tuple[str, str | tuple[str, ...]], ...]:
     """
-    Flatten JSON-shaped bodies into primitive ``(name, value)`` form fields the way the
-    OpenAI SDK serializes multipart bodies, applying ``sources`` in order so a later source
-    wins on a key collision under ``dict.update``. Lets provider params reach a multipart
-    request without handing the httpx encoder a nested value it rejects with
-    ``Invalid type for value``.
+    Flatten JSON-shaped bodies into ``(name, value)`` form fields for a ``dict``-backed
+    multipart body, applying ``sources`` in order so a later source wins on a key collision
+    under ``dict.update``. Nested objects become ``key[subkey]`` fields the way the OpenAI SDK
+    serializes them, so provider params reach a multipart request without handing the httpx
+    encoder a nested value it rejects with ``Invalid type for value``. A scalar list becomes a
+    single field carrying a tuple value, which httpx emits as one repeated part per element, so
+    every element survives instead of collapsing to the last under ``dict.update``.
     """
     return tuple(
         pair
         for source in sources
         if source is not None
         for top_key, top_value in source.items()
-        for pair in _flatten_form_field(top_key, top_value)
+        for pair in _flatten_form_data_field(top_key, top_value)
     )
 
 
