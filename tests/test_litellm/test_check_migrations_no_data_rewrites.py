@@ -476,6 +476,11 @@ class TestStoredRoutines:
         sql = self.DEFINITION + "DO 'BEGIN RAISE NOTICE ''--''; EXECUTE ''SELECT backfill()''; END';\n"
         assert _keywords(tmp_path, sql) == ("UPDATE",)
 
+    def test_a_long_run_of_escaped_quotes_before_an_uncalled_definition_is_not_a_call(self, tmp_path):
+        escaped_quotes = "'" * 84
+        sql = f"DO 'BEGIN RAISE NOTICE ''{escaped_quotes}''; PERFORM 1; END';\n" + self.DEFINITION
+        assert _keywords(tmp_path, sql) == ()
+
     def test_the_name_written_only_in_a_single_quoted_do_comment_is_not_a_call(self, tmp_path):
         sql = self.DEFINITION + "DO 'BEGIN\n-- backfill() runs later\nPERFORM 1; END';\n"
         assert _keywords(tmp_path, sql) == ()
