@@ -15,6 +15,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.caching import DualCache
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.litellm_core_utils.llm_cost_calc.tiered_pricing import select_tier_for_input, tier_rate
+from litellm.litellm_core_utils.token_counter import messages_contain_file_content_blocks
 from litellm.proxy._types import (
     Litellm_EntityType,
     LiteLLM_TeamMembership,
@@ -1273,7 +1274,7 @@ def _approximate_input_size(request_body: dict) -> int:
 def _count_input_tokens(request_body: dict, model: str) -> int | None:
     try:
         if "messages" in request_body:
-            messages = request_body.get("messages") or []
+            messages: Final = request_body.get("messages") or []
             # A `file` content block's real token cost is the provider's
             # server-side extraction of the referenced document and cannot be
             # derived client-side — token_counter only counts its filename/id
@@ -1282,7 +1283,7 @@ def _count_input_tokens(request_body: dict, model: str) -> int | None:
             # reservation — an explicit return, because falling through would
             # let a stray `prompt` / `input` / `query` on the same body count
             # as the whole request.
-            if _messages_contain_file_content_blocks(messages):
+            if messages_contain_file_content_blocks(messages):
                 return None
             return litellm.token_counter(
                 model=model,
@@ -1324,19 +1325,6 @@ def _estimate_input_tokens(
         return max_input_tokens
 
     return None
-
-
-def _messages_contain_file_content_blocks(messages: object) -> bool:
-    if not isinstance(messages, list):
-        return False
-    for message in messages:
-        content = message.get("content") if isinstance(message, dict) else None
-        if not isinstance(content, list):
-            continue
-        for content_item in content:
-            if isinstance(content_item, dict) and content_item.get("type") == "file":
-                return True
-    return False
 
 
 DEFAULT_MAX_OUTPUT_TOKENS_FALLBACK: Final = 16384

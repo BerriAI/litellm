@@ -1827,6 +1827,105 @@ async def test_count_input_file_usage_streams_without_building_list():
     mock_dict_list.assert_not_called()
 
 
+@pytest.mark.asyncio
+async def test_file_content_block_row_reserves_size_based_floor():
+    """A chat row carrying an OpenAI `file` content block must reserve at
+    least the size-based estimate (serialized bytes / 4).
+
+    token_counter deliberately counts only the block's filename/id fields —
+    the document payload is opaque to it — so without this floor a row
+    carrying a large base64 `file_data` counts as a handful of tokens and the
+    whole batch slides under the TPM limit. Before file blocks were countable
+    (#33659) such a row RAISED inside token_counter and fell back to the
+    size-based estimate; the floor restores exactly that conservatism.
+    """
+    import json as _json
+
+    from litellm.proxy.hooks.batch_rate_limiter import _PROXY_BatchRateLimiter
+
+    prl = MagicMock()
+    prl.no_max_tokens_output_floor.return_value = 0
+    rate_limiter = _PROXY_BatchRateLimiter(
+        internal_usage_cache=MagicMock(),
+        parallel_request_limiter=prl,
+    )
+
+    blob = "data:application/pdf;base64," + "A" * 400_000
+    file_row_bytes = _json.dumps(
+        {
+            "custom_id": "row-1",
+            "method": "POST",
+            "url": "/v1/chat/completions",
+            "body": {
+                "model": "gpt-4o-mini",
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "Summarize this document."},
+                            {
+                                "type": "file",
+                                "file": {"filename": "report.pdf", "file_data": blob},
+                            },
+                        ],
+                    }
+                ],
+            },
+        }
+    ).encode("utf-8")
+    fake_content = MagicMock()
+    fake_content.content = file_row_bytes
+
+    with patch(  # test-quality-ok: mirrors the file's established harness — the download, not an HTTP boundary
+        "litellm.afile_content",
+        new=AsyncMock(return_value=fake_content),
+    ):
+        usage = await rate_limiter.count_input_file_usage(
+            file_id="file-not-managed",
+            custom_llm_provider="openai",
+            user_api_key_dict=None,
+        )
+
+    size_based_floor = len(file_row_bytes) // 4
+    assert usage.request_count == 1
+    assert usage.total_tokens >= size_based_floor, (
+        f"file-block row must reserve at least the size-based estimate "
+        f"({size_based_floor} tokens for {len(file_row_bytes)} bytes), got "
+        f"{usage.total_tokens} — a large file_data payload would evade TPM limits"
+    )
+
+    # Control: a plain-text row must NOT be floored at its serialized size —
+    # measured text rows keep the (smaller) real token count.
+    text_row_bytes = _json.dumps(
+        {
+            "custom_id": "row-1",
+            "method": "POST",
+            "url": "/v1/chat/completions",
+            "body": {
+                "model": "gpt-4o-mini",
+                "messages": [{"role": "user", "content": "Summarize this document."}],
+            },
+        }
+    ).encode("utf-8")
+    fake_text_content = MagicMock()
+    fake_text_content.content = text_row_bytes
+
+    with patch(  # test-quality-ok: mirrors the file's established harness — the download, not an HTTP boundary
+        "litellm.afile_content",
+        new=AsyncMock(return_value=fake_text_content),
+    ):
+        text_usage = await rate_limiter.count_input_file_usage(
+            file_id="file-not-managed",
+            custom_llm_provider="openai",
+            user_api_key_dict=None,
+        )
+
+    assert 0 < text_usage.total_tokens < len(text_row_bytes) // 4, (
+        "plain-text rows must keep the measured token count, not the size floor "
+        f"— got {text_usage.total_tokens} for a {len(text_row_bytes)}-byte row"
+    )
+
+
 def _one_row_batch_bytes(model: str) -> bytes:
     import json as _json
 

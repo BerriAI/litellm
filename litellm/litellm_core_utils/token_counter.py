@@ -705,14 +705,36 @@ def _count_file_content_block(count_function: TokenCounterFunction, c: Mapping[s
     token_counter/trim_messages accept valid payloads instead of raising
     (issue #28409).
     """
-    num_tokens = 0
-    file_obj = c.get("file")
+    num_tokens = 0  # rebind-ok: accumulates over the file fields below
+    file_obj: Final = c.get("file")
     if isinstance(file_obj, dict):
         for file_field in ("file_id", "filename", "format"):
             file_field_value = file_obj.get(file_field)
             if isinstance(file_field_value, str) and file_field_value:
                 num_tokens += count_function(file_field_value)
     return num_tokens
+
+
+def messages_contain_file_content_blocks(messages: object) -> bool:
+    """
+    True when any message carries an OpenAI ``file`` content block.
+
+    Callers that use ``token_counter`` for reservations or rate limits must
+    check this first: a file block's document payload is opaque to the counter
+    (only the ``file_id``/``filename``/``format`` fields are counted -- see
+    ``_count_file_content_block``), so the count for such a message is a floor,
+    not a measurement, and it must not be trusted as an upper bound.
+    """
+    if not isinstance(messages, list):
+        return False
+    for message in messages:
+        content = message.get("content") if isinstance(message, dict) else None
+        if not isinstance(content, list):
+            continue
+        for content_item in content:
+            if isinstance(content_item, dict) and content_item.get("type") == "file":
+                return True
+    return False
 
 
 def _count_content_list(

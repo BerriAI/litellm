@@ -35,6 +35,7 @@ from litellm.batches.batch_utils import (
 )
 from litellm.exceptions import RateLimitErrorCategory
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.token_counter import messages_contain_file_content_blocks
 from litellm.proxy._types import (
     ProxyErrorTypes,
     ProxyException,
@@ -853,6 +854,15 @@ class _PROXY_BatchRateLimiter(CustomLogger):
 
                 try:
                     entry_total_tokens = _count_entry_tokens(entry)
+                    # A `file` content block's document payload is opaque to
+                    # token_counter -- only its filename/id fields are counted
+                    # (see token_counter._count_file_content_block) -- so a row
+                    # carrying a large base64 `file_data` would count as a few
+                    # tokens and slide the whole batch under the TPM limit.
+                    # Floor such rows at the size-based estimate, which does
+                    # cover the payload bytes.
+                    if messages_contain_file_content_blocks((entry.get("body") or {}).get("messages")):
+                        entry_total_tokens = max(entry_total_tokens, _estimate_batch_entry_tokens(raw_line))
                 except Exception:
                     entry_total_tokens = _estimate_batch_entry_tokens(raw_line)
                 total_tokens += entry_total_tokens
