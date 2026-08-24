@@ -249,6 +249,16 @@ def undouble(literal: str) -> str:
     return literal.replace("''", "'")
 
 
+def defuse_escapes(literal: str) -> str:
+    """The literal made safe to re-lex without moving anything: each doubled quote becomes a real
+    quote and a space, so a `--` or `/*` in a nested string stays inside its string the way
+    `undouble` achieves it, while the pair keeps its two characters. Every newline and every
+    character after a resolved escape then holds the offset it had in the document, so a rewrite
+    scanned out of the literal reports its true file line and lines up with the file's markers,
+    which `undouble` cannot promise because it shrinks the text as it collapses each pair."""
+    return literal.replace("''", "' ")
+
+
 def mask(sql: str) -> tuple[str, tuple[tuple[int, int], ...], tuple[tuple[int, int], ...]]:
     """Blank comments and quoted text, keeping offsets, and locate the spans that can still
     hold SQL: dollar-quoted bodies, and the single-quoted literals `EXECUTE` runs."""
@@ -632,8 +642,10 @@ def scan_region(
     """Violations in one region of `document`, whose text begins at `offset`. Positions are
     always counted against the whole document, so a statement nested in a dollar-quoted body
     reports its real file line and lines up with the markers read from that file. A single-quoted
-    literal that `DO` or `EXECUTE` runs as SQL is undoubled before it is scanned, so a `--` or `/*`
-    in one of its nested strings blanks nothing and the statement after it stays visible."""
+    literal that `DO` or `EXECUTE` runs as SQL has each doubled quote turned into a quote and a space
+    before it is scanned, so a `--` or `/*` in one of its nested strings blanks nothing and the
+    statement after it stays visible, and since that keeps every character on its offset, the
+    statement reports its true file line and lines up with the markers."""
     masked, bodies, literals = mask(region)
     executed = executed_names(masked)
     runnable = executed_literals(masked, literals, executed)
@@ -648,7 +660,7 @@ def scan_region(
                     if base <= start and end <= commands_end:
                         yield from scan_region(
                             document,
-                            undouble(region[start:end]),
+                            defuse_escapes(region[start:end]),
                             migration,
                             markers,
                             offset + start,
