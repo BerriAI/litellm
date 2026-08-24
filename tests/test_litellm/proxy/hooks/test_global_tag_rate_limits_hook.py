@@ -320,6 +320,50 @@ async def test_concurrency_reservation_released_on_success(time_controller, monk
 
 
 @pytest.mark.asyncio
+async def test_concurrency_reservation_released_when_a_different_hook_rejects_the_request(time_controller, monkeypatch):
+    """
+    model_based_tag_rate_limits_hook raises the identical ProxyRateLimitError
+    shape (detail["error"] == "tag_rate_limit_exceeded") this hook's own
+    admission does, since both hooks share the same rejection marker.
+    async_log_failure_event fires on every registered CustomLogger regardless
+    of which one raised, so this hook must still release its own successfully
+    reserved concurrency slot when the *other* hook is what rejected the
+    request -- skipping release just because the marker matches would leak
+    this hook's own slot until the safety TTL, even though nothing about this
+    hook's own admission failed.
+    """
+    monkeypatch.setattr(
+        litellm,
+        "global_tag_rate_limits",
+        {"concurrency_limits": {"limits": [{"name": "conc", "tag_id": "end_user_id", "limit": 1, "period_seconds": 60}]}},
+    )
+    hook = _make_hook(time_controller)
+
+    data = _data(["end_user_id:u1"], call_id="call-1")
+    await hook.async_pre_call_hook(user_api_key_dict=_key(), cache=DualCache(), data=data, call_type="completion")
+
+    other_hooks_rejection = ProxyRateLimitError(
+        detail={"error": "tag_rate_limit_exceeded", "type": "requests", "tag_id": "end_user_id"},
+        headers={"retry-after": "60"},
+        rate_limit_type=None,
+        model="gpt-4o",
+        llm_provider="litellm_proxy",
+    )
+    kwargs = {"litellm_call_id": "call-1", "exception": other_hooks_rejection}
+    await hook.async_log_failure_event(kwargs=kwargs, response_obj=None, start_time=0, end_time=0)
+
+    # The slot was released despite the shared rejection marker, so a fresh
+    # request must be admitted again.
+    result = await hook.async_pre_call_hook(
+        user_api_key_dict=_key(),
+        cache=DualCache(),
+        data=_data(["end_user_id:u1"], call_id="call-2"),
+        call_type="completion",
+    )
+    assert result is not None
+
+
+@pytest.mark.asyncio
 async def test_concurrency_reservation_released_on_disconnect(time_controller, monkeypatch):
     monkeypatch.setattr(
         litellm,

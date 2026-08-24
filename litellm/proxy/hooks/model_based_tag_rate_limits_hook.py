@@ -1440,13 +1440,15 @@ class _PROXY_ModelBasedTagRateLimitsHook(  # pyright: ignore[reportUnusedClass] 
             await self._release_keys(release_keys)
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time) -> None:
-        if isinstance(kwargs.get("exception"), ProxyRateLimitError):
-            detail: Final = (
-                kwargs["exception"].detail if isinstance(kwargs["exception"].detail, dict) else _EMPTY_MAPPING
-            )
-            if detail.get("error") == "tag_rate_limit_exceeded":
-                return
-
+        # No special-case skip for this hook's own tag_rate_limit_exceeded
+        # rejection: a hop whose own admission rejects never reaches the
+        # point where a concurrency reservation is queued (see
+        # async_filter_deployments), so _pop_pending_concurrency_keys already
+        # returns nothing to release in that case. Skipping release based on
+        # the exception's error marker alone would be wrong here, since
+        # global_tag_rate_limits_hook raises the identical marker -- that
+        # rejection can land after this hook already reserved a slot for the
+        # same request, and that slot must still be released.
         release_keys: Final = self._pop_pending_concurrency_keys(kwargs)
         if release_keys:
             await self._release_keys(release_keys)

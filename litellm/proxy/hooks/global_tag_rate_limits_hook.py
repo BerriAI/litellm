@@ -61,7 +61,6 @@ from litellm.proxy.hooks.model_based_tag_rate_limits_hook import (
     _ATOMIC_UNITS,  # pyright: ignore[reportPrivateUsage]  # reused across module boundaries, see module docstring
     _BACKGROUND_TASKS,  # pyright: ignore[reportPrivateUsage]  # reused across module boundaries, see module docstring
     _CONCURRENCY_MIN_SAFETY_TTL_SECONDS,  # pyright: ignore[reportPrivateUsage]  # reused across module boundaries, see module docstring
-    _EMPTY_MAPPING,  # pyright: ignore[reportPrivateUsage]  # reused across module boundaries, see module docstring
     _LIMIT_UNITS,  # pyright: ignore[reportPrivateUsage]  # reused across module boundaries, see module docstring
     _UNIT_TO_GROUP_FIELD,  # pyright: ignore[reportPrivateUsage]  # reused across module boundaries, see module docstring
     _UNIT_TO_RATE_LIMIT_TYPE,  # pyright: ignore[reportPrivateUsage]  # reused across module boundaries, see module docstring
@@ -513,13 +512,15 @@ class _PROXY_GlobalTagRateLimitsHook(  # pyright: ignore[reportUnusedClass]  # o
         await self._release_keys(release_keys)
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time) -> None:
-        if isinstance(kwargs.get("exception"), ProxyRateLimitError):
-            detail: Final = (
-                kwargs["exception"].detail if isinstance(kwargs["exception"].detail, dict) else _EMPTY_MAPPING
-            )
-            if detail.get("error") == "tag_rate_limit_exceeded":
-                return
-
+        # No special-case skip for this hook's own tag_rate_limit_exceeded
+        # rejection: that rejection never reaches the point where a
+        # concurrency reservation is queued (see async_pre_call_hook), so
+        # stash.pending_concurrency_keys is already empty in that case and
+        # the check below naturally no-ops. Skipping release based on the
+        # exception's error marker alone would be wrong here, since
+        # model_based_tag_rate_limits_hook raises the identical marker --
+        # that rejection can land after this hook already reserved a slot
+        # for this same request, and that slot must still be released.
         stash: Final = _stash_for_call(_call_id_from_kwargs(kwargs))
         if stash is None or not stash.pending_concurrency_keys:
             return

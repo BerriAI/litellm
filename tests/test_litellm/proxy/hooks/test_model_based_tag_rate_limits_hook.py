@@ -2235,6 +2235,50 @@ async def test_concurrency_slot_released_on_failure_frees_capacity(time_controll
 
 
 @pytest.mark.asyncio
+async def test_concurrency_slot_released_when_a_different_hook_rejects_the_request(time_controller):
+    """
+    global_tag_rate_limits_hook raises the identical ProxyRateLimitError
+    shape (detail["error"] == "tag_rate_limit_exceeded") this hook's own
+    admission does. async_log_failure_event fires on every registered
+    CustomLogger regardless of which one raised, so this hook must still
+    release its own successfully reserved concurrency slot when the *other*
+    hook is what rejected the request -- skipping release based on the
+    shared marker alone would leak this hook's own slot until the safety
+    TTL, even though nothing about this hook's own admission failed.
+    """
+    limiter = _make_limiter(time_controller)
+    router = _concurrency_router(limit=1)
+    limiter.update_variables(llm_router=router)
+    healthy = router.model_list
+
+    request_kwargs, kwargs = _call_context(["end_user_id:u1"])
+    await limiter.async_filter_deployments(
+        model="grp",
+        healthy_deployments=healthy,
+        messages=None,
+        request_kwargs=request_kwargs,
+    )
+
+    other_hooks_rejection = ProxyRateLimitError(
+        detail={"error": "tag_rate_limit_exceeded", "type": "requests", "tag_id": "end_user_id"},
+        headers={"retry-after": "60"},
+        rate_limit_type=None,
+        model="grp",
+        llm_provider="litellm_proxy",
+    )
+    kwargs["exception"] = other_hooks_rejection
+    await limiter.async_log_failure_event(kwargs=kwargs, response_obj=None, start_time=0, end_time=0)
+
+    result = await limiter.async_filter_deployments(
+        model="grp",
+        healthy_deployments=healthy,
+        messages=None,
+        request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}},
+    )
+    assert result == healthy
+
+
+@pytest.mark.asyncio
 async def test_concurrency_slot_released_on_fallback_recovered_hop_failure(time_controller):
     """
     A hop that fails but gets recovered by a later fallback never reaches
