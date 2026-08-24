@@ -892,7 +892,9 @@ async def pass_through_request(
         # But if custom_body is provided (e.g., JSON parsed despite multipart content-type), use it
         is_multipart: Final = HttpPassThroughEndpointHelpers.is_multipart(request) and not custom_body
 
-        if custom_body:
+        if state_raw_body is not None:
+            _parsed_body = {}
+        elif custom_body:
             _parsed_body = custom_body
         elif is_multipart:
             # Don't parse multipart body here - it will be handled by make_multipart_http_request

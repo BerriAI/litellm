@@ -97,6 +97,7 @@ from litellm.proxy.utils import (
 )
 from litellm.repositories.table_repositories import TeamMembershipRepository
 from litellm.secret_managers.main import get_secret_bool
+from litellm.types.passthrough_endpoints.assembly_ai import ASSEMBLYAI_UPLOAD_ROUTES
 from litellm.types.services import ServiceTypes
 
 try:
@@ -1135,6 +1136,24 @@ async def _read_request_body_deferring_parse_failure(
     except ProxyException as parse_exception:
         return {}, parse_exception  # mutable-ok: request_data is a plain dict across the whole auth path
     return populate_request_with_path_params(request_data=parsed_body, request=request), None
+
+
+def _request_http_method(request: Request) -> str | None:
+    scope: Final = getattr(request, "scope", None)
+    if isinstance(scope, dict):
+        method: Final = scope.get("method")
+        return method if isinstance(method, str) else None
+    fallback_method: Final = getattr(request, "method", None)
+    return fallback_method if isinstance(fallback_method, str) else None
+
+
+async def _read_request_data_for_auth(
+    request: Request,
+    route: str,
+) -> tuple[dict, ProxyException | None]:  # mutable-ok: request_data is a plain dict across the whole auth path
+    if _request_http_method(request) == "POST" and route.rstrip("/") in ASSEMBLYAI_UPLOAD_ROUTES:
+        return {}, None  # mutable-ok: request_data is a plain dict across the whole auth path
+    return await _read_request_body_deferring_parse_failure(request=request)
 
 
 async def _record_unparsable_body_failure(
@@ -2827,8 +2846,8 @@ async def user_api_key_auth(
     # close, and the trace never reaches the backend.
     _ensure_parent_otel_span_on_request_state(request)
 
-    request_data, body_parse_exception = await _read_request_body_deferring_parse_failure(request=request)
     route: Final[str] = get_request_route(request=request)
+    request_data, body_parse_exception = await _read_request_data_for_auth(request=request, route=route)
     ## CHECK IF ROUTE IS ALLOWED
 
     # Run the whole auth phase inside a live ``auth`` span so the DB lookups it

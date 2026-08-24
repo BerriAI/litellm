@@ -20,6 +20,7 @@ from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     BaseOpenAIPassThroughHandler,
     RouteChecks,
     _join_url_paths,
+    assemblyai_proxy_route,
     azure_proxy_route,
     bedrock_llm_proxy_route,
     bedrock_proxy_route,
@@ -37,7 +38,67 @@ from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     vllm_proxy_route,
 )
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+from litellm.types.passthrough_endpoints.pass_through_endpoints import (
+    LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY,
+)
 from litellm.types.passthrough_endpoints.vertex_ai import VertexPassThroughCredentials
+
+
+@pytest.mark.asyncio
+async def test_regression_assemblyai_upload_preserves_raw_body_and_content_type():
+    raw_audio = b"\xff\x00binary-audio"
+    messages = ({"type": "http.request", "body": raw_audio, "more_body": False},)
+    message_iterator = iter(messages)
+
+    async def receive():
+        return next(message_iterator)
+
+    request = Request(
+        {
+            "type": "http",
+            "http_version": "1.1",
+            "method": "POST",
+            "scheme": "http",
+            "path": "/eu.assemblyai/v2/upload",
+            "raw_path": b"/eu.assemblyai/v2/upload",
+            "query_string": b"",
+            "headers": [(b"content-type", b"audio/mp4")],
+            "client": ("127.0.0.1", 1234),
+            "server": ("testserver", 80),
+        },
+        receive,
+    )
+
+    async def forward_request(**kwargs):
+        assert getattr(
+            kwargs["request"].state,
+            LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY,
+        ) == raw_audio
+        return {"upload_url": "https://cdn.assemblyai.com/upload/test"}
+
+    with (
+        patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router.get_credentials",
+            return_value="provider-key",
+        ),
+        patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route",
+            return_value=forward_request,
+        ) as create_route,
+    ):
+        response = await assemblyai_proxy_route(
+            endpoint="v2/upload",
+            request=request,
+            fastapi_response=Response(),
+            user_api_key_dict=UserAPIKeyAuth(api_key="virtual-key"),
+        )
+
+    assert response == {"upload_url": "https://cdn.assemblyai.com/upload/test"}
+    assert create_route.call_args.kwargs["target"] == "https://api.eu.assemblyai.com/v2/upload"
+    assert create_route.call_args.kwargs["custom_headers"] == {
+        "Authorization": "provider-key",
+        "Content-Type": "audio/mp4",
+    }
 
 
 class TestVertexPassthroughGetVertexBaseUrl:

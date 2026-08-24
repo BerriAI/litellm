@@ -292,7 +292,11 @@ class AssemblyAIPassthroughLoggingHandler:
         """
         if url is None:
             return None
-        if urlparse(url).hostname == "eu.assemblyai.com":
+        parsed_url: Final = urlparse(url)
+        if parsed_url.hostname in (
+            "eu.assemblyai.com",
+            "api.eu.assemblyai.com",
+        ) or "eu.assemblyai" in parsed_url.path.split("/"):
             return "eu"
         return None
 
