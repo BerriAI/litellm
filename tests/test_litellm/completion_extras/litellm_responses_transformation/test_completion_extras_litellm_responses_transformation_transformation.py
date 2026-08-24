@@ -1606,7 +1606,7 @@ def test_map_reasoning_effort_adds_summary_detailed(monkeypatch):
             del os.environ["LITELLM_REASONING_AUTO_SUMMARY"]
 
 
-def test_map_reasoning_effort_max_not_dropped():
+def test_map_reasoning_effort_max_not_dropped(monkeypatch):
     """
     Regression test for issue #38084: reasoning_effort="max" was silently dropped
     when a request was converted to the Responses API.
