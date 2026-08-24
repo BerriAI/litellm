@@ -1341,12 +1341,13 @@ def video_get_character(
 async def avideo_edit(
     video_id: str,
     prompt: str,
-    video: FileContent | None = None,
     timeout=600,
     custom_llm_provider=None,
     extra_headers: dict[str, object] | None = None,
     extra_query: dict[str, object] | None = None,
     extra_body: dict[str, object] | None = None,
+    *,
+    video: FileContent | None = None,
     **kwargs,
 ) -> VideoObject:
     """
@@ -1395,12 +1396,13 @@ async def avideo_edit(
 def video_edit(
     video_id: str,
     prompt: str,
-    video: FileContent | None = None,
     timeout=600,
     custom_llm_provider=None,
     extra_headers: dict[str, object] | None = None,
     extra_query: dict[str, object] | None = None,
     extra_body: dict[str, object] | None = None,
+    *,
+    video: FileContent | None = None,
     **kwargs,
 ) -> VideoObject | Coroutine[object, object, VideoObject]:
     """
