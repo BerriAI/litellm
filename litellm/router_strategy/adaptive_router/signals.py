@@ -115,9 +115,7 @@ def _jaccard(a: Set[str], b: Set[str]) -> float:
 
 
 _DISENGAGEMENT_PATTERNS = [
-    re.compile(
-        r"\b(forget it|never mind|give up|talk to (?:a )?human|cancel)\b", re.IGNORECASE
-    ),
+    re.compile(r"\b(forget it|never mind|give up|talk to (?:a )?human|cancel)\b", re.IGNORECASE),
     re.compile(r"\b(this (?:isn'?t|is not) working|stop|abort)\b", re.IGNORECASE),
     re.compile(r"\bi'?ll do it (?:myself|manually)\b", re.IGNORECASE),
 ]
@@ -211,9 +209,7 @@ _EXHAUSTION_KEYWORDS = (
 )
 
 
-def _detect_exhaustion(
-    status: Optional[int], tool_results: List[Dict[str, Any]]
-) -> bool:
+def _detect_exhaustion(status: Optional[int], tool_results: List[Dict[str, Any]]) -> bool:
     if status is not None and status in _EXHAUSTION_STATUSES:
         return True
     for r in tool_results:
@@ -246,10 +242,7 @@ def apply_turn(state: SessionState, turn: Turn) -> SignalDelta:
         # after MIN_TURNS_FOR_CLEAN_CREDIT turns of context. Early "thanks"
         # on turn 1-2 is noise, not a validated quality signal.
         current_turn_index = state.turn_count + 1
-        if (
-            not state.clean_credit_awarded
-            and current_turn_index >= MIN_TURNS_FOR_CLEAN_CREDIT
-        ):
+        if not state.clean_credit_awarded and current_turn_index >= MIN_TURNS_FOR_CLEAN_CREDIT:
             delta.satisfaction = 1
             state.clean_credit_awarded = True
     if _detect_failure(turn.tool_results):

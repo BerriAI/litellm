@@ -111,6 +111,48 @@ commands:
       - wait_for_service:
           url: tcp://localhost:6379
           timeout: "60"
+  start_openai_record_replay_proxy:
+    description: "Start the record/replay proxy (tests/_openai_record_replay_proxy.py) on host port 8090 and wait until healthy. Models whose api_base points here replay recorded provider responses, so the E2E run neither pays for nor depends on the live provider. The default upstream is OpenAI; a non-OpenAI model must point its api_base at /__recorder_upstream/<host>/ so the recorder forwards there instead of defaulting to OpenAI. Run after uv deps are synced."
+    steps:
+      - run:
+          name: Start record/replay proxy
+          background: true
+          command: |
+            CASSETTE_REDIS_URL="$CASSETTE_REDIS_URL" \
+            RECORDER_UPSTREAM_BASE_URL="https://api.openai.com" \
+              uv run --no-sync python tests/_openai_record_replay_proxy.py --host 0.0.0.0 --port 8090
+      - run:
+          name: Wait for record/replay proxy
+          command: |
+            for i in $(seq 1 30); do
+              if curl -sf http://localhost:8090/__recorder_health >/dev/null 2>&1; then
+                echo "record/replay proxy is up"
+                exit 0
+              fi
+              sleep 1
+            done
+            echo "record/replay proxy did not become ready" >&2
+            exit 1
+  start_fake_openai_endpoint:
+    description: "Start the canned OpenAI mock (tests/_fake_openai_endpoint_server.py) on host port 8190 and wait until healthy. Models whose api_base points here (via FAKE_OPENAI_API_BASE) get well-formed chat/text/embedding responses with realistic usage, so the E2E run neither pays for nor depends on the live provider. A request whose model is '429' returns HTTP 429 for rate-limit/cooldown tests. Run after uv deps are synced."
+    steps:
+      - run:
+          name: Start fake OpenAI endpoint
+          background: true
+          command: |
+            uv run --no-sync python tests/_fake_openai_endpoint_server.py --host 0.0.0.0 --port 8190
+      - run:
+          name: Wait for fake OpenAI endpoint
+          command: |
+            for i in $(seq 1 30); do
+              if curl -sf http://localhost:8190/health >/dev/null 2>&1; then
+                echo "fake OpenAI endpoint is up"
+                exit 0
+              fi
+              sleep 1
+            done
+            echo "fake OpenAI endpoint did not become ready" >&2
+            exit 1
   setup_litellm_enterprise_pip:
     steps:
       - run:
@@ -146,6 +188,10 @@ jobs:
       name: win/default
       shell: powershell.exe
     working_directory: ~/project
+    environment:
+      UV_PYTHON: "3.11"
+      CARGO_HTTP_MULTIPLEXING: "false"
+      CARGO_NET_RETRY: "5"
     steps:
       - checkout
       - run:
@@ -161,6 +207,24 @@ jobs:
           environment:
             UV_HTTP_TIMEOUT: "300"
           command: |
+            $rustupInit = Join-Path $env:TEMP "rustup-init.exe"
+            $rustupVersion = "1.28.2"
+            $rustupUrl = "https://static.rust-lang.org/rustup/archive/$rustupVersion/x86_64-pc-windows-msvc/rustup-init.exe"
+            Invoke-WebRequest -Uri $rustupUrl -OutFile $rustupInit
+            $rustupExpected = "88d8258dcf6ae4f7a80c7d1088e1f36fa7025a1cfd1343731b4ee6f385121fc0"
+            $rustupActual = (Get-FileHash -Path $rustupInit -Algorithm SHA256).Hash.ToLower()
+            if ($rustupActual -ne $rustupExpected) {
+              throw "rustup installer hash mismatch: expected $rustupExpected got $rustupActual"
+            }
+            & $rustupInit -y --profile minimal --default-toolchain stable
+            if ($LASTEXITCODE -ne 0) {
+              exit $LASTEXITCODE
+            }
+            Remove-Item $rustupInit
+            $cargoBin = Join-Path $HOME ".cargo\bin"
+            $env:Path = "$cargoBin;$env:Path"
+            rustc --version
+            cargo --version
             $installer = Join-Path $env:TEMP "uv-install.ps1"
             Invoke-WebRequest -Uri https://astral.sh/uv/0.10.9/install.ps1 -OutFile $installer
             $expected = "d43ffff8d28e7d1e7d1831a212465f12b24a43c7f87f386e95e2a5915aee5d7d"
@@ -178,11 +242,34 @@ jobs:
             if (-not (Select-String -Path $PROFILE -SimpleMatch $uvBin -Quiet)) {
               Add-Content -Path $PROFILE -Value "`$env:Path = `"$uvBin;`$env:Path`""
             }
-            uv sync --frozen --group dev --python (Get-Command python).Source
+            if (-not (Select-String -Path $PROFILE -SimpleMatch $cargoBin -Quiet)) {
+              Add-Content -Path $PROFILE -Value "`$env:Path = `"$cargoBin;`$env:Path`""
+            }
+            for ($attempt = 1; $attempt -le 5; $attempt++) {
+              Write-Host "uv sync attempt $attempt/5"
+              uv sync --frozen --group dev --python 3.11
+              if ($LASTEXITCODE -eq 0) {
+                break
+              }
+              if ($attempt -eq 5) {
+                exit $LASTEXITCODE
+              }
+              Start-Sleep -Seconds 15
+            }
       - run:
           name: Run Windows-specific test
           command: |
-            uv run --no-sync python -m pytest tests/windows_tests/test_litellm_on_windows.py -v
+            uv run --no-sync python -m pytest tests/windows_tests/ -v
+      - run:
+          name: Guard against MAX_PATH-busting packaged wheel paths
+          environment:
+            UV_HTTP_TIMEOUT: "300"
+          command: |
+            $env:Path = "$HOME\.cargo\bin;$HOME\.local\bin;$env:Path"
+            cargo --version
+            Get-ChildItem -Path "litellm\rust_bridge" -Filter "_native*" -File -ErrorAction SilentlyContinue | Remove-Item -Force
+            uv build --wheel --out-dir dist
+            uv run --no-sync python tests/windows_tests/check_windows_wheel_install.py
 
   local_testing_part1:
     docker:
@@ -242,8 +329,15 @@ jobs:
       - run:
           name: Rename the coverage files
           command: |
-            mv coverage.xml local_testing_part1_coverage.xml
-            mv .coverage local_testing_part1_coverage
+            # When CI reruns only the failed tests, a parallel node can receive
+            # zero tests and pytest never writes coverage. Emit empty placeholders
+            # so persist_to_workspace and the downstream coverage combine stay green.
+            if [ -f coverage.xml ]; then
+              mv coverage.xml local_testing_part1_coverage.xml
+              mv .coverage local_testing_part1_coverage
+            else
+              touch local_testing_part1_coverage.xml local_testing_part1_coverage
+            fi
 
       # Store test results
       - store_test_results:
@@ -307,8 +401,15 @@ jobs:
       - run:
           name: Rename the coverage files
           command: |
-            mv coverage.xml local_testing_part2_coverage.xml
-            mv .coverage local_testing_part2_coverage
+            # When CI reruns only the failed tests, a parallel node can receive
+            # zero tests and pytest never writes coverage. Emit empty placeholders
+            # so persist_to_workspace and the downstream coverage combine stay green.
+            if [ -f coverage.xml ]; then
+              mv coverage.xml local_testing_part2_coverage.xml
+              mv .coverage local_testing_part2_coverage
+            else
+              touch local_testing_part2_coverage.xml local_testing_part2_coverage
+            fi
 
       # Store test results
       - store_test_results:
@@ -431,12 +532,128 @@ jobs:
             - auth_ui_unit_tests_coverage.xml
             - auth_ui_unit_tests_coverage
 
+  proxy_behavior_tests:
+    docker:
+      - *python312_image
+      - image: cimg/postgres:16.0@sha256:b125148bc76e8e8eee5eb3ad6020a3a14110a14e8192f1c645128afebe2e2f84
+        environment:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: litellm_test
+    working_directory: ~/project
+    environment:
+      DATABASE_URL: "postgresql://postgres:postgres@localhost:5432/litellm_test"
+    steps:
+      - checkout
+      - setup_google_dns
+      - install_uv
+      - run:
+          name: Install Dependencies
+          command: |
+            uv sync --frozen --all-groups --all-extras --python 3.12
+      - wait_for_service:
+          url: tcp://localhost:5432
+          timeout: "60"
+      - run:
+          name: Seed DB schema via prisma db push
+          command: |
+            uv run --no-sync prisma db push --schema litellm/proxy/schema.prisma --accept-data-loss
+      - run:
+          name: Generate Prisma Client
+          command: uv run --no-sync python -m prisma generate
+      - run:
+          name: Run proxy management behavior tests
+          command: |
+            mkdir -p test-results
+            uv run --no-sync python -m pytest tests/proxy_behavior \
+              -v --junitxml=test-results/junit.xml --durations=10
+          no_output_timeout: 15m
+      - store_test_results:
+          path: test-results
+
+  proxy_security_tests:
+    docker:
+      - *python312_image
+      - image: cimg/postgres:16.0@sha256:b125148bc76e8e8eee5eb3ad6020a3a14110a14e8192f1c645128afebe2e2f84
+        environment:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: litellm_test
+    working_directory: ~/project
+    environment:
+      DATABASE_URL: "postgresql://postgres:postgres@localhost:5432/litellm_test"
+    steps:
+      - checkout
+      - setup_google_dns
+      - install_uv
+      - run:
+          name: Install Dependencies
+          command: |
+            uv sync --frozen --all-groups --all-extras --python 3.12
+      - wait_for_service:
+          url: tcp://localhost:5432
+          timeout: "60"
+      - run:
+          name: Seed DB schema via prisma db push
+          command: |
+            uv run --no-sync prisma db push --schema litellm/proxy/schema.prisma --accept-data-loss
+      - run:
+          name: Generate Prisma Client
+          command: uv run --no-sync python -m prisma generate
+      - run:
+          name: Run proxy security tests
+          command: |
+            mkdir -p test-results
+            uv run --no-sync python -m pytest tests/proxy_security_tests \
+              -v --junitxml=test-results/junit.xml --durations=10
+          no_output_timeout: 15m
+      - store_test_results:
+          path: test-results
+
+  schema_migration_check:
+    docker:
+      - *python312_image
+      - image: cimg/postgres:16.0@sha256:b125148bc76e8e8eee5eb3ad6020a3a14110a14e8192f1c645128afebe2e2f84
+        environment:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: litellm_test
+    working_directory: ~/project
+    environment:
+      # An empty database; the test applies every committed migration itself.
+      DATABASE_URL: "postgresql://postgres:postgres@localhost:5432/litellm_test"
+    steps:
+      - checkout
+      - setup_google_dns
+      - install_uv
+      - run:
+          name: Install Dependencies
+          command: |
+            uv sync --frozen --all-groups --all-extras --python 3.12
+      - wait_for_service:
+          url: tcp://localhost:5432
+          timeout: "60"
+      - run:
+          name: Generate Prisma Client
+          command: uv run --no-sync python -m prisma generate
+      - run:
+          name: Check schema.prisma is in sync with committed migrations
+          command: |
+            mkdir -p test-results
+            uv run --no-sync python -m pytest tests/proxy_migration_tests \
+              -v --junitxml=test-results/junit.xml --durations=10
+          no_output_timeout: 15m
+      - store_test_results:
+          path: test-results
+
   litellm_router_testing: # Runs all tests with the "router" keyword
     docker:
       - *python312_image
     working_directory: ~/project
     resource_class: large
     parallelism: 4
+    environment:
+      FAKE_OPENAI_API_BASE: http://127.0.0.1:8190
     steps:
       - checkout
       - setup_google_dns
@@ -452,11 +669,17 @@ jobs:
           paths:
             - ~/.cache/uv
           key: v1-uv-cache-{{ checksum "uv.lock" }}
+      - start_fake_openai_endpoint
       # Run pytest and generate JUnit XML report
       - setup_litellm_enterprise_pip
       - run:
           name: Run tests
           command: |
+            # On a "rerun failed tests" build a parallel node can receive no
+            # tests, so the test command never creates test-results. Pre-create it
+            # so store_test_results doesn't fail the node on a missing path.
+            mkdir -p test-results
+
             TEST_FILES=$(circleci tests glob "tests/local_testing/**/test_*.py")
 
             echo "$TEST_FILES" | circleci tests run \
@@ -833,7 +1056,9 @@ jobs:
           name: Run tests
           command: |
             mkdir -p test-results
-            TEST_FILES=$(circleci tests glob "tests/ocr_tests/**/test_*.py")
+            TEST_FILES=$(printf "%s\n%s\n" \
+              "$(circleci tests glob "tests/ocr_tests/**/test_*.py")" \
+              "tests/test_litellm/ocr/test_rust_bridge.py")
             echo "$TEST_FILES" | circleci tests run \
               --verbose \
               --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
@@ -1387,6 +1612,7 @@ jobs:
           name: Install Dependencies
           command: |
             uv sync --frozen --all-groups --all-extras --python 3.12
+      - start_fake_openai_endpoint
       - start_postgres:
           db_name: litellm_test
       - attach_workspace:
@@ -1424,6 +1650,7 @@ jobs:
               -e DATABASE_URL="postgresql://postgres:postgres@host.docker.internal:5432/litellm_test" \
               -e DEFAULT_NUM_WORKERS_LITELLM_PROXY=1 \
               -e DISABLE_SCHEMA_UPDATE="True" \
+              -e FAKE_OPENAI_API_BASE=http://host.docker.internal:8190 \
               --name my-app \
               --add-host=host.docker.internal:host-gateway \
               -v $(pwd)/litellm/proxy/example_config_yaml/bad_schema.prisma:/app/schema.prisma \
@@ -1485,6 +1712,8 @@ jobs:
           command: |
             zstd -d litellm-docker-database.tar.zst --stdout | docker load
             docker tag litellm-docker-database:ci my-app:latest
+      - start_openai_record_replay_proxy
+      - start_fake_openai_endpoint
       - run:
           name: Run Docker container
           command: |
@@ -1492,6 +1721,7 @@ jobs:
               -p 4000:4000 \
               -e DATABASE_URL=postgresql://postgres:postgres@host.docker.internal:5432/circle_test \
               -e USE_PRISMA_MIGRATE=True \
+              -e FAKE_OPENAI_API_BASE=http://host.docker.internal:8190 \
               -e AZURE_API_KEY=$AZURE_API_KEY \
               -e REDIS_HOST=$REDIS_HOST \
               -e REDIS_PASSWORD=$REDIS_PASSWORD \
@@ -1515,6 +1745,7 @@ jobs:
               -e LANGFUSE_PROJECT2_PUBLIC=$LANGFUSE_PROJECT2_PUBLIC \
               -e LANGFUSE_PROJECT1_SECRET=$LANGFUSE_PROJECT1_SECRET \
               -e LANGFUSE_PROJECT2_SECRET=$LANGFUSE_PROJECT2_SECRET \
+              -e RECORDER_OPENAI_BASE_URL=http://host.docker.internal:8090/v1 \
               --add-host host.docker.internal:host-gateway \
               --name my-app \
               -v $(pwd)/proxy_server_config.yaml:/app/config.yaml \
@@ -1652,6 +1883,8 @@ jobs:
           command: |
             zstd -d litellm-docker-database.tar.zst --stdout | docker load
             docker images | grep litellm-docker-database
+      - start_openai_record_replay_proxy
+      - start_fake_openai_endpoint
       - run:
           name: Run Docker container
           # intentionally give bad redis credentials here
@@ -1665,6 +1898,7 @@ jobs:
               -e REDIS_PORT=$REDIS_PORT \
               -e LITELLM_MASTER_KEY="sk-1234" \
               -e OPENAI_API_KEY=$OPENAI_API_KEY \
+              -e FAKE_OPENAI_API_BASE=http://host.docker.internal:8190 \
               -e LITELLM_LICENSE=$LITELLM_LICENSE \
               -e OTEL_EXPORTER="in_memory" \
               -e AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID \
@@ -1675,6 +1909,7 @@ jobs:
               -e DD_SITE=$DD_SITE \
               -e AWS_REGION_NAME=$AWS_REGION_NAME \
               -e COHERE_API_KEY=$COHERE_API_KEY \
+              -e RECORDER_COHERE_BASE_URL=http://host.docker.internal:8090/__recorder_upstream/api.cohere.com \
               -e GCS_FLUSH_INTERVAL="1" \
               --add-host host.docker.internal:host-gateway \
               --name my-app \
@@ -1723,6 +1958,7 @@ jobs:
               -e REDIS_PORT=$REDIS_PORT \
               -e LITELLM_MASTER_KEY="sk-1234" \
               -e OPENAI_API_KEY=$OPENAI_API_KEY \
+              -e FAKE_OPENAI_API_BASE=http://host.docker.internal:8190 \
               -e LITELLM_LICENSE="bad-license" \
               --add-host host.docker.internal:host-gateway \
               --name my-app-3 \
@@ -1772,6 +2008,7 @@ jobs:
             uv sync --frozen --all-groups --all-extras --python 3.12
       - start_postgres
       - start_redis
+      - start_fake_openai_endpoint
       - attach_workspace:
           at: ~/project
       - run:
@@ -1795,6 +2032,7 @@ jobs:
               -e REDIS_PORT=6379 \
               -e LITELLM_MASTER_KEY="sk-1234" \
               -e OPENAI_API_KEY=$OPENAI_API_KEY \
+              -e FAKE_OPENAI_API_BASE=http://host.docker.internal:8190 \
               -e LITELLM_LICENSE=$LITELLM_LICENSE \
               -e AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID \
               -e AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY \
@@ -1854,6 +2092,7 @@ jobs:
           command: |
             uv sync --frozen --all-groups --all-extras --python 3.12
       - start_postgres
+      - start_fake_openai_endpoint
       - attach_workspace:
           at: ~/project
       - run:
@@ -1873,6 +2112,7 @@ jobs:
               -e REDIS_PASSWORD=$REDIS_PASSWORD \
               -e REDIS_PORT=$REDIS_PORT \
               -e LITELLM_MASTER_KEY="sk-1234" \
+              -e FAKE_OPENAI_API_BASE=http://host.docker.internal:8190 \
               -e LITELLM_LICENSE=$LITELLM_LICENSE \
               -e USE_DDTRACE=True \
               -e DD_API_KEY=$DD_API_KEY \
@@ -1894,6 +2134,7 @@ jobs:
               -e REDIS_PASSWORD=$REDIS_PASSWORD \
               -e REDIS_PORT=$REDIS_PORT \
               -e LITELLM_MASTER_KEY="sk-1234" \
+              -e FAKE_OPENAI_API_BASE=http://host.docker.internal:8190 \
               -e LITELLM_LICENSE=$LITELLM_LICENSE \
               -e USE_DDTRACE=True \
               -e DD_API_KEY=$DD_API_KEY \
@@ -1946,6 +2187,7 @@ jobs:
           command: |
             uv sync --frozen --all-groups --all-extras --python 3.12
       - start_postgres
+      - start_fake_openai_endpoint
       - attach_workspace:
           at: ~/project
       - run:
@@ -1963,6 +2205,7 @@ jobs:
               -e DATABASE_URL=postgresql://postgres:postgres@host.docker.internal:5432/circle_test \
               -e STORE_MODEL_IN_DB="True" \
               -e LITELLM_MASTER_KEY="sk-1234" \
+              -e FAKE_OPENAI_API_BASE=http://host.docker.internal:8190 \
               -e LITELLM_LICENSE=$LITELLM_LICENSE \
               --add-host host.docker.internal:host-gateway \
               --name my-app \
@@ -2021,6 +2264,7 @@ jobs:
           command: |
             docker build -t my-app:latest -f docker/build_from_pip/Dockerfile.build_from_pip .
       - start_postgres
+      - start_fake_openai_endpoint
       - run:
           name: Run Docker container
           # intentionally give bad redis credentials here
@@ -2034,6 +2278,7 @@ jobs:
               -e REDIS_PORT=$REDIS_PORT \
               -e LITELLM_MASTER_KEY="sk-1234" \
               -e OPENAI_API_KEY=$OPENAI_API_KEY \
+              -e FAKE_OPENAI_API_BASE=http://host.docker.internal:8190 \
               -e LITELLM_LICENSE=$LITELLM_LICENSE \
               -e OTEL_EXPORTER="in_memory" \
               -e AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID \
@@ -2240,6 +2485,7 @@ jobs:
           command: |
             zstd -d litellm-docker-database.tar.zst --stdout | docker load
             docker images | grep litellm-docker-database
+      - start_openai_record_replay_proxy
       - run:
           name: Run Docker container with test config
           command: |
@@ -2248,6 +2494,7 @@ jobs:
               -e DATABASE_URL=postgresql://postgres:postgres@host.docker.internal:5432/circle_test \
               -e LITELLM_MASTER_KEY="sk-1234" \
               -e ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY \
+              -e RECORDER_ANTHROPIC_BASE_URL=http://host.docker.internal:8090/__recorder_upstream/api.anthropic.com \
               -e AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID \
               -e AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY \
               -e AWS_REGION_NAME="us-east-1" \
@@ -2522,6 +2769,122 @@ jobs:
           path: ui/litellm-dashboard/playwright-report
           destination: e2e-playwright-report
 
+  e2e_ui_testing_server_root_path:
+    docker:
+      - image: cimg/python:3.12-browsers@sha256:b432899af01c9a311bf74f4f22e9ada2e5306d4b1b4383f8d29e1228a5844ef2
+        auth:
+          username: ${DOCKERHUB_USERNAME}
+          password: ${DOCKERHUB_PASSWORD}
+      - image: cimg/postgres:16.0@sha256:b125148bc76e8e8eee5eb3ad6020a3a14110a14e8192f1c645128afebe2e2f84
+        environment:
+          POSTGRES_USER: e2euser
+          POSTGRES_PASSWORD: e2epassword
+          POSTGRES_DB: litellm_e2e
+    resource_class: large
+    working_directory: ~/project
+    environment:
+      DATABASE_URL: "postgresql://e2euser:e2epassword@localhost:5432/litellm_e2e"
+      CI: "true"
+      # The whole job exercises the proxy mounted under a prefix. SERVER_ROOT_PATH
+      # is read both by the proxy at boot (to rewrite the built UI bundle in place)
+      # and by migration.serverRootPath.config.ts, which refuses to run without it.
+      SERVER_ROOT_PATH: "/litellm"
+    steps:
+      - checkout
+      - setup_google_dns
+      - install_uv
+      - restore_cache:
+          keys:
+            - v1-uv-cache-{{ checksum "uv.lock" }}
+      - run:
+          name: Install Python dependencies
+          command: |
+            uv sync --frozen --all-groups --all-extras --python 3.12
+            uv run --no-sync python -m prisma generate --schema litellm/proxy/schema.prisma
+      - save_cache:
+          key: v1-uv-cache-{{ checksum "uv.lock" }}
+          paths:
+            - ~/.cache/uv
+      - restore_cache:
+          keys:
+            - ui-e2e-node-deps-v2-{{ checksum "ui/litellm-dashboard/package-lock.json" }}
+      - run:
+          name: Install Node dependencies and Playwright
+          command: |
+            cd ui/litellm-dashboard
+            npm ci
+            npx playwright install chromium
+      - save_cache:
+          key: ui-e2e-node-deps-v2-{{ checksum "ui/litellm-dashboard/package-lock.json" }}
+          paths:
+            - ui/litellm-dashboard/node_modules
+            - ~/.cache/ms-playwright
+      - run:
+          name: Build UI from source
+          command: |
+            cd ui/litellm-dashboard
+            npm run build
+            rm -rf ../../litellm/proxy/_experimental/out
+            mv out ../../litellm/proxy/_experimental/out
+            find ../../litellm/proxy/_experimental/out -name '*.html' ! -name 'index.html' | while read -r f; do
+              d="${f%.html}"; mkdir -p "$d"; mv "$f" "$d/index.html"
+            done
+      - wait_for_service:
+          url: tcp://localhost:5432
+          timeout: "30"
+      - run:
+          name: Push Prisma schema
+          command: uv run --no-sync python -m prisma db push --schema litellm/proxy/schema.prisma --accept-data-loss
+      - run:
+          name: Seed database
+          command: |
+            PGPASSWORD=e2epassword psql -h localhost -p 5432 -U e2euser -d litellm_e2e \
+              -f ui/litellm-dashboard/e2e_tests/fixtures/seed.sql
+      - run:
+          name: Start mock LLM server
+          command: uv run --no-sync python ui/litellm-dashboard/e2e_tests/fixtures/mock_llm_server/server.py
+          background: true
+      - run:
+          name: Start LiteLLM proxy under a server root path
+          environment:
+            LITELLM_MASTER_KEY: "sk-1234"
+            MOCK_LLM_URL: "http://127.0.0.1:8090/v1"
+            DISABLE_SCHEMA_UPDATE: "true"
+          # Output flows to this step's own log, so a boot crash is visible here
+          # rather than swallowed by a downstream readiness probe.
+          command: |
+            LITELLM_LICENSE="$LITELLM_LICENSE" \
+              uv run --no-sync python -m litellm.proxy.proxy_cli \
+                --config ui/litellm-dashboard/e2e_tests/fixtures/config.yml \
+                --port 4000
+          background: true
+      - run:
+          name: Wait for prefixed proxy to be ready
+          command: |
+            for i in $(seq 1 60); do
+              HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 -H "Authorization: Bearer sk-1234" http://127.0.0.1:4000/litellm/health 2>/dev/null || true)
+              if [ "$HTTP_CODE" = "200" ]; then
+                echo "Prefixed proxy is ready"
+                exit 0
+              fi
+              sleep 2
+            done
+            echo "Prefixed proxy failed to start; see the 'Start LiteLLM proxy under a server root path' step for the boot log"
+            exit 1
+      - run:
+          name: Run migration smoke under SERVER_ROOT_PATH
+          command: |
+            cd ui/litellm-dashboard
+            LITELLM_LICENSE="$LITELLM_LICENSE" \
+              npx playwright test --config e2e_tests/migration.serverRootPath.config.ts
+          no_output_timeout: 10m
+      - store_artifacts:
+          path: ui/litellm-dashboard/test-results
+          destination: e2e-server-root-path-test-results
+      - store_artifacts:
+          path: ui/litellm-dashboard/playwright-report
+          destination: e2e-server-root-path-playwright-report
+
   build_docker_database_image:
     machine:
       image: ubuntu-2204:2024.04.1
@@ -2617,9 +2980,17 @@ workflows:
           filters: *main_branches
       - auth_ui_unit_tests:
           filters: *main_branches
+      - proxy_behavior_tests:
+          filters: *main_branches
+      - proxy_security_tests:
+          filters: *main_branches
+      - schema_migration_check:
+          filters: *main_branches
       - build_docker_database_image:
           filters: *main_branches
       - e2e_ui_testing:
+          filters: *main_branches
+      - e2e_ui_testing_server_root_path:
           filters: *main_branches
       - build_and_test:
           requires:

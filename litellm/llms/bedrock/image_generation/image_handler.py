@@ -105,17 +105,17 @@ class BedrockImageGeneration(BaseAWSLLM):
                 logging_obj=logging_obj,
                 prompt=prompt,
                 model_response=model_response,
-                client=(
-                    client
-                    if client is not None and isinstance(client, AsyncHTTPHandler)
-                    else None
-                ),
+                client=(client if client is not None and isinstance(client, AsyncHTTPHandler) else None),
             )
 
         if client is None or not isinstance(client, HTTPHandler):
             client = _get_httpx_client()
         try:
-            response = client.post(url=prepared_request.endpoint_url, headers=prepared_request.prepped.headers, data=prepared_request.body)  # type: ignore
+            response = client.post(
+                url=prepared_request.endpoint_url,
+                headers=prepared_request.prepped.headers,
+                data=prepared_request.body,
+            )  # type: ignore
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
             error_code = err.response.status_code
@@ -154,7 +154,11 @@ class BedrockImageGeneration(BaseAWSLLM):
         )
 
         try:
-            response = await async_client.post(url=prepared_request.endpoint_url, headers=prepared_request.prepped.headers, data=prepared_request.body)  # type: ignore
+            response = await async_client.post(
+                url=prepared_request.endpoint_url,
+                headers=prepared_request.prepped.headers,
+                data=prepared_request.body,
+            )  # type: ignore
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
             error_code = err.response.status_code
@@ -216,9 +220,7 @@ class BedrockImageGeneration(BaseAWSLLM):
             prepped (httpx.Request): The prepared request object
             body (bytes): The request body
         """
-        boto3_credentials_info = self._get_boto_credentials_from_optional_params(
-            optional_params, model
-        )
+        boto3_credentials_info = self._get_boto_credentials_from_optional_params(optional_params, model)
 
         # Use the existing ARN-aware provider detection method
         bedrock_provider = self.get_bedrock_invoke_provider(model)
@@ -292,9 +294,7 @@ class BedrockImageGeneration(BaseAWSLLM):
             dict: The request body to use for the Bedrock Image Generation API
         """
         config_class = self.get_config_class(model=model)
-        request_body = config_class.transform_request_body(
-            text=prompt, optional_params=optional_params
-        )
+        request_body = config_class.transform_request_body(text=prompt, optional_params=optional_params)
         return dict(request_body)
 
     def _transform_response_dict_to_openai_response(

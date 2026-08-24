@@ -9,7 +9,6 @@ Pins covered:
 - ``initialize``
 - ``load_from_azure_key_vault``
 - ``cost_tracking``
-- ``check_request_disconnection``
 - ``_resolve_typed_dict_type``
 - ``_resolve_pydantic_type``
 - ``get_litellm_model_info``
@@ -26,7 +25,7 @@ from typing import List, Optional, Union
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from pydantic import BaseModel
 from typing_extensions import TypedDict
 
@@ -35,7 +34,6 @@ from litellm.proxy.proxy_server import (
     _initialize_shared_aiohttp_session,
     _resolve_pydantic_type,
     _resolve_typed_dict_type,
-    check_request_disconnection,
     cleanup_router_config_variables,
     cost_tracking,
     get_litellm_model_info,
@@ -325,62 +323,6 @@ def test_cost_tracking_no_op_when_prisma_missing(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# check_request_disconnection
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_check_request_disconnection_cancels_task_and_raises_499(monkeypatch):
-    monkeypatch.setattr(ps.asyncio, "sleep", AsyncMock(return_value=None))
-
-    request = MagicMock()
-    request.is_disconnected = AsyncMock(return_value=True)
-    task = MagicMock()
-
-    raised_status = None
-    try:
-        await check_request_disconnection(request=request, llm_api_call_task=task)
-    except HTTPException as exc:
-        raised_status = exc.status_code
-
-    observed = {
-        "raised_status": raised_status,
-        "cancel_called": task.cancel.called,
-        "is_async": inspect.iscoroutinefunction(check_request_disconnection),
-    }
-    assert normalize(observed) == {
-        "raised_status": 499,
-        "cancel_called": True,
-        "is_async": True,
-    }
-
-
-@pytest.mark.asyncio
-async def test_check_request_disconnection_invalid_when_connected_times_out(monkeypatch):
-    """With a connected request the function loops for up to 10 minutes —
-    wrap in wait_for and assert it times out. Patch ``asyncio.sleep`` so the
-    loop spins without real wall-clock waits."""
-    import litellm.proxy.proxy_server as ps
-
-    request = MagicMock()
-    request.is_disconnected = AsyncMock(return_value=False)
-    task = MagicMock()
-
-    _real_sleep = asyncio.sleep
-
-    async def _instant_sleep(_seconds):
-        await _real_sleep(0)
-
-    monkeypatch.setattr(ps.asyncio, "sleep", _instant_sleep)
-
-    with pytest.raises(asyncio.TimeoutError):
-        await asyncio.wait_for(
-            check_request_disconnection(request=request, llm_api_call_task=task),
-            timeout=0.05,
-        )
-
-
-# ---------------------------------------------------------------------------
 # _resolve_typed_dict_type
 # ---------------------------------------------------------------------------
 
@@ -562,3 +504,28 @@ async def test_proxy_startup_event_invalid_missing_app_arg_raises():
         # no arguments — the decorator preserves the missing-arg TypeError.
         async with proxy_startup_event():  # type: ignore[call-arg]
             pass
+
+
+def test_otel_global_provider_published_after_callback_init():
+    """The OTel V2 global-provider publish must run after callback
+    initialization in ``proxy_startup_event``.
+
+    Regression for the orphan span: a preset (arize, langfuse, …) builds its
+    single folded logger during ``_initialize_startup_logging``. Publishing the
+    global ``TracerProvider`` before that ran found no logger and built a second
+    generic one whose provider became the global, so the FastAPI server span and
+    the preset's gen-ai spans exported through different providers and the LLM
+    span was orphaned. The publish (``publish_global_otel_v2_provider``) must
+    therefore appear after ``_initialize_startup_logging`` in the lifespan source.
+    """
+    wrapped = getattr(proxy_startup_event, "__wrapped__", proxy_startup_event)
+    source = inspect.getsource(wrapped)
+    init_pos = source.find("_initialize_startup_logging(")
+    publish_pos = source.find("publish_global_otel_v2_provider(")
+    assert init_pos != -1, "callback init call not found in proxy_startup_event"
+    assert publish_pos != -1, "OTEL global publish not found in proxy_startup_event"
+    assert init_pos < publish_pos, (
+        "OTEL global provider is published before callbacks are initialized; a "
+        "preset logger will not exist yet and a second generic logger will own "
+        "the global provider, orphaning gen-ai spans"
+    )

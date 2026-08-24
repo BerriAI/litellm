@@ -93,6 +93,37 @@ class TestApplyToolsetScope:
             await _apply_toolset_scope(auth, "toolset-123")
         assert exc_info.value.status_code == 403
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("user_role", [None, LitellmUserRoles.PROXY_ADMIN.value])
+    async def test_no_mcp_servers_sentinel_denies_toolset_access(self, user_role):
+        """A key scoped to the no-mcp-servers sentinel cannot reach a toolset it
+        would otherwise be granted (even as admin); the opt-out covers the
+        toolset path, which replaces mcp_servers and would drop the sentinel."""
+        from starlette.exceptions import HTTPException
+
+        from litellm.proxy._experimental.mcp_server.server import _apply_toolset_scope
+
+        op = LiteLLM_ObjectPermissionTable(
+            object_permission_id="test",
+            mcp_servers=["no-mcp-servers"],
+            mcp_toolsets=["toolset-123"],
+        )
+        auth = UserAPIKeyAuth(
+            api_key="sk-test", object_permission=op, user_role=user_role
+        )
+
+        resolve = AsyncMock(return_value={"server-a": ["tool1"]})
+        with patch(
+            "litellm.proxy._experimental.mcp_server.server."
+            "global_mcp_server_manager.resolve_toolset_tool_permissions",
+            new=resolve,
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await _apply_toolset_scope(auth, "toolset-123")
+
+        assert exc_info.value.status_code == 403
+        resolve.assert_not_awaited()
+
 
 class TestFetchMCPToolsetsAccess:
     """Tests for GET /v1/mcp/toolset access control."""
@@ -202,6 +233,132 @@ class TestFetchMCPToolsetsAccess:
 
         assert len(result) == 2
         mock_list.assert_called_once_with(mock_client, toolset_ids=["ts-1", "ts-2"])
+
+
+class TestToolsetPrefixResolution:
+    """Regression for LIT-3419.
+
+    Toolsets store bare tool names; the live tools come back prefixed with the
+    server's own prefix. Reconciling them must strip exactly that prefix, not
+    chop at the first separator, otherwise tools on a server whose prefix
+    contains the separator (a hyphenated alias, or the UUID server_id used when
+    a server has no alias) are silently dropped from the toolset.
+    """
+
+    # alias, server_name, server_id; the clean-alias row worked before the fix,
+    # the hyphenated-alias and no-alias (UUID prefix) rows did not.
+    PREFIX_CASES = [
+        ("deepwiki", None, "srv-clean"),
+        ("deep-wiki", None, "srv-hyphen"),
+        (None, None, "117c814c-1a2b-3c4d-9e8f"),
+    ]
+
+    @staticmethod
+    def _server(alias, server_name, server_id):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(
+            alias=alias,
+            server_name=server_name,
+            server_id=server_id,
+            short_prefix=None,
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("alias, server_name, server_id", PREFIX_CASES)
+    async def test_filter_keeps_tools_when_prefix_contains_separator(
+        self, alias, server_name, server_id
+    ):
+        from mcp.types import Tool as MCPTool
+
+        from litellm.proxy._experimental.mcp_server.server import (
+            filter_tools_by_key_team_permissions,
+        )
+        from litellm.proxy._experimental.mcp_server.utils import (
+            add_server_prefix_to_name,
+            get_server_prefix,
+        )
+
+        server = self._server(alias, server_name, server_id)
+        prefix = get_server_prefix(server)
+        live_tools = [
+            MCPTool(
+                name=add_server_prefix_to_name(name, prefix),
+                inputSchema={"type": "object"},
+            )
+            for name in ("read_wiki_contents", "read_wiki_structure", "not_granted")
+        ]
+        # Bare names as stored in the toolset / resolved into the permission dict.
+        allowed = ["read_wiki_contents", "read_wiki_structure"]
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.server."
+                "MCPRequestHandler.get_allowed_tools_for_server",
+                new=AsyncMock(return_value=allowed),
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.server."
+                "global_mcp_server_manager.get_mcp_server_by_id",
+                return_value=server,
+            ),
+        ):
+            result = await filter_tools_by_key_team_permissions(
+                tools=live_tools,
+                server_id=server_id,
+                user_api_key_auth=_make_auth(),
+            )
+
+        assert sorted(t.name for t in result) == sorted(
+            add_server_prefix_to_name(name, prefix)
+            for name in ("read_wiki_contents", "read_wiki_structure")
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("alias, server_name, server_id", PREFIX_CASES)
+    async def test_resolve_unprefixes_stored_names_with_separator_prefix(
+        self, alias, server_name, server_id
+    ):
+        from types import SimpleNamespace
+
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+        from litellm.proxy._experimental.mcp_server.utils import (
+            add_server_prefix_to_name,
+            get_server_prefix,
+        )
+
+        server = self._server(alias, server_name, server_id)
+        # A caller (e.g. the management API) may persist already-prefixed names;
+        # resolution must reduce them to the true bare name regardless of prefix.
+        stored = add_server_prefix_to_name(
+            "read_wiki_contents", get_server_prefix(server)
+        )
+        toolset = SimpleNamespace(tools=[{"server_id": server_id, "tool_name": stored}])
+        cache = MagicMock(
+            async_get_cache=AsyncMock(return_value=None),
+            async_set_cache=AsyncMock(),
+        )
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager."
+                "global_mcp_server_manager.get_mcp_server_by_id",
+                return_value=server,
+            ),
+            patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+            patch("litellm.proxy.proxy_server.user_api_key_cache", cache),
+            patch(
+                "litellm.proxy._experimental.mcp_server.toolset_db.list_mcp_toolsets",
+                new=AsyncMock(return_value=[toolset]),
+            ),
+        ):
+            result = await global_mcp_server_manager.resolve_toolset_tool_permissions(
+                toolset_ids=["ts-1"]
+            )
+
+        assert result == {server_id: ["read_wiki_contents"]}
 
 
 class TestMCPActiveToolsetContextVar:

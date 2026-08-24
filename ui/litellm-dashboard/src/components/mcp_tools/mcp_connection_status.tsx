@@ -8,6 +8,7 @@ interface MCPConnectionStatusProps {
   tools: any[];
   isLoadingTools: boolean;
   toolsError: string | null;
+  toolsErrorStatus?: number | null;
   toolsErrorStackTrace: string | null;
   canFetchTools: boolean;
   fetchTools: () => Promise<void>;
@@ -18,11 +19,12 @@ const MCPConnectionStatus: React.FC<MCPConnectionStatusProps> = ({
   tools,
   isLoadingTools,
   toolsError,
+  toolsErrorStatus = null,
   toolsErrorStackTrace,
   canFetchTools,
   fetchTools,
 }) => {
-
+  const isPreviewForbidden = toolsErrorStatus === 403;
   // Don't show anything if required fields aren't filled
   if (!canFetchTools && !formValues.url && !formValues.spec_path) {
     return null;
@@ -55,7 +57,9 @@ const MCPConnectionStatus: React.FC<MCPConnectionStatusProps> = ({
                     : tools.length > 0
                       ? "Connection successful"
                       : toolsError
-                        ? "Connection failed"
+                        ? isPreviewForbidden
+                          ? "Ready to submit"
+                          : "Connection failed"
                         : "Ready to test connection"}
                 </Text>
                 <br />
@@ -76,7 +80,7 @@ const MCPConnectionStatus: React.FC<MCPConnectionStatusProps> = ({
                 </div>
               )}
 
-              {toolsError && (
+              {toolsError && !isPreviewForbidden && (
                 <div className="flex items-center text-red-600">
                   <ExclamationCircleOutlined className="mr-1" />
                   <Text className="text-red-600 font-medium">Failed</Text>
@@ -91,7 +95,11 @@ const MCPConnectionStatus: React.FC<MCPConnectionStatusProps> = ({
               </div>
             )}
 
-            {toolsError && (
+            {toolsError && isPreviewForbidden && (
+              <Alert message="Tool preview unavailable" description={toolsError} type="info" showIcon />
+            )}
+
+            {toolsError && !isPreviewForbidden && (
               <Alert
                 message="Connection Failed"
                 description={
@@ -104,18 +112,20 @@ const MCPConnectionStatus: React.FC<MCPConnectionStatusProps> = ({
                             key: "stack-trace",
                             label: "Stack Trace",
                             children: (
-                              <pre style={{ 
-                                whiteSpace: "pre-wrap", 
-                                wordBreak: "break-word",
-                                fontSize: "12px",
-                                fontFamily: "monospace",
-                                margin: 0,
-                                padding: "8px",
-                                backgroundColor: "#f5f5f5",
-                                borderRadius: "4px",
-                                maxHeight: "400px",
-                                overflow: "auto"
-                              }}>
+                              <pre
+                                style={{
+                                  whiteSpace: "pre-wrap",
+                                  wordBreak: "break-word",
+                                  fontSize: "12px",
+                                  fontFamily: "monospace",
+                                  margin: 0,
+                                  padding: "8px",
+                                  backgroundColor: "#f5f5f5",
+                                  borderRadius: "4px",
+                                  maxHeight: "400px",
+                                  overflow: "auto",
+                                }}
+                              >
                                 {toolsErrorStackTrace}
                               </pre>
                             ),

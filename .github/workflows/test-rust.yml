@@ -1,0 +1,65 @@
+name: LiteLLM Rust
+
+on:
+  push:
+    paths:
+      - "litellm-rust/**"
+      - ".github/workflows/test-rust.yml"
+  pull_request:
+    branches:
+      - main
+      - litellm_internal_staging
+      - litellm_oss_staging
+      - "litellm_**"
+    paths:
+      - "litellm-rust/**"
+      - ".github/workflows/test-rust.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rust-checks:
+    name: rustfmt, clippy, test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: litellm-rust
+    env:
+      CARGO_TERM_COLOR: always
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Rust
+        run: |
+          rustup toolchain install stable --profile minimal --component clippy,rustfmt
+          rustup default stable
+
+      - name: Cache Cargo registry and target
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            litellm-rust/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('litellm-rust/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Check Rust formatting
+        run: cargo fmt --check
+
+      - name: Run Clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      - name: Run Rust tests
+        run: cargo test --workspace --locked

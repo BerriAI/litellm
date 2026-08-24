@@ -30,7 +30,10 @@ const defaultProps = {
   onClose: vi.fn(),
   onSuccess: vi.fn(),
   accessToken: "test-token",
-  policies: [makePolicy({ policy_name: "policy-alpha" }), makePolicy({ policy_name: "policy-beta", policy_id: "id-2" })],
+  policies: [
+    makePolicy({ policy_name: "policy-alpha" }),
+    makePolicy({ policy_name: "policy-beta", policy_id: "id-2" }),
+  ],
   createAttachment: vi.fn(),
 };
 

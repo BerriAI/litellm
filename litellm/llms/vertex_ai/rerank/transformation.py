@@ -4,7 +4,7 @@ Translates from Cohere's `/v1/rerank` input format to Vertex AI Discovery Engine
 Why separate file? Make it easy to see how transformation works
 """
 
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Union
 
 import httpx
 
@@ -36,9 +36,9 @@ class VertexAIRerankConfig(BaseRerankConfig, VertexBase):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
+        api_base: str | None,
         model: str,
-        optional_params: Optional[Dict] = None,
+        optional_params: Dict | None = None,
     ) -> str:
         """
         Get the complete URL for the Vertex AI Discovery Engine ranking API
@@ -59,11 +59,7 @@ class VertexAIRerankConfig(BaseRerankConfig, VertexBase):
         )
 
         # Fallback to environment or litellm config
-        project_id = (
-            vertex_project
-            or get_secret_str("VERTEXAI_PROJECT")
-            or litellm.vertex_project
-        )
+        project_id = vertex_project or get_secret_str("VERTEXAI_PROJECT") or litellm.vertex_project
 
         if not project_id:
             raise ValueError(
@@ -76,8 +72,8 @@ class VertexAIRerankConfig(BaseRerankConfig, VertexBase):
         self,
         headers: dict,
         model: str,
-        api_key: Optional[str] = None,
-        optional_params: Optional[Dict] = None,
+        api_key: str | None = None,
+        optional_params: Dict | None = None,
     ) -> dict:
         """
         Validate and set up authentication for Vertex AI Discovery Engine API
@@ -112,7 +108,7 @@ class VertexAIRerankConfig(BaseRerankConfig, VertexBase):
         model: str,
         optional_rerank_params: Dict,
         headers: dict,
-        litellm_params: Optional[dict] = None,
+        litellm_params: dict | None = None,
     ) -> dict:
         """
         Transform the request from Cohere format to Vertex AI Discovery Engine format
@@ -161,7 +157,7 @@ class VertexAIRerankConfig(BaseRerankConfig, VertexBase):
         raw_response: httpx.Response,
         model_response: RerankResponse,
         logging_obj: LiteLLMLoggingObj,
-        api_key: Optional[str] = None,
+        api_key: str | None = None,
         request_data: dict = {},
         optional_params: dict = {},
         litellm_params: dict = {},
@@ -207,19 +203,13 @@ class VertexAIRerankConfig(BaseRerankConfig, VertexBase):
         rerank_results = []
         for result in results:
             rerank_results.append(
-                RerankResponseResult(
-                    index=result["index"], relevance_score=result["relevance_score"]
-                )
+                RerankResponseResult(index=result["index"], relevance_score=result["relevance_score"])
             )
 
         # Create meta object
-        meta = RerankResponseMeta(
-            billed_units=RerankBilledUnits(search_units=len(records))
-        )
+        meta = RerankResponseMeta(billed_units=RerankBilledUnits(search_units=len(records)))
 
-        return RerankResponse(
-            id=f"vertex_ai_rerank_{model}", results=rerank_results, meta=meta
-        )
+        return RerankResponse(id=f"vertex_ai_rerank_{model}", results=rerank_results, meta=meta)
 
     def get_supported_cohere_rerank_params(self, model: str) -> list:
         return [
@@ -236,12 +226,13 @@ class VertexAIRerankConfig(BaseRerankConfig, VertexBase):
         drop_params: bool,
         query: str,
         documents: List[Union[str, Dict[str, Any]]],
-        custom_llm_provider: Optional[str] = None,
-        top_n: Optional[int] = None,
-        rank_fields: Optional[List[str]] = None,
-        return_documents: Optional[bool] = True,
-        max_chunks_per_doc: Optional[int] = None,
-        max_tokens_per_doc: Optional[int] = None,
+        custom_llm_provider: str | None = None,
+        top_n: int | None = None,
+        rank_fields: List[str] | None = None,
+        return_documents: bool | None = True,
+        max_chunks_per_doc: int | None = None,
+        max_tokens_per_doc: int | None = None,
+        instruction: str | None = None,
     ) -> Dict:
         """
         Map Cohere rerank params to Vertex AI format

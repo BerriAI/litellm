@@ -3,9 +3,9 @@
  * Used for messages in tree view and last user message
  */
 
-import { Typography } from 'antd';
-import { ToolCall } from './prettyMessagesTypes';
-import { SimpleToolCallBlock } from './SimpleToolCallBlock';
+import { Typography } from "antd";
+import { ToolCall } from "./prettyMessagesTypes";
+import { SimpleToolCallBlock } from "./SimpleToolCallBlock";
 
 const { Text } = Typography;
 
@@ -16,14 +16,9 @@ interface SimpleMessageBlockProps {
   isCompact?: boolean;
 }
 
-export function SimpleMessageBlock({ 
-  label, 
-  content, 
-  toolCalls, 
-  isCompact = false 
-}: SimpleMessageBlockProps) {
+export function SimpleMessageBlock({ label, content, toolCalls, isCompact = false }: SimpleMessageBlockProps) {
   // Don't show "null" for empty content
-  const displayContent = content && content !== 'null' && content.length > 0 ? content : null;
+  const displayContent = content && content !== "null" && content.length > 0 ? content : null;
   const hasToolCalls = toolCalls && toolCalls.length > 0;
 
   // If no content and no tool calls, don't render
@@ -33,14 +28,14 @@ export function SimpleMessageBlock({
 
   return (
     <div style={{ marginBottom: isCompact ? 8 : 0 }}>
-      <Text 
-        type="secondary" 
-        style={{ 
-          fontSize: 10, 
-          letterSpacing: '0.5px', 
-          textTransform: 'uppercase',
-          display: 'block', 
-          marginBottom: 3 
+      <Text
+        type="secondary"
+        style={{
+          fontSize: 10,
+          letterSpacing: "0.5px",
+          textTransform: "uppercase",
+          display: "block",
+          marginBottom: 3,
         }}
       >
         {label}
@@ -51,9 +46,9 @@ export function SimpleMessageBlock({
           style={{
             fontSize: 13,
             lineHeight: 1.7,
-            color: '#262626',
-            whiteSpace: 'pre-wrap',
-            wordBreak: 'break-word',
+            color: "#262626",
+            whiteSpace: "pre-wrap",
+            wordBreak: "break-word",
             marginBottom: hasToolCalls ? 6 : 0,
           }}
         >

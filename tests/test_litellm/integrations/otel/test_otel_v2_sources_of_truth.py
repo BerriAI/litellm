@@ -1,6 +1,8 @@
 """Tests for the OTel v2 sources of truth: span registry, semconv keys, config,
 and the typed StandardLoggingPayload adapter. These need no OTel SDK."""
 
+import pytest
+
 from litellm.integrations.otel import (
     BAGGAGE_PROMOTED_KEYS,
     DB,
@@ -26,6 +28,13 @@ from litellm.integrations.otel.model.spans import (
     root_roles,
     validate_registry,
 )
+
+
+@pytest.fixture(autouse=True)
+def _clear_otel_v2_flag_cache():
+    is_otel_v2_enabled.cache_clear()
+    yield
+    is_otel_v2_enabled.cache_clear()
 
 
 def _sample_payload(**overrides):
@@ -85,19 +94,32 @@ def test_registry_parent_integrity_no_orphans():
 
 
 def test_registry_hierarchy_shape():
-    assert set(root_roles()) == {SpanRole.PROXY_REQUEST}
+    # MCP roles have no in-process parent: per the MCP semconv they root (or adopt
+    # the client's propagated _meta context), so they sit alongside PROXY_REQUEST.
+    assert set(root_roles()) == {
+        SpanRole.PROXY_REQUEST,
+        SpanRole.MCP_TOOL_CALL,
+        SpanRole.MCP_LIST_TOOLS,
+    }
     # Guardrails parent to the request span, not the LLM call: a pre-call
     # guardrail runs before the LLM call exists, so it's a sibling of it.
     assert set(child_roles(SpanRole.PROXY_REQUEST)) == {
         SpanRole.LLM_CALL,
-        SpanRole.MCP_TOOL_CALL,
         SpanRole.GUARDRAIL,
         SpanRole.DB_CALL,
         SpanRole.SERVICE,
     }
     assert SPAN_REGISTRY[SpanRole.LLM_CALL].kind is LiteLLMSpanKind.CLIENT
-    # The proxy is an MCP client to the upstream tool server: CLIENT span.
+    # The proxy is an MCP client to the upstream tool server: CLIENT span. Listing
+    # tools is the same client relationship, so it's a CLIENT span too.
     assert SPAN_REGISTRY[SpanRole.MCP_TOOL_CALL].kind is LiteLLMSpanKind.CLIENT
+    assert SPAN_REGISTRY[SpanRole.MCP_LIST_TOOLS].kind is LiteLLMSpanKind.CLIENT
+    # MCP spans don't nest under the transport: they link the PROXY_REQUEST span
+    # instead of parenting to it (OTel GenAI MCP semconv).
+    assert SPAN_REGISTRY[SpanRole.MCP_TOOL_CALL].parent is None
+    assert SPAN_REGISTRY[SpanRole.MCP_LIST_TOOLS].parent is None
+    assert SPAN_REGISTRY[SpanRole.MCP_TOOL_CALL].links is SpanRole.PROXY_REQUEST
+    assert SPAN_REGISTRY[SpanRole.MCP_LIST_TOOLS].links is SpanRole.PROXY_REQUEST
     assert SPAN_REGISTRY[SpanRole.PROXY_REQUEST].kind is LiteLLMSpanKind.SERVER
     assert SPAN_REGISTRY[SpanRole.GUARDRAIL].parent is SpanRole.PROXY_REQUEST
     # An outbound datastore call is a CLIENT span; an internal service is INTERNAL.
@@ -528,13 +550,68 @@ def test_capture_span_content_resolves_modes():
         ).capture_span_content
         is False
     )
+    # V1 accepted UPPER_SNAKE_CASE; the env value is case-insensitive so an
+    # operator carrying ``SPAN_AND_EVENT`` forward still enables capture.
+    assert (
+        OpenTelemetryV2Config(
+            capture_message_content="SPAN_AND_EVENT"
+        ).capture_span_content
+        is True
+    )
+    assert (
+        OpenTelemetryV2Config(capture_message_content="SPAN_ONLY").capture_span_content
+        is True
+    )
+    assert (
+        OpenTelemetryV2Config(capture_message_content="NO_CONTENT").capture_span_content
+        is False
+    )
+
+
+def test_capture_message_content_normalizer_only_touches_strings():
+    """The casing normalizer lower-cases strings and leaves anything else
+    untouched, so a non-string value still fails the field's ``str`` validation
+    instead of being silently coerced into a bogus capture mode."""
+    import pytest
+    from pydantic import ValidationError
+
+    from litellm.integrations.otel.model.config import OpenTelemetryV2Config
+
+    with pytest.raises(ValidationError):
+        OpenTelemetryV2Config(capture_message_content=123)
 
 
 def test_v2_flag_is_off_by_default(monkeypatch):
     monkeypatch.delenv("LITELLM_OTEL_V2", raising=False)
+    is_otel_v2_enabled.cache_clear()
     assert is_otel_v2_enabled() is False
     monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+    is_otel_v2_enabled.cache_clear()
     assert is_otel_v2_enabled() is True
+
+
+def test_v2_flag_resolved_once_not_per_call(monkeypatch):
+    """Regression for LIT-3895: ``is_otel_v2_enabled`` sits on the proxy hot path
+    (auth, logging-callback setup). Building the pydantic-settings model on every
+    call re-scanned the environment at ~28us a pop and dropped throughput, so the
+    flag must be resolved once and cached rather than reconstructed per call."""
+    from litellm.integrations.otel.model import config as config_mod
+
+    constructions = 0
+    real_flag = config_mod._OTelV2Flag
+
+    def _counting_flag(*args, **kwargs):
+        nonlocal constructions
+        constructions += 1
+        return real_flag(*args, **kwargs)
+
+    monkeypatch.setattr(config_mod, "_OTelV2Flag", _counting_flag)
+    config_mod.is_otel_v2_enabled.cache_clear()
+
+    for _ in range(50):
+        config_mod.is_otel_v2_enabled()
+
+    assert constructions == 1
 
 
 def test_config_from_env(monkeypatch):

@@ -41,7 +41,8 @@ def test_crowdstrike_aidr_guardrail_config() -> None:
     )
 
 
-def test_crowdstrike_aidr_guardrail_config_no_api_key() -> None:
+def test_crowdstrike_aidr_guardrail_config_no_api_key(monkeypatch) -> None:
+    monkeypatch.delenv("CS_AIDR_TOKEN", raising=False)
     with pytest.raises(CrowdStrikeAIDRGuardrailMissingSecrets):
         init_guardrails_v2(
             all_guardrails=[
@@ -59,7 +60,8 @@ def test_crowdstrike_aidr_guardrail_config_no_api_key() -> None:
         )
 
 
-def test_crowdstrike_aidr_guardrail_config_no_api_base() -> None:
+def test_crowdstrike_aidr_guardrail_config_no_api_base(monkeypatch) -> None:
+    monkeypatch.delenv("CS_AIDR_BASE_URL", raising=False)
     with pytest.raises(CrowdStrikeAIDRGuardrailMissingSecrets):
         init_guardrails_v2(
             all_guardrails=[
@@ -410,6 +412,171 @@ async def test_apply_guardrail_response_ok(
     assert called_kwargs["json"]["guard_input"]["messages"] == expected_messages
     # Should return original inputs when not transformed
     assert result["texts"] == inputs["texts"]
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_sends_user_id_model_and_extra_info(
+    crowdstrike_aidr_guardrail: CrowdStrikeAIDRHandler,
+) -> None:
+    inputs: GenericGuardrailAPIInputs = {
+        "texts": ["Hello"],
+        "structured_messages": [{"role": "user", "content": "Hello"}],
+        "model": "gpt-4o",
+    }
+    request_data = {
+        "messages": inputs["structured_messages"],
+        "model": "gpt-4o",
+        "litellm_metadata": {
+            "user_api_key_user_id": "uid-abc",
+            "user_api_key_user_email": "alice@example.com",
+        },
+    }
+    guardrail_endpoint = (
+        f"{crowdstrike_aidr_guardrail.api_base}/v1/guard_chat_completions"
+    )
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        return_value=httpx.Response(
+            status_code=200,
+            json={"result": {"blocked": False, "transformed": False}},
+            request=httpx.Request(method="POST", url=guardrail_endpoint),
+        ),
+    ) as mock_method:
+        await crowdstrike_aidr_guardrail.apply_guardrail(
+            inputs=inputs,
+            request_data=request_data,
+            input_type="request",
+        )
+
+    payload = mock_method.call_args.kwargs["json"]
+    assert payload["user_id"] == "uid-abc"
+    assert payload["model"] == "gpt-4o"
+    assert payload["extra_info"] == {"user_name": "alice@example.com"}
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_empty_extra_info_when_no_email(
+    crowdstrike_aidr_guardrail: CrowdStrikeAIDRHandler,
+) -> None:
+    inputs: GenericGuardrailAPIInputs = {
+        "texts": ["Hello"],
+        "structured_messages": [{"role": "user", "content": "Hello"}],
+        "model": "gemini-flash",
+    }
+    request_data = {
+        "messages": inputs["structured_messages"],
+        "model": "gemini-flash",
+        "litellm_metadata": {
+            "user_api_key_user_id": "uid-no-email",
+            "user_api_key_user_email": None,
+        },
+    }
+    guardrail_endpoint = (
+        f"{crowdstrike_aidr_guardrail.api_base}/v1/guard_chat_completions"
+    )
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        return_value=httpx.Response(
+            status_code=200,
+            json={"result": {"blocked": False, "transformed": False}},
+            request=httpx.Request(method="POST", url=guardrail_endpoint),
+        ),
+    ) as mock_method:
+        await crowdstrike_aidr_guardrail.apply_guardrail(
+            inputs=inputs,
+            request_data=request_data,
+            input_type="request",
+        )
+
+    payload = mock_method.call_args.kwargs["json"]
+    assert payload["user_id"] == "uid-no-email"
+    assert payload["model"] == "gemini-flash"
+    assert payload["extra_info"] == {}
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_no_metadata_skips_user_fields(
+    crowdstrike_aidr_guardrail: CrowdStrikeAIDRHandler,
+) -> None:
+    inputs: GenericGuardrailAPIInputs = {
+        "texts": ["Hello"],
+        "structured_messages": [{"role": "user", "content": "Hello"}],
+    }
+    request_data = {"messages": inputs["structured_messages"]}
+    guardrail_endpoint = (
+        f"{crowdstrike_aidr_guardrail.api_base}/v1/guard_chat_completions"
+    )
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        return_value=httpx.Response(
+            status_code=200,
+            json={"result": {"blocked": False, "transformed": False}},
+            request=httpx.Request(method="POST", url=guardrail_endpoint),
+        ),
+    ) as mock_method:
+        await crowdstrike_aidr_guardrail.apply_guardrail(
+            inputs=inputs,
+            request_data=request_data,
+            input_type="request",
+        )
+
+    payload = mock_method.call_args.kwargs["json"]
+    assert "user_id" not in payload
+    assert "model" not in payload
+    assert "extra_info" not in payload
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "litellm_metadata, metadata",
+    [
+        (None, {"user_api_key_user_id": "uid-abc", "user_api_key_user_email": "alice@example.com"}),
+        ({"trace_id": "t1"}, {"user_api_key_user_id": "uid-abc", "user_api_key_user_email": "alice@example.com"}),
+        (["unexpected"], {"user_api_key_user_id": "uid-abc", "user_api_key_user_email": "alice@example.com"}),
+        ({"user_api_key_user_id": "uid-abc", "user_api_key_user_email": "alice@example.com"}, {"trace_id": "t1"}),
+    ],
+    ids=["identity_in_metadata_llm_none", "identity_in_metadata_llm_user_dict", "identity_in_metadata_llm_non_mapping", "identity_in_litellm_metadata"],
+)
+async def test_apply_guardrail_reads_identity_from_either_metadata_bag(
+    crowdstrike_aidr_guardrail: CrowdStrikeAIDRHandler,
+    litellm_metadata,
+    metadata,
+) -> None:
+    inputs: GenericGuardrailAPIInputs = {
+        "texts": ["Hello"],
+        "structured_messages": [{"role": "user", "content": "Hello"}],
+        "model": "gpt-4o",
+    }
+    request_data = {
+        "messages": inputs["structured_messages"],
+        "model": "gpt-4o",
+        "litellm_metadata": litellm_metadata,
+        "metadata": metadata,
+    }
+    guardrail_endpoint = (
+        f"{crowdstrike_aidr_guardrail.api_base}/v1/guard_chat_completions"
+    )
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        return_value=httpx.Response(
+            status_code=200,
+            json={"result": {"blocked": False, "transformed": False}},
+            request=httpx.Request(method="POST", url=guardrail_endpoint),
+        ),
+    ) as mock_method:
+        await crowdstrike_aidr_guardrail.apply_guardrail(
+            inputs=inputs,
+            request_data=request_data,
+            input_type="request",
+        )
+
+    payload = mock_method.call_args.kwargs["json"]
+    assert payload["user_id"] == "uid-abc"
+    assert payload["extra_info"] == {"user_name": "alice@example.com"}
 
 
 @pytest.mark.asyncio

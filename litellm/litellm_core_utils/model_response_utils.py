@@ -135,10 +135,7 @@ def _is_choice_non_empty(choice: Any) -> bool:
             # Skip certain structural fields that are just default/None placeholders
             if extra_field_name == "index" and extra_field_value == 0:
                 continue
-            if (
-                extra_field_name in {"finish_reason", "logprobs"}
-                and extra_field_value is None
-            ):
+            if extra_field_name in {"finish_reason", "logprobs"} and extra_field_value is None:
                 continue
             if extra_field_name == "delta":
                 continue
@@ -190,11 +187,7 @@ def _is_delta_non_empty(delta: Delta) -> bool:
     # Check all regular attributes of the delta object
     for attr_name in dir(delta):
         # Skip private attributes, methods, and Pydantic-specific fields
-        if (
-            attr_name.startswith("_")
-            or callable(getattr(delta, attr_name))
-            or attr_name.startswith("model_")
-        ):
+        if attr_name.startswith("_") or callable(getattr(delta, attr_name)) or attr_name.startswith("model_"):
             continue
 
         attr_value = getattr(delta, attr_name, None)

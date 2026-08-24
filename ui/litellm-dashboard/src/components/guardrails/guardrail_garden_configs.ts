@@ -210,6 +210,12 @@ export const GUARDRAIL_PRESETS: Record<string, GuardrailPreset> = {
     mode: "pre_call",
     defaultOn: false,
   },
+  cisco_ai_defense: {
+    provider: "CiscoAiDefense",
+    guardrailNameSuggestion: "Cisco AI Defense",
+    mode: "pre_call",
+    defaultOn: false,
+  },
   noma: {
     provider: "Noma",
     guardrailNameSuggestion: "Noma Security",
@@ -285,6 +291,12 @@ export const GUARDRAIL_PRESETS: Record<string, GuardrailPreset> = {
   xecguard: {
     provider: "Xecguard",
     guardrailNameSuggestion: "XecGuard",
+    mode: "pre_call",
+    defaultOn: false,
+  },
+  repelloai: {
+    provider: "Repelloai",
+    guardrailNameSuggestion: "RepelloAI Argus",
     mode: "pre_call",
     defaultOn: false,
   },

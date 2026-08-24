@@ -349,3 +349,96 @@ class TestPerformRedaction:
 
         assert redacted.output[0].content[0].text == "redacted-by-litellm"
         assert response.output[0].content[0].text == "sensitive output"
+
+    def test_redacts_vertex_provider_metadata_in_standard_logging_response(self):
+        details = {
+            "standard_logging_object": {
+                "messages": [{"role": "user", "content": "sensitive prompt"}],
+                "response": {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": "sensitive answer",
+                                "role": "assistant",
+                            }
+                        }
+                    ],
+                    "vertex_ai_grounding_metadata": [
+                        {"webSearchQueries": ["sensitive search term"]}
+                    ],
+                    "vertex_ai_url_context_metadata": [
+                        {"urlMetadata": [{"retrievedUrl": "https://example.com"}]}
+                    ],
+                },
+            }
+        }
+
+        perform_redaction(details, None)
+
+        response = details["standard_logging_object"]["response"]
+        assert response["choices"][0]["message"]["content"] == "redacted-by-litellm"
+        assert response["vertex_ai_grounding_metadata"] == []
+        assert response["vertex_ai_url_context_metadata"] == []
+
+    def test_redacts_vertex_provider_metadata_on_streaming_model_response(self):
+        response = litellm.ModelResponse(
+            id="resp-1",
+            choices=[
+                litellm.Choices(
+                    message=litellm.Message(
+                        content="sensitive answer",
+                        role="assistant",
+                    )
+                )
+            ],
+            model="gemini-2.5-flash",
+        )
+        setattr(
+            response,
+            "vertex_ai_grounding_metadata",
+            [{"webSearchQueries": ["sensitive search term"]}],
+        )
+        response._hidden_params["vertex_ai_grounding_metadata"] = [
+            {"webSearchQueries": ["sensitive search term"]}
+        ]
+
+        details = {
+            "stream": True,
+            "complete_streaming_response": response,
+        }
+
+        perform_redaction(details, response)
+
+        assert response.choices[0].message.content == "redacted-by-litellm"
+        assert getattr(response, "vertex_ai_grounding_metadata") == []
+        assert "vertex_ai_grounding_metadata" not in response._hidden_params
+
+    def test_redacts_vertex_provider_metadata_from_metadata_hidden_params(self):
+        """Streaming success_handler copies _hidden_params into metadata before redaction."""
+        details = {
+            "stream": True,
+            "litellm_params": {
+                "metadata": {
+                    "hidden_params": {
+                        "response_cost": 0.01,
+                        "vertex_ai_grounding_metadata": [
+                            {"webSearchQueries": ["sensitive search term"]}
+                        ],
+                        "vertex_ai_url_context_metadata": [
+                            {"urlMetadata": [{"retrievedUrl": "https://example.com"}]}
+                        ],
+                        "vertex_ai_safety_ratings": [{"category": "HARM"}],
+                        "vertex_ai_citation_metadata": [{"citations": ["source"]}],
+                    }
+                }
+            },
+        }
+
+        perform_redaction(details, None)
+
+        hidden_params = details["litellm_params"]["metadata"]["hidden_params"]
+        assert hidden_params["response_cost"] == 0.01
+        assert "vertex_ai_grounding_metadata" not in hidden_params
+        assert "vertex_ai_url_context_metadata" not in hidden_params
+        assert "vertex_ai_safety_ratings" not in hidden_params
+        assert "vertex_ai_citation_metadata" not in hidden_params

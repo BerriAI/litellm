@@ -72,9 +72,7 @@ class AzureVideoConfig(OpenAIVideoConfig):
         # Use the base Azure validation method which properly handles:
         # 1. Credentials from litellm_credential_name via litellm_params
         # 2. Sets the correct "api-key" header (not "Authorization: Bearer")
-        return BaseAzureLLM._base_validate_azure_environment(
-            headers=headers, litellm_params=litellm_params
-        )
+        return BaseAzureLLM._base_validate_azure_environment(headers=headers, litellm_params=litellm_params)
 
     def get_complete_url(
         self,

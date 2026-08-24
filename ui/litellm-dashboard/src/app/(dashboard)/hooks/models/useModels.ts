@@ -1,4 +1,4 @@
-import { useQuery, useInfiniteQuery } from "@tanstack/react-query";
+import { useQuery, useInfiniteQuery, UseQueryResult } from "@tanstack/react-query";
 import { createQueryKeys } from "../common/queryKeysFactory";
 import { modelInfoCall, modelHubCall, modelAvailableCall } from "@/components/networking";
 import useAuthorized from "../useAuthorized";
@@ -27,8 +27,17 @@ const modelHubKeys = createQueryKeys("modelHub");
 const allProxyModelsKeys = createQueryKeys("allProxyModels");
 const selectedTeamModelsKeys = createQueryKeys("selectedTeamModels");
 const infiniteModelKeys = createQueryKeys("infiniteModels");
+const userModelsKeys = createQueryKeys("userModels");
 
-export const useModelsInfo = (page: number = 1, size: number = 50, search?: string, modelId?: string, teamId?: string, sortBy?: string, sortOrder?: string) => {
+export const useModelsInfo = (
+  page: number = 1,
+  size: number = 50,
+  search?: string,
+  modelId?: string,
+  teamId?: string,
+  sortBy?: string,
+  sortOrder?: string,
+) => {
   const { accessToken, userId, userRole } = useAuthorized();
   return useQuery<PaginatedModelInfoResponse>({
     queryKey: modelKeys.list({
@@ -44,7 +53,8 @@ export const useModelsInfo = (page: number = 1, size: number = 50, search?: stri
         ...(sortOrder && { sortOrder }),
       },
     }),
-    queryFn: async () => await modelInfoCall(accessToken!, userId!, userRole!, page, size, search, modelId, teamId, sortBy, sortOrder),
+    queryFn: async () =>
+      await modelInfoCall(accessToken!, userId!, userRole!, page, size, search, modelId, teamId, sortBy, sortOrder),
     enabled: Boolean(accessToken && userId && userRole),
   });
 };
@@ -67,6 +77,18 @@ export const useAllProxyModels = () => {
   });
 };
 
+export const useUserModels = (): UseQueryResult<string[]> => {
+  const { accessToken, userId, userRole } = useAuthorized();
+  return useQuery<string[]>({
+    queryKey: userModelsKeys.list({}),
+    queryFn: async () => {
+      const response = await modelAvailableCall(accessToken!, userId!, userRole!);
+      return response["data"].map((model: { id: string }) => model.id);
+    },
+    enabled: Boolean(accessToken && userId && userRole),
+  });
+};
+
 export const useSelectedTeamModels = (teamID: string | null) => {
   const { accessToken, userId, userRole } = useAuthorized();
   return useQuery<AllProxyModelsResponse>({
@@ -76,10 +98,7 @@ export const useSelectedTeamModels = (teamID: string | null) => {
   });
 };
 
-export const useInfiniteModelInfo = (
-  size: number = 50,
-  search?: string,
-) => {
+export const useInfiniteModelInfo = (size: number = 50, search?: string) => {
   const { accessToken, userId, userRole } = useAuthorized();
   return useInfiniteQuery<PaginatedModelInfoResponse>({
     queryKey: infiniteModelKeys.list({
@@ -91,14 +110,7 @@ export const useInfiniteModelInfo = (
       },
     }),
     queryFn: async ({ pageParam }) => {
-      return await modelInfoCall(
-        accessToken!,
-        userId!,
-        userRole!,
-        pageParam as number,
-        size,
-        search,
-      );
+      return await modelInfoCall(accessToken!, userId!, userRole!, pageParam as number, size, search);
     },
     initialPageParam: 1,
     getNextPageParam: (lastPage) => {

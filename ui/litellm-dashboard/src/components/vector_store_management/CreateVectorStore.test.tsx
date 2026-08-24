@@ -32,7 +32,7 @@ vi.mock("../vector_store_providers", () => ({
   },
   vectorStoreProviderLogoMap: {
     "Amazon Bedrock": "https://example.com/bedrock.png",
-    "OpenAI": "https://example.com/openai.png",
+    OpenAI: "https://example.com/openai.png",
     "Azure OpenAI": "https://example.com/azure.png",
     "AWS S3 Vectors": "https://example.com/aws.png",
   },
@@ -164,7 +164,7 @@ describe("CreateVectorStore", () => {
         undefined,
         undefined,
         undefined,
-        {}
+        {},
       );
     });
   });

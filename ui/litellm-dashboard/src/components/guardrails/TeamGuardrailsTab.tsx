@@ -82,10 +82,8 @@ function submissionToTeamGuardrail(item: GuardrailSubmissionItem): TeamGuardrail
           value: String(value ?? ""),
         }))
       : [];
-  const endpoint =
-    (params.api_base as string) ?? (params.url as string) ?? "";
-  const model =
-    (info.model as string) ?? (params.model as string) ?? "—";
+  const endpoint = (params.api_base as string) ?? (params.url as string) ?? "";
+  const model = (info.model as string) ?? (params.model as string) ?? "—";
   const forwardKey = (params.forward_api_key as boolean) ?? true;
   const extraHeaders = Array.isArray(params.extra_headers)
     ? (params.extra_headers as string[]).filter((h): h is string => typeof h === "string")
@@ -111,10 +109,7 @@ function submissionToTeamGuardrail(item: GuardrailSubmissionItem): TeamGuardrail
   };
 }
 
-const STATUS_CONFIG: Record<
-  GuardrailStatus,
-  { label: string; bg: string; text: string; dot: string }
-> = {
+const STATUS_CONFIG: Record<GuardrailStatus, { label: string; bg: string; text: string; dot: string }> = {
   active: {
     label: "Active",
     bg: "bg-green-50",
@@ -148,7 +143,7 @@ function buildEquivalentConfigYaml(g: TeamGuardrail): string {
   const lines: string[] = [
     "litellm_settings:",
     "  guardrails:",
-    `    - guardrail_name: "${g.name.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`,
+    `    - guardrail_name: "${g.name.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`,
     "      litellm_params:",
     `        guardrail: ${g.guardrailType ?? "generic_guardrail_api"}`,
     `        mode: ${g.mode ?? "pre_call"}  # or post_call, during_call`,
@@ -163,7 +158,7 @@ function buildEquivalentConfigYaml(g: TeamGuardrail): string {
   if (g.customHeaders.length > 0) {
     lines.push("        headers:  # static headers (sent with every request)");
     for (const h of g.customHeaders) {
-      lines.push(`          ${h.key}: "${String(h.value).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`);
+      lines.push(`          ${h.key}: "${String(h.value).replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`);
     }
   }
   if (g.extraHeaders.length > 0) {
@@ -182,15 +177,7 @@ function buildEquivalentConfigYaml(g: TeamGuardrail): string {
   return lines.join("\n");
 }
 
-function StatCard({
-  label,
-  value,
-  color,
-}: {
-  label: string;
-  value: number;
-  color: string;
-}) {
+function StatCard({ label, value, color }: { label: string; value: number; color: string }) {
   return (
     <div className="bg-white border border-gray-200 rounded-lg px-4 py-3">
       <div className={`text-2xl font-bold ${color}`}>{value}</div>
@@ -199,13 +186,7 @@ function StatCard({
   );
 }
 
-function Toggle({
-  enabled,
-  onToggle,
-}: {
-  enabled: boolean;
-  onToggle: () => void;
-}) {
+function Toggle({ enabled, onToggle }: { enabled: boolean; onToggle: () => void }) {
   return (
     <button
       type="button"
@@ -257,11 +238,7 @@ function GuardrailCard({
       <div className="flex items-start justify-between gap-4">
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 mb-1.5 flex-wrap">
-            <span
-              className={`text-xs font-medium px-2 py-0.5 rounded-full ${teamColor}`}
-            >
-              Team: {g.team}
-            </span>
+            <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${teamColor}`}>Team: {g.team}</span>
             <span
               className={`inline-flex items-center gap-1.5 text-xs font-medium px-2 py-0.5 rounded-full ${status.bg} ${status.text}`}
             >
@@ -270,30 +247,23 @@ function GuardrailCard({
             </span>
           </div>
           <h3 className="text-sm font-semibold text-gray-900 mb-1">{g.name}</h3>
-          <p className="text-xs text-gray-500 mb-2 line-clamp-1">
-            {g.description}
-          </p>
+          <p className="text-xs text-gray-500 mb-2 line-clamp-1">{g.description}</p>
           <div className="flex items-center gap-1.5 mb-2">
             <ServerIcon className="h-3.5 w-3.5 text-gray-400 flex-shrink-0" />
-            <code className="text-xs text-gray-500 font-mono truncate">
-              {g.endpoint}
-            </code>
+            <code className="text-xs text-gray-500 font-mono truncate">{g.endpoint}</code>
           </div>
           <div className="flex items-center gap-4 text-xs text-gray-500">
             <span>
               Model: <span className="font-medium text-gray-700">{g.model}</span>
             </span>
             <span>
-              Submitted:{" "}
-              <span className="font-medium text-gray-700">{g.submittedAt}</span>
+              Submitted: <span className="font-medium text-gray-700">{g.submittedAt}</span>
             </span>
           </div>
         </div>
         <div className="flex flex-col items-end gap-2 flex-shrink-0">
           <div className="flex items-center gap-2">
-            <span className="text-xs text-gray-500 whitespace-nowrap">
-              Forward API Key
-            </span>
+            <span className="text-xs text-gray-500 whitespace-nowrap">Forward API Key</span>
             <Toggle enabled={g.forwardKey} onToggle={onToggleForwardKey} />
           </div>
           <div className="flex items-center gap-2 mt-1">
@@ -326,16 +296,12 @@ function GuardrailCard({
         </div>
       </div>
       <div className="mt-3 pt-3 border-t border-gray-100">
-          <button
-            type="button"
-            onClick={onToggleHeaders}
-            className="flex items-center gap-1.5 text-xs text-gray-500 hover:text-gray-700 transition-colors"
-          >
-            {isHeadersExpanded ? (
-              <ChevronUpIcon className="h-3.5 w-3.5" />
-            ) : (
-              <ChevronDownIcon className="h-3.5 w-3.5" />
-            )}
+        <button
+          type="button"
+          onClick={onToggleHeaders}
+          className="flex items-center gap-1.5 text-xs text-gray-500 hover:text-gray-700 transition-colors"
+        >
+          {isHeadersExpanded ? <ChevronUpIcon className="h-3.5 w-3.5" /> : <ChevronDownIcon className="h-3.5 w-3.5" />}
           Static headers
           {g.customHeaders.length > 0 && (
             <span className="ml-1 bg-gray-100 text-gray-600 rounded-full px-1.5 py-0.5 text-xs">
@@ -346,19 +312,12 @@ function GuardrailCard({
         {isHeadersExpanded && (
           <div className="mt-2">
             {g.customHeaders.length === 0 ? (
-              <p className="text-xs text-gray-400 italic">
-                No static headers configured.
-              </p>
+              <p className="text-xs text-gray-400 italic">No static headers configured.</p>
             ) : (
               <div className="space-y-1">
                 {g.customHeaders.map((h, i) => (
-                  <div
-                    key={`${h.key}-${i}`}
-                    className="flex items-center gap-2 text-xs font-mono"
-                  >
-                    <span className="text-gray-500 bg-gray-50 border border-gray-200 rounded px-2 py-0.5">
-                      {h.key}
-                    </span>
+                  <div key={`${h.key}-${i}`} className="flex items-center gap-2 text-xs font-mono">
+                    <span className="text-gray-500 bg-gray-50 border border-gray-200 rounded px-2 py-0.5">{h.key}</span>
                     <span className="text-gray-400">:</span>
                     <span className="text-gray-700 bg-gray-50 border border-gray-200 rounded px-2 py-0.5">
                       {h.value}
@@ -374,13 +333,7 @@ function GuardrailCard({
   );
 }
 
-function ConfigRow({
-  label,
-  children,
-}: {
-  label: string;
-  children: React.ReactNode;
-}) {
+function ConfigRow({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div>
       <div className="text-xs font-semibold text-gray-500 mb-1">{label}</div>
@@ -395,9 +348,7 @@ type DetailPanelProps = {
   onApprove: () => void;
   onReject: () => void;
   onToggleForwardKey: () => void;
-  onUpdateCustomHeaders: (
-    customHeaders: { key: string; value: string }[]
-  ) => Promise<void>;
+  onUpdateCustomHeaders: (customHeaders: { key: string; value: string }[]) => Promise<void>;
   onUpdateExtraHeaders: (extraHeaders: string[]) => Promise<void>;
 };
 
@@ -422,11 +373,7 @@ function DetailPanel({
         <div className="flex items-start justify-between mb-4">
           <div>
             <div className="flex items-center gap-2 mb-1">
-              <span
-                className={`text-xs font-medium px-2 py-0.5 rounded-full ${teamColor}`}
-              >
-                Team: {g.team}
-              </span>
+              <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${teamColor}`}>Team: {g.team}</span>
               <span
                 className={`inline-flex items-center gap-1.5 text-xs font-medium px-2 py-0.5 rounded-full ${status.bg} ${status.text}`}
               >
@@ -452,9 +399,7 @@ function DetailPanel({
         <div className="space-y-4">
           <ConfigRow label="Endpoint">
             <div className="flex items-center gap-1.5">
-              <code className="text-xs font-mono text-gray-700 break-all">
-                {g.endpoint}
-              </code>
+              <code className="text-xs font-mono text-gray-700 break-all">{g.endpoint}</code>
               <a
                 href={g.endpoint}
                 target="_blank"
@@ -474,40 +419,29 @@ function DetailPanel({
             <div className="flex items-center justify-between mb-2">
               <div className="flex items-center gap-1.5">
                 <KeyIcon className="h-3.5 w-3.5 text-blue-500" />
-                <span className="text-xs font-semibold text-blue-800">
-                  Forward LiteLLM API Key
-                </span>
+                <span className="text-xs font-semibold text-blue-800">Forward LiteLLM API Key</span>
               </div>
               <Toggle enabled={g.forwardKey} onToggle={onToggleForwardKey} />
             </div>
             <p className="text-xs text-blue-700 leading-relaxed">
               When enabled, the caller&apos;s LiteLLM API key is forwarded as an{" "}
-              <code className="font-mono bg-blue-100 px-1 rounded">
-                Authorization
-              </code>{" "}
-              header to your guardrail endpoint. This allows your guardrail to
-              authenticate model calls using the original caller&apos;s
+              <code className="font-mono bg-blue-100 px-1 rounded">Authorization</code> header to your guardrail
+              endpoint. This allows your guardrail to authenticate model calls using the original caller&apos;s
               credentials.
             </p>
           </div>
           <div>
             <div className="flex items-center gap-1.5 mb-2">
-              <span className="text-xs font-semibold text-gray-700">
-                Static headers
-              </span>
+              <span className="text-xs font-semibold text-gray-700">Static headers</span>
               {g.customHeaders.length > 0 && (
                 <span className="bg-gray-100 text-gray-600 rounded-full px-1.5 py-0.5 text-xs">
                   {g.customHeaders.length}
                 </span>
               )}
             </div>
-            <p className="text-xs text-gray-400 mb-2">
-              Sent with every request to the guardrail.
-            </p>
+            <p className="text-xs text-gray-400 mb-2">Sent with every request to the guardrail.</p>
             {g.customHeaders.length === 0 ? (
-              <p className="text-xs text-gray-400 italic mb-2">
-                No static headers configured.
-              </p>
+              <p className="text-xs text-gray-400 italic mb-2">No static headers configured.</p>
             ) : (
               <ul className="list-none space-y-1 mb-2">
                 {g.customHeaders.map((h, i) => (
@@ -520,11 +454,7 @@ function DetailPanel({
                     </span>
                     <button
                       type="button"
-                      onClick={() =>
-                        onUpdateCustomHeaders(
-                          g.customHeaders.filter((_, idx) => idx !== i)
-                        )
-                      }
+                      onClick={() => onUpdateCustomHeaders(g.customHeaders.filter((_, idx) => idx !== i))}
                       className="text-gray-400 hover:text-red-600 flex-shrink-0"
                       aria-label={`Remove ${h.key}`}
                     >
@@ -592,9 +522,7 @@ function DetailPanel({
           </div>
           <div>
             <div className="flex items-center gap-1.5 mb-2">
-              <span className="text-xs font-semibold text-gray-700">
-                Forward client headers
-              </span>
+              <span className="text-xs font-semibold text-gray-700">Forward client headers</span>
               {g.extraHeaders.length > 0 && (
                 <span className="bg-gray-100 text-gray-600 rounded-full px-1.5 py-0.5 text-xs">
                   {g.extraHeaders.length}
@@ -605,9 +533,7 @@ function DetailPanel({
               Allowed header names to forward from the client request to the guardrail (e.g. x-request-id).
             </p>
             {g.extraHeaders.length === 0 ? (
-              <p className="text-xs text-gray-400 italic mb-2">
-                No forward client headers configured.
-              </p>
+              <p className="text-xs text-gray-400 italic mb-2">No forward client headers configured.</p>
             ) : (
               <ul className="list-none space-y-1 mb-2">
                 {g.extraHeaders.map((name, i) => (
@@ -618,11 +544,7 @@ function DetailPanel({
                     <span className="text-gray-700 truncate">{name}</span>
                     <button
                       type="button"
-                      onClick={() =>
-                        onUpdateExtraHeaders(
-                          g.extraHeaders.filter((_, idx) => idx !== i)
-                        )
-                      }
+                      onClick={() => onUpdateExtraHeaders(g.extraHeaders.filter((_, idx) => idx !== i))}
                       className="text-gray-400 hover:text-red-600 flex-shrink-0"
                       aria-label={`Remove ${name}`}
                     >
@@ -687,8 +609,8 @@ function DetailPanel({
           <div className="flex items-start gap-2 bg-gray-50 border border-gray-200 rounded-lg p-3">
             <InfoIcon className="h-3.5 w-3.5 text-gray-400 flex-shrink-0 mt-0.5" />
             <p className="text-xs text-gray-500 leading-relaxed">
-              This guardrail runs on a separate instance. It receives the user
-              request and forwards the result to the next step in the pipeline. See{" "}
+              This guardrail runs on a separate instance. It receives the user request and forwards the result to the
+              next step in the pipeline. See{" "}
               <a
                 href="https://docs.litellm.ai/docs/adding_provider/generic_guardrail_api"
                 target="_blank"
@@ -742,12 +664,7 @@ type ConfirmDialogProps = {
   onCancel: () => void;
 };
 
-function ConfirmDialog({
-  action,
-  guardrailName,
-  onConfirm,
-  onCancel,
-}: ConfirmDialogProps) {
+function ConfirmDialog({ action, guardrailName, onConfirm, onCancel }: ConfirmDialogProps) {
   const isApprove = action === "approve";
   return (
     <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50">
@@ -785,9 +702,7 @@ function ConfirmDialog({
             type="button"
             onClick={onConfirm}
             className={`flex-1 text-white text-sm font-medium py-2 rounded-md transition-colors ${
-              isApprove
-                ? "bg-green-500 hover:bg-green-600"
-                : "bg-red-500 hover:bg-red-600"
+              isApprove ? "bg-green-500 hover:bg-green-600" : "bg-red-500 hover:bg-red-600"
             }`}
           >
             {isApprove ? "Approve" : "Reject"}
@@ -811,9 +726,7 @@ export function TeamGuardrailsTab({ accessToken }: TeamGuardrailsTabProps) {
     rejected: 0,
   });
   const [search, setSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState<
-    "all" | GuardrailStatus
-  >("all");
+  const [statusFilter, setStatusFilter] = useState<"all" | GuardrailStatus>("all");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [expandedHeaders, setExpandedHeaders] = useState<Set<string>>(new Set());
   const [confirmAction, setConfirmAction] = useState<{
@@ -841,11 +754,7 @@ export function TeamGuardrailsTab({ accessToken }: TeamGuardrailsTabProps) {
     setError(null);
     try {
       const statusParam =
-        statusFilter === "all"
-          ? undefined
-          : statusFilter === "pending"
-            ? "pending_review"
-            : statusFilter;
+        statusFilter === "all" ? undefined : statusFilter === "pending" ? "pending_review" : statusFilter;
       const res = await listGuardrailSubmissions(accessToken, {
         status: statusParam,
         search: searchDebounced.trim() || undefined,
@@ -880,21 +789,14 @@ export function TeamGuardrailsTab({ accessToken }: TeamGuardrailsTabProps) {
       await updateGuardrailCall(accessToken, id, {
         litellm_params: { forward_api_key: newValue },
       });
-      setGuardrails((prev) =>
-        prev.map((x) => (x.id === id ? { ...x, forwardKey: newValue } : x))
-      );
-      NotificationsManager.success(
-        newValue ? "Forward API key enabled" : "Forward API key disabled"
-      );
+      setGuardrails((prev) => prev.map((x) => (x.id === id ? { ...x, forwardKey: newValue } : x)));
+      NotificationsManager.success(newValue ? "Forward API key enabled" : "Forward API key disabled");
     } catch {
       NotificationsManager.fromBackend("Failed to update forward API key");
     }
   }
 
-  async function updateCustomHeaders(
-    id: string,
-    customHeaders: { key: string; value: string }[]
-  ) {
+  async function updateCustomHeaders(id: string, customHeaders: { key: string; value: string }[]) {
     if (!accessToken) return;
     const headersObj: Record<string, string> = {};
     for (const { key, value } of customHeaders) {
@@ -911,8 +813,8 @@ export function TeamGuardrailsTab({ accessToken }: TeamGuardrailsTabProps) {
                 ...x,
                 customHeaders: customHeaders.filter((h) => h.key.trim()),
               }
-            : x
-        )
+            : x,
+        ),
       );
       NotificationsManager.success("Static headers updated");
     } catch {
@@ -926,9 +828,7 @@ export function TeamGuardrailsTab({ accessToken }: TeamGuardrailsTabProps) {
       await updateGuardrailCall(accessToken, id, {
         litellm_params: { extra_headers: extraHeaders },
       });
-      setGuardrails((prev) =>
-        prev.map((x) => (x.id === id ? { ...x, extraHeaders } : x))
-      );
+      setGuardrails((prev) => prev.map((x) => (x.id === id ? { ...x, extraHeaders } : x)));
       NotificationsManager.success("Forward client headers updated");
     } catch {
       NotificationsManager.fromBackend("Failed to update forward client headers");
@@ -972,18 +872,10 @@ export function TeamGuardrailsTab({ accessToken }: TeamGuardrailsTabProps) {
 
   return (
     <div className="flex h-full">
-      <div
-        className={`flex-1 min-w-0 p-6 overflow-auto ${
-          selected ? "border-r border-gray-200" : ""
-        }`}
-      >
+      <div className={`flex-1 min-w-0 p-6 overflow-auto ${selected ? "border-r border-gray-200" : ""}`}>
         <div className="grid grid-cols-4 gap-4 mb-6">
           <StatCard label="Total Submitted" value={totalCount} color="text-gray-900" />
-          <StatCard
-            label="Pending Review"
-            value={pendingCount}
-            color="text-yellow-600"
-          />
+          <StatCard label="Pending Review" value={pendingCount} color="text-yellow-600" />
           <StatCard label="Active" value={activeCount} color="text-green-600" />
           <StatCard label="Rejected" value={rejectedCount} color="text-red-600" />
         </div>
@@ -1000,9 +892,7 @@ export function TeamGuardrailsTab({ accessToken }: TeamGuardrailsTabProps) {
           </div>
           <select
             value={statusFilter}
-            onChange={(e) =>
-              setStatusFilter(e.target.value as typeof statusFilter)
-            }
+            onChange={(e) => setStatusFilter(e.target.value as typeof statusFilter)}
             className="border border-gray-200 rounded-md px-3 py-2 text-sm text-gray-700 focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 bg-white"
           >
             <option value="all">All Status</option>
@@ -1020,65 +910,45 @@ export function TeamGuardrailsTab({ accessToken }: TeamGuardrailsTabProps) {
           </button>
         </div>
         <div className="space-y-3">
-          {isLoading && (
-            <div className="text-center py-12 text-gray-500 text-sm">
-              Loading submissions…
-            </div>
-          )}
-          {error && (
-            <div className="text-center py-12 text-red-600 text-sm">
-              {error}
-            </div>
-          )}
+          {isLoading && <div className="text-center py-12 text-gray-500 text-sm">Loading submissions…</div>}
+          {error && <div className="text-center py-12 text-red-600 text-sm">{error}</div>}
           {!isLoading && !error && filtered.length === 0 && (
-            <div className="text-center py-12 text-gray-400 text-sm">
-              No guardrails match your filters.
-            </div>
+            <div className="text-center py-12 text-gray-400 text-sm">No guardrails match your filters.</div>
           )}
-          {!isLoading && !error && filtered.map((g) => (
-            <GuardrailCard
-              key={g.id}
-              guardrail={g}
-              isSelected={selectedId === g.id}
-              isHeadersExpanded={expandedHeaders.has(g.id)}
-              onSelect={() => setSelectedId(selectedId === g.id ? null : g.id)}
-              onToggleForwardKey={() => toggleForwardKey(g.id)}
-              onToggleHeaders={() => toggleHeaders(g.id)}
-              onApprove={() => setConfirmAction({ id: g.id, action: "approve" })}
-              onReject={() => setConfirmAction({ id: g.id, action: "reject" })}
-            />
-          ))}
+          {!isLoading &&
+            !error &&
+            filtered.map((g) => (
+              <GuardrailCard
+                key={g.id}
+                guardrail={g}
+                isSelected={selectedId === g.id}
+                isHeadersExpanded={expandedHeaders.has(g.id)}
+                onSelect={() => setSelectedId(selectedId === g.id ? null : g.id)}
+                onToggleForwardKey={() => toggleForwardKey(g.id)}
+                onToggleHeaders={() => toggleHeaders(g.id)}
+                onApprove={() => setConfirmAction({ id: g.id, action: "approve" })}
+                onReject={() => setConfirmAction({ id: g.id, action: "reject" })}
+              />
+            ))}
         </div>
       </div>
       {selected && (
         <DetailPanel
           guardrail={selected}
           onClose={() => setSelectedId(null)}
-          onApprove={() =>
-            setConfirmAction({ id: selected.id, action: "approve" })
-          }
-          onReject={() =>
-            setConfirmAction({ id: selected.id, action: "reject" })
-          }
+          onApprove={() => setConfirmAction({ id: selected.id, action: "approve" })}
+          onReject={() => setConfirmAction({ id: selected.id, action: "reject" })}
           onToggleForwardKey={() => toggleForwardKey(selected.id)}
-          onUpdateCustomHeaders={(customHeaders) =>
-            updateCustomHeaders(selected.id, customHeaders)
-          }
-          onUpdateExtraHeaders={(extraHeaders) =>
-            updateExtraHeaders(selected.id, extraHeaders)
-          }
+          onUpdateCustomHeaders={(customHeaders) => updateCustomHeaders(selected.id, customHeaders)}
+          onUpdateExtraHeaders={(extraHeaders) => updateExtraHeaders(selected.id, extraHeaders)}
         />
       )}
       {confirmAction && (
         <ConfirmDialog
           action={confirmAction.action}
-          guardrailName={
-            guardrails.find((g) => g.id === confirmAction.id)?.name ?? ""
-          }
+          guardrailName={guardrails.find((g) => g.id === confirmAction.id)?.name ?? ""}
           onConfirm={() =>
-            confirmAction.action === "approve"
-              ? handleApprove(confirmAction.id)
-              : handleReject(confirmAction.id)
+            confirmAction.action === "approve" ? handleApprove(confirmAction.id) : handleReject(confirmAction.id)
           }
           onCancel={() => setConfirmAction(null)}
         />
@@ -1124,11 +994,7 @@ export function TeamGuardrailsTab({ accessToken }: TeamGuardrailsTabProps) {
             }
           }}
         >
-          <Form.Item
-            label="Team"
-            name="team_id"
-            rules={[{ required: true, message: "Select a team" }]}
-          >
+          <Form.Item label="Team" name="team_id" rules={[{ required: true, message: "Select a team" }]}>
             <TeamDropdown />
           </Form.Item>
           <Form.Item
@@ -1138,11 +1004,7 @@ export function TeamGuardrailsTab({ accessToken }: TeamGuardrailsTabProps) {
           >
             <Input placeholder="e.g. pii-detection" />
           </Form.Item>
-          <Form.Item
-            label="Mode"
-            name="mode"
-            rules={[{ required: true, message: "Select a mode" }]}
-          >
+          <Form.Item label="Mode" name="mode" rules={[{ required: true, message: "Select a mode" }]}>
             <Select>
               <Select.Option value="pre_call">Pre Call</Select.Option>
               <Select.Option value="post_call">Post Call</Select.Option>

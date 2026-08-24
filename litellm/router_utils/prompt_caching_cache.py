@@ -41,9 +41,7 @@ class PromptCachingCache:
             return obj.dict()
         elif isinstance(obj, dict):
             # If the object is a dictionary, serialize it with sorted keys
-            return json.dumps(
-                obj, sort_keys=True, separators=(",", ":")
-            )  # Standardize serialization
+            return json.dumps(obj, sort_keys=True, separators=(",", ":"))  # Standardize serialization
 
         elif isinstance(obj, list):
             # Serialize lists by ensuring each element is handled properly
@@ -160,9 +158,7 @@ class PromptCachingCache:
         # Use serialize_object for consistent and stable serialization
         data_to_hash = {}
         if cacheable_messages is not None:
-            serialized_messages = PromptCachingCache.serialize_object(
-                cacheable_messages
-            )
+            serialized_messages = PromptCachingCache.serialize_object(cacheable_messages)
             data_to_hash["messages"] = serialized_messages
         if tools is not None:
             serialized_tools = PromptCachingCache.serialize_object(tools)
@@ -193,9 +189,7 @@ class PromptCachingCache:
         if cache_key is None:
             return None
 
-        self.cache.set_cache(
-            cache_key, PromptCachingCacheValue(model_id=model_id), ttl=300
-        )
+        self.cache.set_cache(cache_key, PromptCachingCacheValue(model_id=model_id), ttl=300)
         return None
 
     async def async_add_model_id(

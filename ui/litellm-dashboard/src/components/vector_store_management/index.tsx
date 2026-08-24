@@ -1,5 +1,16 @@
 import React, { useState, useEffect } from "react";
-import { Icon, Button as TremorButton, Col, Text, Grid, TabGroup, TabList, Tab, TabPanels, TabPanel } from "@tremor/react";
+import {
+  Icon,
+  Button as TremorButton,
+  Col,
+  Text,
+  Grid,
+  TabGroup,
+  TabList,
+  Tab,
+  TabPanels,
+  TabPanel,
+} from "@tremor/react";
 import { RefreshIcon } from "@heroicons/react/outline";
 import { vectorStoreListCall, vectorStoreDeleteCall, credentialListCall, CredentialItem } from "../networking";
 import { VectorStore } from "./types";

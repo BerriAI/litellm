@@ -73,7 +73,9 @@ const PolicyTable: React.FC<PolicyTableProps> = ({
         const { primaryPolicy, versionCount } = row.original;
         return (
           <div className="flex items-center gap-2">
-            <Tooltip title={`${primaryPolicy.policy_name || "-"}${versionCount > 1 ? ` (${versionCount} versions)` : ""}`}>
+            <Tooltip
+              title={`${primaryPolicy.policy_name || "-"}${versionCount > 1 ? ` (${versionCount} versions)` : ""}`}
+            >
               <Button
                 size="xs"
                 variant="light"
@@ -99,9 +101,7 @@ const PolicyTable: React.FC<PolicyTableProps> = ({
         const policy = row.original.primaryPolicy;
         return (
           <Tooltip title={policy.description}>
-            <span className="text-xs truncate max-w-[200px] block">
-              {policy.description || "-"}
-            </span>
+            <span className="text-xs truncate max-w-[200px] block">{policy.description || "-"}</span>
           </Tooltip>
         );
       },
@@ -231,8 +231,7 @@ const PolicyTable: React.FC<PolicyTableProps> = ({
                     icon={TrashIcon}
                     size="sm"
                     onClick={() =>
-                      policy.policy_id &&
-                      onDeleteClick(policy.policy_id, policy.policy_name || "Unnamed Policy")
+                      policy.policy_id && onDeleteClick(policy.policy_id, policy.policy_name || "Unnamed Policy")
                     }
                     className="cursor-pointer hover:text-red-500"
                   />

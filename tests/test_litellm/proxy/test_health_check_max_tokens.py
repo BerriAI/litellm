@@ -5,7 +5,9 @@ import pytest
 from litellm.litellm_core_utils.health_check_helpers import HealthCheckHelpers
 from litellm.proxy import health_check as hc_module
 from litellm.proxy.health_check import (
+    _is_semantic_auto_router_deployment,
     _resolve_health_check_max_tokens,
+    _resolve_health_check_mode,
     _update_litellm_params_for_health_check,
 )
 
@@ -13,7 +15,7 @@ from litellm.proxy.health_check import (
 @pytest.mark.asyncio
 async def test_update_litellm_params_max_tokens_default(monkeypatch):
     """
-    Test that max_tokens defaults to 5 for non-wildcard models.
+    Test that max_tokens defaults to 16 for non-wildcard models.
     """
     monkeypatch.setattr(hc_module, "BACKGROUND_HEALTH_CHECK_MAX_TOKENS", None)
     monkeypatch.setattr(hc_module, "BACKGROUND_HEALTH_CHECK_MAX_TOKENS_REASONING", None)
@@ -22,7 +24,7 @@ async def test_update_litellm_params_max_tokens_default(monkeypatch):
 
     updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
 
-    assert updated_params["max_tokens"] == 5
+    assert updated_params["max_tokens"] == 16
 
 
 @pytest.mark.asyncio
@@ -48,15 +50,14 @@ async def test_update_litellm_params_max_tokens_wildcard():
 
     updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
 
-    # Should not be set to 1
-    assert "max_tokens" not in updated_params or updated_params["max_tokens"] != 1
+    assert "max_tokens" not in updated_params
 
 
 @pytest.mark.asyncio
 async def test_ahealth_check_wildcard_models_respects_max_tokens():
     """
     Test that ahealth_check_wildcard_models respects max_tokens if passed,
-    otherwise defaults to 10.
+    otherwise defaults to 16.
     """
     with (
         patch(
@@ -65,7 +66,7 @@ async def test_ahealth_check_wildcard_models_respects_max_tokens():
         ),
         patch("litellm.acompletion", new_callable=AsyncMock),
     ):
-        # Test Case 1: No max_tokens passed, should default to 10
+        # Test Case 1: No max_tokens passed, should default to 16
         model_params = {}
         await HealthCheckHelpers.ahealth_check_wildcard_models(
             model="openai/*",
@@ -73,7 +74,7 @@ async def test_ahealth_check_wildcard_models_respects_max_tokens():
             model_params=model_params,
             litellm_logging_obj=MagicMock(),
         )
-        assert model_params["max_tokens"] == 10
+        assert model_params["max_tokens"] == 16
 
         # Test Case 2: Custom health_check_max_tokens passed via model_params, should be respected
         model_params = {"max_tokens": 3}
@@ -160,14 +161,14 @@ def test_explicit_health_check_max_tokens_beats_reasoning_specific():
 
 
 def test_reasoning_specific_falls_through_when_wrong_branch_only(monkeypatch):
-    """Only non-reasoning key set but model is reasoning → fall back to default 5."""
+    """Only non-reasoning key set but model is reasoning → fall back to default 16."""
     monkeypatch.setattr(hc_module, "BACKGROUND_HEALTH_CHECK_MAX_TOKENS", None)
     monkeypatch.setattr(hc_module, "BACKGROUND_HEALTH_CHECK_MAX_TOKENS_REASONING", None)
     model_info = {"health_check_max_tokens_non_reasoning": 3}
     litellm_params = {"model": "openai/o1"}
 
     with patch.object(hc_module.litellm, "supports_reasoning", return_value=True):
-        assert _resolve_health_check_max_tokens(model_info, litellm_params) == 5
+        assert _resolve_health_check_max_tokens(model_info, litellm_params) == 16
 
 
 @pytest.mark.asyncio
@@ -180,7 +181,7 @@ async def test_background_split_env_reasoning_vs_non_reasoning(monkeypatch):
 
     with patch.object(hc_module.litellm, "supports_reasoning", return_value=False):
         updated = _update_litellm_params_for_health_check(model_info, litellm_params)
-        assert updated["max_tokens"] == 5
+        assert updated["max_tokens"] == 16
 
     litellm_params2 = {"model": "openai/o1"}
     with patch.object(hc_module.litellm, "supports_reasoning", return_value=True):
@@ -274,7 +275,7 @@ def test_chat_mode_still_injects_max_tokens():
 
     updated = _update_litellm_params_for_health_check(model_info, litellm_params)
 
-    assert updated["max_tokens"] == 5
+    assert updated["max_tokens"] == 16
 
 
 def test_no_mode_still_injects_max_tokens():
@@ -284,7 +285,7 @@ def test_no_mode_still_injects_max_tokens():
 
     updated = _update_litellm_params_for_health_check(model_info, litellm_params)
 
-    assert updated["max_tokens"] == 5
+    assert updated["max_tokens"] == 16
 
 
 # ---------------------------------------------------------------------------
@@ -300,11 +301,9 @@ def test_no_mode_still_injects_max_tokens():
 
 @pytest.mark.parametrize("mode", ["chat", "completion", "responses"])
 def test_chat_style_modes_inject_max_tokens(mode):
-    updated = _update_litellm_params_for_health_check(
-        {"mode": mode}, {"model": f"openai/dummy-{mode}"}
-    )
+    updated = _update_litellm_params_for_health_check({"mode": mode}, {"model": f"openai/dummy-{mode}"})
 
-    assert updated["max_tokens"] == 5
+    assert updated["max_tokens"] == 16
 
 
 @pytest.mark.parametrize(
@@ -323,9 +322,7 @@ def test_chat_style_modes_inject_max_tokens(mode):
     ],
 )
 def test_non_chat_modes_skip_max_tokens(mode):
-    updated = _update_litellm_params_for_health_check(
-        {"mode": mode}, {"model": f"openai/dummy-{mode}"}
-    )
+    updated = _update_litellm_params_for_health_check({"mode": mode}, {"model": f"openai/dummy-{mode}"})
 
     assert "max_tokens" not in updated
 
@@ -340,7 +337,7 @@ def test_explicit_override_true_forces_injection_outside_allowlist():
 
     updated = _update_litellm_params_for_health_check(model_info, litellm_params)
 
-    assert updated["max_tokens"] == 5
+    assert updated["max_tokens"] == 16
 
 
 def test_explicit_override_false_suppresses_injection_inside_allowlist():
@@ -361,33 +358,188 @@ def test_update_litellm_params_health_check_reasoning_effort():
     assert out.get("reasoning_effort") == "low"
 
     model_info = {"mode": "chat", "health_check_reasoning_effort": "none"}
-    out = _update_litellm_params_for_health_check(
-        model_info, {"model": "openai/gpt-5", "api_key": "x"}
-    )
+    out = _update_litellm_params_for_health_check(model_info, {"model": "openai/gpt-5", "api_key": "x"})
     assert out.get("reasoning_effort") == "none"
 
     model_info = {"mode": "completion", "health_check_reasoning_effort": "low"}
-    out = _update_litellm_params_for_health_check(
-        model_info, {"model": "openai/gpt-5", "api_key": "x"}
-    )
+    out = _update_litellm_params_for_health_check(model_info, {"model": "openai/gpt-5", "api_key": "x"})
     assert out.get("reasoning_effort") == "low"
 
     model_info = {
         "health_check_reasoning_effort": {"effort": "none", "summary": "auto"},
     }
-    out = _update_litellm_params_for_health_check(
-        model_info, {"model": "openai/gpt-5.1", "api_key": "x"}
-    )
+    out = _update_litellm_params_for_health_check(model_info, {"model": "openai/gpt-5.1", "api_key": "x"})
     assert out.get("reasoning_effort") == {"effort": "none", "summary": "auto"}
 
     model_info = {"mode": "embedding", "health_check_reasoning_effort": "low"}
-    out = _update_litellm_params_for_health_check(
-        model_info, {"model": "text-embedding-3-small", "api_key": "x"}
-    )
+    out = _update_litellm_params_for_health_check(model_info, {"model": "text-embedding-3-small", "api_key": "x"})
     assert "reasoning_effort" not in out
 
     model_info = {}
-    out = _update_litellm_params_for_health_check(
-        model_info, {"model": "openai/gpt-4o", "api_key": "x"}
-    )
+    out = _update_litellm_params_for_health_check(model_info, {"model": "openai/gpt-4o", "api_key": "x"})
     assert "reasoning_effort" not in out
+
+
+# ---------------------------------------------------------------------------
+# Bedrock embedding deployments declared without an explicit `model_info.mode`.
+#
+# The health-check builder used to treat a missing mode as `chat`, so it
+# injected `max_tokens` into the embedding probe. Bedrock embeddings reject it
+# with 400 "extraneous key [max_tokens]". It also stripped the `bedrock/`
+# routing prefix without pinning the provider, so a cross-region id like
+# `us.cohere.embed-v4:0` failed downstream with "LLM Provider NOT provided".
+# Mode is now resolved from the model cost map (which understands `bedrock/`
+# and `us.`/`eu.`/`apac.` prefixes) and the provider is pinned to `bedrock`.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "deployment_model, expected_request_model",
+    [
+        ("bedrock/amazon.titan-embed-text-v2:0", "amazon.titan-embed-text-v2:0"),
+        ("bedrock/us.cohere.embed-v4:0", "us.cohere.embed-v4:0"),
+    ],
+)
+def test_bedrock_embedding_without_explicit_mode_skips_max_tokens(deployment_model, expected_request_model):
+    """Embedding mode auto-detected from model cost map -> no max_tokens, provider pinned."""
+    assert _resolve_health_check_mode({}, {"model": deployment_model}) == "embedding"
+
+    updated = _update_litellm_params_for_health_check({}, {"model": deployment_model})
+
+    assert "max_tokens" not in updated
+    assert updated["custom_llm_provider"] == "bedrock"
+    assert updated["model"] == expected_request_model
+
+
+def test_resolve_health_check_mode_prefers_explicit_model_info_mode():
+    """An operator-set mode wins over model-cost lookup."""
+    assert _resolve_health_check_mode({"mode": "chat"}, {"model": "bedrock/amazon.titan-embed-text-v2:0"}) == "chat"
+
+
+def test_resolve_health_check_mode_unknown_model_returns_none():
+    assert _resolve_health_check_mode({}, {"model": "bedrock/not-a-real-model-xyz"}) is None
+    assert _resolve_health_check_mode({}, {}) is None
+
+
+def test_bedrock_chat_without_mode_still_injects_max_tokens_and_pins_provider():
+    """Regression guard: chat-style Bedrock deployments keep max_tokens and get the provider pin."""
+    updated = _update_litellm_params_for_health_check(
+        {}, {"model": "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"}
+    )
+
+    assert updated["max_tokens"] == 16
+    assert updated["custom_llm_provider"] == "bedrock"
+    assert updated["model"] == "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+
+
+def test_bedrock_prefix_strip_preserves_explicit_custom_llm_provider():
+    """An operator-set provider (e.g. bedrock_converse) must survive the prefix strip.
+
+    The pin only fills in a provider when the deployment left it blank; it must
+    not clobber a more specific one, otherwise a converse deployment would be
+    probed against the Invoke endpoint and report a spurious failure.
+    """
+    updated = _update_litellm_params_for_health_check(
+        {},
+        {
+            "model": "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+            "custom_llm_provider": "bedrock_converse",
+        },
+    )
+
+    assert updated["custom_llm_provider"] == "bedrock_converse"
+    assert updated["model"] == "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+
+
+@pytest.mark.asyncio
+async def test_run_model_health_check_threads_resolved_mode_to_ahealth_check():
+    """The resolved mode must reach `ahealth_check`, not just the params builder.
+
+    A Bedrock embedding deployment declared without an explicit `model_info.mode`
+    has to be probed with `mode="embedding"` so the call routes to the embedding
+    handler; if the resolution were dropped it would fall back to `chat`. This
+    also guards that the embedding params (no `max_tokens`, provider pinned) are
+    the ones actually handed to the probe.
+    """
+    fake_ahealth_check = AsyncMock(return_value={})
+    model = {
+        "litellm_params": {"model": "bedrock/amazon.titan-embed-text-v2:0"},
+        "model_info": {},
+    }
+
+    with patch.object(hc_module.litellm, "ahealth_check", fake_ahealth_check):
+        await hc_module._run_model_health_check(model)
+
+    assert fake_ahealth_check.call_args.kwargs["mode"] == "embedding"
+    probed_params = fake_ahealth_check.call_args.args[0]
+    assert "max_tokens" not in probed_params
+    assert probed_params["custom_llm_provider"] == "bedrock"
+    assert probed_params["model"] == "amazon.titan-embed-text-v2:0"
+
+
+def test_autodetected_embedding_skips_reasoning_effort():
+    """reasoning_effort must not leak into an embedding probe whose mode is auto-detected.
+
+    Same bug class as the max_tokens fix: with no explicit `model_info.mode`, the
+    reasoning-effort gate used to read the raw (missing) mode and treat it as
+    chat-like, so a configured `health_check_reasoning_effort` was injected into a
+    Bedrock embedding probe, which embeddings reject as an unknown field. The mode
+    is now resolved from the cost map, so embeddings are excluded.
+    """
+    updated = _update_litellm_params_for_health_check(
+        {"health_check_reasoning_effort": "low"},
+        {"model": "bedrock/amazon.titan-embed-text-v2:0"},
+    )
+
+    assert "reasoning_effort" not in updated
+    assert "max_tokens" not in updated
+
+
+# ---------------------------------------------------------------------------
+# auto_router (semantic router) deployments must be skipped by health checks.
+#
+# These are meta-routers that select among real LLM deployments at request
+# time. They have no LLM endpoint to probe. Before this fix, the health check
+# passed model="auto_router/router_1" to get_llm_provider(), which raised
+# BadRequestError: "Unmapped LLM provider for this endpoint" because
+# auto_router is not a real LLM provider.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "model, expected",
+    [
+        ("auto_router/router_1", True),
+        ("auto_router/my_router", True),
+        ("auto_router/complexity_router", False),
+        ("auto_router/adaptive_router", False),
+        ("auto_router/quality_router", False),
+        ("auto_router/adaptive_router/subpath", False),
+        ("gpt-4", False),
+        ("openai/gpt-4", False),
+        ("bedrock/claude", False),
+    ],
+)
+def test_is_semantic_auto_router_deployment(model, expected):
+    assert _is_semantic_auto_router_deployment({"model": model}) == expected
+
+
+@pytest.mark.asyncio
+async def test_run_model_health_check_skips_auto_router_deployment():
+    """auto_router deployments return {} (healthy) without calling ahealth_check."""
+    fake_ahealth_check = AsyncMock(return_value={})
+    model = {
+        "litellm_params": {
+            "model": "auto_router/router_1",
+            "auto_router_config": '{"routes": []}',
+            "auto_router_default_model": "gpt-4o-mini",
+            "auto_router_embedding_model": "text-embedding-3-small",
+        },
+        "model_info": {},
+    }
+
+    with patch.object(hc_module.litellm, "ahealth_check", fake_ahealth_check):
+        result = await hc_module._run_model_health_check(model)
+
+    fake_ahealth_check.assert_not_called()
+    assert result == {}

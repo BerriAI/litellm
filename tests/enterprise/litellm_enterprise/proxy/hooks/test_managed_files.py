@@ -1404,7 +1404,7 @@ async def test_store_unified_file_id_with_none_file_object():
     from litellm.proxy._types import UserAPIKeyAuth
 
     prisma_client = AsyncMock()
-    prisma_client.db.litellm_managedfiletable.create = AsyncMock(
+    prisma_client.db.litellm_managedfiletable.upsert = AsyncMock(
         return_value=MagicMock()
     )
     internal_usage_cache = MagicMock()
@@ -1424,11 +1424,73 @@ async def test_store_unified_file_id_with_none_file_object():
         user_api_key_dict=UserAPIKeyAuth(user_id="test-user"),
     )
 
-    # Verify DB create was called with expected data (without file_object)
-    prisma_client.db.litellm_managedfiletable.create.assert_called_once()
-    call_args = prisma_client.db.litellm_managedfiletable.create.call_args
-    assert call_args.kwargs["data"]["unified_file_id"] == "test-unified-file-id"
-    assert "file_object" not in call_args.kwargs["data"]
+    # Verify DB upsert was called idempotently with expected create data (without file_object)
+    prisma_client.db.litellm_managedfiletable.upsert.assert_called_once()
+    call_args = prisma_client.db.litellm_managedfiletable.upsert.call_args
+    assert call_args.kwargs["where"] == {"unified_file_id": "test-unified-file-id"}
+    create_data = call_args.kwargs["data"]["create"]
+    assert create_data["unified_file_id"] == "test-unified-file-id"
+    assert "file_object" not in create_data
+
+
+@pytest.mark.asyncio
+async def test_store_unified_file_id_updates_file_metadata_on_existing_row():
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.types.llms.openai import OpenAIFileObject
+
+    prisma_client = AsyncMock()
+    prisma_client.db.litellm_managedfiletable.upsert = AsyncMock(
+        return_value=MagicMock()
+    )
+    internal_usage_cache = MagicMock()
+    internal_usage_cache.async_set_cache = AsyncMock()
+
+    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+        internal_usage_cache=internal_usage_cache,
+        prisma_client=prisma_client,
+    )
+    user_api_key_dict = UserAPIKeyAuth(user_id="test-user")
+
+    await proxy_managed_files.store_unified_file_id(
+        file_id="test-unified-file-id",
+        file_object=None,
+        litellm_parent_otel_span=None,
+        model_mappings={"model-123": "file-provider-xyz"},
+        user_api_key_dict=user_api_key_dict,
+    )
+
+    file_object = OpenAIFileObject(
+        id="file-provider-xyz",
+        object="file",
+        bytes=1234,
+        created_at=1234567890,
+        filename="output.jsonl",
+        purpose="batch_output",
+        status="processed",
+    )
+    file_object._hidden_params = {
+        "storage_backend": "s3",
+        "storage_url": "s3://bucket/output.jsonl",
+    }
+
+    await proxy_managed_files.store_unified_file_id(
+        file_id="test-unified-file-id",
+        file_object=file_object,
+        litellm_parent_otel_span=None,
+        model_mappings={"model-123": "file-provider-xyz"},
+        user_api_key_dict=user_api_key_dict,
+    )
+
+    first_update = prisma_client.db.litellm_managedfiletable.upsert.await_args_list[
+        0
+    ].kwargs["data"]["update"]
+    second_update = prisma_client.db.litellm_managedfiletable.upsert.await_args_list[
+        1
+    ].kwargs["data"]["update"]
+    assert "file_object" not in first_update
+    assert second_update["file_object"] == file_object.model_dump_json()
+    assert second_update["storage_backend"] == "s3"
+    assert second_update["storage_url"] == "s3://bucket/output.jsonl"
 
 
 @pytest.mark.asyncio

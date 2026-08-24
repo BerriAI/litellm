@@ -135,7 +135,7 @@ def render_cli_sso_success_page() -> str:
                 font-size: 14px;
             }}
 
-            .countdown {{
+            .status {{
                 color: #64748b;
                 font-size: 14px;
                 font-weight: 500;
@@ -183,23 +183,11 @@ def render_cli_sso_success_page() -> str:
                 <p>You can now use LiteLLM CLI commands with your authenticated session.</p>
             </div>
             
-            <div class="countdown" id="countdown">This window will close in 3 seconds...</div>
+            <div class="status">You can now close this window and return to your terminal.</div>
         </div>
-        
+
         <script>
-            let seconds = 3;
-            const countdownElement = document.getElementById('countdown');
-            
-            const countdown = setInterval(function() {{
-                seconds--;
-                if (seconds > 0) {{
-                    countdownElement.textContent = `This window will close in ${{seconds}} second${{seconds === 1 ? '' : 's'}}...`;
-                }} else {{
-                    countdownElement.textContent = 'Closing...';
-                    clearInterval(countdown);
-                    window.close();
-                }}
-            }}, 1000);
+            window.close();
         </script>
     </body>
     </html>

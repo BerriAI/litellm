@@ -198,7 +198,10 @@ const ContentFilterDetails: React.FC<ContentFilterDetailsProps> = ({ response })
                     </KV>
                     {detection.severity && (
                       <KV label="Severity:">
-                        {chip(detection.severity, detection.severity === "high" ? "red" : detection.severity === "medium" ? "amber" : "slate")}
+                        {chip(
+                          detection.severity,
+                          detection.severity === "high" ? "red" : detection.severity === "medium" ? "amber" : "slate",
+                        )}
                       </KV>
                     )}
                   </div>
@@ -221,4 +224,3 @@ const ContentFilterDetails: React.FC<ContentFilterDetailsProps> = ({ response })
 };
 
 export default ContentFilterDetails;
-

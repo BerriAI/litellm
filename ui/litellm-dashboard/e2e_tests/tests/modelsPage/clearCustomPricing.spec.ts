@@ -62,9 +62,7 @@ test.describe("Clear custom pricing on a deployment", () => {
     }
   });
 
-  test("UI sends null for cleared pricing and backend removes the override", async ({
-    page,
-  }) => {
+  test("UI sends null for cleared pricing and backend removes the override", async ({ page }) => {
     // Navigate to the model detail view.
     await page.goto("/ui");
     await page.getByText("Models + Endpoints").click();
@@ -97,34 +95,24 @@ test.describe("Clear custom pricing on a deployment", () => {
 
     // Capture the outgoing PATCH so we can assert the UI sends explicit nulls.
     const patchPromise = page.waitForRequest(
-      (req) =>
-        req.method() === "PATCH" &&
-        req.url().includes(`/model/${createdModelId}/update`)
+      (req) => req.method() === "PATCH" && req.url().includes(`/model/${createdModelId}/update`),
     );
     await page.getByRole("button", { name: "Save Changes" }).click();
     const patchReq = await patchPromise;
     const patchBody = JSON.parse(patchReq.postData() ?? "{}");
-    expect(
-      patchBody.litellm_params.input_cost_per_token,
-      "UI sends explicit null for cleared input cost"
-    ).toBeNull();
-    expect(
-      patchBody.litellm_params.output_cost_per_token,
-      "UI sends explicit null for cleared output cost"
-    ).toBeNull();
+    expect(patchBody.litellm_params.input_cost_per_token, "UI sends explicit null for cleared input cost").toBeNull();
+    expect(patchBody.litellm_params.output_cost_per_token, "UI sends explicit null for cleared output cost").toBeNull();
     expect(
       patchBody.litellm_params.cache_read_input_token_cost,
-      "UI sends explicit null for cleared cache_read cost"
+      "UI sends explicit null for cleared cache_read cost",
     ).toBeNull();
     expect(
       patchBody.litellm_params.cache_creation_input_token_cost,
-      "UI sends explicit null for cleared cache_write cost"
+      "UI sends explicit null for cleared cache_write cost",
     ).toBeNull();
 
     // Success toast confirms the save was accepted.
-    await expect(
-      page.getByText("Model settings updated successfully")
-    ).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText("Model settings updated successfully")).toBeVisible({ timeout: 10_000 });
 
     // Verify via the management API: the user-set rate is gone from both blobs.
     // The cost-map may synthesize a default for known providers in the response,
@@ -132,46 +120,40 @@ test.describe("Clear custom pricing on a deployment", () => {
     // undefined.
     const infoRes = await page.request.get(
       `/v2/model/info?include_team_models=true&page=1&size=100&modelId=${createdModelId}`,
-      { headers: { Authorization: `Bearer ${masterKey}` } }
+      { headers: { Authorization: `Bearer ${masterKey}` } },
     );
     expect(infoRes.ok()).toBe(true);
     const infoBody = await infoRes.json();
-    const row = (infoBody.data ?? infoBody).find?.(
-      (m: any) => m?.model_info?.id === createdModelId
-    );
+    const row = (infoBody.data ?? infoBody).find?.((m: any) => m?.model_info?.id === createdModelId);
     expect(row, "model info row").toBeTruthy();
 
-    expect(
-      "input_cost_per_token" in row.litellm_params,
-      "litellm_params.input_cost_per_token key removed"
-    ).toBe(false);
-    expect(
-      "output_cost_per_token" in row.litellm_params,
-      "litellm_params.output_cost_per_token key removed"
-    ).toBe(false);
+    expect("input_cost_per_token" in row.litellm_params, "litellm_params.input_cost_per_token key removed").toBe(false);
+    expect("output_cost_per_token" in row.litellm_params, "litellm_params.output_cost_per_token key removed").toBe(
+      false,
+    );
     expect(
       "cache_read_input_token_cost" in row.litellm_params,
-      "litellm_params.cache_read_input_token_cost key removed"
+      "litellm_params.cache_read_input_token_cost key removed",
     ).toBe(false);
     expect(
       "cache_creation_input_token_cost" in row.litellm_params,
-      "litellm_params.cache_creation_input_token_cost key removed"
+      "litellm_params.cache_creation_input_token_cost key removed",
     ).toBe(false);
     expect(
       row.model_info.input_cost_per_token,
-      "model_info.input_cost_per_token no longer the seeded override"
+      "model_info.input_cost_per_token no longer the seeded override",
     ).not.toBe(SEED_INPUT_PER_TOKEN);
     expect(
       row.model_info.output_cost_per_token,
-      "model_info.output_cost_per_token no longer the seeded override"
+      "model_info.output_cost_per_token no longer the seeded override",
     ).not.toBe(SEED_OUTPUT_PER_TOKEN);
     expect(
       row.model_info.cache_read_input_token_cost,
-      "model_info.cache_read_input_token_cost no longer the seeded override"
+      "model_info.cache_read_input_token_cost no longer the seeded override",
     ).not.toBe(SEED_CACHE_READ_PER_TOKEN);
     expect(
       row.model_info.cache_creation_input_token_cost,
-      "model_info.cache_creation_input_token_cost no longer the seeded override"
+      "model_info.cache_creation_input_token_cost no longer the seeded override",
     ).not.toBe(SEED_CACHE_WRITE_PER_TOKEN);
   });
 });

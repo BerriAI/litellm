@@ -139,9 +139,7 @@ describe("CredentialsPanel", () => {
       // Credential row still renders (read parity).
       expect(screen.getByText("openai-key")).toBeInTheDocument();
       // But no Add Credential button (write blocked).
-      expect(
-        screen.queryByRole("button", { name: /add credential/i }),
-      ).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /add credential/i })).not.toBeInTheDocument();
     });
 
     it("hides Edit / Delete buttons on existing credentials for Admin Viewer", () => {

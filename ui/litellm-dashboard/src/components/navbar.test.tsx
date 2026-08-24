@@ -72,7 +72,10 @@ vi.mock("./Navbar/UserDropdown/UserDropdown", async (importOriginal) => {
 });
 
 vi.mock("@/utils/proxyUtils", () => ({
-  fetchProxySettings: vi.fn(),
+  fetchProxySettings: vi.fn().mockResolvedValue({
+    PROXY_BASE_URL: "",
+    PROXY_LOGOUT_URL: "https://example.com/logout",
+  }),
 }));
 
 // Mock CommunityEngagementButtons component
@@ -137,8 +140,6 @@ Object.defineProperty(window, "location", {
 
 describe("Navbar", () => {
   const defaultProps = {
-    proxySettings: {},
-    setProxySettings: vi.fn(),
     accessToken: "test-token",
     isPublicPage: false,
   };
@@ -298,7 +299,9 @@ describe("Navbar", () => {
 
     const cookieUtils = vi.mocked(await import("@/utils/cookieUtils"));
     expect(cookieUtils.clearTokenCookies).toHaveBeenCalled();
-    expect(window.location.href).toBe("");
+    await waitFor(() => {
+      expect(window.location.href).toBe("https://example.com/logout");
+    });
   });
 
   it("should not render dark mode toggle slider", () => {

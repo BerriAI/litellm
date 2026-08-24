@@ -43,9 +43,7 @@ class NvidiaRivaAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
     optional TLS via ``use_ssl``).
     """
 
-    def get_supported_openai_params(
-        self, model: str
-    ) -> List[OpenAIAudioTranscriptionOptionalParams]:
+    def get_supported_openai_params(self, model: str) -> List[OpenAIAudioTranscriptionOptionalParams]:
         # Riva natively understands language + word timestamps.
         # `response_format` is honored at response-shaping time in the handler.
         return ["language", "response_format", "timestamp_granularities"]
@@ -79,12 +77,8 @@ class NvidiaRivaAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
 
         return optional_params
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, Headers]
-    ) -> BaseLLMException:
-        return NvidiaRivaException(
-            message=error_message, status_code=status_code, headers=headers
-        )
+    def get_error_class(self, error_message: str, status_code: int, headers: Union[dict, Headers]) -> BaseLLMException:
+        return NvidiaRivaException(message=error_message, status_code=status_code, headers=headers)
 
     def transform_audio_transcription_request(
         self,
@@ -141,9 +135,7 @@ class NvidiaRivaAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         # gRPC auth is constructed in the handler, not via HTTP headers.
         return headers
 
-    def _build_recognition_config_dict(
-        self, model: str, optional_params: dict
-    ) -> Dict[str, Any]:
+    def _build_recognition_config_dict(self, model: str, optional_params: dict) -> Dict[str, Any]:
         """
         Build the Riva ``RecognitionConfig`` shape as a plain dict.
 
@@ -156,28 +148,18 @@ class NvidiaRivaAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         """
         return {
             "language_code": optional_params.get("language_code", "en-US"),
-            "sample_rate_hertz": optional_params.get(
-                "sample_rate_hertz", RIVA_TARGET_SAMPLE_RATE_HZ
-            ),
+            "sample_rate_hertz": optional_params.get("sample_rate_hertz", RIVA_TARGET_SAMPLE_RATE_HZ),
             "encoding": optional_params.get("encoding", RIVA_TARGET_ENCODING),
-            "audio_channel_count": optional_params.get(
-                "audio_channel_count", RIVA_TARGET_NUM_CHANNELS
-            ),
-            "enable_automatic_punctuation": optional_params.get(
-                "enable_automatic_punctuation", True
-            ),
-            "enable_word_time_offsets": bool(
-                optional_params.get("enable_word_time_offsets", False)
-            ),
+            "audio_channel_count": optional_params.get("audio_channel_count", RIVA_TARGET_NUM_CHANNELS),
+            "enable_automatic_punctuation": optional_params.get("enable_automatic_punctuation", True),
+            "enable_word_time_offsets": bool(optional_params.get("enable_word_time_offsets", False)),
             "max_alternatives": optional_params.get("max_alternatives", 1),
             "model": optional_params.get("riva_model_name", ""),
             "verbatim_transcripts": optional_params.get("verbatim_transcripts", False),
             "profanity_filter": optional_params.get("profanity_filter", False),
         }
 
-    def _build_endpointing_config_dict(
-        self, optional_params: dict
-    ) -> Optional[Dict[str, Any]]:
+    def _build_endpointing_config_dict(self, optional_params: dict) -> Optional[Dict[str, Any]]:
         """
         Translate an OpenAI-style ``chunking_strategy`` into Riva's
         ``EndpointingConfig`` shape, or pass through an explicit
@@ -257,9 +239,7 @@ class NvidiaRivaAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         only ``result.is_final`` entries (empty/non-final chunks are
         ignored).
         """
-        full_transcript = "".join(
-            (item.get("transcript") or "") for item in final_results
-        ).strip()
+        full_transcript = "".join((item.get("transcript") or "") for item in final_results).strip()
 
         response = TranscriptionResponse(text=full_transcript)
         response["task"] = "transcribe"

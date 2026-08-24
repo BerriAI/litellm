@@ -426,6 +426,7 @@ class TestUpdateLitellmSettingOrdering:
             settings=new_settings,
             settings_key="default_team_params",
             success_message="Updated",
+            user_api_key_dict=UserAPIKeyAuth(user_id="test-admin"),
         )
 
         # In-memory value should be the NEW value, not the stale one
@@ -459,6 +460,7 @@ class TestUpdateLitellmSettingOrdering:
                 settings=DefaultTeamSSOParams(max_budget=100.0),
                 settings_key="default_team_params",
                 success_message="Updated",
+                user_api_key_dict=UserAPIKeyAuth(user_id="test-admin"),
             )
 
         assert exc_info.value.status_code == 500

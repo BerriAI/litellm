@@ -20,13 +20,9 @@ class VertexAIError(Exception):
     def __init__(self, status_code, message):
         self.status_code = status_code
         self.message = message
-        self.request = httpx.Request(
-            method="POST", url=" https://cloud.google.com/vertex-ai/"
-        )
+        self.request = httpx.Request(method="POST", url=" https://cloud.google.com/vertex-ai/")
         self.response = httpx.Response(status_code=status_code, request=self.request)
-        super().__init__(
-            self.message
-        )  # Call the base class constructor with the parameters it needs
+        super().__init__(self.message)  # Call the base class constructor with the parameters it needs
 
 
 class PartnerModelPrefixes(str, Enum):
@@ -125,9 +121,7 @@ class VertexAIPartnerModels(VertexBase):
                 message=f"""vertexai import failed please run `pip install -U "google-cloud-aiplatform>=1.38"`. Got error: {e}""",
             )
 
-        if not (
-            hasattr(vertexai, "preview") or hasattr(vertexai.preview, "language_models")
-        ):
+        if not (hasattr(vertexai, "preview") or hasattr(vertexai.preview, "language_models")):
             raise VertexAIError(
                 status_code=400,
                 message="""Upgrade vertex ai. Run `pip install "google-cloud-aiplatform>=1.38"`""",
@@ -174,9 +168,7 @@ class VertexAIPartnerModels(VertexBase):
 
             if "codestral" in model and litellm_params.get("text_completion") is True:
                 optional_params["model"] = model
-                text_completion_model_response = litellm.TextCompletionResponse(
-                    stream=stream
-                )
+                text_completion_model_response = litellm.TextCompletionResponse(stream=stream)
                 return codestral_fim_completions.completion(
                     model=model,
                     messages=messages,
@@ -194,9 +186,11 @@ class VertexAIPartnerModels(VertexBase):
                     encoding=encoding,
                 )
             elif "claude" in model:
-                if headers is None:
-                    headers = {}
-                headers.update({"Authorization": "Bearer {}".format(access_token)})
+                # Build a new dict so we never mutate the shared deployment extra_headers object.
+                headers = {
+                    **(headers or {}),
+                    "Authorization": "Bearer {}".format(access_token),
+                }
 
                 optional_params.update(
                     {

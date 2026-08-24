@@ -30,9 +30,7 @@ def load_custom_secret_manager(config_file_path: Optional[str] = None) -> None:
     """
 
     if not config_file_path:
-        raise ValueError(
-            "CustomSecretManagerException - config_file_path is required to load custom secret manager"
-        )
+        raise ValueError("CustomSecretManagerException - config_file_path is required to load custom secret manager")
 
     # Get the custom_secret_manager class path from settings
     if litellm._key_management_settings is None:
@@ -40,9 +38,7 @@ def load_custom_secret_manager(config_file_path: Optional[str] = None) -> None:
             "CustomSecretManagerException - key_management_settings is required with custom_secret_manager field"
         )
 
-    custom_secret_manager_path = getattr(
-        litellm._key_management_settings, "custom_secret_manager", None
-    )
+    custom_secret_manager_path = getattr(litellm._key_management_settings, "custom_secret_manager", None)
 
     if not custom_secret_manager_path:
         raise ValueError(
@@ -64,9 +60,7 @@ def load_custom_secret_manager(config_file_path: Optional[str] = None) -> None:
 
     spec = importlib.util.spec_from_file_location(_class_name, module_file_path)  # type: ignore
     if not spec:
-        raise ImportError(
-            f"Could not find a module specification for {module_file_path}"
-        )
+        raise ImportError(f"Could not find a module specification for {module_file_path}")
 
     module = importlib.util.module_from_spec(spec)  # type: ignore
     spec.loader.exec_module(module)  # type: ignore
@@ -74,9 +68,7 @@ def load_custom_secret_manager(config_file_path: Optional[str] = None) -> None:
 
     # Validate that it's a CustomSecretManager subclass
     if not issubclass(_secret_manager_class, CustomSecretManager):
-        raise TypeError(
-            f"CustomSecretManagerException - {_class_name} must be a subclass of CustomSecretManager"
-        )
+        raise TypeError(f"CustomSecretManagerException - {_class_name} must be a subclass of CustomSecretManager")
 
     # Instantiate the custom secret manager
     _secret_manager_instance = _secret_manager_class()

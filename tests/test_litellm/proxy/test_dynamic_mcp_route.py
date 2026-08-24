@@ -486,3 +486,57 @@ async def test_dynamic_mcp_route_empty_access_group_returns_404():
             await dynamic_mcp_route("empty_group", request)
 
     assert exc_info.value.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# 6. Unexpected exception → 500 without leaking stack trace (CWE-209)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_dynamic_mcp_route_unexpected_exception_returns_500_without_traceback():
+    """CWE-209: an unexpected exception must return 500 with a generic message,
+    never leaking str(e) or a Python traceback to the caller."""
+    from litellm.proxy.proxy_server import dynamic_mcp_route
+
+    request = _make_request("/boom/mcp")
+
+    fake_mgr = MagicMock()
+    fake_mgr.get_mcp_server_by_name = MagicMock(
+        side_effect=RuntimeError("internal host: redis://10.0.0.1:6379")
+    )
+
+    with patch(_MCP_MANAGER, fake_mgr):
+        with pytest.raises(HTTPException) as exc_info:
+            await dynamic_mcp_route("boom", request)
+
+    assert exc_info.value.status_code == 500
+    assert exc_info.value.detail == "Internal server error"
+    assert "10.0.0.1" not in str(exc_info.value.detail)
+    assert "traceback" not in str(exc_info.value.detail).lower()
+
+
+@pytest.mark.asyncio
+async def test_toolset_mcp_route_unexpected_exception_returns_500_without_traceback():
+    """CWE-209: toolset_mcp_route must return 500 with a generic message on
+    unexpected errors, never leaking exception text to the caller."""
+    from litellm.proxy.proxy_server import toolset_mcp_route
+
+    request = _make_request("/toolset/broken_toolset/mcp")
+
+    fake_mgr = MagicMock()
+    fake_mgr.get_toolset_by_name_cached = AsyncMock(
+        side_effect=RuntimeError("connection to db-host:5432 refused")
+    )
+
+    with (
+        patch(_MCP_MANAGER, fake_mgr),
+        patch(_PRISMA, new=MagicMock()),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await toolset_mcp_route("broken_toolset", request)
+
+    assert exc_info.value.status_code == 500
+    assert exc_info.value.detail == "Internal server error"
+    assert "db-host" not in str(exc_info.value.detail)
+    assert "traceback" not in str(exc_info.value.detail).lower()

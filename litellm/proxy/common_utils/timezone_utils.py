@@ -15,7 +15,7 @@ def get_budget_reset_timezone():
     return getattr(litellm, "timezone", None) or "UTC"
 
 
-def get_budget_reset_time(budget_duration: str):
+def get_budget_reset_time(budget_duration: str) -> datetime:
     """
     Get the budget reset time based on the configured timezone.
     Falls back to UTC if not specified.

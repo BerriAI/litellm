@@ -278,7 +278,8 @@ def test_anthropic_stream_wrapper_interleaved_tool_calls_and_text():
         "content_block_delta",  # {"city":
         "content_block_delta",  # "NY"}
         "content_block_stop",  # End of first tool_use content block
-        "content_block_start",  # "The weather is nice today"
+        "content_block_start",  # "The weather is nice today" text block
+        "content_block_delta",  # "The weather is nice today." text_delta
         "content_block_stop",
         "content_block_start",  # Start of second tool_use content block
         "content_block_delta",  # {"city":
@@ -288,13 +289,28 @@ def test_anthropic_stream_wrapper_interleaved_tool_calls_and_text():
         "content_block_delta",  # {"city":
         "content_block_delta",  # " CHI"}
         "content_block_stop",  # End of third tool_use content block
-        "content_block_start",  # "The weather is not so nice today"
+        "content_block_start",  # "The weather is not so nice today" text block
+        "content_block_delta",  # "The weather is not so nice today." text_delta
         "content_block_stop",
         "message_delta",  # Stop reason with merged usage
         "message_stop",  # Final message stop
     ]
 
     assert expected_types == chunk_types
+
+    # Regression: the first (and only) text delta of each text block sits in
+    # the chunk that *triggered* the tool_use -> text transition. It must be
+    # re-emitted as a content_block_delta instead of being silently dropped.
+    text_deltas = [
+        chunk["delta"]["text"]
+        for chunk in chunks
+        if chunk.get("type") == "content_block_delta"
+        and chunk["delta"].get("type") == "text_delta"
+    ]
+    assert text_deltas == [
+        "The weather is nice today.",
+        "The weather is not so nice today.",
+    ]
 
     get_weather_calls = 0
 
