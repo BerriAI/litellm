@@ -28,8 +28,12 @@ from litellm.types.llms.openai import (
     ChatCompletionAssistantMessage,
     ChatCompletionFileObject,
     ChatCompletionImageObject,
+    ChatCompletionReasoningItem,
+    ChatCompletionReasoningSummaryTextBlock,
+    ChatCompletionRedactedThinkingBlock,
     ChatCompletionResponseMessage,
     ChatCompletionTextObject,
+    ChatCompletionThinkingBlock,
     ChatCompletionToolParam,
     ChatCompletionUserMessage,
 )
@@ -1547,6 +1551,44 @@ def _extract_reasoning_content(message: dict) -> tuple[str | None, str | None]:
     elif isinstance(message_content, str):
         return _parse_content_for_reasoning(message_content)
     return None, message_content
+
+
+def _readable_thinking_text(
+    block: ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock,
+) -> str:
+    """The text a chat model can read back, empty for redacted blocks and malformed ones."""
+    if block.get("type") != "thinking":
+        return ""
+    thinking: Final = cast(ChatCompletionThinkingBlock, block).get("thinking")  # cast-ok: narrowed by the type tag
+    return str(thinking or "")
+
+
+def reasoning_content_from_thinking_blocks(
+    thinking_blocks: Iterable[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock],
+) -> str:
+    """Flatten Anthropic thinking blocks into the `reasoning_content` string chat models expect.
+
+    Redacted blocks carry no readable text, so they contribute nothing.
+    """
+    return "\n".join(text for block in thinking_blocks if (text := _readable_thinking_text(block)))
+
+
+def responses_reasoning_item_from_thinking_blocks(
+    thinking_blocks: Iterable[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock],
+) -> ChatCompletionReasoningItem | None:
+    """Build a Responses API `reasoning` input item from Anthropic thinking blocks.
+
+    The item carries no `id`: the Responses API rejects an empty one and 404s on any id it
+    did not mint itself, while an item without an id is always accepted.
+    """
+    summary: Final[list[ChatCompletionReasoningSummaryTextBlock]] = [  # mutable-ok: API message payload
+        ChatCompletionReasoningSummaryTextBlock(type="summary_text", text=text)
+        for block in thinking_blocks
+        if (text := _readable_thinking_text(block))
+    ]
+    if not summary:
+        return None
+    return ChatCompletionReasoningItem(type="reasoning", summary=summary)
 
 
 def _parse_content_for_reasoning(
