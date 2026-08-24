@@ -69,7 +69,7 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
         # The Responses API accepts a string or a list, but this backend
         # rejects a string with {"detail": "Input must be a list"}.
         if isinstance(input, str):
-            input = [{"role": "user", "content": input}]
+            input = [{"role": "user", "content": input}]  # mutable-ok: the wire payload this backend requires
         request: Final = super().transform_responses_api_request(
             model,
             input,
