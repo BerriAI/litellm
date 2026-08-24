@@ -119,6 +119,25 @@ class TestRunwayMLVideoTransformation:
         assert result.status == "in_progress"
         assert result.progress == 3
 
+    def test_status_progress_null_leaves_progress_unset(self):
+        """Runway sends an explicit null progress for pending polls; scaling it must not crash."""
+        mock_response = Mock(spec=httpx.Response)
+        mock_response.json.return_value = {
+            "id": "63fd0f13-f29d-4e58-99d3-1cb9efa14a5b",
+            "createdAt": "2025-11-11T21:48:50.448Z",
+            "status": "PENDING",
+            "progress": None,
+        }
+
+        result = self.config.transform_video_status_retrieve_response(
+            raw_response=mock_response,
+            logging_obj=self.mock_logging_obj,
+            custom_llm_provider="runwayml",
+        )
+
+        assert result.status == "queued"
+        assert result.progress is None
+
     def test_get_error_class_returns_exception_instead_of_raising(self):
         error = self.config.get_error_class(
             error_message="Invalid API key",

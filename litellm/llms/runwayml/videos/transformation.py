@@ -636,8 +636,9 @@ class RunwayMLVideoConfig(BaseVideoConfig):
         if "completedAt" in response_data:
             video_data["completed_at"] = self._parse_runway_timestamp(response_data.get("completedAt"))
 
-        if "progress" in response_data:
-            video_data["progress"] = _progress_percent(response_data["progress"])
+        progress_value: Final = response_data.get("progress")
+        if progress_value is not None:
+            video_data["progress"] = _progress_percent(progress_value)
 
         if "failureCode" in response_data or "failure" in response_data:
             video_data["error"] = {
