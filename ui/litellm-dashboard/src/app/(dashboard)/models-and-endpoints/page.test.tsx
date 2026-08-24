@@ -40,6 +40,15 @@ vi.mock("./useModelDashboardData", () => ({
 
 const ADMIN = { accessToken: "at", token: "t", userRole: "Admin", userId: "u1", premiumUser: false };
 const NON_ADMIN = { accessToken: "at", token: "t", userRole: "Internal User", userId: "u1", premiumUser: false };
+// effectiveSessionRole reports a proxy_admin_viewer session as "Admin"; only isViewOnly tells them apart.
+const ADMIN_VIEWER = {
+  accessToken: "at",
+  token: "t",
+  userRole: "Admin",
+  userId: "u1",
+  premiumUser: false,
+  isViewOnly: true,
+};
 
 const renderPage = () => {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
@@ -68,7 +77,15 @@ describe("ModelsAndEndpointsPage", () => {
     expect(getByRole("tab", { name: "All Models" })).toBeInTheDocument();
     expect(getByRole("tab", { name: "LLM Credentials" })).toBeInTheDocument();
     expect(getByRole("tab", { name: "Health Status" })).toBeInTheDocument();
+    expect(getByRole("tab", { name: "Add Provider" })).toBeInTheDocument();
     expect(getByTestId("panel-all-models")).toBeInTheDocument();
+  });
+
+  it("hides the write-only Add Provider tab from a view-only admin", () => {
+    mockUseAuthorized.mockReturnValue(ADMIN_VIEWER);
+    const { getByRole, queryByRole } = renderPage();
+    expect(getByRole("tab", { name: "All Models" })).toBeInTheDocument();
+    expect(queryByRole("tab", { name: "Add Provider" })).not.toBeInTheDocument();
   });
 
   it("switches tabs in-memory, mounting only the active panel", async () => {
@@ -97,6 +114,7 @@ describe("ModelsAndEndpointsPage", () => {
     const { queryByRole } = renderPage();
     expect(queryByRole("tab", { name: "LLM Credentials" })).not.toBeInTheDocument();
     expect(queryByRole("tab", { name: "Health Status" })).not.toBeInTheDocument();
+    expect(queryByRole("tab", { name: "Add Provider" })).not.toBeInTheDocument();
   });
 
   // Auto-routers are excluded from the All Models table, so this tab is their home: the only

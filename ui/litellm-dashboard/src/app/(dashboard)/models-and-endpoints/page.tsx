@@ -80,7 +80,7 @@ const renderPanel = (key: string) => {
 };
 
 export default function ModelsAndEndpointsPage() {
-  const { accessToken, userRole, userId: userID, premiumUser } = useAuthorized();
+  const { accessToken, userRole, userId: userID, premiumUser, isViewOnly } = useAuthorized();
   const { data: teams } = useTeams();
   const { data: uiSettings } = useUISettings();
   const queryClient = useQueryClient();
@@ -106,12 +106,14 @@ export default function ModelsAndEndpointsPage() {
       "",
       ...(canCreate ? (["add"] as const) : []),
       ...(isAdmin || canCreate ? (["auto-routers"] as const) : []),
-      ...(isAdmin ? (["add-provider"] as const) : []),
+      // effectiveSessionRole reports proxy_admin_viewer as "Admin", so isAdmin alone would show
+      // a viewer this write-only wizard; only the raw-role isViewOnly separates them.
+      ...(isAdmin && !isViewOnly ? (["add-provider"] as const) : []),
       ...(isAdmin
         ? (["llm-credentials", "pass-through", "health", "retry-settings", "model-group-alias", "price-data"] as const)
         : []),
     ],
-    [canCreate, isAdmin],
+    [canCreate, isAdmin, isViewOnly],
   );
 
   const allModelsLabel = isAdmin ? "All Models" : "Your Models";
