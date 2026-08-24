@@ -1019,6 +1019,7 @@
     },
     "anthropic.claude-opus-4-6-v1": {
         "supports_adaptive_thinking": true,
+        "supports_legacy_thinking": true,
         "cache_creation_input_token_cost": 6.25e-06,
         "cache_creation_input_token_cost_above_1hr": 1e-05,
         "cache_read_input_token_cost": 5e-07,
@@ -1053,6 +1054,7 @@
     },
     "global.anthropic.claude-opus-4-6-v1": {
         "supports_adaptive_thinking": true,
+        "supports_legacy_thinking": true,
         "cache_creation_input_token_cost": 6.25e-06,
         "cache_creation_input_token_cost_above_1hr": 1e-05,
         "cache_read_input_token_cost": 5e-07,
@@ -1087,6 +1089,7 @@
     },
     "us.anthropic.claude-opus-4-6-v1": {
         "supports_adaptive_thinking": true,
+        "supports_legacy_thinking": true,
         "cache_creation_input_token_cost": 6.875e-06,
         "cache_creation_input_token_cost_above_1hr": 1.1e-05,
         "cache_read_input_token_cost": 5.5e-07,
@@ -1121,6 +1124,7 @@
     },
     "eu.anthropic.claude-opus-4-6-v1": {
         "supports_adaptive_thinking": true,
+        "supports_legacy_thinking": true,
         "cache_creation_input_token_cost": 6.875e-06,
         "cache_creation_input_token_cost_above_1hr": 1.1e-05,
         "cache_read_input_token_cost": 5.5e-07,
@@ -1155,6 +1159,7 @@
     },
     "au.anthropic.claude-opus-4-6-v1": {
         "supports_adaptive_thinking": true,
+        "supports_legacy_thinking": true,
         "cache_creation_input_token_cost": 6.875e-06,
         "cache_creation_input_token_cost_above_1hr": 1.1e-05,
         "cache_read_input_token_cost": 5.5e-07,
@@ -2233,6 +2238,7 @@
     },
     "anthropic.claude-sonnet-4-6": {
         "supports_adaptive_thinking": true,
+        "supports_legacy_thinking": true,
         "cache_creation_input_token_cost": 3.75e-06,
         "cache_creation_input_token_cost_above_1hr": 6e-06,
         "cache_read_input_token_cost": 3e-07,
@@ -2266,6 +2272,7 @@
     },
     "global.anthropic.claude-sonnet-4-6": {
         "supports_adaptive_thinking": true,
+        "supports_legacy_thinking": true,
         "cache_creation_input_token_cost": 3.75e-06,
         "cache_creation_input_token_cost_above_1hr": 6e-06,
         "cache_read_input_token_cost": 3e-07,
@@ -2299,6 +2306,7 @@
     },
     "us.anthropic.claude-sonnet-4-6": {
         "supports_adaptive_thinking": true,
+        "supports_legacy_thinking": true,
         "cache_creation_input_token_cost": 4.125e-06,
         "cache_creation_input_token_cost_above_1hr": 6.6e-06,
         "cache_read_input_token_cost": 3.3e-07,
@@ -2332,6 +2340,7 @@
     },
     "eu.anthropic.claude-sonnet-4-6": {
         "supports_adaptive_thinking": true,
+        "supports_legacy_thinking": true,
         "cache_creation_input_token_cost": 4.125e-06,
         "cache_creation_input_token_cost_above_1hr": 6.6e-06,
         "cache_read_input_token_cost": 3.3e-07,
@@ -2365,6 +2374,7 @@
     },
     "au.anthropic.claude-sonnet-4-6": {
         "supports_adaptive_thinking": true,
+        "supports_legacy_thinking": true,
         "cache_creation_input_token_cost": 4.125e-06,
         "cache_creation_input_token_cost_above_1hr": 6.6e-06,
         "cache_read_input_token_cost": 3.3e-07,
@@ -2398,6 +2408,7 @@
     },
     "jp.anthropic.claude-sonnet-4-6": {
         "supports_adaptive_thinking": true,
+        "supports_legacy_thinking": true,
         "cache_creation_input_token_cost": 4.125e-06,
         "cache_creation_input_token_cost_above_1hr": 6.6e-06,
         "cache_read_input_token_cost": 3.3e-07,
@@ -2950,6 +2961,7 @@
     "azure_ai/claude-opus-4-6": {
         "deprecation_date": "2027-02-02",
         "supports_adaptive_thinking": true,
+        "supports_legacy_thinking": true,
         "input_cost_per_token": 5e-06,
         "output_cost_per_token": 2.5e-05,
         "litellm_provider": "azure_ai",
@@ -3181,6 +3193,7 @@
     "azure_ai/claude-sonnet-4-6": {
         "deprecation_date": "2027-02-10",
         "supports_adaptive_thinking": true,
+        "supports_legacy_thinking": true,
         "cache_creation_input_token_cost": 3.75e-06,
         "cache_creation_input_token_cost_above_1hr": 6e-06,
         "cache_read_input_token_cost": 3e-07,
@@ -12489,6 +12502,7 @@
             "search_context_size_medium": 0.01
         },
         "supports_adaptive_thinking": true,
+        "supports_legacy_thinking": true,
         "supports_assistant_prefill": true,
         "supports_computer_use": true,
         "supports_function_calling": true,
@@ -12698,6 +12712,7 @@
             "search_context_size_medium": 0.01
         },
         "supports_adaptive_thinking": true,
+        "supports_legacy_thinking": true,
         "supports_assistant_prefill": false,
         "supports_computer_use": true,
         "supports_function_calling": true,
@@ -12735,6 +12750,7 @@
             "search_context_size_medium": 0.01
         },
         "supports_adaptive_thinking": true,
+        "supports_legacy_thinking": true,
         "supports_assistant_prefill": false,
         "supports_computer_use": true,
         "supports_function_calling": true,
@@ -14677,6 +14693,7 @@
         "source": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving",
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
+        "supports_legacy_thinking": true,
         "supports_reasoning": true,
         "supports_tool_choice": true
     },
@@ -14753,6 +14770,7 @@
         "source": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving",
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
+        "supports_legacy_thinking": true,
         "supports_reasoning": true,
         "supports_tool_choice": true
     },
@@ -23180,6 +23198,7 @@
     },
     "github_copilot/claude-opus-4.6-fast": {
         "supports_adaptive_thinking": true,
+        "supports_legacy_thinking": true,
         "litellm_provider": "github_copilot",
         "max_input_tokens": 128000,
         "max_output_tokens": 16000,
@@ -33563,6 +33582,7 @@
     },
     "openrouter/anthropic/claude-sonnet-4.6": {
         "supports_adaptive_thinking": true,
+        "supports_legacy_thinking": true,
         "cache_creation_input_token_cost": 3.75e-06,
         "cache_creation_input_token_cost_above_200k_tokens": 7.5e-06,
         "cache_read_input_token_cost": 3e-07,
@@ -33607,6 +33627,7 @@
     },
     "openrouter/anthropic/claude-opus-4.6": {
         "supports_adaptive_thinking": true,
+        "supports_legacy_thinking": true,
         "cache_creation_input_token_cost": 6.25e-06,
         "cache_read_input_token_cost": 5e-07,
         "input_cost_per_token": 5e-06,
@@ -35681,6 +35702,7 @@
     },
     "perplexity/anthropic/claude-opus-4-6": {
         "supports_adaptive_thinking": true,
+        "supports_legacy_thinking": true,
         "litellm_provider": "perplexity",
         "mode": "responses",
         "supports_web_search": true,
@@ -39056,6 +39078,7 @@
     },
     "vercel_ai_gateway/anthropic/claude-opus-4.6": {
         "supports_adaptive_thinking": true,
+        "supports_legacy_thinking": true,
         "cache_creation_input_token_cost": 6.25e-06,
         "cache_read_input_token_cost": 5e-07,
         "input_cost_per_token": 5e-06,
@@ -40315,6 +40338,7 @@
         "deprecation_date": "2027-02-05",
         "regional_endpoint_uplift_multiplier": 1.1,
         "supports_adaptive_thinking": true,
+        "supports_legacy_thinking": true,
         "cache_creation_input_token_cost": 6.25e-06,
         "cache_creation_input_token_cost_above_1hr": 1e-05,
         "cache_read_input_token_cost": 5e-07,
@@ -40347,6 +40371,7 @@
         "deprecation_date": "2027-02-05",
         "regional_endpoint_uplift_multiplier": 1.1,
         "supports_adaptive_thinking": true,
+        "supports_legacy_thinking": true,
         "cache_creation_input_token_cost": 6.25e-06,
         "cache_creation_input_token_cost_above_1hr": 1e-05,
         "cache_read_input_token_cost": 5e-07,
@@ -40712,6 +40737,7 @@
     "vertex_ai/claude-sonnet-4-6": {
         "regional_endpoint_uplift_multiplier": 1.1,
         "supports_adaptive_thinking": true,
+        "supports_legacy_thinking": true,
         "cache_creation_input_token_cost": 3.75e-06,
         "cache_creation_input_token_cost_above_1hr": 6e-06,
         "cache_read_input_token_cost": 3e-07,
@@ -48481,6 +48507,7 @@
     "vertex_ai/claude-sonnet-4-6@default": {
         "regional_endpoint_uplift_multiplier": 1.1,
         "supports_adaptive_thinking": true,
+        "supports_legacy_thinking": true,
         "cache_creation_input_token_cost": 3.75e-06,
         "cache_creation_input_token_cost_above_1hr": 6e-06,
         "cache_read_input_token_cost": 3e-07,
@@ -49265,6 +49292,7 @@
     },
     "snowflake/claude-sonnet-4-6": {
         "supports_adaptive_thinking": true,
+        "supports_legacy_thinking": true,
         "max_tokens": 16384,
         "max_input_tokens": 200000,
         "max_output_tokens": 16384,
@@ -50253,6 +50281,14 @@
                 "description": "Claude at version 4.6 or higher, in any id shape that contains claude-<family>-: minors 4.6 through 4.99, any later major-minor, and bare 5+ majors so a new family shaped like claude-fable-5 matches. Requiring the claude- prefix keeps non-Claude names such as team-sonnet-5-1 out. The minor is capped at two digits so an 8-digit date suffix such as claude-opus-4-20250514 is never read as a >= 4.6 minor. Turns on adaptive thinking for new versions and new families with no code change.",
                 "model_info": {
                     "supports_adaptive_thinking": true
+                }
+            },
+            {
+                "name": "claude-legacy-thinking",
+                "pattern": "claude-[a-z]+-4[-._]6(?!\\d)",
+                "description": "Claude at version 4.6 exactly, in any id shape that contains claude-<family>-4-6 (dotted and underscored minors included, dated releases such as claude-sonnet-4-6-20260219 too). The 4.6 family is adaptive-thinking yet still accepts legacy thinking.type=enabled with budget_tokens, so the caller's hard budget cap is forwarded verbatim instead of being rewritten to an uncapped output_config.effort. The lookahead keeps two-digit minors such as 4-60 from matching. 4.7+ and 5+ majors reject the legacy shape and stay on the adaptive translation.",
+                "model_info": {
+                    "supports_legacy_thinking": true
                 }
             },
             {
