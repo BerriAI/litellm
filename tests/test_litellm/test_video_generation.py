@@ -2,14 +2,10 @@ import asyncio
 import io
 import json
 import os
-import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 
 import litellm
 from litellm.cost_calculator import default_video_cost_calculator
@@ -151,7 +147,7 @@ class TestVideoGeneration:
             "video_generation_handler",
             side_effect=Exception("API Error"),
         ):
-            with pytest.raises(Exception):
+            with pytest.raises(litellm.APIConnectionError):
                 video_generation(prompt="Test video", model="sora-2")
 
     def test_video_generation_provider_config(self):
@@ -242,7 +238,6 @@ class TestVideoGeneration:
     def test_video_generation_cost_calculation(self):
         """Test video generation cost calculation."""
         import json
-        import os
 
         # Try to load the local model cost map, skip if not found
         cost_map_path = "model_prices_and_context_window.json"
@@ -739,7 +734,7 @@ class TestVideoGeneration:
             "video_status_handler",
             side_effect=Exception("API Error"),
         ):
-            with pytest.raises(Exception):
+            with pytest.raises(litellm.APIConnectionError):
                 video_status(video_id="test_video_id", model="sora-2")
 
     def test_video_status_request_transformation(self):

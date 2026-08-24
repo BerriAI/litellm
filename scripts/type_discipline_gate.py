@@ -267,7 +267,10 @@ def main() -> None:
     parser.add_argument("--base", default=DEFAULT_BASE)
     parser.add_argument("--update", action="store_true")
     args = parser.parse_args()
-    cmd_update(args.base) if args.update else cmd_check(args.base)
+    from gate_slot_lock import held_slot
+
+    with held_slot():
+        cmd_update(args.base) if args.update else cmd_check(args.base)
 
 
 if __name__ == "__main__":

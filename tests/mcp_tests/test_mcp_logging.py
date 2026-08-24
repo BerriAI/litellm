@@ -1,14 +1,10 @@
 import os
-import sys
 import pytest
 import asyncio
 from typing import Optional
 from unittest.mock import AsyncMock, patch
 
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 import litellm
 from litellm.types.utils import StandardLoggingPayload
 from litellm.integrations.custom_logger import CustomLogger

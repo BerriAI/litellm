@@ -158,6 +158,10 @@ class DailyGuardrailMetricsRepository(PrismaTableRepository):
     table_name = "litellm_dailyguardrailmetrics"
 
 
+class DailyGuardrailUsageUnitsRepository(PrismaTableRepository):
+    table_name = "litellm_dailyguardrailusageunits"
+
+
 class PolicyAttachmentRepository(PrismaTableRepository):
     table_name = "litellm_policyattachmenttable"
 

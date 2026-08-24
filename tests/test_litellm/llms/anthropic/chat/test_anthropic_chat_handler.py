@@ -1,7 +1,7 @@
 import json
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -2045,3 +2045,389 @@ def test_non_bash_tool_result_skipped():
     assert (
         len(code_results) == 0
     ), f"Expected 0 code_interpreter_results for text_editor result, got {len(code_results)}"
+
+
+class TestRustChatCompletionsHook:
+    """The `rust: true` opt-in on `/chat/completions` for the Anthropic provider.
+
+    The native callables are dependency-injected, so these run without the
+    compiled extension.
+    """
+
+    RUST_RESPONSE = {
+        "created": 1_700_000_000,
+        "model": "claude-sonnet-4-5-20260101",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "hello from rust"},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {
+            "prompt_tokens": 11,
+            "completion_tokens": 4,
+            "total_tokens": 15,
+            "prompt_tokens_details": {
+                "cached_tokens": 0,
+                "cache_creation_tokens": 0,
+                "text_tokens": 11,
+            },
+        },
+    }
+
+    @pytest.fixture(autouse=True)
+    def _reset_bridge(self, monkeypatch):
+        from litellm.rust_bridge import chat_completions as bridge
+
+        monkeypatch.delenv("LITELLM_RUST", raising=False)
+        bridge.set_rust_chat_completions(
+            chat_completions=None, achat_completions=None, decline=None
+        )
+        yield
+        bridge.set_rust_chat_completions(
+            chat_completions=None, achat_completions=None, decline=None
+        )
+
+    @staticmethod
+    def _completion_kwargs(**overrides):
+        from litellm.types.utils import ModelResponse
+
+        kwargs = {
+            "model": "claude-sonnet-4-5",
+            "messages": [{"role": "user", "content": "hi"}],
+            "api_base": "https://api.anthropic.com/v1/messages",
+            "custom_llm_provider": "anthropic",
+            "custom_prompt_dict": {},
+            "model_response": ModelResponse(),
+            "print_verbose": lambda *_args, **_kwargs: None,
+            "encoding": None,
+            "api_key": "sk-ant-test",
+            "logging_obj": MagicMock(),
+            "optional_params": {"max_tokens": 16},
+            "timeout": 30.0,
+            "litellm_params": {"rust": True},
+            "acompletion": False,
+            "headers": {},
+            "client": None,
+        }
+        kwargs.update(overrides)
+        return kwargs
+
+    @staticmethod
+    def _recording_logging_obj():
+        """A logging object that keeps each hook's payload in a real list, so a
+        test can assert which path logged and what it carried."""
+        calls = {"pre_call": [], "post_call": []}
+        logging_obj = MagicMock()
+        logging_obj.pre_call.side_effect = lambda **kwargs: calls["pre_call"].append(kwargs)
+        logging_obj.post_call.side_effect = lambda **kwargs: calls["post_call"].append(kwargs)
+        return logging_obj, calls
+
+    def _inject(self, *, decline_reason=None, sync_result=None, sync_error=None):
+        from litellm.rust_bridge import chat_completions as bridge
+
+        seen = {"gate": [], "call": []}
+
+        def gate(**kwargs):
+            seen["gate"].append(kwargs)
+            return decline_reason
+
+        def native(**kwargs):
+            seen["call"].append(kwargs)
+            if sync_error is not None:
+                raise sync_error
+            return dict(sync_result if sync_result is not None else self.RUST_RESPONSE)
+
+        bridge.set_rust_chat_completions(decline=gate, chat_completions=native)
+        return seen
+
+    def test_rust_true_serves_the_call_and_stamps_the_header(self):
+        from litellm.llms.anthropic.chat.handler import AnthropicChatCompletion
+
+        seen = self._inject()
+        response = AnthropicChatCompletion().completion(**self._completion_kwargs())
+
+        assert response.choices[0].message.content == "hello from rust"
+        assert response._hidden_params["additional_headers"] == {"x-litellm-rust": "true"}
+        assert len(seen["call"]) == 1
+
+    def test_the_core_receives_the_untranslated_openai_messages(self):
+        """Rust owns the translation, so the handler must not pre-translate."""
+        from litellm.llms.anthropic.chat.handler import AnthropicChatCompletion
+
+        seen = self._inject()
+        AnthropicChatCompletion().completion(
+            **self._completion_kwargs(
+                messages=[
+                    {"role": "system", "content": "be terse"},
+                    {"role": "user", "content": "hi"},
+                ]
+            )
+        )
+        assert seen["call"][0]["messages"] == [
+            {"role": "system", "content": "be terse"},
+            {"role": "user", "content": "hi"},
+        ]
+
+    def test_the_anthropic_max_tokens_default_is_merged_in_before_the_gate(self):
+        """`transform_request` applies `AnthropicConfig.get_config`; the Rust
+        path skips it, so the handler has to merge it or Anthropic 400s on a
+        request that omits `max_tokens`."""
+        from litellm.llms.anthropic.chat.handler import AnthropicChatCompletion
+
+        seen = self._inject()
+        AnthropicChatCompletion().completion(**self._completion_kwargs(optional_params={}))
+        assert "max_tokens" in seen["gate"][0]["optional_params"]
+        assert seen["call"][0]["optional_params"]["max_tokens"] > 0
+
+    def test_a_caller_supplied_max_tokens_outranks_the_default(self):
+        from litellm.llms.anthropic.chat.handler import AnthropicChatCompletion
+
+        seen = self._inject()
+        AnthropicChatCompletion().completion(
+            **self._completion_kwargs(optional_params={"max_tokens": 7})
+        )
+        assert seen["call"][0]["optional_params"]["max_tokens"] == 7
+
+    def test_without_the_opt_in_the_core_is_never_consulted(self):
+        from litellm.llms.anthropic.chat.handler import AnthropicChatCompletion
+        from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+
+        seen = self._inject()
+        with patch.object(
+            AnthropicConfig, "transform_request", return_value={"model": "m", "messages": []}
+        ) as transform, patch.object(
+            AnthropicChatCompletion, "acompletion_function"
+        ):
+            try:
+                AnthropicChatCompletion().completion(
+                    **self._completion_kwargs(litellm_params={})
+                )
+            except Exception:
+                # The Python path goes on to make an HTTP call; reaching it is
+                # the assertion, so the network failure below is expected.
+                pass
+        assert seen["gate"] == []
+        assert seen["call"] == []
+        assert transform.called
+
+    def test_a_declined_request_never_reaches_the_native_call(self):
+        from litellm.llms.anthropic.chat.handler import AnthropicChatCompletion
+        from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+
+        seen = self._inject(decline_reason="unrecognized request parameter")
+        with patch.object(
+            AnthropicConfig, "transform_request", return_value={"model": "m", "messages": []}
+        ):
+            try:
+                AnthropicChatCompletion().completion(**self._completion_kwargs())
+            except Exception:
+                pass
+        assert len(seen["gate"]) == 1
+        assert seen["call"] == []
+
+    def test_streaming_stays_on_the_python_path(self):
+        from litellm.llms.anthropic.chat.handler import AnthropicChatCompletion
+        from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+
+        seen = self._inject()
+        with patch.object(
+            AnthropicConfig, "transform_request", return_value={"model": "m", "messages": []}
+        ):
+            try:
+                AnthropicChatCompletion().completion(
+                    **self._completion_kwargs(optional_params={"max_tokens": 16, "stream": True})
+                )
+            except Exception:
+                pass
+        assert seen["gate"] == []
+
+    def test_pre_call_logging_fires_exactly_once_on_the_rust_path(self):
+        from litellm.llms.anthropic.chat.handler import AnthropicChatCompletion
+
+        seen = self._inject()
+        logging_obj = MagicMock()
+        AnthropicChatCompletion().completion(
+            **self._completion_kwargs(logging_obj=logging_obj)
+        )
+        assert logging_obj.pre_call.call_count == 1
+        assert len(seen["call"]) == 1
+
+    def test_post_call_logging_fires_on_the_rust_path(self):
+        """The Rust core owns the provider call, so the Python transform that
+        normally raises `post_call` never runs. Without the bridge hook every
+        post_call callback goes silent and `original_response` stays unset."""
+        import json
+
+        from litellm.llms.anthropic.chat.handler import AnthropicChatCompletion
+
+        self._inject()
+        logging_obj = MagicMock()
+        AnthropicChatCompletion().completion(
+            **self._completion_kwargs(logging_obj=logging_obj)
+        )
+
+        assert logging_obj.post_call.call_count == 1
+        logged = logging_obj.post_call.call_args.kwargs["original_response"]
+        assert json.loads(logged)["choices"][0]["message"]["content"] == "hello from rust"
+
+    def test_post_call_is_not_logged_twice_when_the_sync_rust_call_declines(self, monkeypatch):
+        """A decline never reached the provider, so the Python path serves the
+        request and owns the only post_call. Firing the hook there too would
+        double every post_call callback for one request."""
+        from litellm.llms.anthropic.chat.handler import AnthropicChatCompletion
+        from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+        from litellm.rust_bridge import chat_completions as bridge
+
+        class _Declined(Exception):
+            pass
+
+        class _FakeNative:
+            RustBridgeDeclined = _Declined
+            RustUpstreamError = type("_Upstream", (Exception,), {})
+
+        def declining_native(**_kwargs):
+            raise _Declined("blank message text")
+
+        monkeypatch.setattr(bridge, "get_native_bridge", lambda: _FakeNative())
+        bridge.set_rust_chat_completions(
+            decline=lambda **_kwargs: None, chat_completions=declining_native
+        )
+
+        logging_obj, calls = self._recording_logging_obj()
+        with patch.object(
+            AnthropicConfig, "transform_request", return_value={"model": "m", "messages": []}
+        ):
+            try:
+                AnthropicChatCompletion().completion(
+                    **self._completion_kwargs(logging_obj=logging_obj)
+                )
+            except Exception:
+                # The Python path goes on to make an HTTP call; the log count is
+                # the assertion, so a failure past this point is expected.
+                pass
+
+        assert calls["post_call"] == []
+
+    @pytest.mark.asyncio
+    async def test_the_async_path_falls_back_when_the_core_declines(self, monkeypatch):
+        from litellm.llms.anthropic.chat.handler import AnthropicChatCompletion
+        from litellm.rust_bridge import chat_completions as bridge
+
+        class _Declined(Exception):
+            pass
+
+        class _FakeNative:
+            RustBridgeDeclined = _Declined
+            RustUpstreamError = type("_Upstream", (Exception,), {})
+
+        monkeypatch.setattr(bridge, "get_native_bridge", lambda: _FakeNative())
+
+        async def declining_native(**_kwargs):
+            raise _Declined("blank message text")
+
+        bridge.set_rust_chat_completions(
+            decline=lambda **_kwargs: None, achat_completions=declining_native
+        )
+
+        sentinel = object()
+
+        async def python_path(**_kwargs):
+            return sentinel
+
+        with patch.object(
+            AnthropicChatCompletion, "acompletion_function", side_effect=python_path
+        ) as python_call:
+            result = await AnthropicChatCompletion().completion(
+                **self._completion_kwargs(acompletion=True)
+            )
+
+        assert result is sentinel
+        assert python_call.called, "a failing rust call must re-enter the python path"
+
+    @pytest.mark.asyncio
+    async def test_the_async_path_serves_the_rust_response_without_the_fallback(self):
+        from litellm.llms.anthropic.chat.handler import AnthropicChatCompletion
+        from litellm.rust_bridge import chat_completions as bridge
+
+        async def native(**_kwargs):
+            return dict(self.RUST_RESPONSE)
+
+        bridge.set_rust_chat_completions(
+            decline=lambda **_kwargs: None, achat_completions=native
+        )
+
+        with patch.object(AnthropicChatCompletion, "acompletion_function") as python_call:
+            result = await AnthropicChatCompletion().completion(
+                **self._completion_kwargs(acompletion=True)
+            )
+
+        assert result.choices[0].message.content == "hello from rust"
+        assert result._hidden_params["additional_headers"] == {"x-litellm-rust": "true"}
+        assert not python_call.called
+
+
+    def test_pre_call_logging_fires_once_when_the_sync_rust_call_declines(self, monkeypatch):
+        """One request, one pre_call, on the synchronous path too. Without the
+        suppression the Python path logs a second time for the same attempt."""
+        from litellm.llms.anthropic.chat.handler import AnthropicChatCompletion
+        from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+        from litellm.rust_bridge import chat_completions as bridge
+
+        class _Declined(Exception):
+            pass
+
+        class _FakeNative:
+            RustBridgeDeclined = _Declined
+            RustUpstreamError = type("_Upstream", (Exception,), {})
+
+        monkeypatch.setattr(bridge, "get_native_bridge", lambda: _FakeNative())
+
+        def declining_native(**_kwargs):
+            raise _Declined("blank message text")
+
+        bridge.set_rust_chat_completions(
+            decline=lambda **_kwargs: None, chat_completions=declining_native
+        )
+
+        logging_obj, calls = self._recording_logging_obj()
+        with patch.object(
+            AnthropicConfig, "transform_request", return_value={"model": "m", "messages": []}
+        ):
+            try:
+                AnthropicChatCompletion().completion(
+                    **self._completion_kwargs(logging_obj=logging_obj)
+                )
+            except Exception:
+                # The Python path goes on to make an HTTP call; the log count is
+                # the assertion, so a failure past this point is expected.
+                pass
+
+        assert len(calls["pre_call"]) == 1
+        assert calls["pre_call"][0]["additional_args"]["complete_input_dict"]["model"] == (
+            "claude-sonnet-4-5"
+        )
+
+    def test_pre_call_logging_still_fires_when_rust_is_not_involved(self, monkeypatch):
+        """The suppression must not swallow the log on the ordinary path."""
+        from litellm.llms.anthropic.chat.handler import AnthropicChatCompletion
+        from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+
+        self._inject()
+        logging_obj, calls = self._recording_logging_obj()
+        with patch.object(
+            AnthropicConfig, "transform_request", return_value={"model": "m", "messages": []}
+        ):
+            try:
+                AnthropicChatCompletion().completion(
+                    **self._completion_kwargs(litellm_params={}, logging_obj=logging_obj)
+                )
+            except Exception:
+                pass
+
+        assert len(calls["pre_call"]) == 1
+        assert calls["pre_call"][0]["additional_args"]["complete_input_dict"] == {
+            "model": "m",
+            "messages": [],
+        }
