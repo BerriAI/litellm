@@ -212,18 +212,16 @@ class CrowdStrikeAIDRHandler(CustomGuardrail):
         """
         Calls the AIDR guard, applying the fail-open policy on transport failures.
 
-        Policy blocks (HTTPException from the guard result) always propagate. Client
-        errors (4xx) always fail closed, since they are caller-controlled and a bypass
-        would let malformed input skip scanning. Only server errors (5xx) and
-        connectivity failures honor ``fail_on_error=False``, returning None so the
-        caller proceeds with the original inputs unscanned.
+        Policy blocks (HTTPException from the guard result) always propagate. API
+        errors and connectivity failures honor ``fail_on_error=False``, returning
+        None so the caller proceeds with the original inputs unscanned.
         """
         try:
             return await self._call_crowdstrike_aidr_guard(payload, hook_name)
         except HTTPException:
             raise
         except httpx.HTTPStatusError as e:
-            if self.fail_on_error or e.response.status_code < 500:
+            if self.fail_on_error:
                 raise
             verbose_proxy_logger.error(
                 f"CrowdStrike AIDR Guardrail ({hook_name}): guard API returned {e.response.status_code}, failing open: {e}",

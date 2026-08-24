@@ -661,7 +661,7 @@ async def test_apply_guardrail_fails_closed_on_guard_api_error(
 
 
 @pytest.mark.asyncio
-async def test_apply_guardrail_fails_closed_on_4xx_even_when_fail_open() -> None:
+async def test_apply_guardrail_fails_open_on_4xx() -> None:
     guardrail = _fail_open_guardrail()
     inputs = _malformed_inputs()
     request_data = {"messages": inputs["structured_messages"]}
@@ -671,12 +671,13 @@ async def test_apply_guardrail_fails_closed_on_4xx_even_when_fail_open() -> None
         "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
         return_value=_guard_api_error_response(endpoint, status_code=400),
     ):
-        with pytest.raises(httpx.HTTPStatusError):
-            await guardrail.apply_guardrail(
-                inputs=inputs,
-                request_data=request_data,
-                input_type="request",
-            )
+        result = await guardrail.apply_guardrail(
+            inputs=inputs,
+            request_data=request_data,
+            input_type="request",
+        )
+
+    assert result == inputs
 
 
 @pytest.mark.asyncio
