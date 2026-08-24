@@ -256,6 +256,13 @@ class TagRateLimitEntry(BaseModel):
                 "limit must be finite -- positive infinity makes admission never reject (current + increment "
                 "> limit is always false), negative infinity makes it always reject every tagged request"
             )
+        if self.limit <= 0:
+            raise ValueError(
+                "limit must be a positive number -- zero or negative makes the atomic requests/concurrency "
+                "check (current + increment > limit) reject every admission and the read-only tokens/dollars "
+                "check (current < limit) never admit, silently blocking all matching traffic instead of the "
+                "likely intended config"
+            )
         return self
 
     @model_validator(mode="after")

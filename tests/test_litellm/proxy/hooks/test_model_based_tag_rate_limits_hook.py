@@ -288,6 +288,21 @@ def test_tag_rate_limit_entry_rejects_infinite_limit():
         TagRateLimitEntry(name="n", limit=float("-inf"), period_seconds=60)
 
 
+def test_tag_rate_limit_entry_rejects_zero_or_negative_limit():
+    """
+    A limit of 0 (or negative) makes the atomic requests/concurrency check
+    (current + increment > limit) reject every admission and the read-only
+    tokens/dollars check (current < limit) never admit, same silent
+    always-reject-everything failure mode as a negative-infinity limit --
+    almost certainly a config typo, not an intentional "block everything"
+    policy, so reject it at config load time instead.
+    """
+    with pytest.raises(ValidationError, match="limit must be a positive number"):
+        TagRateLimitEntry(name="n", limit=0, period_seconds=60)
+    with pytest.raises(ValidationError, match="limit must be a positive number"):
+        TagRateLimitEntry(name="n", limit=-1, period_seconds=60)
+
+
 # ---------------------------------------------------------------------------
 # TagRateLimitEntry -- period_seconds validation
 # ---------------------------------------------------------------------------
