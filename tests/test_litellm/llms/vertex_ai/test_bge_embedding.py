@@ -6,11 +6,8 @@ and that the request body is properly formatted.
 """
 
 import json
-import os
-import sys
 from unittest.mock import MagicMock, patch
 
-sys.path.insert(0, os.path.abspath("../../../.."))
 
 import pytest
 

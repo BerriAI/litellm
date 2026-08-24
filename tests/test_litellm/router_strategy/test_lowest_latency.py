@@ -5,15 +5,10 @@
 #    latency list and break the Redis cache sync). Issue #33169.
 
 import json
-import os
-import sys
 from datetime import datetime, timedelta
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 import litellm
 from litellm.caching.caching import DualCache

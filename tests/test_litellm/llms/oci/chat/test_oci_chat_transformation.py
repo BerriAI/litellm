@@ -1,6 +1,4 @@
 import datetime
-import os
-import sys
 import httpx
 import pytest
 import json
@@ -8,7 +6,6 @@ import json
 import litellm
 
 # Adds the parent directory to the system path
-sys.path.insert(0, os.path.abspath("../../../../.."))
 
 from litellm import ModelResponse
 from litellm.constants import DEFAULT_OCI_CHAT_MAX_TOKENS

@@ -18,12 +18,10 @@ check-and-increment becomes atomic.
 
 import asyncio
 import os
-import sys
 from typing import List
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../.."))
 
 import litellm
 from litellm import DualCache, Router

@@ -323,6 +323,62 @@ class TestProxyBaseLLMRequestProcessing:
             pytest.fail("litellm_call_id is not a valid UUID")
         assert data_passed["litellm_call_id"] == returned_data["litellm_call_id"]
 
+    @pytest.mark.asyncio
+    async def test_common_processing_pre_call_logic_refreshes_proxy_server_request_body_after_guardrails(
+        self, monkeypatch
+    ):
+        """
+        A guardrail (e.g. Presidio PII masking) mutates data["messages"] in place inside
+        pre_call_hook. The proxy_server_request.body snapshot is taken before that hook
+        runs, so it must be refreshed afterward or SpendLogs (when store_prompts_in_spend_logs
+        is enabled) persists the raw pre-guardrail body, bypassing the masking entirely.
+        """
+        processing_obj = ProxyBaseLLMRequestProcessing(data={})
+        mock_request = MagicMock(spec=Request)
+        mock_request.headers = {}
+
+        raw_messages = [{"role": "user", "content": "my ssn is 123-45-6789"}]
+
+        async def mock_add_litellm_data_to_request(*args, **kwargs):
+            return {
+                "messages": raw_messages,
+                "proxy_server_request": {
+                    "url": "http://testserver/chat/completions",
+                    "method": "POST",
+                    "body": {"messages": raw_messages},
+                },
+            }
+
+        async def mock_pre_call_hook(user_api_key_dict, data, call_type):
+            data["messages"] = [{"role": "user", "content": "my ssn is <MASKED>"}]
+            return data
+
+        mock_proxy_logging_obj = MagicMock(spec=ProxyLogging)
+        mock_proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=mock_pre_call_hook)
+        monkeypatch.setattr(
+            litellm.proxy.common_request_processing,
+            "add_litellm_data_to_request",
+            mock_add_litellm_data_to_request,
+        )
+
+        returned_data, _ = await processing_obj.common_processing_pre_call_logic(
+            request=mock_request,
+            general_settings={},
+            user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
+            proxy_logging_obj=mock_proxy_logging_obj,
+            proxy_config=MagicMock(spec=ProxyConfig),
+            route_type="acompletion",
+        )
+
+        persisted_body = returned_data["proxy_server_request"]["body"]
+        assert persisted_body["messages"] == returned_data["messages"]
+        assert "123-45-6789" not in json.dumps(persisted_body["messages"])
+        # litellm_logging_obj is stamped onto `data` by function_setup between the
+        # initial snapshot and pre_call_hook; it must never leak into the persisted
+        # audit body, which needs to stay plain-JSON-serializable end to end.
+        assert "litellm_logging_obj" not in persisted_body
+        json.dumps(persisted_body)
+
     def test_add_dd_apm_tags_for_litellm_call_id_uses_dd_tracing_helper(self, monkeypatch):
         mock_set_active_span_tag = MagicMock(return_value=True)
         import litellm.proxy.dd_span_tagger
@@ -1336,11 +1392,25 @@ class TestProxyBaseLLMRequestProcessing:
             route_type=route_type,
         )
 
-        # Verify queue_time_seconds is set and non-negative
+        # Verify queue_time_seconds is set and non-negative. Ends at start_time
+        # (captured before this mock runs, so it can precede the mock's own
+        # time.time() by a handful of microseconds) rather than a freshly
+        # captured time.time(), so a tiny tolerance below 0.5 is expected and
+        # correct -- see LIT-6012.
         metadata = returned_data.get("metadata", {})
         assert "queue_time_seconds" in metadata, "queue_time_seconds should be set in metadata"
-        assert metadata["queue_time_seconds"] >= 0.5, (
-            f"queue_time_seconds should be at least 0.5, got {metadata['queue_time_seconds']}"
+        assert metadata["queue_time_seconds"] >= 0.49, (
+            f"queue_time_seconds should be at least ~0.5, got {metadata['queue_time_seconds']}"
+        )
+
+        # queue_time_seconds must end exactly where logging_obj.start_time begins
+        # (the same start_time litellm_request_total_latency_metric's window
+        # starts from) so the two windows share a boundary, not an overlap.
+        # A mutant that reintroduces a separately-captured processing_start_time
+        # would make this assertion fail.
+        arrival_time = returned_data["proxy_server_request"]["arrival_time"]
+        assert arrival_time + metadata["queue_time_seconds"] == pytest.approx(
+            logging_obj.start_time.timestamp(), abs=1e-6
         )
 
 

@@ -1,12 +1,9 @@
 import asyncio
-import os
-import sys
 from unittest.mock import patch
 
 import pytest
 from fastapi import HTTPException
 
-sys.path.insert(0, os.path.abspath("../../../.."))
 
 from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.management_helpers.team_metadata_validation import (
