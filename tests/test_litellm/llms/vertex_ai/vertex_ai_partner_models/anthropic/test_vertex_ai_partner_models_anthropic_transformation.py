@@ -779,7 +779,7 @@ def test_vertex_ai_anthropic_tool_based_response_format_still_upgrades_legacy_th
 
 
 
-def _mid_conversation_system_conversation():
+def _mid_conversation_system_conversation() -> list[dict]:
     return [
         {"role": "system", "content": [{"type": "text", "text": "You are terse.", "cache_control": {"type": "ephemeral"}}]},
         {"role": "user", "content": "First question"},

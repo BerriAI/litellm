@@ -814,7 +814,7 @@ async def test_bedrock_invoke_claude_async_completion_inlines_document_url_sourc
 
 
 
-def _mid_conversation_system_conversation():
+def _mid_conversation_system_conversation() -> list[dict]:
     return [
         {"role": "system", "content": [{"type": "text", "text": "You are terse.", "cache_control": {"type": "ephemeral"}}]},
         {"role": "user", "content": "First question"},

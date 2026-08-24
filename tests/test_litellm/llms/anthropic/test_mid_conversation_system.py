@@ -5,6 +5,8 @@ Anthropic, Vertex, Azure AI and Bedrock Invoke transformation tests; these pin
 the pure placement rules on the OpenAI-format message list.
 """
 
+import pytest
+
 import litellm
 from litellm.llms.anthropic.mid_conversation_system import (
     CONVERTED_SYSTEM_NOTE,
@@ -13,11 +15,11 @@ from litellm.llms.anthropic.mid_conversation_system import (
 )
 
 
-def _roles(messages):
+def _roles(messages: object) -> list[str]:
     return [m["role"] if isinstance(m, dict) else m.role for m in messages]
 
 
-def _texts(message):
+def _texts(message: dict) -> list[str]:
     return [block["text"] for block in message["content"]]
 
 
@@ -125,19 +127,35 @@ def test_unflagged_conversion_keeps_the_client_order_when_no_tool_result_follows
     assert _texts(placed[2]) == [CONVERTED_SYSTEM_NOTE, "reminder"]
 
 
-def test_unflagged_conversion_rebuilds_cache_control_on_the_converted_block():
+@pytest.mark.parametrize(
+    "cache_control, expected",
+    [
+        ({"type": "ephemeral", "ttl": "1h"}, {"type": "ephemeral", "ttl": "1h"}),
+        ({"type": "ephemeral", "ttl": "5m"}, {"type": "ephemeral", "ttl": "5m"}),
+        ({"type": "ephemeral", "ttl": "2h"}, {"type": "ephemeral"}),
+    ],
+)
+def test_unflagged_conversion_rebuilds_cache_control_on_the_converted_block(cache_control, expected):
+    """Only the shapes Anthropic accepts survive: ephemeral with a 5m or 1h ttl, or no ttl."""
     messages = [
         {"role": "user", "content": "q1"},
-        {"role": "system", "content": "reminder", "cache_control": {"type": "ephemeral", "ttl": "1h"}},
+        {"role": "system", "content": "reminder", "cache_control": cache_control},
     ]
 
     placed = place_mid_conversation_system(messages, supports_mid_conversation_system=False)
 
-    assert placed[1]["content"][1] == {
-        "type": "text",
-        "text": "reminder",
-        "cache_control": {"type": "ephemeral", "ttl": "1h"},
-    }
+    assert placed[1]["content"][1] == {"type": "text", "text": "reminder", "cache_control": expected}
+
+
+def test_unflagged_conversion_drops_a_cache_control_that_is_not_ephemeral():
+    messages = [
+        {"role": "user", "content": "q1"},
+        {"role": "system", "content": "reminder", "cache_control": {"type": "persistent"}},
+    ]
+
+    placed = place_mid_conversation_system(messages, supports_mid_conversation_system=False)
+
+    assert placed[1]["content"][1] == {"type": "text", "text": "reminder"}
 
 
 def test_placement_is_a_no_op_without_later_system_messages():
