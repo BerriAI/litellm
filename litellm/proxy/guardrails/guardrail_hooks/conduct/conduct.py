@@ -13,7 +13,7 @@ import hashlib
 import os
 import uuid
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Final, Literal
+from typing import Any, Final, Literal
 
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import (
@@ -28,9 +28,6 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.guardrails import GuardrailEventHooks
 
 GUARDRAIL_NAME: Final = "conduct"
-
-if TYPE_CHECKING:
-    from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 
 
 Verdict = Literal["allow", "advisory", "warning", "block", "approval", "unknown"]
@@ -48,7 +45,7 @@ class GuardDecision:
     message: str | None = None
 
     @classmethod
-    def parse(cls, text: str) -> "GuardDecision":
+    def parse(cls, text: str) -> GuardDecision:
         """Map the ``guard_check`` string envelope to a verdict.
 
         Response contract from Conduct:
@@ -244,7 +241,7 @@ class ConductGuardrail(CustomGuardrail):
                 if item.get("type") == "text":
                     return GuardDecision.parse(item.get("text", ""))
             return GuardDecision(verdict="allow", raw="")
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — transport failure fallback path is intentionally broad
             verbose_proxy_logger.warning("conduct_guard: transport error %s — applying %s", e, self._fail_mode)
             if self._fail_mode == "fail_closed":
                 return GuardDecision(
