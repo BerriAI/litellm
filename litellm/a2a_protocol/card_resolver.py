@@ -57,22 +57,32 @@ _CANONICAL_PROTOCOL_BINDINGS: Final = MappingProxyType(
     }
 )
 
+_LEGACY_PROTOCOL_VERSION: Final = "0.3"
 
-def normalize_agent_card_protocol_bindings(agent_card: "AgentCard") -> "AgentCard":
+
+def normalize_agent_card_interfaces(agent_card: "AgentCard") -> "AgentCard":
     """
-    Canonicalize protocolBinding casing on the card's supported interfaces.
+    Canonicalize the supported interfaces of spec-adjacent agent cards.
 
     Some A2A servers (e.g. LangGraph Platform) serve agent cards with lowercase
     bindings like "jsonrpc", but a2a-sdk's ClientFactory matches bindings
     case-sensitively against its uppercase TransportProtocol constants and fails
     with "no compatible transports found." for spec-adjacent casings.
+
+    The same servers also speak the A2A 0.3 JSON dialect ("kind"-discriminated
+    payloads) while declaring protocolVersion "1.0", which a2a-sdk's strict v1
+    proto parsing rejects. A mis-cased binding fingerprints such a server, so its
+    declared version is downgraded to 0.3 to route the SDK's ClientFactory onto
+    its v0.3 compat transport, which speaks that dialect.
     """
     normalized: Final = type(agent_card)()
     normalized.CopyFrom(agent_card)
     for interface in normalized.supported_interfaces:
         canonical: str | None = _CANONICAL_PROTOCOL_BINDINGS.get(interface.protocol_binding.lower())
-        if canonical is not None:
-            interface.protocol_binding = canonical
+        if canonical is None or canonical == interface.protocol_binding:
+            continue
+        interface.protocol_binding = canonical
+        interface.protocol_version = _LEGACY_PROTOCOL_VERSION
     return normalized
 
 

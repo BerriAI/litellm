@@ -176,10 +176,40 @@ _AGENT_A_HEADERS = {"x-agent-token": "token-for-a", "x-tenant": "tenant-a"}
 _AGENT_B_HEADERS = {"x-agent-token": "token-for-b", "x-tenant": "tenant-b"}
 
 
-_V1_RPC_REPLY = {
+_LANGGRAPH_TASK_REPLY = {
     "jsonrpc": "2.0",
     "id": "reply",
-    "result": {"message": {"messageId": "reply-1", "role": "ROLE_AGENT", "parts": [{"text": "pong"}]}},
+    "result": {
+        "kind": "task",
+        "id": "run-1:task-1",
+        "contextId": "thread-1",
+        "history": [
+            {
+                "kind": "message",
+                "role": "user",
+                "parts": [{"kind": "text", "text": "hi"}],
+                "messageId": "m-user",
+                "taskId": "run-1:task-1",
+                "contextId": "thread-1",
+            },
+            {
+                "kind": "message",
+                "role": "agent",
+                "parts": [{"kind": "text", "text": "langgraph echo: hi"}],
+                "messageId": "m-agent",
+                "taskId": "run-1:task-1",
+                "contextId": "thread-1",
+            },
+        ],
+        "status": {"state": "completed", "timestamp": "2026-08-24T00:00:00+00:00"},
+        "artifacts": [
+            {
+                "artifactId": "art-1",
+                "name": "Assistant Response",
+                "parts": [{"kind": "text", "text": "langgraph echo: hi"}],
+            }
+        ],
+    },
 }
 
 
@@ -334,17 +364,22 @@ async def test_streaming_send_carries_only_its_own_caller_headers(isolated_clien
 
 
 @pytest.mark.asyncio
-async def test_lowercase_protocol_binding_in_agent_card_still_gets_a_client(isolated_client_cache):
-    """LangGraph Platform serves cards with protocolBinding "jsonrpc"; a2a-sdk matches
-    bindings case-sensitively, so without normalization client creation raises
-    ValueError("no compatible transports found.")."""
-    await _seed_shared_a2a_client(card=_LOWERCASE_BINDING_CARD, rpc_reply=_V1_RPC_REPLY)
+async def test_lowercase_protocol_binding_card_round_trips_the_langgraph_dialect(isolated_client_cache):
+    """LangGraph Platform serves cards with protocolBinding "jsonrpc" and answers in the
+    A2A 0.3 JSON dialect ("kind"-discriminated) while declaring protocolVersion "1.0".
+    Without binding normalization client creation raises ValueError("no compatible
+    transports found."); without the version downgrade the SDK's strict v1 transport
+    rejects the reply with 'Message type "lf.a2a.v1.Task" has no field named "kind"'."""
+    await _seed_shared_a2a_client(card=_LOWERCASE_BINDING_CARD, rpc_reply=_LANGGRAPH_TASK_REPLY)
 
     a2a_client = await create_a2a_client(base_url="http://127.0.0.1:9")
     response = await _send_message(a2a_client, _send_request("lc"))
 
-    assert type(response.root.result).__name__ == "Message"
-    assert a2a_client._litellm_agent_card.supported_interfaces[0].protocol_binding == "JSONRPC"
+    assert type(response.root.result).__name__ == "Task"
+    assert response.root.result.artifacts[0].parts[0].root.text == "langgraph echo: hi"
+    interface = a2a_client._litellm_agent_card.supported_interfaces[0]
+    assert interface.protocol_binding == "JSONRPC"
+    assert interface.protocol_version == "0.3"
 
 
 @pytest.mark.asyncio
