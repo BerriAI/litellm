@@ -1,18 +1,35 @@
 import json
 import threading
+from collections.abc import AsyncIterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import anyio
+import httpx
 import pytest
 
 import litellm
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
+from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.llms.anthropic.chat.handler import ModelResponseIterator, make_call
 from litellm.types.llms.openai import (
     ChatCompletionToolCallChunk,
     ChatCompletionToolCallFunctionChunk,
 )
 from litellm.types.responses.main import OutputCodeInterpreterCall
+
+
+class _RecordingAsyncByteStream(httpx.AsyncByteStream):
+    def __init__(self) -> None:
+        self.aclose_calls: int = 0
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        yield b'data: {"type":"message_start"}\n\n'
+
+    async def aclose(self) -> None:
+        await anyio.sleep(0)
+        self.aclose_calls += 1
 
 
 @pytest.mark.asyncio
@@ -44,6 +61,43 @@ async def test_make_call_passes_logging_obj_to_client_post():
     mock_client.post.assert_called_once()
     call_kwargs = mock_client.post.call_args[1]
     assert call_kwargs.get("logging_obj") is logging_obj
+
+
+@pytest.mark.asyncio
+async def test_make_call_stream_cleanup_closes_http_response_once_under_cancellation():
+    stream: Final = _RecordingAsyncByteStream()
+    response: Final = httpx.Response(200, stream=stream)
+    mock_client: Final = AsyncMock()
+    mock_client.post.return_value = response
+    logging_obj: Final = MagicMock(model_call_details={"litellm_params": {}})
+
+    completion_stream, _ = await make_call(
+        client=mock_client,
+        api_base="https://api.anthropic.com/v1/messages",
+        headers={},
+        data="{}",
+        model="claude-haiku-4-5",
+        messages=[{"role": "user", "content": "Hi"}],
+        logging_obj=logging_obj,
+        timeout=60.0,
+        json_mode=False,
+    )
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=completion_stream,
+        model="claude-haiku-4-5",
+        custom_llm_provider="anthropic",
+        logging_obj=logging_obj,
+    )
+
+    with anyio.CancelScope() as cancel_scope:
+        cancel_scope.cancel()
+        await wrapper.aclose()
+    await wrapper.aclose()
+    await completion_stream.aclose()
+
+    assert response.is_closed is True
+    assert completion_stream.http_response is None
+    assert stream.aclose_calls == 1
 
 
 def test_redacted_thinking_content_block_delta():
