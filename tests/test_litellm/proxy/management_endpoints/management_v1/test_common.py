@@ -52,11 +52,8 @@ def test_an_unknown_query_param_is_rejected_as_a_problem():
 
 
 def test_a_path_param_name_is_not_a_declared_query_param():
-    """The flatten step returns path+query+header together; only query names count as declared.
-
-    If the ParamTypes.query filter were dropped, `thing_id` (a path param) would leak
-    into the declared set and this request would be wrongly accepted.
-    """
+    """`_query_param_aliases` walks `Dependant.query_params`; if it were ever widened
+    to also read `.path_params`, `thing_id` would leak into the declared set."""
     response = _client().get("/things/abc", params={"thing_id": "x"})
     assert response.status_code == 400
     assert "thing_id" in response.json()["detail"]
@@ -102,9 +99,25 @@ def test_declared_query_params_is_empty_when_the_route_has_no_dependant():
     assert _declared_query_params(request) == frozenset()
 
 
-# fastapi removed these in 0.140.7, which `pyproject.toml` still allows via
-# `fastapi>=0.136.3,<1.0`. Add a name here whenever a supported release drops one.
-FASTAPI_NAMES_REMOVED_IN_0_140_7 = frozenset({"get_flat_dependant"})
+def _shared_pagination(page: Annotated[int, Query()] = 1) -> int:
+    return page
+
+
+def test_declared_query_params_includes_a_param_declared_only_on_a_shared_sub_dependency():
+    """`page` sits on `_shared_pagination`'s own Dependant, nested under the route's
+    `dependencies`, not on the route function's own `query_params` — the case a
+    non-recursive walk over just the top-level Dependant would miss."""
+    captured: dict[str, frozenset[str]] = {}
+    app = FastAPI()
+
+    @app.get("/probe")
+    def _handler(request: Request, page: Annotated[int, Depends(_shared_pagination)]) -> dict[str, bool]:
+        captured["declared"] = _declared_query_params(request)
+        return {"ok": True}
+
+    TestClient(app).get("/probe")
+    assert captured["declared"] == frozenset({"page"})
+
 
 MANAGEMENT_V1_PACKAGE = Path(str(common_module.__file__)).parent
 
@@ -113,39 +126,23 @@ def _public_names(module: ModuleType) -> frozenset[str]:
     return frozenset(name for name in vars(module) if not name.startswith("_"))
 
 
-def _fastapi_names_imported_by(source_file: Path) -> frozenset[str]:
+def _modules_imported_from_by(source_file: Path) -> frozenset[str]:
     tree = ast.parse(source_file.read_text())
-    return frozenset(
-        alias.name
-        for node in ast.walk(tree)
-        if isinstance(node, ast.ImportFrom) and (node.module or "").startswith("fastapi")
-        for alias in node.names
-    )
+    return frozenset(node.module for node in ast.walk(tree) if isinstance(node, ast.ImportFrom) and node.module)
 
 
-@pytest.mark.parametrize(
-    "source_file", sorted(MANAGEMENT_V1_PACKAGE.glob("*.py")), ids=lambda path: path.name
-)
-def test_no_module_imports_a_fastapi_name_removed_in_a_supported_release(source_file: Path):
-    """`pyproject.toml` allows fastapi up to <1.0, but CI only ever resolves 0.136.3.
-
-    Every other test here passes just as well against a module importing a name
-    fastapi has since deleted, because the pinned fastapi still has it. On a user's
-    fastapi>=0.140.7 that import is an ImportError, and `proxy_server` imports this
-    package unguarded at module level, so it takes the whole proxy down rather than
-    just these routes. Globbing the package means a new module is covered on sight.
+@pytest.mark.parametrize("source_file", sorted(MANAGEMENT_V1_PACKAGE.glob("*.py")), ids=lambda path: path.name)
+def test_no_module_imports_from_the_private_fastapi_dependencies_utils_module(source_file: Path):
+    """fastapi.dependencies.utils is a private module fastapi has already removed a name
+    from once (get_flat_dependant, in 0.140.7) without notice; the names it still exposes
+    (e.g. get_flat_params) carry the same risk. Nothing here should import from it at all,
+    only from the stable public Dependant dataclass in fastapi.dependencies.models.
     """
-    assert not _fastapi_names_imported_by(source_file) & FASTAPI_NAMES_REMOVED_IN_0_140_7
+    assert "fastapi.dependencies.utils" not in _modules_imported_from_by(source_file)
 
 
-def test_common_still_imports_when_fastapi_has_dropped_those_names(monkeypatch: pytest.MonkeyPatch):
-    """The static check above cannot prove the module actually loads; this does.
-
-    Behaviour cannot be asserted under the same simulation: on 0.136.3
-    `get_flat_params` calls `get_flat_dependant` internally, so it raises NameError
-    once the name is gone. Loading is the part this pins.
-    """
-    for name in FASTAPI_NAMES_REMOVED_IN_0_140_7:
+def test_common_still_imports_with_fastapi_dependencies_utils_emptied_out(monkeypatch: pytest.MonkeyPatch):
+    for name in ("get_flat_dependant", "get_flat_params"):
         monkeypatch.delattr(fastapi_dependency_utils, name, raising=False)
     spec = importlib.util.spec_from_file_location(
         "management_v1_common__simulated_fastapi", Path(str(common_module.__file__))

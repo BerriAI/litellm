@@ -4501,7 +4501,7 @@ requires-dist = [
     { name = "detect-secrets", marker = "extra == 'proxy-runtime'", specifier = ">=1.5.0,<2.0" },
     { name = "diskcache", marker = "extra == 'caching'", specifier = ">=5.6.3,<6.0" },
     { name = "expression", marker = "extra == 'proxy'", specifier = ">=5.6.0,<6.0" },
-    { name = "fastapi", marker = "extra == 'proxy'", specifier = ">=0.136.3,<1.0" },
+    { name = "fastapi", marker = "extra == 'proxy'", specifier = ">=0.136.3,<0.142" },
     { name = "fastapi-sso", marker = "extra == 'proxy'", specifier = ">=0.19.0,<1.0" },
     { name = "fastuuid", specifier = ">=0.14.0,<1.0" },
     { name = "google-cloud-aiplatform", marker = "extra == 'google'", specifier = ">=1.133.0,<2.0" },
