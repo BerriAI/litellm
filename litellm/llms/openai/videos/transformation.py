@@ -101,6 +101,9 @@ class OpenAIVideoConfig(BaseVideoConfig):
 
         return f"{api_base.rstrip('/')}/videos"
 
+    def use_multipart_form_data(self) -> bool:
+        return True
+
     def transform_video_create_request(
         self,
         model: str,
