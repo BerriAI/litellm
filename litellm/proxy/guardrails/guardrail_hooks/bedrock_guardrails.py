@@ -30,7 +30,10 @@ from litellm.caching import DualCache
 from litellm.constants import BEDROCK_APPLY_GUARDRAIL_CHUNK_BUDGET_CHARS
 from litellm.exceptions import ModifyResponseException
 from litellm.integrations.custom_guardrail import CustomGuardrail
-from litellm.litellm_core_utils.core_helpers import redact_nested_match_and_regex_keys
+from litellm.litellm_core_utils.core_helpers import (
+    get_metadata_variable_name_from_kwargs,
+    redact_nested_match_and_regex_keys,
+)
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import bedrock_guardrail_cost
 from litellm.llms.anthropic.chat.guardrail_translation.handler import AnthropicMessagesHandler
 from litellm.llms.base_llm.guardrail_translation.utils import (
@@ -690,14 +693,10 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         if llm_router is None:
             return None
 
-        metadata: Final = request_data.get("metadata")
-        litellm_metadata: Final = request_data.get("litellm_metadata")
+        metadata_key: Final = get_metadata_variable_name_from_kwargs(dict(request_data))
+        metadata: Final = request_data.get(metadata_key)
         team_id: Final[object | None] = (
-            metadata.get("user_api_key_team_id")
-            if isinstance(metadata, Mapping)
-            else litellm_metadata.get("user_api_key_team_id")
-            if isinstance(litellm_metadata, Mapping)
-            else None
+            metadata.get("user_api_key_team_id") if isinstance(metadata, Mapping) else None
         )
         try:
             deployments: Final = llm_router.get_model_list(
@@ -706,11 +705,25 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             ) or []
         except Exception:
             return False
-        if not deployments:
+        active_deployments = []
+        for deployment in deployments:
+            model_info = (
+                deployment.get("model_info")
+                if isinstance(deployment, Mapping)
+                else getattr(deployment, "model_info", None)
+            )
+            blocked = (
+                model_info.get("blocked")
+                if isinstance(model_info, Mapping)
+                else getattr(model_info, "blocked", None)
+            )
+            if blocked is not True:
+                active_deployments.append(deployment)
+        if not active_deployments:
             return False
 
         providers: list[str] = []
-        for deployment in deployments:
+        for deployment in active_deployments:
             params: object = deployment.get("litellm_params") if isinstance(deployment, Mapping) else None
             provider: object = params.get("custom_llm_provider") if isinstance(params, Mapping) else None
             if not isinstance(provider, str) and isinstance(params, Mapping):

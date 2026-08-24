@@ -11,6 +11,34 @@ from litellm.caching import DualCache
 from unittest.mock import MagicMock, AsyncMock, patch
 
 
+def test_bedrock_guardrail_uses_active_metadata_bucket_for_team_id():
+    router = MagicMock()
+    router.get_model_list.return_value = [
+        {"litellm_params": {"custom_llm_provider": "bedrock"}, "model_info": {}}
+    ]
+    request_data = {
+        "model": "team-alias",
+        "metadata": {"user_api_key_team_id": "legacy-team"},
+        "litellm_metadata": {"user_api_key_team_id": "active-team"},
+    }
+
+    with patch("litellm.proxy.proxy_server.llm_router", router):
+        assert BedrockGuardrail._router_allows_bedrock(request_data) is True
+
+    router.get_model_list.assert_called_once_with(model_name="team-alias", team_id="active-team")
+
+
+def test_bedrock_guardrail_ignores_blocked_deployments():
+    router = MagicMock()
+    router.get_model_list.return_value = [
+        {"litellm_params": {"custom_llm_provider": "openai"}, "model_info": {"blocked": True}},
+        {"litellm_params": {"custom_llm_provider": "bedrock"}, "model_info": {}},
+    ]
+
+    with patch("litellm.proxy.proxy_server.llm_router", router):
+        assert BedrockGuardrail._router_allows_bedrock({"model": "alias"}) is True
+
+
 @pytest.mark.asyncio
 async def test_bedrock_guardrails_pii_masking():
     # Create proper mock objects
