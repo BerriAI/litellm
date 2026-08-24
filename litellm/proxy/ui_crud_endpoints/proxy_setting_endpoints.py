@@ -21,6 +21,7 @@ from litellm.proxy.config_resolvers.sso import (
     SSO_SECRET_FIELDS,
     resolve_sso_config,
 )
+from litellm.proxy.spend_tracking.ptu_feature_flag import is_ptu_cost_attribution_enabled
 from litellm.proxy.utils import invalidate_config_param
 from litellm.repositories.config_repository import ConfigRepository
 from litellm.repositories.organization_repository import OrganizationRepository
@@ -109,6 +110,7 @@ def _config_param_db(repo: _HasConfigParamTable) -> _PrismaTableActions[_ConfigP
 # reflect a deployment branded purely through process env.
 _UI_THEME_FIELD_ENV_VARS: Final[dict[str, str]] = {
     "logo_url": "UI_LOGO_PATH",
+    "logo_url_dark": "UI_LOGO_PATH_DARK",
     "favicon_url": "LITELLM_FAVICON_URL",
 }
 
@@ -153,6 +155,14 @@ class UIThemeConfig(BaseModel):
     logo_url: str | None = Field(
         default=None,
         description="URL or path to custom logo image. Can be a local file path or HTTP/HTTPS URL",
+    )
+
+    logo_url_dark: str | None = Field(
+        default=None,
+        description=(
+            "URL or path to a custom logo image for dark mode. Can be a local file path or HTTP/HTTPS URL. "
+            "Leave unset to reuse logo_url in dark mode"
+        ),
     )
 
     # Favicon configuration
@@ -306,6 +316,27 @@ ALLOWED_UI_SETTINGS_FIELDS: Final = {
     "disable_key_generate_for_org_admin",
     "enable_chat_ui",
 }
+
+ENABLE_PTU_COST_ATTRIBUTION_UI_SETTING: Final = "enable_ptu_cost_attribution"
+
+# UI settings derived from the deployment environment. Deliberately kept out of
+# ALLOWED_UI_SETTINGS_FIELDS: they are read-only, never persisted, and PATCH
+# rejects them so an admin cannot flip an env-gated feature at runtime.
+_DERIVED_UI_SETTINGS_FIELDS: Final[frozenset[str]] = frozenset({ENABLE_PTU_COST_ATTRIBUTION_UI_SETTING})
+
+
+def _derived_ui_setting_value(key: str) -> object:
+    """The environment-derived value GET reports for ``key``.
+
+    PATCH compares against this rather than rejecting the key outright, so the body GET
+    hands back is still a valid PATCH body. Rejecting on presence broke read-modify-write:
+    a client that edited one setting and sent the rest back unchanged got a 400 and lost
+    the edit it actually wanted.
+    """
+    if key == ENABLE_PTU_COST_ATTRIBUTION_UI_SETTING:
+        return is_ptu_cost_attribution_enabled()
+    return None
+
 
 # Flags that must be synced from the persisted UISettings into
 # general_settings at runtime (on both read and write).
@@ -644,7 +675,7 @@ async def get_internal_user_settings():
 )
 async def get_default_team_settings():
     """
-    Get all SSO settings from the litellm_settings configuration.
+    Get the default team parameters (litellm_settings.default_team_params).
     Returns a structured object with values and descriptions for UI display.
     """
     from litellm.proxy.proxy_server import proxy_config
@@ -872,8 +903,9 @@ async def update_default_team_settings(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
-    Update the default team parameters for SSO users.
-    These settings will be applied to new teams created from SSO.
+    Update the default team parameters (litellm_settings.default_team_params).
+    Applied to every new team for fields not explicitly provided in the create request;
+    `models` only applies to teams automatically created via SSO Groups.
     """
     if settings.organization_id is not None:
         await _validate_default_organization_exists(settings.organization_id)
@@ -1161,6 +1193,7 @@ async def update_ui_theme_settings(
     )
 
     _validate_public_image_url(theme_config.logo_url, "logo_url")
+    _validate_public_image_url(theme_config.logo_url_dark, "logo_url_dark")
     _validate_public_image_url(theme_config.favicon_url, "favicon_url")
 
     if store_model_in_db is not True:
@@ -1181,16 +1214,18 @@ async def update_ui_theme_settings(
         config["litellm_settings"] = {}
     config["litellm_settings"]["ui_theme_config"] = theme_data
 
-    # UI_LOGO_PATH and LITELLM_FAVICON_URL are the only environment variables
-    # this endpoint owns. A non-empty value sets the var; an empty or missing
-    # one clears it back to the default. Apply to the live process immediately,
-    # then persist only these two keys so an unrelated env var (a YAML/OS value
-    # merged in by get_config) is never snapshotted into the DB.
+    # The vars below are the only environment variables this endpoint owns, and
+    # they must stay in step with _UI_THEME_FIELD_ENV_VARS. A non-empty value
+    # sets the var; an empty or missing one clears it back to the default. Apply
+    # to the live process immediately, then persist only those keys so an
+    # unrelated env var (a YAML/OS value merged in by get_config) is never
+    # snapshotted into the DB.
     def _clean(url: str | None) -> str | None:
         return url if url is not None and url.strip() else None
 
     env_updates: Final[dict[str, str | None]] = {
         "UI_LOGO_PATH": _clean(theme_config.logo_url),
+        "UI_LOGO_PATH_DARK": _clean(theme_config.logo_url_dark),
         "LITELLM_FAVICON_URL": _clean(theme_config.favicon_url),
     }
     for env_key, env_value in env_updates.items():
@@ -1345,21 +1380,15 @@ async def get_ui_settings():
             detail={"error": "Database not connected. Please connect a database."},
         )
 
-    ui_settings: Mapping[str, JsonValue] = {}
-
     db_record: Final = await _ui_settings_db(UISettingsRepository(prisma_client)).find_unique(
         where={"id": "ui_settings"}
     )
 
-    if db_record and db_record.ui_settings:
-        ui_settings_json: Final = db_record.ui_settings
-        if isinstance(ui_settings_json, str):
-            ui_settings = json.loads(ui_settings_json)
-        else:
-            ui_settings = dict(ui_settings_json)
+    stored: Final = (db_record.ui_settings if db_record else None) or "{}"
+    parsed: Final = json.loads(stored) if isinstance(stored, str) else stored
 
     # Sanitize any unexpected keys from persisted config before returning
-    ui_settings = {k: v for k, v in ui_settings.items() if k in ALLOWED_UI_SETTINGS_FIELDS}
+    ui_settings: Final = {k: v for k, v in parsed.items() if k in ALLOWED_UI_SETTINGS_FIELDS}
 
     # Sync runtime flags into general_settings so the proxy picks them up
     # at runtime (covers server restart scenarios).
@@ -1377,10 +1406,17 @@ async def get_ui_settings():
     # Build config-like object for schema helper
     config: Final[dict[str, object]] = {"litellm_settings": {"ui_settings": ui_settings}}
 
-    return await _get_settings_with_schema(
+    settings: Final = await _get_settings_with_schema(
         settings_key="ui_settings",
         settings_class=_get_effective_ui_settings_class(),
         config=config,
+    )
+    return UISettingsResponse(
+        values={
+            **settings["values"],
+            ENABLE_PTU_COST_ATTRIBUTION_UI_SETTING: is_ptu_cost_attribution_enabled(),
+        },
+        field_schema=settings["field_schema"],
     )
 
 
@@ -1416,6 +1452,20 @@ async def update_ui_settings(
         raise HTTPException(
             status_code=500,
             detail={"error": "Set `'STORE_MODEL_IN_DB='True'` in your env to enable this feature."},
+        )
+
+    conflicting_keys: Final = sorted(
+        key
+        for key, value in settings_body.items()
+        if key in _DERIVED_UI_SETTINGS_FIELDS and value != _derived_ui_setting_value(key)
+    )
+    if conflicting_keys:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Setting(s) {conflicting_keys} are derived from the deployment environment "
+                "and cannot be changed from the UI."
+            ),
         )
 
     # Validate against the same effective class GET advertises, so

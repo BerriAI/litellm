@@ -6,11 +6,9 @@ count actual model entries, not reserved meta keys) and the extraction of the
 
 import json
 import os
-import sys
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../.."))
 
 from litellm.litellm_core_utils.fallback_generalizations import (
     get_fallback_generalization_rules,

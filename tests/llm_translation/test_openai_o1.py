@@ -1,12 +1,8 @@
 import json
 import os
-import sys
 from datetime import datetime
 from unittest.mock import AsyncMock, patch, MagicMock
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 
 
 import httpx
@@ -134,7 +130,6 @@ def test_litellm_responses():
     """
     ensures that type of completion_tokens_details is correctly handled / returned
     """
-    from litellm import ModelResponse
     from litellm.types.utils import CompletionTokensDetails
 
     response = ModelResponse(

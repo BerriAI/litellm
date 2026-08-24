@@ -6,24 +6,31 @@ path used for OpenAI and Azure models.
 """
 
 import json
+from collections.abc import Iterable
 from typing import Any, Final, cast
 
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    TOOL_RESULT_IMAGE_BOUNDARY,
+    TOOL_RESULT_IMAGE_PLACEHOLDER,
+    with_prompt_cache_breakpoint,
+)
 from litellm.litellm_core_utils.reasoning_effort_utils import (
     reasoning_effort_from_thinking_budget,
 )
 from litellm.llms.anthropic.experimental_pass_through.utils import (
     is_reasoning_auto_summary_enabled,
+    prompt_cache_key_from_user_id,
 )
 from litellm.types.llms.anthropic import (
+    AllAnthropicPassThroughMessageValues,
     AllAnthropicToolsValues,
-    AnthopicMessagesAssistantMessageParam,
     AnthropicFinishReason,
     AnthropicMessagesRequest,
     AnthropicMessagesToolChoice,
-    AnthropicMessagesUserMessageParam,
     AnthropicResponseContentBlockText,
     AnthropicResponseContentBlockThinking,
     AnthropicResponseContentBlockToolUse,
+    AnthropicSystemMessageContent,
 )
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
@@ -61,8 +68,10 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
     # ------------------------------------------------------------------ #
 
     @staticmethod
-    def _translate_anthropic_image_source_to_url(source: dict) -> str | None:
+    def _translate_anthropic_image_source_to_url(source: object) -> str | None:
         """Convert Anthropic image source to a URL string."""
+        if not isinstance(source, dict):
+            return None
         source_type: Final = source.get("type")
         if source_type == "base64":
             media_type: Final = source.get("media_type", "image/jpeg")
@@ -72,14 +81,34 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             return source.get("url")
         return None
 
+    @staticmethod
+    def _translate_midturn_system_content_to_responses(
+        content: str | Iterable[AnthropicSystemMessageContent],
+    ) -> list[dict[str, object]]:  # mutable-ok: API message payload
+        """Convert in-sequence system content to Responses input-text parts."""
+        if isinstance(content, str):
+            return (
+                [{"type": "input_text", "text": content}] if content else []  # mutable-ok: API message payload
+            )  # mutable-ok: API message payload
+        if not isinstance(content, list):
+            return []  # mutable-ok: API message payload
+        return [  # mutable-ok: API message payload
+            with_prompt_cache_breakpoint(
+                {"type": "input_text", "text": text}, block.get("prompt_cache_breakpoint")
+            )  # mutable-ok: API message payload
+            for block in content
+            if isinstance(block, dict) and block.get("type") == "text" and (text := block.get("text"))  # pyright: ignore[reportUnnecessaryIsInstance]  # untrusted client payload
+        ]
+
     def translate_messages_to_responses_input(
         self,
-        messages: list[AnthropicMessagesUserMessageParam | AnthopicMessagesAssistantMessageParam],
+        messages: list[AllAnthropicPassThroughMessageValues],
     ) -> list[dict[str, Any]]:
         """
         Convert Anthropic messages list to Responses API `input` items.
 
         Mapping:
+          system text        -> message(role=system, input_text)
           user text          -> message(role=user, input_text)
           user image         -> message(role=user, input_image)
           user tool_result   -> function_call_output
@@ -89,6 +118,18 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         input_items: Final[list[dict[str, Any]]] = []
 
         for m in messages:
+            if m["role"] == "system":
+                system_parts = self._translate_midturn_system_content_to_responses(m.get("content"))
+                if system_parts:
+                    input_items.append(
+                        {  # mutable-ok: API message payload
+                            "type": "message",
+                            "role": "system",
+                            "content": system_parts,
+                        }
+                    )
+                continue
+
             role = m["role"]
             content = m.get("content")
 
@@ -103,16 +144,26 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                     )
                 elif isinstance(content, list):
                     user_parts: list[dict[str, Any]] = []
+                    tool_image_parts: list[dict[str, Any]] = []  # mutable-ok: json content parts
                     for block in content:
                         if not isinstance(block, dict):
                             continue
                         btype = block.get("type")
                         if btype == "text":
-                            user_parts.append({"type": "input_text", "text": block.get("text", "")})
+                            user_parts.append(
+                                with_prompt_cache_breakpoint(
+                                    {"type": "input_text", "text": block.get("text", "")},
+                                    block.get("prompt_cache_breakpoint"),
+                                )
+                            )
                         elif btype == "image":
                             url = self._translate_anthropic_image_source_to_url(cast(dict, block.get("source", {})))
                             if url:
-                                user_parts.append({"type": "input_image", "image_url": url})
+                                user_parts.append(
+                                    with_prompt_cache_breakpoint(
+                                        {"type": "input_image", "image_url": url}, block.get("prompt_cache_breakpoint")
+                                    )
+                                )
                         elif btype == "tool_result":
                             tool_use_id = block.get("tool_use_id", "")
                             inner = block.get("content")
@@ -125,6 +176,22 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                                     c.get("text", "") for c in inner if isinstance(c, dict) and c.get("type") == "text"
                                 ]
                                 output_text = "\n".join(parts)
+                                image_candidates = tuple(
+                                    self._translate_anthropic_image_source_to_url(c.get("source"))
+                                    for c in inner
+                                    if isinstance(c, dict) and c.get("type") == "image"
+                                )
+                                image_urls = tuple(url for url in image_candidates if url)
+                                if image_urls:
+                                    output_text = (
+                                        f"{output_text}\n{TOOL_RESULT_IMAGE_PLACEHOLDER}"
+                                        if output_text
+                                        else TOOL_RESULT_IMAGE_PLACEHOLDER
+                                    )
+                                    tool_image_parts.extend(
+                                        {"type": "input_image", "image_url": url}  # mutable-ok: json content part
+                                        for url in image_urls
+                                    )
                             else:
                                 output_text = str(inner)
                             # tool_result is a top-level item, not inside the message
@@ -135,6 +202,18 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                                     "output": output_text,
                                 }
                             )
+                    if tool_image_parts:
+                        boundary_part = {  # mutable-ok: json content part
+                            "type": "input_text",
+                            "text": TOOL_RESULT_IMAGE_BOUNDARY,
+                        }
+                        input_items.append(
+                            {  # mutable-ok: json input item
+                                "type": "message",
+                                "role": "user",
+                                "content": [boundary_part, *tool_image_parts],  # mutable-ok: json content list
+                            }
+                        )
                     if user_parts:
                         input_items.append(
                             {
@@ -200,7 +279,13 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             if (isinstance(tool_type, str) and tool_type.startswith("web_search")) or tool_name == "web_search":
                 result.append({"type": "web_search_preview"})
                 continue
-            func_tool: dict[str, Any] = {"type": "function", "name": tool_name}
+            # Responses turns strict mode on when `strict` is omitted, silently rewriting
+            # `required` to every property. Anthropic tools are non-strict unless asked.
+            func_tool: dict[str, Any] = {
+                "type": "function",
+                "name": tool_name,
+                "strict": bool(tool_dict.get("strict")),
+            }
             if "description" in tool_dict:
                 func_tool["description"] = tool_dict["description"]
             if "input_schema" in tool_dict:
@@ -300,23 +385,40 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         """
         model: Final[str] = anthropic_request["model"]
         messages_list: Final = cast(
-            list[AnthropicMessagesUserMessageParam | AnthopicMessagesAssistantMessageParam],
+            list[AllAnthropicPassThroughMessageValues],
             anthropic_request["messages"],
         )
 
+        input_items: Final = self.translate_messages_to_responses_input(messages_list)
+        system: Final = anthropic_request.get("system")
+        developer_parts: Final = (
+            self._translate_midturn_system_content_to_responses(system)
+            if isinstance(system, list)
+            and any(isinstance(block, dict) and block.get("prompt_cache_breakpoint") is not None for block in system)
+            else ()
+        )
+        if developer_parts:
+            input_items.insert(
+                0,
+                {  # mutable-ok: API message payload
+                    "type": "message",
+                    "role": "developer",
+                    "content": developer_parts,
+                },
+            )
+
         responses_kwargs: Final[dict[str, Any]] = {
             "model": model,
-            "input": self.translate_messages_to_responses_input(messages_list),
+            "input": input_items,
         }
 
-        # system -> instructions
-        system: Final = anthropic_request.get("system")
-        if system:
+        if system and not developer_parts:
             if isinstance(system, str):
                 responses_kwargs["instructions"] = system
             elif isinstance(system, list):
-                text_parts = [b.get("text", "") for b in system if isinstance(b, dict) and b.get("type") == "text"]
-                responses_kwargs["instructions"] = "\n".join(filter(None, text_parts))
+                responses_kwargs["instructions"] = "\n".join(
+                    filter(None, (b.get("text", "") for b in system if isinstance(b, dict) and b.get("type") == "text"))
+                )
 
         # max_tokens -> max_output_tokens
         max_tokens: Final = anthropic_request.get("max_tokens")
@@ -380,10 +482,13 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             if openai_cm is not None:
                 responses_kwargs["context_management"] = openai_cm
 
-        # metadata user_id -> user
+        # metadata user_id -> user and prompt_cache_key
         metadata: Final = anthropic_request.get("metadata")
         if isinstance(metadata, dict) and "user_id" in metadata:
             responses_kwargs["user"] = str(metadata["user_id"])[:64]
+            prompt_cache_key: Final = prompt_cache_key_from_user_id(metadata["user_id"])
+            if prompt_cache_key is not None:
+                responses_kwargs["prompt_cache_key"] = prompt_cache_key
 
         return responses_kwargs
 

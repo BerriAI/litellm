@@ -1,15 +1,10 @@
 import asyncio
 import json
-import os
-import sys
 from typing import Any, Dict, Final, List, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 from litellm.router_strategy.auto_router.auto_router import AutoRouter
 
@@ -479,3 +474,85 @@ class TestAutoRouterEmbeddingInputCap:
 
         assert auto_router.routelayer is not None
         assert auto_router.routelayer.encoder.max_input_chars == 777
+
+
+class TestAutoRouterRoutesResponsesApiInput:
+    """Responses API requests carry the prompt in `input`, not `messages`, and still have to reach the route layer."""
+
+    @pytest.mark.asyncio
+    async def test_should_route_a_string_input_when_messages_is_none(self):
+        from semantic_router.schema import RouteChoice
+
+        layer: Final = FixedRouteLayer(RouteChoice(name="code-model"))
+        auto_router: Final = _auto_router(layer)
+
+        result: Final = await auto_router.async_pre_routing_hook(
+            model="my-auto-router",
+            request_kwargs={
+                "input": "fix this stack trace",
+                "litellm_metadata": {"user_api_key_request_route": "/v1/responses"},
+            },
+            messages=None,
+        )
+
+        assert result is not None
+        assert result.model == "code-model"
+        assert result.messages is None
+        assert layer.seen_text == "fix this stack trace"
+
+    @pytest.mark.asyncio
+    async def test_should_route_a_list_input_with_instructions_when_messages_is_none(self):
+        from semantic_router.schema import RouteChoice
+
+        layer: Final = FixedRouteLayer(RouteChoice(name="code-model"))
+        auto_router: Final = _auto_router(layer)
+
+        result: Final = await auto_router.async_pre_routing_hook(
+            model="my-auto-router",
+            request_kwargs={
+                "instructions": "You are a coding agent.",
+                "input": [
+                    {
+                        "type": "message",
+                        "role": "user",
+                        "content": [{"type": "input_text", "text": "fix this stack trace"}],
+                    }
+                ],
+                "litellm_metadata": {"user_api_key_request_route": "/v1/responses"},
+            },
+            messages=None,
+        )
+
+        assert result is not None
+        assert result.model == "code-model"
+        assert layer.seen_text is not None
+        assert "fix this stack trace" in layer.seen_text
+
+    @pytest.mark.asyncio
+    async def test_should_skip_routing_when_neither_messages_nor_input_is_present(self):
+        layer: Final = FixedRouteLayer(None)
+        auto_router: Final = _auto_router(layer)
+
+        result: Final = await auto_router.async_pre_routing_hook(
+            model="my-auto-router",
+            request_kwargs={"litellm_metadata": {"user_api_key_request_route": "/v1/responses"}},
+            messages=None,
+        )
+
+        assert result is None
+        assert layer.seen_text is None
+
+    @pytest.mark.asyncio
+    async def test_should_keep_routing_an_empty_messages_list_to_the_default_model(self):
+        layer: Final = FixedRouteLayer(None)
+        auto_router: Final = _auto_router(layer)
+
+        result: Final = await auto_router.async_pre_routing_hook(
+            model="my-auto-router",
+            request_kwargs={"messages": [], "litellm_metadata": {"user_api_key_request_route": "/v1/chat/completions"}},
+            messages=[],
+        )
+
+        assert result is not None
+        assert result.model == "fallback-model"
+        assert layer.seen_text == ""

@@ -9,15 +9,11 @@ counting, the test will be skipped.
 """
 
 import os
-import sys
 from typing import Any, Dict, List
 from unittest.mock import patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
 from litellm.llms.bedrock.count_tokens.bedrock_token_counter import BedrockTokenCounter

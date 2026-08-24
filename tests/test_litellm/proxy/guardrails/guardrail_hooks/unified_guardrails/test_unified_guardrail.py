@@ -1016,10 +1016,9 @@ class TestStreamingTransform:
 
     @pytest.mark.asyncio
     async def test_emit_streaming_http_error_a2a_yields_jsonrpc_chunk(self):
-        """The shared streaming error helper emits an in-stream JSON-RPC error for
-        A2A call types instead of raising."""
-        import json
-
+        """The shared streaming error helper emits an in-stream JSON-RPC error
+        object (not a pre-serialized string, which the A2A endpoint would frame as
+        a JSON string instead of an error object) for A2A call types."""
         handler = UnifiedLLMGuardrails()
         exc = unified_module.HTTPException(
             status_code=400,
@@ -1036,7 +1035,8 @@ class TestStreamingTransform:
             emitted.append(item)
 
         assert len(emitted) == 1
-        payload = json.loads(emitted[0])
+        payload = emitted[0]
+        assert isinstance(payload, dict)
         assert payload["error"]["message"] == "stream_transform_underflow"
         assert payload["id"] == "req-1"
 
