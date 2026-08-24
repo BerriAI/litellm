@@ -24,6 +24,7 @@ from litellm.litellm_core_utils.agentic_loop_settings import (
     validated_max_agentic_loops,
 )
 from litellm.litellm_core_utils.asyncify import run_async_function
+from litellm.litellm_core_utils.llm_request_utils import serialize_multipart_form_fields
 from litellm.litellm_core_utils.realtime_errors import realtime_error_event, websocket_close_reason
 from litellm.litellm_core_utils.realtime_streaming import RealTimeStreaming
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment
@@ -7050,9 +7051,7 @@ class BaseLLMHTTPHandler:
         )
 
         try:
-            # Use JSON when no files, otherwise use form data with files
             if files and len(files) > 0:
-                # Use multipart/form-data when files are present
                 response = sync_httpx_client.post(
                     url=api_base,
                     headers=headers,
@@ -7060,9 +7059,14 @@ class BaseLLMHTTPHandler:
                     files=files,
                     timeout=timeout,
                 )
-
+            elif video_generation_provider_config.use_multipart_form_data():
+                response = sync_httpx_client.post(
+                    url=api_base,
+                    headers=headers,
+                    files=serialize_multipart_form_fields(data),
+                    timeout=timeout,
+                )
             else:
-                # Use JSON content type for POST requests without files
                 response = sync_httpx_client.post(
                     url=api_base,
                     headers=headers,
@@ -7154,20 +7158,26 @@ class BaseLLMHTTPHandler:
         )
 
         try:
-            # Use JSON when no files, otherwise use form data with files
-            if files is None or len(files) == 0:
+            if files and len(files) > 0:
                 response = await async_httpx_client.post(
                     url=api_base,
                     headers=headers,
-                    json=data,
+                    data=data,
+                    files=files,
+                    timeout=timeout,
+                )
+            elif video_generation_provider_config.use_multipart_form_data():
+                response = await async_httpx_client.post(
+                    url=api_base,
+                    headers=headers,
+                    files=serialize_multipart_form_fields(data),
                     timeout=timeout,
                 )
             else:
                 response = await async_httpx_client.post(
                     url=api_base,
                     headers=headers,
-                    data=data,
-                    files=files,
+                    json=data,
                     timeout=timeout,
                 )
 

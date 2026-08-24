@@ -846,6 +846,15 @@ def image_edit(
             additional_drop_params=kwargs.get("additional_drop_params"),
         )
 
+        if (
+            custom_llm_provider == "openai"
+            or custom_llm_provider == "azure"
+            or custom_llm_provider in litellm.openai_compatible_providers
+        ):
+            image_edit_request_params.update(non_default_params)
+            if isinstance(extra_body, dict):
+                image_edit_request_params.update(extra_body)
+
         # Pre Call logging
         litellm_logging_obj.update_from_kwargs(
             kwargs=kwargs,
@@ -995,6 +1004,9 @@ async def aimage_edit(
             response_format=response_format,
             size=size,
             user=user,
+            extra_headers=extra_headers,
+            extra_query=extra_query,
+            extra_body=extra_body,
             timeout=timeout,
             custom_llm_provider=custom_llm_provider,
             **kwargs,
