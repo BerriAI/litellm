@@ -119,9 +119,7 @@ class PromptManagementBase(ABC):
         compiled_prompt_client["completed_messages"] = messages
         return compiled_prompt_client
 
-    def _get_model_from_prompt(
-        self, prompt_management_client: PromptManagementClient, model: str
-    ) -> str:
+    def _get_model_from_prompt(self, prompt_management_client: PromptManagementClient, model: str) -> str:
         if prompt_management_client["prompt_template_model"] is not None:
             return prompt_management_client["prompt_template_model"]
         else:
@@ -138,23 +136,15 @@ class PromptManagementBase(ABC):
     ):
         completed_messages = prompt_template["completed_messages"] or messages
 
-        prompt_template_optional_params = (
-            prompt_template["prompt_template_optional_params"] or {}
-        )
+        prompt_template_optional_params = prompt_template["prompt_template_optional_params"] or {}
 
         updated_non_default_params = {
             **non_default_params,
-            **(
-                prompt_template_optional_params
-                if not ignore_prompt_manager_optional_params
-                else {}
-            ),
+            **(prompt_template_optional_params if not ignore_prompt_manager_optional_params else {}),
         }
 
         if not ignore_prompt_manager_model:
-            model = self._get_model_from_prompt(
-                prompt_management_client=prompt_template, model=model
-            )
+            model = self._get_model_from_prompt(prompt_management_client=prompt_template, model=model)
         else:
             model = model
 

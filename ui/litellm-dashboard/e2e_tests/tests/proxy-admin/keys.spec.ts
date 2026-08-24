@@ -89,12 +89,8 @@ test.describe("Proxy Admin - Keys", () => {
     await page.getByRole("spinbutton", { name: "RPM Limit" }).fill("456");
     await page.getByRole("button", { name: "Save Changes" }).click();
 
-    await expect(
-      page.getByRole("paragraph").filter({ hasText: "TPM: 123" })
-    ).toBeVisible({ timeout: 10_000 });
-    await expect(
-      page.getByRole("paragraph").filter({ hasText: "RPM: 456" })
-    ).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByRole("paragraph").filter({ hasText: "TPM: 123" })).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByRole("paragraph").filter({ hasText: "RPM: 456" })).toBeVisible({ timeout: 10_000 });
   });
 
   test("Delete key", async ({ page }) => {

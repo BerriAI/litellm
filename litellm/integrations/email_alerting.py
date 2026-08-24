@@ -7,6 +7,7 @@ from typing import List, Optional
 
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm.proxy._types import WebhookEvent
+from litellm.repositories.team_repository import TeamRepository
 
 # we use this for the email header, please send a test email if you change this. verify it looks good on email
 LITELLM_LOGO_URL = "https://litellm-listing.s3.amazonaws.com/litellm_logo.png"
@@ -14,9 +15,7 @@ LITELLM_SUPPORT_CONTACT = "support@berri.ai"
 
 
 async def get_all_team_member_emails(team_id: Optional[str] = None) -> list:
-    verbose_logger.debug(
-        "Email Alerting: Getting all team members for team_id=%s", team_id
-    )
+    verbose_logger.debug("Email Alerting: Getting all team members for team_id=%s", team_id)
     if team_id is None:
         return []
     from litellm.proxy.proxy_server import prisma_client
@@ -24,7 +23,7 @@ async def get_all_team_member_emails(team_id: Optional[str] = None) -> list:
     if prisma_client is None:
         raise Exception("Not connected to DB!")
 
-    team_row = await prisma_client.db.litellm_teamtable.find_unique(
+    team_row = await TeamRepository(prisma_client).table.find_unique(
         where={
             "team_id": team_id,
         }
@@ -75,9 +74,7 @@ async def send_team_budget_alert(webhook_event: WebhookEvent) -> bool:
 
     _team_id = webhook_event.team_id
     team_alias = webhook_event.team_alias
-    verbose_logger.debug(
-        "Email Alerting: Sending Team Budget Alert for team=%s", team_alias
-    )
+    verbose_logger.debug("Email Alerting: Sending Team Budget Alert for team=%s", team_alias)
 
     email_logo_url = os.getenv("SMTP_SENDER_LOGO", os.getenv("EMAIL_LOGO_URL", None))
     email_support_contact = os.getenv("EMAIL_SUPPORT_CONTACT", None)
@@ -92,9 +89,7 @@ async def send_team_budget_alert(webhook_event: WebhookEvent) -> bool:
         email_support_contact = LITELLM_SUPPORT_CONTACT
     recipient_emails = await get_all_team_member_emails(_team_id)
     recipient_emails_str: str = ",".join(recipient_emails)
-    verbose_logger.debug(
-        "Email Alerting: Sending team budget alert to %s", recipient_emails_str
-    )
+    verbose_logger.debug("Email Alerting: Sending team budget alert to %s", recipient_emails_str)
 
     event_name = webhook_event.event_message
     max_budget = webhook_event.max_budget

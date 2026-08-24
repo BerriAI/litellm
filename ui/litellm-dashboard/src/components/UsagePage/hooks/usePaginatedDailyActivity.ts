@@ -68,10 +68,7 @@ const EMPTY_DATA: DailyActivityResponse = {
   },
 };
 
-function sumMetadata(
-  a: Record<string, any>,
-  b: Record<string, any>,
-): Record<string, any> {
+function sumMetadata(a: Record<string, any>, b: Record<string, any>): Record<string, any> {
   const result = { ...a };
   for (const key of SUMMABLE_METADATA_KEYS) {
     result[key] = (a[key] || 0) + (b[key] || 0);
@@ -139,8 +136,7 @@ export function usePaginatedDailyActivity({
     cancelledRef.current = false;
     setCancelled(false);
 
-    const isStale = () =>
-      fetchIdRef.current !== currentFetchId || cancelledRef.current;
+    const isStale = () => fetchIdRef.current !== currentFetchId || cancelledRef.current;
 
     /** Cancellable delay that clears itself on cleanup. */
     const delay = (ms: number) =>
@@ -196,10 +192,7 @@ export function usePaginatedDailyActivity({
           if (isStale()) return;
 
           accumulatedResults = [...accumulatedResults, ...pageData.results];
-          accumulatedMetadata = sumMetadata(
-            accumulatedMetadata,
-            pageData.metadata,
-          );
+          accumulatedMetadata = sumMetadata(accumulatedMetadata, pageData.metadata);
           accumulatedMetadata.total_pages = totalPages;
           accumulatedMetadata.has_more = page < totalPages;
           accumulatedMetadata.page = page;

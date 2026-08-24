@@ -24,6 +24,9 @@ from litellm.constants import (
     MCP_TOKEN_EXCHANGE_CACHE_MAX_SIZE,
 )
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+from litellm.proxy._experimental.mcp_server.auth.token_endpoint_auth import (
+    build_token_endpoint_client_auth,
+)
 from litellm.types.llms.custom_http import httpxSpecialProvider
 
 if TYPE_CHECKING:
@@ -49,9 +52,7 @@ class TokenExchangeHandler:
         )
         # WeakValueDictionary so locks are GC'd once no coroutine holds a reference,
         # preventing unbounded growth with many rotating user tokens.
-        self._locks: weakref.WeakValueDictionary[str, asyncio.Lock] = (
-            weakref.WeakValueDictionary()
-        )
+        self._locks: weakref.WeakValueDictionary[str, asyncio.Lock] = weakref.WeakValueDictionary()
 
     def _get_lock(self, cache_key: str) -> asyncio.Lock:
         lock = self._locks.get(cache_key)
@@ -115,13 +116,16 @@ class TokenExchangeHandler:
                 f"but missing client_id or client_secret"
             )
 
+        client_auth = build_token_endpoint_client_auth(
+            auth_method=server.token_endpoint_auth_method,
+            client_id=server.client_id,
+            client_secret=server.client_secret,
+        )
         data: Dict[str, str] = {
             "grant_type": TOKEN_EXCHANGE_GRANT_TYPE,
             "subject_token": subject_token,
-            "subject_token_type": server.subject_token_type
-            or DEFAULT_SUBJECT_TOKEN_TYPE,
-            "client_id": server.client_id,
-            "client_secret": server.client_secret,
+            "subject_token_type": server.subject_token_type or DEFAULT_SUBJECT_TOKEN_TYPE,
+            **client_auth.body,
         }
         if server.audience:
             data["audience"] = server.audience
@@ -136,8 +140,9 @@ class TokenExchangeHandler:
         )
 
         client = get_async_httpx_client(llm_provider=httpxSpecialProvider.MCP)
+        post_kwargs = {"data": data, **({"headers": client_auth.headers} if client_auth.headers else {})}
         try:
-            response = await client.post(endpoint, data=data)
+            response = await client.post(endpoint, **post_kwargs)
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
             verbose_logger.debug(
@@ -146,8 +151,7 @@ class TokenExchangeHandler:
                 exc.response.status_code,
             )
             raise ValueError(
-                f"Token exchange for MCP server '{server.server_id}' "
-                f"failed with status {exc.response.status_code}"
+                f"Token exchange for MCP server '{server.server_id}' failed with status {exc.response.status_code}"
             ) from exc
 
         body = response.json()
@@ -159,18 +163,11 @@ class TokenExchangeHandler:
 
         access_token = body.get("access_token")
         if not access_token:
-            raise ValueError(
-                f"Token exchange response for MCP server '{server.server_id}' "
-                f"missing 'access_token'"
-            )
+            raise ValueError(f"Token exchange response for MCP server '{server.server_id}' missing 'access_token'")
 
         raw_expires_in = body.get("expires_in")
         try:
-            expires_in = (
-                int(raw_expires_in)
-                if raw_expires_in is not None
-                else MCP_OAUTH2_TOKEN_CACHE_DEFAULT_TTL
-            )
+            expires_in = int(raw_expires_in) if raw_expires_in is not None else MCP_OAUTH2_TOKEN_CACHE_DEFAULT_TTL
         except (TypeError, ValueError):
             expires_in = MCP_OAUTH2_TOKEN_CACHE_DEFAULT_TTL
 

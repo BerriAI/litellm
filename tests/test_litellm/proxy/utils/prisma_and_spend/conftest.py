@@ -340,7 +340,7 @@ class InMemorySMTP:
             def __exit__(self, *exc: Any) -> None:
                 return None
 
-            def starttls(self) -> None:
+            def starttls(self, **kwargs: Any) -> None:
                 self._starttls_called = True
 
             def login(self, user: str, password: str) -> None:
@@ -378,10 +378,12 @@ class InMemorySMTP:
 
 @pytest.fixture
 def in_memory_smtp(monkeypatch: pytest.MonkeyPatch) -> InMemorySMTP:
-    """Patch ``smtplib.SMTP`` to capture sends in memory.
+    """Patch ``smtplib.SMTP`` and ``smtplib.SMTP_SSL`` to capture sends in memory.
 
     Override ``smtp.raise_on_send`` to test the SMTP error path.
     """
     smtp = InMemorySMTP()
-    monkeypatch.setattr("smtplib.SMTP", smtp.server_factory())
+    factory = smtp.server_factory()
+    monkeypatch.setattr("smtplib.SMTP", factory)
+    monkeypatch.setattr("smtplib.SMTP_SSL", factory)
     return smtp

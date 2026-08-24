@@ -42,9 +42,7 @@ def get_azure_ai_ocr_config(model: str) -> Optional["BaseOCRConfig"]:
 
     # Check for Azure Document Intelligence models
     if "doc-intelligence" in model or "documentintelligence" in model:
-        verbose_logger.debug(
-            f"Routing {model} to Azure Document Intelligence OCR config"
-        )
+        verbose_logger.debug(f"Routing {model} to Azure Document Intelligence OCR config")
         return AzureDocumentIntelligenceOCRConfig()
 
     # Default to Mistral-based OCR for other azure_ai models

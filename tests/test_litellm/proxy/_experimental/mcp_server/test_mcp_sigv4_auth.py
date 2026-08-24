@@ -1007,6 +1007,7 @@ class TestRotateCredentials:
             "aws_secret_access_key": "enc_old:SAK",
             "aws_region_name": "us-east-1",
         }
+        server.env_vars = None
 
         mock_prisma = MagicMock()
         mock_prisma.db.litellm_mcpservertable.find_many = AsyncMock(
@@ -1042,6 +1043,58 @@ class TestRotateCredentials:
         assert stored_creds["aws_secret_access_key"] == "enc_new:SAK"
         # Non-secret fields should pass through unchanged
         assert stored_creds["aws_region_name"] == "us-east-1"
+
+    @pytest.mark.asyncio
+    async def test_rotation_reencrypts_global_env_vars(self):
+        """Global env var values are re-encrypted under the new key; user-scope
+        placeholders are left untouched."""
+        from litellm.proxy._experimental.mcp_server.db import (
+            rotate_mcp_server_credentials_master_key,
+        )
+
+        server = MagicMock()
+        server.server_id = "srv-env"
+        server.credentials = None
+        server.env_vars = [
+            {"name": "API_KEY", "value": "enc_old:secret", "scope": "global"},
+            {"name": "USER_TOKEN", "value": "", "scope": "user"},
+        ]
+
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_mcpservertable.find_many = AsyncMock(
+            return_value=[server]
+        )
+        mock_prisma.db.litellm_mcpservertable.update = AsyncMock()
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.db._get_salt_key",
+                return_value="old-key",
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.db.decrypt_value_helper",
+                side_effect=lambda value, key, exception_type="error", return_original_value=False: value.replace(
+                    "enc_old:", ""
+                ),
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.db.encrypt_value_helper",
+                side_effect=lambda value, new_encryption_key: f"enc_new:{value}",
+            ),
+        ):
+            await rotate_mcp_server_credentials_master_key(
+                mock_prisma, "admin", "new-key"
+            )
+
+        update_call = mock_prisma.db.litellm_mcpservertable.update
+        assert update_call.called
+        stored_env = json.loads(update_call.call_args[1]["data"]["env_vars"])
+        # Global value decrypted from old, then re-encrypted with new key
+        assert stored_env[0]["value"] == "enc_new:secret"
+        # User-scope placeholder untouched
+        assert stored_env[1]["value"] == ""
+        # Credentials column not written when the server has none
+        assert "credentials" not in update_call.call_args[1]["data"]
 
 
 class TestAuthTypeSwitchClearsCredentials:

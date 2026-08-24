@@ -1,11 +1,6 @@
 import { renderWithProviders, screen } from "../../../tests/test-utils";
 import { vi } from "vitest";
-import {
-  PolicySelect,
-  policyStyle,
-  INPUT_POLICY_OPTIONS,
-  OUTPUT_POLICY_OPTIONS,
-} from "./PolicySelect";
+import { PolicySelect, policyStyle, INPUT_POLICY_OPTIONS, OUTPUT_POLICY_OPTIONS } from "./PolicySelect";
 
 describe("policyStyle", () => {
   it("should return the matching option for a known policy", () => {
@@ -23,51 +18,23 @@ describe("policyStyle", () => {
 
 describe("PolicySelect", () => {
   it("should render", () => {
-    renderWithProviders(
-      <PolicySelect
-        value="untrusted"
-        toolName="test-tool"
-        saving={false}
-        onChange={vi.fn()}
-      />
-    );
+    renderWithProviders(<PolicySelect value="untrusted" toolName="test-tool" saving={false} onChange={vi.fn()} />);
     expect(screen.getByText("untrusted")).toBeInTheDocument();
   });
 
   it("should show the current policy value", () => {
-    renderWithProviders(
-      <PolicySelect
-        value="trusted"
-        toolName="test-tool"
-        saving={false}
-        onChange={vi.fn()}
-      />
-    );
+    renderWithProviders(<PolicySelect value="trusted" toolName="test-tool" saving={false} onChange={vi.fn()} />);
     expect(screen.getByText("trusted")).toBeInTheDocument();
   });
 
   it("should be disabled when saving is true", () => {
-    renderWithProviders(
-      <PolicySelect
-        value="untrusted"
-        toolName="test-tool"
-        saving={true}
-        onChange={vi.fn()}
-      />
-    );
+    renderWithProviders(<PolicySelect value="untrusted" toolName="test-tool" saving={true} onChange={vi.fn()} />);
     expect(screen.getByRole("combobox")).toHaveAttribute("aria-expanded", "false");
     expect(screen.getByRole("combobox").closest(".ant-select")).toHaveClass("ant-select-disabled");
   });
 
   it("should not be disabled when saving is false", () => {
-    renderWithProviders(
-      <PolicySelect
-        value="untrusted"
-        toolName="test-tool"
-        saving={false}
-        onChange={vi.fn()}
-      />
-    );
+    renderWithProviders(<PolicySelect value="untrusted" toolName="test-tool" saving={false} onChange={vi.fn()} />);
     expect(screen.getByRole("combobox").closest(".ant-select")).not.toHaveClass("ant-select-disabled");
   });
 });

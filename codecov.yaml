@@ -3,6 +3,9 @@ codecov:
   notify:
     wait_for_ci: false # post as soon as expected uploads arrive, don't wait on CI
 
+ignore:
+  - "litellm-rust/**"
+
 # Uploads are flagged per workflow/shard (GHA) or "circleci". carryforward makes
 # a re-upload of a flag replace its prior session instead of accumulating a
 # conflicting one, and lets a commit reuse a flag from its parent when that flag
@@ -35,6 +38,22 @@ component_management:
     - component_id: "Enterprise"
       paths:
         - "enterprise/**"
+    - component_id: "Batches"
+      paths:
+        - "*/proxy/batches_endpoints/**"
+        - "litellm/batches/**"
+        - "*/llms/*/batches/**"
+    - component_id: "Videos"
+      paths:
+        - "litellm/videos/**"
+        - "*/proxy/video_endpoints/**"
+        - "*/llms/*/videos/**"
+    - component_id: "Realtime"
+      paths:
+        - "litellm/realtime_api/**"
+        - "*/proxy/realtime_endpoints/**"
+        - "*/llms/*/realtime/**"
+        - "litellm/litellm_core_utils/realtime_streaming.py"
 comment:
   layout: "header, diff, flags, components"  # show component info in the PR comment
 

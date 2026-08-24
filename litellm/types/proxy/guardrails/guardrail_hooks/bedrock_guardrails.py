@@ -2,9 +2,14 @@ from typing import Any, Dict, List, Literal, Optional, Union
 
 from typing_extensions import TypedDict
 
+# Bedrock contextual grounding tags each content block so the guardrail knows
+# which text is the reference source, the user question, and the content to grade.
+BedrockGuardrailQualifier = Literal["grounding_source", "query", "guard_content"]
+
 
 class BedrockTextContent(TypedDict, total=False):
     text: str
+    qualifiers: List[BedrockGuardrailQualifier]
 
 
 class BedrockContentItem(TypedDict, total=False):

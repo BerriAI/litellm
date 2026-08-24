@@ -63,12 +63,8 @@ class SagemakerEmbeddingConfig(BaseEmbeddingConfig):
     ) -> dict:
         return optional_params
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, Headers]
-    ) -> BaseLLMException:
-        return SagemakerError(
-            message=error_message, status_code=status_code, headers=headers
-        )
+    def get_error_class(self, error_message: str, status_code: int, headers: Union[dict, Headers]) -> BaseLLMException:
+        return SagemakerError(message=error_message, status_code=status_code, headers=headers)
 
     def transform_embedding_request(
         self,
@@ -126,9 +122,7 @@ class SagemakerEmbeddingConfig(BaseEmbeddingConfig):
 
         output_data = []
         for idx, embedding in enumerate(embeddings):
-            output_data.append(
-                {"object": "embedding", "index": idx, "embedding": embedding}
-            )
+            output_data.append({"object": "embedding", "index": idx, "embedding": embedding})
 
         model_response.object = "list"
         model_response.data = output_data

@@ -1,21 +1,26 @@
-import { useState, useEffect } from "react";
 import { fetchProxySettings } from "@/utils/proxyUtils";
-import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import { useQuery } from "@tanstack/react-query";
+import { createQueryKeys } from "../common/queryKeysFactory";
 
-export default function useProxySettings() {
-  const { accessToken } = useAuthorized();
-  const [proxySettings, setProxySettings] = useState({
-    PROXY_BASE_URL: "",
-    PROXY_LOGOUT_URL: "",
-    LITELLM_UI_API_DOC_BASE_URL: null as string | null,
+export const proxySettingsKeys = createQueryKeys("proxySettings");
+
+export interface ProxySettings {
+  PROXY_BASE_URL: string;
+  PROXY_LOGOUT_URL: string;
+  LITELLM_UI_API_DOC_BASE_URL?: string | null;
+}
+
+const EMPTY_PROXY_SETTINGS: ProxySettings = {
+  PROXY_BASE_URL: "",
+  PROXY_LOGOUT_URL: "",
+  LITELLM_UI_API_DOC_BASE_URL: null,
+};
+
+export default function useProxySettings(accessToken: string | null): ProxySettings {
+  const { data } = useQuery({
+    queryKey: [...proxySettingsKeys.all, accessToken],
+    queryFn: () => fetchProxySettings(accessToken),
+    enabled: Boolean(accessToken),
   });
-
-  useEffect(() => {
-    if (!accessToken) return;
-    fetchProxySettings(accessToken).then((settings) => {
-      if (settings) setProxySettings(settings);
-    });
-  }, [accessToken]);
-
-  return proxySettings;
+  return data ?? EMPTY_PROXY_SETTINGS;
 }

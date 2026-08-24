@@ -13,12 +13,7 @@ import React, { useMemo, useState } from "react";
 import { Checkbox } from "antd";
 import { Text } from "@tremor/react";
 import { ChevronDownIcon, ChevronRightIcon } from "lucide-react";
-import {
-  CrudOp,
-  MCPToolEntry,
-  CRUD_GROUP_META,
-  groupToolsByCrud,
-} from "../../utils/mcpToolCrudClassification";
+import { CrudOp, MCPToolEntry, CRUD_GROUP_META, groupToolsByCrud } from "../../utils/mcpToolCrudClassification";
 
 interface McpCrudPermissionPanelProps {
   /** List of tools available on this MCP server. */
@@ -151,9 +146,7 @@ const McpCrudPermissionPanel: React.FC<McpCrudPermissionPanelProps> = ({
         if (searchFilter) {
           const lf = searchFilter.toLowerCase();
           const hasMatch = group.some(
-            (t) =>
-              t.name.toLowerCase().includes(lf) ||
-              (t.description ?? "").toLowerCase().includes(lf)
+            (t) => t.name.toLowerCase().includes(lf) || (t.description ?? "").toLowerCase().includes(lf),
           );
           if (!hasMatch) return null;
         }
@@ -182,10 +175,10 @@ const McpCrudPermissionPanel: React.FC<McpCrudPermissionPanelProps> = ({
                   {meta.risk === "high"
                     ? "High Risk"
                     : meta.risk === "medium"
-                    ? "Medium Risk"
-                    : meta.risk === "low"
-                    ? "Safe"
-                    : "Unclassified"}
+                      ? "Medium Risk"
+                      : meta.risk === "low"
+                        ? "Safe"
+                        : "Unclassified"}
                 </span>
                 <span className="text-xs text-gray-500 ml-1">
                   {group.filter((t) => effectiveAllowed.has(t.name)).length}/{group.length} allowed
@@ -219,45 +212,44 @@ const McpCrudPermissionPanel: React.FC<McpCrudPermissionPanelProps> = ({
             {!isCollapsed && (
               <div className="bg-white divide-y divide-gray-50">
                 {group
-                  .filter((t) =>
-                    !searchFilter ||
-                    t.name.toLowerCase().includes(searchFilter.toLowerCase()) ||
-                    (t.description ?? "").toLowerCase().includes(searchFilter.toLowerCase())
+                  .filter(
+                    (t) =>
+                      !searchFilter ||
+                      t.name.toLowerCase().includes(searchFilter.toLowerCase()) ||
+                      (t.description ?? "").toLowerCase().includes(searchFilter.toLowerCase()),
                   )
                   .map((tool) => {
-                  const allowed = isToolAllowed(tool.name);
-                  return (
-                    <div
-                      key={tool.name}
-                      className={`flex items-start gap-3 px-4 py-2.5 transition-colors hover:bg-gray-50 ${
-                        !readOnly ? "cursor-pointer" : ""
-                      } ${allowed ? "" : "opacity-60"}`}
-                      onClick={() => toggleTool(tool.name)}
-                    >
-                      <Checkbox
-                        checked={allowed}
-                        onChange={() => toggleTool(tool.name)}
-                        disabled={readOnly}
-                        onClick={(e) => e.stopPropagation()}
-                      />
-                      <div className="flex-1 min-w-0">
-                        <Text className="font-medium text-gray-900 text-sm">{tool.name}</Text>
-                        {tool.description && (
-                          <Text className="text-xs text-gray-500 mt-0.5 leading-snug">
-                            {tool.description}
-                          </Text>
-                        )}
-                      </div>
-                      <span
-                        className={`text-xs px-1.5 py-0.5 rounded flex-shrink-0 ${
-                          allowed ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-500"
-                        }`}
+                    const allowed = isToolAllowed(tool.name);
+                    return (
+                      <div
+                        key={tool.name}
+                        className={`flex items-start gap-3 px-4 py-2.5 transition-colors hover:bg-gray-50 ${
+                          !readOnly ? "cursor-pointer" : ""
+                        } ${allowed ? "" : "opacity-60"}`}
+                        onClick={() => toggleTool(tool.name)}
                       >
-                        {allowed ? "on" : "off"}
-                      </span>
-                    </div>
-                  );
-                })}
+                        <Checkbox
+                          checked={allowed}
+                          onChange={() => toggleTool(tool.name)}
+                          disabled={readOnly}
+                          onClick={(e) => e.stopPropagation()}
+                        />
+                        <div className="flex-1 min-w-0">
+                          <Text className="font-medium text-gray-900 text-sm">{tool.name}</Text>
+                          {tool.description && (
+                            <Text className="text-xs text-gray-500 mt-0.5 leading-snug">{tool.description}</Text>
+                          )}
+                        </div>
+                        <span
+                          className={`text-xs px-1.5 py-0.5 rounded flex-shrink-0 ${
+                            allowed ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-500"
+                          }`}
+                        >
+                          {allowed ? "on" : "off"}
+                        </span>
+                      </div>
+                    );
+                  })}
               </div>
             )}
           </div>

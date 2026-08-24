@@ -23,20 +23,34 @@ class AnthropicMessagesRequestUtils:
     @staticmethod
     def get_requested_anthropic_messages_optional_param(
         params: Dict[str, Any],
+        *,
+        model: str | None = None,
+        drop_params: bool = False,
+        custom_llm_provider: str | None = None,
     ) -> AnthropicMessagesRequestOptionalParams:
         """
         Filter parameters to only include those defined in AnthropicMessagesRequestOptionalParams.
 
         Args:
             params: Dictionary of parameters to filter
+            model: Resolved model id; when set, unsupported params may be dropped
+            drop_params: Per-request drop_params flag (also respects litellm.drop_params)
+            custom_llm_provider: Routed provider; fast mode is gated to direct Anthropic
 
         Returns:
             AnthropicMessagesRequestOptionalParams instance with only the valid parameters
         """
         valid_keys = _anthropic_messages_optional_param_keys()
-        filtered_params = {
-            k: v for k, v in params.items() if k in valid_keys and v is not None
-        }
+        filtered_params = {k: v for k, v in params.items() if k in valid_keys and v is not None}
+        if model is not None:
+            from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+
+            AnthropicConfig._maybe_drop_speed_param(
+                model=model,
+                optional_params=filtered_params,
+                drop_params=drop_params,
+                custom_llm_provider=custom_llm_provider,
+            )
         return cast(AnthropicMessagesRequestOptionalParams, filtered_params)
 
 

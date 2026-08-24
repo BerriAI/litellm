@@ -27,20 +27,13 @@ const RoutingStrategySelector: React.FC<RoutingStrategySelectorProps> = ({
         </p>
       </div>
       <div className="routing-strategy-select max-w-3xl">
-        <Select
-          value={selectedStrategy}
-          onChange={onStrategyChange}
-          style={{ width: "100%" }}
-          size="large"
-        >
+        <Select value={selectedStrategy} onChange={onStrategyChange} style={{ width: "100%" }} size="large">
           {availableStrategies.map((strategy) => (
             <Select.Option key={strategy} value={strategy} label={strategy}>
               <div className="flex flex-col gap-0.5 py-1">
                 <span className="font-mono text-sm font-medium">{strategy}</span>
                 {routingStrategyDescriptions[strategy] && (
-                  <span className="text-xs text-gray-500 font-normal">
-                    {routingStrategyDescriptions[strategy]}
-                  </span>
+                  <span className="text-xs text-gray-500 font-normal">{routingStrategyDescriptions[strategy]}</span>
                 )}
               </div>
             </Select.Option>
@@ -52,4 +45,3 @@ const RoutingStrategySelector: React.FC<RoutingStrategySelectorProps> = ({
 };
 
 export default RoutingStrategySelector;
-

@@ -9,11 +9,7 @@ import { TableHeaderSortDropdown } from "./common_components/TableHeaderSortDrop
 import FilterComponent, { FilterOption } from "./molecules/filter";
 import { MetricCard } from "./GuardrailsMonitor/MetricCard";
 import { PolicySelect, INPUT_POLICY_OPTIONS, OUTPUT_POLICY_OPTIONS } from "./ToolPolicies/PolicySelect";
-import {
-  fetchToolsList,
-  updateToolPolicy,
-  ToolRow,
-} from "./networking";
+import { fetchToolsList, updateToolPolicy, ToolRow } from "./networking";
 
 function getUTCDateKey(date: Date): string {
   return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}`;
@@ -192,9 +188,7 @@ export const ToolPolicies: React.FC<ToolPoliciesProps> = ({ accessToken, onSelec
       const activeTeamsCount = new Set(tools.map((t) => t.team_id).filter(Boolean)).size;
 
       const needsReviewTools = tools.filter(
-        (t) =>
-          isCreatedInUTCDay(t.created_at, todayKey) &&
-          t.input_policy === "untrusted"
+        (t) => isCreatedInUTCDay(t.created_at, todayKey) && t.input_policy === "untrusted",
       );
 
       return {
@@ -290,8 +284,8 @@ export const ToolPolicies: React.FC<ToolPoliciesProps> = ({ accessToken, onSelec
         <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 mb-6">
           <h2 className="text-sm font-semibold text-amber-900 mb-1">Needs Review</h2>
           <p className="text-sm text-amber-800 mb-3">
-            {needsReviewTools.length} new tool{needsReviewTools.length !== 1 ? "s" : ""} discovered that require
-            policy decisions.
+            {needsReviewTools.length} new tool{needsReviewTools.length !== 1 ? "s" : ""} discovered that require policy
+            decisions.
           </p>
           <div className="flex flex-wrap gap-2">
             {needsReviewTools.map((t) => (
@@ -522,7 +516,9 @@ export const ToolPolicies: React.FC<ToolPoliciesProps> = ({ accessToken, onSelec
                   </TableCell>
                   <TableCell className="py-0.5 max-h-8 overflow-hidden whitespace-nowrap">
                     <Tooltip title={tool.user_agent ?? "-"}>
-                      <span className="font-mono max-w-[20ch] truncate block text-xs text-gray-500">{tool.user_agent ?? "-"}</span>
+                      <span className="font-mono max-w-[20ch] truncate block text-xs text-gray-500">
+                        {tool.user_agent ?? "-"}
+                      </span>
                     </Tooltip>
                   </TableCell>
                 </TableRow>
@@ -556,7 +552,6 @@ export const ToolPolicies: React.FC<ToolPoliciesProps> = ({ accessToken, onSelec
           </div>
         )}
       </div>
-
     </div>
   );
 };

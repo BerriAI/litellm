@@ -66,9 +66,7 @@ class BaseEmbeddingConfig(BaseConfig, ABC):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
-        raise NotImplementedError(
-            "EmbeddingConfig does not need a request transformation for chat models"
-        )
+        raise NotImplementedError("EmbeddingConfig does not need a request transformation for chat models")
 
     def transform_response(
         self,
@@ -84,6 +82,4 @@ class BaseEmbeddingConfig(BaseConfig, ABC):
         api_key: Optional[str] = None,
         json_mode: Optional[bool] = None,
     ) -> ModelResponse:
-        raise NotImplementedError(
-            "EmbeddingConfig does not need a response transformation for chat models"
-        )
+        raise NotImplementedError("EmbeddingConfig does not need a response transformation for chat models")

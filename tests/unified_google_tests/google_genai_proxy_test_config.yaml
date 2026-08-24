@@ -1,0 +1,16 @@
+model_list:
+  - model_name: gemini-2.5-flash-lite
+    litellm_params:
+      model: gemini/gemini-2.5-flash-lite
+      api_key: os.environ/GEMINI_API_KEY
+
+  - model_name: vertex-gemini-2.5-flash-lite
+    litellm_params:
+      model: vertex_ai/gemini-2.5-flash-lite
+
+general_settings:
+  master_key: sk-1234
+  store_model_in_db: false
+
+litellm_settings:
+  drop_params: true

@@ -68,4 +68,3 @@ export function SimpleTable<T>({
     </Table>
   );
 }
-

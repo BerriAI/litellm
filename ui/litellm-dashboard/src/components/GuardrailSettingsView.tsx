@@ -20,15 +20,10 @@ export function GuardrailSettingsView({
   className = "",
 }: GuardrailSettingsViewProps) {
   const optedOutSet = new Set(optedOutGlobalGuardrails);
-  const globalsRunning = Array.from(globalGuardrailNames).filter(
-    (n) => !optedOutSet.has(n),
-  );
-  const nonGlobalOptIns = teamGuardrails.filter(
-    (n) => !globalGuardrailNames.has(n),
-  );
+  const globalsRunning = Array.from(globalGuardrailNames).filter((n) => !optedOutSet.has(n));
+  const nonGlobalOptIns = teamGuardrails.filter((n) => !globalGuardrailNames.has(n));
 
-  const isEmpty =
-    !killSwitchOn && globalsRunning.length === 0 && nonGlobalOptIns.length === 0;
+  const isEmpty = !killSwitchOn && globalsRunning.length === 0 && nonGlobalOptIns.length === 0;
 
   const content = isEmpty ? (
     <span className="block text-gray-500">No guardrails configured</span>

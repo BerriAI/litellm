@@ -50,9 +50,7 @@ interface TeamVirtualKeysTableProps {
 export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVirtualKeysTableProps) {
   const { accessToken } = useAuthorized();
   const [selectedKey, setSelectedKey] = useState<KeyResponse | null>(null);
-  const [sorting, setSorting] = useState<SortingState>([
-    { id: "created_at", desc: true },
-  ]);
+  const [sorting, setSorting] = useState<SortingState>([{ id: "created_at", desc: true }]);
   const [tablePagination, setTablePagination] = useState<PaginationState>({
     pageIndex: 0,
     pageSize: 50,
@@ -173,9 +171,7 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
           const { organizationIds } = teamFilterOptions;
           if (!organizationIds.length) return [];
           const lower = searchText.toLowerCase();
-          const filtered = lower
-            ? organizationIds.filter((id) => id.toLowerCase().includes(lower))
-            : organizationIds;
+          const filtered = lower ? organizationIds.filter((id) => id.toLowerCase().includes(lower)) : organizationIds;
           return filtered.map((id) => ({ label: id, value: id }));
         },
       },
@@ -186,9 +182,7 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
         searchFn: async (searchText: string) => {
           const { keyAliases } = teamFilterOptions;
           const lower = searchText.toLowerCase();
-          const filtered = lower
-            ? keyAliases.filter((alias) => alias.toLowerCase().includes(lower))
-            : keyAliases;
+          const filtered = lower ? keyAliases.filter((alias) => alias.toLowerCase().includes(lower)) : keyAliases;
           return filtered.map((alias) => ({ label: alias, value: alias }));
         },
       },
@@ -200,10 +194,7 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
           const { userIds } = teamFilterOptions;
           const lower = searchText.toLowerCase();
           const filtered = lower
-            ? userIds.filter(
-                (u) =>
-                  u.id.toLowerCase().includes(lower) || u.email.toLowerCase().includes(lower),
-              )
+            ? userIds.filter((u) => u.id.toLowerCase().includes(lower) || u.email.toLowerCase().includes(lower))
             : userIds;
           return filtered.map((u) => ({
             label: u.email ? `${u.id} (${u.email})` : u.id,
@@ -252,10 +243,7 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
           const width = info.cell.column.getSize();
           return (
             <Tooltip title={value}>
-              <span
-                className="font-mono text-xs truncate block"
-                style={{ maxWidth: width, overflow: "hidden" }}
-              >
+              <span className="font-mono text-xs truncate block" style={{ maxWidth: width, overflow: "hidden" }}>
                 {value ?? "-"}
               </span>
             </Tooltip>
@@ -290,10 +278,7 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
           const width = info.cell.column.getSize();
           return (
             <Tooltip title={value}>
-              <span
-                className="font-mono text-xs truncate block"
-                style={{ maxWidth: width, overflow: "hidden" }}
-              >
+              <span className="font-mono text-xs truncate block" style={{ maxWidth: width, overflow: "hidden" }}>
                 {value ?? "-"}
               </span>
             </Tooltip>
@@ -312,10 +297,7 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
           const width = info.cell.column.getSize();
           return (
             <Tooltip title={displayValue}>
-              <span
-                className="font-mono text-xs truncate block"
-                style={{ maxWidth: width, overflow: "hidden" }}
-              >
+              <span className="font-mono text-xs truncate block" style={{ maxWidth: width, overflow: "hidden" }}>
                 {displayValue ?? "-"}
               </span>
             </Tooltip>
@@ -359,11 +341,7 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
                 <div key={label} className="flex flex-col min-w-0">
                   <span className="text-gray-400">{label}</span>
                   {value ? (
-                    <Typography.Text
-                      className="font-mono text-xs"
-                      ellipsis={{ tooltip: value }}
-                      copyable
-                    >
+                    <Typography.Text className="font-mono text-xs" ellipsis={{ tooltip: value }} copyable>
                       {value}
                     </Typography.Text>
                   ) : (
@@ -583,8 +561,7 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
 
   const handleSortingChange = useCallback(
     (updaterOrValue: React.SetStateAction<SortingState>) => {
-      const newSorting =
-        typeof updaterOrValue === "function" ? updaterOrValue(sorting) : updaterOrValue;
+      const newSorting = typeof updaterOrValue === "function" ? updaterOrValue(sorting) : updaterOrValue;
       setSorting(newSorting);
       if (newSorting?.length > 0) {
         const sortState = newSorting[0];
@@ -694,23 +671,15 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
                               cursor: header.column.getCanSort() ? "pointer" : "default",
                             }}
                             onMouseEnter={() => {
-                              const resizer = document.querySelector(
-                                `[data-header-id="${header.id}"] .resizer`,
-                              );
+                              const resizer = document.querySelector(`[data-header-id="${header.id}"] .resizer`);
                               if (resizer) (resizer as HTMLElement).style.opacity = "0.5";
                             }}
                             onMouseLeave={() => {
-                              const resizer = document.querySelector(
-                                `[data-header-id="${header.id}"] .resizer`,
-                              );
+                              const resizer = document.querySelector(`[data-header-id="${header.id}"] .resizer`);
                               if (resizer && !header.column.getIsResizing())
                                 (resizer as HTMLElement).style.opacity = "0";
                             }}
-                            onClick={
-                              header.column.getCanSort()
-                                ? header.column.getToggleSortingHandler()
-                                : undefined
-                            }
+                            onClick={header.column.getCanSort() ? header.column.getToggleSortingHandler() : undefined}
                           >
                             <div className="flex items-center justify-between gap-2">
                               <div className="flex items-center">

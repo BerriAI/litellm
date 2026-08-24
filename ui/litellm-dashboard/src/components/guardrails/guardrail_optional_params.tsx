@@ -98,12 +98,7 @@ const DictField: React.FC<DictFieldProps> = ({ field, fieldKey, fullFieldKey, va
               )}
             </Form.Item>
           </div>
-          <Button
-            type="text"
-            danger
-            size="small"
-            onClick={() => removeEntry(entry.id, entry.key)}
-          >
+          <Button type="text" danger size="small" onClick={() => removeEntry(entry.id, entry.key)}>
             Remove
           </Button>
         </div>

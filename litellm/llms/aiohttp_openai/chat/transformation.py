@@ -72,9 +72,7 @@ class AiohttpOpenAIChatConfig(OpenAILikeChatConfig):
     ) -> ModelResponse:
         _json_response = await raw_response.json()
         model_response.id = _json_response.get("id")
-        model_response.choices = [
-            Choices(**choice) for choice in _json_response.get("choices")
-        ]
+        model_response.choices = [Choices(**choice) for choice in _json_response.get("choices")]
         model_response.created = _json_response.get("created")
         model_response.model = _json_response.get("model")
         model_response.object = _json_response.get("object")

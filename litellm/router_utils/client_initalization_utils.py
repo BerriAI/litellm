@@ -13,9 +13,7 @@ else:
 
 class InitalizeCachedClient:
     @staticmethod
-    def set_max_parallel_requests_client(
-        litellm_router_instance: LitellmRouter, model: dict
-    ):
+    def set_max_parallel_requests_client(litellm_router_instance: LitellmRouter, model: dict):
         litellm_params = model.get("litellm_params", {})
         model_id = model["model_info"]["id"]
         rpm = litellm_params.get("rpm", None)

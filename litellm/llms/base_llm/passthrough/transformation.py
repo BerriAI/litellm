@@ -95,9 +95,7 @@ class BasePassthroughConfig(BaseLLMModelInfo):
     ) -> "BaseLLMException":
         from litellm.llms.base_llm.chat.transformation import BaseLLMException
 
-        return BaseLLMException(
-            status_code=status_code, message=error_message, headers=headers
-        )
+        return BaseLLMException(status_code=status_code, message=error_message, headers=headers)
 
     def logging_non_streaming_response(
         self,

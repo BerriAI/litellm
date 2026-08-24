@@ -29,14 +29,10 @@ def resolve_passthrough_managed_id_provider(
     Splitting them would make a managed ID minted on ``azure`` fail to resolve
     when replayed on ``azure_ai`` and vice versa.
     """
-    provider = str(
-        getattr(custom_llm_provider, "value", custom_llm_provider) or ""
-    ).lower()
+    provider = str(getattr(custom_llm_provider, "value", custom_llm_provider) or "").lower()
     if not provider:
         return None
-    if provider in PASSTHROUGH_MANAGED_ID_AZURE_PROVIDERS or provider.endswith(
-        (".azure", ".azure_ai")
-    ):
+    if provider in PASSTHROUGH_MANAGED_ID_AZURE_PROVIDERS or provider.endswith((".azure", ".azure_ai")):
         return "azure"
     if provider == "openai" or provider.endswith(".openai"):
         return "openai"
@@ -391,12 +387,8 @@ def parse_unified_id(
         return {
             "resource_type": extract_resource_type_from_unified_id(decoded_id),
             "unified_uuid": extract_unified_uuid_from_unified_id(decoded_id),
-            "target_model_names": extract_target_model_names_from_unified_id(
-                decoded_id
-            ),
-            "provider_resource_id": extract_provider_resource_id_from_unified_id(
-                decoded_id
-            ),
+            "target_model_names": extract_target_model_names_from_unified_id(decoded_id),
+            "provider_resource_id": extract_provider_resource_id_from_unified_id(decoded_id),
             "model_id": extract_model_id_from_unified_id(decoded_id),
         }
     except Exception:

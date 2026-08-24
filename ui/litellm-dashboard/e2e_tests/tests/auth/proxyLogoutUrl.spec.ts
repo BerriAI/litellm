@@ -38,10 +38,9 @@ test.describe("PROXY_LOGOUT_URL redirect", () => {
     // fetch (/sso/get/ui_settings) resolves. Clicking Logout before that lands
     // runs `window.location.href = ""` — a same-origin reload, not a redirect —
     // so gate the click on the settings response, not just on first paint.
-    const settingsLoaded = page.waitForResponse(
-      (r) => r.url().includes("/sso/get/ui_settings") && r.ok(),
-      { timeout: 30_000 },
-    );
+    const settingsLoaded = page.waitForResponse((r) => r.url().includes("/sso/get/ui_settings") && r.ok(), {
+      timeout: 30_000,
+    });
     await page.goto("/ui");
     await expect(page.getByText("Virtual Keys")).toBeVisible({ timeout: 15_000 });
     await settingsLoaded;
@@ -59,10 +58,7 @@ test.describe("PROXY_LOGOUT_URL redirect", () => {
 
     // handleLogout clears cookies/local storage, then assigns window.location.href.
     // Arm the navigation wait before the click so we never miss the redirect.
-    await Promise.all([
-      page.waitForURL((url) => url.origin === target.origin, { timeout: 15_000 }),
-      logout.click(),
-    ]);
+    await Promise.all([page.waitForURL((url) => url.origin === target.origin, { timeout: 15_000 }), logout.click()]);
 
     // The browser landed on exactly the configured logout URL. Compare normalized
     // hrefs (both sides through URL()) so trailing-slash / default-port rewrites the
@@ -74,9 +70,7 @@ test.describe("PROXY_LOGOUT_URL redirect", () => {
     // ...and the client-side session cookie is gone (clearTokenCookies ran before
     // the redirect). HttpOnly cookies set server-side can't be cleared from JS,
     // so scope the check to the JS-managed token the UI is responsible for.
-    const clientTokensAfter = (await page.context().cookies()).filter(
-      (c) => c.name === "token" && !c.httpOnly,
-    );
+    const clientTokensAfter = (await page.context().cookies()).filter((c) => c.name === "token" && !c.httpOnly);
     expect(clientTokensAfter, "client token cookie should be cleared on logout").toHaveLength(0);
   });
 });

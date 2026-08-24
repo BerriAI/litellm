@@ -174,7 +174,5 @@ class BaseSecretManager(ABC):
         except httpx.TimeoutException:
             raise ValueError("Timeout error occurred")
         except Exception as e:
-            verbose_logger.exception(
-                "Error rotating secret in AWS Secrets Manager: %s", str(e)
-            )
+            verbose_logger.exception("Error rotating secret in AWS Secrets Manager: %s", str(e))
             raise

@@ -230,7 +230,9 @@ export const useUserMcpOAuthFlow = ({
       NotificationsManager.error(msg);
     } finally {
       clearStorage(FLOW_STATE_KEY);
-      setTimeout(() => { processingRef.current = false; }, 1000);
+      setTimeout(() => {
+        processingRef.current = false;
+      }, 1000);
     }
   }, [accessToken, serverId, onSuccess]);
 
