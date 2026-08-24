@@ -30,6 +30,21 @@ def _make_transcript_event(text: str, item_id: str = "item_x") -> bytes:
     ).encode()
 
 
+def test_store_and_log_work_without_a_backend_websocket():
+    """
+    Providers that stream over a non-websocket transport (Bedrock's AWS SDK stream) build this
+    class only to store and log; store/log must work with backend_ws=None, and any forwarding
+    path reached from there must fail loudly rather than on a placeholder object.
+    """
+    streaming = RealTimeStreaming(MagicMock(), None, MagicMock())
+
+    streaming.store_message(json.dumps({"type": "session.created", "session": {"id": "s"}}))
+    assert [message["type"] for message in streaming.messages] == ["session.created"]
+
+    with pytest.raises(RuntimeError, match="without a backend websocket"):
+        _ = streaming.backend_ws
+
+
 def test_realtime_streaming_store_message():
     # Setup
     websocket = MagicMock()
@@ -1403,7 +1418,6 @@ async def test_realtime_guardrail_blocks_prompt_injection(monkeypatch: pytest.Mo
     )
 
 
-
 @pytest.mark.asyncio
 async def test_realtime_guardrail_allows_clean_transcript(monkeypatch: pytest.MonkeyPatch):
     """
@@ -1458,7 +1472,6 @@ async def test_realtime_guardrail_allows_clean_transcript(monkeypatch: pytest.Mo
     sent_to_backend = [json.loads(c.args[0]) for c in backend_ws.send.call_args_list if c.args]
     response_creates = [e for e in sent_to_backend if e.get("type") == "response.create"]
     assert len(response_creates) == 1, f"Clean transcript should trigger response.create, got: {sent_to_backend}"
-
 
 
 @pytest.mark.asyncio
@@ -1554,7 +1567,6 @@ async def test_realtime_text_input_guardrail_blocks_and_returns_error(monkeypatc
     assert len(original_items) == 0, f"Blocked item should not be forwarded to backend, got: {original_items}"
 
 
-
 @pytest.mark.asyncio
 async def test_realtime_function_call_output_guardrail_blocks_and_returns_error(monkeypatch: pytest.MonkeyPatch):
     """
@@ -1643,7 +1655,6 @@ async def test_realtime_function_call_output_guardrail_blocks_and_returns_error(
     assert "test@example.com" not in sanitized_item["output"]
 
 
-
 @pytest.mark.asyncio
 async def test_realtime_function_call_output_guardrail_allows_clean_output(monkeypatch: pytest.MonkeyPatch):
     """
@@ -1708,7 +1719,6 @@ async def test_realtime_function_call_output_guardrail_allows_clean_output(monke
     assert len(forwarded) == 1, f"Clean function_call_output should be forwarded, got: {forwarded}"
 
 
-
 @pytest.mark.asyncio
 async def test_realtime_text_input_guardrail_uses_pre_call_mode(monkeypatch: pytest.MonkeyPatch):
     """
@@ -1742,7 +1752,6 @@ async def test_realtime_text_input_guardrail_uses_pre_call_mode(monkeypatch: pyt
     assert streaming._has_audio_transcription_guardrails() is False, (
         "pre_call-only guardrail must not disable server_vad auto-response"
     )
-
 
 
 @pytest.mark.asyncio
@@ -1801,7 +1810,6 @@ async def test_realtime_session_created_injects_session_update_for_audio_guardra
     )
 
 
-
 @pytest.mark.asyncio
 async def test_realtime_session_created_does_not_inject_session_update_for_pre_call_only(
     monkeypatch: pytest.MonkeyPatch,
@@ -1846,7 +1854,6 @@ async def test_realtime_session_created_does_not_inject_session_update_for_pre_c
     assert len(session_updates) == 0, f"pre_call-only guardrail must not inject session.update, got: {sent_to_backend}"
 
 
-
 @pytest.mark.asyncio
 async def test_pre_call_and_post_call_guardrails_do_not_disable_server_vad(monkeypatch: pytest.MonkeyPatch):
     """Model Armor-style pre_call + post_call must not gate audio VAD."""
@@ -1862,17 +1869,17 @@ async def test_pre_call_and_post_call_guardrails_do_not_disable_server_vad(monke
         litellm,
         "callbacks",
         [
-                ModelArmorStyleGuardrail(
-                    guardrail_name="model_armor_all_pre_call",
-                    event_hook=GuardrailEventHooks.pre_call,
-                    default_on=False,
-                ),
-                ModelArmorStyleGuardrail(
-                    guardrail_name="model_armor_all_post_call",
-                    event_hook=GuardrailEventHooks.post_call,
-                    default_on=False,
-                ),
-            ],
+            ModelArmorStyleGuardrail(
+                guardrail_name="model_armor_all_pre_call",
+                event_hook=GuardrailEventHooks.pre_call,
+                default_on=False,
+            ),
+            ModelArmorStyleGuardrail(
+                guardrail_name="model_armor_all_post_call",
+                event_hook=GuardrailEventHooks.post_call,
+                default_on=False,
+            ),
+        ],
     )
 
     client_ws = MagicMock()
@@ -1894,7 +1901,6 @@ async def test_pre_call_and_post_call_guardrails_do_not_disable_server_vad(monke
 
     assert streaming._has_realtime_guardrails() is True
     assert streaming._has_audio_transcription_guardrails() is False
-
 
 
 @pytest.mark.asyncio
@@ -1943,7 +1949,6 @@ async def test_end_session_after_n_fails_closes_connection(monkeypatch: pytest.M
     assert streaming._violation_count == 2
 
 
-
 @pytest.mark.asyncio
 async def test_on_violation_end_session_closes_on_first_fail(monkeypatch: pytest.MonkeyPatch):
     """
@@ -1987,7 +1992,6 @@ async def test_on_violation_end_session_closes_on_first_fail(monkeypatch: pytest
 
     assert backend_ws.close.called, "Expected session to close immediately with on_violation=end_session"
     assert streaming._violation_count == 1
-
 
 
 @pytest.mark.asyncio
@@ -2952,7 +2956,9 @@ async def test_log_messages_routes_async_logging_through_bounded_worker():
 
         mock_worker.ensure_initialized_and_enqueue.assert_called_once()
         enqueued = mock_worker.ensure_initialized_and_enqueue.call_args
-        assert (enqueued.args or tuple(enqueued.kwargs.values()))[0] is logging_obj.dispatch_success_handlers.return_value
+        assert (enqueued.args or tuple(enqueued.kwargs.values()))[
+            0
+        ] is logging_obj.dispatch_success_handlers.return_value
         logging_obj.dispatch_success_handlers.assert_called_once_with(streaming.messages, prefer_async_handlers=True)
         logging_obj.success_handler.assert_not_called()
         # the bare create_task path must no longer be used for success logging

@@ -210,7 +210,9 @@ def stub_aws_sdk_client(monkeypatch):
 
         async def invoke_model_with_bidirectional_stream(self, operation_input):
             captured["operation_input"] = operation_input
-            return ImmediatelyEndingBedrockStream()
+            # Tests that need the session to see Bedrock frames set captured["stream_events"];
+            # with none set this replays nothing and ends immediately.
+            return ScriptedBedrockStream(captured.get("stream_events", []))
 
     package = types.ModuleType("aws_sdk_bedrock_runtime")
     client_module = types.ModuleType("aws_sdk_bedrock_runtime.client")
@@ -393,6 +395,90 @@ class TestBedrockRealtimeSessionLifecycle:
         assert logging_obj.dispatched_results
         dispatched = logging_obj.dispatched_results[0]
         assert any(event.get("type") == "session.created" for event in dispatched)
+
+    @pytest.mark.asyncio
+    async def test_unbilled_usage_at_session_close_is_flushed_into_the_spend_log(
+        self, stub_aws_sdk_client, drain_bedrock_realtime_logging_worker
+    ):
+        """
+        Usage that arrives while a response is open is not billed by any response.done during
+        the session, so closing the session must flush it or the turn is never charged.
+        """
+        stub_aws_sdk_client["stream_events"] = [
+            {"event": {"contentStart": {"role": "ASSISTANT", "type": "TEXT"}}},
+            {
+                "event": {
+                    "usageEvent": {
+                        "totalInputTokens": 12,
+                        "totalOutputTokens": 23,
+                        "totalTokens": 35,
+                        "details": {
+                            "total": {
+                                "input": {"speechTokens": 10, "textTokens": 2},
+                                "output": {"speechTokens": 20, "textTokens": 3},
+                            }
+                        },
+                    }
+                }
+            },
+        ]
+        handler = BedrockRealtime()
+        logging_obj = FakeLogging()
+
+        await handler.async_realtime(
+            model="amazon.nova-sonic-v1:0",
+            websocket=RealtimeClientWS(),
+            logging_obj=logging_obj,
+            aws_region_name="us-east-1",
+            aws_access_key_id="k",
+            aws_secret_access_key="s",
+        )
+
+        await drain_bedrock_realtime_logging_worker.pop()
+        dispatched = logging_obj.dispatched_results[0]
+        done_events = [event for event in dispatched if event.get("type") == "response.done"]
+        assert len(done_events) == 1, "session close did not flush the open turn's usage"
+        usage = done_events[0]["response"]["usage"]
+        assert usage["input_tokens"] == 12
+        assert usage["output_tokens"] == 23
+        assert usage["total_tokens"] == 35
+
+    @pytest.mark.asyncio
+    async def test_client_session_update_reaches_spend_logging(self, stub_aws_models):
+        """Declared tools and instructions must reach the spend log via store_input."""
+        handler = BedrockRealtime()
+        client_ws = DisconnectingClientWS(
+            [
+                json.dumps(
+                    {
+                        "type": "session.update",
+                        "session": {
+                            "instructions": "be brief",
+                            "tools": [{"type": "function", "name": "get_weather"}],
+                        },
+                    }
+                )
+            ]
+        )
+        realtime_streaming = RealTimeStreaming(
+            websocket=client_ws,
+            backend_ws=None,
+            logging_obj=FakeLogging(),
+            model="amazon.nova-sonic-v1:0",
+        )
+
+        await handler._forward_client_to_bedrock(
+            client_ws,
+            FakeBedrockStream(),
+            BedrockRealtimeConfig(),
+            "amazon.nova-sonic-v1:0",
+            {},
+            FakeLogging(),
+            realtime_streaming,
+        )
+
+        assert realtime_streaming.session_tools == [{"type": "function", "name": "get_weather"}]
+        assert {"role": "system", "content": "be brief"} in realtime_streaming.input_messages
 
     @pytest.mark.asyncio
     async def test_tool_call_reaches_spend_logging_via_response_done(self):

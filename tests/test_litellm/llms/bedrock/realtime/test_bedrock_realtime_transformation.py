@@ -1393,6 +1393,29 @@ class TestBedrockRealtimeContentBlockLifecycle:
         assert sum(1 for msg in second["response"] if msg["type"] == "response.output_item.added") == 1
 
 
+class TestBedrockRealtimeToolArgumentParsing:
+    """Nova Sonic tool args arrive in several shapes; none may crash or leak a raw wire value."""
+
+    def _args(self, tool_use: dict) -> str:
+        config = BedrockRealtimeConfig()
+        events, _, _ = config.transform_tool_use_event({"toolUse": tool_use}, "item_1", "resp_1", "conv_1")
+        return _only(events, "response.function_call_arguments.done")["arguments"]
+
+    def test_already_decoded_object_content_is_passed_through(self):
+        assert json.loads(self._args({"toolUseId": "t", "toolName": "f", "content": {"location": "Seattle"}})) == {
+            "location": "Seattle"
+        }
+
+    def test_empty_content_falls_back_to_empty_arguments(self):
+        assert json.loads(self._args({"toolUseId": "t", "toolName": "f", "content": ""})) == {}
+
+    def test_missing_content_and_input_yields_empty_arguments(self):
+        assert json.loads(self._args({"toolUseId": "t", "toolName": "f"})) == {}
+
+    def test_non_json_content_yields_empty_arguments(self):
+        assert json.loads(self._args({"toolUseId": "t", "toolName": "f", "content": "not json"})) == {}
+
+
 class TestBedrockRealtimeUsageAccounting:
     def _usage_event(
         self,
@@ -1640,6 +1663,20 @@ class TestBedrockRealtimeUsageAccounting:
             realtime_response_transform_input=state,
         )
         assert completion_end["response"] == []
+        assert not config.has_unbilled_usage()
+        assert config.flush_pending_usage_as_response_done(None, None) == []
+
+    def test_non_numeric_token_counts_are_billed_as_zero(self):
+        """A malformed usageEvent must not crash the session or bill a bogus amount."""
+        config = BedrockRealtimeConfig()
+        config.record_usage_event(
+            {
+                "totalInputTokens": "twelve",
+                "totalOutputTokens": True,
+                "totalTokens": None,
+                "details": {"total": {"input": {"speechTokens": None}, "output": {"textTokens": "x"}}},
+            }
+        )
         assert not config.has_unbilled_usage()
         assert config.flush_pending_usage_as_response_done(None, None) == []
 
