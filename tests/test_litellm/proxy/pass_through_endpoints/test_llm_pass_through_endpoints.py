@@ -2015,7 +2015,7 @@ class TestLLMPassthroughFactoryProxyRoute:
 
 class TestVLLMProxyRoute:
     @pytest.mark.asyncio
-    @patch(
+    @patch(  # test-quality-ok: isolate allowlist gate from router passthrough
         "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints._authorize_passthrough_route_model",
         new_callable=AsyncMock,
     )
@@ -2057,19 +2057,21 @@ class TestVLLMProxyRoute:
         mock_llm_router.allm_passthrough_route.assert_awaited_once()
 
     @pytest.mark.asyncio
-    @patch(
+    @patch(  # test-quality-ok: isolate allowlist gate from router passthrough
         "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints._authorize_passthrough_route_model",
         new_callable=AsyncMock,
     )
-    @patch(
+    @patch(  # test-quality-ok: empty body; model comes from query only
         "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.get_request_body",
         return_value={},
     )
-    @patch(
+    @patch(  # test-quality-ok: force router branch for query-model path
         "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.is_passthrough_request_using_router_model",
         return_value=True,
     )
-    @patch("litellm.proxy.proxy_server.llm_router")
+    @patch(  # test-quality-ok: capture allm_passthrough_route model kwarg
+        "litellm.proxy.proxy_server.llm_router"
+    )
     async def test_vllm_proxy_route_query_only_model_uses_router_and_auth(
         self, mock_llm_router, mock_is_router, mock_get_body, mock_authorize
     ):
@@ -2102,19 +2104,21 @@ class TestVLLMProxyRoute:
         assert call_kwargs["method"] == "GET"
 
     @pytest.mark.asyncio
-    @patch(
+    @patch(  # test-quality-ok: inject ProxyException without full auth stack
         "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints._authorize_passthrough_route_model",
         new_callable=AsyncMock,
     )
-    @patch(
+    @patch(  # test-quality-ok: empty body; model comes from query only
         "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.get_request_body",
         return_value={},
     )
-    @patch(
+    @patch(  # test-quality-ok: force router branch before deny
         "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.is_passthrough_request_using_router_model",
         return_value=True,
     )
-    @patch("litellm.proxy.proxy_server.llm_router")
+    @patch(  # test-quality-ok: assert forward is skipped on deny
+        "litellm.proxy.proxy_server.llm_router"
+    )
     async def test_vllm_proxy_route_query_model_auth_denies_disallowed(
         self, mock_llm_router, mock_is_router, mock_get_body, mock_authorize
     ):
@@ -2179,7 +2183,7 @@ class TestVLLMProxyRoute:
             is_passthrough_request_using_router_model,
         )
 
-        with patch(
+        with patch(  # test-quality-ok: assert query model is passed into is_known_model
             "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.is_known_model",
             return_value=True,
         ) as mock_known:
