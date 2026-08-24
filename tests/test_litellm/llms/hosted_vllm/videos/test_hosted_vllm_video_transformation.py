@@ -1,12 +1,15 @@
 """Tests for hosted_vllm video generation (vLLM-Omni /v1/videos)."""
 
+import base64
 import json
 from io import BytesIO
-from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
 
 import litellm
+from litellm.litellm_core_utils.url_utils import SSRFError
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.llms.hosted_vllm.videos import get_hosted_vllm_video_config
 from litellm.llms.hosted_vllm.videos.transformation import (
     HostedVLLMVideoConfig,
@@ -205,53 +208,144 @@ def test_get_supported_openai_params_includes_omni_extensions():
     assert "audio_reference" in supported
 
 
-def _mock_http_client(response_body: dict) -> MagicMock:
-    mock_client = MagicMock()
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.headers = {"content-type": "application/json"}
-    mock_response.json.return_value = response_body
-    mock_response.text = json.dumps(response_body)
-    mock_client.post.return_value = mock_response
-    return mock_client
+def _http_handler_for(handler) -> HTTPHandler:
+    return HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(handler)))
 
 
 def test_video_generation_posts_multipart_not_json():
-    mock_client = _mock_http_client(
-        {
-            "id": "video-123",
-            "object": "video",
-            "status": "queued",
-            "created_at": 1701234567,
-        }
-    )
+    captured: list[httpx.Request] = []
 
-    with patch(
-        "litellm.llms.custom_httpx.llm_http_handler._get_httpx_client",
-        return_value=mock_client,
-    ):
-        response = litellm.video_generation(
-            model="hosted_vllm/MiniMax-H3",
-            prompt="three cats march into a bedroom playing tiny brass instruments",
-            api_base="http://localhost:8091",
-            api_key="test-key",
-            extra_body={
-                "width": 1280,
-                "height": 720,
-                "fps": 24,
-                "extra_params": {"task": "t2va", "duration": 10.0},
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "id": "video-123",
+                "object": "video",
+                "status": "queued",
+                "created_at": 1701234567,
             },
         )
 
+    response = litellm.video_generation(
+        model="hosted_vllm/MiniMax-H3",
+        prompt="three cats march into a bedroom playing tiny brass instruments",
+        api_base="http://localhost:8091",
+        api_key="test-key",
+        client=_http_handler_for(handler),
+        extra_body={
+            "width": 1280,
+            "height": 720,
+            "fps": 24,
+            "extra_params": {"task": "t2va", "duration": 10.0},
+        },
+    )
+
     assert isinstance(response, VideoObject)
     assert response.status == "queued"
-    mock_client.post.assert_called_once()
-    post_kwargs = mock_client.post.call_args.kwargs
-    assert post_kwargs["url"] == "http://localhost:8091/v1/videos"
-    assert post_kwargs.get("json") is None
-    assert post_kwargs["files"]
-    fields = _form_fields(post_kwargs["files"])
-    assert fields["prompt"] == "three cats march into a bedroom playing tiny brass instruments"
-    assert fields["width"] == "1280"
-    assert json.loads(fields["extra_params"]) == {"task": "t2va", "duration": 10.0}
-    assert post_kwargs["headers"]["Authorization"] == "Bearer test-key"
+    assert len(captured) == 1
+    request = captured[0]
+    assert str(request.url) == "http://localhost:8091/v1/videos"
+    assert request.headers["authorization"] == "Bearer test-key"
+    body = request.content
+    assert b'name="prompt"' in body
+    assert b"three cats march into a bedroom playing tiny brass instruments" in body
+    assert b'name="width"' in body
+    assert b"1280" in body
+    assert b'name="extra_params"' in body
+    assert b"t2va" in body
+    assert request.headers.get("content-type", "").startswith("multipart/form-data")
+
+
+def test_http_image_reference_is_inlined_as_data_url():
+    png_bytes = b"fake-png"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.host == "1.1.1.1"
+        return httpx.Response(200, content=png_bytes, headers={"content-type": "image/png"})
+
+    config = HostedVLLMVideoConfig(media_http_client=_http_handler_for(handler))
+    _, files, _ = config.transform_video_create_request(
+        model="MiniMax-H3",
+        prompt="a person singing",
+        api_base="http://localhost:8091/v1/videos",
+        video_create_optional_request_params={
+            "image_reference": {"image_url": "http://1.1.1.1/face.png"},
+        },
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    payload = json.loads(_form_fields(files)["image_reference"])
+    assert payload["image_url"] == "data:image/png;base64," + base64.b64encode(png_bytes).decode("ascii")
+
+
+def test_http_audio_reference_json_string_is_inlined_as_data_url():
+    audio_bytes = b"fake-mp3"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=audio_bytes, headers={"content-type": "audio/mpeg"})
+
+    config = HostedVLLMVideoConfig(media_http_client=_http_handler_for(handler))
+    _, files, _ = config.transform_video_create_request(
+        model="MiniMax-H3",
+        prompt="a person singing",
+        api_base="http://localhost:8091/v1/videos",
+        video_create_optional_request_params={
+            "audio_reference": '{"audio_url": "http://1.1.1.1/speech.mp3"}',
+        },
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    payload = json.loads(_form_fields(files)["audio_reference"])
+    assert payload["audio_url"].startswith("data:audio/mpeg;base64,")
+    assert base64.b64decode(payload["audio_url"].split(",", 1)[1]) == audio_bytes
+
+
+def test_data_url_image_reference_is_not_fetched():
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError(f"unexpected fetch of {request.url}")
+
+    data_url = "data:image/png;base64,AAAA"
+    config = HostedVLLMVideoConfig(media_http_client=_http_handler_for(handler))
+    _, files, _ = config.transform_video_create_request(
+        model="MiniMax-H3",
+        prompt="a person singing",
+        api_base="http://localhost:8091/v1/videos",
+        video_create_optional_request_params={"image_reference": {"image_url": data_url}},
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert json.loads(_form_fields(files)["image_reference"])["image_url"] == data_url
+
+
+def test_metadata_url_in_image_reference_is_rejected():
+    config = HostedVLLMVideoConfig()
+    with pytest.raises(SSRFError, match="blocked address"):
+        config.transform_video_create_request(
+            model="MiniMax-H3",
+            prompt="a person singing",
+            api_base="http://localhost:8091/v1/videos",
+            video_create_optional_request_params={
+                "image_reference": {"image_url": "http://169.254.169.254/latest/meta-data/"},
+            },
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+
+def test_file_scheme_media_reference_is_rejected():
+    config = HostedVLLMVideoConfig()
+    with pytest.raises(SSRFError, match="scheme"):
+        config.transform_video_create_request(
+            model="MiniMax-H3",
+            prompt="a person singing",
+            api_base="http://localhost:8091/v1/videos",
+            video_create_optional_request_params={
+                "video_reference": {"video_url": "file:///etc/passwd"},
+            },
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
