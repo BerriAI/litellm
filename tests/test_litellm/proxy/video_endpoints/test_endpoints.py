@@ -372,6 +372,7 @@ async def test_content__model_encoded_id(harness):
 async def call_edit(
     harness: Harness, *, body: Dict[str, Any], headers=None, query=None
 ):
+    harness.read_body.return_value = dict(body)
     return await endpoints.video_edit(
         request=FakeRequest(headers=headers, query=query, raw_body=orjson.dumps(body)),
         fastapi_response=Response(),
@@ -428,6 +429,27 @@ async def test_edit__missing_video_object_defaults_to_openai(harness):
     assert "video" not in data
 
 
+@pytest.mark.asyncio
+async def test_edit__bare_string_video_id_from_form_field(harness):
+    await call_edit(harness, body={"prompt": "brighter", "video": "video_plain"})
+
+    assert harness.processor_data() == {
+        "prompt": "brighter",
+        "video_id": "video_plain",
+        "custom_llm_provider": "openai",
+    }
+
+
+@pytest.mark.asyncio
+async def test_edit__json_string_video_reference_from_form_field(harness):
+    await call_edit(
+        harness,
+        body={"prompt": "brighter", "video": orjson.dumps({"id": "video_plain"}).decode()},
+    )
+
+    assert harness.processor_data()["video_id"] == "video_plain"
+
+
 # =========================================================================== #
 #   GET /v1/videos  -  video_list                                              #
 # =========================================================================== #
@@ -471,6 +493,7 @@ async def test_list__provider_from_header(harness):
 async def call_remix(
     harness: Harness, video_id: str, *, body, headers=None, query=None
 ):
+    harness.read_body.return_value = dict(body)
     return await endpoints.video_remix(
         video_id=video_id,
         request=FakeRequest(headers=headers, query=query, raw_body=orjson.dumps(body)),
@@ -629,6 +652,7 @@ async def test_get_character__plain_id_defaults_openai_no_encode(harness):
 
 
 async def call_extension(harness: Harness, *, body, headers=None, query=None):
+    harness.read_body.return_value = dict(body)
     return await endpoints.video_extension(
         request=FakeRequest(headers=headers, query=query, raw_body=orjson.dumps(body)),
         fastapi_response=Response(),
