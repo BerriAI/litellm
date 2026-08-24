@@ -277,6 +277,8 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     output_cost_per_second_1080p: (
         float | None
     )  # video_generation tier: key output_cost_per_second_<resolution> (e.g. 1080p, 720p)
+    output_cost_per_second_480p: ReadOnly[float | None]
+    output_cost_per_second_4k: ReadOnly[float | None]
     ocr_cost_per_page: float | None  # for OCR models
     ocr_cost_per_credit: float | None  # for OCR models priced by credit
     annotation_cost_per_page: float | None  # for OCR models
@@ -3331,6 +3333,8 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     input_cost_per_second: float | None = None
     output_cost_per_second: float | None = None
     output_cost_per_second_1080p: float | None = None
+    output_cost_per_second_480p: float | None = None
+    output_cost_per_second_4k: float | None = None
     input_cost_per_pixel: float | None = None
     output_cost_per_pixel: float | None = None
 
