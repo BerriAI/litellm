@@ -2316,6 +2316,72 @@ def test_edit_and_extension_support_custom_provider_from_extra_body(
     assert captured_data["custom_llm_provider"] == "vertex_ai"
 
 
+@pytest.mark.parametrize(
+    "handler_name, path, form",
+    [
+        (
+            "video_edit",
+            "/v1/videos/edits",
+            {"model": "my-video-model", "prompt": "brighter", "video": "video_123"},
+        ),
+        (
+            "video_extension",
+            "/v1/videos/extensions",
+            {"model": "my-video-model", "prompt": "continue", "seconds": "4", "video": "video_123"},
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_edit_and_extension_read_cached_body_after_auth_consumes_stream(
+    handler_name, path, form
+):
+    from urllib.parse import urlencode
+
+    from fastapi import Response
+    from starlette.requests import Request
+
+    import litellm.proxy.video_endpoints.endpoints as endpoints
+    from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+    from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
+
+    body = urlencode(form).encode()
+    stream = {"sent": False}
+
+    async def receive():
+        if stream["sent"]:
+            return {"type": "http.request", "body": b"", "more_body": False}
+        stream["sent"] = True
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": path,
+            "headers": [
+                (b"content-type", b"application/x-www-form-urlencoded"),
+                (b"content-length", str(len(body)).encode()),
+            ],
+            "query_string": b"",
+        },
+        receive,
+    )
+
+    await _read_request_body(request=request)
+
+    handler = getattr(endpoints, handler_name)
+    with pytest.raises(ProxyException) as exc_info:
+        await handler(
+            request=request,
+            fastapi_response=Response(),
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-1234"),
+        )
+
+    message = str(exc_info.value)
+    assert "Stream consumed" not in message
+    assert "my-video-model" in message
+
+
 @pytest.mark.parametrize("endpoint", ["/v1/videos/edits", "/v1/videos/extensions"])
 def test_edit_and_extension_route_with_encoded_video_ids(
     video_proxy_test_client, endpoint
