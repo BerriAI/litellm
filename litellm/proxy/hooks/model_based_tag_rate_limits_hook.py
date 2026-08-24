@@ -47,15 +47,24 @@ _LIMIT_UNITS: Final[tuple[_LimitUnit, ...]] = ("tokens", "requests", "dollars", 
 # depending on TagRateLimitScope's own hashability.
 _ScopeSignature: TypeAlias = tuple[str, tuple[str, ...]] | None
 # (tag_id, name, limit, period_seconds, scope_by_key_hash, included_values,
-# excluded_values, enabled_for, disabled_for) -- the fields that decide
-# whether two deployments' entries are the same rate limit for dedup
-# purposes; see _build_group_limits. Two deployments that agree on the first
-# five but disagree on any scoping field are declaring genuinely different
-# policies (e.g. one excludes a user the other doesn't) and must not be
-# merged into one shared bucket -- the same class of bug this signature
-# already guards against for a plain divergent `limit`.
+# excluded_values, enabled_for, disabled_for, apply_to_key_alias) -- the
+# fields that decide whether two deployments' entries are the same rate
+# limit for dedup purposes; see _build_group_limits. Two deployments that
+# agree on the first five but disagree on any scoping field are declaring
+# genuinely different policies (e.g. one excludes a user the other doesn't)
+# and must not be merged into one shared bucket -- the same class of bug
+# this signature already guards against for a plain divergent `limit`.
 _DedupSignature: TypeAlias = tuple[
-    str, str, float, int, bool, tuple[str, ...] | None, tuple[str, ...] | None, _ScopeSignature, _ScopeSignature
+    str,
+    str,
+    float,
+    int,
+    bool,
+    tuple[str, ...] | None,
+    tuple[str, ...] | None,
+    _ScopeSignature,
+    _ScopeSignature,
+    tuple[str, ...] | None,
 ]
 # Units whose admission must be atomic (check-and-increment in one Redis
 # round trip) because the increment amount is known upfront (always 1).
@@ -204,11 +213,11 @@ def _scope_signature(scope: TagRateLimitScope | None) -> _ScopeSignature:
     return None if scope is None else (scope.tag_id, scope.values)
 
 
-def _entry_applies(entry: TagRateLimitEntry, tag_value: str, tags: Sequence[str]) -> bool:
+def _entry_applies(entry: TagRateLimitEntry, tag_value: str, tags: Sequence[str], key_alias: str | None) -> bool:
     """
     Applies `entry`'s own scoping fields (`included_values`/`excluded_values`/
-    `enabled_for`/`disabled_for`), evaluated in this order -- deny overrides
-    allow, checked before either allowlist:
+    `enabled_for`/`disabled_for`/`apply_to_key_alias`), evaluated in this
+    order -- deny overrides allow, checked before either allowlist:
 
       1. `excluded_values`: `tag_value` is in it -> doesn't apply.
       2. `included_values`: `tag_value` is NOT in it -> doesn't apply.
@@ -220,8 +229,12 @@ def _entry_applies(entry: TagRateLimitEntry, tag_value: str, tags: Sequence[str]
          NOT in `enabled_for.values` -> doesn't apply. Unlike `disabled_for`,
          absence DOES fail this check -- an allowlist gate requires an
          explicit match, so "not tagged at all" means "not in scope".
+      5. `apply_to_key_alias`: the calling key's own alias is absent, or
+         present but not in the list -> doesn't apply. Same allowlist
+         semantics as `enabled_for` -- a key with no alias set never
+         satisfies this gate.
 
-    An entry with none of the four fields set always applies -- this is the
+    An entry with none of these fields set always applies -- this is the
     unscoped behavior every existing entry has today, unchanged.
     """
     if entry.excluded_values is not None and tag_value in entry.excluded_values:
@@ -236,7 +249,9 @@ def _entry_applies(entry: TagRateLimitEntry, tag_value: str, tags: Sequence[str]
         gate_value = _extract_identity(tags, entry.enabled_for.tag_id)
         if gate_value is None or gate_value not in entry.enabled_for.values:
             return False
-    return True
+    if entry.apply_to_key_alias is None:
+        return True
+    return key_alias in entry.apply_to_key_alias
 
 
 def _deployment_id(deployment: Mapping[str, object]) -> str | None:
@@ -267,6 +282,16 @@ def _extract_key_hash(request_kwargs: Mapping[str, object], metadata_variable_na
     active: Final = request_kwargs.get(metadata_variable_name) or _EMPTY_MAPPING
     key_hash: Final = active.get("user_api_key")
     return key_hash if isinstance(key_hash, str) else None
+
+
+def _extract_key_alias(request_kwargs: Mapping[str, object], metadata_variable_name: str) -> str | None:
+    """Same single-authoritative-field lookup as `_extract_team_id`, but for
+    the calling virtual key's own `key_alias`: `LiteLLMProxyRequestSetup` sets
+    `metadata["user_api_key_alias"]` to `user_api_key_dict.key_alias`
+    (see `litellm_pre_call_utils.py`)."""
+    active: Final = request_kwargs.get(metadata_variable_name) or _EMPTY_MAPPING
+    key_alias: Final = active.get("user_api_key_alias")
+    return key_alias if isinstance(key_alias, str) else None
 
 
 def _entries_for_unit(deployment: Mapping[str, object], unit: _LimitUnit) -> tuple[TagRateLimitEntry, ...]:
@@ -357,6 +382,7 @@ def _build_group_limits(deployments: Sequence[Mapping[str, object]], unit: _Limi
                 entry.excluded_values,
                 _scope_signature(entry.enabled_for),
                 _scope_signature(entry.disabled_for),
+                entry.apply_to_key_alias,
             )
             ids_for_signature = declaring_ids_by_signature.setdefault(signature, [])  # mutable-ok: see comment above
             # One deployment declaring the identical entry twice (a config
@@ -472,6 +498,7 @@ class _LimitsIndex:
                     limit.entry.excluded_values,
                     _scope_signature(limit.entry.enabled_for),
                     _scope_signature(limit.entry.disabled_for),
+                    limit.entry.apply_to_key_alias,
                     limit.deployment_scope,
                     limit.team_scope,
                 )
@@ -679,6 +706,7 @@ def _policy_fingerprint(entry: TagRateLimitEntry) -> str:
         entry.excluded_values,
         _scope_signature(entry.enabled_for),
         _scope_signature(entry.disabled_for),
+        entry.apply_to_key_alias,
     )
     return hashlib.sha256(repr(fingerprint_source).encode()).hexdigest()[:16]
 
@@ -745,6 +773,7 @@ def _classify_check(
     request_kwargs: Mapping[str, object],
     metadata_variable_name: str,
     now: float,
+    key_alias: str | None,
 ) -> _ClassifiedCheck | None:
     if configured_limit.deployment_scope is not None and not (
         present_deployment_ids & frozenset(configured_limit.deployment_scope)
@@ -753,7 +782,7 @@ def _classify_check(
     tag_value: Final = _extract_identity(tags, configured_limit.entry.tag_id)
     if tag_value is None:
         return None
-    if not _entry_applies(configured_limit.entry, tag_value, tags):
+    if not _entry_applies(configured_limit.entry, tag_value, tags, key_alias):
         return None
     key_hash: Final = (
         _extract_key_hash(request_kwargs, metadata_variable_name) if configured_limit.entry.scope_by_key_hash else None
@@ -781,6 +810,7 @@ def _increment_operation_for_limit(
     tags: Sequence[str],
     deployment_id: str | None,
     key_hash: str | None,
+    key_alias: str | None,
     increment_by_unit: Mapping[_LimitUnit, float],
     now: float,
 ) -> RedisPipelineIncrementOperation | None:
@@ -791,7 +821,7 @@ def _increment_operation_for_limit(
     tag_value: Final = _extract_identity(tags, configured_limit.entry.tag_id)
     if tag_value is None:
         return None
-    if not _entry_applies(configured_limit.entry, tag_value, tags):
+    if not _entry_applies(configured_limit.entry, tag_value, tags, key_alias):
         return None
     if configured_limit.unit not in increment_by_unit:
         return None  # "requests" is accounted atomically at admission, not here
@@ -1139,6 +1169,7 @@ class _PROXY_ModelBasedTagRateLimitsHook(  # pyright: ignore[reportUnusedClass] 
             dep_id for d in healthy_deployments if (dep_id := _deployment_id(d)) is not None
         )
 
+        key_alias: Final = _extract_key_alias(resolved_request_kwargs, metadata_variable_name)
         now: Final = self._time_provider().timestamp()
         _record_admission_time(resolved_request_kwargs, now)
         classified: Final = tuple(
@@ -1153,6 +1184,7 @@ class _PROXY_ModelBasedTagRateLimitsHook(  # pyright: ignore[reportUnusedClass] 
                     resolved_request_kwargs,
                     metadata_variable_name,
                     now,
+                    key_alias,
                 )
             )
             is not None
@@ -1460,6 +1492,7 @@ class _PROXY_ModelBasedTagRateLimitsHook(  # pyright: ignore[reportUnusedClass] 
         # here instead keeps this bucket identical to the one admission
         # already scoped the check against.
         key_hash: Final = _extract_key_hash(litellm_params_for_metadata, metadata_variable_name)
+        key_alias: Final = _extract_key_alias(litellm_params_for_metadata, metadata_variable_name)
         # model_group is the caller-visible name, which Router deliberately
         # keeps distinct from the serving deployment's own model_name for a
         # routing-group call (see resolve_any's docstring). Passing only the
@@ -1516,7 +1549,7 @@ class _PROXY_ModelBasedTagRateLimitsHook(  # pyright: ignore[reportUnusedClass] 
             for configured_limit in configured
             if (
                 operation := _increment_operation_for_limit(
-                    configured_limit, model_group, tags, deployment_id, key_hash, increment_by_unit, now
+                    configured_limit, model_group, tags, deployment_id, key_hash, key_alias, increment_by_unit, now
                 )
             )
             is not None

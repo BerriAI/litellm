@@ -231,6 +231,12 @@ class TagRateLimitEntry(BaseModel):
     # either (nothing to match against a denylist).
     enabled_for: TagRateLimitScope | None = None
     disabled_for: TagRateLimitScope | None = None
+    # Restrict this entry to requests authenticated with one of these virtual
+    # keys' own `key_alias`. Unset (the default) means the entry applies to
+    # every request regardless of which key made it. A key with no alias set
+    # never satisfies this allowlist, same "absent gate never matches an
+    # allowlist" precedent as `enabled_for`.
+    apply_to_key_alias: tuple[str, ...] | None = None
 
     model_config = ConfigDict(protected_namespaces=())
 
@@ -281,6 +287,8 @@ class TagRateLimitEntry(BaseModel):
             raise ValueError("included_values must be a non-empty list of strings when set")
         if self.excluded_values is not None and not self.excluded_values:
             raise ValueError("excluded_values must be a non-empty list of strings when set")
+        if self.apply_to_key_alias is not None and not self.apply_to_key_alias:
+            raise ValueError("apply_to_key_alias must be a non-empty list of strings when set")
         return self
 
     @model_validator(mode="after")
@@ -294,6 +302,8 @@ class TagRateLimitEntry(BaseModel):
             self.included_values = tuple(sorted(set(self.included_values)))
         if self.excluded_values is not None:
             self.excluded_values = tuple(sorted(set(self.excluded_values)))
+        if self.apply_to_key_alias is not None:
+            self.apply_to_key_alias = tuple(sorted(set(self.apply_to_key_alias)))
         return self
 
 
