@@ -1,6 +1,7 @@
 package litellm
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -157,5 +158,99 @@ func TestParseKeyResponseNewFields(t *testing.T) {
 	}
 	if len(key.EnforcedParams) != 1 || len(key.AllowedRoutes) != 1 || len(key.AllowedPassthroughRoutes) != 1 || len(key.Prompts) != 1 {
 		t.Errorf("list fields not parsed: %+v", key)
+	}
+}
+
+// A config-supplied key value must be forwarded to /key/generate; previously
+// it was silently dropped and the proxy generated a random key instead.
+func TestCreateKeySendsConfigSuppliedKey(t *testing.T) {
+	var captured map[string]interface{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/key/generate" {
+			body, _ := io.ReadAll(r.Body)
+			json.Unmarshal(body, &captured)
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"key": "sk-custom", "token_id": "hash-1"}`))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"key": "sk-custom", "token_id": "hash-1"}`))
+	}))
+	defer srv.Close()
+
+	client := NewClient(srv.URL, "test-key", true)
+	d := newKeyResourceData(t, map[string]interface{}{"key": "sk-custom"})
+
+	diags := resourceKeyCreate(context.Background(), d, client)
+	if diags.HasError() {
+		t.Fatalf("create returned error: %v", diags)
+	}
+	if captured["key"] != "sk-custom" {
+		t.Errorf("create payload key = %v, want sk-custom", captured["key"])
+	}
+	if d.Id() != "hash-1" {
+		t.Errorf("resource ID = %q, want hash-1", d.Id())
+	}
+}
+
+// The proxy 400s on budget_duration: "", so an unset duration must be
+// omitted from the update payload entirely.
+func TestUpdateKeyOmitsEmptyBudgetDuration(t *testing.T) {
+	var captured map[string]interface{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		json.Unmarshal(body, &captured)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"key": "sk-test"}`))
+	}))
+	defer srv.Close()
+
+	client := NewClient(srv.URL, "test-key", true)
+	if _, err := client.UpdateKey(&Key{Key: "sk-test"}); err != nil {
+		t.Fatalf("UpdateKey returned error: %v", err)
+	}
+	if _, present := captured["budget_duration"]; present {
+		t.Errorf("update payload contains empty budget_duration: %v", captured["budget_duration"])
+	}
+
+	if _, err := client.UpdateKey(&Key{Key: "sk-test", BudgetDuration: "30d"}); err != nil {
+		t.Fatalf("UpdateKey returned error: %v", err)
+	}
+	if captured["budget_duration"] != "30d" {
+		t.Errorf("budget_duration = %v, want 30d", captured["budget_duration"])
+	}
+}
+
+// /key/info nests the key's fields under "info"; GetKey must unwrap that
+// envelope or reads map nothing back into state.
+func TestGetKeyUnwrapsInfoEnvelope(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{
+			"key": "hash-1",
+			"info": {
+				"key_alias": "envelope-alias",
+				"models": ["gpt-4o-mini"],
+				"budget_id": "budget-1",
+				"team_id": "team-1",
+				"rpm_limit": 100
+			}
+		}`))
+	}))
+	defer srv.Close()
+
+	client := NewClient(srv.URL, "test-key", true)
+	key, err := client.GetKey("hash-1")
+	if err != nil {
+		t.Fatalf("GetKey returned error: %v", err)
+	}
+	if key.KeyAlias != "envelope-alias" {
+		t.Errorf("KeyAlias = %q, want envelope-alias (info envelope not unwrapped)", key.KeyAlias)
+	}
+	if key.BudgetID != "budget-1" || key.TeamID != "team-1" {
+		t.Errorf("nested fields not parsed: %+v", key)
+	}
+	if key.RPMLimit == nil || *key.RPMLimit != 100 {
+		t.Errorf("RPMLimit not parsed: %+v", key.RPMLimit)
 	}
 }

@@ -61,6 +61,17 @@ func (c *Client) GetKey(keyID string) (*Key, error) {
 		return nil, err
 	}
 
+	// /key/info nests the key's fields under "info"; only "key" itself is
+	// top-level. Without unwrapping, reads map nothing back into state.
+	if info, ok := resp["info"].(map[string]interface{}); ok {
+		if _, present := info["key"]; !present {
+			if k, ok := resp["key"].(string); ok {
+				info["key"] = k
+			}
+		}
+		return c.parseKeyResponse(info)
+	}
+
 	return c.parseKeyResponse(resp)
 }
 
@@ -70,7 +81,6 @@ func (c *Client) UpdateKey(key *Key) (*Key, error) {
 		"key":              key.Key,
 		"team_id":          key.TeamID,
 		"metadata":         key.Metadata,
-		"budget_duration":  key.BudgetDuration,
 		"key_alias":        key.KeyAlias,
 		"aliases":          key.Aliases,
 		"permissions":      key.Permissions,
@@ -78,6 +88,12 @@ func (c *Client) UpdateKey(key *Key) (*Key, error) {
 		"model_rpm_limit":  key.ModelRPMLimit,
 		"model_tpm_limit":  key.ModelTPMLimit,
 		"blocked":          key.Blocked,
+	}
+
+	// The proxy rejects an empty-string budget_duration with a 400, so only
+	// send it when set.
+	if key.BudgetDuration != "" {
+		updateData["budget_duration"] = key.BudgetDuration
 	}
 
 	// Only add pointer fields if they are explicitly set

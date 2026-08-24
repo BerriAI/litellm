@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/hashicorp/go-cty/cty"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 )
@@ -188,6 +189,14 @@ func resourceKeyCreate(ctx context.Context, d *schema.ResourceData, m interface{
 
 	key := &Key{}
 	mapResourceDataToKey(d, key)
+	// A config-supplied key value becomes the key itself; when absent the
+	// proxy generates one. Write-only attributes are invisible to d.Get in
+	// real Terraform runs, so read the raw config first.
+	if raw, err := d.GetRawConfigAt(cty.GetAttrPath("key")); err == nil && !raw.IsNull() && raw.Type() == cty.String && raw.AsString() != "" {
+		key.Key = raw.AsString()
+	} else if v := d.Get("key").(string); v != "" {
+		key.Key = v
+	}
 
 	createdKey, err := c.CreateKey(key)
 	if err != nil {
