@@ -464,6 +464,18 @@ class TestStoredRoutines:
         sql = self.DEFINITION + "DO 'DECLARE q text; BEGIN q := ''SELECT backfill()''; EXECUTE q; END';\n"
         assert _keywords(tmp_path, sql) == ("UPDATE",)
 
+    def test_a_call_after_a_single_quoted_literal_holding_comment_dashes_still_counts(self, tmp_path):
+        sql = self.DEFINITION + "DO 'BEGIN RAISE NOTICE ''--''; PERFORM backfill(); END';\n"
+        assert _keywords(tmp_path, sql) == ("UPDATE",)
+
+    def test_a_call_after_a_single_quoted_literal_opening_a_block_comment_still_counts(self, tmp_path):
+        sql = self.DEFINITION + "DO 'BEGIN RAISE NOTICE ''/*''; PERFORM backfill(); END';\n"
+        assert _keywords(tmp_path, sql) == ("UPDATE",)
+
+    def test_an_executed_literal_after_a_single_quoted_comment_dash_string_still_counts(self, tmp_path):
+        sql = self.DEFINITION + "DO 'BEGIN RAISE NOTICE ''--''; EXECUTE ''SELECT backfill()''; END';\n"
+        assert _keywords(tmp_path, sql) == ("UPDATE",)
+
     def test_the_name_written_only_in_a_single_quoted_do_comment_is_not_a_call(self, tmp_path):
         sql = self.DEFINITION + "DO 'BEGIN\n-- backfill() runs later\nPERFORM 1; END';\n"
         assert _keywords(tmp_path, sql) == ()

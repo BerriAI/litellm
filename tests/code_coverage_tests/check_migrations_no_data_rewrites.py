@@ -240,6 +240,15 @@ def blank(text: str) -> str:
     return "".join(character if character == "\n" else " " for character in text)
 
 
+def undouble(literal: str) -> str:
+    """The SQL a single-quoted literal stands for, with each doubled quote read back as the one it
+    escapes. `mask` hands the literal on raw, `''` and all, so re-lexing it as SQL needs the escapes
+    resolved first: left doubled, the first quote of a pair opens an empty string and closes it on
+    the second, and a `--` or `/*` in what was a nested string is then bare and blanks the code
+    after it."""
+    return literal.replace("''", "'")
+
+
 def mask(sql: str) -> tuple[str, tuple[tuple[int, int], ...], tuple[tuple[int, int], ...]]:
     """Blank comments and quoted text, keeping offsets, and locate the spans that can still
     hold SQL: dollar-quoted bodies, and the single-quoted literals `EXECUTE` runs."""
@@ -712,12 +721,16 @@ def outside_definition(
     ordinary way a migration runs a routine it has just defined, so a call written inside one has
     to stay readable. Each comes back with its comments blanked, since a name written in a comment
     is documentation rather than a call, while its string literals stay readable because `EXECUTE`
-    runs one as SQL and the call can be written inside it. The definition is blanked after they
-    are restored, which takes its own body with it, so a routine that names itself recursively
-    does not thereby count as called."""
+    runs one as SQL and the call can be written inside it. A single-quoted payload is undoubled as
+    it goes back, so a `--` or `/*` in one of its nested strings blanks nothing and the call after
+    it stays visible, and it is padded to the span it fills so the later offsets still land. The
+    definition is blanked after they are restored, which takes its own body with it, so a routine
+    that names itself recursively does not thereby count as called."""
     text = list(masked)
-    for start, end in (*bodies, *runnable):
+    for start, end in bodies:
         text[start:end] = without_comments(region[start:end])
+    for start, end in runnable:
+        text[start:end] = without_comments(undouble(region[start:end])).ljust(end - start)
     text[opens:closes] = blank(region[opens:closes])
     return "".join(text)
 
