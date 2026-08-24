@@ -6,16 +6,11 @@ with guardrail transformations, specifically testing edge cases with empty choic
 """
 
 import json
-import os
-import sys
 from typing import Any, Literal, Optional
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../../../../..")
-)  # Adds the parent directory to the system path
 
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.llms.anthropic.chat.guardrail_translation.handler import (
@@ -119,6 +114,45 @@ class MockCompactingGuardrail(CustomGuardrail):
         # A new list object -- this is what signals a rewrite to the handler.
         rewritten["structured_messages"] = list(self.replacement_messages)
         return rewritten
+
+
+class MockStructuredMaskingGuardrail(CustomGuardrail):
+    """Mask an email in texts and in a rebuilt structured view, like a PII-masking guardrail (LIT-5696)."""
+
+    def __init__(self):
+        super().__init__(guardrail_name="structured-masking-test")
+
+    @staticmethod
+    def _mask(text: str) -> str:
+        return text.replace("bob@example.com", "<EMAIL>")
+
+    def _mask_content(self, content: object) -> object:
+        if isinstance(content, str):
+            return self._mask(content)
+        if not isinstance(content, list):
+            return content
+        return [
+            {**block, "text": self._mask(block["text"])}
+            if isinstance(block, dict) and isinstance(block.get("text"), str)
+            else block
+            for block in content
+        ]
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        masked = inputs.copy()
+        masked["texts"] = [self._mask(text) for text in inputs.get("texts", [])]
+        structured = inputs.get("structured_messages")
+        if structured is not None:
+            masked["structured_messages"] = [
+                {**message, "content": self._mask_content(message.get("content"))} for message in structured
+            ]
+        return masked
 
 
 class TestAnthropicMessagesHandlerStreamingRequestData:
@@ -602,7 +636,7 @@ class TestAnthropicMessagesHandlerInputProcessing:
         assert data["system"] == "trusted top-level system prompt"
 
     @pytest.mark.asyncio
-    async def test_compaction_rewrite_keeps_leading_midturn_system_when_system_is_skipped(
+    async def test_leading_system_row_appends_to_skipped_top_level_system(
         self,
     ):
         handler = AnthropicMessagesHandler()
@@ -624,11 +658,14 @@ class TestAnthropicMessagesHandlerInputProcessing:
 
         await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
 
-        assert [m["role"] for m in data["messages"]] == ["system", "user"]
-        assert data["messages"][0]["content"] == "use the corrected result"
+        assert [m["role"] for m in data["messages"]] == ["user"]
+        assert data["system"] == [
+            {"type": "text", "text": "trusted top-level system prompt"},
+            {"type": "text", "text": "use the corrected result"},
+        ]
 
     @pytest.mark.asyncio
-    async def test_compaction_rewrite_keeps_leading_correction_when_top_level_system_hoists_nothing(
+    async def test_leading_correction_appends_when_top_level_system_hoists_nothing(
         self,
     ):
         handler = AnthropicMessagesHandler()
@@ -650,11 +687,14 @@ class TestAnthropicMessagesHandlerInputProcessing:
 
         await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
 
-        assert [m["role"] for m in data["messages"]] == ["system", "user"]
-        assert data["messages"][0]["content"] == "use the corrected result"
+        assert [m["role"] for m in data["messages"]] == ["user"]
+        assert data["system"] == [
+            {"type": "image", "source": {"type": "url", "url": "https://example.com/a.png"}},
+            {"type": "text", "text": "use the corrected result"},
+        ]
 
     @pytest.mark.asyncio
-    async def test_compaction_rewrite_keeps_leading_correction_when_hoisted_prompt_is_dropped(
+    async def test_leading_correction_replaces_top_level_system_when_hoisted_prompt_is_dropped(
         self,
     ):
         handler = AnthropicMessagesHandler()
@@ -681,9 +721,81 @@ class TestAnthropicMessagesHandlerInputProcessing:
             "role": "system",
             "content": "TRUSTED",
         }
-        assert [m["role"] for m in data["messages"]] == ["system", "user"]
-        assert data["messages"][0]["content"] == "CLIENT CORRECTION"
-        assert data["system"] == "TRUSTED"
+        assert [m["role"] for m in data["messages"]] == ["user"]
+        assert data["system"] == [{"type": "text", "text": "CLIENT CORRECTION"}]
+
+    @pytest.mark.asyncio
+    async def test_masked_hoisted_system_folds_into_top_level_system(self):
+        """LIT-5696: a guardrail-modified top-level prompt must go back through the system
+        param; emitting it as messages[0] is rejected by Anthropic, dropping it leaks the
+        unmasked original."""
+        handler = AnthropicMessagesHandler()
+        guardrail = MockStructuredMaskingGuardrail()
+        data = {
+            "model": "claude-3-5-sonnet-20241022",
+            "system": [{"type": "text", "text": "You are helpful. The admin is bob@example.com."}],
+            "messages": [{"role": "user", "content": [{"type": "text", "text": "hi"}]}],
+        }
+
+        await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert data["system"] == [{"type": "text", "text": "You are helpful. The admin is <EMAIL>."}]
+        assert [m["role"] for m in data["messages"]] == ["user"]
+
+    @pytest.mark.asyncio
+    async def test_client_leading_system_row_folds_into_top_level_system(self):
+        """LIT-5696: a client-sent leading system row folds into the system param instead of
+        being sent back as messages[0], which Anthropic rejects."""
+        handler = AnthropicMessagesHandler()
+        guardrail = MockStructuredMaskingGuardrail()
+        data = {
+            "model": "claude-3-5-sonnet-20241022",
+            "messages": [
+                {"role": "system", "content": [{"type": "text", "text": "You are helpful."}]},
+                {"role": "user", "content": [{"type": "text", "text": "hi"}]},
+            ],
+        }
+
+        await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert data["system"] == [{"type": "text", "text": "You are helpful."}]
+        assert [m["role"] for m in data["messages"]] == ["user"]
+
+    @pytest.mark.asyncio
+    async def test_masked_midturn_system_after_user_stays_in_messages(self):
+        handler = AnthropicMessagesHandler()
+        guardrail = MockStructuredMaskingGuardrail()
+        data = {
+            "model": "claude-3-5-sonnet-20241022",
+            "system": [{"type": "text", "text": "You are helpful. The admin is bob@example.com."}],
+            "messages": [
+                {"role": "user", "content": [{"type": "text", "text": "hi"}]},
+                {"role": "assistant", "content": [{"type": "text", "text": "hello"}]},
+                {"role": "system", "content": [{"type": "text", "text": "Mid-turn: admin bob@example.com"}]},
+                {"role": "user", "content": [{"type": "text", "text": "next"}]},
+            ],
+        }
+
+        await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert data["system"] == [{"type": "text", "text": "You are helpful. The admin is <EMAIL>."}]
+        assert [m["role"] for m in data["messages"]] == ["user", "assistant", "system", "user"]
+        assert data["messages"][2]["content"] == [{"type": "text", "text": "Mid-turn: admin <EMAIL>"}]
+
+    @pytest.mark.asyncio
+    async def test_unmodified_structured_copy_leaves_top_level_system_untouched(self):
+        handler = AnthropicMessagesHandler()
+        guardrail = MockStructuredMaskingGuardrail()
+        data = {
+            "model": "claude-3-5-sonnet-20241022",
+            "system": "You are helpful.",
+            "messages": [{"role": "user", "content": [{"type": "text", "text": "hi"}]}],
+        }
+
+        await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert data["system"] == "You are helpful."
+        assert [m["role"] for m in data["messages"]] == ["user"]
 
     @pytest.mark.asyncio
     async def test_compaction_rewrite_drops_hoisted_prompt_matched_by_content_copy(self):
@@ -934,8 +1046,8 @@ class TestAnthropicMessagesHandlerInputProcessing:
         with patch.object(litellm, "modify_params", True):
             await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
 
-        assert [m["role"] for m in data["messages"]] == ["system", "user"]
-        assert data["messages"][0]["content"] == "use the corrected result"
+        assert data["messages"] == [{"role": "user", "content": [{"type": "text", "text": "Please continue."}]}]
+        assert data["system"] == [{"type": "text", "text": "use the corrected result"}]
 
     @pytest.mark.asyncio
     async def test_compaction_rewrite_without_system_messages_is_unchanged(self):

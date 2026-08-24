@@ -115,10 +115,12 @@ SPAN_REGISTRY: Final[dict[SpanRole, SpanSpec]] = {
 # redis-backed spend queues. Any service not mapped here is litellm-internal work
 # and stays an INTERNAL ``SERVICE`` span. This table is the single source of
 # datastore knowledge — both the role classifier and the mapper read it.
+POSTGRESQL: Final = "postgresql"
+
 _DB_SYSTEM_BY_SERVICE: Final[dict[str, str]] = {
     "redis": "redis",
-    "postgres": "postgresql",
-    "batch_write_to_db": "postgresql",
+    "postgres": POSTGRESQL,
+    "batch_write_to_db": POSTGRESQL,
 }
 
 

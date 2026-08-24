@@ -10,13 +10,14 @@ from openai import (
     AsyncAzureOpenAI,
     AsyncOpenAI,
     AzureOpenAI,
+    BadRequestError,
     OpenAI,
 )
 
 import litellm
 from litellm.constants import AZURE_OPERATION_POLLING_TIMEOUT, DEFAULT_MAX_RETRIES
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
+from litellm.litellm_core_utils.logging_utils import speech_request_body, track_llm_api_timing
 from litellm.litellm_core_utils.url_utils import SSRFError, assert_same_origin
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -37,6 +38,10 @@ from litellm.utils import (
 
 from ...types.llms.openai import HttpxBinaryResponseContent
 from ..base import BaseLLM
+from ..openai.common_utils import (
+    build_output_token_limit_response,
+    is_output_token_limit_error,
+)
 from .common_utils import (
     AzureOpenAIError,
     BaseAzureLLM,
@@ -147,6 +152,10 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
             headers: Final = dict(raw_response.headers)
             response: Final = raw_response.parse()
             return headers, response
+        except BadRequestError as e:
+            if not is_output_token_limit_error(e):
+                raise
+            return build_output_token_limit_response(e=e, data=data, is_async=False)
         except Exception as e:
             raise e
 
@@ -175,6 +184,10 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
             time_delta: Final = round(end_time - start_time, 2)
             e.message += f" - timeout value={timeout}, time taken={time_delta} seconds"
             raise e
+        except BadRequestError as e:
+            if not is_output_token_limit_error(e):
+                raise
+            return build_output_token_limit_response(e=e, data=data, is_async=True)
         except Exception as e:
             raise e
 
@@ -1339,6 +1352,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         organization: str | None,
         max_retries: int,
         timeout: float | httpx.Timeout,
+        logging_obj: LiteLLMLoggingObj,
         azure_ad_token: str | None = None,
         azure_ad_token_provider: Callable | None = None,
         aspeech: bool | None = None,
@@ -1360,6 +1374,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 azure_ad_token_provider=azure_ad_token_provider,
                 max_retries=max_retries,
                 timeout=timeout,
+                logging_obj=logging_obj,
                 client=client,
                 litellm_params=litellm_params,
             )
@@ -1372,6 +1387,15 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
             _is_async=False,
             client=client,
             litellm_params=litellm_params,
+        )
+
+        logging_obj.pre_call(
+            input=input,
+            api_key=api_key,
+            additional_args={  # mutable-ok: loggers isinstance-check this payload as a dict
+                "complete_input_dict": speech_request_body(model, voice, optional_params),
+                "api_base": str(azure_client.base_url),
+            },
         )
 
         response: Final = azure_client.audio.speech.create(
@@ -1395,6 +1419,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         azure_ad_token_provider: Callable | None,
         max_retries: int,
         timeout: float | httpx.Timeout,
+        logging_obj: LiteLLMLoggingObj,
         client=None,
         litellm_params: dict | None = None,
     ) -> HttpxBinaryResponseContent:
@@ -1406,6 +1431,15 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
             _is_async=True,
             client=client,
             litellm_params=litellm_params,
+        )
+
+        logging_obj.pre_call(
+            input=input,
+            api_key=api_key,
+            additional_args={  # mutable-ok: loggers isinstance-check this payload as a dict
+                "complete_input_dict": speech_request_body(model, voice, optional_params),
+                "api_base": str(azure_client.base_url),
+            },
         )
 
         azure_response: Final = await azure_client.audio.speech.create(

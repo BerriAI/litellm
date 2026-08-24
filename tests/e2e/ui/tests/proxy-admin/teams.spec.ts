@@ -41,16 +41,17 @@ test.describe("Proxy Admin - Teams", () => {
       .click();
 
     // Wait for the Create Team modal
-    const dialog = page.locator(".ant-modal:visible");
+    const dialog = page.getByRole("dialog", { name: "Create Team" });
     await expect(dialog).toBeVisible({ timeout: 5_000 });
 
-    // Fill Team Name — the input has id="team_alias"
-    await dialog.locator("#team_alias").fill(uniqueAlias);
+    // Fill Team Name — FormField derives the control id from React.useId(), so
+    // the input is only addressable by its label or its test id.
+    await dialog.getByTestId("team-name-input").fill(uniqueAlias);
 
-    // Select models — the models multi-select is inside the modal
-    // Click to open dropdown, select "All Proxy Models"
-    await dialog.locator(".ant-select-selection-overflow").first().click();
-    await page.locator(".ant-select-dropdown:visible").getByText("All Proxy Models").click();
+    // Select models — the models multi-select is inside the modal. Its popup is
+    // portaled to the body, so scope the option lookup to the page, not the dialog.
+    await dialog.getByTestId("create-team-models-select").getByRole("combobox").click();
+    await page.getByRole("option", { name: "All Proxy Models", exact: true }).click();
     await page.keyboard.press("Escape");
 
     // Submit — click the submit button inside the dialog (not the header button)
@@ -75,11 +76,11 @@ test.describe("Proxy Admin - Teams", () => {
     await page.getByRole("button", { name: /Add Member/i }).click();
 
     // Wait for Add Team Member modal
-    const modal = page.locator(".ant-modal:visible");
+    const modal = page.getByRole("dialog", { name: "Add Team Member" });
     await expect(modal).toBeVisible({ timeout: 5_000 });
 
     // The email field is a Select — type to search, then select from dropdown
-    await modal.locator(".ant-select").first().click();
+    await modal.getByRole("combobox").first().click();
     await page.keyboard.type("invitable@test.local");
 
     // Wait for the option to appear, then select via keyboard (avoids viewport issues)
@@ -112,7 +113,7 @@ test.describe("Proxy Admin - Teams", () => {
 
     await page.getByTestId("edit-member").first().click();
 
-    const modal = page.locator(".ant-modal:visible");
+    const modal = page.getByRole("dialog", { name: "Edit Member" });
     await expect(modal).toBeVisible({ timeout: 5_000 });
     await modal.getByRole("button", { name: /Save Changes/i }).click();
 
@@ -129,7 +130,7 @@ test.describe("Proxy Admin - Teams", () => {
     await teamRow.locator('[data-testid^="team-actions-"]').click();
     await page.getByTestId("team-action-delete").click();
 
-    const modal = page.locator(".ant-modal:visible");
+    const modal = page.getByRole("dialog", { name: "Delete Team?" });
     await expect(modal).toBeVisible({ timeout: 5_000 });
     await modal.locator("input").fill(E2E_TEAM_DELETE_ALIAS);
     await modal.getByRole("button", { name: /Force Delete|Delete/i }).click();
@@ -155,7 +156,7 @@ test.describe("Proxy Admin - Teams", () => {
 
     await page.getByTestId("edit-member").first().click();
 
-    const modal = page.locator(".ant-modal:visible");
+    const modal = page.getByRole("dialog", { name: "Edit Member" });
     await expect(modal).toBeVisible({ timeout: 5_000 });
     await modal.getByRole("button", { name: /Save Changes/i }).click();
 
@@ -191,11 +192,11 @@ test.describe("Proxy Admin - Teams", () => {
       const modelsSelect = page.locator("[data-testid='models-select']");
       await expect(modelsSelect).toBeVisible({ timeout: 10_000 });
 
-      const anthropicTag = modelsSelect
-        .locator(".ant-select-selection-item")
+      const anthropicChip = modelsSelect
+        .locator('[data-slot="combobox-chip"]')
         .filter({ hasText: "fake-anthropic-claude" });
-      await expect(anthropicTag).toBeVisible({ timeout: 5_000 });
-      await anthropicTag.locator(".ant-select-selection-item-remove").click();
+      await expect(anthropicChip).toBeVisible({ timeout: 5_000 });
+      await anthropicChip.locator('[data-slot="combobox-chip-remove"]').click();
 
       await page.getByRole("button", { name: "Save Changes" }).click();
 
