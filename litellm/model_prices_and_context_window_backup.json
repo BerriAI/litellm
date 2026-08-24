@@ -51069,7 +51069,7 @@
     },
     "openrouter/google/gemma-4-26b-a4b-it": {
         "max_input_tokens": 262144,
-        "max_tokens": 262144,
+        "max_tokens": 16384,
         "mode": "chat",
         "litellm_provider": "openrouter",
         "source": "https://openrouter.ai/google/gemma-4-26b-a4b-it",

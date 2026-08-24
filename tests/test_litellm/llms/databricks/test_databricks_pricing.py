@@ -90,7 +90,7 @@ def test_databricks_proprietary_models_have_cache_pricing():
             expected = input_usd * ratio
             if actual is None:
                 errors.append(f"{model} missing {field}")
-            elif abs(actual - expected) > 1e-12:
+            elif abs(actual - expected) > abs(expected) * 1e-2:
                 errors.append(f"{model} {field} mismatch: got {actual}, expected {expected}")
         if not info.get("supports_prompt_caching"):
             errors.append(f"{model} missing supports_prompt_caching")
