@@ -9,11 +9,17 @@ if TYPE_CHECKING:
 
 
 def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"):
+    """Initialize the Conduct guardrail from LiteLLM's config block.
+
+    Maps LiteLLM's idiomatic ``api_base`` / ``api_key`` to Conduct's
+    ``api_url`` / ``agent_token`` constructor arguments. All other
+    settings pass through unchanged.
+    """
     import litellm
 
     _conduct_callback: Final = ConductGuardrail(
-        api_base=getattr(litellm_params, "api_base", None),
-        api_key=getattr(litellm_params, "api_key", None),
+        api_url=getattr(litellm_params, "api_base", None),
+        agent_token=getattr(litellm_params, "api_key", None),
         workspace_id=getattr(litellm_params, "workspace_id", None),
         fail_mode=getattr(litellm_params, "fail_mode", "fail_closed"),
         tool_name=getattr(litellm_params, "tool_name", "llm_call"),
