@@ -18,6 +18,7 @@ import yaml
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.testclient import TestClient
+from prisma.engine.errors import BinaryNotFoundError, MismatchedVersionsError
 
 
 import litellm
@@ -10997,6 +10998,48 @@ async def test_setup_prisma_client_raises_when_db_unavailable_is_not_allowed(mon
     mock_client = _mock_startup_prisma_client(health_check_error=httpx.ReadTimeout("startup health check timed out"))
     with pytest.raises(httpx.ReadTimeout):
         await _run_setup_prisma_client(mock_client)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "permanent_error",
+    [
+        pytest.param(
+            BinaryNotFoundError("query engine binary not found"),
+            id="binary-not-found",
+        ),
+        pytest.param(
+            MismatchedVersionsError(expected="1", got="2"),
+            id="version-mismatch",
+        ),
+    ],
+)
+async def test_setup_prisma_client_does_not_recover_permanent_initial_fault(
+    monkeypatch,
+    permanent_error,
+):
+    """Fail-open recovery is only for transient connection failures.
+
+    A missing or incompatible query engine cannot recover when the database
+    returns, so retaining it would keep the proxy Ready in degraded auth mode
+    indefinitely.
+    """
+    monkeypatch.setattr(
+        proxy_server_module,
+        "general_settings",
+        {"allow_requests_on_db_unavailable": True},
+    )
+    monkeypatch.setattr(proxy_server_module, "prisma_client", None)
+
+    mock_client = _mock_startup_prisma_client(connect_error=permanent_error)
+
+    with pytest.raises(type(permanent_error)):
+        await _run_setup_prisma_client(mock_client)
+
+    recovery_state = proxy_server_module._initial_prisma_connect_recovery_state
+    assert recovery_state.candidate is None
+    assert recovery_state.task is None
+    assert proxy_server_module.prisma_client is None
 
 
 @pytest.mark.asyncio
