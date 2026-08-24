@@ -1623,46 +1623,34 @@ def test_map_reasoning_effort_max_not_dropped(monkeypatch):
 
     handler = LiteLLMResponsesTransformationHandler()
 
-    original_flag = litellm.reasoning_auto_summary
-    original_env = os.environ.get("LITELLM_REASONING_AUTO_SUMMARY")
+    monkeypatch.delenv("LITELLM_REASONING_AUTO_SUMMARY", raising=False)
 
-    try:
-        # Default behavior: effort=max must produce a Reasoning with effort="max"
-        # and no summary (matching the other effort levels).
-        litellm.reasoning_auto_summary = False
-        if "LITELLM_REASONING_AUTO_SUMMARY" in os.environ:
-            del os.environ["LITELLM_REASONING_AUTO_SUMMARY"]
+    # Default behavior: effort=max must produce a Reasoning with effort="max"
+    # and no summary (matching the other effort levels).
+    monkeypatch.setattr(litellm, "reasoning_auto_summary", False)
+    result = handler._map_reasoning_effort("max")
+    assert result is not None, (
+        "reasoning_effort='max' must not be silently dropped; "
+        "expected Reasoning(effort='max'), got None (issue #38084)"
+    )
+    assert result["effort"] == "max", f"Expected effort='max', got {result['effort']!r}"
+    assert "summary" not in result, "Summary should NOT be present by default for effort='max'"
 
-        result = handler._map_reasoning_effort("max")
-        assert result is not None, (
-            "reasoning_effort='max' must not be silently dropped; "
-            "expected Reasoning(effort='max'), got None (issue #38084)"
-        )
-        assert result["effort"] == "max", f"Expected effort='max', got {result['effort']!r}"
-        assert "summary" not in result, "Summary should NOT be present by default for effort='max'"
+    # With auto-summary enabled: summary='detailed' is added, matching other efforts.
+    monkeypatch.setattr(litellm, "reasoning_auto_summary", True)
+    result = handler._map_reasoning_effort("max")
+    assert result is not None, "reasoning_effort='max' must not be dropped with auto-summary on"
+    assert result["effort"] == "max"
+    assert result["summary"] == "detailed"
 
-        # With auto-summary enabled: summary='detailed' is added, matching other efforts.
-        litellm.reasoning_auto_summary = True
-        result = handler._map_reasoning_effort("max")
-        assert result is not None, "reasoning_effort='max' must not be dropped with auto-summary on"
-        assert result["effort"] == "max"
-        assert result["summary"] == "detailed"
+    # Dict input with effort='max' is passed through unchanged.
+    monkeypatch.setattr(litellm, "reasoning_auto_summary", False)
+    dict_input = {"effort": "max", "summary": "concise"}
+    result_dict = handler._map_reasoning_effort(dict_input)
+    assert result_dict["effort"] == "max"
+    assert result_dict["summary"] == "concise"
 
-        # Dict input with effort='max' is passed through unchanged.
-        litellm.reasoning_auto_summary = False
-        dict_input = {"effort": "max", "summary": "concise"}
-        result_dict = handler._map_reasoning_effort(dict_input)
-        assert result_dict["effort"] == "max"
-        assert result_dict["summary"] == "concise"
-
-        print("✓ reasoning_effort='max' is preserved through Responses API conversion")
-
-    finally:
-        litellm.reasoning_auto_summary = original_flag
-        if original_env is not None:
-            monkeypatch.setenv("LITELLM_REASONING_AUTO_SUMMARY", original_env)
-        elif "LITELLM_REASONING_AUTO_SUMMARY" in os.environ:
-            del os.environ["LITELLM_REASONING_AUTO_SUMMARY"]
+    print("✓ reasoning_effort='max' is preserved through Responses API conversion")
 
 
 def test_transform_response_preserves_annotations():
