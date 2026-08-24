@@ -947,11 +947,8 @@ def generic_cost_per_token(
                 usage.completion_tokens - reasoning_tokens - audio_tokens - image_tokens - video_tokens,
             )
         else:
-            # No breakdown at all, all tokens are text tokens.
-            # Clamped for the same reason the branch above is: a negative count
-            # would otherwise multiply straight into a negative cost, and this
-            # is the only one of the four token paths in this module that did
-            # not guard against it.
+            # No breakdown at all, all tokens are text tokens. Clamped like
+            # the branch above, so a negative count cannot credit the budget.
             text_tokens = max(0, usage.completion_tokens)
             is_text_tokens_total = True
     ## TEXT COST
