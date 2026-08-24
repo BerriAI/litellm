@@ -9,6 +9,7 @@ from redis.credentials import CredentialProvider
 
 import litellm
 from litellm._redis import (
+    _async_auth_kwargs,
     _get_redis_client_logic,
     _get_redis_cluster_kwargs,
     _get_redis_env_kwarg_mapping,
@@ -228,32 +229,28 @@ def test_async_url_pool_strips_userinfo_for_the_provider(clean_redis_environment
     assert connection.db == 3
 
 
-def test_sync_cluster_preserves_credential_provider_identity(  # test-quality-ok: constructor kwargs are the only seam
-    clean_redis_environment,
-):
+def test_sync_cluster_preserves_credential_provider_identity(clean_redis_environment):
     provider = _StubCredentialProvider()
     startup_nodes = [{"host": "cluster-node", "port": 6379}]
 
-    with patch(  # test-quality-ok: RedisCluster slot-discovers in its constructor
-        "litellm._redis.redis.RedisCluster", autospec=True
-    ) as mock_cluster_cls:
-        get_redis_client(startup_nodes=startup_nodes, credential_provider=provider)
+    with patch("redis.RedisCluster", autospec=True) as mock_cluster_cls:
+        get_redis_client(startup_nodes=startup_nodes, credential_provider=provider, password="redis-secret")
 
-    mock_cluster_cls.assert_called_once()
-    assert mock_cluster_cls.call_args[1].get("credential_provider") is provider
+    cluster_kwargs = mock_cluster_cls.call_args.kwargs
+    assert cluster_kwargs["credential_provider"] is provider
+    assert "password" not in cluster_kwargs
+    assert [(node.host, node.port) for node in cluster_kwargs["startup_nodes"]] == [("cluster-node", 6379)]
 
 
 def test_async_cluster_preserves_credential_provider_identity(clean_redis_environment):
     provider = _StubCredentialProvider()
     startup_nodes = [{"host": "cluster-node", "port": 6379}]
 
-    with patch(  # test-quality-ok: the async cluster class is the only injection point here
-        "litellm.caching.redis_cluster_node_isolation.get_litellm_async_redis_cluster_class"
-    ) as mock_class:
-        get_redis_async_client(startup_nodes=startup_nodes, credential_provider=provider)
+    client = get_redis_async_client(startup_nodes=startup_nodes, credential_provider=provider)
 
-    call_kwargs = mock_class.return_value.call_args[1]
-    assert call_kwargs.get("credential_provider") is provider
+    assert client.connection_kwargs["credential_provider"] is provider
+    assert client.connection_kwargs["socket_keepalive"] is True
+    assert client.connection_kwargs["health_check_interval"] == REDIS_CLUSTER_HEALTH_CHECK_INTERVAL
 
 
 def test_explicit_provider_skips_automatic_auth_and_callback(clean_redis_environment, monkeypatch):
@@ -262,10 +259,10 @@ def test_explicit_provider_skips_automatic_auth_and_callback(clean_redis_environ
     monkeypatch.setenv("REDIS_AZURE_AD_TOKEN", "true")
 
     with (
-        patch(  # test-quality-ok: the assertion is that this builder is never reached
+        patch(  # test-quality-ok: an auto-auth callback built here is popped again by the provider branch, so the builders are the only place the wasted work is visible
             "litellm._redis.create_gcp_iam_redis_connect_func"
         ) as mock_gcp,
-        patch(  # test-quality-ok: the assertion is that this builder is never reached
+        patch(  # test-quality-ok: same as above, and reaching this one also builds an Azure credential the caller never asked for
             "litellm._redis.create_azure_ad_redis_connect_func"
         ) as mock_azure,
     ):
@@ -323,108 +320,92 @@ def test_provider_free_url_is_left_untouched(clean_redis_environment):
     assert redis_kwargs["url"] == url
 
 
-def test_async_direct_explicit_provider_is_preserved_when_normalization_is_bypassed():
+def test_async_auth_kwargs_supersedes_credentials_an_explicit_provider_replaces():
+    """The shared seam both async entry points run through: a provider outranks every other
+    credential, and redis-py rejects a provider that arrives next to a username or password."""
     provider = _StubCredentialProvider()
-    redis_kwargs = {
-        "host": "redis-host",
-        "port": 6379,
-        "credential_provider": provider,
-        "redis_connect_func": _gcp_marker_callback(),
-    }
 
-    with (
-        patch(  # test-quality-ok: bypassing normalization is what this test pins
-            "litellm._redis._get_redis_client_logic", return_value=redis_kwargs
-        ),
-        patch(  # test-quality-ok: the constructor kwargs are the only observable
-            "litellm._redis.async_redis.Redis", autospec=True
-        ) as mock_redis,
-    ):
-        get_redis_async_client()
+    auth_kwargs = _async_auth_kwargs(
+        {
+            "host": "redis-host",
+            "port": 6379,
+            "credential_provider": provider,
+            "redis_connect_func": _gcp_marker_callback(),
+            "username": "url-user",
+            "password": "url-pass",
+        }
+    )
 
-    call_kwargs = mock_redis.call_args[1]
-    assert call_kwargs["credential_provider"] is provider
-    assert "redis_connect_func" not in call_kwargs
+    assert auth_kwargs["credential_provider"] is provider
+    assert auth_kwargs["host"] == "redis-host"
+    assert auth_kwargs["port"] == 6379
+    assert "redis_connect_func" not in auth_kwargs
+    assert "username" not in auth_kwargs
+    assert "password" not in auth_kwargs
 
 
-def test_async_pool_explicit_provider_is_preserved_when_normalization_is_bypassed():
-    provider = _StubCredentialProvider()
-    redis_kwargs = {
-        "host": "redis-host",
-        "port": 6379,
-        "credential_provider": provider,
-        "redis_connect_func": _gcp_marker_callback(),
-    }
+def test_async_auth_kwargs_leaves_provider_free_kwargs_alone():
+    redis_kwargs = {"host": "redis-host", "port": 6379, "username": "url-user", "password": "url-pass"}
 
-    with (
-        patch(  # test-quality-ok: bypassing normalization is what this test pins
-            "litellm._redis._get_redis_client_logic", return_value=redis_kwargs
-        ),
-        patch(  # test-quality-ok: the constructor kwargs are the only observable
-            "litellm._redis.async_redis.BlockingConnectionPool", autospec=True
-        ) as mock_pool,
-    ):
-        get_redis_connection_pool()
-
-    call_kwargs = mock_pool.call_args[1]
-    assert call_kwargs["credential_provider"] is provider
-    assert "redis_connect_func" not in call_kwargs
+    assert _async_auth_kwargs(redis_kwargs) == redis_kwargs
 
 
 @pytest.mark.asyncio
 async def test_redis_cache_test_connection_uses_shared_factory(clean_redis_environment):
     provider = _StubCredentialProvider()
-    client = MagicMock(spec=async_redis.Redis)
-    client.ping = AsyncMock(return_value=True)
-    client.aclose = AsyncMock()
 
-    with patch(  # test-quality-ok: the factory call is what routing through it means
-        "litellm._redis.get_redis_async_client", return_value=client
-    ) as mock_factory:
-        cache = RedisCache(host="redis-host", port=6379, credential_provider=provider)
+    with (
+        patch("redis.Redis", autospec=True),
+        patch("redis.asyncio.BlockingConnectionPool", autospec=True),
+        patch("redis.asyncio.Redis", autospec=True) as mock_async_redis,
+    ):
+        mock_async_redis.return_value.ping = AsyncMock(return_value=True)
+        mock_async_redis.return_value.aclose = AsyncMock()
+        cache = RedisCache(host="redis-host", port=6379, credential_provider=provider, password="redis-secret")
         result = await cache.test_connection()
 
+    client_kwargs = mock_async_redis.call_args.kwargs
     assert result["status"] == "success"
-    call_kwargs = mock_factory.call_args.kwargs
-    assert call_kwargs["credential_provider"] is provider
+    assert client_kwargs["credential_provider"] is provider
+    assert "password" not in client_kwargs
 
 
 @pytest.mark.asyncio
 async def test_redis_cluster_cache_test_connection_uses_shared_factory(clean_redis_environment):
     provider = _StubCredentialProvider()
-    client = MagicMock(spec=async_redis.RedisCluster)
-    client.ping = AsyncMock(return_value=True)
-    client.aclose = AsyncMock()
+    recorder = MagicMock()
 
-    with patch(  # test-quality-ok: the factory call is what routing through it means
-        "litellm._redis.get_redis_async_client", return_value=client
-    ) as mock_factory:
-        with patch(  # test-quality-ok: a real RedisCluster would slot-discover here
-            "litellm._redis.get_redis_client", return_value=MagicMock(spec=redis.RedisCluster)
-        ):
-            cache = RedisClusterCache(
-                startup_nodes=[{"host": "redis-host", "port": 6379}], credential_provider=provider
-            )
+    class _StubAsyncCluster:
+        """A real base class, because the production path subclasses this at call time."""
+
+        def __init__(self, **kwargs):
+            recorder(**kwargs)
+
+        async def ping(self):
+            return True
+
+        async def aclose(self):
+            return None
+
+    with (
+        patch("redis.RedisCluster", autospec=True),
+        patch("redis.asyncio.cluster.RedisCluster", _StubAsyncCluster),
+    ):
+        cache = RedisClusterCache(startup_nodes=[{"host": "redis-host", "port": 6379}], credential_provider=provider)
         result = await cache.test_connection()
 
+    cluster_kwargs = recorder.call_args.kwargs
     assert result["status"] == "success"
-    call_kwargs = mock_factory.call_args.kwargs
-    assert call_kwargs["credential_provider"] is provider
+    assert cluster_kwargs["credential_provider"] is provider
 
 
 def test_redis_cache_key_does_not_inspect_provider(clear_llm_client_cache):
     provider = _HostileCredentialProvider("synthetic-secret")
     second_provider = _StubCredentialProvider("another-token")
-    sync_client = MagicMock(spec=redis.Redis)
-    async_pool = MagicMock(spec=async_redis.BlockingConnectionPool)
 
     with (
-        patch(  # test-quality-ok: the hostile provider must not reach a real client
-            "litellm._redis.get_redis_client", return_value=sync_client
-        ),
-        patch(  # test-quality-ok: the hostile provider must not reach a real pool
-            "litellm._redis.get_redis_connection_pool", return_value=async_pool
-        ),
+        patch("redis.Redis", autospec=True),
+        patch("redis.asyncio.BlockingConnectionPool", autospec=True),
     ):
         cache = RedisCache(host="redis-host", port=6379, credential_provider=provider)
         second_cache = RedisCache(host="redis-host", port=6379, credential_provider=second_provider)
@@ -931,7 +912,7 @@ def test_sync_sentinel_uses_sentinel_password_and_master_password(mock_sentinel_
     )
 
 
-@patch("litellm._redis.redis.Sentinel")  # test-quality-ok: sentinel discovery needs live sentinels
+@patch("redis.Sentinel")
 def test_sync_sentinel_keeps_provider_off_monitors_and_on_master(mock_sentinel_cls):
     provider = _StubCredentialProvider()
     mock_sentinel = MagicMock()
