@@ -3,7 +3,6 @@ import contextlib
 import json
 import logging
 import math
-import time
 import traceback
 from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping
 from datetime import datetime
@@ -178,6 +177,7 @@ else:
     ProxyConfig = Any
 from litellm.proxy.litellm_pre_call_utils import (
     add_litellm_data_to_request,
+    refresh_proxy_server_request_body_snapshot,
     reject_url_valued_destination,
 )
 from litellm.types.utils import (
@@ -1725,13 +1725,17 @@ class ProxyBaseLLMRequestProcessing:
             )
 
         # Calculate request queue time after add_litellm_data_to_request
-        # which sets arrival_time in proxy_server_request
+        # which sets arrival_time in proxy_server_request. Ends at start_time
+        # (not a freshly captured time.time() here) so this window is exactly
+        # [arrival_time, start_time], with zero overlap with the
+        # litellm_request_total_latency_metric window of [start_time, end_time] --
+        # otherwise the few lines of add_litellm_data_to_request's own work would
+        # be double-counted across both metrics.
         proxy_server_request: Final = self.data.get("proxy_server_request", {})
         arrival_time: Final = proxy_server_request.get("arrival_time")
         queue_time_seconds = None
         if arrival_time is not None:
-            processing_start_time: Final = time.time()
-            queue_time_seconds = processing_start_time - arrival_time
+            queue_time_seconds = start_time.timestamp() - arrival_time
 
         # Store queue time in metadata after add_litellm_data_to_request to ensure it's preserved
         if queue_time_seconds is not None:
@@ -1861,6 +1865,12 @@ class ProxyBaseLLMRequestProcessing:
             data=self.data,
             call_type=route_type,
         )
+
+        # Refresh AFTER pre_call_hook: guardrails (e.g. Presidio PII masking) may
+        # have mutated `self.data` in place, and the audit-trail snapshot taken in
+        # add_litellm_data_to_request predates that mutation.
+        refresh_proxy_server_request_body_snapshot(self.data)
+        verbose_proxy_logger.debug("receiving data: %s", self.data)
 
         if "messages" in self.data and self.data["messages"]:
             logging_obj.update_messages(self.data["messages"])

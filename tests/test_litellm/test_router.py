@@ -6,6 +6,7 @@ import os
 import threading
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 
 
@@ -7305,6 +7306,78 @@ async def test_acreate_batch_surfaces_owning_provider_error_without_disable_fall
 
 
 @pytest.mark.asyncio
+async def test_acreate_batch_still_falls_back_within_the_owning_model_group():
+    """Holding a batch inside the model group that owns its input file must not
+    disable fallbacks outright (#35359): the owning group's second deployment is
+    still tried in `order`, and only the cross-group target is skipped."""
+    completion_window_error = "Invalid value: '5m'. Supported values are: '24h'."
+    attempted_models = []
+
+    async def _acreate_batch(**kwargs):
+        model = kwargs["model"]
+        attempted_models.append(model)
+        if model.startswith("azure/"):
+            raise litellm.BadRequestError(
+                message="Error code: 400 - {'error': {'code': 'quotaExceeded'}}",
+                model=model,
+                llm_provider="azure",
+            )
+        raise litellm.BadRequestError(
+            message=completion_window_error,
+            model=model,
+            llm_provider="openai",
+        )
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "my-gpt",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "sk-owning",
+                    "order": 1,
+                },
+                "model_info": {"id": "my-gpt-1"},
+            },
+            {
+                "model_name": "my-gpt",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini-backup",
+                    "api_key": "sk-owning",
+                    "order": 2,
+                },
+                "model_info": {"id": "my-gpt-2"},
+            },
+            {
+                "model_name": "my-azure-gpt",
+                "litellm_params": {
+                    "model": "azure/gpt-4o-mini",
+                    "api_key": "sk-fallback",
+                    "api_base": "https://fallback.openai.azure.com",
+                    "api_version": "2024-08-01-preview",
+                },
+                "model_info": {"id": "my-azure-gpt-1"},
+            },
+        ],
+        fallbacks=[{"my-gpt": ["my-azure-gpt"]}],
+        num_retries=0,
+    )
+
+    with patch.object(litellm, "acreate_batch", new=_acreate_batch):
+        with pytest.raises(litellm.BadRequestError) as raised:
+            await router.acreate_batch(
+                model="my-gpt",
+                input_file_id="file-owned-by-my-gpt",
+                endpoint="/v1/chat/completions",
+                completion_window="5m",
+            )
+
+    assert "24h" in str(raised.value)
+    assert "quotaExceeded" not in str(raised.value)
+    assert attempted_models == ["openai/gpt-4o-mini", "openai/gpt-4o-mini-backup"]
+
+
+@pytest.mark.asyncio
 async def test_acreate_batch_request_bedrock_tags_override_deployment_tags():
     import httpx
 
@@ -8262,6 +8335,94 @@ class TestTaggedAutoRouterOnSharedModelName:
 
         assert mixed._model_name_has_plain_deployments("gpt4o") is True
         assert marker_only._model_name_has_plain_deployments("gpt4o") is False
+
+
+class TestAutoRouterSharedModelNameConnectionParams:
+    """A plain deployment sharing its model_name with an `auto_router/` marker must not have
+    its api_base and api_key grafted onto the routed tier's outbound call (#36619)."""
+
+    PLAIN_API_BASE = "https://plain-sibling.openai.example/v1"
+    PLAIN_API_KEY = "sk-plain-sibling-secret"
+
+    class _FixedRouteLayer:
+        def __call__(self, text: str):
+            from semantic_router.schema import RouteChoice
+
+            return RouteChoice(name="gemini-flash")
+
+    @classmethod
+    def _router(cls, plain_entry_first: bool) -> "litellm.Router":
+        pytest.importorskip("semantic_router", reason="auto-router needs the semantic-router extra")
+        plain = {
+            "model_name": "gpt4o",
+            "litellm_params": {
+                "model": "openai/gpt-4o",
+                "api_key": cls.PLAIN_API_KEY,
+                "api_base": cls.PLAIN_API_BASE,
+            },
+        }
+        marker = {
+            "model_name": "gpt4o",
+            "litellm_params": {
+                "model": "auto_router/gpt4o-router",
+                "auto_router_config": json.dumps(
+                    {"routes": [{"name": "gemini-flash", "utterances": ["capital city questions"]}]}
+                ),
+                "auto_router_default_model": "gemini-flash",
+                "auto_router_embedding_model": "text-embedding-3-small",
+                "drop_params": True,
+            },
+        }
+        tier = {
+            "model_name": "gemini-flash",
+            "litellm_params": {"model": "gemini/gemini-3.6-flash", "api_key": "sk-tier-key"},
+        }
+        shared_name_entries = [plain, marker] if plain_entry_first else [marker, plain]
+        router = litellm.Router(model_list=[*shared_name_entries, tier])
+        router.auto_routers["gpt4o"][0].strategy.routelayer = cls._FixedRouteLayer()
+        return router
+
+    @staticmethod
+    def _gemini_response() -> httpx.Response:
+        return httpx.Response(
+            status_code=200,
+            json={
+                "candidates": [
+                    {"content": {"parts": [{"text": "Paris"}], "role": "model"}, "finishReason": "STOP"}
+                ],
+                "usageMetadata": {"promptTokenCount": 5, "candidatesTokenCount": 1, "totalTokenCount": 6},
+                "modelVersion": "gemini-3.6-flash",
+            },
+            request=httpx.Request("POST", "https://generativelanguage.googleapis.com"),
+        )
+
+    @pytest.mark.parametrize(
+        "plain_entry_first", [True, False], ids=["plain_entry_first", "marker_entry_first"]
+    )
+    async def test_routed_tier_call_goes_out_on_its_own_endpoint_and_credentials(self, plain_entry_first):
+        """The outbound provider request for the routed tier hits the tier's own Gemini host
+        with the tier's own key, never the plain sibling's api_base or api_key."""
+        from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+
+        router = self._router(plain_entry_first)
+
+        with patch.object(
+            AsyncHTTPHandler, "post", new_callable=AsyncMock, return_value=self._gemini_response()
+        ) as mock_post:
+            await router.acompletion(
+                model="gpt4o",
+                messages=[{"role": "user", "content": "What is the capital of France?"}],
+            )
+
+        call = mock_post.call_args
+        outbound_url = str(call.kwargs["url"] if "url" in call.kwargs else call.args[0])
+        outbound_headers = dict(call.kwargs.get("headers") or {})
+
+        assert "generativelanguage.googleapis.com" in outbound_url
+        assert "gemini-3.6-flash" in outbound_url
+        assert self.PLAIN_API_BASE not in outbound_url
+        assert self.PLAIN_API_KEY not in outbound_url
+        assert self.PLAIN_API_KEY not in json.dumps(outbound_headers)
 
 
 class TestGetAllowedFailsFromPolicy:

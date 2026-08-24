@@ -73,6 +73,7 @@ except ImportError:
 from litellm.a2a_protocol.card_resolver import (
     LiteLLMA2ACardResolver,
     get_agent_card_url,
+    normalize_agent_card_interfaces,
 )
 from litellm.a2a_protocol.exception_mapping_utils import (
     handle_a2a_localhost_retry,
@@ -782,13 +783,17 @@ async def create_a2a_client(
     if extra_headers:
         verbose_proxy_logger.debug("A2A client created with extra_headers=%s", list(extra_headers.keys()))
 
+    resolver: Final = A2ACardResolver(httpx_client=httpx_client, base_url=base_url)
+    agent_card: Final = normalize_agent_card_interfaces(
+        await resolver.get_agent_card(http_kwargs={"headers": extra_headers} if extra_headers else None)
+    )
+
     a2a_client: Final = await create_client(  # pyright: ignore[reportOptionalCall]
-        base_url,
+        agent_card,
         client_config=ClientConfig(  # pyright: ignore[reportOptionalCall]
             httpx_client=httpx_client,
             streaming=streaming,
         ),
-        resolver_http_kwargs={"headers": extra_headers} if extra_headers else None,
     )
     # Stash LiteLLM-owned handles on the client so the localhost-retry path can reuse
     # the configured httpx client and this agent's headers without excavating
@@ -799,9 +804,7 @@ async def create_a2a_client(
         if extra_headers
         else None
     )
-    agent_card: Final = getattr(a2a_client, "_card", None)
-    if agent_card is not None:
-        a2a_client._litellm_agent_card = agent_card
+    a2a_client._litellm_agent_card = agent_card
 
     verbose_logger.info("A2A client created for %s", base_url)
 
