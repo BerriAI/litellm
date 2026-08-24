@@ -128,6 +128,8 @@ DEFINES_A_ROUTINE = re.compile(
 QUALIFIED_NAME = r"(?:\"[^\"]*\"|[A-Za-z_][A-Za-z0-9_$]*)"
 ROUTINE_NAME = re.compile(rf"\s*(?:{QUALIFIED_NAME}\s*\.\s*)?({QUALIFIED_NAME})")
 OPENS_A_CALL = re.compile(r"\s*\(")
+NAMES_AN_INDEX = re.compile(r"\bCREATE\b.+\bINDEX\b", re.IGNORECASE | re.DOTALL)
+INTRODUCES_A_RELATION = frozenset({"TABLE", "INTO", "REFERENCES", "EXISTS", "COPY"})
 
 REWRITES_ROWS = frozenset({"UPDATE", "DELETE", "MERGE"})
 
@@ -270,8 +272,10 @@ def mask(
     of text is. Whether an identifier opens a call is read from the masked text rather than the
     raw SQL, so a comment sitting between the name and its parenthesis, blanked to spaces here, is
     skipped exactly as whitespace is. A double-quoted identifier that opens no call, a column,
-    table, index, or constraint name, is left out, so it never masquerades as a call to a
-    like-named routine."""
+    index, or constraint name, is left out, so it never masquerades as a call to a like-named
+    routine, as is one whose parenthesis is a column list rather than an argument list, the table
+    of a `CREATE TABLE`, `INSERT INTO`, `REFERENCES`, `COPY`, or `CREATE INDEX`, which
+    `names_a_relation` reads from the word before the name."""
     chunks: list[str] = []
     bodies: list[tuple[int, int]] = []
     literals: list[tuple[int, int]] = []
@@ -323,7 +327,11 @@ def mask(
         index += 1
 
     masked = "".join(chunks)
-    calls = tuple((start, end) for start, end in identifiers if OPENS_A_CALL.match(masked, end))
+    calls = tuple(
+        (start, end)
+        for start, end in identifiers
+        if OPENS_A_CALL.match(masked, end) and not names_a_relation(masked[:start])
+    )
     return masked, tuple(bodies), tuple(literals), calls
 
 
@@ -565,6 +573,27 @@ def names_a_table(before: str) -> bool:
     the word immediately before is what separates the two."""
     word = PRECEDING_WORD.search(before)
     return word is not None and word.group(1).upper() == "INSERT"
+
+
+def names_a_relation(before: str) -> bool:
+    """Whether the parenthesised quoted identifier this text runs up to names a table with a
+    column list rather than opening a routine call. The two look alike, a name then a `(`, so
+    an uncalled routine sharing a name with a table would otherwise read as called. The word
+    immediately before tells most of them apart: `CREATE TABLE`, `INSERT INTO`, a foreign key's
+    `REFERENCES`, `CREATE TABLE IF NOT EXISTS`, and `COPY` each put a table there, and none can
+    precede a call. `ON` is the ambiguous one, since it introduces the table of a `CREATE INDEX`
+    but also a join condition that may itself be a call, so it counts only inside a statement
+    that creates an index, leaving `JOIN ... ON f()` and an index predicate's `WHERE f()` as
+    calls."""
+    word = PRECEDING_WORD.search(before)
+    if word is None:
+        return False
+    keyword = word.group(1).upper()
+    if keyword in INTRODUCES_A_RELATION:
+        return True
+    if keyword == "ON":
+        return NAMES_AN_INDEX.search(before[before.rfind(";") + 1 :]) is not None
+    return False
 
 
 def assignment_reach(statement: str) -> tuple[str, ...]:

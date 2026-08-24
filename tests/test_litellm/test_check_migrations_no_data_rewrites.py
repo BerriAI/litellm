@@ -449,6 +449,50 @@ class TestStoredRoutines:
         sql = self.DEFINITION + 'ALTER TABLE "Foo" ADD COLUMN "backfill" /* note */ int;\n'
         assert _keywords(tmp_path, sql) == ()
 
+    def test_a_like_named_table_with_a_column_list_is_not_a_call(self, tmp_path):
+        sql = self.DEFINITION + 'CREATE TABLE "backfill" (id int);\n'
+        assert _keywords(tmp_path, sql) == ()
+
+    def test_an_insert_into_a_like_named_table_is_not_a_call(self, tmp_path):
+        sql = self.DEFINITION + 'INSERT INTO "backfill" ("id") VALUES (1);\n'
+        assert _keywords(tmp_path, sql) == ()
+
+    def test_an_insert_into_a_like_named_table_with_a_commented_column_list_is_not_a_call(self, tmp_path):
+        sql = self.DEFINITION + 'INSERT INTO "backfill" /* cols */ ("id") VALUES (1);\n'
+        assert _keywords(tmp_path, sql) == ()
+
+    def test_a_foreign_key_referencing_a_like_named_table_is_not_a_call(self, tmp_path):
+        sql = self.DEFINITION + 'CREATE TABLE "Bar" (id int REFERENCES "backfill" ("id"));\n'
+        assert _keywords(tmp_path, sql) == ()
+
+    def test_an_index_on_a_like_named_table_is_not_a_call(self, tmp_path):
+        sql = self.DEFINITION + 'CREATE INDEX ON "backfill" ("id");\n'
+        assert _keywords(tmp_path, sql) == ()
+
+    def test_an_if_not_exists_table_named_after_the_routine_is_not_a_call(self, tmp_path):
+        sql = self.DEFINITION + 'CREATE TABLE IF NOT EXISTS "backfill" (id int);\n'
+        assert _keywords(tmp_path, sql) == ()
+
+    def test_a_copy_into_a_like_named_table_is_not_a_call(self, tmp_path):
+        sql = self.DEFINITION + 'COPY "backfill" ("id") FROM stdin;\n'
+        assert _keywords(tmp_path, sql) == ()
+
+    def test_a_set_returning_call_in_from_still_counts(self, tmp_path):
+        sql = self.DEFINITION + 'SELECT * FROM "backfill"();\n'
+        assert _keywords(tmp_path, sql) == ("UPDATE",)
+
+    def test_a_call_in_a_join_condition_still_counts(self, tmp_path):
+        sql = self.DEFINITION + 'SELECT 1 FROM "Bar" b JOIN "Baz" z ON "backfill"();\n'
+        assert _keywords(tmp_path, sql) == ("UPDATE",)
+
+    def test_a_call_in_an_index_predicate_still_counts(self, tmp_path):
+        sql = self.DEFINITION + 'CREATE INDEX ON "Foo" ("a") WHERE "backfill"();\n'
+        assert _keywords(tmp_path, sql) == ("UPDATE",)
+
+    def test_a_join_condition_call_after_an_earlier_index_still_counts(self, tmp_path):
+        sql = self.DEFINITION + 'CREATE INDEX ON "Foo" ("a");\nSELECT 1 FROM "Bar" b JOIN "Baz" z ON "backfill"();\n'
+        assert _keywords(tmp_path, sql) == ("UPDATE",)
+
     def test_a_trigger_wiring_the_function_up_counts_as_a_call(self, tmp_path):
         sql = self.DEFINITION + 'CREATE TRIGGER t AFTER INSERT ON "Foo" EXECUTE FUNCTION backfill();\n'
         assert _keywords(tmp_path, sql) == ("UPDATE",)
