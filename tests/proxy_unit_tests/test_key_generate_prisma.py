@@ -3323,16 +3323,17 @@ async def test_team_access_groups(prisma_client):
 
     request._url = URL(url="/chat/completions")
 
+    def body_reader(requested_model: str):
+        async def return_body() -> bytes:
+            return f'{{"model": "{requested_model}"}}'.encode()
+
+        return return_body
+
     for model in ["gpt-4o", "gemini-pro-vision"]:
         # Expect these to pass
-        async def return_body():
-            return_string = f'{{"model": "{model}"}}'
-            # return string as bytes
-            return return_string.encode()
-
         request = Request(scope={"type": "http"})
         request._url = URL(url="/chat/completions")
-        request.body = return_body
+        request.body = body_reader(model)
 
         # use generated key to auth in
         print(
@@ -3342,14 +3343,9 @@ async def test_team_access_groups(prisma_client):
 
     for model in ["gpt-4", "gpt-4o-mini", "gemini-experimental"]:
         # Expect these to fail
-        async def return_body_2():
-            return_string = f'{{"model": "{model}"}}'
-            # return string as bytes
-            return return_string.encode()
-
         request = Request(scope={"type": "http"})
         request._url = URL(url="/chat/completions")
-        request.body = return_body_2
+        request.body = body_reader(model)
 
         # use generated key to auth in
         print(

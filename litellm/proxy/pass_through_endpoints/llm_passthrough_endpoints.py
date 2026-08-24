@@ -9,7 +9,7 @@ Use litellm with Anthropic SDK, Vertex AI SDK, Cohere SDK, etc.
 import json
 import os
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Any, Final, cast
 
@@ -104,6 +104,36 @@ def is_passthrough_request_streaming(request_body: object) -> bool:
     if not isinstance(request_body, dict):
         return False
     return bool(request_body.get("stream", False))
+
+
+def get_passthrough_router_request_metadata(user_api_key_dict: UserAPIKeyAuth) -> Mapping[str, Any]:
+    """
+    Build the request metadata carrying key-level spend attribution and the
+    pre-call budget reservation for a router-model passthrough request.
+
+    Router-model passthrough branches call ``allm_passthrough_route`` directly,
+    bypassing ``add_litellm_data_to_request``. Without this metadata the cost
+    callback cannot attribute spend to the calling key and never releases the
+    budget reservation minted at auth time, so the shared spend counter drifts
+    up until the key falsely trips ``BudgetExceededError``.
+
+    The payload rides the ``litellm_metadata`` bucket, not ``metadata``: the
+    router hop ``_ageneric_api_call_with_fallbacks`` canonicalises this call
+    type into ``litellm_metadata``, and the cost callback reads spend
+    attribution from that bucket while only backfilling ``user_api_key*`` keys
+    from ``metadata``. Passing ``metadata=`` would silently drop the secondary
+    attribution fields the helper sets (``agent_id``,
+    ``user_api_end_user_max_budget``) before the callback ever sees them.
+    """
+    from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+
+    request_data: Final = {"litellm_metadata": {}}  # mutable-ok: builder + litellm mutate this in place
+    LiteLLMProxyRequestSetup.add_user_api_key_auth_to_request_metadata(
+        data=request_data,
+        user_api_key_dict=user_api_key_dict,
+        _metadata_variable_name="litellm_metadata",
+    )
+    return request_data["litellm_metadata"]
 
 
 async def llm_passthrough_factory_proxy_route(
@@ -346,6 +376,7 @@ async def vllm_proxy_route(
                 params=None,
                 headers=None,
                 cookies=None,
+                litellm_metadata=get_passthrough_router_request_metadata(user_api_key_dict),
             ),
         )
 
@@ -1475,6 +1506,7 @@ async def azure_proxy_route(
                     params=None,
                     headers=None,
                     cookies=None,
+                    litellm_metadata=get_passthrough_router_request_metadata(user_api_key_dict),
                 )
 
                 if is_streaming_request:
