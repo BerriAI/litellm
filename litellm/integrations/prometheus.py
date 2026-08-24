@@ -3648,6 +3648,8 @@ class PrometheusLogger(CustomLogger):
             team_object.budget_reset_at = team_info.budget_reset_at
             if team_object.max_budget is None and team_info.max_budget is not None:
                 team_object.max_budget = team_info.max_budget
+            if spend is None and team_info.spend is not None:
+                team_object.spend = team_info.spend + response_cost
 
         return team_object
 

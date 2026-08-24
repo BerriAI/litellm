@@ -359,6 +359,61 @@ async def test_assemble_team_object_does_not_override_metadata_max_budget(
     ), "max_budget from metadata must not be replaced by the DB value"
 
 
+async def test_assemble_team_object_uses_db_spend_when_metadata_is_none(
+    prometheus_logger,
+):
+    """
+    When spend is None in request metadata (cached team object not hydrated),
+    _assemble_team_object must backfill it from get_team_object, otherwise the
+    remaining-budget gauge reports the full max_budget as if nothing was spent.
+    """
+    db_team = MagicMock()
+    db_team.max_budget = 1000.0
+    db_team.spend = 902.60
+    db_team.budget_reset_at = None
+
+    with patch("litellm.proxy.auth.auth_checks.get_team_object") as mock_get_team:
+        mock_get_team.return_value = db_team
+        team_object = await prometheus_logger._assemble_team_object(
+            team_id="team-1",
+            team_alias="team-a",
+            spend=None,  # simulates None coming from request metadata
+            max_budget=1000.0,
+            response_cost=0.5,
+        )
+
+    assert (
+        team_object.spend == 902.60 + 0.5
+    ), "spend should be populated from DB (plus request cost) when metadata value is None"
+
+
+async def test_assemble_team_object_does_not_override_metadata_spend(
+    prometheus_logger,
+):
+    """
+    When spend IS present in request metadata, it must not be replaced by the
+    DB value.
+    """
+    db_team = MagicMock()
+    db_team.max_budget = 1000.0
+    db_team.spend = 9999.0
+    db_team.budget_reset_at = None
+
+    with patch("litellm.proxy.auth.auth_checks.get_team_object") as mock_get_team:
+        mock_get_team.return_value = db_team
+        team_object = await prometheus_logger._assemble_team_object(
+            team_id="team-1",
+            team_alias="team-a",
+            spend=50.0,  # metadata has a real value
+            max_budget=1000.0,
+            response_cost=1.0,
+        )
+
+    assert (
+        team_object.spend == 50.0 + 1.0
+    ), "spend from metadata must not be replaced by the DB value"
+
+
 async def test_set_team_budget_metrics_after_api_request_no_inf_when_metadata_budget_none(
     prometheus_logger,
 ):
