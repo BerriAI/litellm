@@ -12,6 +12,7 @@ from litellm.proxy.common_utils.config_sync_pubsub import (
 )
 
 if TYPE_CHECKING:
+    from litellm.caching.in_memory_cache import InMemoryCache
     from litellm.caching.redis_cache import RedisCache
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 
@@ -95,15 +96,17 @@ async def evict_and_broadcast(cache_keys: Sequence[str], user_api_key_cache: "Us
 
 
 class AuthCacheInvalidationSubscriber:
-    __slots__ = ("_redis_cache", "_task", "_user_api_key_cache")
+    __slots__ = ("_additional_in_memory_caches", "_redis_cache", "_task", "_user_api_key_cache")
 
     def __init__(
         self,
         redis_cache: "RedisCache",
         user_api_key_cache: "UserApiKeyCache",
+        additional_in_memory_caches: Sequence["InMemoryCache"] = (),
     ) -> None:
         self._redis_cache = redis_cache
         self._user_api_key_cache = user_api_key_cache
+        self._additional_in_memory_caches = tuple(additional_in_memory_caches)
         self._task: asyncio.Task[None] | None = None
 
     def start(self) -> None:
@@ -166,6 +169,8 @@ class AuthCacheInvalidationSubscriber:
         in_memory_cache: Final = self._user_api_key_cache.in_memory_cache
         if in_memory_cache is not None:
             in_memory_cache.delete_cache(cache_key)
+        for additional_cache in self._additional_in_memory_caches:
+            additional_cache.delete_cache(cache_key)
 
     @staticmethod
     async def _close_pubsub(pubsub: _ConfigSyncPubSub) -> None:

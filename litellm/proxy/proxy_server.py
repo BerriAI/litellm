@@ -6798,6 +6798,7 @@ class ProxyConfig:
         subscriber: Final = AuthCacheInvalidationSubscriber(
             redis_cache=redis_cache,
             user_api_key_cache=user_api_key_cache,
+            additional_in_memory_caches=(spend_counter_cache.in_memory_cache,),
         )
         self.auth_cache_invalidation_subscriber = subscriber
         subscriber.start()

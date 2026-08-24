@@ -87,6 +87,8 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     object_permission_cache_key,
     tag_cache_key,
     tag_registry_cache_key,
+    team_membership_auth_cache_key,
+    team_membership_reservation_cache_key,
 )
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.guardrails.tool_name_extraction import (
@@ -1967,7 +1969,7 @@ async def get_team_membership(
     if user_id is None or team_id is None:
         return None
 
-    _key: Final = f"team_membership:{user_id}:{team_id}"
+    _key: Final = team_membership_reservation_cache_key(user_id=user_id, team_id=team_id)
 
     # check if in cache
     cached_membership_obj: Final = await user_api_key_cache.async_get_cache(
@@ -2400,6 +2402,94 @@ async def _cache_team_object(
                 alias_key,
                 e,
             )
+
+
+async def invalidate_team_member_spend_state(
+    user_id: str,
+    team_id: str,
+    user_api_key_cache: UserApiKeyCache,
+    new_spend: float | None = None,
+) -> None:
+    """
+    Clear every cached read path for one team member's budget so a spend
+    reset or a raised cap takes effect on the next request instead of
+    waiting on the membership cache's TTL.
+
+    Two independently-keyed cache entries hold the same LiteLLM_TeamMembership
+    row: user_api_key_auth.py's admission check writes ``{team_id}_{user_id}``,
+    while budget_reservation.py's pre-call reservation and auth_checks.py's own
+    get_team_membership() (used by _check_team_member_budget) both write
+    ``team_membership:{user_id}:{team_id}``. Both formats must be invalidated
+    explicitly; writing one does not refresh the other. All keys are also
+    broadcast (LIT-3803): each worker's own in-memory copy (membership object,
+    spend counter, or the counter's own short-TTL DB-floor marker) survives
+    eviction elsewhere until its TTL, so the handling worker alone clearing its
+    copy leaves every other worker still enforcing the pre-reset budget.
+
+    ``new_spend`` is only passed by reset_team_member_spend_fn, which knows the
+    exact post-reset value: it is SET everywhere (matching /key/{key}/reset_spend's
+    own precedent) rather than deleted, so a worker's next read reflects it
+    directly instead of re-deriving it through a DB reseed. team_member_update
+    only changes the budget cap, not the tracked spend, so it passes no
+    new_spend; the live spend counter is untouched in that case (deleting it
+    would force a reseed from the DB's own spend column, which lags the live
+    counter via periodic batch writes, briefly under-enforcing the raised cap
+    against a spend value lower than what was actually tracked) and only the
+    membership caches carrying the new cap are invalidated.
+
+    The floor marker (``spend_db_floor:``, proxy_server.py's
+    _authoritative_floor_spend) caches the pre-reset DB spend for
+    SPEND_DB_FLOOR_CACHE_TTL_SECONDS; left stale after a real reset, a request
+    landing on the pod that cached it can read that higher floor and raise the
+    counter right back above the just-reset spend. Invalidating it here closes
+    that window for any read that starts after this function returns; a read
+    already in flight when the DB write commits can still repopulate it with
+    the pre-reset value for up to that TTL, a race inherent to every
+    best-effort cache invalidation in this pub/sub (LIT-3803) and not specific
+    to this endpoint.
+    """
+    from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
+        evict_and_broadcast,
+        publish_auth_cache_invalidation,
+    )
+
+    if new_spend is not None:
+        from litellm.proxy.proxy_server import spend_counter_cache
+
+        spend_counter_key: Final = f"spend:team_member:{user_id}:{team_id}"
+        spend_db_floor_key: Final = f"spend_db_floor:{spend_counter_key}"
+
+        spend_counter_cache.in_memory_cache.set_cache(key=spend_counter_key, value=new_spend, ttl=60)
+        if spend_counter_cache.redis_cache is not None:
+            try:
+                await spend_counter_cache.redis_cache.async_set_cache(key=spend_counter_key, value=new_spend, ttl=60)
+            except Exception as e:  # noqa: BLE001  # best-effort set; a Redis error must not fail the reset
+                verbose_proxy_logger.warning(
+                    "Failed to set spend counter %s in Redis after reset: %s; deleting it instead so the next "
+                    "read reseeds from the DB rather than keeping the stale pre-reset value authoritative",
+                    spend_counter_key,
+                    e,
+                )
+                try:
+                    await spend_counter_cache.redis_cache.async_delete_cache(key=spend_counter_key)
+                except Exception:  # noqa: BLE001  # best-effort cleanup; a second Redis error must not fail the reset
+                    verbose_proxy_logger.warning(
+                        "Failed to delete stale spend counter %s in Redis after a failed reset write",
+                        spend_counter_key,
+                        exc_info=True,
+                    )
+
+        spend_counter_cache.in_memory_cache.delete_cache(key=spend_db_floor_key)
+        await publish_auth_cache_invalidation(cache_key=spend_counter_key)
+        await publish_auth_cache_invalidation(cache_key=spend_db_floor_key)
+
+    await evict_and_broadcast(
+        cache_keys=(
+            team_membership_auth_cache_key(team_id=team_id, user_id=user_id),
+            team_membership_reservation_cache_key(user_id=user_id, team_id=team_id),
+        ),
+        user_api_key_cache=user_api_key_cache,
+    )
 
 
 async def delete_cache_team_object(
