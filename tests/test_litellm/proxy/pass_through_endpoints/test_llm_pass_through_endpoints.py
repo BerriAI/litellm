@@ -3450,14 +3450,16 @@ class TestVertexCredentiallessPassthroughVirtualKeyLeak:
 
     With no Vertex credential configured, the passthrough took the
     bring-your-own-credentials branch and forwarded the whole incoming header set
-    to Google, including whichever header carried the caller's LiteLLM virtual key
-    (``Authorization: Bearer <vkey>`` or ``x-litellm-api-key: <vkey>``). That leaked
-    the proxy's own secret to an upstream provider.
+    to Google, including whichever header carried the caller's LiteLLM virtual key.
+    LiteLLM accepts that key from several headers (``Authorization``,
+    ``x-litellm-api-key``, ``x-goog-api-key``, ``api-key``, ``x-api-key``), and
+    ``x-goog-api-key`` doubles as a genuine Google credential, so any of them could
+    leak the proxy's own secret to an upstream provider.
 
     A credential-less request that carries no upstream Google credential must now
     fail with a clean 401 and never reach ``create_pass_through_route``; a genuine
     bring-your-own Google credential must still pass through, with the virtual key
-    stripped from what is forwarded.
+    stripped by value from every forwarded header.
     """
 
     VKEY = "sk-litellm-victim-key"
@@ -3576,6 +3578,26 @@ class TestVertexCredentiallessPassthroughVirtualKeyLeak:
         assert raised is None
         assert forwarded is not None
         assert forwarded.get("x-goog-api-key") == "AIza-google-api-key"
+        assert "x-litellm-api-key" not in forwarded
+        assert self.VKEY not in " ".join(f"{name}:{value}" for name, value in forwarded.items())
+
+    @pytest.mark.asyncio
+    async def test_virtual_key_echoed_in_alternate_auth_headers_is_stripped_by_value(self, monkeypatch):
+        raised, forwarded = await self._run(
+            monkeypatch,
+            [
+                (b"x-litellm-api-key", self.VKEY.encode()),
+                (b"authorization", b"Bearer ya29.google-oauth-token"),
+                (b"api-key", self.VKEY.encode()),
+                (b"x-api-key", self.VKEY.encode()),
+                (b"content-type", b"application/json"),
+            ],
+        )
+        assert raised is None
+        assert forwarded is not None
+        assert forwarded.get("authorization") == "Bearer ya29.google-oauth-token"
+        assert "api-key" not in forwarded
+        assert "x-api-key" not in forwarded
         assert "x-litellm-api-key" not in forwarded
         assert self.VKEY not in " ".join(f"{name}:{value}" for name, value in forwarded.items())
 
