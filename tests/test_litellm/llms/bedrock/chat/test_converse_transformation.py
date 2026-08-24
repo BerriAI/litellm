@@ -1,14 +1,10 @@
 import asyncio
 import json
 import os
-import sys
 
 import pytest
 from fastapi.testclient import TestClient
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
 from unittest.mock import MagicMock, patch
 
 import litellm
@@ -678,10 +674,10 @@ def test_transform_request_helper_includes_anthropic_beta_and_tools():
     assert fields["tools"][0]["type"] == "computer_20250124"
 
 
-def test_parallel_tool_calls_config_kept_for_sonnet_5():
+def test_parallel_tool_calls_config_kept_for_sonnet_5(monkeypatch):
     old_env = os.environ.get("LITELLM_LOCAL_MODEL_COST_MAP")
     old_cost = litellm.model_cost
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
     try:
         config = AmazonConverseConfig()
@@ -708,7 +704,7 @@ def test_parallel_tool_calls_config_kept_for_sonnet_5():
         if old_env is None:
             os.environ.pop("LITELLM_LOCAL_MODEL_COST_MAP", None)
         else:
-            os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = old_env
+            monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", old_env)
 
 
 def test_parallel_tool_calls_config_dropped_for_ttl_only_model(
@@ -3575,7 +3571,7 @@ def test_drop_thinking_param_when_thinking_blocks_missing():
         litellm.modify_params = original_modify_params
 
 
-def test_supports_native_structured_outputs():
+def test_supports_native_structured_outputs(monkeypatch):
     """Test model detection for native structured outputs support.
 
     Support is driven by the ``supports_native_structured_output`` flag in the
@@ -3583,7 +3579,7 @@ def test_supports_native_structured_outputs():
     """
     old_env = os.environ.get("LITELLM_LOCAL_MODEL_COST_MAP")
     old_cost = litellm.model_cost
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
     try:
         config = AmazonConverseConfig()
@@ -3645,7 +3641,7 @@ def test_supports_native_structured_outputs():
         if old_env is None:
             os.environ.pop("LITELLM_LOCAL_MODEL_COST_MAP", None)
         else:
-            os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = old_env
+            monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", old_env)
 
 
 def test_create_output_config_for_response_format():
@@ -3683,11 +3679,11 @@ def test_create_output_config_for_response_format():
     assert parsed_schema == expected
 
 
-def test_translate_response_format_native_output_config():
+def test_translate_response_format_native_output_config(monkeypatch):
     """For supported models, _translate_response_format_param should produce outputConfig."""
     old_env = os.environ.get("LITELLM_LOCAL_MODEL_COST_MAP")
     old_cost = litellm.model_cost
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
     try:
         config = AmazonConverseConfig()
@@ -3743,7 +3739,7 @@ def test_translate_response_format_native_output_config():
         if old_env is None:
             os.environ.pop("LITELLM_LOCAL_MODEL_COST_MAP", None)
         else:
-            os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = old_env
+            monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", old_env)
 
 
 def test_translate_response_format_fallback_tool_call():
@@ -3778,11 +3774,11 @@ def test_translate_response_format_fallback_tool_call():
     assert result["json_mode"] is True
 
 
-def test_native_structured_output_no_fake_stream():
+def test_native_structured_output_no_fake_stream(monkeypatch):
     """When using native structured outputs with streaming, fake_stream should NOT be set."""
     old_env = os.environ.get("LITELLM_LOCAL_MODEL_COST_MAP")
     old_cost = litellm.model_cost
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
     try:
         config = AmazonConverseConfig()
@@ -3828,7 +3824,7 @@ def test_native_structured_output_no_fake_stream():
         if old_env is None:
             os.environ.pop("LITELLM_LOCAL_MODEL_COST_MAP", None)
         else:
-            os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = old_env
+            monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", old_env)
 
 
 def test_transform_request_with_output_config():
@@ -4116,7 +4112,7 @@ def test_add_additional_properties_definitions():
     )
 
 
-def test_json_object_no_schema_skips_tool_injection():
+def test_json_object_no_schema_skips_tool_injection(monkeypatch):
     """response_format: {type: json_object} with no schema should NOT inject
     the synthetic json_tool_call tool.
 
@@ -4126,7 +4122,7 @@ def test_json_object_no_schema_skips_tool_injection():
     the model respond naturally with the JSON the caller asked for."""
     old_env = os.environ.get("LITELLM_LOCAL_MODEL_COST_MAP")
     old_cost = litellm.model_cost
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
     try:
         config = AmazonConverseConfig()
@@ -4152,7 +4148,7 @@ def test_json_object_no_schema_skips_tool_injection():
         if old_env is None:
             os.environ.pop("LITELLM_LOCAL_MODEL_COST_MAP", None)
         else:
-            os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = old_env
+            monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", old_env)
 
 
 def test_output_config_applies_additional_properties():
@@ -4805,7 +4801,7 @@ def test_cache_control_injection_tool_config_not_added_without_injection_point()
     assert all("cachePoint" not in tool for tool in tools)
 
 
-def test_cache_control_injection_tool_config_honors_ttl_for_supported_model():
+def test_cache_control_injection_tool_config_honors_ttl_for_supported_model(monkeypatch):
     """
     Regression test: cache_control_injection_points with location=tool_config
     must honor the requested `control.ttl`, mirroring the message/system
@@ -4819,7 +4815,7 @@ def test_cache_control_injection_tool_config_honors_ttl_for_supported_model():
     """
     old_env = os.environ.get("LITELLM_LOCAL_MODEL_COST_MAP")
     old_cost = litellm.model_cost
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
     try:
         config = AmazonConverseConfig()
@@ -4858,10 +4854,10 @@ def test_cache_control_injection_tool_config_honors_ttl_for_supported_model():
         if old_env is None:
             os.environ.pop("LITELLM_LOCAL_MODEL_COST_MAP", None)
         else:
-            os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = old_env
+            monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", old_env)
 
 
-def test_cache_control_injection_tool_config_honors_ttl_for_regional_model_lacking_own_pricing():
+def test_cache_control_injection_tool_config_honors_ttl_for_regional_model_lacking_own_pricing(monkeypatch):
     """
     Regression test: a regional pricing entry that omits
     `cache_creation_input_token_cost_above_1hr` (e.g. `jp.anthropic.claude-opus-4-7`)
@@ -4870,7 +4866,7 @@ def test_cache_control_injection_tool_config_honors_ttl_for_regional_model_lacki
     """
     old_env = os.environ.get("LITELLM_LOCAL_MODEL_COST_MAP")
     old_cost = litellm.model_cost
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
     try:
         assert "cache_creation_input_token_cost_above_1hr" not in litellm.model_cost["jp.anthropic.claude-opus-4-7"]
@@ -4911,7 +4907,7 @@ def test_cache_control_injection_tool_config_honors_ttl_for_regional_model_lacki
         if old_env is None:
             os.environ.pop("LITELLM_LOCAL_MODEL_COST_MAP", None)
         else:
-            os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = old_env
+            monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", old_env)
 
 
 def test_cache_control_injection_tool_config_drops_ttl_for_unsupported_model():

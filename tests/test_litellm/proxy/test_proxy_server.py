@@ -5,7 +5,6 @@ import os
 import re
 import socket
 import subprocess
-import sys
 import types
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -20,7 +19,6 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.testclient import TestClient
 
-sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system-path
 
 import litellm
 import litellm.proxy.proxy_server as proxy_server_module

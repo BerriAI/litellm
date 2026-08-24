@@ -1,7 +1,6 @@
 import contextlib
 import json
 import os
-import sys
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -9,7 +8,6 @@ import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
-sys.path.insert(0, os.path.abspath("../../../.."))  # Adds the parent directory to the system path
 
 from starlette.datastructures import Headers
 
@@ -6240,7 +6238,6 @@ class TestAggregateGatewayDcrChallenge:
         well_known_root_suffix), so a DCR client behind a sub-path is pointed at a route that
         exists instead of a 404. Regression: the challenge used to hard-code /mcp and omit the
         root path the route inserts."""
-        import os
 
         with (
             patch.dict(os.environ, {"SERVER_ROOT_PATH": "/litellm"}),
@@ -6321,7 +6318,6 @@ class TestAggregateGatewayDcrChallenge:
         used to fail, silently pointing a legacy-spelling client at the standard-pattern document
         whose ``resource`` is ``{base}/mcp/{server}`` rather than the ``{base}/{server}/mcp`` URL it
         called, which a strict RFC 9728 section 3 client rejects."""
-        import os
 
         from litellm.types.mcp import MCPAuth
         from litellm.types.mcp_server.mcp_server_manager import MCPServer

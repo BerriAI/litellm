@@ -5,14 +5,11 @@ text completion path.
 Regression tests for https://github.com/BerriAI/litellm/issues/27410
 """
 
-import os
-import sys
 
 import pytest
 import respx
 from httpx import Response
 
-sys.path.insert(0, os.path.abspath("../../../../.."))
 
 import litellm
 from litellm import atext_completion, text_completion

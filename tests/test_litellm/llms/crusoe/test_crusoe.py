@@ -105,14 +105,14 @@ def test_crusoe_provider_detection_by_prefix():
     assert model == "meta-llama/Llama-3.3-70B-Instruct"
 
 
-def test_crusoe_model_list_populated():
+def test_crusoe_model_list_populated(monkeypatch):
     """Test Crusoe models are present in model_prices_and_context_window.json"""
     import litellm
 
     original_model_cost = litellm.model_cost
     original_env = os.environ.get("LITELLM_LOCAL_MODEL_COST_MAP")
     try:
-        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+        monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
         litellm.model_cost = litellm.get_model_cost_map(url="")
 
         expected = [
@@ -132,4 +132,4 @@ def test_crusoe_model_list_populated():
         if original_env is None:
             os.environ.pop("LITELLM_LOCAL_MODEL_COST_MAP", None)
         else:
-            os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = original_env
+            monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", original_env)

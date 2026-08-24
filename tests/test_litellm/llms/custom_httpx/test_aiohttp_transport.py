@@ -1,7 +1,5 @@
 import asyncio
 import concurrent.futures
-import os
-import sys
 
 import aiohttp
 import aiohttp.client_exceptions
@@ -9,9 +7,6 @@ import aiohttp.http_exceptions
 import httpx
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../..")
-)  # Adds the parent directory to the system path
 
 from litellm.llms.custom_httpx.aiohttp_transport import (
     AiohttpResponseStream,

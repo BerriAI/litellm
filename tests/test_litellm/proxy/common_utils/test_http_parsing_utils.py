@@ -1,6 +1,4 @@
 import json
-import os
-import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import orjson
@@ -9,9 +7,6 @@ from fastapi import Request
 from fastapi.testclient import TestClient
 from starlette.datastructures import FormData
 
-sys.path.insert(
-    0, os.path.abspath("../../../..")
-)  # Adds the parent directory to the system path
 
 
 import litellm

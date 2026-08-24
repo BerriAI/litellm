@@ -2,14 +2,9 @@
 Test Gemini TTS (Text-to-Speech) functionality
 """
 
-import os
-import sys
 import pytest
 from unittest.mock import patch, MagicMock
 
-sys.path.insert(
-    0, os.path.abspath("../../../..")
-)  # Adds the parent directory to the system path
 
 import litellm
 from litellm.llms.gemini.chat.transformation import GoogleAIStudioGeminiConfig
