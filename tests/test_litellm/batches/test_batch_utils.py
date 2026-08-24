@@ -1165,6 +1165,53 @@ async def test_handle_completed_batch_counts_error_file_failures(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_handle_completed_batch_decodes_model_encoded_error_file_id(monkeypatch):
+    """A model-encoded error file id must be decoded to the raw provider id before
+    the fetch, exactly like the output file id. Sending the encoded id straight to
+    the provider 404s, and the swallowed fetch failure silently reports 0 failures."""
+    import base64
+
+    from litellm.types.llms.openai import Batch
+
+    provider_error_file_id = "file-real-error-id"
+    encoded_error_file_id = "file-" + base64.urlsafe_b64encode(
+        f"litellm:{provider_error_file_id};model,model-abc".encode()
+    ).decode().rstrip("=")
+
+    requested_file_ids = []
+
+    async def fake_fetch(batch, custom_llm_provider, litellm_params=None):
+        return _vertex_jsonl([_success_row(model="gpt-4o", usage=_usage(10, 5))])
+
+    async def fake_afile_content(**kw):
+        requested_file_ids.append(kw["file_id"])
+        return type("R", (), {"content": _vertex_jsonl([{"custom_id": "bad-1"}])})()
+
+    import litellm.files.main as files_main
+
+    monkeypatch.setattr(bu, "_fetch_batch_output_file_content", fake_fetch)
+    monkeypatch.setattr(files_main, "afile_content", fake_afile_content)
+    monkeypatch.setattr(litellm, "completion_cost", lambda **kw: 0.0)
+
+    batch = Batch(
+        id="b",
+        completion_window="24h",
+        created_at=1,
+        endpoint="/v1/chat/completions",
+        input_file_id="f",
+        object="batch",
+        status="completed",
+        output_file_id="of",
+        error_file_id=encoded_error_file_id,
+    )
+
+    result = await bu._handle_completed_batch(batch, custom_llm_provider="openai")
+
+    assert requested_file_ids == [provider_error_file_id]
+    assert result.failed_requests == 1
+
+
+@pytest.mark.asyncio
 async def test_handle_completed_batch_no_error_file_id_reports_zero_error_failures(monkeypatch):
     rows = [_success_row(model="gpt-4o", usage=_usage(10, 5))]
 
