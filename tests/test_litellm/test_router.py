@@ -8566,6 +8566,30 @@ async def test_retry_breadcrumbs_do_not_carry_the_walk_state():
 
 
 @pytest.mark.asyncio
+async def test_retry_breadcrumbs_drop_forwarded_client_credentials():
+    """log_retry copies kwargs verbatim into previous_models, which reaches spend logs and logging
+    callbacks. provider_specific_header can carry a client's forwarded Authorization token, and a
+    breadcrumb has no diagnostic use for it, so the raw credential must never land in the breadcrumb."""
+    canary = "Bearer sk-ant-oat01-RETRY-BREADCRUMB-CANARY-doNotShip"
+    router = _cyclic_fallback_router(num_retries=1)
+    capture = _LogCapture(logging.ERROR)
+
+    await _drive_cyclic_fallback(
+        router,
+        capture,
+        provider_specific_header={
+            "custom_llm_provider": "openai",
+            "extra_headers": {"authorization": canary},
+        },
+    )
+
+    assert router.previous_models, "no retry breadcrumbs were recorded"
+    for breadcrumb in router.previous_models:
+        assert "provider_specific_header" not in breadcrumb
+    assert canary not in json.dumps(router.previous_models, default=str)
+
+
+@pytest.mark.asyncio
 async def test_fallback_traceback_stays_available_at_debug_level():
     """Dropping the stack from the ERROR line is only safe because the fallback path still
     emits it once per level at DEBUG, which is what an operator needs to diagnose why every

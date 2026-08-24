@@ -376,9 +376,19 @@ set_live_deployment_replay(_replay_live_router_model_cost)
 
 
 # Kwargs that log_retry must not copy into a retry breadcrumb. The breadcrumbs reach spend
-# logs and logging callbacks, and these carry either the request payload or router-internal
-# walk state rather than anything that identifies the failed attempt.
-RETRY_BREADCRUMB_EXCLUDED_KWARGS: Final = frozenset(("messages", "original_function", "attempted_targets"))
+# logs and logging callbacks, so they must never carry the request payload, router-internal
+# walk state, or transport credentials: provider_specific_header / headers / api_key can hold a
+# client's forwarded Authorization or a provider key, none of which identify the failed attempt.
+RETRY_BREADCRUMB_EXCLUDED_KWARGS: Final = frozenset(
+    (
+        "messages",
+        "original_function",
+        "attempted_targets",
+        "provider_specific_header",
+        "headers",
+        "api_key",
+    )
+)
 
 
 class Router:
