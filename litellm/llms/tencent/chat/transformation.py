@@ -30,13 +30,37 @@ class TencentChatConfig(OpenAIGPTConfig):
         thinking_value: Final = optional_params.pop("thinking", None)
         reasoning_effort: Final = optional_params.pop("reasoning_effort", None)
 
-        if thinking_value is not None:
-            if isinstance(thinking_value, dict):
-                optional_params["thinking"] = thinking_value
-        elif reasoning_effort is not None and reasoning_effort != "none":
-            optional_params["thinking"] = {"type": "enabled"}
+        thinking: dict | None = None
+        if isinstance(thinking_value, dict):
+            thinking = thinking_value
+        elif reasoning_effort is not None:
+            # TokenHub recommends explicitly disabling thinking instead of
+            # relying on per-model defaults (deepseek-v4-* default to enabled).
+            thinking = {"type": "disabled" if reasoning_effort == "none" else "enabled"}
+
+        if thinking is not None:
+            thinking = self._normalize_thinking_type_for_model(model=model, thinking=thinking)
+            # Tencent TokenHub expects `thinking` in the request JSON body, but
+            # the OpenAI SDK's chat.completions.create() rejects unknown
+            # top-level kwargs. Route it through `extra_body` so it is merged
+            # into the payload instead of passed as a keyword argument.
+            extra_body: Final = optional_params.setdefault("extra_body", {})
+            extra_body["thinking"] = thinking
 
         return optional_params
+
+    @staticmethod
+    def _normalize_thinking_type_for_model(model: str, thinking: dict) -> dict:
+        """Coerce `thinking.type` values the model does not accept.
+
+        MiniMax models on TokenHub only accept "adaptive" or "disabled" —
+        sending "enabled" returns a 400. "adaptive" is the closest semantic
+        (the model decides when to think), so "enabled" is coerced to it.
+        Ref: https://www.tencentcloud.com/document/product/1300/82345
+        """
+        if thinking.get("type") == "enabled" and "minimax" in model.lower():
+            return {**thinking, "type": "adaptive"}
+        return thinking
 
     def _get_openai_compatible_provider_info(
         self, api_base: str | None, api_key: str | None
