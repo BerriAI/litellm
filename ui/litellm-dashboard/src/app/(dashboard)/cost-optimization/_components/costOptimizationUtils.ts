@@ -12,6 +12,14 @@ export const usd = (value: number): string => {
 
 export const pct = (ratio: number): string => `${formatNumberWithCommas(ratio * 100, 1)}%`;
 
+export const shortDate = (iso: string): string =>
+  new Date(`${iso}T00:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+
+export const compressionOf = (m: SpendMetrics): number => m.compression_savings_spend ?? 0;
+export const cachingOf = (m: SpendMetrics): number => m.prompt_caching_savings_spend ?? 0;
+export const autorouterOf = (m: SpendMetrics): number => m.autorouter_savings_spend ?? 0;
+export const savedTokensOf = (m: SpendMetrics): number => m.compression_saved_tokens ?? 0;
+
 export type CacheLeakageDimension = "key" | "model";
 
 export interface CacheLeakageRow {
@@ -25,7 +33,7 @@ export interface CacheLeakageRow {
 
 export interface CacheLeakageResult {
   rows: CacheLeakageRow[];
-  discountPerToken: number | null;
+  netSavingsPerCachedToken: number | null;
 }
 
 export const isAnthropicModel = (model: string): boolean => /claude|anthropic/i.test(model);
@@ -97,12 +105,18 @@ export const computeCacheLeakage = (
 
   const totals = [...byEntity.values()].reduce(
     (agg, a) => ({
-      cacheReadTokens: agg.cacheReadTokens + a.cacheReadTokens,
+      cachedTokens: agg.cachedTokens + a.cacheReadTokens + a.cacheCreationTokens,
       realizedCachingSavings: agg.realizedCachingSavings + a.realizedCachingSavings,
     }),
-    { cacheReadTokens: 0, realizedCachingSavings: 0 },
+    { cachedTokens: 0, realizedCachingSavings: 0 },
   );
-  const discountPerToken = totals.cacheReadTokens > 0 ? totals.realizedCachingSavings / totals.cacheReadTokens : null;
+  // prompt_caching_savings_spend is net of the cache-write premium, so the rate has to
+  // divide by every token that took the cache path -- a key that starts caching pays
+  // those write premiums too. Dividing by reads alone overstates it and, on write-heavy
+  // traffic where the net is negative, would flip the sign of a real loss into a saving
+  const netSavingsPerCachedToken = totals.cachedTokens > 0 ? totals.realizedCachingSavings / totals.cachedTokens : null;
+  // A non-positive rate prices no leakage: there is no saving to extrapolate from
+  const rate = netSavingsPerCachedToken != null && netSavingsPerCachedToken > 0 ? netSavingsPerCachedToken : null;
 
   const rows: CacheLeakageRow[] = [...byEntity.entries()]
     .map(([id, a]) => {
@@ -113,18 +127,18 @@ export const computeCacheLeakage = (
         sublabel: dimension === "model" ? null : a.teamId,
         uncachedPromptTokens,
         cacheHitRatio: a.promptTokens > 0 ? a.cacheReadTokens / a.promptTokens : 0,
-        potentialSavings: discountPerToken != null ? uncachedPromptTokens * discountPerToken : null,
+        potentialSavings: rate != null ? uncachedPromptTokens * rate : null,
       };
     })
     .filter((row) => row.uncachedPromptTokens > 0);
 
   const sorted = rows.sort((x, y) =>
-    discountPerToken != null
+    rate != null
       ? (y.potentialSavings ?? 0) - (x.potentialSavings ?? 0)
       : y.uncachedPromptTokens - x.uncachedPromptTokens,
   );
 
-  return { rows: sorted.slice(0, limit), discountPerToken };
+  return { rows: sorted.slice(0, limit), netSavingsPerCachedToken };
 };
 
 export interface DailyToolSpendPoint {

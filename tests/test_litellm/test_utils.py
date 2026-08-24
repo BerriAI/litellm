@@ -1,15 +1,12 @@
 import json
 import logging
 import os
-import sys
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from jsonschema import validate
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 
 import litellm
 from litellm._logging import (
@@ -29,13 +26,17 @@ from litellm.types.utils import (
     StreamingChoices,
     Usage,
 )
+from litellm.types.utils import all_litellm_params, bedrock_batch_litellm_params
+from litellm.types.router import CredentialLiteLLMParams, GenericLiteLLMParams
 from litellm.utils import (
     ProviderConfigManager,
     TextCompletionStreamWrapper,
     _check_provider_match,
+    _get_potential_model_names,
     _is_streaming_request,
     get_api_key,
     get_llm_provider,
+    get_non_default_completion_params,
     get_optional_params_image_gen,
     get_prompt_cache_min_tokens,
     is_cached_message,
@@ -96,18 +97,6 @@ def test_prompt_tokens_details_cache_write_creation_stay_in_sync_on_assignment()
     assert details.cache_write_tokens == details.cache_creation_tokens == 375
 
 
-@pytest.fixture
-def local_model_cost_map(monkeypatch):
-    original_model_cost = litellm.model_cost
-    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    litellm.model_cost = litellm.get_model_cost_map(url="")
-    litellm.get_model_info.cache_clear()
-    try:
-        yield
-    finally:
-        litellm.model_cost = original_model_cost
-        litellm.get_model_info.cache_clear()
-
 
 def test_get_model_info_surfaces_supports_adaptive_thinking(local_model_cost_map):
     """supports_adaptive_thinking must flow through get_model_info like every other
@@ -123,6 +112,74 @@ def test_get_model_info_surfaces_supports_adaptive_thinking(local_model_cost_map
         model="claude-opus-4-9", custom_llm_provider="anthropic"
     )
     assert generalized["supports_adaptive_thinking"] is True
+
+
+def test_potential_model_names_keeps_provider_prefixed_candidate():
+    """A provider whose own model ids repeat the litellm provider name (Perplexity's
+    Agent API serves `perplexity/glm-5.2`, mapped as `perplexity/perplexity/glm-5.2`)
+    needs the un-stripped `<provider>/<model>` candidate. Every other candidate reads
+    the leading `perplexity/` as the litellm prefix and strips it away."""
+    already_prefixed = _get_potential_model_names(
+        model="perplexity/glm-5.2", custom_llm_provider="perplexity"
+    )
+    assert already_prefixed["provider_prefixed_model_name"] == "perplexity/perplexity/glm-5.2"
+    assert already_prefixed["split_model"] == "glm-5.2"
+    assert already_prefixed["combined_model_name"] == "perplexity/glm-5.2"
+    assert already_prefixed["combined_stripped_model_name"] == "perplexity/glm-5.2"
+
+    bare = _get_potential_model_names(model="glm-5.2", custom_llm_provider="perplexity")
+    assert bare["provider_prefixed_model_name"] == bare["combined_model_name"] == "perplexity/glm-5.2"
+
+
+def test_get_model_info_resolves_provider_prefixed_model_ids(local_model_cost_map):
+    """Perplexity's Agent API third-party models are keyed `perplexity/perplexity/<id>`
+    because Perplexity's own id already starts with `perplexity/`. Callers run
+    `get_llm_provider` first, which hands `_get_potential_model_names` model
+    `perplexity/glm-5.2` with provider `perplexity`, and every candidate but the
+    provider-prefixed one strips that second `perplexity/` off. Regression: the
+    entries were unreachable from `supports_reasoning` and from the cost calculator's
+    per-token fallback, so a mapped model reported no reasoning support and raised
+    "This model isn't mapped yet" on the only path where its rates are ever used."""
+    for model, reasoning in (
+        ("perplexity/perplexity/glm-5.2", True),
+        ("perplexity/perplexity/kimi-k3", True),
+        ("perplexity/perplexity/deepseek-v4-flash-0731", True),
+        ("perplexity/perplexity/kimi-k2.7-code", False),
+    ):
+        assert litellm.supports_reasoning(model=model) is reasoning, model
+
+    via_provider = litellm.get_model_info(
+        model="perplexity/glm-5.2", custom_llm_provider="perplexity"
+    )
+    assert via_provider["key"] == "perplexity/perplexity/glm-5.2"
+    assert via_provider["input_cost_per_token"] == 1.4e-06
+    assert via_provider["output_cost_per_token"] == 4.4e-06
+    assert via_provider["mode"] == "responses"
+
+
+def test_provider_prefixed_lookup_never_outranks_an_existing_row(local_model_cost_map):
+    """The provider-prefixed candidate is tried last, after every candidate that
+    already existed, so no model that resolves today can change answer. `perplexity/sonar`
+    is the case that proves it: both `perplexity/sonar` and `perplexity/perplexity/sonar`
+    are cost-map keys, and the shorter one must keep winning."""
+    sonar = litellm.get_model_info(model="sonar", custom_llm_provider="perplexity")
+    assert sonar["key"] == "perplexity/sonar"
+    assert sonar["mode"] == "chat"
+    assert sonar["input_cost_per_token"] == 1e-06
+
+    still_sonar = litellm.get_model_info(
+        model="perplexity/sonar", custom_llm_provider="perplexity"
+    )
+    assert still_sonar["key"] == "perplexity/sonar"
+    assert still_sonar["mode"] == "chat"
+
+    for model, provider, expected_key in (
+        ("claude-sonnet-4-5", "anthropic", "claude-sonnet-4-5"),
+        ("anthropic/claude-sonnet-4-5", "anthropic", "claude-sonnet-4-5"),
+        ("gemini/gemini-2.0-flash", "gemini", "gemini/gemini-2.0-flash"),
+        ("openrouter/openai/gpt-4o", "openrouter", "openrouter/openai/gpt-4o"),
+    ):
+        assert litellm.get_model_info(model=model, custom_llm_provider=provider)["key"] == expected_key
 
 
 def test_check_provider_match_azure_ai_allows_openai_and_azure():
@@ -611,8 +668,8 @@ def test_all_model_configs():
     ) == {"max_output_tokens": 10}
 
 
-def test_anthropic_web_search_in_model_info():
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+def test_anthropic_web_search_in_model_info(monkeypatch):
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
     supported_models = [
@@ -828,6 +885,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "output_cost_per_token_above_200k_tokens_priority": {"type": "number"},
                 "output_cost_per_token_above_272k_tokens_priority": {"type": "number"},
                 "output_cost_per_token_above_272k_tokens_flex": {"type": "number"},
+                "regional_endpoint_uplift_multiplier": {"type": "number"},
                 "regional_processing_uplift_multiplier_eu": {"type": "number"},
                 "regional_processing_uplift_multiplier_us": {"type": "number"},
                 "input_cost_per_pixel": {"type": "number"},
@@ -866,6 +924,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                         "container",
                         "image_edit",
                         "embedding",
+                        "guardrail",
                         "image_generation",
                         "video_generation",
                         "moderation",
@@ -915,10 +974,12 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "supports_parallel_tool_use_config": {"type": "boolean"},
                 "supports_pdf_input": {"type": "boolean"},
                 "prompt_cache_min_tokens": {"type": "number"},
+                "supports_prompt_cache_breakpoint": {"type": "boolean"},
                 "supports_prompt_caching": {"type": "boolean"},
                 "supports_response_schema": {"type": "boolean"},
                 "supports_system_messages": {"type": "boolean"},
                 "supports_tool_choice": {"type": "boolean"},
+                "supports_tool_search": {"type": "boolean"},
                 "supports_video_input": {"type": "boolean"},
                 "supports_vision": {"type": "boolean"},
                 "supports_web_search": {"type": "boolean"},
@@ -932,6 +993,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "supports_xhigh_reasoning_effort": {"type": "boolean"},
                 "supports_max_reasoning_effort": {"type": "boolean"},
                 "supports_adaptive_thinking": {"type": "boolean"},
+                "thinking_always_on": {"type": "boolean"},
                 "supports_mid_conversation_system": {"type": "boolean"},
                 "supports_sampling_params": {"type": "boolean"},
                 "supports_output_config": {"type": "boolean"},
@@ -971,6 +1033,10 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                     "items": {
                         "type": "string",
                     },
+                },
+                "guardrail_cost_per_unit": {
+                    "type": "object",
+                    "additionalProperties": {"type": "number"},
                 },
                 "search_context_cost_per_query": {
                     "type": "object",
@@ -1018,6 +1084,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                             "input_cost_per_token": {"type": "number"},
                             "output_cost_per_token": {"type": "number"},
                             "cache_read_input_token_cost": {"type": "number"},
+                            "cache_creation_input_token_cost": {"type": "number"},
                             "output_cost_per_reasoning_token": {"type": "number"},
                             "max_results_range": {
                                 "type": "array",
@@ -1122,11 +1189,11 @@ def test_max_tokens_consistency():
         raise AssertionError(error_msg)
 
 
-def test_get_model_info_gemini():
+def test_get_model_info_gemini(monkeypatch):
     """
     Tests if ALL gemini models have 'tpm' and 'rpm' in the model info
     """
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
     model_map = litellm.model_cost
@@ -1181,8 +1248,8 @@ def test_get_model_info_bedrock_double_provider_prefix_resolves(local_model_cost
     assert info["key"] == "us.anthropic.claude-sonnet-4-6"
 
 
-def test_openai_models_in_model_info():
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+def test_openai_models_in_model_info(monkeypatch):
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
     model_map = litellm.model_cost
@@ -1292,7 +1359,7 @@ def test_get_provider_rerank_config():
     Test the get_provider_rerank_config function for various providers
     """
     from litellm import HostedVLLMRerankConfig
-    from litellm.utils import LlmProviders, ProviderConfigManager
+    from litellm.utils import LlmProviders
 
     # Test for hosted_vllm provider
     config = ProviderConfigManager.get_provider_rerank_config(
@@ -1337,7 +1404,7 @@ for commitment in BEDROCK_COMMITMENTS:
 print("block_list", block_list)
 
 
-def test_supports_computer_use_utility():
+def test_supports_computer_use_utility(monkeypatch):
     """
     Tests the litellm.utils.supports_computer_use utility function.
     """
@@ -1349,7 +1416,7 @@ def test_supports_computer_use_utility():
     original_env_var = os.getenv("LITELLM_LOCAL_MODEL_COST_MAP")
     original_model_cost = getattr(litellm, "model_cost", None)
 
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")  # Load with local/backup
 
     try:
@@ -1367,7 +1434,7 @@ def test_supports_computer_use_utility():
         if original_env_var is None:
             del os.environ["LITELLM_LOCAL_MODEL_COST_MAP"]
         else:
-            os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = original_env_var
+            monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", original_env_var)
 
         if original_model_cost is not None:
             litellm.model_cost = original_model_cost
@@ -1375,13 +1442,13 @@ def test_supports_computer_use_utility():
             delattr(litellm, "model_cost")
 
 
-def test_get_model_info_shows_supports_computer_use():
+def test_get_model_info_shows_supports_computer_use(monkeypatch):
     """
     Tests if 'supports_computer_use' is correctly retrieved by get_model_info.
     We'll use 'claude-4-sonnet-20250514' as it's configured
     in the backup JSON to have supports_computer_use: True.
     """
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     # Ensure litellm.model_cost is loaded, relying on the backup mechanism if primary fails
     # as per previous debugging.
     litellm.model_cost = litellm.get_model_cost_map(url="")
@@ -1415,7 +1482,7 @@ def test_get_model_info_shows_supports_computer_use():
 def test_pre_process_non_default_params(model, custom_llm_provider):
     from pydantic import BaseModel
 
-    from litellm.utils import ProviderConfigManager, pre_process_non_default_params
+    from litellm.utils import pre_process_non_default_params
 
     provider_config = ProviderConfigManager.get_provider_chat_config(
         model=model, provider=LlmProviders(custom_llm_provider)
@@ -1874,539 +1941,6 @@ class TestProxyFunctionCalling:
             f"{proxy_model} -> {proxy_result}"
         )
 
-    @pytest.mark.parametrize(
-        "proxy_model_name,underlying_bedrock_model,expected_proxy_result,description",
-        [
-            # Bedrock Converse API mappings - these are the real-world scenarios
-            (
-                "litellm_proxy/bedrock-claude-3-haiku",
-                "bedrock/converse/anthropic.claude-3-haiku-20240307-v1:0",
-                False,
-                "Bedrock Claude 3 Haiku via Converse API",
-            ),
-            (
-                "litellm_proxy/bedrock-claude-3-sonnet",
-                "bedrock/converse/anthropic.claude-3-sonnet-20240229-v1:0",
-                False,
-                "Bedrock Claude 3 Sonnet via Converse API",
-            ),
-            (
-                "litellm_proxy/bedrock-claude-3-opus",
-                "bedrock/converse/anthropic.claude-sonnet-4-5-20250929-v1:0",
-                False,
-                "Bedrock Claude 3 Opus via Converse API",
-            ),
-            (
-                "litellm_proxy/bedrock-claude-3-5-sonnet",
-                "bedrock/converse/anthropic.claude-haiku-4-5-20251001-v1:0",
-                False,
-                "Bedrock Claude 3.5 Sonnet via Converse API",
-            ),
-            # Bedrock Legacy API mappings (non-converse)
-            (
-                "litellm_proxy/bedrock-claude-instant",
-                "bedrock/anthropic.claude-instant-v1",
-                False,
-                "Bedrock Claude Instant Legacy API",
-            ),
-            (
-                "litellm_proxy/bedrock-claude-v2",
-                "bedrock/anthropic.claude-v2",
-                False,
-                "Bedrock Claude v2 Legacy API",
-            ),
-            (
-                "litellm_proxy/bedrock-claude-v2-1",
-                "bedrock/anthropic.claude-v2:1",
-                False,
-                "Bedrock Claude v2.1 Legacy API",
-            ),
-            # Bedrock other model providers via Converse API
-            (
-                "litellm_proxy/bedrock-titan-text",
-                "bedrock/converse/amazon.titan-text-express-v1",
-                False,
-                "Bedrock Titan Text Express via Converse API",
-            ),
-            (
-                "litellm_proxy/bedrock-titan-text-premier",
-                "bedrock/converse/amazon.titan-text-premier-v1:0",
-                False,
-                "Bedrock Titan Text Premier via Converse API",
-            ),
-            (
-                "litellm_proxy/bedrock-llama3-8b",
-                "bedrock/converse/meta.llama3-8b-instruct-v1:0",
-                False,
-                "Bedrock Llama 3 8B via Converse API",
-            ),
-            (
-                "litellm_proxy/bedrock-llama3-70b",
-                "bedrock/converse/meta.llama3-70b-instruct-v1:0",
-                False,
-                "Bedrock Llama 3 70B via Converse API",
-            ),
-            (
-                "litellm_proxy/bedrock-mistral-7b",
-                "bedrock/converse/mistral.mistral-7b-instruct-v0:2",
-                False,
-                "Bedrock Mistral 7B via Converse API",
-            ),
-            (
-                "litellm_proxy/bedrock-mistral-8x7b",
-                "bedrock/converse/mistral.mixtral-8x7b-instruct-v0:1",
-                False,
-                "Bedrock Mistral 8x7B via Converse API",
-            ),
-            (
-                "litellm_proxy/bedrock-mistral-large",
-                "bedrock/converse/mistral.mistral-large-2402-v1:0",
-                False,
-                "Bedrock Mistral Large via Converse API",
-            ),
-            # Company-specific naming patterns (real-world examples)
-            (
-                "litellm_proxy/prod-claude-haiku",
-                "bedrock/converse/anthropic.claude-3-haiku-20240307-v1:0",
-                False,
-                "Production Claude Haiku",
-            ),
-            (
-                "litellm_proxy/dev-claude-sonnet",
-                "bedrock/converse/anthropic.claude-3-sonnet-20240229-v1:0",
-                False,
-                "Development Claude Sonnet",
-            ),
-            (
-                "litellm_proxy/staging-claude-opus",
-                "bedrock/converse/anthropic.claude-sonnet-4-5-20250929-v1:0",
-                False,
-                "Staging Claude Opus",
-            ),
-            (
-                "litellm_proxy/cost-optimized-claude",
-                "bedrock/converse/anthropic.claude-3-haiku-20240307-v1:0",
-                False,
-                "Cost-optimized Claude deployment",
-            ),
-            (
-                "litellm_proxy/high-performance-claude",
-                "bedrock/converse/anthropic.claude-sonnet-4-5-20250929-v1:0",
-                False,
-                "High-performance Claude deployment",
-            ),
-            # Regional deployment examples
-            (
-                "litellm_proxy/us-east-claude",
-                "bedrock/converse/anthropic.claude-3-sonnet-20240229-v1:0",
-                False,
-                "US East Claude deployment",
-            ),
-            (
-                "litellm_proxy/eu-west-claude",
-                "bedrock/converse/anthropic.claude-3-haiku-20240307-v1:0",
-                False,
-                "EU West Claude deployment",
-            ),
-            (
-                "litellm_proxy/ap-south-llama",
-                "bedrock/converse/meta.llama3-70b-instruct-v1:0",
-                False,
-                "Asia Pacific Llama deployment",
-            ),
-        ],
-    )
-    def test_bedrock_converse_api_proxy_mappings(
-        self,
-        proxy_model_name,
-        underlying_bedrock_model,
-        expected_proxy_result,
-        description,
-    ):
-        """
-        Test real-world Bedrock Converse API proxy model mappings.
-
-        This test covers the specific scenario where proxy model names like
-        'bedrock-claude-3-haiku' map to underlying Bedrock Converse API models like
-        'bedrock/converse/anthropic.claude-3-haiku-20240307-v1:0'.
-
-        These mappings are typically defined in proxy server configuration files
-        and cannot be resolved by LiteLLM without that context.
-        """
-        print(f"\nTesting: {description}")
-        print(f"  Proxy model: {proxy_model_name}")
-        print(f"  Underlying model: {underlying_bedrock_model}")
-
-        # Test the underlying model directly to verify it supports function calling
-        try:
-            underlying_result = supports_function_calling(underlying_bedrock_model)
-            print(f"  Underlying model function calling support: {underlying_result}")
-
-            # Most Bedrock Converse API models with Anthropic Claude should support function calling
-            if "anthropic.claude-3" in underlying_bedrock_model:
-                assert (
-                    underlying_result is True
-                ), f"Claude 3 models should support function calling: {underlying_bedrock_model}"
-        except Exception as e:
-            print(
-                f"  Warning: Could not test underlying model {underlying_bedrock_model}: {e}"
-            )
-
-        # Test the proxy model - should return False due to lack of configuration context
-        proxy_result = supports_function_calling(proxy_model_name)
-        print(f"  Proxy model function calling support: {proxy_result}")
-
-        assert proxy_result == expected_proxy_result, (
-            f"Proxy model {proxy_model_name} should return {expected_proxy_result} "
-            f"(without config context). Description: {description}"
-        )
-
-    def test_real_world_proxy_config_documentation(self):
-        """
-        Document how real-world proxy configurations would handle model mappings.
-
-        This test provides documentation on how the proxy server configuration
-        would typically map custom model names to underlying models.
-        """
-        print("""
-        
-        REAL-WORLD PROXY SERVER CONFIGURATION EXAMPLE:
-        ===============================================
-        
-        In a proxy_server_config.yaml file, you would define:
-        
-        model_list:
-          - model_name: bedrock-claude-3-haiku
-            litellm_params:
-              model: bedrock/converse/anthropic.claude-3-haiku-20240307-v1:0
-              aws_access_key_id: os.environ/AWS_ACCESS_KEY_ID
-              aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY
-              aws_region_name: us-east-1
-              
-          - model_name: bedrock-claude-3-sonnet
-            litellm_params:
-              model: bedrock/converse/anthropic.claude-3-sonnet-20240229-v1:0
-              aws_access_key_id: os.environ/AWS_ACCESS_KEY_ID
-              aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY
-              aws_region_name: us-east-1
-              
-          - model_name: prod-claude-haiku
-            litellm_params:
-              model: bedrock/converse/anthropic.claude-3-haiku-20240307-v1:0
-              aws_access_key_id: os.environ/PROD_AWS_ACCESS_KEY_ID
-              aws_secret_access_key: os.environ/PROD_AWS_SECRET_ACCESS_KEY
-              aws_region_name: us-west-2
-        
-        
-        FUNCTION CALLING WITH PROXY SERVER:
-        ===================================
-        
-        When using the proxy server with this configuration:
-        
-        1. Client calls: supports_function_calling("bedrock-claude-3-haiku")
-        2. Proxy server resolves to: bedrock/converse/anthropic.claude-3-haiku-20240307-v1:0
-        3. LiteLLM evaluates the underlying model's capabilities
-        4. Returns: True (because Claude 3 Haiku supports function calling)
-        
-        Without the proxy server configuration context, LiteLLM cannot resolve
-        the custom model name and returns False.
-        
-        
-        BEDROCK CONVERSE API BENEFITS:
-        ==============================
-        
-        The Bedrock Converse API provides:
-        - Standardized function calling interface across providers
-        - Better tool use capabilities compared to legacy APIs
-        - Consistent request/response format
-        - Enhanced streaming support for function calls
-        
-        """)
-
-        # Verify that direct underlying models work as expected
-        bedrock_models = [
-            "bedrock/converse/anthropic.claude-3-haiku-20240307-v1:0",
-            "bedrock/converse/anthropic.claude-3-sonnet-20240229-v1:0",
-            "bedrock/converse/anthropic.claude-sonnet-4-5-20250929-v1:0",
-        ]
-
-        for model in bedrock_models:
-            try:
-                result = supports_function_calling(model)
-                print(f"Direct test - {model}: {result}")
-                # Claude 3 models should support function calling
-                assert (
-                    result is True
-                ), f"Claude 3 model should support function calling: {model}"
-            except Exception as e:
-                print(f"Could not test {model}: {e}")
-
-    @pytest.mark.parametrize(
-        "proxy_model_name,underlying_bedrock_model,expected_proxy_result,description",
-        [
-            # Bedrock Converse API mappings - these are the real-world scenarios
-            (
-                "litellm_proxy/bedrock-claude-3-haiku",
-                "bedrock/converse/anthropic.claude-3-haiku-20240307-v1:0",
-                False,
-                "Bedrock Claude 3 Haiku via Converse API",
-            ),
-            (
-                "litellm_proxy/bedrock-claude-3-sonnet",
-                "bedrock/converse/anthropic.claude-3-sonnet-20240229-v1:0",
-                False,
-                "Bedrock Claude 3 Sonnet via Converse API",
-            ),
-            (
-                "litellm_proxy/bedrock-claude-3-opus",
-                "bedrock/converse/anthropic.claude-sonnet-4-5-20250929-v1:0",
-                False,
-                "Bedrock Claude 3 Opus via Converse API",
-            ),
-            (
-                "litellm_proxy/bedrock-claude-3-5-sonnet",
-                "bedrock/converse/anthropic.claude-haiku-4-5-20251001-v1:0",
-                False,
-                "Bedrock Claude 3.5 Sonnet via Converse API",
-            ),
-            # Bedrock Legacy API mappings (non-converse)
-            (
-                "litellm_proxy/bedrock-claude-instant",
-                "bedrock/anthropic.claude-instant-v1",
-                False,
-                "Bedrock Claude Instant Legacy API",
-            ),
-            (
-                "litellm_proxy/bedrock-claude-v2",
-                "bedrock/anthropic.claude-v2",
-                False,
-                "Bedrock Claude v2 Legacy API",
-            ),
-            (
-                "litellm_proxy/bedrock-claude-v2-1",
-                "bedrock/anthropic.claude-v2:1",
-                False,
-                "Bedrock Claude v2.1 Legacy API",
-            ),
-            # Bedrock other model providers via Converse API
-            (
-                "litellm_proxy/bedrock-titan-text",
-                "bedrock/converse/amazon.titan-text-express-v1",
-                False,
-                "Bedrock Titan Text Express via Converse API",
-            ),
-            (
-                "litellm_proxy/bedrock-titan-text-premier",
-                "bedrock/converse/amazon.titan-text-premier-v1:0",
-                False,
-                "Bedrock Titan Text Premier via Converse API",
-            ),
-            (
-                "litellm_proxy/bedrock-llama3-8b",
-                "bedrock/converse/meta.llama3-8b-instruct-v1:0",
-                False,
-                "Bedrock Llama 3 8B via Converse API",
-            ),
-            (
-                "litellm_proxy/bedrock-llama3-70b",
-                "bedrock/converse/meta.llama3-70b-instruct-v1:0",
-                False,
-                "Bedrock Llama 3 70B via Converse API",
-            ),
-            (
-                "litellm_proxy/bedrock-mistral-7b",
-                "bedrock/converse/mistral.mistral-7b-instruct-v0:2",
-                False,
-                "Bedrock Mistral 7B via Converse API",
-            ),
-            (
-                "litellm_proxy/bedrock-mistral-8x7b",
-                "bedrock/converse/mistral.mixtral-8x7b-instruct-v0:1",
-                False,
-                "Bedrock Mistral 8x7B via Converse API",
-            ),
-            (
-                "litellm_proxy/bedrock-mistral-large",
-                "bedrock/converse/mistral.mistral-large-2402-v1:0",
-                False,
-                "Bedrock Mistral Large via Converse API",
-            ),
-            # Company-specific naming patterns (real-world examples)
-            (
-                "litellm_proxy/prod-claude-haiku",
-                "bedrock/converse/anthropic.claude-3-haiku-20240307-v1:0",
-                False,
-                "Production Claude Haiku",
-            ),
-            (
-                "litellm_proxy/dev-claude-sonnet",
-                "bedrock/converse/anthropic.claude-3-sonnet-20240229-v1:0",
-                False,
-                "Development Claude Sonnet",
-            ),
-            (
-                "litellm_proxy/staging-claude-opus",
-                "bedrock/converse/anthropic.claude-sonnet-4-5-20250929-v1:0",
-                False,
-                "Staging Claude Opus",
-            ),
-            (
-                "litellm_proxy/cost-optimized-claude",
-                "bedrock/converse/anthropic.claude-3-haiku-20240307-v1:0",
-                False,
-                "Cost-optimized Claude deployment",
-            ),
-            (
-                "litellm_proxy/high-performance-claude",
-                "bedrock/converse/anthropic.claude-sonnet-4-5-20250929-v1:0",
-                False,
-                "High-performance Claude deployment",
-            ),
-            # Regional deployment examples
-            (
-                "litellm_proxy/us-east-claude",
-                "bedrock/converse/anthropic.claude-3-sonnet-20240229-v1:0",
-                False,
-                "US East Claude deployment",
-            ),
-            (
-                "litellm_proxy/eu-west-claude",
-                "bedrock/converse/anthropic.claude-3-haiku-20240307-v1:0",
-                False,
-                "EU West Claude deployment",
-            ),
-            (
-                "litellm_proxy/ap-south-llama",
-                "bedrock/converse/meta.llama3-70b-instruct-v1:0",
-                False,
-                "Asia Pacific Llama deployment",
-            ),
-        ],
-    )
-    def test_bedrock_converse_api_proxy_mappings(
-        self,
-        proxy_model_name,
-        underlying_bedrock_model,
-        expected_proxy_result,
-        description,
-    ):
-        """
-        Test real-world Bedrock Converse API proxy model mappings.
-
-        This test covers the specific scenario where proxy model names like
-        'bedrock-claude-3-haiku' map to underlying Bedrock Converse API models like
-        'bedrock/converse/anthropic.claude-3-haiku-20240307-v1:0'.
-
-        These mappings are typically defined in proxy server configuration files
-        and cannot be resolved by LiteLLM without that context.
-        """
-        print(f"\nTesting: {description}")
-        print(f"  Proxy model: {proxy_model_name}")
-        print(f"  Underlying model: {underlying_bedrock_model}")
-
-        # Test the underlying model directly to verify it supports function calling
-        try:
-            underlying_result = supports_function_calling(underlying_bedrock_model)
-            print(f"  Underlying model function calling support: {underlying_result}")
-
-            # Most Bedrock Converse API models with Anthropic Claude should support function calling
-            if "anthropic.claude-3" in underlying_bedrock_model:
-                assert (
-                    underlying_result is True
-                ), f"Claude 3 models should support function calling: {underlying_bedrock_model}"
-        except Exception as e:
-            print(
-                f"  Warning: Could not test underlying model {underlying_bedrock_model}: {e}"
-            )
-
-        # Test the proxy model - should return False due to lack of configuration context
-        proxy_result = supports_function_calling(proxy_model_name)
-        print(f"  Proxy model function calling support: {proxy_result}")
-
-        assert proxy_result == expected_proxy_result, (
-            f"Proxy model {proxy_model_name} should return {expected_proxy_result} "
-            f"(without config context). Description: {description}"
-        )
-
-    def test_real_world_proxy_config_documentation(self):
-        """
-        Document how real-world proxy configurations would handle model mappings.
-
-        This test provides documentation on how the proxy server configuration
-        would typically map custom model names to underlying models.
-        """
-        print("""
-        
-        REAL-WORLD PROXY SERVER CONFIGURATION EXAMPLE:
-        ===============================================
-        
-        In a proxy_server_config.yaml file, you would define:
-        
-        model_list:
-          - model_name: bedrock-claude-3-haiku
-            litellm_params:
-              model: bedrock/converse/anthropic.claude-3-haiku-20240307-v1:0
-              aws_access_key_id: os.environ/AWS_ACCESS_KEY_ID
-              aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY
-              aws_region_name: us-east-1
-              
-          - model_name: bedrock-claude-3-sonnet
-            litellm_params:
-              model: bedrock/converse/anthropic.claude-3-sonnet-20240229-v1:0
-              aws_access_key_id: os.environ/AWS_ACCESS_KEY_ID
-              aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY
-              aws_region_name: us-east-1
-              
-          - model_name: prod-claude-haiku
-            litellm_params:
-              model: bedrock/converse/anthropic.claude-3-haiku-20240307-v1:0
-              aws_access_key_id: os.environ/PROD_AWS_ACCESS_KEY_ID
-              aws_secret_access_key: os.environ/PROD_AWS_SECRET_ACCESS_KEY
-              aws_region_name: us-west-2
-        
-        
-        FUNCTION CALLING WITH PROXY SERVER:
-        ===================================
-        
-        When using the proxy server with this configuration:
-        
-        1. Client calls: supports_function_calling("bedrock-claude-3-haiku")
-        2. Proxy server resolves to: bedrock/converse/anthropic.claude-3-haiku-20240307-v1:0
-        3. LiteLLM evaluates the underlying model's capabilities
-        4. Returns: True (because Claude 3 Haiku supports function calling)
-        
-        Without the proxy server configuration context, LiteLLM cannot resolve
-        the custom model name and returns False.
-        
-        
-        BEDROCK CONVERSE API BENEFITS:
-        ==============================
-        
-        The Bedrock Converse API provides:
-        - Standardized function calling interface across providers
-        - Better tool use capabilities compared to legacy APIs
-        - Consistent request/response format
-        - Enhanced streaming support for function calls
-        
-        """)
-
-        # Verify that direct underlying models work as expected
-        bedrock_models = [
-            "bedrock/converse/anthropic.claude-3-haiku-20240307-v1:0",
-            "bedrock/converse/anthropic.claude-3-sonnet-20240229-v1:0",
-            "bedrock/converse/anthropic.claude-sonnet-4-5-20250929-v1:0",
-        ]
-
-        for model in bedrock_models:
-            try:
-                result = supports_function_calling(model)
-                print(f"Direct test - {model}: {result}")
-                # Claude 3 models should support function calling
-                assert (
-                    result is True
-                ), f"Claude 3 model should support function calling: {model}"
-            except Exception as e:
-                print(f"Could not test {model}: {e}")
 
     @pytest.mark.parametrize(
         "proxy_model_name,underlying_bedrock_model,expected_proxy_result,description",
@@ -2815,7 +2349,6 @@ def test_anthropic_claude_4_invoke_chat_provider_config():
     from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import (
         AmazonAnthropicClaudeConfig,
     )
-    from litellm.utils import ProviderConfigManager
 
     config = ProviderConfigManager.get_provider_chat_config(
         model="invoke/us.anthropic.claude-sonnet-4-20250514-v1:0",
@@ -3702,7 +3235,6 @@ class TestProxyLoggingBudgetAlerts:
 def test_azure_ai_claude_provider_config():
     """Test that Azure AI Claude models return AzureAnthropicConfig for proper tool transformation."""
     from litellm import AzureAIStudioConfig, AzureAnthropicConfig
-    from litellm.utils import ProviderConfigManager
 
     # Claude models should return AzureAnthropicConfig
     config = ProviderConfigManager.get_provider_chat_config(
@@ -4099,8 +3631,6 @@ class TestIsStreamingRequest:
             is True
         )
 
-    def test_non_streaming_call_type_string(self):
-        assert _is_streaming_request(kwargs={}, call_type="acompletion") is False
 
     def test_non_streaming_call_type_enum(self):
         assert (
@@ -4243,7 +3773,7 @@ class TestMetadataNoneHandling:
 
         # Attempting 'in' on None raises TypeError
         with pytest.raises(TypeError):
-            "model_group" in kwargs.get("metadata", {})
+            _ = "model_group" in kwargs.get("metadata", {})
 
     def test_litellm_params_metadata_none(self):
         """litellm_params.get("metadata") or {} should handle None value."""
@@ -4291,6 +3821,20 @@ class TestValidateAndFixThinkingParam:
         assert "budgetTokens" in thinking
         assert "budget_tokens" not in thinking
 
+    def test_bool_true_maps_to_enabled_with_default_budget(self):
+        from litellm.constants import DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET
+        from litellm.utils import validate_and_fix_thinking_param
+
+        assert validate_and_fix_thinking_param(thinking=True) == {
+            "type": "enabled",
+            "budget_tokens": DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
+        }
+
+    def test_bool_false_returns_none(self):
+        from litellm.utils import validate_and_fix_thinking_param
+
+        assert validate_and_fix_thinking_param(thinking=False) is None
+
 
 def test_deepseek_v4_models_in_cost_map():
     """
@@ -4298,8 +3842,8 @@ def test_deepseek_v4_models_in_cost_map():
     configured in model_prices_and_context_window.json.
 
     Prices sourced from https://api-docs.deepseek.com/quick_start/pricing:
-    - deepseek-v4-flash: $0.14/M input, $0.28/M output
-    - deepseek-v4-pro:   $0.435/M input, $0.87/M output (75% discounted active price)
+    - deepseek-v4-flash: $0.44/M input, $1.32/M output
+    - deepseek-v4-pro:   $1.32/M input, $3.96/M output
 
     Closes https://github.com/BerriAI/litellm/issues/26709
     """
@@ -4312,8 +3856,8 @@ def test_deepseek_v4_models_in_cost_map():
 
     # --- bare model names ---
     for key, expected_input, expected_output, expected_cache in [
-        ("deepseek-v4-flash", 1.4e-07, 2.8e-07, 2.8e-09),
-        ("deepseek-v4-pro", 4.35e-07, 8.7e-07, 3.625e-09),
+        ("deepseek-v4-flash", 4.4e-07, 1.32e-06, 1.4e-08),
+        ("deepseek-v4-pro", 1.32e-06, 3.96e-06, 4.4e-08),
     ]:
         info = model_cost.get(key)
         assert info is not None, f"{key} missing from model_prices_and_context_window.json"
@@ -4328,8 +3872,8 @@ def test_deepseek_v4_models_in_cost_map():
 
     # --- provider-prefixed names ---
     for key, expected_input, expected_output, expected_cache in [
-        ("deepseek/deepseek-v4-flash", 1.4e-07, 2.8e-07, 2.8e-09),
-        ("deepseek/deepseek-v4-pro", 4.35e-07, 8.7e-07, 3.625e-09),
+        ("deepseek/deepseek-v4-flash", 4.4e-07, 1.32e-06, 1.4e-08),
+        ("deepseek/deepseek-v4-pro", 1.32e-06, 3.96e-06, 4.4e-08),
     ]:
         info = model_cost.get(key)
         assert info is not None, f"{key} missing from model_prices_and_context_window.json"
@@ -4356,8 +3900,8 @@ def test_deepseek_v4_models_in_backup_cost_map():
 
     # --- bare model names ---
     for key, expected_input, expected_output, expected_cache in [
-        ("deepseek-v4-flash", 1.4e-07, 2.8e-07, 2.8e-09),
-        ("deepseek-v4-pro", 4.35e-07, 8.7e-07, 3.625e-09),
+        ("deepseek-v4-flash", 4.4e-07, 1.32e-06, 1.4e-08),
+        ("deepseek-v4-pro", 1.32e-06, 3.96e-06, 4.4e-08),
     ]:
         info = model_cost.get(key)
         assert info is not None, f"{key} missing from backup JSON"
@@ -4370,8 +3914,8 @@ def test_deepseek_v4_models_in_backup_cost_map():
 
     # --- provider-prefixed names ---
     for key, expected_input, expected_output, expected_cache in [
-        ("deepseek/deepseek-v4-flash", 1.4e-07, 2.8e-07, 2.8e-09),
-        ("deepseek/deepseek-v4-pro", 4.35e-07, 8.7e-07, 3.625e-09),
+        ("deepseek/deepseek-v4-flash", 4.4e-07, 1.32e-06, 1.4e-08),
+        ("deepseek/deepseek-v4-pro", 1.32e-06, 3.96e-06, 4.4e-08),
     ]:
         info = model_cost.get(key)
         assert info is not None, f"{key} missing from backup JSON"
@@ -4696,7 +4240,6 @@ def test_aws_bedrock_project_id_excluded_from_bedrock_optional_params():
     assert result["aws_region_name"] == "us-east-1"
 
 
-
 class TestGetOptionalParamsTencent:
     """Tests that tencent provider uses TencentChatConfig for parameter mapping."""
 
@@ -4759,7 +4302,6 @@ class TestGetOptionalParamsTencent:
         from litellm.llms.tencent.messages.transformation import (
             TencentAnthropicMessagesConfig,
         )
-        from litellm.utils import ProviderConfigManager
 
         config = ProviderConfigManager.get_provider_anthropic_messages_config(
             model="deepseek-v4-pro",
@@ -4810,7 +4352,7 @@ class TestVertexEmbeddingEncodingFormat:
         assert "encoding_format" not in optional_params
 
     def test_encoding_format_base64_still_rejected_without_drop_params(self):
-        with pytest.raises(Exception) as excinfo:
+        with pytest.raises(Exception, match='To drop these, set `litellm\\.drop_params=True` or for proxy') as excinfo:
             litellm.utils.get_optional_params_embeddings(
                 model="gemini-embedding-001",
                 encoding_format="base64",
@@ -4845,11 +4387,13 @@ class TestVertexEmbeddingEncodingFormat:
         "vertex_ai/gemini-3-pro-image-preview",
         "vertex_ai/gemini-3.1-flash-image",
         "vertex_ai/gemini-3.1-flash-image-preview",
+        "vertex_ai/gemini-3.1-flash-lite-image",
         "gemini/gemini-2.5-flash-image",
         "gemini/gemini-3-pro-image",
         "gemini/gemini-3-pro-image-preview",
         "gemini/gemini-3.1-flash-image",
         "gemini/gemini-3.1-flash-image-preview",
+        "gemini/gemini-3.1-flash-lite-image",
     ],
 )
 def test_gemini_image_models_do_not_support_reasoning(
@@ -4894,6 +4438,45 @@ def test_get_prompt_cache_min_tokens_differs_per_platform_for_same_model(local_m
     assert get_prompt_cache_min_tokens(model="claude-fable-5") != get_prompt_cache_min_tokens(
         model="anthropic.claude-fable-5"
     )
+
+
+GEMINI_4096_CACHE_MIN_MODELS: Final = tuple(
+    prefix + base
+    for base in (
+        "gemini-3.5-flash",
+        "gemini-3.6-flash",
+        "gemini-3.7-flash",
+        "gemini-3.1-pro-preview",
+        "gemini-3.1-pro-preview-customtools",
+    )
+    for prefix in ("", "gemini/", "vertex_ai/")
+)
+
+
+def test_gemini_3_flash_and_31_pro_preview_resolve_4096_cache_minimum(local_model_cost_map: None) -> None:
+    """Regression for the cost map missing prompt_cache_min_tokens on these models: Google rejects
+    explicit caching below 4,096 tokens for them (https://ai.google.dev/gemini-api/docs/caching), so
+    the 1024 default sent cachedContents creates Vertex answered with a hard 400."""
+    wrong: Final = {
+        model: get_prompt_cache_min_tokens(model=model)
+        for model in GEMINI_4096_CACHE_MIN_MODELS
+        if get_prompt_cache_min_tokens(model=model) != 4096
+    }
+    assert not wrong, f"prompt_cache_min_tokens must be 4096: {wrong}"
+
+
+def test_gemini_4096_cache_minimum_present_in_root_cost_map() -> None:
+    """The root map ships to the CDN independently of the bundled backup, so both must carry the
+    minimum or proxies reading one of them regress to the 1024 default."""
+    root_map_path: Final = os.path.join(os.path.dirname(__file__), "..", "..", "model_prices_and_context_window.json")
+    with open(root_map_path) as f:
+        root_map: Final = json.load(f)
+    wrong: Final = {
+        model: root_map[model].get("prompt_cache_min_tokens")
+        for model in GEMINI_4096_CACHE_MIN_MODELS
+        if root_map[model].get("prompt_cache_min_tokens") != 4096
+    }
+    assert not wrong, f"prompt_cache_min_tokens must be 4096: {wrong}"
 
 
 def test_get_prompt_cache_min_tokens_unmapped_model_falls_back_to_default(local_model_cost_map: None) -> None:
@@ -5254,3 +4837,139 @@ def test_function_setup_failure_log_line_shows_outer_not_doomed_ids(monkeypatch)
         verbose_logger.removeHandler(cap)
         trace_id_var.set("")
         session_id_var.set("")
+
+
+WEBSEARCH_INTERNAL_CONTROL_FIELDS = (
+    "_websearch_interception_emit_native_blocks",
+    "_websearch_interception_converted_stream",
+)
+
+
+def test_websearch_interception_control_fields_never_reach_the_provider():
+    """The web-search interception hooks stamp these onto kwargs to carry state
+    across the agentic loop. Anything the param builder does not recognize is
+    swept into the provider request, and a provider that validates its body
+    rejects the whole call: Bedrock Converse answers
+    `_websearch_interception_emit_native_blocks: Extra inputs are not permitted`
+    with a 400, so enabling interception breaks every request it touches.
+
+    Their code-interpreter counterparts are already registered; these were not.
+    """
+    kwargs = {
+        "a_real_provider_specific_param": 1,
+        **{field: True for field in WEBSEARCH_INTERNAL_CONTROL_FIELDS},
+    }
+
+    non_default = get_non_default_completion_params(kwargs)
+
+    assert non_default == {"a_real_provider_specific_param": 1}, (
+        "web-search interception control fields leaked into the provider params: "
+        f"{sorted(set(non_default) - {'a_real_provider_specific_param'})}"
+    )
+    assert set(WEBSEARCH_INTERNAL_CONTROL_FIELDS) <= set(all_litellm_params)
+
+
+def test_bedrock_batch_params_never_reach_the_provider():
+    """A Bedrock managed-batch deployment carries aws_batch_role_arn / s3_* /
+    bedrock_tags in its litellm_params, and the same deployment also serves chat.
+    Anything the param builder does not recognize is swept into extra_body, so
+    Bedrock rejects the whole call: `aws_batch_role_arn: Extra inputs are not
+    permitted` (Anthropic models) or `extraneous key [aws_batch_role_arn] is not
+    permitted` (Nova/Llama/Titan), turning every non-batch request to that
+    deployment into a 400.
+
+    The batch path is unaffected by registering them, because GenericLiteLLMParams
+    is extra="allow" and preserves them into litellm_params for the batch and files
+    transformations that read them.
+    """
+    configured = {
+        field: ([{"key": "team", "value": "configured-value"}] if field == "bedrock_tags" else "configured-value")
+        for field in bedrock_batch_litellm_params
+    }
+    kwargs = {"a_real_provider_specific_param": 1, **configured}
+
+    non_default = get_non_default_completion_params(dict(kwargs))
+
+    assert non_default == {"a_real_provider_specific_param": 1}, (
+        "bedrock batch params leaked into the provider params: "
+        f"{sorted(set(non_default) - {'a_real_provider_specific_param'})}"
+    )
+    assert set(bedrock_batch_litellm_params) <= set(all_litellm_params)
+
+    batch_params = dict(GenericLiteLLMParams(**kwargs))
+    assert all(batch_params.get(field) == configured[field] for field in bedrock_batch_litellm_params), (
+        "registering these must not strip them from the batch path: "
+        f"{sorted(f for f in bedrock_batch_litellm_params if batch_params.get(f) != configured[f])}"
+    )
+
+    normalized = CredentialLiteLLMParams.model_validate(
+        GenericLiteLLMParams(**kwargs).model_dump(exclude_none=True)
+    ).model_dump(exclude_none=True)
+    assert all(normalized.get(field) == configured[field] for field in bedrock_batch_litellm_params), (
+        "credential normalization dropped batch params before the transformation: "
+        f"{sorted(f for f in bedrock_batch_litellm_params if normalized.get(f) != configured[f])}"
+    )
+
+
+def test_client_side_timeout_marker_never_reaches_the_provider():
+    """The proxy stamps kwargs["client_side_timeout"] = True whenever a request carries
+    a caller-supplied timeout (body timeout / request_timeout / stream_timeout or the
+    x-litellm-timeout headers) so the router can skip cooldowns on the resulting 408s.
+    The marker is only meaningful to the router, so it must be filtered out of the
+    provider params: swept into extra_body / additionalModelRequestFields it turns every
+    timed-out request into a provider 400 (`client_side_timeout: Extra inputs are not
+    permitted`)."""
+    kwargs = {"a_real_provider_specific_param": 1, "client_side_timeout": True}
+
+    non_default = get_non_default_completion_params(kwargs)
+
+    assert non_default == {"a_real_provider_specific_param": 1}, (
+        "client_side_timeout leaked into the provider params: "
+        f"{sorted(set(non_default) - {'a_real_provider_specific_param'})}"
+    )
+
+
+def test_rust_flag_not_forwarded_as_provider_param():
+    forwarded = get_non_default_completion_params({"rust": True, "temperature": 0.5})
+    assert "rust" not in forwarded
+
+
+def test_completion_does_not_leak_rust_flag_into_provider_request_body():
+    mock_response = MagicMock()
+    mock_response.model_dump.return_value = {
+        "id": "chatcmpl-1",
+        "object": "chat.completion",
+        "created": 1234567890,
+        "model": "gpt-4o-mini",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "hi"},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {
+            "prompt_tokens": 1,
+            "completion_tokens": 1,
+            "total_tokens": 2,
+        },
+    }
+
+    mock_raw_response = MagicMock()
+    mock_raw_response.headers = {}
+    mock_raw_response.parse.return_value = mock_response
+
+    mock_client = MagicMock()
+    mock_client.chat.completions.with_raw_response.create.return_value = mock_raw_response
+
+    litellm.completion(
+        model="openai/gpt-4o-mini",
+        messages=[{"role": "user", "content": "hi"}],
+        rust=True,
+        api_key="sk-test",
+        client=mock_client,
+    )
+
+    create_kwargs = mock_client.chat.completions.with_raw_response.create.call_args.kwargs
+    assert "rust" not in create_kwargs
+    assert "rust" not in (create_kwargs.get("extra_body") or {})

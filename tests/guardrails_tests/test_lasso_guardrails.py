@@ -1,5 +1,4 @@
 import os
-import sys
 from fastapi.exceptions import HTTPException
 from unittest.mock import patch
 from httpx import Response, Request
@@ -14,9 +13,6 @@ from litellm.proxy.guardrails.guardrail_hooks.lasso.lasso import (
     LassoGuardrailAPIError,
 )
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 import litellm
 from litellm.proxy.guardrails.init_guardrails import init_guardrails_v2
 

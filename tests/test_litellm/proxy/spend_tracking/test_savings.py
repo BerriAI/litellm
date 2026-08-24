@@ -1,18 +1,15 @@
-import os
-import sys
 
-sys.path.insert(0, os.path.abspath("../../../.."))
 
 import pytest
 
 import litellm
-from litellm.router import Router
 from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
 from litellm.proxy.spend_tracking.savings import (
     _baseline_usage,
     compute_autorouter_savings,
     compute_savings_spend,
 )
+from litellm.router import Router
 from litellm.types.utils import Usage
 
 
@@ -82,6 +79,236 @@ def test_prompt_caching_savings_priced_at_input_minus_cache_read():
     assert result.prompt_caching == pytest.approx(8200 * (input_cost - cache_read_cost))
     assert result.prompt_caching > 0
     assert result.compression == 0.0
+
+
+def _net_caching_savings_against_biller(usage_object: dict, model: str = "claude-sonnet-5") -> float:
+    """True net caching savings, priced by the real cost calculator.
+
+    Bills the request as it happened, then bills the same token total with nothing
+    cached, and returns the difference. Deriving the expectation from
+    ``generic_cost_per_token`` rather than restating the formula is what makes these
+    tests able to fail: a wrong formula in savings.py cannot also be wrong here.
+    """
+    prompt_tokens = usage_object["prompt_tokens"]
+    uncached = {
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": usage_object["completion_tokens"],
+        "total_tokens": prompt_tokens + usage_object["completion_tokens"],
+        "prompt_tokens_details": {"cached_tokens": 0, "cache_creation_tokens": 0, "text_tokens": prompt_tokens},
+    }
+    return _cost_on(model, uncached) - _cost_on(model, usage_object)
+
+
+def _caching_usage(read: int, written: int, text: int = 10, out: int = 100) -> dict:
+    prompt_tokens = text + read + written
+    return {
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": out,
+        "total_tokens": prompt_tokens + out,
+        "prompt_tokens_details": {
+            "cached_tokens": read,
+            "cache_creation_tokens": written,
+            "text_tokens": text,
+        },
+        "cache_creation_input_tokens": written,
+        "cache_read_input_tokens": read,
+    }
+
+
+def test_prompt_caching_savings_nets_out_the_cache_write_premium():
+    """A cache-writing request is only credited the read discount minus the write premium."""
+    input_cost, cache_read_cost = _anthropic_costs("claude-sonnet-5")
+    _, _, cache_write_cost = _flat_rates("claude-sonnet-5")
+    # Anthropic charges a premium to write; without it this test asserts nothing.
+    assert cache_write_cost > input_cost
+    usage_object = _caching_usage(read=20000, written=500)
+    result = compute_savings_spend(
+        model="claude-sonnet-5",
+        custom_llm_provider="anthropic",
+        compression_saved_tokens=0,
+        usage_object=usage_object,
+    )
+    assert result.prompt_caching == pytest.approx(_net_caching_savings_against_biller(usage_object))
+    # Strictly less than the gross read discount, which is what shipped before.
+    assert result.prompt_caching < 20000 * (input_cost - cache_read_cost)
+    assert result.prompt_caching > 0
+
+
+def test_prompt_caching_savings_go_negative_on_a_write_only_request():
+    """A cold turn that writes cache and gets no hits genuinely cost more than not caching."""
+    usage_object = _caching_usage(read=0, written=20000)
+    result = compute_savings_spend(
+        model="claude-sonnet-5",
+        custom_llm_provider="anthropic",
+        compression_saved_tokens=0,
+        usage_object=usage_object,
+    )
+    true_savings = _net_caching_savings_against_biller(usage_object)
+    assert true_savings < 0
+    assert result.prompt_caching == pytest.approx(true_savings)
+    assert result.prompt_caching < 0
+
+
+def test_prompt_caching_savings_negative_when_writes_outweigh_reads():
+    """The wrong-sign case: a few hits against a big write bill is still a net loss."""
+    usage_object = _caching_usage(read=1000, written=20000)
+    result = compute_savings_spend(
+        model="claude-sonnet-5",
+        custom_llm_provider="anthropic",
+        compression_saved_tokens=0,
+        usage_object=usage_object,
+    )
+    true_savings = _net_caching_savings_against_biller(usage_object)
+    assert true_savings < 0
+    assert result.prompt_caching == pytest.approx(true_savings)
+    # The gross formula reported this as a saving; the sign itself is the regression.
+    assert result.prompt_caching < 0
+
+
+def test_read_only_request_is_unchanged_by_the_write_premium():
+    """No cache writes means nothing to net out, so the read discount stands alone."""
+    input_cost, cache_read_cost = _anthropic_costs("claude-sonnet-5")
+    result = compute_savings_spend(
+        model="claude-sonnet-5",
+        custom_llm_provider="anthropic",
+        compression_saved_tokens=0,
+        usage_object=_caching_usage(read=20000, written=0),
+    )
+    assert result.prompt_caching == pytest.approx(20000 * (input_cost - cache_read_cost))
+
+
+def test_openai_style_cache_write_tokens_are_netted_out():
+    """Providers reporting writes under prompt_tokens_details are netted the same way."""
+    _, _, cache_write_cost = _flat_rates("claude-sonnet-5")
+    input_cost, _ = _anthropic_costs("claude-sonnet-5")
+    with_top_level = compute_savings_spend(
+        model="claude-sonnet-5",
+        custom_llm_provider="anthropic",
+        compression_saved_tokens=0,
+        usage_object={"cache_read_input_tokens": 5000, "cache_creation_input_tokens": 800},
+    )
+    nested_only = compute_savings_spend(
+        model="claude-sonnet-5",
+        custom_llm_provider="anthropic",
+        compression_saved_tokens=0,
+        usage_object={
+            "prompt_tokens_details": {"cached_tokens": 5000, "cache_write_tokens": 800},
+        },
+    )
+    assert nested_only.prompt_caching == pytest.approx(with_top_level.prompt_caching)
+    assert nested_only.prompt_caching == pytest.approx(
+        5000 * (input_cost - _anthropic_costs("claude-sonnet-5")[1]) - 800 * (cache_write_cost - input_cost)
+    )
+
+
+def test_model_without_a_cache_write_price_takes_no_premium():
+    """An absent write price must mean zero premium, never a bonus.
+
+    ``_get_cost_per_unit`` in the cost calculator defaults a missing price to 0.0. Were
+    that default copied here the premium would be ``0 - input_cost``, and a model with no
+    write pricing would report cache writes as free money. This is the common case: most
+    of the pricing map publishes a cache-read price and no cache-write price.
+    """
+    model = "amazon.nova-2-lite-v1:0"
+    info = litellm.get_model_info(model=model)
+    input_cost = info["input_cost_per_token"]
+    cache_read_cost = info["cache_read_input_token_cost"]
+    assert info.get("cache_creation_input_token_cost") is None, (
+        "fixture drifted: this test needs a model that publishes no cache-write price"
+    )
+
+    result = compute_savings_spend(
+        model=model,
+        custom_llm_provider=None,
+        compression_saved_tokens=0,
+        usage_object=_caching_usage(read=5000, written=5000),
+    )
+    assert result.prompt_caching == pytest.approx(5000 * (input_cost - cache_read_cost))
+    assert result.prompt_caching > 0
+
+
+def test_zero_cache_write_price_is_read_as_unpublished():
+    """A ``0.0`` write price means "no separate price", not "writes are free".
+
+    ``deepseek-chat`` carries an explicit zero in the pricing map. Taken literally the
+    premium would be ``0 - input_cost``, paying out a saving of ``writes * input_cost``
+    on traffic that cached nothing. No provider gives cache writes away, so a falsy
+    price falls open to the input cost like an absent one does.
+    """
+    info = litellm.get_model_info(model="deepseek-chat", custom_llm_provider="deepseek")
+    assert info.get("cache_creation_input_token_cost") == 0.0, (
+        "fixture drifted: this test exists because deepseek-chat publishes a literal 0.0 write price"
+    )
+
+    result = compute_savings_spend(
+        model="deepseek-chat",
+        custom_llm_provider="deepseek",
+        compression_saved_tokens=0,
+        usage_object=_caching_usage(read=0, written=10000),
+    )
+    assert result.prompt_caching == pytest.approx(0.0)
+
+
+def test_zero_cache_read_price_stays_literal():
+    """The read leg must NOT copy the write leg's falsy fall-open.
+
+    The two zeros mean opposite things. A free cache *write* is unpublished pricing, so
+    it falls open to input. A free cache *read* is real and is the largest discount
+    available -- 15 models charge for input and serve reads for nothing. Falling that
+    open to the input cost would zero out their savings entirely.
+    """
+    model = "gemini-robotics-er-1.5-preview"
+    info = litellm.get_model_info(model=model)
+    input_cost = info["input_cost_per_token"]
+    assert info.get("cache_read_input_token_cost") == 0.0 and input_cost > 0, (
+        "fixture drifted: this test needs a model with paid input and free cache reads"
+    )
+
+    result = compute_savings_spend(
+        model=model,
+        custom_llm_provider=None,
+        compression_saved_tokens=0,
+        usage_object=_caching_usage(read=10000, written=0),
+    )
+    # free reads => the whole input rate is saved, not zero
+    assert result.prompt_caching == pytest.approx(10000 * input_cost)
+
+
+def test_sub_input_cache_write_price_is_an_extra_saving():
+    """A few models price writes below input; there the premium is a real credit.
+
+    Clamping the premium at zero would silently undercount these, so the subtraction
+    stays signed. ``azure/eu/gpt-4o-2024-11-20`` ships a write price at ~0.5x input.
+    """
+    model = "azure/eu/gpt-4o-2024-11-20"
+    info = litellm.get_model_info(model=model)
+    input_cost = info["input_cost_per_token"]
+    cheap_write = info["cache_creation_input_token_cost"]
+    assert 0 < cheap_write < input_cost, "fixture drifted: this test needs a model pricing cache writes below input"
+    # no published read price, so the read leg mirrors input and contributes nothing;
+    # the whole result is the negative premium, i.e. a credit.
+    assert info.get("cache_read_input_token_cost") is None
+
+    result = compute_savings_spend(
+        model=model,
+        custom_llm_provider=None,
+        compression_saved_tokens=0,
+        usage_object=_caching_usage(read=1000, written=4000),
+    )
+    assert result.prompt_caching == pytest.approx(4000 * (input_cost - cheap_write))
+    assert result.prompt_caching > 0
+
+
+def test_negative_cache_write_count_clamps_to_zero():
+    """A malformed negative write count must not be read as a saving."""
+    input_cost, cache_read_cost = _anthropic_costs("claude-sonnet-5")
+    result = compute_savings_spend(
+        model="claude-sonnet-5",
+        custom_llm_provider="anthropic",
+        compression_saved_tokens=0,
+        usage_object={"cache_read_input_tokens": 1000, "cache_creation_input_tokens": -5000},
+    )
+    assert result.prompt_caching == pytest.approx(1000 * (input_cost - cache_read_cost))
 
 
 def test_unknown_model_fails_open_to_zero():
@@ -611,6 +838,44 @@ def test_the_baseline_is_priced_on_the_basis_the_request_was_billed_at(basis, ex
     assert reported == pytest.approx(expected_multiplier * baseline - served)
 
 
+def test_the_baseline_is_priced_on_the_vertex_location_the_request_was_billed_at(monkeypatch):
+    """A request served from a regional Vertex endpoint was billed with the
+    regional-endpoint uplift, so the counterfactual single-model operator would
+    have paid it too. The served model carries no uplift field, so only the
+    baseline moves with the recorded location."""
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+    gemini = litellm.get_model_info("gemini-3.5-flash", "vertex_ai")
+    haiku = litellm.get_model_info("claude-haiku-4-5", "anthropic")
+    assert gemini.get("regional_endpoint_uplift_multiplier") == 1.1
+    assert haiku.get("regional_endpoint_uplift_multiplier") is None, "served model must not move with the basis"
+
+    usage = _usage(fresh=20_000, cached=0, written=0, out=1_000)
+    served = 20_000 * haiku["input_cost_per_token"] + 1_000 * haiku["output_cost_per_token"]
+    baseline = 20_000 * gemini["input_cost_per_token"] + 1_000 * gemini["output_cost_per_token"]
+
+    regional = compute_autorouter_savings(
+        baseline_model="vertex_ai/gemini-3.5-flash",
+        selected_model="claude-haiku-4-5",
+        selected_provider="anthropic",
+        usage=usage,
+        conversation_continuing=False,
+        cost_breakdown=_breakdown(served, vertex_location="us-east5"),
+    )
+    global_endpoint = compute_autorouter_savings(
+        baseline_model="vertex_ai/gemini-3.5-flash",
+        selected_model="claude-haiku-4-5",
+        selected_provider="anthropic",
+        usage=usage,
+        conversation_continuing=False,
+        cost_breakdown=_breakdown(served, vertex_location="global"),
+    )
+
+    assert regional == pytest.approx(1.1 * baseline - served)
+    assert global_endpoint == pytest.approx(baseline - served)
+
+
 def test_a_baseline_recorded_on_the_decision_turns_the_driver_on():
     """An operator who configures nothing still sees the driver work."""
     result = compute_savings_spend(
@@ -664,6 +929,47 @@ def test_a_non_string_recorded_baseline_is_ignored():
     assert result.autorouter == 0.0
 
 
+def test_prompt_caching_prices_at_the_deployment_rate_not_the_public_one():
+    """A deployment's negotiated cache rates are what it really pays.
+
+    Pricing the write premium off the public map instead reports a loss ~3x the real
+    one here, which is the whole point of resolving deployment pricing first.
+    """
+    router = Router(
+        model_list=[
+            {
+                "model_name": "cheap-sonnet",
+                "litellm_params": {
+                    "model": "anthropic/claude-sonnet-4-5",
+                    "input_cost_per_token": 1e-06,
+                    "cache_creation_input_token_cost": 1.25e-06,
+                    "cache_read_input_token_cost": 1e-07,
+                },
+            },
+        ]
+    )
+    deployment_id = router.get_model_list(model_name="cheap-sonnet")[0]["model_info"]["id"]
+
+    result = compute_savings_spend(
+        model="claude-sonnet-4-5",
+        custom_llm_provider="anthropic",
+        compression_saved_tokens=0,
+        usage_object=_caching_usage(read=1000, written=20000),
+        model_id=deployment_id,
+        llm_router=lambda: router,
+    )
+    at_deployment_rates = 1000 * (1e-06 - 1e-07) - 20000 * (1.25e-06 - 1e-06)
+    assert result.prompt_caching == pytest.approx(at_deployment_rates)
+
+    at_public_rates = compute_savings_spend(
+        model="claude-sonnet-4-5",
+        custom_llm_provider="anthropic",
+        compression_saved_tokens=0,
+        usage_object=_caching_usage(read=1000, written=20000),
+    )
+    assert result.prompt_caching > at_public_rates.prompt_caching
+
+
 def test_a_recorded_baseline_deployment_prices_at_its_configured_rate():
     """A hardest-tier deployment with a negotiated rate is what the traffic would
     really have cost; pricing its model publicly misstates the saving."""
@@ -702,3 +1008,122 @@ def test_a_recorded_baseline_deployment_prices_at_its_configured_rate():
         llm_router=lambda: router,
     )
     assert with_deployment_rate.autorouter > at_public_rate.autorouter
+
+
+def _routed_decision() -> dict:
+    return {"savings_baseline_model": "anthropic/claude-opus-5", "conversation_continuing": True}
+
+
+def test_recorded_savings_win_over_recomputation():
+    """The figure the logging path stamped is the one the rollup keeps, so the
+    per-request record and the daily rollup cannot disagree."""
+    result = compute_savings_spend(
+        model="claude-haiku-4-5",
+        custom_llm_provider="anthropic",
+        compression_saved_tokens=0,
+        routing_decision=_routed_decision(),
+        usage_object=_cached_usage_object(),
+        recorded_autorouter_savings=0.5,
+    )
+    assert result.autorouter == 0.5
+
+
+def test_recorded_savings_survive_an_unusable_usage_object():
+    """A recorded figure was computed when the usage still parsed; a later row whose
+    usage_object no longer does must keep the number, not zero it."""
+    result = compute_savings_spend(
+        model="claude-haiku-4-5",
+        custom_llm_provider="anthropic",
+        compression_saved_tokens=0,
+        routing_decision=_routed_decision(),
+        usage_object={"prompt_tokens": ["not", "a", "number"]},
+        recorded_autorouter_savings=0.25,
+    )
+    assert result.autorouter == 0.25
+
+
+def test_a_boolean_is_not_a_recorded_savings_figure():
+    result = compute_savings_spend(
+        model="claude-haiku-4-5",
+        custom_llm_provider="anthropic",
+        compression_saved_tokens=0,
+        routing_decision=None,
+        usage_object=_cached_usage_object(),
+        recorded_autorouter_savings=True,
+    )
+    assert result.autorouter == 0.0
+
+
+def test_rows_written_before_the_field_shipped_recompute():
+    """No recorded figure means the row predates the logging-path stamp; the writer
+    recomputes exactly what the one shared helper would have recorded."""
+    from litellm.proxy.spend_tracking.savings import autorouter_savings_for_request
+
+    recomputed = compute_savings_spend(
+        model="claude-haiku-4-5",
+        custom_llm_provider="anthropic",
+        compression_saved_tokens=0,
+        routing_decision=_routed_decision(),
+        usage_object=_cached_usage_object(),
+    )
+    direct = autorouter_savings_for_request(
+        model="claude-haiku-4-5",
+        custom_llm_provider="anthropic",
+        routing_decision=_routed_decision(),
+        usage_object=_cached_usage_object(),
+    )
+    assert direct is not None and direct != 0.0
+    assert recomputed.autorouter == direct
+
+
+def test_driver_off_is_none_not_zero_for_the_request_helper():
+    """None and 0.0 are different facts on the logging payload: absence means the
+    request was never auto-routed, zero is a real figure for a routed request."""
+    from litellm.proxy.spend_tracking.savings import autorouter_savings_for_request
+
+    assert (
+        autorouter_savings_for_request(
+            model="claude-haiku-4-5",
+            custom_llm_provider="anthropic",
+            routing_decision=None,
+            usage_object=_cached_usage_object(),
+        )
+        is None
+    )
+    assert (
+        autorouter_savings_for_request(
+            model="claude-haiku-4-5",
+            custom_llm_provider="anthropic",
+            routing_decision={"conversation_continuing": True},
+            usage_object=_cached_usage_object(),
+        )
+        is None
+    )
+
+
+def test_logging_payload_never_stamps_internal_calls():
+    """Shadow eval and classifier sub-calls carry a real routing decision but are not
+    requests the caller made; a stamped figure would report savings for traffic no
+    user sent, which the spend writer deliberately zeroes."""
+    from litellm.proxy.spend_tracking.savings import autorouter_savings_for_logging_payload
+
+    routed_metadata = {"routing_decision": _routed_decision()}
+    stamped = autorouter_savings_for_logging_payload(
+        request_metadata=routed_metadata,
+        model="claude-haiku-4-5",
+        custom_llm_provider="anthropic",
+        model_id=None,
+        usage_object=_cached_usage_object(),
+        cost_breakdown=None,
+    )
+    assert stamped is not None and stamped != 0.0
+
+    internal = autorouter_savings_for_logging_payload(
+        request_metadata={**routed_metadata, "internal_call_origin": "shadow_eval_shadow"},
+        model="claude-haiku-4-5",
+        custom_llm_provider="anthropic",
+        model_id=None,
+        usage_object=_cached_usage_object(),
+        cost_breakdown=None,
+    )
+    assert internal is None

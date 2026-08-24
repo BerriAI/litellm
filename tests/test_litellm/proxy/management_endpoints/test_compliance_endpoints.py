@@ -2,12 +2,9 @@
 Unit tests for compliance check endpoints (EU AI Act and GDPR).
 """
 
-import os
-import sys
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../.."))  # Adds the parent directory to the system path
 
 from litellm.proxy.compliance_checks import ComplianceChecker
 from litellm.types.proxy.compliance_endpoints import ComplianceCheckRequest

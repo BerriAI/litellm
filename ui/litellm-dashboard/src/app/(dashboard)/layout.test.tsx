@@ -25,6 +25,10 @@ vi.mock("@/components/DebugWarningBanner", () => ({
   DebugWarningBanner: () => null,
 }));
 
+vi.mock("@/components/NoRedisWarningBanner", () => ({
+  NoRedisWarningBanner: () => null,
+}));
+
 vi.mock("@/components/LicenseExpiryBanner", () => ({
   LicenseExpiryBanner: () => null,
 }));
@@ -78,15 +82,15 @@ describe("(dashboard) Layout", () => {
       </AuthProvider>,
     );
 
-    await waitFor(() => expect(screen.getByTestId("loading-screen")).toBeTruthy());
-    expect(screen.queryByTestId("page-content")).toBeNull();
-    expect(screen.queryByTestId("dashboard-header")).toBeNull();
+    expect(await screen.findByTestId("loading-screen")).toBeInTheDocument();
+    expect(screen.queryByTestId("page-content")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("dashboard-header")).not.toBeInTheDocument();
 
     pendingUiConfig.resolve();
 
-    await waitFor(() => expect(screen.getByTestId("page-content")).toBeTruthy());
-    expect(screen.getByTestId("dashboard-header")).toBeTruthy();
-    expect(screen.queryByTestId("loading-screen")).toBeNull();
+    expect(await screen.findByTestId("page-content")).toBeInTheDocument();
+    expect(screen.getByTestId("dashboard-header")).toBeInTheDocument();
+    expect(screen.queryByTestId("loading-screen")).not.toBeInTheDocument();
   });
 
   it("redirects an invitation link to the onboarding route instead of rendering the dashboard shell", async () => {
@@ -105,8 +109,8 @@ describe("(dashboard) Layout", () => {
     await waitFor(() =>
       expect(replaceMock).toHaveBeenCalledWith(expect.stringContaining("/onboarding?invitation_id=abc123")),
     );
-    expect(screen.queryByTestId("page-content")).toBeNull();
-    expect(screen.queryByTestId("dashboard-header")).toBeNull();
-    expect(screen.queryByTestId("sidebar")).toBeNull();
+    expect(screen.queryByTestId("page-content")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("dashboard-header")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("sidebar")).not.toBeInTheDocument();
   });
 });

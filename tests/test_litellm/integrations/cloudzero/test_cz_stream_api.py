@@ -1,5 +1,3 @@
-import os
-import sys
 import zoneinfo
 from datetime import datetime, timezone
 from unittest.mock import MagicMock, Mock, patch
@@ -8,7 +6,6 @@ import httpx
 import polars as pl
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../.."))
 
 from litellm.integrations.cloudzero.cz_stream_api import CloudZeroStreamer
 
@@ -108,7 +105,7 @@ class TestCloudZeroStreamer:
         """Test _parse_and_convert_timestamp method with invalid timestamp."""
         streamer = CloudZeroStreamer("test-key", "test-connection")
 
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="Could not parse timestamp 'invalid-timestamp': Invalid"):
             streamer._parse_and_convert_timestamp("invalid-timestamp")
 
     def test_prepare_batch_payload(self):

@@ -1,5 +1,6 @@
 import * as networking from "@/components/networking";
-import { fireEvent, render, waitFor } from "@testing-library/react";
+import { fireEvent, render, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import GuardrailInfoView from "./guardrail_info";
 
@@ -109,7 +110,7 @@ describe("Guardrail Info", () => {
     );
 
     const logo = await findByAltText("Presidio PII logo");
-    expect(logo.getAttribute("src")).toContain("microsoft_azure.svg");
+    expect(logo).toHaveAttribute("src", expect.stringContaining("microsoft_azure.svg"));
   });
 
   it("should not render the edit button for config guardrails", async () => {
@@ -136,7 +137,7 @@ describe("Guardrail Info", () => {
 
     vi.mocked(networking.getGuardrailProviderSpecificParams).mockResolvedValue({});
 
-    const { getByText, container } = render(
+    const { getByText, findByText, container } = render(
       <GuardrailInfoView guardrailId="123" onClose={() => {}} accessToken="123" isAdmin={true} />,
     );
 
@@ -152,18 +153,9 @@ describe("Guardrail Info", () => {
       expect(getByText("Guardrail Settings")).toBeInTheDocument();
     });
 
-    // Find the info icon and hover over it
-    const infoIcon = container.querySelector(".anticon-info-circle");
-    expect(infoIcon).toBeInTheDocument();
+    await userEvent.hover(within(container).getByRole("img", { name: "Config guardrail details" }));
 
-    if (infoIcon) {
-      fireEvent.mouseEnter(infoIcon);
-
-      // Wait for the tooltip to appear
-      await waitFor(() => {
-        expect(getByText("Guardrail is defined in the config file and cannot be edited.")).toBeInTheDocument();
-      });
-    }
+    expect(await findByText("Guardrail is defined in the config file and cannot be edited.")).toBeInTheDocument();
   });
 
   it("should render the guardrail info", async () => {
@@ -298,5 +290,31 @@ describe("Guardrail Info", () => {
     expect(secondCallArgs.litellm_params).toBeDefined();
     expect(secondCallArgs.litellm_params.patterns).toEqual(["new_pattern"]);
     expect(secondCallArgs.litellm_params.blocked_words).toEqual(["new_word"]);
+  });
+
+  it("keeps the settings panel mounted while the overview tab is active", async () => {
+    vi.mocked(networking.getGuardrailInfo).mockResolvedValue({
+      guardrail_id: "123",
+      guardrail_name: "Test Guardrail",
+      litellm_params: { guardrail: "presidio", mode: "pre_call", default_on: true },
+      created_at: "2024-01-01T00:00:00Z",
+      updated_at: "2024-01-01T00:00:00Z",
+      guardrail_definition_location: "database",
+    });
+    vi.mocked(networking.getGuardrailUISettings).mockResolvedValue({
+      supported_entities: [],
+      supported_actions: [],
+      pii_entity_categories: [],
+      supported_modes: ["pre_call"],
+    });
+    vi.mocked(networking.getGuardrailProviderSpecificParams).mockResolvedValue({});
+
+    const { findByRole, getByRole, getByText } = render(
+      <GuardrailInfoView guardrailId="123" onClose={() => {}} accessToken="123" isAdmin={true} />,
+    );
+
+    expect(await findByRole("tab", { name: "Overview" })).toHaveAttribute("aria-selected", "true");
+    expect(getByRole("tab", { name: "Settings" })).toHaveAttribute("aria-selected", "false");
+    expect(getByText("Guardrail Settings")).toBeInTheDocument();
   });
 });
