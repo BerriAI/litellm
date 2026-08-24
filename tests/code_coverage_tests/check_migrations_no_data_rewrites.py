@@ -121,6 +121,7 @@ LOOP_TARGET = re.compile(r"\bFOR(?:EACH)?\s+([A-Za-z_][A-Za-z0-9_]*)\s+IN\b", re
 LOOP_HEADER = re.compile(r"\bFOR(?:EACH)?\b.*?\bLOOP\b", re.IGNORECASE | re.DOTALL)
 WORD_OR_ASSIGN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*|:=|(?<![<>!:=])=(?![=>])")
 PRECEDING_WORD = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)[^A-Za-z0-9_]*$")
+QUALIFIER_GAP = re.compile(r"[\s.]*")
 EXPLAIN_OPTIONS = re.compile(r"\bEXPLAIN\b(?:\s+(?:ANALYZE|ANALYSE|VERBOSE)\b)+", re.IGNORECASE)
 DEFINES_A_ROUTINE = re.compile(
     r"\bCREATE\b(?:\s+OR\s+REPLACE)?\s+(?:FUNCTION|PROCEDURE)\b", re.IGNORECASE
@@ -589,16 +590,21 @@ def names_a_relation(before: str) -> bool:
     touching or spaced as `public . "Foo"`, is the qualifier and the one before it decides. The
     introducing word is settled before that, so a quoted schema, which blanks to spaces and leaves
     `INTO` itself as the word ahead of the name however the dot is spaced, still reads as a relation,
-    while a genuine `SELECT public."f"()` reads through its qualifier to the `SELECT` and stays a call."""
+    while a genuine `SELECT public."f"()` reads through its qualifier to the `SELECT` and stays a call.
+    A word only introduces the name when nothing but whitespace and qualifier dots lies between them,
+    so a `(` in that gap keeps it from reaching across: a schema-qualified call inside a `CREATE INDEX`
+    expression, `ON "Foo" (public."f"(col))`, leaves `ON` behind the paren and the call stays a call."""
     word = PRECEDING_WORD.search(before)
     if word is None:
         return False
-    keyword = word.group(1).upper()
-    if keyword in INTRODUCES_A_RELATION:
-        return True
-    if keyword == "ON":
-        return NAMES_AN_INDEX.search(before[before.rfind(";") + 1 :]) is not None
-    if "." in before[word.end(1) :]:
+    gap = before[word.end(1) :]
+    if QUALIFIER_GAP.fullmatch(gap):
+        keyword = word.group(1).upper()
+        if keyword in INTRODUCES_A_RELATION:
+            return True
+        if keyword == "ON":
+            return NAMES_AN_INDEX.search(before[before.rfind(";") + 1 :]) is not None
+    if "." in gap:
         return names_a_relation(before[: word.start(1)])
     return False
 
