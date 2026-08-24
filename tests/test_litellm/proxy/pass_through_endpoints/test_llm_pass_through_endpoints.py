@@ -3698,6 +3698,26 @@ class TestVertexCredentiallessPassthroughVirtualKeyLeak:
         assert forwarded is None, "a virtual key in the custom auth header must not satisfy the gate nor be forwarded"
         assert raised is not None and raised.status_code == 401
 
+    @pytest.mark.asyncio
+    async def test_virtual_key_in_pass_through_configured_header_is_stripped(self, monkeypatch):
+        with mock.patch.dict(  # test-quality-ok: general_settings is the real proxy config surface for pass_through_endpoints; no injection seam exists on this route
+            "litellm.proxy.proxy_server.general_settings",
+            {"pass_through_endpoints": [{"headers": {"litellm_user_api_key": "x-company-key"}}]},
+        ):
+            raised, forwarded = await self._run(
+                monkeypatch,
+                [
+                    (b"x-company-key", f"Bearer {self.VKEY}".encode()),
+                    (b"x-goog-api-key", b"AIza-real-google-api-key"),
+                    (b"content-type", b"application/json"),
+                ],
+            )
+        assert raised is None
+        assert forwarded is not None
+        assert forwarded.get("x-goog-api-key") == "AIza-real-google-api-key"
+        assert "x-company-key" not in forwarded
+        assert self.VKEY not in " ".join(f"{name}:{value}" for name, value in forwarded.items())
+
 
 class TestGetAzureAISearchIndexFromEndpoint:
     """The operable index is only the segment right after ``indexes``.
