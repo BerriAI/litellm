@@ -28,7 +28,6 @@ _ARCHIVE_MAGIC_PREFIXES: Final[tuple[bytes, ...]] = (
     b"PK\x05\x06",
     b"PK\x07\x08",
     b"\x1f\x8b",
-    b"BZh",
     b"\xfd7zXZ\x00",
     b"7z\xbc\xaf\x27\x1c",
     b"Rar!\x1a\x07\x00",
@@ -36,6 +35,8 @@ _ARCHIVE_MAGIC_PREFIXES: Final[tuple[bytes, ...]] = (
     b"\x04\x22\x4d\x18",
     b"\x28\xb5\x2f\xfd",
 )
+
+_ARCHIVE_MAGIC_PREFIXES_ASCII_AMBIGUOUS: Final[tuple[bytes, ...]] = (b"BZh",)
 
 _EXECUTABLE_MAGIC_PREFIXES: Final[tuple[bytes, ...]] = (
     b"\x7fELF",
@@ -45,11 +46,14 @@ _EXECUTABLE_MAGIC_PREFIXES: Final[tuple[bytes, ...]] = (
     b"\xce\xfa\xed\xfe",
     b"\xcf\xfa\xed\xfe",
     b"\x00asm",
-    b"dex\n",
 )
+
+_EXECUTABLE_MAGIC_PREFIXES_ASCII_AMBIGUOUS: Final[tuple[bytes, ...]] = (b"MZ", b"dex\n")
 
 _TAR_USTAR_MAGIC: Final = b"ustar"
 _TAR_USTAR_OFFSET: Final = 257
+
+_UTF8_BOM: Final = b"\xef\xbb\xbf"
 
 
 class DetectedFormat(str, Enum):
@@ -158,7 +162,9 @@ def _is_archive(content: bytes) -> bool:
     if _starts_with_any(content, _ARCHIVE_MAGIC_PREFIXES):
         return True
     tar_magic_end: Final = _TAR_USTAR_OFFSET + len(_TAR_USTAR_MAGIC)
-    return len(content) >= tar_magic_end and content[_TAR_USTAR_OFFSET:tar_magic_end] == _TAR_USTAR_MAGIC
+    if len(content) >= tar_magic_end and content[_TAR_USTAR_OFFSET:tar_magic_end] == _TAR_USTAR_MAGIC:
+        return True
+    return _starts_with_any(content, _ARCHIVE_MAGIC_PREFIXES_ASCII_AMBIGUOUS) and not _is_utf8_text(content)
 
 
 def _is_utf8_text(content: bytes) -> bool:
@@ -174,11 +180,16 @@ def _is_utf8_text(content: bytes) -> bool:
 def _is_executable_binary(content: bytes) -> bool:
     if _starts_with_any(content, _EXECUTABLE_MAGIC_PREFIXES):
         return True
-    return content.startswith(b"MZ") and not _is_utf8_text(content)
+    return _starts_with_any(content, _EXECUTABLE_MAGIC_PREFIXES_ASCII_AMBIGUOUS) and not _is_utf8_text(content)
+
+
+def _looks_like_shebang(content: bytes) -> bool:
+    body: Final = content.removeprefix(_UTF8_BOM).lstrip()
+    return body.startswith(b"#!")
 
 
 def inspect_content(content: bytes) -> ContentInspection:
-    if content.startswith(b"#!"):
+    if _looks_like_shebang(content):
         return DisallowedContent(DisallowedKind.EXECUTABLE)
     if content.startswith(b"%PDF-"):
         return AllowedContent(DetectedFormat.PDF)
