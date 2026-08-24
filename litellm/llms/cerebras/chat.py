@@ -26,7 +26,7 @@ class CerebrasConfig(OpenAIGPTConfig):
     response_format: dict | None = None
     seed: int | None = None
     stream: bool | None = None
-    top_p: float | None = None
+    top_p: float | None = None  # pyright: ignore[reportIncompatibleVariableOverride]  # Fractions supported.
     tool_choice: str | dict | None = None
     tools: list | None = None
     user: str | None = None
@@ -34,8 +34,8 @@ class CerebrasConfig(OpenAIGPTConfig):
     parallel_tool_calls: bool | None = None
     logprobs: bool | None = None
     top_logprobs: int | None = None
-    frequency_penalty: float | None = None
-    presence_penalty: float | None = None
+    frequency_penalty: float | None = None  # pyright: ignore[reportIncompatibleVariableOverride]  # Fractions supported.
+    presence_penalty: float | None = None  # pyright: ignore[reportIncompatibleVariableOverride]  # Fractions supported.
     logit_bias: dict[str, float] | None = None
     service_tier: str | None = None
     prompt_cache_key: str | None = None
