@@ -5,11 +5,8 @@ These tests validate the MoonshotChatConfig class which extends OpenAIGPTConfig.
 Moonshot AI is an OpenAI-compatible provider with minor customizations.
 """
 
-import os
-import sys
 from unittest.mock import patch
 
-sys.path.insert(0, os.path.abspath("../../../../.."))  # Adds the parent directory to the system path
 
 import pytest
 

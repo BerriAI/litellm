@@ -1,17 +1,16 @@
-import React, { useState } from "react";
-import { Modal, Upload } from "antd";
-import type { UploadFile, UploadProps } from "antd";
-import { Upload as UploadIcon } from "lucide-react";
+import React, { useRef, useState } from "react";
+import { Upload as UploadIcon, X } from "lucide-react";
 import { z } from "zod/v4";
 import { convertPromptFileToJson, createPromptCall } from "@/components/networking";
 import { toast } from "@/lib/toast";
-import { Field, FieldDescription, FieldGroup, FieldSeparator, FieldTitle } from "@/components/shared/form/field";
+import { Field, FieldDescription, FieldGroup, FieldSeparator, FieldTitle } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { useZodForm } from "@/lib/forms/useZodForm";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 interface AddPromptFormProps {
   visible: boolean;
@@ -49,14 +48,33 @@ const EMPTY_VALUES: AddPromptFormValues = { prompt_id: "", prompt_integration: "
 const AddPromptForm: React.FC<AddPromptFormProps> = ({ visible, onClose, accessToken, onSuccess }) => {
   const form = useZodForm(addPromptSchema, { defaultValues: EMPTY_VALUES });
   const [loading, setLoading] = useState(false);
-  const [fileList, setFileList] = useState<UploadFile[]>([]);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [promptIntegration, setPromptIntegration] = useState<string>("dotprompt");
+
+  const clearSelectedFile = () => {
+    setSelectedFile(null);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+    }
+  };
 
   const handleCancel = () => {
     form.reset(EMPTY_VALUES);
-    setFileList([]);
+    clearSelectedFile();
     setPromptIntegration("dotprompt");
     onClose();
+  };
+
+  const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const picked = event.target.files?.[0];
+    if (!picked) return;
+    if (!picked.name.endsWith(".prompt")) {
+      toast.fromError("Please upload a .prompt file");
+      clearSelectedFile();
+      return;
+    }
+    setSelectedFile(picked);
   };
 
   const handleIntegrationChange = (selected: string | null) => {
@@ -65,9 +83,11 @@ const AddPromptForm: React.FC<AddPromptFormProps> = ({ visible, onClose, accessT
     setPromptIntegration(selected);
   };
 
-  const convertUploadedFile = async (token: string, promptId: string): Promise<CreatePromptRequest | null> => {
-    const file = fileList[0].originFileObj as File;
-
+  const convertUploadedFile = async (
+    token: string,
+    promptId: string,
+    file: File,
+  ): Promise<CreatePromptRequest | null> => {
     try {
       const conversionResult = await convertPromptFileToJson(token, file);
 
@@ -97,16 +117,15 @@ const AddPromptForm: React.FC<AddPromptFormProps> = ({ visible, onClose, accessT
 
     const isDotprompt = promptIntegration === "dotprompt";
 
-    if (isDotprompt && fileList.length === 0) {
+    if (isDotprompt && !selectedFile) {
       toast.fromError("Please upload a .prompt file");
       return;
     }
 
     setLoading(true);
 
-    const promptData: CreatePromptRequest | Record<string, never> | null = isDotprompt
-      ? await convertUploadedFile(accessToken, values.prompt_id)
-      : {};
+    const promptData: CreatePromptRequest | Record<string, never> | null =
+      isDotprompt && selectedFile ? await convertUploadedFile(accessToken, values.prompt_id, selectedFile) : {};
 
     if (promptData === null) {
       setLoading(false);
@@ -126,85 +145,84 @@ const AddPromptForm: React.FC<AddPromptFormProps> = ({ visible, onClose, accessT
     }
   };
 
-  const uploadProps: UploadProps = {
-    beforeUpload: (file) => {
-      if (!file.name.endsWith(".prompt")) {
-        toast.fromError("Please upload a .prompt file");
-        return false;
-      }
-      return false; // Prevent automatic upload
-    },
-    fileList,
-    onChange: ({ fileList: newFileList }) => {
-      setFileList(newFileList.slice(-1)); // Keep only the last file
-    },
-    onRemove: () => {
-      setFileList([]);
-    },
-  };
-
   return (
-    <Modal
-      title="Add New Prompt"
-      open={visible}
-      onCancel={handleCancel}
-      footer={[
-        <Button key="cancel" type="button" variant="outline" onClick={handleCancel}>
-          Cancel
-        </Button>,
-        <Button key="submit" type="button" disabled={loading} onClick={() => void form.handleSubmit(handleSubmit)()}>
-          {loading && <UiLoadingSpinner className="size-4" />}
-          Create Prompt
-        </Button>,
-      ]}
-      width={600}
-    >
-      <form onSubmit={(event) => event.preventDefault()} noValidate>
-        <FieldGroup>
-          <FormField control={form.control} name="prompt_id" label="Prompt ID">
-            {({ ref, ...field }) => (
-              <Input {...field} ref={ref} placeholder="Enter unique prompt ID (e.g., my_prompt_id)" />
-            )}
-          </FormField>
+    <Dialog open={visible} onOpenChange={(open) => !open && handleCancel()}>
+      <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[600px]">
+        <DialogHeader>
+          <DialogTitle>Add New Prompt</DialogTitle>
+        </DialogHeader>
+        <form onSubmit={(event) => event.preventDefault()} noValidate>
+          <FieldGroup>
+            <FormField control={form.control} name="prompt_id" label="Prompt ID">
+              {({ ref, ...field }) => (
+                <Input {...field} ref={ref} placeholder="Enter unique prompt ID (e.g., my_prompt_id)" />
+              )}
+            </FormField>
 
-          <FormField control={form.control} name="prompt_integration" label="Prompt Integration">
-            {({ id, value, "aria-invalid": ariaInvalid, "aria-describedby": ariaDescribedBy }) => (
-              <Select items={PROMPT_INTEGRATION_OPTIONS} value={value} onValueChange={handleIntegrationChange}>
-                <SelectTrigger id={id} aria-invalid={ariaInvalid} aria-describedby={ariaDescribedBy}>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {PROMPT_INTEGRATION_OPTIONS.map((option) => (
-                    <SelectItem key={option.value} value={option.value}>
-                      {option.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            )}
-          </FormField>
+            <FormField control={form.control} name="prompt_integration" label="Prompt Integration">
+              {({ id, value, "aria-invalid": ariaInvalid, "aria-describedby": ariaDescribedBy }) => (
+                <Select items={PROMPT_INTEGRATION_OPTIONS} value={value} onValueChange={handleIntegrationChange}>
+                  <SelectTrigger id={id} aria-invalid={ariaInvalid} aria-describedby={ariaDescribedBy}>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {PROMPT_INTEGRATION_OPTIONS.map((option) => (
+                      <SelectItem key={option.value} value={option.value}>
+                        {option.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
+            </FormField>
 
-          {promptIntegration === "dotprompt" && (
-            <>
-              <FieldSeparator />
-              <Field>
-                <FieldTitle>Prompt File</FieldTitle>
-                <Upload {...uploadProps}>
-                  <Button type="button" variant="outline">
+            {promptIntegration === "dotprompt" && (
+              <>
+                <FieldSeparator />
+                <Field>
+                  <FieldTitle>Prompt File</FieldTitle>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept=".prompt"
+                    aria-label="Prompt file"
+                    className="sr-only"
+                    onChange={handleFileChange}
+                  />
+                  <Button type="button" variant="outline" onClick={() => fileInputRef.current?.click()}>
                     <UploadIcon />
                     Select .prompt File
                   </Button>
-                </Upload>
-                {fileList.length > 0 && (
-                  <div className="mt-2 text-sm text-muted-foreground">Selected: {fileList[0].name}</div>
-                )}
-                <FieldDescription>Upload a .prompt file that follows the Dotprompt specification</FieldDescription>
-              </Field>
-            </>
-          )}
-        </FieldGroup>
-      </form>
-    </Modal>
+                  {selectedFile && (
+                    <div className="mt-2 flex items-center gap-2 text-sm text-muted-foreground">
+                      <span>Selected: {selectedFile.name}</span>
+                      <button
+                        type="button"
+                        aria-label={`Remove ${selectedFile.name}`}
+                        onClick={clearSelectedFile}
+                        className="text-muted-foreground hover:text-destructive"
+                      >
+                        <X className="size-3.5" />
+                      </button>
+                    </div>
+                  )}
+                  <FieldDescription>Upload a .prompt file that follows the Dotprompt specification</FieldDescription>
+                </Field>
+              </>
+            )}
+          </FieldGroup>
+        </form>
+        <DialogFooter>
+          <Button type="button" variant="outline" onClick={handleCancel}>
+            Cancel
+          </Button>
+          <Button type="button" disabled={loading} onClick={() => void form.handleSubmit(handleSubmit)()}>
+            {loading && <UiLoadingSpinner className="size-4" />}
+            Create Prompt
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 };
 

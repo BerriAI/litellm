@@ -91,6 +91,14 @@ class BaseVideoConfig(ABC):
             raise ValueError("api_base is required")
         return api_base
 
+    def use_multipart_form_data(self) -> bool:
+        """
+        Whether video create requests without files must still be sent as
+        multipart/form-data (the encoding the OpenAI SDK always uses for
+        /videos), instead of falling back to JSON.
+        """
+        return False
+
     @abstractmethod
     def transform_video_create_request(
         self,

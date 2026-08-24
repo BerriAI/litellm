@@ -428,6 +428,14 @@
           "type": "number",
           "minimum": 0
         },
+        "output_cost_per_second_480p": {
+          "type": "number",
+          "minimum": 0
+        },
+        "output_cost_per_second_4k": {
+          "type": "number",
+          "minimum": 0
+        },
         "output_cost_per_token": {
           "type": "number",
           "minimum": 0,
@@ -513,6 +521,11 @@
         "provider_specific_entry": {
           "type": "object",
           "description": "Provider-internal routing hints (e.g. bedrock_invocation_schema)."
+        },
+        "regional_endpoint_uplift_multiplier": {
+          "type": "number",
+          "minimum": 1,
+          "description": "Multiplier applied to all token costs when served from a non-global Vertex AI endpoint (e.g. 1.10 = +10%)."
         },
         "regional_processing_uplift_multiplier_eu": {
           "type": "number",
@@ -620,6 +633,9 @@
         "supports_image_size": {
           "type": "boolean"
         },
+        "supports_legacy_thinking": {
+          "type": "boolean"
+        },
         "supports_low_reasoning_effort": {
           "type": "boolean"
         },
@@ -659,6 +675,9 @@
         "supports_pdf_input": {
           "type": "boolean"
         },
+        "supports_prompt_cache_breakpoint": {
+          "type": "boolean"
+        },
         "supports_prompt_caching": {
           "type": "boolean"
         },
@@ -696,6 +715,9 @@
           "type": "boolean"
         },
         "supports_xhigh_reasoning_effort": {
+          "type": "boolean"
+        },
+        "thinking_always_on": {
           "type": "boolean"
         },
         "tiered_pricing": {

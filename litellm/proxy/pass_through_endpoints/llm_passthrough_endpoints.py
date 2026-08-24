@@ -9,8 +9,9 @@ Use litellm with Anthropic SDK, Vertex AI SDK, Cohere SDK, etc.
 import json
 import os
 import re
+from collections.abc import Callable, Mapping
 from types import MappingProxyType
-from typing import Annotated, Any, Final, cast
+from typing import TYPE_CHECKING, Annotated, Any, Final, cast
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, WebSocket
@@ -28,7 +29,11 @@ from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.proxy._types import *
 from litellm.proxy.auth.route_checks import RouteChecks
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth, user_api_key_auth_websocket
+from litellm.proxy.auth.user_api_key_auth import (
+    _get_bearer_token,
+    user_api_key_auth,
+    user_api_key_auth_websocket,
+)
 from litellm.proxy.common_utils.http_parsing_utils import (
     _read_request_body,
     _safe_get_request_headers,
@@ -55,10 +60,14 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
     LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY,
 )
+from litellm.types.passthrough_endpoints.vertex_ai import VertexPassThroughCredentials
 from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager
 
 from .passthrough_endpoint_router import PassthroughEndpointRouter
+
+if TYPE_CHECKING:
+    from litellm.router import Router
 
 vertex_llm_base: Final = VertexBase()
 router: Final = APIRouter()
@@ -99,6 +108,36 @@ def is_passthrough_request_streaming(request_body: object) -> bool:
     if not isinstance(request_body, dict):
         return False
     return bool(request_body.get("stream", False))
+
+
+def get_passthrough_router_request_metadata(user_api_key_dict: UserAPIKeyAuth) -> Mapping[str, Any]:
+    """
+    Build the request metadata carrying key-level spend attribution and the
+    pre-call budget reservation for a router-model passthrough request.
+
+    Router-model passthrough branches call ``allm_passthrough_route`` directly,
+    bypassing ``add_litellm_data_to_request``. Without this metadata the cost
+    callback cannot attribute spend to the calling key and never releases the
+    budget reservation minted at auth time, so the shared spend counter drifts
+    up until the key falsely trips ``BudgetExceededError``.
+
+    The payload rides the ``litellm_metadata`` bucket, not ``metadata``: the
+    router hop ``_ageneric_api_call_with_fallbacks`` canonicalises this call
+    type into ``litellm_metadata``, and the cost callback reads spend
+    attribution from that bucket while only backfilling ``user_api_key*`` keys
+    from ``metadata``. Passing ``metadata=`` would silently drop the secondary
+    attribution fields the helper sets (``agent_id``,
+    ``user_api_end_user_max_budget``) before the callback ever sees them.
+    """
+    from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+
+    request_data: Final = {"litellm_metadata": {}}  # mutable-ok: builder + litellm mutate this in place
+    LiteLLMProxyRequestSetup.add_user_api_key_auth_to_request_metadata(
+        data=request_data,
+        user_api_key_dict=user_api_key_dict,
+        _metadata_variable_name="litellm_metadata",
+    )
+    return request_data["litellm_metadata"]
 
 
 async def llm_passthrough_factory_proxy_route(
@@ -341,6 +380,7 @@ async def vllm_proxy_route(
                 params=None,
                 headers=None,
                 cookies=None,
+                litellm_metadata=get_passthrough_router_request_metadata(user_api_key_dict),
             ),
         )
 
@@ -1470,6 +1510,7 @@ async def azure_proxy_route(
                     params=None,
                     headers=None,
                     cookies=None,
+                    litellm_metadata=get_passthrough_router_request_metadata(user_api_key_dict),
                 )
 
                 if is_streaming_request:
@@ -1721,6 +1762,154 @@ def _override_vertex_params_from_router_credentials(
     return vertex_project, vertex_location
 
 
+_CREDENTIALLESS_VERTEX_MISSING_CREDENTIAL_DETAIL: Final = (
+    "No Vertex AI credential is configured on this proxy and the request carried no upstream "
+    "Google credential. The LiteLLM virtual key is not forwarded to Google. Configure a Vertex "
+    "credential (DEFAULT_VERTEXAI_PROJECT / DEFAULT_VERTEXAI_LOCATION / DEFAULT_VERTEXAI_CREDENTIALS, "
+    "or a model with use_in_pass_through: true), or send your own Google OAuth token in the "
+    "Authorization header."
+)
+
+
+def _normalize_credential_value(value: str) -> str:
+    """Reduce a header value to the bare token, matching how ``user_api_key_auth``
+    reads a caller's key.
+
+    Reuses the auth module's ``_get_bearer_token`` so the caller-key comparison
+    strips exactly the schemes authentication accepts (``Bearer`` / ``bearer`` /
+    ``Basic`` / ``AWS4-HMAC-SHA256`` credential), rather than re-deriving a
+    narrower normalization here. ``_get_bearer_token`` returns ``""`` for a value
+    with no recognized scheme prefix, so a bare token (or a real Google
+    credential that carries no scheme) falls back to its own value.
+    """
+    return _get_bearer_token(value) or value
+
+
+_VERTEX_UPSTREAM_CREDENTIAL_HEADERS: Final = frozenset({"authorization", "x-goog-api-key"})
+_HEADERS_NEVER_FORWARDED_TO_VERTEX: Final = frozenset({"content-length", "host"}) | (
+    SpecialHeaders.litellm_credential_header_names() - _VERTEX_UPSTREAM_CREDENTIAL_HEADERS
+)
+
+
+_VERTEX_CALLER_KEY_HEADER_PRECEDENCE: Final = (
+    SpecialHeaders.custom_litellm_api_key.value.lower(),
+    SpecialHeaders.openai_authorization.value.lower(),
+    SpecialHeaders.azure_authorization.value.lower(),
+    SpecialHeaders.anthropic_authorization.value.lower(),
+    SpecialHeaders.google_ai_studio_authorization.value.lower(),
+    SpecialHeaders.azure_apim_authorization.value.lower(),
+)
+
+_MAPPED_ROUTE_CALLER_KEY_HEADER: Final = "litellm_user_api_key"
+
+
+def _operator_configured_caller_key_header_names() -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Operator-configured caller-key header names, as (override, pass_through).
+
+    ``user_api_key_auth`` accepts the caller's key from two runtime-configured
+    header sources beyond the built-in ones, at opposite ends of its precedence.
+    ``general_settings.litellm_key_header_name`` overrides every built-in source
+    (it replaces the resolved key after ``get_api_key`` runs), so it is highest
+    precedence. Each ``general_settings.pass_through_endpoints`` entry's
+    ``headers.litellm_user_api_key`` is checked last inside ``get_api_key``, so it
+    is lowest. Google never consumes either, so both are also dropped by name.
+    """
+    from litellm.proxy.proxy_server import general_settings
+
+    custom_key_header: Final = general_settings.get("litellm_key_header_name")
+    override: Final = (custom_key_header.lower(),) if isinstance(custom_key_header, str) else ()
+    pass_through_endpoints: Final = general_settings.get("pass_through_endpoints")
+    endpoints: Final = pass_through_endpoints if isinstance(pass_through_endpoints, list) else ()
+    pass_through: Final = tuple(
+        dict.fromkeys(
+            headers["litellm_user_api_key"].lower()
+            for endpoint in endpoints
+            if isinstance(endpoint, dict)
+            for headers in (endpoint.get("headers"),)
+            if isinstance(headers, dict) and isinstance(headers.get("litellm_user_api_key"), str)
+        )
+    )
+    return override, pass_through
+
+
+def _authenticated_caller_key_values(request: Request) -> frozenset[str]:
+    """The value ``user_api_key_auth`` would accept as this caller's LiteLLM key.
+
+    The Vertex route authenticates through ``Depends(user_api_key_auth)``, which
+    resolves the key by precedence, matched here exactly. The ``/vertex_ai`` route
+    is a mapped pass-through route, so a header literally named
+    ``litellm_user_api_key`` overrides every other source (``user_api_key_auth``
+    applies it last), making it highest precedence. Then an operator
+    ``litellm_key_header_name``, then the built-in headers in ``get_api_key`` order,
+    then a ``pass_through_endpoints`` ``litellm_user_api_key`` header which
+    ``get_api_key`` checks last. Some of those headers (``Authorization``,
+    ``x-goog-api-key``) are also kept as genuine bring-your-own Google credentials,
+    so returning only the value that actually authenticated lets the filter strip
+    that value wherever it appears while leaving a real Google credential in place.
+    An empty set means no caller key was found, so nothing is value-stripped.
+    """
+    incoming: Final = _safe_get_request_headers(request)
+    override_headers, pass_through_headers = _operator_configured_caller_key_header_names()
+    ordered_names: Final = (
+        (_MAPPED_ROUTE_CALLER_KEY_HEADER,)
+        + override_headers
+        + _VERTEX_CALLER_KEY_HEADER_PRECEDENCE
+        + pass_through_headers
+    )
+    present_values: Final = (incoming[name] for name in ordered_names if incoming.get(name))
+    authenticated_key: Final = next(
+        (stripped for value in present_values if (stripped := _normalize_credential_value(value))),
+        "",
+    )
+    return frozenset({authenticated_key}) if authenticated_key else frozenset()
+
+
+def _forwarded_headers_for_credentialless_vertex_passthrough(request: Request) -> Mapping[str, str]:
+    """
+    Header set to forward on the bring-your-own-credentials Vertex passthrough
+    branch, used when the proxy has no Vertex credential configured.
+
+    No credential the proxy accepts for caller authentication is forwarded to
+    Google. ``user_api_key_auth`` reads the caller's key from every header in
+    ``SpecialHeaders.litellm_credential_header_names()``, and Vertex only ever
+    authenticates with an OAuth token in ``Authorization`` or an API key in
+    ``x-goog-api-key``. So the proxy-only auth headers Google never consumes
+    (everything in that set except those two, e.g. ``x-litellm-api-key`` /
+    ``api-key`` / ``x-api-key`` / ``Ocp-Apim-Subscription-Key``, plus the mapped
+    pass-through ``litellm_user_api_key`` header and any operator-configured
+    ``litellm_key_header_name`` / ``pass_through_endpoints`` key header) are dropped
+    by name. ``Authorization`` and ``x-goog-api-key`` may
+    instead carry a genuine bring-your-own Google credential, so they are kept
+    unless their value is the caller's authenticated LiteLLM key, which is dropped
+    by value (normalizing any ``Bearer`` / ``Basic`` / ``AWS4`` auth-scheme prefix
+    the same way authentication does). Because the value that authenticated is
+    resolved by the same precedence ``user_api_key_auth`` uses, a virtual key sent
+    only in ``x-goog-api-key`` (or in an operator-configured key header) is dropped
+    too, while a real Google key in ``x-goog-api-key`` alongside a virtual key in a
+    higher-precedence header is preserved. When neither a surviving
+    ``Authorization`` nor ``x-goog-api-key`` remains the request is rejected so the
+    virtual key cannot leak upstream.
+    """
+    incoming: Final = _safe_get_request_headers(request)
+    caller_key_values: Final = _authenticated_caller_key_values(request)
+    override_headers, pass_through_headers = _operator_configured_caller_key_header_names()
+    never_forwarded: Final = (
+        _HEADERS_NEVER_FORWARDED_TO_VERTEX.union((_MAPPED_ROUTE_CALLER_KEY_HEADER,))
+        .union(override_headers)
+        .union(pass_through_headers)
+    )
+    forwarded: Final = MappingProxyType(
+        {
+            name: value
+            for name, value in incoming.items()
+            if name not in never_forwarded and _normalize_credential_value(value) not in caller_key_values
+        }
+    )
+    if "authorization" not in forwarded and "x-goog-api-key" not in forwarded:
+        raise HTTPException(status_code=401, detail=_CREDENTIALLESS_VERTEX_MISSING_CREDENTIAL_DETAIL)
+    return forwarded
+
+
 async def _prepare_vertex_auth_headers(
     request: Request,
     vertex_credentials: Any | None,
@@ -1729,7 +1918,7 @@ async def _prepare_vertex_auth_headers(
     vertex_location: str | None,
     base_target_url: str | None,
     get_vertex_pass_through_handler: BaseVertexAIPassThroughHandler,
-) -> tuple[dict, str | None, bool, str | None, str | None]:
+) -> tuple[Mapping[str, str], str | None, bool, str | None, str | None]:
     """
     Prepare authentication headers for Vertex AI pass-through requests.
 
@@ -1755,11 +1944,11 @@ async def _prepare_vertex_auth_headers(
 
     # Use headers from the incoming request if no vertex credentials are found
     if (vertex_credentials is None or vertex_credentials.vertex_project is None) and router_credentials is None:
-        headers = _safe_get_request_headers(request).copy()
+        headers = _forwarded_headers_for_credentialless_vertex_passthrough(request)
         headers_passed_through = True
-        verbose_proxy_logger.debug("default_vertex_config  not set, incoming request headers %s", headers)
-        headers.pop("content-length", None)
-        headers.pop("host", None)
+        verbose_proxy_logger.debug(
+            "default_vertex_config not set, forwarding caller-provided headers %s", tuple(headers.keys())
+        )
     else:
         if router_credentials is not None:
             vertex_credentials_str = None
@@ -1845,7 +2034,7 @@ async def _base_vertex_proxy_route(
 
     encoded_endpoint = httpx.URL(endpoint).path
     verbose_proxy_logger.debug("requested endpoint %s", endpoint)
-    headers: dict = {}
+    headers: Mapping[str, str] = {}
     api_key_to_use = get_litellm_virtual_key(request=request)
     user_api_key_dict = await user_api_key_auth(
         request=request,
@@ -2373,6 +2562,112 @@ async def cursor_proxy_route(
     return received_value
 
 
+VERTEX_LIVE_UNCONFIGURED_CLOSE_REASON: Final = (
+    "Vertex AI auth failed: set a use_in_pass_through vertex model, default_vertex_config, or DEFAULT_VERTEXAI_* env"
+)
+
+VERTEX_PUBLISHER_MODEL_PREFIX: Final = "publishers/google/models/"
+
+VERTEX_PUBLISHERS_SEGMENT: Final = "publishers/"
+
+
+def _vertex_publisher_model_suffix(model: str) -> str:
+    """
+    Turn whatever the client named into the ``publishers/<publisher>/models/<id>`` tail of a Vertex resource name.
+
+    Clients send bare ids, LiteLLM ids (``vertex_ai/gemini-live-2.5-flash``), and the Live SDK's ``models/<id>``,
+    and a publisher model id never contains a slash, so anything ahead of the last one is addressing, not identity
+    """
+    publishers_at: Final = model.find(VERTEX_PUBLISHERS_SEGMENT)
+    if publishers_at != -1:
+        return model[publishers_at:]
+    return f"{VERTEX_PUBLISHER_MODEL_PREFIX}{model.rsplit('/', 1)[-1]}"
+
+
+def _get_llm_router() -> "Router | None":
+    from litellm.proxy.proxy_server import llm_router
+
+    return llm_router
+
+
+def _resolve_vertex_live_credentials(
+    vertex_project: str | None,
+    vertex_location: str | None,
+    model: str | None,
+) -> VertexPassThroughCredentials | None:
+    """
+    Resolution order: an explicit project/location registration, then ``default_vertex_config`` (which the proxy
+    fills from the ``DEFAULT_VERTEXAI_*`` env vars whenever the yaml leaves it out), then any DB model entry
+    flagged ``use_in_pass_through``.
+
+    DB entries come last on purpose: an operator who set a global default already said which project
+    pass-through traffic should bill to, and this route silently ignoring that would be the worse surprise
+    """
+    keyed: Final = passthrough_endpoint_router.get_vertex_credentials(
+        project_id=vertex_project,
+        location=vertex_location,
+    )
+    if keyed is not None and keyed.vertex_project is not None:
+        return keyed
+    from_deployments: Final = passthrough_endpoint_router.get_vertex_credentials_from_router_deployments(model=model)
+    if from_deployments is not None:
+        return from_deployments
+    if keyed is not None:
+        return keyed
+    passthrough_endpoint_router.set_default_vertex_config()
+    return passthrough_endpoint_router.get_vertex_credentials(
+        project_id=vertex_project,
+        location=vertex_location,
+    )
+
+
+def _build_vertex_live_setup_model_rewriter(
+    vertex_project: str | None,
+    vertex_location: str | None,
+    llm_router: "Router | None",
+) -> Callable[[str], str] | None:
+    """
+    Rewrite the ``setup`` frame's model into the full Vertex resource path the Live API requires.
+
+    Clients address the gateway the way they address LiteLLM (bare id or model alias); Vertex reads anything
+    that is not a ``projects/...`` path as a project name and closes the socket
+    """
+    if vertex_project is None or vertex_location is None:
+        return None
+
+    def rewrite(setup_model: str) -> str:
+        if setup_model.startswith("projects/"):
+            return setup_model
+        aliased: Final = _resolve_alias_to_upstream_model(setup_model, llm_router)
+        return f"projects/{vertex_project}/locations/{vertex_location}/{_vertex_publisher_model_suffix(aliased)}"
+
+    return rewrite
+
+
+def _resolve_alias_to_upstream_model(setup_model: str, llm_router: "Router | None") -> str:
+    """
+    The Live SDK wraps whatever the caller typed as ``models/<name>``, so a gateway alias arrives prefixed
+    """
+    if llm_router is None:
+        return setup_model
+    candidates: Final = (setup_model, setup_model.rsplit("/", 1)[-1])
+    upstream: Final = next(
+        (
+            deployment["litellm_params"].get("model")
+            for deployment in (llm_router.get_model_list() or ())
+            if deployment.get("model_name") in candidates
+        ),
+        None,
+    )
+    if upstream is None:
+        return setup_model
+    try:
+        _, provider, _, _ = litellm.get_llm_provider(model=upstream)
+    except litellm.exceptions.BadRequestError:
+        return upstream
+    return upstream.removeprefix(f"{provider}/")
+
+
 async def vertex_ai_live_websocket_passthrough(
     websocket: WebSocket,
     model: str | None = None,
@@ -2396,51 +2691,38 @@ async def vertex_ai_live_websocket_passthrough(
     await websocket.accept()
 
     incoming_headers: Final = dict(websocket.headers)
-    vertex_credentials_config = passthrough_endpoint_router.get_vertex_credentials(
-        project_id=vertex_project,
-        location=vertex_location,
+    vertex_credentials_config: Final = _resolve_vertex_live_credentials(
+        vertex_project=vertex_project,
+        vertex_location=vertex_location,
+        model=model,
     )
 
-    if vertex_credentials_config is None:
-        # Attempt to load defaults from environment/config if not already initialised
-        passthrough_endpoint_router.set_default_vertex_config()
-        vertex_credentials_config = passthrough_endpoint_router.get_vertex_credentials(
-            project_id=vertex_project,
-            location=vertex_location,
-        )
-
-    resolved_project = vertex_project
-    resolved_location: str | None = vertex_location
-    credentials_value: str | None = None
-
-    if vertex_credentials_config is not None:
-        resolved_project = resolved_project or vertex_credentials_config.vertex_project
-        temp_location: Final = resolved_location or vertex_credentials_config.vertex_location
-        # Ensure resolved_location is a string
-        if isinstance(temp_location, dict) or temp_location is not None:
-            resolved_location = str(temp_location)
-        else:
-            resolved_location = None
-        credentials_value = (
-            str(vertex_credentials_config.vertex_credentials)
-            if vertex_credentials_config.vertex_credentials is not None
-            else None
-        )
+    configured_project: Final = vertex_project or (
+        vertex_credentials_config.vertex_project if vertex_credentials_config is not None else None
+    )
+    configured_location: Final = vertex_location or (
+        vertex_credentials_config.vertex_location if vertex_credentials_config is not None else None
+    )
+    credentials_value: Final = (
+        vertex_credentials_config.vertex_credentials if vertex_credentials_config is not None else None
+    )
 
     try:
-        resolved_location = resolved_location or (vertex_llm_base.get_default_vertex_location())
-        if model:
-            resolved_location = vertex_llm_base.get_vertex_region(
-                vertex_region=resolved_location,
+        resolved_location: Final = (
+            vertex_llm_base.get_vertex_region(
+                vertex_region=configured_location or vertex_llm_base.get_default_vertex_location(),
                 model=model,
             )
+            if model
+            else configured_location or vertex_llm_base.get_default_vertex_location()
+        )
 
         (
             access_token,
             resolved_project,
         ) = await vertex_llm_base._ensure_access_token_async(
             credentials=credentials_value,
-            project_id=resolved_project,
+            project_id=configured_project,
             custom_llm_provider="vertex_ai_beta",
         )
     except Exception as e:
@@ -2453,7 +2735,7 @@ async def vertex_ai_live_websocket_passthrough(
                 request_data={},
             )
         if websocket.client_state != WebSocketState.DISCONNECTED:
-            await websocket.close(code=1011, reason="Vertex AI authentication failed")
+            await websocket.close(code=1011, reason=VERTEX_LIVE_UNCONFIGURED_CLOSE_REASON)
         return
 
     host_location: Final = resolved_location or vertex_llm_base.get_default_vertex_location()
@@ -2485,6 +2767,11 @@ async def vertex_ai_live_websocket_passthrough(
         forward_headers=False,
         endpoint="/vertex_ai/live",
         accept_websocket=False,
+        setup_model_rewriter=_build_vertex_live_setup_model_rewriter(
+            vertex_project=resolved_project,
+            vertex_location=resolved_location,
+            llm_router=_get_llm_router(),
+        ),
     )
 
 

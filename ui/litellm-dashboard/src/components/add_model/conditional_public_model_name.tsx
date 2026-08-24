@@ -1,9 +1,10 @@
-import React, { useEffect, useState } from "react";
-import { Table } from "antd";
+import React, { useEffect, useMemo } from "react";
+import type { ColumnDef } from "@tanstack/react-table";
 import { useFormContext, useWatch } from "react-hook-form";
+import { DataTable } from "@/components/shared/DataTable";
 import { Input } from "@/components/ui/input";
 import { SimpleTooltip } from "@/components/ui/tooltip";
-import { antdRules } from "../common_components/antdFormRules";
+import { validatorRules } from "../common_components/formRules";
 import { MountedFormField, type MountedFormValues } from "../common_components/MountedFormField";
 import { Providers } from "../provider_info_helpers";
 
@@ -11,6 +12,13 @@ interface ModelMapping {
   public_name: string;
   litellm_model: string;
 }
+
+const sameMappings = (left: readonly ModelMapping[], right: readonly ModelMapping[]): boolean =>
+  left.length === right.length &&
+  left.every(
+    (mapping, index) =>
+      mapping.public_name === right[index].public_name && mapping.litellm_model === right[index].litellm_model,
+  );
 
 const modelMappingsRule = {
   validator: async (_: unknown, value: unknown) => {
@@ -26,17 +34,18 @@ const modelMappingsRule = {
   },
 };
 
+const tooltipCodeClassName = "rounded-sm bg-background/20 px-1 py-0.5 font-mono text-xs";
+
 const ConditionalPublicModelName: React.FC = () => {
   const form = useFormContext<MountedFormValues>();
-  const [tableKey, setTableKey] = useState(0); // Add a key to force table re-render
 
-  // Watch the 'model' field for changes and ensure it's always an array
   const modelValue = useWatch({ control: form.control, name: "model" }) || [];
-  const selectedModels = Array.isArray(modelValue) ? modelValue : [modelValue];
+  const selectionKey = JSON.stringify(Array.isArray(modelValue) ? modelValue : [modelValue]);
+  const selectedModels = useMemo(() => JSON.parse(selectionKey) as string[], [selectionKey]);
   const customModelName = useWatch({ control: form.control, name: "custom_model_name" }) as string | undefined;
   const showPublicModelName = !selectedModels.includes("all-wildcard");
   const selectedProvider = useWatch({ control: form.control, name: "custom_llm_provider" });
-  // Force table to re-render when custom model name changes
+
   useEffect(() => {
     if (customModelName && selectedModels.includes("custom")) {
       const currentMappings = (form.getValues("model_mappings") as ModelMapping[]) || [];
@@ -55,8 +64,9 @@ const ConditionalPublicModelName: React.FC = () => {
         }
         return mapping;
       });
-      form.setValue("model_mappings", updatedMappings);
-      setTableKey((prev) => prev + 1); // Force table re-render
+      if (!sameMappings(currentMappings, updatedMappings)) {
+        form.setValue("model_mappings", updatedMappings);
+      }
     }
   }, [customModelName, selectedModels, selectedProvider, form]);
 
@@ -108,7 +118,6 @@ const ConditionalPublicModelName: React.FC = () => {
         });
 
         form.setValue("model_mappings", mappings);
-        setTableKey((prev) => prev + 1); // Force table re-render
       }
     }
   }, [selectedModels, customModelName, selectedProvider, form]);
@@ -116,40 +125,40 @@ const ConditionalPublicModelName: React.FC = () => {
   if (!showPublicModelName) return null;
 
   const publicNameTooltipContent = (
-    <>
-      <div className="mb-2 font-normal">The name you specify in your API calls to LiteLLM Proxy</div>
-      <div className="mb-2 font-normal">
+    <div className="flex flex-col gap-2 text-left font-normal">
+      <div>The name you specify in your API calls to LiteLLM Proxy</div>
+      <div>
         <strong>Example:</strong> If you name your public model{" "}
-        <code className="bg-muted px-1 py-0.5 rounded-sm text-xs">example-name</code>, and choose{" "}
-        <code className="bg-muted px-1 py-0.5 rounded-sm text-xs">openai/qwen-plus-latest</code> as the LiteLLM model
+        <code className={tooltipCodeClassName}>example-name</code>, and choose{" "}
+        <code className={tooltipCodeClassName}>openai/qwen-plus-latest</code> as the LiteLLM model
       </div>
-      <div className="mb-2 font-normal">
+      <div>
         <strong>Usage:</strong> You make an API call to the LiteLLM proxy with{" "}
-        <code className="bg-muted px-1 py-0.5 rounded-sm text-xs">model = &quot;example-name&quot;</code>
+        <code className={tooltipCodeClassName}>model = &quot;example-name&quot;</code>
       </div>
-      <div className="font-normal">
-        <strong>Result:</strong> LiteLLM sends{" "}
-        <code className="bg-muted px-1 py-0.5 rounded-sm text-xs">qwen-plus-latest</code> to the provider
+      <div>
+        <strong>Result:</strong> LiteLLM sends <code className={tooltipCodeClassName}>qwen-plus-latest</code> to the
+        provider
       </div>
-    </>
+    </div>
   );
 
   const liteLLMModelTooltipContent = <div>The model name LiteLLM will send to the LLM API</div>;
 
-  const columns = [
+  const columns: ColumnDef<ModelMapping>[] = [
     {
-      title: (
+      id: "public_name",
+      accessorKey: "public_name",
+      header: () => (
         <span className="flex items-center">
           Public Model Name
           <SimpleTooltip content={publicNameTooltipContent} width="500px" />
         </span>
       ),
-      dataIndex: "public_name",
-      key: "public_name",
-      render: (text: string, record: any, index: number) => {
+      cell: ({ row }) => {
         return (
           <Input
-            value={text}
+            value={row.original.public_name}
             onChange={(e) => {
               const newValue = e.target.value;
               const newMappings = [...((form.getValues("model_mappings") as ModelMapping[]) ?? [])];
@@ -175,7 +184,7 @@ const ConditionalPublicModelName: React.FC = () => {
                 finalPublicName = newValue.slice(0, -3); // Remove "-1m" (3 characters)
               }
 
-              newMappings[index].public_name = finalPublicName;
+              newMappings[row.index].public_name = finalPublicName;
               form.setValue("model_mappings", newMappings);
             }}
           />
@@ -183,14 +192,14 @@ const ConditionalPublicModelName: React.FC = () => {
       },
     },
     {
-      title: (
+      id: "litellm_model",
+      accessorKey: "litellm_model",
+      header: () => (
         <span className="flex items-center">
           LiteLLM Model Name
           <SimpleTooltip content={liteLLMModelTooltipContent} width="360px" />
         </span>
       ),
-      dataIndex: "litellm_model",
-      key: "litellm_model",
     },
   ];
 
@@ -204,16 +213,15 @@ const ConditionalPublicModelName: React.FC = () => {
         </span>
       }
       required
-      rules={{ validate: antdRules(modelMappingsRule) }}
+      rules={{ validate: validatorRules(modelMappingsRule) }}
       className="mb-4"
     >
       {(control) => (
-        <Table
-          key={tableKey} // Add key to force re-render
-          dataSource={control.value as ModelMapping[] | undefined}
+        <DataTable
+          data={(control.value as ModelMapping[] | undefined) ?? []}
           columns={columns}
-          pagination={false}
-          size="small"
+          getRowId={(row) => row.litellm_model}
+          size="compact"
         />
       )}
     </MountedFormField>

@@ -11,13 +11,9 @@ calculations for DB-sourced models with prompt caching pricing.
 
 import copy
 import os
-import sys
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 
 import litellm
 from litellm.main import _build_custom_pricing_entry
@@ -318,7 +314,7 @@ def test_register_model_strips_none_litellm_provider_from_get_model_info(monkeyp
         litellm.model_cost.pop(model_key, None)
 
 
-def test_register_model_inherits_builtin_cache_pricing_for_unmapped_key():
+def test_register_model_inherits_builtin_cache_pricing_for_unmapped_key(monkeypatch):
     """Registering a custom override under a key shape that
     ``get_model_info`` cannot resolve (e.g. a triple provider prefix like
     ``bedrock/bedrock/bedrock/us.anthropic.claude-sonnet-4-6``; a double
@@ -338,7 +334,7 @@ def test_register_model_inherits_builtin_cache_pricing_for_unmapped_key():
     from litellm.types.utils import PromptTokensDetailsWrapper, Usage
 
     original_model_cost = litellm.model_cost
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
     builtin_key = "us.anthropic.claude-sonnet-4-6"

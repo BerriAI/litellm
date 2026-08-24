@@ -13,7 +13,6 @@ from typing import Annotated, Any, Final
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 
-import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.proxy._types import (
@@ -29,6 +28,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.callback_config_validation import callback_config_error
 from litellm.proxy.common_utils.callback_utils import (
     _CALLBACK_VAR_ENCRYPTED_PREFIX,
     decrypt_callback_vars,
@@ -50,6 +50,16 @@ router: Final = APIRouter()
 
 
 _CALLBACK_VARS_REDACTED: Final = "***REDACTED***"
+
+
+def _callback_config_error(message: str) -> HTTPException:
+    return HTTPException(status_code=400, detail={"error": message})  # mutable-ok: FastAPI detail contract
+
+
+def _validate_team_callback(data: "AddTeamCallback") -> None:
+    error: Final = callback_config_error(data.callback_name, data.callback_vars)
+    if error is not None:
+        raise _callback_config_error(error)
 
 
 def _redact_callback_secrets(metadata: Any) -> Any:
@@ -182,13 +192,14 @@ async def _emit_team_callback_audit_log(
     Callback secrets are redacted before serialization so the audit table
     cannot itself become a credential-harvest sink.
     """
-    if litellm.store_audit_logs is not True:
-        return
-
     from litellm.proxy.management_helpers.audit_logs import (
         create_audit_log_for_update,
+        is_audit_logging_enabled,
     )
     from litellm.proxy.proxy_server import litellm_proxy_admin_name
+
+    if not is_audit_logging_enabled():
+        return
 
     redacted_before: Final = _redact_callback_secrets(before_metadata)
     redacted_after: Final = _redact_callback_secrets(after_metadata)
@@ -303,6 +314,8 @@ async def add_team_callbacks(
             team_obj=LiteLLM_TeamTable(**_existing_team.model_dump()),
             user_api_key_dict=user_api_key_dict,
         )
+
+        _validate_team_callback(data)
 
         # store team callback settings in metadata
         team_metadata = _existing_team.metadata

@@ -5,10 +5,8 @@ import {
   updateGuardrailCall,
 } from "@/components/networking";
 import { copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils";
-import { CodeOutlined, EyeInvisibleOutlined, InfoCircleOutlined, StopOutlined } from "@ant-design/icons";
 
-import { Button as AntdButton } from "antd";
-import { ArrowLeft, CheckIcon, CopyIcon } from "lucide-react";
+import { ArrowLeft, Ban, CheckIcon, Code, CopyIcon, EyeOff, Info } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -16,7 +14,7 @@ import React, { useCallback, useEffect, useLayoutEffect, useState } from "react"
 import { useForm } from "react-hook-form";
 import { toast } from "@/lib/toast";
 import { Logo } from "@/components/molecules/logo/Logo";
-import { FieldGroup } from "@/components/shared/form/field";
+import { FieldGroup } from "@/components/ui/field";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -511,24 +509,26 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
   return (
     <div className="p-4">
       <div>
-        <AntdButton type="text" icon={<ArrowLeft className="w-4 h-4" />} onClick={onClose} className="mb-4">
+        <Button variant="ghost" onClick={onClose} className="mb-4">
+          <ArrowLeft className="w-4 h-4" />
           Back to Guardrails
-        </AntdButton>
+        </Button>
         <h1 className="text-2xl font-semibold">{guardrailData.guardrail_name || "Unnamed Guardrail"}</h1>
         <div className="flex items-center cursor-pointer">
           <p className="text-muted-foreground font-mono">{guardrailData.guardrail_id}</p>
 
-          <AntdButton
-            type="text"
-            size="small"
-            icon={copiedStates["guardrail-id"] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
+          <Button
+            variant="ghost"
+            size="icon-xs"
             onClick={() => copyToClipboard(guardrailData.guardrail_id, "guardrail-id")}
             className={`left-2 z-10 transition-all duration-200 ${
               copiedStates["guardrail-id"]
-                ? "text-green-600 bg-green-50 border-green-200 dark:text-green-400 dark:bg-green-950/40 dark:border-green-900"
+                ? "text-success bg-success/10 border-success/20"
                 : "text-muted-foreground hover:text-foreground hover:bg-muted"
             }`}
-          />
+          >
+            {copiedStates["guardrail-id"] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
+          </Button>
         </div>
       </div>
 
@@ -603,10 +603,10 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
                           <p className="flex-1">
                             <span
                               className={`inline-flex items-center gap-1.5 ${
-                                value === "MASK" ? "text-blue-600" : "text-red-600"
+                                value === "MASK" ? "text-info" : "text-destructive"
                               }`}
                             >
-                              {value === "MASK" ? <EyeInvisibleOutlined /> : <StopOutlined />}
+                              {value === "MASK" ? <EyeOff className="size-3.5" /> : <Ban className="size-3.5" />}
                               {String(value)}
                             </span>
                           </p>
@@ -628,13 +628,14 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
               <Card className="block mt-6 p-6">
                 <div className="flex justify-between items-center mb-4">
                   <div className="flex items-center gap-2">
-                    <CodeOutlined className="text-blue-500" />
+                    <Code className="text-info" />
                     <p className="font-medium text-lg">Custom Code</p>
                   </div>
                   {isAdmin && !isConfigGuardrail && (
-                    <AntdButton size="small" icon={<CodeOutlined />} onClick={() => setCustomCodeModalVisible(true)}>
+                    <Button variant="outline" size="sm" onClick={() => setCustomCodeModalVisible(true)}>
+                      <Code />
                       Edit Code
-                    </AntdButton>
+                    </Button>
                   )}
                 </div>
                 <div className="relative rounded-lg overflow-hidden border border-gray-700 bg-[#1e1e1e]">
@@ -665,17 +666,20 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
                   <h3 className="text-lg font-medium">Guardrail Settings</h3>
                   {isConfigGuardrail && (
                     <SimpleTooltip content="Guardrail is defined in the config file and cannot be edited.">
-                      <InfoCircleOutlined />
+                      <Info role="img" aria-label="Config guardrail details" className="size-4 text-muted-foreground" />
                     </SimpleTooltip>
                   )}
                   {!isEditing &&
                     !isConfigGuardrail &&
                     (guardrailData.litellm_params?.guardrail === "custom_code" ? (
-                      <AntdButton icon={<CodeOutlined />} onClick={() => setCustomCodeModalVisible(true)}>
+                      <Button variant="outline" onClick={() => setCustomCodeModalVisible(true)}>
+                        <Code />
                         Edit Code
-                      </AntdButton>
+                      </Button>
                     ) : (
-                      <AntdButton onClick={() => setIsEditing(true)}>Edit Settings</AntdButton>
+                      <Button variant="outline" onClick={() => setIsEditing(true)}>
+                        Edit Settings
+                      </Button>
                     ))}
                 </div>
 

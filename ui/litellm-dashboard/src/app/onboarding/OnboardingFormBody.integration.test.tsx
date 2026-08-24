@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { OnboardingFormBody } from "./OnboardingFormBody";
@@ -20,7 +20,7 @@ describe("OnboardingFormBody submit payload", () => {
     const onSubmit = vi.fn();
     render(<OnboardingFormBody {...defaultProps} onSubmit={onSubmit} />);
 
-    await user.type(screen.getByLabelText("Password"), "hunter2");
+    fireEvent.change(screen.getByLabelText("Password"), { target: { value: "hunter2" } });
     await user.click(screen.getByRole("button", { name: "Sign Up" }));
 
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));

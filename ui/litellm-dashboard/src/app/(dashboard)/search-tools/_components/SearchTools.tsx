@@ -1,6 +1,5 @@
 import { isAdminRole } from "@/utils/roles";
 import { useQuery } from "@tanstack/react-query";
-import { Modal } from "antd";
 import React, { useState } from "react";
 import { z } from "zod/v4";
 import DeleteResourceModal from "@/components/common_components/DeleteResourceModal";
@@ -12,7 +11,7 @@ import {
   updateSearchTool,
 } from "@/components/networking";
 import { PasswordInput } from "@/components/shared/PasswordInput";
-import { FieldGroup } from "@/components/shared/form/field";
+import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -25,6 +24,7 @@ import { buildSearchToolPayload } from "./searchToolPayload";
 import SearchToolTable from "./SearchToolTable";
 import { SearchToolView } from "./SearchToolView";
 import { AvailableSearchProvider, SearchTool } from "./types";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 interface SearchToolsProps {
   accessToken: string | null;
@@ -284,19 +284,36 @@ const SearchTools: React.FC<SearchToolsProps> = ({ accessToken, userRole, userID
         setModalVisible={setCreateModalVisible}
       />
 
-      <Modal
-        title="Edit Search Tool"
+      <Dialog
         open={isEditModalVisible}
-        onOk={handleEditSubmit}
-        onCancel={() => {
-          setEditModalVisible(false);
-          form.reset(EMPTY_EDIT_VALUES);
-          setSelectedToolId(null);
+        onOpenChange={(open) => {
+          if (!open) {
+            setEditModalVisible(false);
+            form.reset(EMPTY_EDIT_VALUES);
+            setSelectedToolId(null);
+          }
         }}
-        width={600}
       >
-        {renderEditForm()}
-      </Modal>
+        <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[600px]">
+          <DialogHeader>
+            <DialogTitle>Edit Search Tool</DialogTitle>
+          </DialogHeader>
+          {renderEditForm()}
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setEditModalVisible(false);
+                form.reset(EMPTY_EDIT_VALUES);
+                setSelectedToolId(null);
+              }}
+            >
+              Cancel
+            </Button>
+            <Button onClick={handleEditSubmit}>OK</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <h1 className="text-lg font-semibold text-foreground">Search Tools</h1>
       <p className="mt-2 text-sm text-muted-foreground">Configure and manage your search providers</p>

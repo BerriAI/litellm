@@ -1,7 +1,8 @@
 import json
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from dataclasses import replace as dataclasses_replace
+from enum import Enum
 from typing import Any, Final, Literal
 
 import litellm
@@ -106,7 +107,7 @@ async def _handle_completed_batch(
             and getattr(litellm, "disable_vertex_batch_output_transformation", False)
         )
         else _aggregate_batch_cost_usage_models(
-            entries=_iter_batch_input_entries(file_content),
+            entries=_iter_batch_output_entries(file_content),
             custom_llm_provider=custom_llm_provider,
             model_name=model_name,
             model_info=model_info,
@@ -118,6 +119,13 @@ async def _handle_completed_batch(
     return dataclasses_replace(
         output_file_result, failed_requests=output_file_result.failed_requests + error_file_failed_requests
     )
+
+
+class _LineOutcome(Enum):
+    """A batch output line that yielded no billable stats."""
+
+    PROVIDER_FAILED = "provider_failed"
+    UNCOSTABLE = "uncostable"
 
 
 @dataclass(frozen=True, slots=True)
@@ -137,50 +145,99 @@ def _classify_output_line_stats(
     custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "bedrock"],
     model_name: str | None,
     model_info: ModelInfo | None,
-) -> Iterator[_BatchOutputLineStats | None]:
-    """Classify every output line in a single pass: yields stats for a
-    successful line, ``None`` for a failed one (per ``_batch_response_was_successful``).
-    Counting failures this way avoids a second pass over a potentially huge output file."""
-    from litellm.cost_calculator import batch_cost_calculator
-
+) -> Iterator[_BatchOutputLineStats | _LineOutcome]:
+    """Classify every output line in a single pass, so counting failures never needs
+    a second read of a potentially huge output file. A line the provider reported as
+    failed yields ``PROVIDER_FAILED``; a successful line litellm could not price
+    yields ``UNCOSTABLE`` and still counts as a successful request billed at $0, so
+    the counts stay reconcilable with the provider's own ``request_counts``."""
     for entry in entries:
         if not _batch_response_was_successful(entry, custom_llm_provider):
-            yield None
+            yield _LineOutcome.PROVIDER_FAILED
             continue
-        response_body = _get_response_from_batch_job_output_file(entry, custom_llm_provider)
-        usage = _get_batch_job_usage_from_response_body(response_body, custom_llm_provider)
-        prompt_details = parse_prompt_tokens_details(usage)
-        raw_model = response_body.get("model")
-        response_model = raw_model if isinstance(raw_model, str) and raw_model else None
-        if model_info is not None or custom_llm_provider in ("anthropic", "bedrock"):
-            if custom_llm_provider == "bedrock" and model_name:
-                cost_model = model_name
-            else:
-                cost_model = response_model or model_name or ""
-            prompt_cost, completion_cost = batch_cost_calculator(
-                usage=usage,
-                model=cost_model,
-                custom_llm_provider=custom_llm_provider,
-                model_info=model_info,
-            )
-            line_cost = prompt_cost + completion_cost
-        else:
-            line_cost = litellm.completion_cost(
-                completion_response=response_body,
-                custom_llm_provider=custom_llm_provider,
-                call_type=CallTypes.aretrieve_batch.value,
-            )
-        reasoning_tokens = usage.completion_tokens_details.reasoning_tokens if usage.completion_tokens_details else None
-        yield _BatchOutputLineStats(
-            cost=line_cost,
-            prompt_tokens=usage.prompt_tokens,
-            completion_tokens=usage.completion_tokens,
-            total_tokens=usage.total_tokens,
-            cache_read_tokens=prompt_details["cache_hit_tokens"],
-            cache_creation_tokens=prompt_details["cache_creation_tokens"],
-            reasoning_tokens=reasoning_tokens or 0,
-            model=response_model,
+        stats = _safe_output_line_stats(entry, custom_llm_provider, model_name, model_info)
+        yield stats if stats is not None else _LineOutcome.UNCOSTABLE
+
+
+def _safe_output_line_stats(
+    entry: Mapping[str, Any],
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "bedrock"],
+    model_name: str | None,
+    model_info: ModelInfo | None,
+) -> _BatchOutputLineStats | None:
+    """Return the stats for one provider-successful batch output line, or None when
+    it cannot be costed, so a single bad line never aborts the whole batch's cost
+    accounting."""
+    custom_id: Final = entry.get("custom_id") if isinstance(entry, dict) else None
+    try:
+        return _compute_output_line_stats(entry, custom_llm_provider, model_name, model_info)
+    except Exception as e:  # noqa: BLE001  # any single line's costing failure must not abort the whole batch
+        verbose_logger.warning(
+            "batch output line could not be costed, so it is billed at $0 and the rest of the batch "
+            "is still billed. custom_id=%s error=%s",
+            custom_id,
+            str(e),
         )
+        return None
+
+
+def _compute_output_line_stats(
+    entry: Mapping[str, Any],
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "bedrock"],
+    model_name: str | None,
+    model_info: ModelInfo | None,
+) -> _BatchOutputLineStats:
+    response_body: Final = _get_response_from_batch_job_output_file(entry, custom_llm_provider)
+    usage: Final = _get_batch_job_usage_from_response_body(response_body, custom_llm_provider)
+    prompt_details: Final = parse_prompt_tokens_details(usage)
+    raw_model: Final = response_body.get("model")
+    response_model: Final = raw_model if isinstance(raw_model, str) and raw_model else None
+    completion_details: Final = usage.completion_tokens_details
+    return _BatchOutputLineStats(
+        cost=_output_line_cost(
+            response_body=response_body,
+            usage=usage,
+            custom_llm_provider=custom_llm_provider,
+            model_name=model_name,
+            response_model=response_model,
+            model_info=model_info,
+        ),
+        prompt_tokens=usage.prompt_tokens,
+        completion_tokens=usage.completion_tokens,
+        total_tokens=usage.total_tokens,
+        cache_read_tokens=prompt_details["cache_hit_tokens"],
+        cache_creation_tokens=prompt_details["cache_creation_tokens"],
+        reasoning_tokens=(completion_details.reasoning_tokens if completion_details else None) or 0,
+        model=response_model,
+    )
+
+
+def _output_line_cost(
+    response_body: Mapping[str, Any],
+    usage: Usage,
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "bedrock"],
+    model_name: str | None,
+    response_model: str | None,
+    model_info: ModelInfo | None,
+) -> float:
+    from litellm.cost_calculator import batch_cost_calculator
+
+    if model_info is None and custom_llm_provider not in ("anthropic", "bedrock"):
+        return litellm.completion_cost(
+            completion_response=response_body,
+            custom_llm_provider=custom_llm_provider,
+            call_type=CallTypes.aretrieve_batch.value,
+        )
+    cost_model: Final = (
+        model_name if custom_llm_provider == "bedrock" and model_name else response_model or model_name or ""
+    )
+    prompt_cost, completion_cost = batch_cost_calculator(
+        usage=usage,
+        model=cost_model,
+        custom_llm_provider=custom_llm_provider,
+        model_info=model_info,
+    )
+    return prompt_cost + completion_cost
 
 
 def _aggregate_batch_cost_usage_models(
@@ -193,9 +250,9 @@ def _aggregate_batch_cost_usage_models(
     entries in a single pass, holding one small stats record per line instead
     of the parsed file."""
     all_results: Final = tuple(_classify_output_line_stats(entries, custom_llm_provider, model_name, model_info))
-    line_stats: Final = tuple(stats for stats in all_results if stats is not None)
-    successful_requests: Final = len(line_stats)
-    failed_requests: Final = len(all_results) - successful_requests
+    line_stats: Final = tuple(result for result in all_results if isinstance(result, _BatchOutputLineStats))
+    failed_requests: Final = sum(1 for result in all_results if result is _LineOutcome.PROVIDER_FAILED)
+    successful_requests: Final = len(all_results) - failed_requests
 
     cache_token_params: Final = {
         key: tokens
@@ -315,6 +372,32 @@ def calculate_vertex_ai_batch_cost_and_usage(
     )
 
 
+def _provider_output_file_id(output_file_id: str) -> str:
+    """
+    Resolve the file id the provider actually knows: unified ids yield their embedded
+    llm_output_file_id, model-encoded ids decode to the raw provider id, raw ids pass through.
+    """
+    from litellm.proxy.openai_files_endpoints.common_utils import (
+        _is_base64_encoded_unified_file_id,
+        get_original_file_id,
+    )
+
+    unified_file_id: Final = _is_base64_encoded_unified_file_id(output_file_id)
+    if not unified_file_id:
+        return get_original_file_id(output_file_id)
+    try:
+        extracted: Final = unified_file_id.split("llm_output_file_id,")[1].split(";")[0]
+    except (IndexError, AttributeError) as e:
+        verbose_logger.error(
+            "Failed to extract LLM output file ID from unified file ID: %s, error: %s",
+            output_file_id,
+            e,
+        )
+        return output_file_id
+    verbose_logger.debug("Extracted LLM output file ID from unified file ID: %s", extracted)
+    return extracted
+
+
 async def _fetch_batch_managed_file_content(
     file_id: str,
     custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic"] = "openai",
@@ -330,22 +413,10 @@ async def _fetch_batch_managed_file_content(
                        Required for Azure and other providers that need authentication
     """
     from litellm.files.main import afile_content
-    from litellm.proxy.openai_files_endpoints.common_utils import (
-        _is_base64_encoded_unified_file_id,
-    )
-
-    resolved_file_id = file_id
-    is_base64_unified_file_id: Final = _is_base64_encoded_unified_file_id(file_id)
-    if is_base64_unified_file_id:
-        try:
-            resolved_file_id = is_base64_unified_file_id.split("llm_output_file_id,")[1].split(";")[0]
-            verbose_logger.debug("Extracted LLM output file ID from unified file ID: %s", resolved_file_id)
-        except (IndexError, AttributeError) as e:
-            verbose_logger.error("Failed to extract LLM output file ID from unified file ID: %s, error: %s", file_id, e)
 
     # Build kwargs for afile_content with credentials from litellm_params
     file_content_kwargs: Final = {
-        "file_id": resolved_file_id,
+        "file_id": _provider_output_file_id(file_id),
         "custom_llm_provider": custom_llm_provider,
     }
 
@@ -446,9 +517,10 @@ def _extract_file_access_credentials(litellm_params: dict | None) -> dict:
 
 def _get_file_content_as_dictionary(file_content: bytes) -> list[dict]:
     """
-    Get the file content as a list of dictionaries from JSON Lines format
+    Get the file content as a list of dictionaries from JSON Lines format,
+    skipping malformed lines
     """
-    return list(_iter_batch_input_entries(file_content))
+    return list(_iter_batch_output_entries(file_content))
 
 
 def _iter_batch_input_lines(file_content: bytes) -> Iterator[bytes]:
@@ -469,15 +541,29 @@ def _iter_batch_input_lines(file_content: bytes) -> Iterator[bytes]:
             yield line
 
 
-def _iter_batch_input_entries(file_content: bytes) -> Iterator[dict]:
+def _iter_batch_output_entries(file_content: bytes) -> Iterator[dict]:
     """
-    Yield parsed batch input JSONL entries one at a time without materializing the
-    whole file as a list, so peak memory stays bounded. Raises on a malformed line;
-    callers that must survive bad rows should iterate ``_iter_batch_input_lines``
-    and parse per-row instead.
+    Yield parsed batch output JSONL entries one at a time without materializing
+    the whole file as a list, so peak memory stays bounded. A malformed or
+    non-object line is skipped with a warning so one bad line never aborts the
+    whole batch's cost accounting.
     """
     for line in _iter_batch_input_lines(file_content):
-        yield json.loads(line)
+        entry = _parse_batch_output_line(line)
+        if entry is not None:
+            yield entry
+
+
+def _parse_batch_output_line(line: bytes) -> dict | None:
+    try:
+        parsed: Final = json.loads(line)
+    except ValueError as e:
+        verbose_logger.warning("skipping malformed batch output line: %s", str(e))
+        return None
+    if isinstance(parsed, dict):
+        return parsed
+    verbose_logger.warning("skipping non-object batch output line of type %s", type(parsed).__name__)
+    return None
 
 
 # A batch request's input tokens scale roughly with its serialized size, so this
@@ -548,7 +634,9 @@ def _count_prompt_or_input_tokens(model: str, value: Any) -> int:
     return 0
 
 
-def _get_batch_job_usage_from_response_body(response_body: dict, custom_llm_provider: str = "openai") -> Usage:
+def _get_batch_job_usage_from_response_body(
+    response_body: Mapping[str, Any], custom_llm_provider: str = "openai"
+) -> Usage:
     """
     Get the tokens of a batch job from the response body
     """
@@ -580,7 +668,7 @@ def _get_batch_job_usage_from_response_body(response_body: dict, custom_llm_prov
     return usage
 
 
-def _get_anthropic_result_from_batch_results_line(batch_results_line: dict) -> dict:
+def _get_anthropic_result_from_batch_results_line(batch_results_line: Mapping[str, Any]) -> dict:
     """
     Get the ``result`` object from a line of an Anthropic message batch results JSONL file.
 
@@ -590,7 +678,9 @@ def _get_anthropic_result_from_batch_results_line(batch_results_line: dict) -> d
     return batch_results_line.get("result", None) or {}
 
 
-def _get_response_from_batch_job_output_file(batch_job_output_file: dict, custom_llm_provider: str = "openai") -> Any:
+def _get_response_from_batch_job_output_file(
+    batch_job_output_file: Mapping[str, Any], custom_llm_provider: str = "openai"
+) -> Any:
     """
     Get the response from the batch job output file
     """
@@ -603,7 +693,9 @@ def _get_response_from_batch_job_output_file(batch_job_output_file: dict, custom
     return _response_body
 
 
-def _batch_response_was_successful(batch_job_output_file: dict, custom_llm_provider: str = "openai") -> bool:
+def _batch_response_was_successful(
+    batch_job_output_file: Mapping[str, Any], custom_llm_provider: str = "openai"
+) -> bool:
     """
     Check if the batch job response was successful
 

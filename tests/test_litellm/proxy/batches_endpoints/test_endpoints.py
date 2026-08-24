@@ -29,8 +29,7 @@ added to this layer raises instead of silently passing - the inventory of seams
 cannot drift without a test failure.
 """
 
-import os
-import sys
+import json
 from contextlib import ExitStack
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
@@ -38,7 +37,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../.."))
 
 import litellm
 import litellm.proxy.batches_endpoints.endpoints as endpoints
@@ -53,7 +51,7 @@ from litellm.router import Router
 from litellm.types.llms.openai import BatchJobStatus
 from litellm.types.utils import CredentialItem, LiteLLMBatch
 
-from fastapi import Response
+from fastapi import Request, Response
 
 # --------------------------------------------------------------------------- #
 # Fixtures: distinguishable credentials per model so a wrong/hardcoded model_id
@@ -854,6 +852,48 @@ async def test_create__missing_required_param_is_400(harness, body, missing_para
     harness.router_acreate.assert_not_called()
 
 
+def _raw_batches_request(body: Dict[str, Any]) -> MagicMock:
+    """A request that reaches the real pre-call logic, which the `harness` fixture
+    mocks out. Metadata validation lives there, so it cannot be seen through the seam."""
+    request = MagicMock(spec=Request)
+    request.url = MagicMock()
+    request.url.__str__.return_value = "http://localhost/v1/batches"
+    request.url.path = "/v1/batches"
+    request.method = "POST"
+    request.query_params = {}
+    request.headers = {"Content-Type": "application/json"}
+    request.client = MagicMock()
+    request.client.host = "127.0.0.1"
+    request.body = AsyncMock(return_value=json.dumps(body).encode())
+    return request
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("field", ["metadata", "litellm_metadata"])
+async def test_create__non_object_metadata_is_400(field):
+    """A non-object metadata field is rejected with a 400 naming it (#37147), rather
+    than being coerced to None and silently dropped, or crashing behind a 500 with
+    "'str' object has no attribute 'update'"."""
+    body = {
+        "input_file_id": "file-abc",
+        "endpoint": "/v1/chat/completions",
+        "completion_window": "24h",
+        field: "abc",
+    }
+
+    with pytest.raises(ProxyException) as exc_info:
+        await endpoints.create_batch(
+            request=_raw_batches_request(body),
+            fastapi_response=Response(),
+            provider=None,
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+        )
+
+    assert exc_info.value.code == "400"
+    assert exc_info.value.param == field
+    assert "has no attribute 'update'" not in exc_info.value.message
+
+
 # =========================================================================== #
 # Team-level batch expiry enforcement (independent of routing).
 # =========================================================================== #
@@ -979,7 +1019,7 @@ async def test_create__exception_calls_failure_hook(harness, openai_env_creds):
     )
     harness.litellm_acreate.side_effect = ValueError("provider boom")
 
-    with pytest.raises(Exception):
+    with pytest.raises(ProxyException):
         await call_create(harness)
 
     harness.logging.post_call_failure_hook.assert_called_once()
@@ -1437,7 +1477,7 @@ async def test_retrieve__uses_aretrieve_batch_route_type(retrieve_harness, opena
 async def test_retrieve__exception_calls_failure_hook(retrieve_harness, openai_env_creds):
     retrieve_harness.litellm_aretrieve.side_effect = ValueError("provider boom")
 
-    with pytest.raises(Exception):
+    with pytest.raises(ProxyException):
         await call_retrieve(retrieve_harness, "batch-raw-xyz")
 
     retrieve_harness.logging.post_call_failure_hook.assert_called_once()
@@ -1844,7 +1884,7 @@ async def test_list__uses_alist_batches_route_type(list_harness):
 async def test_list__exception_calls_failure_hook(list_harness):
     list_harness.litellm_alist.side_effect = ValueError("provider boom")
 
-    with pytest.raises(Exception):
+    with pytest.raises(ProxyException):
         await call_list(list_harness)
 
     list_harness.logging.post_call_failure_hook.assert_called_once()
@@ -2233,7 +2273,7 @@ async def test_cancel__uses_acancel_batch_route_type(cancel_harness, openai_env_
 async def test_cancel__exception_calls_failure_hook(cancel_harness, openai_env_creds):
     cancel_harness.litellm_acancel.side_effect = ValueError("provider boom")
 
-    with pytest.raises(Exception):
+    with pytest.raises(ProxyException):
         await call_cancel(cancel_harness, "batch-raw-xyz")
 
     cancel_harness.logging.post_call_failure_hook.assert_called_once()

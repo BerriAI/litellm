@@ -1,9 +1,8 @@
-import { Modal } from "antd";
 import React, { useEffect, useMemo, useState } from "react";
 import { z } from "zod/v4";
 import NumericalInput from "../shared/numerical_input";
 import BudgetDurationDropdown from "../common_components/budget_duration_dropdown";
-import { FieldGroup } from "@/components/shared/form/field";
+import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { MultiSelect } from "@/components/shared/MultiSelect";
 import { Button } from "@/components/ui/button";
@@ -19,6 +18,7 @@ import {
   type MemberFieldsConfig,
   type MemberFormValues,
 } from "./memberFormValues";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 interface BaseMember {
   user_email?: string;
@@ -168,91 +168,98 @@ const MemberModal = <T extends BaseMember>({
   );
 
   return (
-    <Modal
-      title={config.title || (mode === "add" ? "Add Member" : "Edit Member")}
-      open={visible}
-      width={1000}
-      footer={null}
-      onCancel={onCancel}
-    >
-      <form onSubmit={form.handleSubmit(handleSubmit)}>
-        <FieldGroup>
-          {config.showEmail && (
-            <FormField control={form.control} name="user_email" label="Email">
-              {({ ref, value, onChange, ...rest }) => (
-                <Input
-                  {...rest}
-                  ref={ref}
-                  placeholder="user@example.com"
-                  value={typeof value === "string" ? value : ""}
-                  onChange={(event) => onChange(event.target.value)}
-                />
-              )}
-            </FormField>
-          )}
-
-          {config.showEmail && config.showUserId && <div className="text-center text-sm text-muted-foreground">OR</div>}
-
-          {config.showUserId && (
-            <FormField control={form.control} name="user_id" label="User ID">
-              {({ ref, value, onChange, ...rest }) => (
-                <Input
-                  {...rest}
-                  ref={ref}
-                  placeholder="user_123"
-                  value={typeof value === "string" ? value : ""}
-                  onChange={(event) => onChange(event.target.value)}
-                />
-              )}
-            </FormField>
-          )}
-
-          <FormField
-            control={form.control}
-            name="role"
-            label={
-              <span className="flex items-center gap-2">
-                <span>Role</span>
-                {mode === "edit" && initialData && (
-                  <span className="text-sm text-muted-foreground">(Current: {getRoleLabel(initialData.role)})</span>
+    <Dialog open={visible} onOpenChange={(open) => !open && onCancel()}>
+      <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[1000px]">
+        <DialogHeader>
+          <DialogTitle>{config.title || (mode === "add" ? "Add Member" : "Edit Member")}</DialogTitle>
+        </DialogHeader>
+        <form onSubmit={form.handleSubmit(handleSubmit)}>
+          <FieldGroup>
+            {config.showEmail && (
+              <FormField control={form.control} name="user_email" label="Email">
+                {({ ref, value, onChange, ...rest }) => (
+                  <Input
+                    {...rest}
+                    ref={ref}
+                    placeholder="user@example.com"
+                    value={typeof value === "string" ? value : ""}
+                    onChange={(event) => onChange(event.target.value)}
+                  />
                 )}
-              </span>
-            }
-          >
-            {({ id, value, onChange }) => (
-              <Select
-                items={Object.fromEntries(orderedRoleOptions.map((option) => [option.value, option.label]))}
-                value={typeof value === "string" && value !== "" ? value : null}
-                onValueChange={(selected: string | null) => onChange(selected ?? undefined)}
-              >
-                <SelectTrigger id={id} className="w-full">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {orderedRoleOptions.map((option) => (
-                    <SelectItem key={option.value} value={option.value}>
-                      {option.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              </FormField>
             )}
-          </FormField>
 
-          {config.additionalFields?.map((field) => renderField(field, field.name))}
-        </FieldGroup>
+            {config.showEmail && config.showUserId && (
+              <div className="text-center text-sm text-muted-foreground">OR</div>
+            )}
 
-        <div className="mt-6 text-right">
-          <Button type="button" variant="outline" onClick={onCancel} disabled={isSubmitting} className="mr-2">
-            Cancel
-          </Button>
-          <Button type="submit" variant="outline" disabled={isSubmitting}>
-            {isSubmitting && <UiLoadingSpinner className="size-4" />}
-            {mode === "add" ? (isSubmitting ? "Adding..." : "Add Member") : isSubmitting ? "Saving..." : "Save Changes"}
-          </Button>
-        </div>
-      </form>
-    </Modal>
+            {config.showUserId && (
+              <FormField control={form.control} name="user_id" label="User ID">
+                {({ ref, value, onChange, ...rest }) => (
+                  <Input
+                    {...rest}
+                    ref={ref}
+                    placeholder="user_123"
+                    value={typeof value === "string" ? value : ""}
+                    onChange={(event) => onChange(event.target.value)}
+                  />
+                )}
+              </FormField>
+            )}
+
+            <FormField
+              control={form.control}
+              name="role"
+              label={
+                <span className="flex items-center gap-2">
+                  <span>Role</span>
+                  {mode === "edit" && initialData && (
+                    <span className="text-sm text-muted-foreground">(Current: {getRoleLabel(initialData.role)})</span>
+                  )}
+                </span>
+              }
+            >
+              {({ id, value, onChange }) => (
+                <Select
+                  items={Object.fromEntries(orderedRoleOptions.map((option) => [option.value, option.label]))}
+                  value={typeof value === "string" && value !== "" ? value : null}
+                  onValueChange={(selected: string | null) => onChange(selected ?? undefined)}
+                >
+                  <SelectTrigger id={id} className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {orderedRoleOptions.map((option) => (
+                      <SelectItem key={option.value} value={option.value}>
+                        {option.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
+            </FormField>
+
+            {config.additionalFields?.map((field) => renderField(field, field.name))}
+          </FieldGroup>
+
+          <div className="mt-6 text-right">
+            <Button type="button" variant="outline" onClick={onCancel} disabled={isSubmitting} className="mr-2">
+              Cancel
+            </Button>
+            <Button type="submit" variant="outline" disabled={isSubmitting}>
+              {isSubmitting && <UiLoadingSpinner className="size-4" />}
+              {mode === "add"
+                ? isSubmitting
+                  ? "Adding..."
+                  : "Add Member"
+                : isSubmitting
+                  ? "Saving..."
+                  : "Save Changes"}
+            </Button>
+          </div>
+        </form>
+      </DialogContent>
+    </Dialog>
   );
 };
 

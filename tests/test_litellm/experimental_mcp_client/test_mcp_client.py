@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import os
 import sys
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -20,18 +21,22 @@ from mcp.types import (
 )
 
 # Add the parent directory to the path so we can import litellm
-sys.path.insert(0, "../../../")
 
 import litellm.experimental_mcp_client.client as mcp_client_module
 from litellm.experimental_mcp_client.client import (
     MCPClient,
     _as_read_timeout,
     _first_non_cancelled_cause,
+    strip_auth_scheme,
 )
 from litellm.proxy._experimental.mcp_server.faults.list_outcomes import (
     classify_list_exception,
     list_fault_http_status,
 )
+from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+    _format_byok_openapi_auth_header,
+)
+from litellm.types.mcp_server.mcp_server_manager import MCPServer
 from litellm.types.mcp import MCPAuth, MCPStdioConfig, MCPTransport
 
 
@@ -69,11 +74,10 @@ class TestMCPClient:
         # Test missing stdio_config
         client = MCPClient(transport_type=MCPTransport.stdio)
 
+        async def _noop(session):
+            return None
+
         with pytest.raises(ValueError, match="stdio_config is required for stdio transport"):
-
-            async def _noop(session):
-                return None
-
             await client.run_with_session(_noop)
 
     @pytest.mark.asyncio
@@ -887,3 +891,159 @@ async def test_read_timeout_logs_an_actionable_line_that_quiet_on_error_cannot_d
     assert timeout_lines, f"expected an actionable timeout warning, got {warnings}"
     assert "http://upstream.local/mcp" in timeout_lines[0], "the line must name the server that stopped answering"
     assert "0.5s" in timeout_lines[0], "the line must name the budget that elapsed"
+
+
+class TestAuthSchemeNormalization:
+    """MCP egress must emit exactly one authorization scheme.
+
+    Callers supply both a bare credential and a complete header value (the latter whenever it is
+    passed through from ``x-mcp-auth`` / ``Authorization``), and the second shape used to be given
+    a second scheme, which upstream servers reject as a malformed token.
+    """
+
+    @pytest.mark.parametrize(
+        "auth_type, auth_value",
+        [
+            (MCPAuth.bearer_token, "bare-token"),
+            (MCPAuth.bearer_token, "Bearer bare-token"),
+            (MCPAuth.bearer_token, "bearer bare-token"),
+            (MCPAuth.bearer_token, "  BEARER   bare-token"),
+            (MCPAuth.oauth2, "bare-token"),
+            (MCPAuth.oauth2, "Bearer bare-token"),
+            (MCPAuth.oauth2_token_exchange, "bare-token"),
+            (MCPAuth.oauth2_token_exchange, "Bearer bare-token"),
+        ],
+    )
+    def test_bearer_family_emits_exactly_one_scheme(self, auth_type, auth_value):
+        client = MCPClient(server_url="http://example.com/mcp", auth_type=auth_type, auth_value=auth_value)
+
+        assert client._get_auth_headers()["Authorization"] == "Bearer bare-token"
+
+    @pytest.mark.parametrize("auth_value", ["bare-token", "token bare-token", "TOKEN bare-token"])
+    def test_token_scheme_emits_exactly_one_scheme(self, auth_value):
+        client = MCPClient(server_url="http://example.com/mcp", auth_type=MCPAuth.token, auth_value=auth_value)
+
+        assert client._get_auth_headers()["Authorization"] == "token bare-token"
+
+    @pytest.mark.parametrize(
+        "auth_type, auth_value",
+        [
+            (MCPAuth.bearer_token, "Bearertoken"),
+            (MCPAuth.oauth2, "Bearer.eyJzdWIiOiJhYmMifQ.sig"),
+            (MCPAuth.token, "tokenish"),
+        ],
+    )
+    def test_a_credential_merely_starting_with_the_scheme_text_is_left_intact(self, auth_type, auth_value):
+        """RFC 7235 requires whitespace between scheme and credential, so a token whose first
+        characters happen to spell the scheme is a credential, not a schemed value."""
+        client = MCPClient(server_url="http://example.com/mcp", auth_type=auth_type, auth_value=auth_value)
+
+        scheme = "token" if auth_type == MCPAuth.token else "Bearer"
+        assert client._get_auth_headers()["Authorization"] == f"{scheme} {auth_value}"
+
+    @pytest.mark.parametrize(
+        "auth_type, auth_value, expected",
+        [
+            (MCPAuth.bearer_token, "Bearer ", "Bearer Bearer"),
+            (MCPAuth.bearer_token, "Bearer    ", "Bearer Bearer"),
+        ],
+    )
+    def test_a_scheme_with_no_credential_behind_it_still_produces_a_header(self, auth_type, auth_value, expected):
+        """Treating this as a schemed value would leave nothing to send, and a request with no
+        Authorization at all is harder to diagnose upstream than a visibly wrong one."""
+        client = MCPClient(server_url="http://example.com/mcp", auth_type=auth_type, auth_value=auth_value)
+
+        assert client._get_auth_headers()["Authorization"] == expected
+
+    def test_basic_with_a_scheme_and_no_credential_still_produces_a_header(self):
+        client = MCPClient(server_url="http://example.com/mcp", auth_type=MCPAuth.basic, auth_value="Basic ")
+
+        assert "Authorization" in client._get_auth_headers()
+
+    def test_basic_accepts_an_already_encoded_schemed_value_without_re_encoding_it(self):
+        """Stripping the scheme at header-build time cannot fix this shape: ``to_basic_auth`` has by
+        then encoded the whole ``Basic ...`` string, leaving no prefix to find."""
+        encoded = base64.b64encode(b"user:pass").decode()
+
+        client = MCPClient(
+            server_url="http://example.com/mcp",
+            auth_type=MCPAuth.basic,
+            auth_value=f"Basic {encoded}",
+        )
+
+        header = client._get_auth_headers()["Authorization"]
+        assert header == f"Basic {encoded}"
+        assert base64.b64decode(header.split(" ", 1)[1]) == b"user:pass"
+
+    @pytest.mark.parametrize("auth_value", ["user:pass", "Basic user:pass", "basic user:pass"])
+    def test_basic_always_emits_encoded_credentials(self, auth_value):
+        """A schemed value whose remainder is raw rather than encoded is still a username/password
+        pair, so it is encoded rather than forwarded as an invalid RFC 7617 header."""
+        client = MCPClient(server_url="http://example.com/mcp", auth_type=MCPAuth.basic, auth_value=auth_value)
+
+        header = client._get_auth_headers()["Authorization"]
+        assert base64.b64decode(header.split(" ", 1)[1]) == b"user:pass"
+
+    def test_authorization_auth_type_is_passed_through_verbatim(self):
+        """``MCPAuth.authorization`` means the caller owns the whole header value."""
+        client = MCPClient(
+            server_url="http://example.com/mcp",
+            auth_type=MCPAuth.authorization,
+            auth_value="Bearer Bearer deliberately-doubled",
+        )
+
+        assert client._get_auth_headers()["Authorization"] == "Bearer Bearer deliberately-doubled"
+
+    def test_api_key_credential_is_not_treated_as_a_schemed_value(self):
+        client = MCPClient(
+            server_url="http://example.com/mcp",
+            auth_type=MCPAuth.api_key,
+            auth_value="Bearer looks-schemed",
+        )
+
+        assert client._get_auth_headers()["X-API-Key"] == "Bearer looks-schemed"
+
+
+@pytest.mark.parametrize(
+    "auth_value, scheme, expected",
+    [
+        ("Bearer abc", "Bearer", "abc"),
+        ("bearer abc", "Bearer", "abc"),
+        ("  Bearer   abc  ", "Bearer", "abc  "),
+        ("abc", "Bearer", "abc"),
+        ("Bearerabc", "Bearer", "Bearerabc"),
+        ("Basic abc", "Bearer", "Basic abc"),
+        ("token abc", "token", "abc"),
+        ("Basic abc", "Basic", "abc"),
+        ("Bearer ", "Bearer", "Bearer "),
+        ("Bearer   ", "Bearer", "Bearer   "),
+    ],
+)
+def test_strip_auth_scheme(auth_value, scheme, expected):
+    assert strip_auth_scheme(auth_value, scheme) == expected
+
+
+@pytest.mark.parametrize(
+    "auth_type, auth_value, expected",
+    [
+        (MCPAuth.bearer_token, "Bearer jwt", "Bearer jwt"),
+        (MCPAuth.bearer_token, "jwt", "Bearer jwt"),
+        (MCPAuth.api_key, "ApiKey secret", "ApiKey secret"),
+        (MCPAuth.api_key, "secret", "ApiKey secret"),
+        (MCPAuth.basic, "Basic dXNlcjpwYXNz", "Basic dXNlcjpwYXNz"),
+    ],
+)
+def test_openapi_byok_auth_header_emits_exactly_one_scheme(auth_type, auth_value, expected):
+    """A non-BYOK server short-circuits ``_resolve_byok_mcp_auth_header``, so this formatter also
+    receives the deprecated global ``x-mcp-auth``, which is already a complete header value."""
+    server = MCPServer(
+        server_id="s1",
+        name="openapi-server",
+        url="http://example.com/mcp",
+        transport=MCPTransport.http,
+        auth_type=auth_type,
+        spec_path="/tmp/spec.json",
+    )
+
+    assert server.is_byok is False
+    assert _format_byok_openapi_auth_header(server, auth_value) == expected

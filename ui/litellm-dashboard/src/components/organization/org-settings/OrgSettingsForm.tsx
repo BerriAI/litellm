@@ -8,7 +8,7 @@ import { ModelSelect } from "@/components/ModelSelect/ModelSelect";
 import MCPServerSelector from "@/components/mcp_server_management/MCPServerSelector";
 import { toast } from "@/lib/toast";
 import type { Organization } from "@/components/networking";
-import { FieldGroup } from "@/components/shared/form/field";
+import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -153,7 +153,7 @@ export const OrgSettingsForm = ({
         </FormField>
       </FieldGroup>
 
-      <div className="sticky z-10 bg-white p-4 border-t border-gray-200 -bottom-6 -inset-x-6 mt-6">
+      <div className="sticky z-10 bg-card p-4 border-t border-border -bottom-6 -inset-x-6 mt-6">
         <div className="flex justify-end items-center gap-2">
           <Button type="button" variant="outline" onClick={onCancel} disabled={mutation.isPending}>
             Cancel

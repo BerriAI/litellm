@@ -2,12 +2,15 @@ import React, { useMemo, useState } from "react";
 import { z } from "zod/v4";
 import { all_admin_roles } from "@/utils/roles";
 import BudgetDurationDropdown from "@/components/common_components/budget_duration_dropdown";
+import { ModelMaxBudget, ModelMaxBudgetField } from "@/components/key_team_helpers/ModelMaxBudgetEditor";
+import { modelMaxBudgetUpdate } from "@/components/key_team_helpers/modelMaxBudgetPayload";
+import { useSeededState } from "@/components/key_team_helpers/useSeededState";
 import { getModelDisplayName } from "@/components/key_team_helpers/fetch_available_models_team_key";
 import MCPServerSelector from "@/components/mcp_server_management/MCPServerSelector";
 import MCPToolPermissions from "@/components/mcp_server_management/MCPToolPermissions";
 import type { ObjectPermission } from "@/components/object_permission_types";
 import { MultiSelect } from "@/components/shared/MultiSelect";
-import { FieldGroup } from "@/components/shared/form/field";
+import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -30,6 +33,7 @@ interface UserEditViewProps {
   possibleUIRoles: Record<string, Record<string, string>> | null;
   isBulkEdit?: boolean;
   objectPermission?: ObjectPermission | null;
+  premiumUser?: boolean;
 }
 
 const MCP_SELECTION_SHAPE = z.object({
@@ -135,9 +139,14 @@ export function UserEditView({
   possibleUIRoles,
   isBulkEdit = false,
   objectPermission,
+  premiumUser = false,
 }: UserEditViewProps) {
   const canEditMcpPermissions = !isBulkEdit && all_admin_roles.includes(userRole || "");
   const [unlimitedBudget, setUnlimitedBudget] = useState(false);
+  const [modelMaxBudget, setModelMaxBudget] = useSeededState<ModelMaxBudget>(
+    userData.user_id,
+    () => userData.user_info?.model_max_budget ?? {},
+  );
   const schema = useMemo(() => budgetSchema(unlimitedBudget), [unlimitedBudget]);
   const form = useZodForm(schema, {
     defaultValues: toFormValues(userData, objectPermission, isBulkEdit, canEditMcpPermissions),
@@ -162,9 +171,11 @@ export function UserEditView({
       return;
     }
 
+    const modelBudgets = modelMaxBudgetUpdate(modelMaxBudget, userData.user_info?.model_max_budget);
     onSubmit({
       ...values,
       ...("metadata" in values ? { metadata: metadata.value } : {}),
+      ...(modelBudgets !== undefined && { model_max_budget: modelBudgets }),
       max_budget:
         unlimitedBudget || values.max_budget === "" || values.max_budget === undefined ? null : values.max_budget,
     });
@@ -256,14 +267,10 @@ export function UserEditView({
             label={
               <>
                 Max Budget (USD)
-                <span className="ml-3 inline-flex items-center gap-2 font-normal">
-                  <Checkbox
-                    aria-label="Unlimited Budget"
-                    checked={unlimitedBudget}
-                    onCheckedChange={handleUnlimitedBudgetChange}
-                  />
+                <label className="ml-3 inline-flex items-center gap-2 font-normal">
+                  <Checkbox checked={unlimitedBudget} onCheckedChange={handleUnlimitedBudgetChange} />
                   Unlimited Budget
-                </span>
+                </label>
               </>
             }
           >
@@ -285,6 +292,20 @@ export function UserEditView({
           <FormField control={form.control} name="budget_duration" label="Reset Budget">
             {({ id, value, onChange }) => <BudgetDurationDropdown id={id} value={value} onChange={onChange} />}
           </FormField>
+
+          {/* Bulk edit forwards a fixed field list and has no single stored budget to
+              diff against, so the editor would silently discard whatever was typed. */}
+          {!isBulkEdit && (
+            <ModelMaxBudgetField
+              key={userData.user_id}
+              premiumUser={premiumUser}
+              value={modelMaxBudget}
+              onChange={setModelMaxBudget}
+              availableModels={userModels}
+              usage={userData.user_info?.model_max_budget_usage}
+              hint="Cap this user's spend on individual models, each with its own reset window. Applies across every key the user holds."
+            />
+          )}
 
           <FormField control={form.control} name="metadata" label="Metadata">
             {({ ref, value, ...control }) => (

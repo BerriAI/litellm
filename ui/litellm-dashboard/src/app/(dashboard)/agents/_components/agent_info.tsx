@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from "react";
-import { Spin, Descriptions } from "antd";
+import { cx } from "@/lib/cva.config";
 import { FormProvider, useForm, useWatch } from "react-hook-form";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -8,7 +8,7 @@ import { Separator } from "@/components/ui/separator";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
-import { Field, FieldGroup, FieldLabel } from "@/components/shared/form/field";
+import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { toast } from "@/lib/toast";
 import { ArrowLeft } from "lucide-react";
 import { getAgentInfo, patchAgentCall, getAgentCreateMetadata, AgentCreateInfo } from "@/components/networking";
@@ -39,6 +39,26 @@ interface AgentInfoViewProps {
   accessToken: string | null;
   isAdmin: boolean;
 }
+
+const DetailList: React.FC<{ children: React.ReactNode; className?: string }> = ({ children, className }) => (
+  <dl
+    className={cx(
+      "grid grid-cols-[minmax(0,14rem)_minmax(0,1fr)] overflow-hidden rounded-lg border border-border text-sm",
+      className,
+    )}
+  >
+    {children}
+  </dl>
+);
+
+const DetailItem: React.FC<{ label: React.ReactNode; children: React.ReactNode }> = ({ label, children }) => (
+  <>
+    <dt className="border-b border-border bg-muted px-4 py-3 font-medium text-foreground last-of-type:border-b-0">
+      {label}
+    </dt>
+    <dd className="border-b border-border px-4 py-3 break-words text-foreground last-of-type:border-b-0">{children}</dd>
+  </>
+);
 
 const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessToken, isAdmin }) => {
   const [agent, setAgent] = useState<Agent | null>(null);
@@ -195,7 +215,7 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessT
     return (
       <div className="p-4">
         <div className="flex justify-center items-center h-64">
-          <Spin size="large" />
+          <UiLoadingSpinner className="size-8 text-primary" />
         </div>
       </div>
     );
@@ -258,7 +278,7 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessT
           Back to Agents
         </Button>
         <h1 className="text-2xl font-semibold">{agent.agent_name || "Unnamed Agent"}</h1>
-        <p className="text-sm text-gray-500 font-mono">{agent.agent_id}</p>
+        <p className="text-sm text-muted-foreground font-mono">{agent.agent_id}</p>
       </div>
 
       <Tabs value={activeTab} onValueChange={setActiveTab}>
@@ -276,51 +296,41 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessT
         <div>
           {/* Overview Panel */}
           <TabsContent value="overview" keepMounted>
-            <Descriptions bordered column={1}>
-              <Descriptions.Item label="Agent ID">{agent.agent_id}</Descriptions.Item>
-              <Descriptions.Item label="Agent Name">{agent.agent_name}</Descriptions.Item>
-              <Descriptions.Item label="Display Name">{agent.agent_card_params?.name || "-"}</Descriptions.Item>
-              <Descriptions.Item label="Description">{agent.agent_card_params?.description || "-"}</Descriptions.Item>
-              <Descriptions.Item label="URL">{agent.agent_card_params?.url || "-"}</Descriptions.Item>
-              <Descriptions.Item label="Version">{agent.agent_card_params?.version || "-"}</Descriptions.Item>
-              <Descriptions.Item label="Protocol Version">
-                {agent.agent_card_params?.protocolVersion || "-"}
-              </Descriptions.Item>
-              <Descriptions.Item label="Streaming">
+            <DetailList>
+              <DetailItem label="Agent ID">{agent.agent_id}</DetailItem>
+              <DetailItem label="Agent Name">{agent.agent_name}</DetailItem>
+              <DetailItem label="Display Name">{agent.agent_card_params?.name || "-"}</DetailItem>
+              <DetailItem label="Description">{agent.agent_card_params?.description || "-"}</DetailItem>
+              <DetailItem label="URL">{agent.agent_card_params?.url || "-"}</DetailItem>
+              <DetailItem label="Version">{agent.agent_card_params?.version || "-"}</DetailItem>
+              <DetailItem label="Protocol Version">{agent.agent_card_params?.protocolVersion || "-"}</DetailItem>
+              <DetailItem label="Streaming">
                 {agent.agent_card_params?.capabilities?.streaming ? "Yes" : "No"}
-              </Descriptions.Item>
+              </DetailItem>
               {agent.agent_card_params?.capabilities?.pushNotifications && (
-                <Descriptions.Item label="Push Notifications">Yes</Descriptions.Item>
+                <DetailItem label="Push Notifications">Yes</DetailItem>
               )}
               {agent.agent_card_params?.capabilities?.stateTransitionHistory && (
-                <Descriptions.Item label="State Transition History">Yes</Descriptions.Item>
+                <DetailItem label="State Transition History">Yes</DetailItem>
               )}
-              <Descriptions.Item label="Skills">
-                {agent.agent_card_params?.skills?.length || 0} configured
-              </Descriptions.Item>
-              {agent.litellm_params?.model && (
-                <Descriptions.Item label="Model">{agent.litellm_params.model}</Descriptions.Item>
-              )}
+              <DetailItem label="Skills">{agent.agent_card_params?.skills?.length || 0} configured</DetailItem>
+              {agent.litellm_params?.model && <DetailItem label="Model">{agent.litellm_params.model}</DetailItem>}
               {agent.litellm_params?.make_public !== undefined && (
-                <Descriptions.Item label="Make Public">
-                  {agent.litellm_params.make_public ? "Yes" : "No"}
-                </Descriptions.Item>
+                <DetailItem label="Make Public">{agent.litellm_params.make_public ? "Yes" : "No"}</DetailItem>
               )}
               {agent.agent_card_params?.iconUrl && (
-                <Descriptions.Item label="Icon URL">{agent.agent_card_params.iconUrl}</Descriptions.Item>
+                <DetailItem label="Icon URL">{agent.agent_card_params.iconUrl}</DetailItem>
               )}
               {agent.agent_card_params?.documentationUrl && (
-                <Descriptions.Item label="Documentation URL">
-                  {agent.agent_card_params.documentationUrl}
-                </Descriptions.Item>
+                <DetailItem label="Documentation URL">{agent.agent_card_params.documentationUrl}</DetailItem>
               )}
-              <Descriptions.Item label="TPM Limit">{agent.tpm_limit ?? "Unlimited"}</Descriptions.Item>
-              <Descriptions.Item label="RPM Limit">{agent.rpm_limit ?? "Unlimited"}</Descriptions.Item>
-              <Descriptions.Item label="Session TPM Limit">{agent.session_tpm_limit ?? "Unlimited"}</Descriptions.Item>
-              <Descriptions.Item label="Session RPM Limit">{agent.session_rpm_limit ?? "Unlimited"}</Descriptions.Item>
-              <Descriptions.Item label="Created At">{formatDate(agent.created_at)}</Descriptions.Item>
-              <Descriptions.Item label="Updated At">{formatDate(agent.updated_at)}</Descriptions.Item>
-            </Descriptions>
+              <DetailItem label="TPM Limit">{agent.tpm_limit ?? "Unlimited"}</DetailItem>
+              <DetailItem label="RPM Limit">{agent.rpm_limit ?? "Unlimited"}</DetailItem>
+              <DetailItem label="Session TPM Limit">{agent.session_tpm_limit ?? "Unlimited"}</DetailItem>
+              <DetailItem label="Session RPM Limit">{agent.session_rpm_limit ?? "Unlimited"}</DetailItem>
+              <DetailItem label="Created At">{formatDate(agent.created_at)}</DetailItem>
+              <DetailItem label="Updated At">{formatDate(agent.updated_at)}</DetailItem>
+            </DetailList>
 
             <AgentVirtualKeys keys={agentKeys} isLoading={keysLoading} onKeyClick={setSelectedKey} />
 
@@ -331,21 +341,19 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessT
                   Object.keys(agent.object_permission.mcp_tool_permissions).length > 0)) && (
                 <div style={{ marginTop: 24 }}>
                   <h3 className="text-lg font-medium">MCP Tool Permissions</h3>
-                  <Descriptions bordered column={1} style={{ marginTop: 16 }}>
+                  <DetailList className="mt-4">
                     {agent.object_permission.mcp_servers && agent.object_permission.mcp_servers.length > 0 && (
-                      <Descriptions.Item label="MCP Servers">
-                        {agent.object_permission.mcp_servers.join(", ")}
-                      </Descriptions.Item>
+                      <DetailItem label="MCP Servers">{agent.object_permission.mcp_servers.join(", ")}</DetailItem>
                     )}
                     {agent.object_permission.mcp_access_groups &&
                       agent.object_permission.mcp_access_groups.length > 0 && (
-                        <Descriptions.Item label="MCP Access Groups">
+                        <DetailItem label="MCP Access Groups">
                           {agent.object_permission.mcp_access_groups.join(", ")}
-                        </Descriptions.Item>
+                        </DetailItem>
                       )}
                     {agent.object_permission.mcp_tool_permissions &&
                       Object.keys(agent.object_permission.mcp_tool_permissions).length > 0 && (
-                        <Descriptions.Item label="Tool permissions per server">
+                        <DetailItem label="Tool permissions per server">
                           <div className="space-y-1">
                             {Object.entries(agent.object_permission.mcp_tool_permissions).map(([serverId, tools]) => (
                               <div key={serverId}>
@@ -354,9 +362,9 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessT
                               </div>
                             ))}
                           </div>
-                        </Descriptions.Item>
+                        </DetailItem>
                       )}
-                  </Descriptions>
+                  </DetailList>
                 </div>
               )}
 
@@ -365,9 +373,9 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessT
             {agent.agent_card_params?.skills && agent.agent_card_params.skills.length > 0 && (
               <div style={{ marginTop: 24 }}>
                 <h3 className="text-lg font-medium">Skills</h3>
-                <Descriptions bordered column={1} style={{ marginTop: 16 }}>
+                <DetailList className="mt-4">
                   {agent.agent_card_params.skills.map((skill: any, index: number) => (
-                    <Descriptions.Item label={skill.name || `Skill ${index + 1}`} key={index}>
+                    <DetailItem label={skill.name || `Skill ${index + 1}`} key={index}>
                       <div>
                         <div>
                           <strong>ID:</strong> {skill.id}
@@ -385,9 +393,9 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessT
                           </div>
                         )}
                       </div>
-                    </Descriptions.Item>
+                    </DetailItem>
                   ))}
-                </Descriptions>
+                </DetailList>
               </div>
             )}
           </TabsContent>

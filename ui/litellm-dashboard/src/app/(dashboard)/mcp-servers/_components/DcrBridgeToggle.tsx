@@ -1,7 +1,8 @@
+import { Info } from "lucide-react";
 import React from "react";
-import { Switch, Tooltip } from "antd";
-import { InfoCircleOutlined } from "@ant-design/icons";
+import { SimpleTooltip } from "@/components/ui/tooltip";
 
+import { Switch } from "@/components/ui/switch";
 import { MountedFormField } from "@/components/common_components/MountedFormField";
 import { isClientForwardedTokenMode } from "@/components/mcp_tools/types";
 import { switchControl } from "./mcpFieldRules";
@@ -26,11 +27,11 @@ export default function DcrBridgeToggle({
   return (
     <MountedFormField
       label={
-        <span className="text-sm font-medium text-gray-700 flex items-center">
+        <span className="text-sm font-medium text-foreground flex items-center">
           Gateway-hosted sign-in (DCR bridge)
-          <Tooltip title="Lets OAuth-only clients like Claude Desktop register and sign in through the gateway. Turn off to relay the upstream server's own OAuth metadata instead (for clients pre-registered with the upstream IdP).">
-            <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
-          </Tooltip>
+          <SimpleTooltip content="Lets OAuth-only clients like Claude Desktop register and sign in through the gateway. Turn off to relay the upstream server's own OAuth metadata instead (for clients pre-registered with the upstream IdP).">
+            <Info className="ml-2 size-4 text-info hover:text-info/80 cursor-help" />
+          </SimpleTooltip>
         </span>
       }
       name="dcr_bridge"

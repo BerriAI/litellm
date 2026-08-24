@@ -12,7 +12,7 @@ import {
 } from "@/app/(dashboard)/hooks/storeRequestInSpendLogs/useStoreRequestInSpendLogs";
 import { toast } from "@/lib/toast";
 import { parseErrorMessage } from "@/components/shared/errorUtils";
-import { FieldGroup } from "@/components/shared/form/field";
+import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -20,9 +20,9 @@ import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/in
 import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
-import { ClockCircleOutlined } from "@ant-design/icons";
-import { Card, Skeleton, Space, Typography } from "antd";
-import { CircleHelp } from "lucide-react";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { CircleHelp, Clock } from "lucide-react";
 import React, { useCallback, useMemo } from "react";
 import { useForm } from "react-hook-form";
 
@@ -198,7 +198,7 @@ const LoggingSettingsForm: React.FC<LoggingSettingsFormProps> = ({
                       placeholder={field.placeholder}
                     />
                     <InputGroupAddon>
-                      <ClockCircleOutlined />
+                      <Clock />
                     </InputGroupAddon>
                   </InputGroup>
                 ) : (
@@ -317,23 +317,34 @@ const LoggingSettings: React.FC = () => {
   };
 
   return (
-    <Card title="Logging Settings">
-      <Space direction="vertical" size="large" style={{ width: "100%" }}>
-        <Typography.Paragraph style={{ marginBottom: 0 }} type="secondary">
-          Proxy-wide settings that control how request and response data are written to spend logs.
-        </Typography.Paragraph>
+    <Card>
+      <CardHeader className="border-b">
+        <CardTitle>Logging Settings</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <div className="flex w-full flex-col gap-6">
+          <p className="mb-0 text-muted-foreground">
+            Proxy-wide settings that control how request and response data are written to spend logs.
+          </p>
 
-        {isLoadingConfig ? (
-          <Skeleton active paragraph={{ rows: 4 }} />
-        ) : (
-          <LoggingSettingsForm
-            initialValues={initialValues}
-            describeField={describeField}
-            isSaving={isPending || isDeletingField}
-            onSubmit={handleFormSubmit}
-          />
-        )}
-      </Space>
+          {isLoadingConfig ? (
+            <div className="flex flex-col gap-3">
+              <Skeleton className="h-4 w-2/5" />
+              <Skeleton className="h-4 w-full" />
+              <Skeleton className="h-4 w-full" />
+              <Skeleton className="h-4 w-full" />
+              <Skeleton className="h-4 w-3/5" />
+            </div>
+          ) : (
+            <LoggingSettingsForm
+              initialValues={initialValues}
+              describeField={describeField}
+              isSaving={isPending || isDeletingField}
+              onSubmit={handleFormSubmit}
+            />
+          )}
+        </div>
+      </CardContent>
     </Card>
   );
 };

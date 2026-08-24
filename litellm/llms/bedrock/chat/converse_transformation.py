@@ -39,6 +39,7 @@ from litellm.llms.anthropic.chat.transformation import (
     REASONING_EFFORT_TO_OUTPUT_CONFIG_EFFORT,
     AnthropicConfig,
 )
+from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.bedrock.request_metadata import (
     bedrock_request_metadata_headers,
@@ -1571,6 +1572,12 @@ class AmazonConverseConfig(BaseConfig):
                     "has no thinking_blocks. The model won't use extended thinking for this turn."
                 )
 
+        AnthropicModelInfo.maybe_drop_disabled_thinking(
+            model=model,
+            optional_params=optional_params,
+            custom_llm_provider="bedrock",
+        )
+
         # Prepare and separate parameters
         (
             inference_params,
@@ -1834,6 +1841,7 @@ class AmazonConverseConfig(BaseConfig):
         self,
         usage: ConverseTokenUsageBlock,
         reasoning_content: str | None = None,
+        thinking_ran: bool = False,
     ) -> Usage:
         input_tokens = usage["inputTokens"]
         output_tokens: Final = usage["outputTokens"]
@@ -1854,10 +1862,19 @@ class AmazonConverseConfig(BaseConfig):
             cache_creation_tokens=cache_creation_input_tokens,
             text_tokens=raw_input_tokens,
         )
-        reasoning_tokens = token_counter(text=reasoning_content, count_response_tokens=True) if reasoning_content else 0
-        completion_tokens_details: Final = CompletionTokensDetailsWrapper(
-            reasoning_tokens=reasoning_tokens,
-            text_tokens=(output_tokens - reasoning_tokens if reasoning_tokens > 0 else output_tokens),
+        reasoning_tokens: Final = (
+            token_counter(text=reasoning_content, count_response_tokens=True) if reasoning_content else 0
+        )
+        completion_tokens_details: Final = (
+            CompletionTokensDetailsWrapper(
+                reasoning_tokens=reasoning_tokens,
+                text_tokens=output_tokens - reasoning_tokens,
+            )
+            if reasoning_tokens > 0
+            else CompletionTokensDetailsWrapper(
+                reasoning_tokens=None if thinking_ran else 0,
+                text_tokens=None if thinking_ran else output_tokens,
+            )
         )
         openai_usage: Final = Usage(
             prompt_tokens=input_tokens,
@@ -2254,6 +2271,7 @@ class AmazonConverseConfig(BaseConfig):
         usage: Final = self.transform_usage(
             completion_response["usage"],
             reasoning_content=chat_completion_message.get("reasoning_content"),
+            thinking_ran=reasoningContentBlocks is not None,
         )
 
         ## HANDLE TOOL CALLS

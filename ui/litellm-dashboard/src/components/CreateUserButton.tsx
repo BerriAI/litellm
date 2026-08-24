@@ -1,17 +1,18 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import { MultiSelect } from "@/components/shared/MultiSelect";
-import { FieldGroup } from "@/components/shared/form/field";
+import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { Alert, Modal, Typography } from "antd";
-import { ChevronRight, CircleHelp, UserPlus } from "lucide-react";
+import { Alert, AlertDescription, AlertTitle } from "@/components/shared/Alert";
+import { ChevronRight, CircleHelp, Info, UserPlus } from "lucide-react";
 import React, { useEffect, useState } from "react";
 import { useForm } from "react-hook-form";
 import TeamDropdown from "./common_components/team_dropdown";
@@ -25,7 +26,7 @@ import {
   userCreateCall,
 } from "./networking";
 import OnboardingModal, { InvitationLink } from "./onboarding_link";
-const { Link } = Typography;
+
 // Helper function to generate UUID compatible across all environments
 const generateUUID = (): string => {
   if (typeof crypto !== "undefined" && crypto.randomUUID) {
@@ -134,20 +135,16 @@ const labelWithHint = (label: string, hint: string): React.ReactNode => (
 );
 
 const EmailInvitationsNotice: React.FC = () => (
-  <Alert
-    message="Email invitations"
-    description={
-      <>
-        New users receive an email invite only when an email integration (SMTP, Resend, or SendGrid) is configured.{" "}
-        <Link href="https://docs.litellm.ai/docs/proxy/email" target="_blank">
-          Learn how to set up email notifications
-        </Link>
-      </>
-    }
-    type="info"
-    showIcon
-    className="mb-4"
-  />
+  <Alert variant="info" className="mb-4">
+    <Info />
+    <AlertTitle>Email invitations</AlertTitle>
+    <AlertDescription>
+      New users receive an email invite only when an email integration (SMTP, Resend, or SendGrid) is configured.{" "}
+      <a href="https://docs.litellm.ai/docs/proxy/email" target="_blank" rel="noreferrer">
+        Learn how to set up email notifications
+      </a>
+    </AlertDescription>
+  </Alert>
 );
 
 export const CreateUserButton: React.FC<CreateuserProps> = ({
@@ -331,110 +328,108 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
       <Button type="button" onClick={() => setIsModalVisible(true)}>
         + Invite User
       </Button>
-      <Modal
-        title="Invite User"
-        open={isModalVisible}
-        width={800}
-        footer={null}
-        onOk={() => setIsModalVisible(false)}
-        onCancel={handleCancel}
-      >
-        <div className="flex flex-col gap-3">
-          <p className="mb-1 text-sm text-foreground">Create a User who can own keys</p>
-          <EmailInvitationsNotice />
-        </div>
-        <TooltipProvider>
-          <form onSubmit={form.handleSubmit(handleCreate)}>
-            <FieldGroup>
-              {userEmailField}
-              {roleField(
-                labelWithHint(
-                  "Global Proxy Role",
-                  "This role is independent of any team/org specific roles. Configure Team / Organization Admins in the Settings",
-                ),
-              )}
-              {teamField}
-
-              <FormField
-                control={form.control}
-                name="organization_ids"
-                label="Organization"
-                description="The user will be added to the selected organization(s)."
-              >
-                {({ id, value, onChange }) => (
-                  <Select
-                    multiple
-                    items={organizationOptions}
-                    value={value ?? []}
-                    onValueChange={(selected: string[]) => onChange(selected.length === 0 ? undefined : selected)}
-                  >
-                    <SelectTrigger id={id} className="w-full">
-                      <SelectValue placeholder="Select Organization">
-                        {(selected: string[]) =>
-                          selected.length === 0
-                            ? "Select Organization"
-                            : organizationOptions
-                                .filter((option) => selected.includes(option.value))
-                                .map((option) => option.label)
-                                .join(", ")
-                        }
-                      </SelectValue>
-                    </SelectTrigger>
-                    <SelectContent>
-                      {organizationOptions.map((option) => (
-                        <SelectItem key={option.value} value={option.value}>
-                          {option.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+      <Dialog open={isModalVisible} onOpenChange={(open) => !open && handleCancel()}>
+        <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[800px]">
+          <DialogHeader>
+            <DialogTitle>Invite User</DialogTitle>
+          </DialogHeader>
+          <div className="flex flex-col gap-3">
+            <p className="mb-1 text-sm text-foreground">Create a User who can own keys</p>
+            <EmailInvitationsNotice />
+          </div>
+          <TooltipProvider>
+            <form onSubmit={form.handleSubmit(handleCreate)}>
+              <FieldGroup>
+                {userEmailField}
+                {roleField(
+                  labelWithHint(
+                    "Global Proxy Role",
+                    "This role is independent of any team/org specific roles. Configure Team / Organization Admins in the Settings",
+                  ),
                 )}
-              </FormField>
+                {teamField}
 
-              {metadataField}
-              {sendInviteEmailField}
+                <FormField
+                  control={form.control}
+                  name="organization_ids"
+                  label="Organization"
+                  description="The user will be added to the selected organization(s)."
+                >
+                  {({ id, value, onChange }) => (
+                    <Select
+                      multiple
+                      items={organizationOptions}
+                      value={value ?? []}
+                      onValueChange={(selected: string[]) => onChange(selected.length === 0 ? undefined : selected)}
+                    >
+                      <SelectTrigger id={id} className="w-full">
+                        <SelectValue placeholder="Select Organization">
+                          {(selected: string[]) =>
+                            selected.length === 0
+                              ? "Select Organization"
+                              : organizationOptions
+                                  .filter((option) => selected.includes(option.value))
+                                  .map((option) => option.label)
+                                  .join(", ")
+                          }
+                        </SelectValue>
+                      </SelectTrigger>
+                      <SelectContent>
+                        {organizationOptions.map((option) => (
+                          <SelectItem key={option.value} value={option.value}>
+                            {option.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  )}
+                </FormField>
 
-              <Collapsible open={isPersonalKeyOpen} onOpenChange={setIsPersonalKeyOpen}>
-                <CollapsibleTrigger className="flex w-full items-center gap-2 rounded-md border border-border px-3 py-2 text-left text-sm font-semibold text-foreground">
-                  <ChevronRight
-                    className={`size-4 transition-transform ${isPersonalKeyOpen ? "rotate-90" : ""}`}
-                    aria-hidden
-                  />
-                  Personal Key Creation
-                </CollapsibleTrigger>
-                <CollapsibleContent className="pt-4">
-                  <FormField
-                    control={form.control}
-                    name="models"
-                    label={labelWithHint("Models", "Models user has access to, outside of team scope.")}
-                    description="Models user has access to, outside of team scope."
-                  >
-                    {({ value, onChange }) => (
-                      <MultiSelect
-                        options={[
-                          { label: "All Proxy Models", value: "all-proxy-models" },
-                          { label: "No Default Models", value: "no-default-models" },
-                          ...userModels.map((model) => ({ label: getModelDisplayName(model), value: model })),
-                        ]}
-                        value={value ?? []}
-                        onValueChange={onChange}
-                        placeholder="Select models"
-                      />
-                    )}
-                  </FormField>
-                </CollapsibleContent>
-              </Collapsible>
-            </FieldGroup>
+                {metadataField}
+                {sendInviteEmailField}
 
-            <div className="mt-4 text-right">
-              <Button type="submit">
-                <UserPlus />
-                Invite User
-              </Button>
-            </div>
-          </form>
-        </TooltipProvider>
-      </Modal>
+                <Collapsible open={isPersonalKeyOpen} onOpenChange={setIsPersonalKeyOpen}>
+                  <CollapsibleTrigger className="flex w-full items-center gap-2 rounded-md border border-border px-3 py-2 text-left text-sm font-semibold text-foreground">
+                    <ChevronRight
+                      className={`size-4 transition-transform ${isPersonalKeyOpen ? "rotate-90" : ""}`}
+                      aria-hidden
+                    />
+                    Personal Key Creation
+                  </CollapsibleTrigger>
+                  <CollapsibleContent className="pt-4">
+                    <FormField
+                      control={form.control}
+                      name="models"
+                      label={labelWithHint("Models", "Models user has access to, outside of team scope.")}
+                      description="Models user has access to, outside of team scope."
+                    >
+                      {({ value, onChange }) => (
+                        <MultiSelect
+                          options={[
+                            { label: "All Proxy Models", value: "all-proxy-models" },
+                            { label: "No Default Models", value: "no-default-models" },
+                            ...userModels.map((model) => ({ label: getModelDisplayName(model), value: model })),
+                          ]}
+                          value={value ?? []}
+                          onValueChange={onChange}
+                          placeholder="Select models"
+                        />
+                      )}
+                    </FormField>
+                  </CollapsibleContent>
+                </Collapsible>
+              </FieldGroup>
+
+              <div className="mt-4 text-right">
+                <Button type="submit">
+                  <UserPlus />
+                  Invite User
+                </Button>
+              </div>
+            </form>
+          </TooltipProvider>
+        </DialogContent>
+      </Dialog>
       {apiuser && (
         <OnboardingModal
           isInvitationLinkModalVisible={isInvitationLinkModalVisible}

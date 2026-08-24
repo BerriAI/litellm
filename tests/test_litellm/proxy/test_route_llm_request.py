@@ -1,9 +1,6 @@
-import os
-import sys
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system path
 
 
 from unittest.mock import MagicMock
@@ -169,7 +166,7 @@ async def test_route_request_proxy_admin_can_call_all_team_scoped_deployments_wi
         )
     )
 
-    with pytest.raises(litellm.BadRequestError, match="multiple teams"):
+    async def _route_and_await():
         ambiguous_call = await route_request(
             data=data,
             llm_router=router,
@@ -178,6 +175,9 @@ async def test_route_request_proxy_admin_can_call_all_team_scoped_deployments_wi
             user_api_key_dict=admin_auth,
         )
         await ambiguous_call
+
+    with pytest.raises(litellm.BadRequestError, match="multiple teams"):
+        await _route_and_await()
 
     router.add_deployment(
         Deployment(

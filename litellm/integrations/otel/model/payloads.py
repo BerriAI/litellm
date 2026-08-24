@@ -15,8 +15,10 @@ from litellm.integrations.otel.model.metadata import (
 )
 from litellm.integrations.otel.model.semconv import (
     GenAIOperation,
+    GenAIOutputType,
     MCPMethod,
     resolve_operation,
+    resolve_output_type,
     resolve_provider,
 )
 from litellm.integrations.otel.model.utils import (
@@ -310,6 +312,11 @@ class LLMCallSpanData:
     choices_out: tuple[Mapping[str, object], ...] = ()
     system_fingerprint: str | None = None
     time_to_first_chunk_seconds: float | None = None
+    # The requested output modality, set only on the routes that pin one (image
+    # generation, speech, transcription, OCR), and the litellm route itself, which
+    # keeps routes the convention folds into one operation distinguishable.
+    output_type: GenAIOutputType | None = None
+    call_type: str | None = None
 
     @classmethod
     def from_standard_logging_payload(
@@ -334,8 +341,9 @@ class LLMCallSpanData:
         # otherwise the content-bearing mappers receive empty sequences and emit
         # no prompt/response text.
         finish_reasons: Final = _finish_reasons(choices_out)
+        call_type: Final = as_str(payload.get("call_type"))
         return cls(
-            operation=resolve_operation(as_str(payload.get("call_type"))),
+            operation=resolve_operation(call_type),
             provider=resolve_provider(as_str(payload.get("custom_llm_provider"))),
             request_model=context.request_model,
             response_model=context.response_model,
@@ -358,6 +366,8 @@ class LLMCallSpanData:
             choices_out=choices_out if capture_content else (),
             system_fingerprint=as_str(response.get("system_fingerprint")),
             time_to_first_chunk_seconds=time_to_first_chunk_seconds,
+            output_type=resolve_output_type(call_type),
+            call_type=call_type or None,
         )
 
 
