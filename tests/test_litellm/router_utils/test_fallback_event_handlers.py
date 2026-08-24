@@ -484,9 +484,7 @@ async def test_run_async_fallback_keeps_a_request_override_distinct_from_the_bar
     with pytest.raises(RuntimeError, match="fallback model also failed"):
         await run_async_fallback(
             litellm_router=router,
-            fallback_model_group=[
-                {"model": "already-attempted", "messages": [{"role": "user", "content": "shorter"}]}
-            ],
+            fallback_model_group=[{"model": "already-attempted", "messages": [{"role": "user", "content": "shorter"}]}],
             original_model_group="primary-model",
             original_exception=RuntimeError("original failed"),
             max_fallbacks=3,
@@ -843,3 +841,39 @@ class TestRunAsyncFallbackTriggersCooldown:
                 )
 
             mock_trigger.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_a_stored_fallback_target_cannot_carry_a_federation_field():
+    """A dict fallback target is merged into kwargs, and kwargs beat the deployment's own params,
+    so a stored key/team/global fallback could otherwise set the workspace a federation token is
+    minted for. The request itself is already forbidden to carry these, and a stored setting is
+    not a more trusted source than the request."""
+    with pytest.raises(ValueError, match="server-owned workload identity federation parameter"):
+        await run_async_fallback(
+            litellm_router=FakeRouter(),
+            fallback_model_group=[{"model": "anthropic-backup", "anthropic_workspace_id": "wrkspc_other"}],
+            original_model_group="primary-model",
+            original_exception=RuntimeError("upstream limited request"),
+            max_fallbacks=3,
+            fallback_depth=0,
+        )
+
+
+@pytest.mark.asyncio
+async def test_the_refusal_is_not_swallowed_as_a_fallback_error():
+    """Checked before the per-target loop on purpose: inside it, the refusal would be caught as
+    that target's failure and the run would quietly continue to the next one."""
+    with pytest.raises(ValueError, match="anthropic_issuer_signing_key_ref"):
+        await run_async_fallback(
+            litellm_router=FakeRouter(),
+            fallback_model_group=[
+                {"model": "anthropic-backup", "anthropic_issuer_signing_key_ref": "os.environ/ADMIN_KEY"},
+                "a-perfectly-fine-model",
+            ],
+            original_model_group="primary-model",
+            original_exception=RuntimeError("upstream limited request"),
+            max_fallbacks=3,
+            fallback_depth=0,
+            include_fallback_errors=True,
+        )

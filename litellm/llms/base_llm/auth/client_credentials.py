@@ -24,6 +24,7 @@ from typing_extensions import assert_never
 from litellm.llms.base_llm.auth.identity_source import KeycloakSource, ref_for_error_message
 from litellm.llms.base_llm.auth.token_exchange import (
     MAX_RESPONSE_BYTES,
+    endpoint_url_for_error_message,
     redact_oauth_error_body,
     validate_token_endpoint_url,
 )
@@ -146,7 +147,10 @@ def _resolve_client_secret(config: KeycloakSource, secret_reader: SecretReader) 
 
 def _endpoint_error_message(config: KeycloakSource, response: httpx.Response, client_secret: str) -> str:
     endpoint_error: Final = redact_oauth_error_body(response.status_code, response.text, SecretStr(client_secret))
-    return f"keycloak token endpoint {config.token_url} returned HTTP {endpoint_error.status_code}: {endpoint_error.redacted_body}"
+    return (
+        f"keycloak token endpoint {endpoint_url_for_error_message(config.token_url)} "
+        f"returned HTTP {endpoint_error.status_code}: {endpoint_error.redacted_body}"
+    )
 
 
 def _parse_success_body(response: httpx.Response) -> str:
@@ -180,7 +184,10 @@ def fetch_keycloak_assertion(
     try:
         response: Final = poster.post(config.token_url, content=content, headers=headers, timeout=_TIMEOUT_SECONDS)
     except Exception as e:  # noqa: BLE001  # injected posters may raise beyond httpx; every failure becomes a ValueError
-        raise ValueError(f"could not reach the keycloak token endpoint {config.token_url}: {type(e).__name__}") from e
+        raise ValueError(
+            f"could not reach the keycloak token endpoint {endpoint_url_for_error_message(config.token_url)}: "
+            f"{type(e).__name__}"
+        ) from e
     if not 200 <= response.status_code < 300:
         raise ValueError(_endpoint_error_message(config, response, client_secret))
     return _parse_success_body(response)

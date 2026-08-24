@@ -24,6 +24,7 @@ from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKey
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.credential_hydration import (
     hydrate_named_credential,
+    hydrate_named_credential_authoritative,
     named_credential_wif_fields,
 )
 from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
@@ -292,7 +293,7 @@ async def get_credential_internal_issuer_jwks(
         )
 
     try:
-        credential: Final = await hydrate_named_credential(credential_name, prisma_client)
+        credential: Final = await hydrate_named_credential_authoritative(credential_name, prisma_client)
         if credential is None or credential.credential_info.get("custom_llm_provider") != "anthropic":
             raise HTTPException(
                 status_code=404,

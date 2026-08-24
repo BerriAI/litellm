@@ -1048,6 +1048,7 @@ async def test_handle_completed_batch_no_output_file_is_zero(monkeypatch):
     result set - zero cost, zero usage, no models - instead of letting the file
     fetch raise "Output file id is None" on every aretrieve_batch logging poll.
     """
+
     # The output-file fetch must not even be attempted when there is no output file.
     async def _must_not_fetch(*args, **kwargs):
         pytest.fail("_fetch_batch_output_file_content should not be called")
@@ -1166,7 +1167,10 @@ def test_anthropic_response_body_is_result_message():
 
 
 def test_anthropic_usage_conversion_includes_cache_tokens():
-    body = {"model": "claude-sonnet-4-5-20250929", "usage": _anthropic_usage(1000, 200, cache_creation=2000, cache_read=8000)}
+    body = {
+        "model": "claude-sonnet-4-5-20250929",
+        "usage": _anthropic_usage(1000, 200, cache_creation=2000, cache_read=8000),
+    }
     usage = bu._get_batch_job_usage_from_response_body(body, custom_llm_provider="anthropic")
     assert usage.prompt_tokens == 11000
     assert usage.completion_tokens == 200
@@ -1181,7 +1185,9 @@ def test_bedrock_model_output_line_success_check():
         "modelOutput": {"model": "claude-sonnet-4-6", "usage": {"input_tokens": 13, "output_tokens": 5}},
     }
     assert bu._batch_response_was_successful(row, custom_llm_provider="bedrock") is True
-    assert bu._get_response_from_batch_job_output_file(row, custom_llm_provider="bedrock")["model"] == "claude-sonnet-4-6"
+    assert (
+        bu._get_response_from_batch_job_output_file(row, custom_llm_provider="bedrock")["model"] == "claude-sonnet-4-6"
+    )
 
 
 def test_bedrock_cost_uses_deployment_model_name():
@@ -1233,7 +1239,13 @@ def test_total_usage_without_cache_tokens_has_no_prompt_details(monkeypatch):
     rows = [
         {
             "custom_id": "req-1",
-            "response": {"status_code": 200, "body": {"model": "gpt-5.2", "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}}},
+            "response": {
+                "status_code": 200,
+                "body": {
+                    "model": "gpt-5.2",
+                    "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+                },
+            },
         }
     ]
     _, usage, _ = bu._aggregate_batch_cost_usage_models(entries=rows, custom_llm_provider="openai")
@@ -1479,7 +1491,10 @@ async def test_handle_completed_batch_honors_deployment_pricing(monkeypatch) -> 
 
 
 def test_bedrock_converse_shaped_batch_usage_is_parsed():
-    body = {"model": "us.amazon.nova-lite-v1:0", "usage": {"inputTokens": 2202, "outputTokens": 540, "totalTokens": 2742}}
+    body = {
+        "model": "us.amazon.nova-lite-v1:0",
+        "usage": {"inputTokens": 2202, "outputTokens": 540, "totalTokens": 2742},
+    }
     usage = bu._get_batch_job_usage_from_response_body(body, custom_llm_provider="bedrock")
     assert (usage.prompt_tokens, usage.completion_tokens, usage.total_tokens) == (2202, 540, 2742)
 
@@ -1523,3 +1538,37 @@ def test_unparsable_bedrock_batch_usage_warns(caplog):
     assert usage.total_tokens == 0
     assert "does not understand" in caplog.text
     assert "inputTextTokenCount" in caplog.text
+
+
+class TestFileAccessCredentialsCarryFederation:
+    """A federated deployment holds no api_key, so the fetch that reads a finished batch's output
+    has to inherit the federation fields or it cannot authenticate and the batch is never billed."""
+
+    def test_federation_fields_survive_extraction(self):
+        from litellm.batches.batch_utils import _extract_file_access_credentials
+
+        credentials = _extract_file_access_credentials(
+            {
+                "model": "anthropic/claude-sonnet-4-5",
+                "anthropic_federation_rule_id": "fdrl_x",
+                "anthropic_organization_id": "org-x",
+                "anthropic_identity_token_file": "/var/run/secrets/anthropic.com/token",
+                "something_unrelated": "dropped",
+            }
+        )
+
+        assert credentials["anthropic_federation_rule_id"] == "fdrl_x"
+        assert credentials["anthropic_organization_id"] == "org-x"
+        assert credentials["anthropic_identity_token_file"] == "/var/run/secrets/anthropic.com/token"
+        assert "something_unrelated" not in credentials
+
+    def test_every_federation_field_is_carried(self):
+        """Derived from the kwargs set, so a new federation field is carried without an edit here."""
+        from litellm.batches.batch_utils import _extract_file_access_credentials
+        from litellm.litellm_core_utils.get_litellm_params import ANTHROPIC_WIF_KWARGS_KEYS
+
+        params = {name: f"value-{name}" for name in ANTHROPIC_WIF_KWARGS_KEYS}
+
+        credentials = _extract_file_access_credentials(params)
+
+        assert set(credentials) == set(ANTHROPIC_WIF_KWARGS_KEYS)

@@ -1069,3 +1069,23 @@ class AdaptiveRouterPreferences(BaseModel):
 
     quality_tier: int = Field(ge=1, le=3)
     strengths: list[RequestType] = Field(default_factory=list)
+
+
+_BEDROCK_WORKSPACE_HINT: Final = " On the Bedrock Claude Platform route, pass workspace_id or aws_workspace_id instead."
+
+
+def reject_server_owned_wif_params(body: Mapping[str, object]) -> None:
+    """Raise ``ValueError`` if a mapping that did not come from deployment config carries a
+    server-owned workload identity federation field.
+
+    These are never client-settable on any surface, with or without a client-side credential
+    opt-in. This lives here rather than under ``litellm.proxy`` so the router can call it on a
+    post-authentication merge without core importing from the proxy package.
+    """
+    for param in _anthropic_wif_litellm_params:
+        if param in body:
+            raise ValueError(
+                f"Rejected Request: {param} is a server-owned workload identity federation parameter "
+                "and cannot be set in a request body; configure it on the deployment instead."
+                + (_BEDROCK_WORKSPACE_HINT if param == "anthropic_workspace_id" else "")
+            )

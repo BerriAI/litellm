@@ -5,7 +5,10 @@ from typing import Any, Final, Literal
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.get_litellm_params import AWS_CREDENTIAL_KWARGS_KEYS
+from litellm.litellm_core_utils.get_litellm_params import (
+    ANTHROPIC_WIF_KWARGS_KEYS,
+    AWS_CREDENTIAL_KWARGS_KEYS,
+)
 from litellm.litellm_core_utils.llm_cost_calc.utils import parse_prompt_tokens_details
 from litellm.types.llms.openai import Batch
 from litellm.types.utils import CallTypes, ModelInfo, Usage
@@ -390,6 +393,9 @@ def _extract_file_access_credentials(litellm_params: dict | None) -> dict:
             "max_retries",
             "_litellm_internal_model_credentials",
             *AWS_CREDENTIAL_KWARGS_KEYS,
+            # A federated deployment holds no api_key, so without these the fetch that reads a
+            # finished batch's output has nothing to authenticate with and its cost is never billed.
+            *sorted(ANTHROPIC_WIF_KWARGS_KEYS),
         )
         for key in credential_keys:
             if key in litellm_params:

@@ -31,6 +31,7 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_ENDPOINT_MARKER,
 )
 from litellm.types.router import CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS
+from litellm.types.router import reject_server_owned_wif_params as _reject_server_owned_wif_params
 from litellm.types.utils import CustomPricingLiteLLMParams, anthropic_wif_litellm_params
 
 
@@ -190,20 +191,11 @@ def _allow_model_level_clientside_configurable_parameters(
 _ANTHROPIC_WIF_UNCONDITIONAL_BANNED: Final[tuple[str, ...]] = anthropic_wif_litellm_params
 # The Bedrock Claude Platform route reads a workspace from workspace_id or aws_workspace_id as
 # well, and neither is a federation parameter, so say so rather than leaving that caller stuck.
-_BEDROCK_WORKSPACE_HINT: Final = " On the Bedrock Claude Platform route, pass workspace_id or aws_workspace_id instead."
 
 
-def reject_server_owned_wif_params(body: Mapping[str, object]) -> None:
-    """Raise ``ValueError`` if a request-supplied mapping carries a server-owned workload-identity
-    federation field. These are never client-settable, on any surface, with or without a client-side
-    credential opt-in."""
-    for param in _ANTHROPIC_WIF_UNCONDITIONAL_BANNED:
-        if param in body:
-            raise ValueError(
-                f"Rejected Request: {param} is a server-owned workload identity federation parameter "
-                "and cannot be set in a request body; configure it on the deployment instead."
-                + (_BEDROCK_WORKSPACE_HINT if param == "anthropic_workspace_id" else "")
-            )
+# Re-exported from litellm.types.router, where it lives so the router can call it on a
+# post-authentication merge without core importing from the proxy package.
+reject_server_owned_wif_params = _reject_server_owned_wif_params
 
 
 _NESTED_CONFIG_KEYS: Final[tuple[str, ...]] = ("litellm_embedding_config", "extra_body")

@@ -591,6 +591,37 @@ class TestRedactionAndCaps:
         assert assertion.get_secret_value() not in result.redacted_body
         assert "REFLECTEDPAYLOAD" not in result.redacted_body
 
+    def test_assertion_reflected_from_an_offset_is_dropped(self):
+        """Regression: the probe only looked at the assertion's first 24 characters, so an
+        endpoint echoing it from any later offset shared no prefix and slipped through."""
+        assertion = SecretStr("eyJhbGciOiJSUzI1NiJ9." + "A" * 40 + "PAYLOADMIDDLE" + "B" * 40 + ".signature")
+        tail = assertion.get_secret_value()[24:]
+        body = {"error": "invalid_grant", "error_description": tail}
+
+        result = redact_oauth_error_body(400, json.dumps(body), assertion)
+
+        assert "PAYLOADMIDDLE" not in result.redacted_body
+        assert tail[:40] not in result.redacted_body
+
+    def test_a_short_secret_is_still_matched_whole(self):
+        """A Keycloak client secret can be shorter than the probe length; the whole value is
+        compared in that case rather than a truncated prefix."""
+        secret = SecretStr("short-secret")
+        body = {"error": "invalid_client", "error_description": "rejected short-secret"}
+
+        result = redact_oauth_error_body(400, json.dumps(body), secret)
+
+        assert "short-secret" not in result.redacted_body
+
+    def test_an_unrelated_body_is_not_falsely_redacted(self):
+        """The scan must not fire on a body that merely shares short runs with the assertion."""
+        assertion = SecretStr("eyJhbGciOiJSUzI1NiJ9." + "Z" * 60 + ".signature")
+        body = {"error": "invalid_grant", "error_description": "the federation rule was not found"}
+
+        result = redact_oauth_error_body(400, json.dumps(body), assertion)
+
+        assert "the federation rule was not found" in result.redacted_body
+
     def test_json_array_body_constant_message(self):
         result = redact_oauth_error_body(400, json.dumps(["a", "b"]))
         assert result.redacted_body == "non-object error response omitted"

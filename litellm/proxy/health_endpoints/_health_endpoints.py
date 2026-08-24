@@ -1963,6 +1963,9 @@ async def test_model_connection(
             user_api_key_dict=user_api_key_dict,
             prisma_client=prisma_client,
             premium_user=premium_user,
+            # The Deployment above already carries the caller's merged params, so the effective
+            # state is model_params itself; there is no separate incoming patch here.
+            incoming_params=None,
         )
         # Include health_check_params if provided
         litellm_params = _update_litellm_params_for_health_check(

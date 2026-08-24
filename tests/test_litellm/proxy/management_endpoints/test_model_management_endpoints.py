@@ -231,6 +231,7 @@ class TestModelManagementAuthChecks:
             user_api_key_dict=self.admin_user,
             prisma_client=prisma_client,
             premium_user=True,
+            incoming_params=None,
         )
         assert result is True
 
@@ -252,6 +253,7 @@ class TestModelManagementAuthChecks:
                 user_api_key_dict=self.normal_user,
                 prisma_client=prisma_client,
                 premium_user=True,
+                incoming_params=None,
             )
         assert "403" in str(exc_info.value)
 
@@ -4254,12 +4256,10 @@ class TestNonAdminCannotPersistWifFieldsOnModel:
                 "litellm.proxy.proxy_server.premium_user",
                 True,
             ),
-            patch(  # test-quality-ok: the proxy wiring under test is what this patches
-                "litellm.proxy.management_endpoints.model_management_endpoints.ModelManagementAuthChecks.can_user_make_model_call",
-                new=AsyncMock(return_value=None),
-            ),
         ):
-            with pytest.raises(Exception, match="Only proxy admins can set") as exc_info:
+            with pytest.raises(
+                Exception, match="Only proxy admins can modify a deployment configured for Anthropic"
+            ) as exc_info:
                 await patch_model(
                     model_id="m1",
                     patch_data=updateDeployment(
@@ -4313,10 +4313,6 @@ class TestNonAdminCannotPersistWifFieldsOnModel:
                 True,
             ),
             patch(  # test-quality-ok: the proxy wiring under test is what this patches
-                "litellm.proxy.management_endpoints.model_management_endpoints.ModelManagementAuthChecks.can_user_make_model_call",
-                new=AsyncMock(return_value=None),
-            ),
-            patch(  # test-quality-ok: the proxy wiring under test is what this patches
                 "litellm.proxy.management_endpoints.model_management_endpoints.encrypt_value_helper",
                 side_effect=lambda value: value,
             ),
@@ -4359,10 +4355,6 @@ class TestNonAdminCannotPersistWifFieldsOnModel:
             patch(  # test-quality-ok: the proxy wiring under test is what this patches
                 "litellm.proxy.proxy_server.premium_user",
                 True,
-            ),
-            patch(  # test-quality-ok: the proxy wiring under test is what this patches
-                "litellm.proxy.management_endpoints.model_management_endpoints.ModelManagementAuthChecks.can_user_make_model_call",
-                new=AsyncMock(return_value=None),
             ),
         ):
             with pytest.raises(ProxyException) as exc_info:
@@ -4414,10 +4406,6 @@ class TestNonAdminCannotPersistWifFieldsOnModel:
             patch(  # test-quality-ok: the proxy wiring under test is what this patches
                 "litellm.proxy.proxy_server.llm_router",
                 MagicMock(**{"get_model_ids.return_value": ["wif-gate-create-1"]}),
-            ),
-            patch(  # test-quality-ok: the proxy wiring under test is what this patches
-                "litellm.proxy.management_endpoints.model_management_endpoints.ModelManagementAuthChecks.can_user_make_model_call",
-                new=AsyncMock(return_value=None),
             ),
             patch(  # test-quality-ok: the proxy wiring under test is what this patches
                 "litellm.proxy.proxy_server.proxy_config",
@@ -4473,12 +4461,10 @@ class TestNonAdminCannotPersistWifFieldsOnModel:
                 "litellm.proxy.proxy_server.premium_user",
                 True,
             ),
-            patch(  # test-quality-ok: the proxy wiring under test is what this patches
-                "litellm.proxy.management_endpoints.model_management_endpoints.ModelManagementAuthChecks.can_user_make_model_call",
-                new=AsyncMock(return_value=None),
-            ),
         ):
-            with pytest.raises(Exception, match="Only proxy admins can set") as exc_info:
+            with pytest.raises(
+                Exception, match="Only proxy admins can modify a deployment configured for Anthropic"
+            ) as exc_info:
                 await update_model(
                     model_params=updateDeployment(
                         litellm_params=updateLiteLLMParams(
@@ -4532,10 +4518,6 @@ class TestNonAdminCannotPersistWifFieldsOnModel:
                 True,
             ),
             patch(  # test-quality-ok: the proxy wiring under test is what this patches
-                "litellm.proxy.management_endpoints.model_management_endpoints.ModelManagementAuthChecks.can_user_make_model_call",
-                new=AsyncMock(return_value=None),
-            ),
-            patch(  # test-quality-ok: the proxy wiring under test is what this patches
                 "litellm.proxy.management_endpoints.model_management_endpoints.encrypt_value_helper",
                 side_effect=lambda value: value,
             ),
@@ -4559,6 +4541,14 @@ class TestNonAdminCannotPersistWifFieldsOnModel:
             ]
             assert "anthropic_keycloak_client_secret_ref" in written_litellm_params
             assert "os.environ/ANTHROPIC_WIF_CLIENT_SECRET" in written_litellm_params
+
+
+def _prisma_without_stored_credentials() -> MagicMock:
+    """A prisma double whose credential row is absent, so credential resolution falls back to
+    the in-memory list. Management reads consult the row first, which is the multi-pod case."""
+    prisma = MagicMock()
+    prisma.db.litellm_credentialstable.find_unique = AsyncMock(return_value=None)
+    return prisma
 
 
 class TestDiscoverProviderModels:
@@ -4665,7 +4655,7 @@ class TestDiscoverProviderModels:
             ],
         )
         with patch(  # test-quality-ok: the proxy wiring under test is what this patches
-            "litellm.proxy.proxy_server.prisma_client", MagicMock()
+            "litellm.proxy.proxy_server.prisma_client", _prisma_without_stored_credentials()
         ):  # test-quality-ok: the proxy wiring under test is what this patches
             with pytest.raises(HTTPException) as exc_info:
                 await discover_provider_models(
@@ -4727,7 +4717,7 @@ class TestDiscoverProviderModels:
         )
         with (
             patch(  # test-quality-ok: the proxy wiring under test is what this patches
-                "litellm.proxy.proxy_server.prisma_client", MagicMock()
+                "litellm.proxy.proxy_server.prisma_client", _prisma_without_stored_credentials()
             ),
             patch(  # test-quality-ok: the proxy wiring under test is what this patches
                 "litellm.llms.anthropic.common_utils.AnthropicModelInfo.discover_models",
@@ -4817,3 +4807,98 @@ class TestOneCredentialFeedsManyModelsNoWifCopy:
                 assert "anthropic_federation_rule_id" not in written_litellm_params
                 assert "anthropic_identity_token" not in written_litellm_params
                 assert call.kwargs["data"]["blocked"] is False
+
+
+class TestWifBoundaryReadsTheResultingDeployment:
+    """The proxy-admin rule has to be evaluated against the deployment the write PRODUCES.
+    Reading only the submitted payload let a team admin keep an existing federated deployment
+    and change it anyway, because the fields they sent named nothing federated."""
+
+    @staticmethod
+    def _existing_wif_row():
+        row = MagicMock()
+        row.litellm_params = {
+            "model": "anthropic/claude-sonnet-4",
+            "anthropic_federation_rule_id": "fdrl_admin",
+            "anthropic_organization_id": "org-admin",
+        }
+        row.model_dump.return_value = {
+            "model_name": "claude",
+            "litellm_params": row.litellm_params,
+            "model_info": {"id": "m1"},
+        }
+        return row
+
+    @pytest.mark.asyncio
+    async def test_non_admin_cannot_retarget_an_existing_wif_deployment_via_api_base(self):
+        """api_base is not a federation field, so the payload-only check saw nothing to refuse,
+        and the merged deployment then sent its assertion and minted token to the new host."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import patch_model
+
+        non_admin = UserAPIKeyAuth(user_id="team_admin", user_role=LitellmUserRoles.INTERNAL_USER)
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(return_value=self._existing_wif_row())
+
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),  # test-quality-ok: proxy wiring under test
+            patch(  # test-quality-ok: proxy wiring under test
+                "litellm.proxy.proxy_server.llm_router", MagicMock(**{"get_model_ids.return_value": ["m1"]})
+            ),
+            patch("litellm.proxy.proxy_server.store_model_in_db", True),  # test-quality-ok: proxy wiring under test
+            patch("litellm.proxy.proxy_server.premium_user", True),  # test-quality-ok: proxy wiring under test
+        ):
+            with pytest.raises(Exception, match="Only proxy admins can modify a deployment configured for Anthropic"):
+                await patch_model(
+                    model_id="m1",
+                    patch_data=updateDeployment(
+                        litellm_params=updateLiteLLMParams(api_base="https://gateway.internal")
+                    ),
+                    user_api_key_dict=non_admin,
+                )
+
+    @pytest.mark.asyncio
+    async def test_non_admin_cannot_attach_a_federated_credential_by_name(self):
+        """litellm_credential_name names no federation field itself, but request-time hydration
+        imports whatever the credential holds, so the resulting deployment federates."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import patch_model
+
+        non_admin = UserAPIKeyAuth(user_id="team_admin", user_role=LitellmUserRoles.INTERNAL_USER)
+        plain_row = MagicMock()
+        plain_row.litellm_params = {"model": "anthropic/claude-sonnet-4"}
+        plain_row.model_dump.return_value = {
+            "model_name": "claude",
+            "litellm_params": plain_row.litellm_params,
+            "model_info": {"id": "m1"},
+        }
+        # The credential is served from the row rather than this pod's memory, which is both the
+        # multi-pod case and the one the gate must not miss.
+        admin_credential_row = MagicMock()
+        admin_credential_row.dict.return_value = {
+            "credential_name": "admin-wif",
+            "credential_values": {
+                "anthropic_federation_rule_id": "fdrl_admin",
+                "anthropic_organization_id": "org-admin",
+            },
+            "credential_info": {"custom_llm_provider": "anthropic"},
+        }
+
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(return_value=plain_row)
+        mock_prisma.db.litellm_credentialstable.find_unique = AsyncMock(return_value=admin_credential_row)
+
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),  # test-quality-ok: proxy wiring under test
+            patch(  # test-quality-ok: proxy wiring under test
+                "litellm.proxy.proxy_server.llm_router", MagicMock(**{"get_model_ids.return_value": ["m1"]})
+            ),
+            patch("litellm.proxy.proxy_server.store_model_in_db", True),  # test-quality-ok: proxy wiring under test
+            patch("litellm.proxy.proxy_server.premium_user", True),  # test-quality-ok: proxy wiring under test
+        ):
+            with pytest.raises(Exception, match="Only proxy admins can modify a deployment configured for Anthropic"):
+                await patch_model(
+                    model_id="m1",
+                    patch_data=updateDeployment(
+                        litellm_params=updateLiteLLMParams(litellm_credential_name="admin-wif")
+                    ),
+                    user_api_key_dict=non_admin,
+                )

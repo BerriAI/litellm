@@ -941,3 +941,59 @@ class TestNonAdminCannotTouchAStoredWifCredential:
         assert response.status_code == 200, response.text
         repository.create.assert_awaited_once()
         assert litellm.credential_list[0].credential_name == "ordinary-cred"
+
+
+class TestManagementReadsTheStoredCredential:
+    """Serving a request reads memory first, which is right. A management operation cannot: on a
+    pod whose in-memory copy predates another pod's update it would act on superseded values."""
+
+    @pytest.mark.asyncio
+    async def test_authoritative_hydrate_prefers_the_row_over_a_stale_memory_copy(self):
+        import litellm
+        from litellm.proxy.common_utils.credential_hydration import (
+            hydrate_named_credential,
+            hydrate_named_credential_authoritative,
+        )
+        from litellm.types.utils import CredentialItem
+
+        stale = CredentialItem(
+            credential_name="anthropic-wif",
+            credential_values={"anthropic_issuer_url": "https://old.example.com"},
+            credential_info={"custom_llm_provider": "anthropic"},
+        )
+        row = MagicMock()
+        row.dict.return_value = {
+            "credential_name": "anthropic-wif",
+            "credential_values": {"anthropic_issuer_url": "https://new.example.com"},
+            "credential_info": {"custom_llm_provider": "anthropic"},
+        }
+
+        prisma = MagicMock()
+        prisma.db.litellm_credentialstable.find_unique = AsyncMock(return_value=row)
+
+        with patch.object(litellm, "credential_list", [stale]):
+            served = await hydrate_named_credential("anthropic-wif", prisma)
+            managed = await hydrate_named_credential_authoritative("anthropic-wif", prisma)
+
+        assert served is not None and served.credential_values["anthropic_issuer_url"] == "https://old.example.com"
+        assert managed is not None and managed.credential_values["anthropic_issuer_url"] == "https://new.example.com"
+
+    @pytest.mark.asyncio
+    async def test_authoritative_hydrate_falls_back_to_memory_when_the_row_is_absent(self):
+        import litellm
+        from litellm.proxy.common_utils.credential_hydration import hydrate_named_credential_authoritative
+        from litellm.types.utils import CredentialItem
+
+        only_in_memory = CredentialItem(
+            credential_name="config-yaml-credential",
+            credential_values={"anthropic_issuer_url": "https://configured.example.com"},
+            credential_info={"custom_llm_provider": "anthropic"},
+        )
+        prisma = MagicMock()
+        prisma.db.litellm_credentialstable.find_unique = AsyncMock(return_value=None)
+
+        with patch.object(litellm, "credential_list", [only_in_memory]):
+            resolved = await hydrate_named_credential_authoritative("config-yaml-credential", prisma)
+
+        assert resolved is not None
+        assert resolved.credential_values["anthropic_issuer_url"] == "https://configured.example.com"

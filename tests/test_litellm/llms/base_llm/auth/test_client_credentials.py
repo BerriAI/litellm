@@ -429,7 +429,7 @@ class TestUnresolvedSecretRefIsNotEchoed:
             client_secret_ref=pasted_secret,
         )
 
-        with pytest.raises(ValueError) as excinfo:
+        with pytest.raises(ValueError, match="could not be read") as excinfo:
             keycloak_assertion_source(config, secret_reader=lambda _ref: None)()
 
         assert pasted_secret not in str(excinfo.value)
@@ -446,8 +446,39 @@ class TestUnresolvedSecretRefIsNotEchoed:
             signing_key_ref=pasted_pem,
         )
 
-        with pytest.raises(ValueError) as excinfo:
+        with pytest.raises(ValueError, match="could not be read") as excinfo:
             internal_issuer_assertion_source(config, key_reader=lambda _ref: None)()
 
         assert pasted_pem not in str(excinfo.value)
         assert "withheld" in str(excinfo.value)
+
+
+class TestTokenUrlIsNotEchoedWholesale:
+    """A token endpoint is configuration and naming it makes the error actionable, but nothing
+    stops an operator putting a credential in the URL, and these errors reach model callers."""
+
+    def test_query_string_is_dropped_from_a_status_error(self):
+        from litellm.llms.base_llm.auth.token_exchange import endpoint_url_for_error_message
+
+        rendered = endpoint_url_for_error_message("https://idp.example/token?client_secret=supersecret")
+
+        assert "supersecret" not in rendered
+        assert rendered == "https://idp.example/token"
+
+    def test_userinfo_is_dropped_too(self):
+        from litellm.llms.base_llm.auth.token_exchange import endpoint_url_for_error_message
+
+        rendered = endpoint_url_for_error_message("https://user:pw@idp.example:8443/token")
+
+        assert "pw" not in rendered
+        assert rendered == "https://idp.example:8443/token"
+
+    def test_transport_failure_message_carries_no_query_secret(self):
+        poster = RaisingPoster(httpx.ConnectTimeout("timed out"))
+        config = make_config(token_url="https://idp.example/token?client_secret=supersecret")
+
+        with pytest.raises(ValueError, match="could not reach the keycloak token endpoint") as excinfo:
+            fetch_keycloak_assertion(config, poster=poster, secret_reader=DEFAULT_SECRET_READER)
+
+        assert "supersecret" not in str(excinfo.value)
+        assert "idp.example/token" in str(excinfo.value)

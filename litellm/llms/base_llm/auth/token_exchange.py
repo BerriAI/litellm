@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from math import inf
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Protocol, TypeAlias
-from urllib.parse import urlencode, urlsplit
+from urllib.parse import urlencode, urlsplit, urlunsplit
 
 import httpx
 from pydantic import BaseModel, SecretStr, TypeAdapter, ValidationError
@@ -88,6 +88,19 @@ _RedactableBody: TypeAlias = Mapping[str, object] | list[object] | str | int | f
 _REDACTABLE_BODY_ADAPTER: Final = TypeAdapter[_RedactableBody](_RedactableBody)
 
 
+def endpoint_url_for_error_message(url: str) -> str:
+    """``url`` reduced to scheme, host and path for operator-facing errors.
+
+    A token endpoint is configuration, not a secret, and naming it is what makes these errors
+    actionable. But nothing stops an operator writing a credential into it, as a query parameter
+    or as userinfo, and these errors reach model callers, so neither part is echoed.
+    """
+    parsed: Final = urlsplit(url)
+    host: Final = parsed.hostname or ""
+    authority: Final = f"{host}:{parsed.port}" if parsed.port is not None else host
+    return urlunsplit((parsed.scheme, authority, parsed.path, "", ""))
+
+
 def validate_token_endpoint_url(url: str) -> str | InsecureTokenUrl:
     parsed: Final = urlsplit(url)
     if parsed.scheme == "https":
@@ -115,10 +128,18 @@ def _drop_reflected_assertion(rendered: str, assertion: SecretStr | None) -> str
     if assertion is None:
         return rendered
     secret: Final = assertion.get_secret_value()
-    probe: Final = secret[:_REFLECTION_PROBE_LENGTH]
-    if not probe or probe not in rendered:
+    if not secret:
         return rendered
-    return _REFLECTED_VALUE_MESSAGE
+    if len(secret) <= _REFLECTION_PROBE_LENGTH:
+        return _REFLECTED_VALUE_MESSAGE if secret in rendered else rendered
+    # Scan from the rendered side rather than probing the assertion's prefix: an endpoint that
+    # echoes the assertion from any offset (or only its tail) shares no prefix with it, but must
+    # still be caught. The rendered text is already capped, so this stays a handful of lookups.
+    windows: Final = (
+        rendered[start : start + _REFLECTION_PROBE_LENGTH]
+        for start in range(len(rendered) - _REFLECTION_PROBE_LENGTH + 1)
+    )
+    return _REFLECTED_VALUE_MESSAGE if any(window in secret for window in windows) else rendered
 
 
 def _redact_body_text(body_text: str) -> str:

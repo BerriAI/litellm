@@ -23,7 +23,7 @@ from litellm.router_utils.cooldown_handlers import (
 from litellm.router_utils.router_callbacks.track_deployment_metrics import (
     increment_deployment_failures_for_current_minute,
 )
-from litellm.types.router import LiteLLMParamsTypedDict
+from litellm.types.router import LiteLLMParamsTypedDict, reject_server_owned_wif_params
 
 if TYPE_CHECKING:
     from litellm.router import Router as _Router
@@ -346,6 +346,14 @@ async def run_async_fallback(
         carried_targets if isinstance(carried_targets, AttemptedFallbackTargets) else AttemptedFallbackTargets()
     )
     attempted.record(original_model_group)
+
+    # A dict target is merged straight into kwargs below, and kwargs win over the deployment's own
+    # params, so a stored key/team/global fallback could otherwise set a federation field that the
+    # request itself is forbidden to carry. Checked here rather than at the merge: inside the loop
+    # the refusal would be caught as a per-target failure and quietly skipped to the next one.
+    for target in fallback_model_group:
+        if isinstance(target, dict):
+            reject_server_owned_wif_params(target)
 
     for mg in fallback_model_group:
         if mg == original_model_group:
