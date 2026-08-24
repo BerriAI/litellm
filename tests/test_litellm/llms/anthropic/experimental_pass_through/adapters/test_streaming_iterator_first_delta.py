@@ -507,11 +507,7 @@ def _thinking_first_chunks() -> List[MagicMock]:
 
 
 def _assert_thinking_first_block_opens_at_index_zero(events: List[dict]) -> None:
-    starts = [
-        (e["index"], e["content_block"]["type"])
-        for e in events
-        if e.get("type") == "content_block_start"
-    ]
+    starts = [(e["index"], e["content_block"]["type"]) for e in events if e.get("type") == "content_block_start"]
     assert starts == [(0, "thinking"), (1, "text")], starts
     assert "" not in _text_deltas(events)
     assert _thinking_deltas(events) == ["Let me think", "about it."]
@@ -980,9 +976,7 @@ def test_tool_block_start_emitted_without_awaiting_the_next_chunk_sync():
         "name": "Write",
         "input": {},
     }
-    assert stream.pulled == 1, (
-        f"content_block_start was withheld until {stream.pulled} upstream chunks had arrived"
-    )
+    assert stream.pulled == 1, f"content_block_start was withheld until {stream.pulled} upstream chunks had arrived"
 
 
 @pytest.mark.asyncio
@@ -997,9 +991,7 @@ async def test_tool_block_start_emitted_without_awaiting_the_next_chunk_async():
     start = await wrapper.__anext__()
     assert start["type"] == "content_block_start"
     assert start["content_block"]["name"] == "Write"
-    assert stream.pulled == 1, (
-        f"content_block_start was withheld until {stream.pulled} upstream chunks had arrived"
-    )
+    assert stream.pulled == 1, f"content_block_start was withheld until {stream.pulled} upstream chunks had arrived"
 
 
 @pytest.mark.parametrize("is_async", [False, True])

@@ -39,9 +39,7 @@ def _text_resp(text: str, model: str = "gpt-4o-mini") -> Dict:
     }
 
 
-def _advisor_call_resp(
-    question: str = "How do I approach this?", tool_id: str = "tid_01"
-) -> Dict:
+def _advisor_call_resp(question: str = "How do I approach this?", tool_id: str = "tid_01") -> Dict:
     return {
         "id": "msg_int_test",
         "type": "message",
@@ -106,14 +104,10 @@ async def test_full_dispatch_interceptor_fires_and_loop_completes():
     assert isinstance(result, dict)
     content = result.get("content", [])
     text_blocks = [b for b in content if b.get("type") == "text"]
-    advisor_uses = [
-        b for b in content if b.get("type") == "tool_use" and b.get("name") == "advisor"
-    ]
+    advisor_uses = [b for b in content if b.get("type") == "tool_use" and b.get("name") == "advisor"]
 
     assert len(text_blocks) >= 1, "Final response must have text"
-    assert (
-        len(advisor_uses) == 0
-    ), "No advisor tool_use blocks must appear in final output"
+    assert len(advisor_uses) == 0, "No advisor tool_use blocks must appear in final output"
 
 
 # ---------------------------------------------------------------------------
@@ -221,9 +215,7 @@ async def test_named_params_forwarded_into_advisor_executor_subcall():
 
     captured_executor_kwargs: Dict = {}
 
-    async def mock_handler(
-        model, messages, tools, stream, max_tokens, custom_llm_provider, **kwargs
-    ):
+    async def mock_handler(model, messages, tools, stream, max_tokens, custom_llm_provider, **kwargs):
         # First call is the executor sub-call (returns advisor tool_use).
         # Capture its kwargs so we can assert the forwarded params.
         if not captured_executor_kwargs:
@@ -267,8 +259,7 @@ async def test_named_params_forwarded_into_advisor_executor_subcall():
         )
 
     assert captured_executor_kwargs["thinking"] == {"type": "adaptive"}, (
-        "thinking must be forwarded into executor sub-call — see "
-        "anthropic_messages.handler interceptor invocation."
+        "thinking must be forwarded into executor sub-call — see anthropic_messages.handler interceptor invocation."
     )
     # The advisor enriches metadata with `advisor_sub_call` / `parent_request_id`,
     # but the original caller fields must survive into the executor sub-call.
@@ -304,9 +295,7 @@ async def test_pre_request_hook_override_does_not_collide_with_explicit_kwargs()
 
     captured: Dict = {}
 
-    async def mock_handler(
-        model, messages, tools, stream, max_tokens, custom_llm_provider, **kwargs
-    ):
+    async def mock_handler(model, messages, tools, stream, max_tokens, custom_llm_provider, **kwargs):
         if not captured:
             captured.update(
                 {
@@ -320,9 +309,7 @@ async def test_pre_request_hook_override_does_not_collide_with_explicit_kwargs()
             return _text_resp("Some advice.", model="claude-opus-4-6")
         return _text_resp("Final answer.")
 
-    async def fake_pre_request_hooks(
-        model, messages, tools, stream, custom_llm_provider, **hook_kwargs
-    ):
+    async def fake_pre_request_hooks(model, messages, tools, stream, custom_llm_provider, **hook_kwargs):
         # Simulate a CustomLogger.async_pre_request_hook that overrides several
         # named params on its way through. Without the request_kwargs.pop()
         # extraction in handler.py, these would collide with the explicit

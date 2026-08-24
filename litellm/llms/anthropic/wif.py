@@ -271,7 +271,7 @@ def _token_exchange_base(api_base: str | None) -> str:
     """Exchange base for any caller-supplied form of the deployment base: trailing
     slashes and chat-appended ``/v1/messages`` suffixes stripped, so every tier
     derives the same token URL (and cache key) for the same deployment."""
-    return _strip_chat_suffix(api_base if api_base is not None else _resolve_default_api_base())
+    return anthropic_base_without_chat_suffix(api_base if api_base is not None else _resolve_default_api_base())
 
 
 def _trusted_exchange_hosts() -> frozenset[str]:
@@ -315,7 +315,9 @@ def _resolve_default_api_base() -> str:
     return AnthropicModelInfo.get_api_base(None) or _DEFAULT_API_BASE
 
 
-def _strip_chat_suffix(base: str) -> str:
+def anthropic_base_without_chat_suffix(base: str) -> str:
+    """A deployment base with its chat-surface suffix removed, so the token URL and model
+    discovery both derive from the same value whatever form the operator configured."""
     parts: Final = urlsplit(base)
     if not parts.scheme or not parts.netloc:
         return base.rstrip("/")

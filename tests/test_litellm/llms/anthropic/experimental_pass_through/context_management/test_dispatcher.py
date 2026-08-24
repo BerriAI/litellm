@@ -50,9 +50,7 @@ async def test_unknown_edit_type_is_noop():
         messages=messages,
         tools=None,
         system=None,
-        context_management_spec={
-            "edits": [{"type": "totally_not_a_real_edit_20999999"}]
-        },
+        context_management_spec={"edits": [{"type": "totally_not_a_real_edit_20999999"}]},
     )
     assert result.applied_edits == []
     assert result.messages == messages

@@ -36,7 +36,12 @@ from litellm.types.llms.openai import (
 )
 from litellm.types.utils import LlmProviders
 
-from ..common_utils import AnthropicError, AnthropicModelInfo, merge_anthropic_beta_headers
+from ..common_utils import (
+    AnthropicError,
+    AnthropicModelInfo,
+    merge_anthropic_beta_headers,
+    without_caller_credential_headers,
+)
 
 ANTHROPIC_FILES_API_BASE: Final = "https://api.anthropic.com"
 ANTHROPIC_FILES_BETA_HEADER: Final = "files-api-2025-04-14"
@@ -138,14 +143,12 @@ class AnthropicFilesConfig(BaseFilesConfig):
             merge_anthropic_beta_headers(headers.get("anthropic-beta"), auth_header.get("anthropic-beta")),
             ANTHROPIC_FILES_BETA_HEADER,
         )
-        headers.update(
-            {
-                **auth_header,
-                "anthropic-version": "2023-06-01",
-                "anthropic-beta": merged_beta,
-            }
-        )
-        return headers
+        return {
+            **without_caller_credential_headers(headers),
+            **auth_header,
+            "anthropic-version": "2023-06-01",
+            "anthropic-beta": merged_beta,
+        }
 
     def get_supported_openai_params(self, model: str) -> list[OpenAICreateFileRequestOptionalParams]:
         return ["purpose"]

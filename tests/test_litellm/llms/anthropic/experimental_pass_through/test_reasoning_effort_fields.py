@@ -188,9 +188,7 @@ class TestNormalizeReasoningEffortValue:
             "litellm.utils.get_model_info",
             return_value=_mock_model_info(supports_minimal_reasoning_effort=True),
         ):
-            assert (
-                normalize_reasoning_effort_value("minimal", model="test") == "minimal"
-            )
+            assert normalize_reasoning_effort_value("minimal", model="test") == "minimal"
 
     def test_minimal_degrades_to_low(self):
         with patch(
@@ -239,9 +237,7 @@ class TestAdapterAdaptiveThinking:
         )
 
         adapter = LiteLLMAnthropicMessagesAdapter()
-        result = adapter.translate_anthropic_thinking_to_reasoning_effort(
-            {"type": "adaptive"}
-        )
+        result = adapter.translate_anthropic_thinking_to_reasoning_effort({"type": "adaptive"})
         assert result == "medium"
 
     def test_messages_adapter_adaptive_overridden_by_output_config(self):

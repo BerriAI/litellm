@@ -2316,6 +2316,31 @@ class TestWifServerOwnedAuthHeaderStrip:
         assert all(caller_key not in value for value in headers.values())
         assert headers["user-agent"] == "caller/1.0"
 
+    @pytest.mark.parametrize("header_name", PROXY_CREDENTIAL_HEADER_NAMES)
+    def test_files_surface_strips_caller_credentials_too(self, monkeypatch, wif_engine, header_name):
+        """The files surface builds its own headers, so it needs the same strip the chat surface
+        has: without it a minted federation Bearer travels beside the caller's own credential."""
+        from litellm.llms.anthropic.files.transformation import AnthropicFilesConfig
+
+        for name, value in WIF_ENV.items():
+            monkeypatch.setenv(name, value)
+        caller_key = "sk-litellm-CALLER-VIRTUAL-KEY"
+
+        headers = AnthropicFilesConfig().validate_environment(
+            headers={header_name.title(): caller_key, "user-agent": "caller/1.0"},
+            model="claude-sonnet-4-5",
+            messages=[],
+            optional_params={},
+            litellm_params={},
+            api_key=None,
+            api_base=None,
+        )
+
+        assert headers["authorization"] == f"Bearer {FAKE_MINTED_TOKEN}"
+        assert header_name == "authorization" or header_name not in {name.lower() for name in headers}
+        assert all(caller_key not in value for value in headers.values())
+        assert headers["user-agent"] == "caller/1.0"
+
     def test_no_mint_preserves_caller_supplied_authorization(self, monkeypatch, clean_anthropic_env):
         """No-regression: LiteLLM deliberately lets a caller-forwarded credential
         header ride alongside a statically configured ANTHROPIC_API_KEY, because the
@@ -3018,6 +3043,23 @@ class TestModelDiscovery:
     sanitized errors on the upstream Anthropic /v1/models call itself (issue #28607 gap: a
     WIF source configured in litellm_params, rather than the environment, could not
     discover)."""
+
+    @pytest.mark.parametrize(
+        "configured_base", ["https://api.anthropic.com/v1", "https://api.anthropic.com/v1/messages"]
+    )
+    def test_discovery_does_not_double_the_version_segment(self, monkeypatch, clean_anthropic_env, configured_base):
+        """Regression: /v1/models is appended here, so a base an operator already wrote as
+        .../v1 (or the chat URL they copied) would be asked for /v1/v1/models and 404."""
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        monkeypatch.setenv("ANTHROPIC_API_KEY", FAKE_REGULAR_KEY)
+        client = RecordingModelsClient([{"data": [{"id": "claude-a"}], "has_more": False, "last_id": "claude-a"}])
+        monkeypatch.setattr("litellm.module_level_client", client)
+
+        models = AnthropicModelInfo().get_models(api_base=configured_base)
+
+        assert models == ["anthropic/claude-a"]
+        assert client.calls[0].url == "https://api.anthropic.com/v1/models"
 
     def test_get_models_paginates_via_has_more_and_last_id(self, monkeypatch, clean_anthropic_env):
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo

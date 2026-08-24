@@ -20,7 +20,11 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 from litellm.litellm_core_utils.prompt_templates.factory import (
     THOUGHT_SIGNATURE_SEPARATOR,
 )
-from litellm.llms.anthropic.wif import aget_anthropic_wif_token, get_anthropic_wif_token
+from litellm.llms.anthropic.wif import (
+    aget_anthropic_wif_token,
+    anthropic_base_without_chat_suffix,
+    get_anthropic_wif_token,
+)
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.proxy._types import SpecialHeaders
@@ -60,6 +64,16 @@ def _strip_bedrock_id_suffixes(model: str) -> str:
 
 _SERVER_OWNED_AUTH_HEADERS: Final = SpecialHeaders.litellm_credential_header_names()
 _WIF_ELIGIBILITY_ATTR: Final = "_workload_identity_eligible"
+
+
+def without_caller_credential_headers(headers: Mapping[str, str]) -> dict[str, str]:
+    """``headers`` minus every header that authenticates the caller to litellm.
+
+    The deployment's own credential is applied on top of the result, so a caller-supplied
+    credential must not survive into the upstream request: without this a minted federation
+    Bearer travels beside the caller's own ``x-api-key``, and Anthropic sees two credentials.
+    """
+    return {name: value for name, value in headers.items() if name.lower() not in _SERVER_OWNED_AUTH_HEADERS}
 
 
 def config_allows_workload_identity(config: object) -> bool:
@@ -887,11 +901,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             wif_minted=wif_minted,
         )
 
-        caller_headers: Final = (
-            {name: value for name, value in headers.items() if name.lower() not in _SERVER_OWNED_AUTH_HEADERS}
-            if wif_minted
-            else headers
-        )
+        caller_headers: Final = without_caller_credential_headers(headers) if wif_minted else headers
 
         return {**caller_headers, **anthropic_headers}
 
@@ -1032,8 +1042,13 @@ class AnthropicModelInfo(BaseLLMModelInfo):
                 "Anthropic's `/models` endpoint."
             )
         headers: Final = MappingProxyType({"anthropic-version": "2023-06-01", **auth_header})
+        # /v1/models is appended below, so a base the operator already wrote as .../v1 or
+        # .../v1/messages would otherwise be asked for /v1/v1/models.
         model_ids: Final = _fetch_anthropic_model_ids(
-            resolved_api_base, headers, after_id=None, pages_left=_MODEL_LIST_PAGE_CAP
+            anthropic_base_without_chat_suffix(resolved_api_base),
+            headers,
+            after_id=None,
+            pages_left=_MODEL_LIST_PAGE_CAP,
         )
         return [  # mutable-ok: matches get_models' list[str] contract shared by every provider override
             "anthropic/" + model_id for model_id in model_ids

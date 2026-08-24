@@ -37,9 +37,7 @@ def _ok_batch_response():
             "ended_at": "2024-09-24T11:00:00Z",
             "request_counts": {"succeeded": 2, "errored": 0},
         },
-        request=httpx.Request(
-            "GET", "https://api.anthropic.com/v1/messages/batches/msgbatch_abc"
-        ),
+        request=httpx.Request("GET", "https://api.anthropic.com/v1/messages/batches/msgbatch_abc"),
     )
 
 
@@ -61,9 +59,7 @@ def patched_client():
 
 
 @pytest.mark.asyncio
-async def test_aretrieve_batch_fires_get_with_correct_url_and_headers(
-    handler, patched_client
-):
+async def test_aretrieve_batch_fires_get_with_correct_url_and_headers(handler, patched_client):
     fake_client, factory = patched_client
 
     batch = await handler.aretrieve_batch(
@@ -78,9 +74,7 @@ async def test_aretrieve_batch_fires_get_with_correct_url_and_headers(
     fake_client.get.assert_awaited_once()
     _, call_kwargs = fake_client.get.call_args
     # Exact URL built by get_retrieve_batch_url.
-    assert call_kwargs["url"] == (
-        "https://api.anthropic.com/v1/messages/batches/msgbatch_abc"
-    )
+    assert call_kwargs["url"] == ("https://api.anthropic.com/v1/messages/batches/msgbatch_abc")
     # Auth + version + beta headers built by validate_environment.
     headers = call_kwargs["headers"]
     assert headers["x-api-key"] == "sk-ant-test"
@@ -95,9 +89,7 @@ async def test_aretrieve_batch_fires_get_with_correct_url_and_headers(
 
 
 @pytest.mark.asyncio
-async def test_aretrieve_batch_uses_anthropic_provider_for_client(
-    handler, patched_client
-):
+async def test_aretrieve_batch_uses_anthropic_provider_for_client(handler, patched_client):
     from litellm.types.utils import LlmProviders
 
     _, factory = patched_client
@@ -113,14 +105,10 @@ async def test_aretrieve_batch_uses_anthropic_provider_for_client(
 
 
 @pytest.mark.asyncio
-async def test_aretrieve_batch_resolves_api_key_from_model_info(
-    handler, patched_client
-):
+async def test_aretrieve_batch_resolves_api_key_from_model_info(handler, patched_client):
     fake_client, _ = patched_client
     # api_key=None -> handler falls back to AnthropicModelInfo.get_api_key().
-    with patch.object(
-        handler.anthropic_model_info, "get_api_key", return_value="sk-from-env"
-    ):
+    with patch.object(handler.anthropic_model_info, "get_api_key", return_value="sk-from-env"):
         await handler.aretrieve_batch(
             batch_id="msgbatch_abc",
             api_base="https://api.anthropic.com",
@@ -136,9 +124,7 @@ async def test_aretrieve_batch_resolves_api_key_from_model_info(
 async def test_aretrieve_batch_missing_api_key_raises(handler, patched_client):
     fake_client, _ = patched_client
     # No api_key and resolver yields None -> hard error before any network call.
-    with patch.object(
-        handler.anthropic_model_info, "get_api_key", return_value=None
-    ):
+    with patch.object(handler.anthropic_model_info, "get_api_key", return_value=None):
         with pytest.raises(ValueError, match="Missing Anthropic API Key"):
             await handler.aretrieve_batch(
                 batch_id="msgbatch_abc",
@@ -167,9 +153,7 @@ async def test_aretrieve_batch_resolves_default_api_base(handler, patched_client
             max_retries=0,
         )
     _, call_kwargs = fake_client.get.call_args
-    assert call_kwargs["url"] == (
-        "https://api.anthropic.com/v1/messages/batches/msgbatch_abc"
-    )
+    assert call_kwargs["url"] == ("https://api.anthropic.com/v1/messages/batches/msgbatch_abc")
 
 
 @pytest.mark.asyncio
@@ -178,9 +162,7 @@ async def test_aretrieve_batch_raises_for_status(handler):
     error_response = httpx.Response(
         status_code=404,
         json={"error": "not found"},
-        request=httpx.Request(
-            "GET", "https://api.anthropic.com/v1/messages/batches/missing"
-        ),
+        request=httpx.Request("GET", "https://api.anthropic.com/v1/messages/batches/missing"),
     )
     fake_client = MagicMock()
     fake_client.get = AsyncMock(return_value=error_response)
@@ -215,21 +197,15 @@ async def test_aretrieve_batch_invokes_pre_call_logging(handler, patched_client)
     assert pre_kwargs["input"] == "msgbatch_abc"
     assert pre_kwargs["api_key"] == "sk-ant-test"
     # The logged api_base is the full retrieve URL, not the bare base.
-    assert pre_kwargs["additional_args"]["api_base"] == (
-        "https://api.anthropic.com/v1/messages/batches/msgbatch_abc"
-    )
+    assert pre_kwargs["additional_args"]["api_base"] == ("https://api.anthropic.com/v1/messages/batches/msgbatch_abc")
 
 
 @pytest.mark.asyncio
-async def test_aretrieve_batch_builds_default_logging_obj_when_absent(
-    handler, patched_client
-):
+async def test_aretrieve_batch_builds_default_logging_obj_when_absent(handler, patched_client):
     # logging_obj=None -> handler constructs a real Logging object; the call
     # must still complete (no AttributeError on a missing logger).
     _, _ = patched_client
-    with patch(
-        "litellm.litellm_core_utils.litellm_logging.Logging"
-    ) as logging_cls:
+    with patch("litellm.litellm_core_utils.litellm_logging.Logging") as logging_cls:
         logging_cls.return_value = MagicMock()
         batch = await handler.aretrieve_batch(
             batch_id="msgbatch_abc",
@@ -318,9 +294,7 @@ class _BlockingPoster:
 
 
 @pytest.mark.asyncio
-async def test_aretrieve_batch_wif_exchange_does_not_block_event_loop(
-    handler, patched_client, monkeypatch
-):
+async def test_aretrieve_batch_wif_exchange_does_not_block_event_loop(handler, patched_client, monkeypatch):
     """Regression: aretrieve_batch called the synchronous validate_environment
     directly, so a cold WIF mint ran inline on the event loop and froze every
     other concurrent coroutine until the exchange finished."""
@@ -345,9 +319,7 @@ async def test_aretrieve_batch_wif_exchange_does_not_block_event_loop(
     def routed_through_injected_engine(litellm_params, api_base, model):
         return get_anthropic_wif_token(litellm_params, api_base, model, engine)
 
-    monkeypatch.setattr(
-        anthropic_common_utils, "get_anthropic_wif_token", routed_through_injected_engine
-    )
+    monkeypatch.setattr(anthropic_common_utils, "get_anthropic_wif_token", routed_through_injected_engine)
 
     ticks = []
 

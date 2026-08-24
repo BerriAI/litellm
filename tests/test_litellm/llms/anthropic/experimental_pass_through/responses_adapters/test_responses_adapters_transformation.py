@@ -1308,9 +1308,7 @@ class TestToolResultImages:
             },
             {
                 "role": "user",
-                "content": [
-                    {"type": "tool_result", "tool_use_id": "toolu_01", "content": tool_result_content}
-                ],
+                "content": [{"type": "tool_result", "tool_use_id": "toolu_01", "content": tool_result_content}],
             },
         ]
 
@@ -1473,7 +1471,9 @@ class TestPromptCacheBreakpointToResponses:
         ]
 
     def test_system_without_breakpoint_still_becomes_instructions(self):
-        request = _make_request(system=[{"type": "text", "text": "Be concise."}, {"type": "text", "text": "Be helpful."}])
+        request = _make_request(
+            system=[{"type": "text", "text": "Be concise."}, {"type": "text", "text": "Be helpful."}]
+        )
         kwargs = _ADAPTER.translate_request(request)
         assert kwargs["instructions"] == "Be concise.\nBe helpful."
         assert kwargs["input"] == [
