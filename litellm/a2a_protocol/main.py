@@ -73,7 +73,7 @@ except ImportError:
 from litellm.a2a_protocol.card_resolver import (
     LiteLLMA2ACardResolver,
     get_agent_card_url,
-    normalize_agent_card_protocol_bindings,
+    normalize_agent_card_interfaces,
 )
 from litellm.a2a_protocol.exception_mapping_utils import (
     handle_a2a_localhost_retry,
@@ -784,7 +784,7 @@ async def create_a2a_client(
         verbose_proxy_logger.debug("A2A client created with extra_headers=%s", list(extra_headers.keys()))
 
     resolver: Final = A2ACardResolver(httpx_client=httpx_client, base_url=base_url)
-    agent_card: Final = normalize_agent_card_protocol_bindings(
+    agent_card: Final = normalize_agent_card_interfaces(
         await resolver.get_agent_card(http_kwargs={"headers": extra_headers} if extra_headers else None)
     )
 
