@@ -64,6 +64,27 @@ class TestBedrockRerankReturnDocuments:
         assert response.results[0]["index"] == 7
         assert "document" not in response.results[0]
 
+    def test_json_documents_yield_no_document_and_do_not_raise(self):
+        """
+        A dict document with no `text` key goes to Bedrock as a `jsonDocument`
+        (`_transform_sources`), and `RerankResponseDocument` carries only
+        `text`, so there is nowhere to put it. Pinned as a known boundary: no
+        back-fill, but no crash either. Raised by @kimnamu on #38006.
+        """
+        response = self.config._transform_response(
+            BEDROCK_RESPONSE,
+            _request(documents=[{"title": "zero", "body": "b0"}, {"title": "one", "body": "b1"}]),
+        )
+
+        assert all("document" not in result for result in response.results)
+        assert [r["index"] for r in response.results] == [1, 0]
+
+    def test_non_integer_index_is_tolerated(self):
+        """`index` is coerced by pydantic upstream; do not raise on it here."""
+        response = self.config._transform_response({"results": [{"index": "2", "relevanceScore": 0.9}]}, _request())
+
+        assert response.results[0]["relevance_score"] == 0.9
+
     def test_relevance_scores_are_preserved(self):
         response = self.config._transform_response(BEDROCK_RESPONSE, _request())
 
