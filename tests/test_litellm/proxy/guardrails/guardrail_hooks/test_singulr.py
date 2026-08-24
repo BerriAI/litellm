@@ -213,6 +213,30 @@ class TestSingulrRequestPayload:
         assert sent_payload["tools"] == tools
 
     @pytest.mark.asyncio
+    async def test_responses_api_mcp_tools_are_forwarded(self, singulr_guardrail):
+        """Regression: Responses API tools (e.g. {"type": "mcp", "server_label": ...})
+        have no "function" key, unlike Chat Completions tools. SingulrGuardrailPayload
+        rejected them with a pydantic ValidationError, turning every Responses API
+        request carrying an MCP tool into a 500."""
+        resp = _make_response({"should_block": False})
+        tools = [
+            {
+                "type": "mcp",
+                "server_label": "docs-server",
+                "server_url": "https://mcp.example.com",
+                "allowed_tools": ["search_docs"],
+            }
+        ]
+        with patch.object(singulr_guardrail.async_handler, "post", return_value=resp) as mock_post:
+            await singulr_guardrail.apply_guardrail(
+                inputs={"texts": ["How do I reset my password?"], "tools": tools},
+                request_data={},
+                input_type="request",
+            )
+        sent_payload = mock_post.call_args.kwargs["json"]
+        assert sent_payload["tools"] == tools
+
+    @pytest.mark.asyncio
     async def test_user_api_key_alias_is_forwarded_in_metadata(self, singulr_guardrail):
         """Regression: the alias must be sent as {"user_api_key_alias": <alias>},
         not as a dict whose key is the alias value itself."""
