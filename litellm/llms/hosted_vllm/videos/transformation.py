@@ -1,14 +1,19 @@
 """Video generation for Hosted VLLM (vLLM-Omni OpenAI-compatible /v1/videos)."""
 
+import base64
 import json
 import mimetypes
 from collections.abc import Mapping
 from io import BufferedReader
+from types import MappingProxyType
 from typing import Final
+from urllib.parse import urlparse
 
 from httpx._types import FileTypes, RequestFiles
 
 from litellm.images.utils import ImageEditRequestUtils
+from litellm.litellm_core_utils.url_utils import SSRFError, safe_get
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.llms.openai.videos.transformation import OpenAIVideoConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.router import GenericLiteLLMParams
@@ -55,15 +60,72 @@ _VLLM_OMNI_VIDEO_PARAMS: Final = (
     "aspect_ratio",
 )
 
+_REFERENCE_URL_KEYS: Final = MappingProxyType(
+    {
+        "image_reference": "image_url",
+        "video_reference": "video_url",
+        "audio_reference": "audio_url",
+    }
+)
+
 
 def _serialize_form_value(value: object) -> str:
     if isinstance(value, str):
         return value
     if isinstance(value, bool):
         return "true" if value else "false"
-    if isinstance(value, (Mapping, list)):
+    if isinstance(value, (Mapping, list, tuple)):
         return json.dumps(value)
     return str(value)
+
+
+def _maybe_json(value: object) -> object:
+    if not isinstance(value, str):
+        return value
+    stripped: Final = value.strip()
+    if not stripped or stripped[0] not in "{[":
+        return value
+    return json.loads(stripped)
+
+
+def _content_type_from_headers(headers: Mapping[str, object]) -> str:
+    raw: Final = headers.get("content-type", "application/octet-stream")
+    if not isinstance(raw, str) or not raw.strip():
+        return "application/octet-stream"
+    return raw.split(";", 1)[0].strip() or "application/octet-stream"
+
+
+def _fetch_url_as_data_url(url: str, client: HTTPHandler) -> str:
+    response: Final = safe_get(client, url)
+    response.raise_for_status()
+    encoded: Final = base64.b64encode(response.content).decode("ascii")
+    return f"data:{_content_type_from_headers(response.headers)};base64,{encoded}"
+
+
+def _inline_reference_item(url_key: str, item: object, client: HTTPHandler) -> object:
+    if not isinstance(item, Mapping):
+        return item
+    url: Final = item.get(url_key)
+    if not isinstance(url, str):
+        return item
+    scheme: Final = urlparse(url).scheme.lower()
+    if scheme in ("", "data"):
+        return item
+    if scheme not in ("http", "https"):
+        raise SSRFError(f"URL scheme '{scheme}' is not allowed")
+    return {**item, url_key: _fetch_url_as_data_url(url, client)}  # mutable-ok: JSON form field serialized immediately
+
+
+def _inline_media_reference(field_name: str, value: object, client: HTTPHandler) -> object:
+    url_key: Final = _REFERENCE_URL_KEYS.get(field_name)
+    if url_key is None:
+        return value
+    parsed: Final = _maybe_json(value)
+    if isinstance(parsed, list):
+        return tuple(_inline_reference_item(url_key, item, client) for item in parsed)
+    if isinstance(parsed, Mapping):
+        return _inline_reference_item(url_key, parsed, client)
+    return value
 
 
 def _input_reference_file(reference: object) -> tuple[str, FileTypes]:
@@ -87,6 +149,10 @@ class HostedVLLMVideoConfig(OpenAIVideoConfig):
 
     https://docs.vllm.ai/projects/vllm-omni/en/latest/serving/videos_api/
     """
+
+    def __init__(self, media_http_client: HTTPHandler | None = None) -> None:
+        super().__init__()
+        self._media_http_client = media_http_client
 
     def get_supported_openai_params(self, model: str) -> list:  # mutable-ok: BaseVideoConfig contract
         return [  # mutable-ok: BaseVideoConfig returns list
@@ -145,9 +211,10 @@ class HostedVLLMVideoConfig(OpenAIVideoConfig):
         litellm_params: GenericLiteLLMParams,
         headers: dict,  # mutable-ok: BaseVideoConfig contract
     ) -> tuple[dict, RequestFiles, str]:  # mutable-ok: BaseVideoConfig contract
+        media_client: Final = self._media_http_client or HTTPHandler(concurrent_limit=1)
         input_reference: Final = video_create_optional_request_params.get("input_reference")
         form_files: Final = tuple(
-            (key, (None, _serialize_form_value(value)))
+            (key, (None, _serialize_form_value(_inline_media_reference(key, value, media_client))))
             for key, value in video_create_optional_request_params.items()
             if key not in _EXCLUDED_FORM_KEYS and value is not None
         )
