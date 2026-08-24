@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import sys
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -41,6 +42,7 @@ from litellm.utils import (
     get_prompt_cache_min_tokens,
     is_cached_message,
     is_prompt_caching_valid_prompt,
+    prompt_token_calculator,
 )
 
 # Adds the parent directory to the system path
@@ -4974,3 +4976,19 @@ def test_completion_does_not_leak_rust_flag_into_provider_request_body():
     create_kwargs = mock_client.chat.completions.with_raw_response.create.call_args.kwargs
     assert "rust" not in create_kwargs
     assert "rust" not in (create_kwargs.get("extra_body") or {})
+
+
+def test_prompt_token_calculator_counts_claude_without_the_anthropic_sdk():
+    """
+    The claude branch used to call the anthropic SDK's `count_tokens`, which the SDK
+    removed, so every claude call raised AttributeError. Counting must work with
+    `anthropic` unimportable.
+    """
+    messages: Final = [{"role": "user", "content": "the quick brown fox jumps over the lazy dog"}]
+
+    with patch.dict(sys.modules, {"anthropic": None}):
+        claude_tokens = prompt_token_calculator("claude-sonnet-4-5", messages)
+        gpt_tokens = prompt_token_calculator("gpt-4o", messages)
+
+    assert claude_tokens == 9
+    assert gpt_tokens == 9
