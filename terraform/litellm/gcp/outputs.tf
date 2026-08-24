@@ -1,19 +1,19 @@
 output "lb_ip" {
   description = "Load balancer IP. Global anycast for EXTERNAL_MANAGED, global private IP for INTERNAL_MANAGED. Null when create_runtime is false."
-  value       = var.create_runtime ? (
+  value = var.create_runtime ? (
     var.load_balancing_scheme == "EXTERNAL_MANAGED" ? google_compute_global_address.lb[0].address : google_compute_global_forwarding_rule.http_internal[0].ip_address
-  ) : (
+    ) : (
     null
   )
 }
 
 output "lb_url" {
-  description = "Proxy URL, or null when create_runtime is false. Switches scheme based on whether lb_domains is set; when TLS is enabled the URL points at the first listed domain (since managed certs are tied to the hostname, not the anycast IP). The dashboard is served at /, the API at /v1/*."
+  description = "Proxy URL, or null when create_runtime is false. Switches scheme based on whether TLS is enabled; when TLS is enabled the URL points at the first domain in lb_domains. The dashboard is served at /, the API at /v1/*."
   value = var.create_runtime ? (local.tls_enabled ? (
     "https://${var.lb_domains[0]}"
-  ) : (
-    format("http://%s", var.load_balancing_scheme == "EXTERNAL_MANAGED" ? google_compute_global_address.lb[0].address : google_compute_global_forwarding_rule.http_internal[0].ip_address)
-  )) : (
+    ) : (
+    var.load_balancing_scheme == "EXTERNAL_MANAGED" ? "https://${google_compute_global_address.lb[0].address}" : "https://${google_compute_global_forwarding_rule.http_internal[0].ip_address}"
+    )) : (
     null
   )
 }
