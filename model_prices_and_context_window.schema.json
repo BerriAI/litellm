@@ -625,6 +625,9 @@
         "supports_image_size": {
           "type": "boolean"
         },
+        "supports_legacy_thinking": {
+          "type": "boolean"
+        },
         "supports_low_reasoning_effort": {
           "type": "boolean"
         },
