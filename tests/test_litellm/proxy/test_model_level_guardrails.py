@@ -598,10 +598,15 @@ async def test_pre_call_merges_model_level_guardrails_before_pre_call_hook():
         }
     )
 
-    captured_pre_call_data: dict = {}
+    captured_pre_call_guardrails: list = []
 
     async def fake_pre_call_hook(*, user_api_key_dict, data, call_type):
-        captured_pre_call_data.update(data)
+        # Snapshot the list rather than the dict: metadata is shared by
+        # reference, so a merge that happens after this point would otherwise
+        # show up here retroactively and the assertion would pass either way.
+        captured_pre_call_guardrails.extend(
+            (data.get("metadata") or {}).get("guardrails") or data.get("guardrails") or []
+        )
         return data
 
     proxy_logging = MagicMock()
@@ -616,13 +621,9 @@ async def test_pre_call_merges_model_level_guardrails_before_pre_call_hook():
     proxy_config = MagicMock()
     proxy_config._get_hierarchical_router_settings = AsyncMock(return_value=None)
 
-    # Stop the function before any post-pre_call_hook logic so we can keep
-    # the test focused. Raising _StopAfterPreCall in the next await fires
-    # right after the guardrail merge + pre_call_hook complete.
-    class _StopAfterPreCall(Exception):
-        pass
-
-    proxy_config._get_hierarchical_router_settings.side_effect = _StopAfterPreCall()
+    # Assert on what pre_call_hook was handed rather than short-circuiting the
+    # function part way through: a sentinel keyed to one particular later call
+    # silently stops testing the ordering as soon as that call moves.
 
     with (
         patch(
@@ -640,30 +641,24 @@ async def test_pre_call_merges_model_level_guardrails_before_pre_call_hook():
     ):
         from litellm.proxy._types import UserAPIKeyAuth
 
-        try:
-            await processing.common_processing_pre_call_logic(
-                request=MagicMock(headers={}, url=MagicMock(path="/v1/chat/completions")),
-                general_settings={},
-                user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
-                proxy_logging_obj=proxy_logging,
-                proxy_config=proxy_config,
-                route_type="acompletion",
-                version=None,
-                user_model=None,
-                user_temperature=None,
-                user_request_timeout=None,
-                user_max_tokens=None,
-                user_api_base=None,
-                model=None,
-                llm_router=mock_router,
-            )
-        except _StopAfterPreCall:
-            pass
+        await processing.common_processing_pre_call_logic(
+            request=MagicMock(headers={}, url=MagicMock(path="/v1/chat/completions")),
+            general_settings={},
+            user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+            proxy_logging_obj=proxy_logging,
+            proxy_config=proxy_config,
+            route_type="acompletion",
+            version=None,
+            user_model=None,
+            user_temperature=None,
+            user_request_timeout=None,
+            user_max_tokens=None,
+            user_api_base=None,
+            model=None,
+            llm_router=mock_router,
+        )
 
     # The pre_call_hook must have received data with the model-level
     # guardrail already merged in. Before the fix, this assertion fails
     # because pre_call_hook saw the original data without merge.
-    merged = (captured_pre_call_data.get("metadata") or {}).get("guardrails") or (
-        captured_pre_call_data.get("guardrails") or []
-    )
-    assert "my-pre-call-guardrail" in merged
+    assert "my-pre-call-guardrail" in captured_pre_call_guardrails

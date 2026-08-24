@@ -1,6 +1,7 @@
-import NotificationManager from "../molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { Model, modelCreateCall } from "../networking";
 import { provider_map } from "../provider_info_helpers";
+import { ptuPickerToUtcIso } from "../../utils/ptuDatetime";
 
 export const prepareModelAddRequest = async (formValues: Record<string, any>, accessToken: string, form: any) => {
   try {
@@ -127,7 +128,7 @@ export const prepareModelAddRequest = async (formValues: Record<string, any>, ac
                 delete litellmExtraParams.litellm_credential_name;
               }
             } catch (error) {
-              NotificationManager.fromBackend("Failed to parse LiteLLM Extra Params: " + error);
+              toast.fromError("Failed to parse LiteLLM Extra Params: " + error);
               throw new Error("Failed to parse litellm_extra_params: " + error);
             }
             for (const [key, value] of Object.entries(litellmExtraParams)) {
@@ -140,7 +141,7 @@ export const prepareModelAddRequest = async (formValues: Record<string, any>, ac
             try {
               modelInfoParams = JSON.parse(value);
             } catch (error) {
-              NotificationManager.fromBackend("Failed to parse LiteLLM Extra Params: " + error);
+              toast.fromError("Failed to parse LiteLLM Extra Params: " + error);
               throw new Error("Failed to parse litellm_extra_params: " + error);
             }
             for (const [key, value] of Object.entries(modelInfoParams)) {
@@ -163,6 +164,23 @@ export const prepareModelAddRequest = async (formValues: Record<string, any>, ac
           continue;
         }
 
+        // Handle the PTU flat-cost fields (attributed to the team via model_info)
+        else if (key === "ptu_count" || key === "cost_per_ptu_per_hour") {
+          if (value !== undefined && value !== null && value !== "") {
+            modelInfoObj[key] = Number(value);
+          }
+          continue;
+        }
+
+        // Handle the PTU effective window (DatePicker dayjs value -> ISO 8601 UTC string)
+        else if (key === "ptu_effective_from" || key === "ptu_effective_to") {
+          const iso = ptuPickerToUtcIso(value);
+          if (iso !== null) {
+            modelInfoObj[key] = iso;
+          }
+          continue;
+        }
+
         // Check if key is any of the specified API related keys
         else {
           // Add key-value pair to litellm_params dictionary
@@ -175,7 +193,7 @@ export const prepareModelAddRequest = async (formValues: Record<string, any>, ac
 
     return deployments;
   } catch (error) {
-    NotificationManager.fromBackend("Failed to create model: " + error);
+    toast.fromError("Failed to create model: " + error);
   }
 };
 
@@ -197,12 +215,12 @@ export const handleAddModelSubmit = async (values: any, accessToken: string, for
         model_info: modelInfoObj,
       };
 
-      const response: any = await modelCreateCall(accessToken, new_model);
+      await modelCreateCall(accessToken, new_model);
     }
 
     callback && callback();
     form.resetFields();
   } catch (error) {
-    NotificationManager.fromBackend("Failed to add model: " + error);
+    toast.fromError("Failed to add model: " + error);
   }
 };

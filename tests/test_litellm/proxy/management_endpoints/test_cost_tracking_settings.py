@@ -4,14 +4,11 @@ Tests for cost tracking settings management endpoints.
 Tests the GET and PATCH endpoints for managing cost discount configuration.
 """
 
-import os
-import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
 
-sys.path.insert(0, os.path.abspath("../../../.."))
 
 import litellm
 from litellm.proxy.management_endpoints.cost_tracking_settings import router
@@ -322,9 +319,9 @@ class TestResolveModelForCostLookup:
             "litellm.proxy.proxy_server.llm_router",
             mock_router,
         ):
-            resolved_model, provider = _resolve_model_for_cost_lookup("gpt-5.3-codex")
+            resolved = _resolve_model_for_cost_lookup("gpt-5.3-codex")
 
-        assert resolved_model == "azure/gpt-4o"
+        assert resolved.model == "azure/gpt-4o"
         mock_router.get_model_list.assert_called_once_with(model_name="gpt-5.3-codex")
 
     def test_falls_back_to_litellm_params_model_when_no_base_model(self):
@@ -352,9 +349,9 @@ class TestResolveModelForCostLookup:
             "litellm.proxy.proxy_server.llm_router",
             mock_router,
         ):
-            resolved_model, provider = _resolve_model_for_cost_lookup("gpt-4")
+            resolved = _resolve_model_for_cost_lookup("gpt-4")
 
-        assert resolved_model == "openai/gpt-4"
+        assert resolved.model == "openai/gpt-4"
 
     def test_resolves_base_model_from_litellm_params(self):
         """
@@ -383,9 +380,9 @@ class TestResolveModelForCostLookup:
             "litellm.proxy.proxy_server.llm_router",
             mock_router,
         ):
-            resolved_model, provider = _resolve_model_for_cost_lookup("my-azure-model")
+            resolved = _resolve_model_for_cost_lookup("my-azure-model")
 
-        assert resolved_model == "azure/gpt-4o-mini"
+        assert resolved.model == "azure/gpt-4o-mini"
 
     def test_returns_original_model_when_no_router(self):
         """
@@ -399,12 +396,10 @@ class TestResolveModelForCostLookup:
             "litellm.proxy.proxy_server.llm_router",
             None,
         ):
-            resolved_model, provider = _resolve_model_for_cost_lookup(
-                "azure/openai/gpt-5.3-codex"
-            )
+            resolved = _resolve_model_for_cost_lookup("azure/openai/gpt-5.3-codex")
 
-        assert resolved_model == "azure/openai/gpt-5.3-codex"
-        assert provider is None
+        assert resolved.model == "azure/openai/gpt-5.3-codex"
+        assert resolved.provider is None
 
     def test_returns_custom_llm_provider_on_base_model_path(self):
         """base_model path: the custom_llm_provider from litellm_params is
@@ -427,10 +422,10 @@ class TestResolveModelForCostLookup:
         ]
 
         with patch("litellm.proxy.proxy_server.llm_router", mock_router):
-            resolved_model, provider = _resolve_model_for_cost_lookup("my-azure-model")
+            resolved = _resolve_model_for_cost_lookup("my-azure-model")
 
-        assert resolved_model == "azure/gpt-4o"
-        assert provider == "azure"
+        assert resolved.model == "azure/gpt-4o"
+        assert resolved.provider == "azure"
 
     def test_returns_custom_llm_provider_on_resolved_model_path(self):
         """resolved-model path (no base_model): the custom_llm_provider from
@@ -452,10 +447,10 @@ class TestResolveModelForCostLookup:
         ]
 
         with patch("litellm.proxy.proxy_server.llm_router", mock_router):
-            resolved_model, provider = _resolve_model_for_cost_lookup("gpt-4")
+            resolved = _resolve_model_for_cost_lookup("gpt-4")
 
-        assert resolved_model == "openai/gpt-4"
-        assert provider == "openai"
+        assert resolved.model == "openai/gpt-4"
+        assert resolved.provider == "openai"
 
     def test_resolves_base_model_when_deployment_has_no_litellm_params(self):
         """A deployment can omit litellm_params entirely; base_model from
@@ -474,10 +469,10 @@ class TestResolveModelForCostLookup:
         ]
 
         with patch("litellm.proxy.proxy_server.llm_router", mock_router):
-            resolved_model, provider = _resolve_model_for_cost_lookup("my-azure-model")
+            resolved = _resolve_model_for_cost_lookup("my-azure-model")
 
-        assert resolved_model == "azure/gpt-4o"
-        assert provider is None
+        assert resolved.model == "azure/gpt-4o"
+        assert resolved.provider is None
 
     def test_resolves_model_when_deployment_has_no_model_info(self):
         """A deployment can omit model_info entirely; litellm_params.model must
@@ -496,7 +491,292 @@ class TestResolveModelForCostLookup:
         ]
 
         with patch("litellm.proxy.proxy_server.llm_router", mock_router):
-            resolved_model, provider = _resolve_model_for_cost_lookup("gpt-4")
+            resolved = _resolve_model_for_cost_lookup("gpt-4")
 
-        assert resolved_model == "openai/gpt-4"
-        assert provider is None
+        assert resolved.model == "openai/gpt-4"
+        assert resolved.provider is None
+
+
+class TestEstimateCostOnPremProvider:
+    """Regression tests for LIT-5210: /cost/estimate on on-prem deployment aliases."""
+
+    @pytest.mark.asyncio
+    async def test_estimate_cost_onprem_model_without_pricing(self):
+        """
+        On-prem deployments (custom_llm_provider set, model absent from the cost map)
+        must not 500 with "LLM Provider NOT provided". The resolved provider has to be
+        forwarded to completion_cost so provider inference doesn't run on the bare model.
+
+        completion_cost is intentionally NOT mocked.
+        """
+        from litellm.proxy._types import CostEstimateRequest
+        from litellm.proxy.management_endpoints.cost_tracking_settings import (
+            estimate_cost,
+        )
+
+        request = CostEstimateRequest(
+            model="nvidia/zai-org/glm-5.2",
+            input_tokens=1000,
+            output_tokens=500,
+        )
+
+        mock_router = MagicMock()
+        mock_router.get_model_list.return_value = [
+            {
+                "model_name": "nvidia/zai-org/glm-5.2",
+                "litellm_params": {
+                    "model": "zai-org/GLM-5.2",
+                    "custom_llm_provider": "openai",
+                },
+                "model_info": {},
+            }
+        ]
+
+        saved_model_cost = dict(litellm.model_cost)
+        litellm.register_model(
+            {
+                "openai/zai-org/GLM-5.2": {
+                    "input_cost_per_token": 0.0,
+                    "output_cost_per_token": 0.0,
+                    "litellm_provider": "openai",
+                    "mode": "chat",
+                }
+            }
+        )
+        try:
+            with patch("litellm.proxy.proxy_server.llm_router", mock_router):
+                response = await estimate_cost(request=request, user_api_key_dict=MagicMock())
+        finally:
+            litellm.model_cost = saved_model_cost
+
+        assert response.model == "nvidia/zai-org/glm-5.2"
+        assert response.provider == "openai"
+        assert response.cost_per_request == 0.0
+
+    @pytest.mark.asyncio
+    async def test_estimate_cost_onprem_model_with_configured_pricing(self):
+        """
+        On-prem deployments with input/output_cost_per_token configured must estimate a
+        real cost using that pricing, not fall back to 0.0.
+
+        completion_cost is intentionally NOT mocked.
+        """
+        from litellm.proxy._types import CostEstimateRequest
+        from litellm.proxy.management_endpoints.cost_tracking_settings import (
+            estimate_cost,
+        )
+
+        request = CostEstimateRequest(
+            model="nvidia/zai-org/glm-5.2",
+            input_tokens=1000,
+            output_tokens=500,
+            num_requests_per_day=100,
+        )
+
+        mock_router = MagicMock()
+        mock_router.get_model_list.return_value = [
+            {
+                "model_name": "nvidia/zai-org/glm-5.2",
+                "litellm_params": {
+                    "model": "zai-org/GLM-5.2",
+                    "custom_llm_provider": "openai",
+                    "input_cost_per_token": 0.000001,
+                    "output_cost_per_token": 0.000002,
+                },
+                "model_info": {},
+            }
+        ]
+
+        with patch("litellm.proxy.proxy_server.llm_router", mock_router):
+            response = await estimate_cost(request=request, user_api_key_dict=MagicMock())
+
+        assert response.provider == "openai"
+        assert response.cost_per_request == pytest.approx(0.002)
+        assert response.input_cost_per_request == pytest.approx(0.001)
+        assert response.output_cost_per_request == pytest.approx(0.001)
+        assert response.daily_cost == pytest.approx(0.2)
+        assert response.input_cost_per_token == pytest.approx(0.000001)
+        assert response.output_cost_per_token == pytest.approx(0.000002)
+
+    @pytest.mark.asyncio
+    async def test_estimate_cost_onprem_model_with_model_info_pricing(self):
+        """
+        Custom pricing configured under model_info (how DB / Admin UI added
+        deployments store it) must be honored, not just litellm_params pricing.
+
+        completion_cost is intentionally NOT mocked.
+        """
+        from litellm.proxy._types import CostEstimateRequest
+        from litellm.proxy.management_endpoints.cost_tracking_settings import (
+            estimate_cost,
+        )
+
+        request = CostEstimateRequest(
+            model="nvidia/zai-org/glm-5.2",
+            input_tokens=1000,
+            output_tokens=500,
+        )
+
+        mock_router = MagicMock()
+        mock_router.get_model_list.return_value = [
+            {
+                "model_name": "nvidia/zai-org/glm-5.2",
+                "litellm_params": {
+                    "model": "zai-org/GLM-5.2",
+                    "custom_llm_provider": "openai",
+                },
+                "model_info": {
+                    "input_cost_per_token": 0.000003,
+                    "output_cost_per_token": 0.000004,
+                },
+            }
+        ]
+
+        with patch("litellm.proxy.proxy_server.llm_router", mock_router):
+            response = await estimate_cost(request=request, user_api_key_dict=MagicMock())
+
+        assert response.provider == "openai"
+        assert response.cost_per_request == pytest.approx(0.005)
+        assert response.input_cost_per_token == pytest.approx(0.000003)
+        assert response.output_cost_per_token == pytest.approx(0.000004)
+
+    @pytest.mark.asyncio
+    async def test_estimate_cost_litellm_params_pricing_overrides_model_info(self):
+        """
+        When pricing is set in both places, litellm_params wins, matching the
+        router's cost-map registration precedence.
+        """
+        from litellm.proxy._types import CostEstimateRequest
+        from litellm.proxy.management_endpoints.cost_tracking_settings import (
+            estimate_cost,
+        )
+
+        request = CostEstimateRequest(
+            model="nvidia/zai-org/glm-5.2",
+            input_tokens=1000,
+            output_tokens=500,
+        )
+
+        mock_router = MagicMock()
+        mock_router.get_model_list.return_value = [
+            {
+                "model_name": "nvidia/zai-org/glm-5.2",
+                "litellm_params": {
+                    "model": "zai-org/GLM-5.2",
+                    "custom_llm_provider": "openai",
+                    "input_cost_per_token": 0.000001,
+                    "output_cost_per_token": 0.000002,
+                },
+                "model_info": {
+                    "input_cost_per_token": 0.000003,
+                    "output_cost_per_token": 0.000004,
+                },
+            }
+        ]
+
+        with patch("litellm.proxy.proxy_server.llm_router", mock_router):
+            response = await estimate_cost(request=request, user_api_key_dict=MagicMock())
+
+        assert response.cost_per_request == pytest.approx(0.002)
+        assert response.input_cost_per_token == pytest.approx(0.000001)
+        assert response.output_cost_per_token == pytest.approx(0.000002)
+
+
+
+
+class TestBlockRequestsForModelsWithoutPricing:
+    """Test suite for the block_requests_for_models_without_pricing toggle endpoints"""
+
+    @pytest.mark.asyncio
+    async def test_get_reflects_in_memory_flag(self):
+        with patch.object(litellm, "block_requests_for_models_without_pricing", True):
+            response = client.get(
+                "/config/block_requests_for_models_without_pricing",
+                headers={"Authorization": "Bearer sk-1234"},
+            )
+
+        assert response.status_code == 200
+        assert response.json() == {"enabled": True}
+
+    @pytest.mark.asyncio
+    async def test_patch_persists_and_updates_flag(self):
+        mock_proxy_config = AsyncMock()
+        mock_proxy_config.get_config = AsyncMock(return_value={"litellm_settings": {}})
+        mock_proxy_config.save_config = AsyncMock()
+
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+            patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config),
+            patch("litellm.proxy.proxy_server.store_model_in_db", True),
+            patch.object(litellm, "block_requests_for_models_without_pricing", False),
+        ):
+            response = client.patch(
+                "/config/block_requests_for_models_without_pricing",
+                headers={"Authorization": "Bearer sk-1234"},
+                json={"enabled": True},
+            )
+
+            assert response.status_code == 200
+            assert response.json() == {"enabled": True}
+            assert litellm.block_requests_for_models_without_pricing is True
+
+        saved_config = mock_proxy_config.save_config.call_args.kwargs["new_config"]
+        assert saved_config["litellm_settings"]["block_requests_for_models_without_pricing"] is True
+
+    def test_peer_workers_pick_up_persisted_flag_on_config_reload(self):
+        """A PATCH only mutates the flag on the worker that served it; peer workers must pick the
+        persisted value up when they reload litellm_settings from the DB."""
+        from litellm.proxy.proxy_server import ProxyConfig
+
+        with patch.object(litellm, "block_requests_for_models_without_pricing", False):
+            ProxyConfig()._update_config_fields(
+                current_config={},
+                param_name="litellm_settings",
+                db_param_value={"block_requests_for_models_without_pricing": True},
+            )
+
+            assert litellm.block_requests_for_models_without_pricing is True
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("loads_config_overrides", [True, False])
+    async def test_periodic_db_sync_applies_flag_to_peer_worker(self, loads_config_overrides):
+        """The ~10s reconcile loop runs _init_non_llm_objects_in_db on every worker; it must apply
+        the persisted flag so peers converge without a restart, including when supported_db_objects
+        leaves config_overrides out."""
+        from types import SimpleNamespace
+
+        from litellm.proxy.proxy_server import ProxyConfig
+
+        config_record = SimpleNamespace(
+            param_value={"block_requests_for_models_without_pricing": True, "unsafe_key": "x"}
+        )
+        with (
+            patch.object(litellm, "block_requests_for_models_without_pricing", False),
+            patch.object(
+                ProxyConfig,
+                "_should_load_db_object",
+                side_effect=lambda object_type: loads_config_overrides and object_type == "config_overrides",
+            ),
+            patch.object(ProxyConfig, "_init_hashicorp_vault_config_override", AsyncMock()),
+            patch("litellm.proxy.proxy_server.get_config_param", AsyncMock(return_value=config_record)),
+        ):
+            await ProxyConfig()._init_non_llm_objects_in_db(prisma_client=MagicMock())
+
+            assert litellm.block_requests_for_models_without_pricing is True
+            assert not hasattr(litellm, "unsafe_key")
+
+    @pytest.mark.asyncio
+    async def test_patch_requires_store_model_in_db(self):
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+            patch("litellm.proxy.proxy_server.proxy_config", AsyncMock()),
+            patch("litellm.proxy.proxy_server.store_model_in_db", False),
+        ):
+            response = client.patch(
+                "/config/block_requests_for_models_without_pricing",
+                headers={"Authorization": "Bearer sk-1234"},
+                json={"enabled": True},
+            )
+
+        assert response.status_code == 500
+        assert "error" in response.json()["detail"]

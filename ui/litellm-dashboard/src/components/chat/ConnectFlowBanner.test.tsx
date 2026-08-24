@@ -16,8 +16,8 @@ describe("ConnectFlowBanner", () => {
     const { container } = render(<ConnectFlowBanner flowHandle="flow-handle-123" clientOrigin="https://claude.ai" />);
 
     const form = container.querySelector("form")!;
-    expect(form.getAttribute("method")).toBe("POST");
-    expect(form.getAttribute("action")).toBe("https://gateway.example.com/authorize/complete");
+    expect(form).toHaveAttribute("method", "POST");
+    expect(form).toHaveAttribute("action", "https://gateway.example.com/authorize/complete");
 
     const hidden = form.querySelector('input[name="flow"]') as HTMLInputElement;
     expect(hidden.value).toBe("flow-handle-123");

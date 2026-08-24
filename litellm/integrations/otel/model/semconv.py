@@ -3,7 +3,9 @@ Keys follow the OpenTelemetry GenAI semantic conventions (experimental). Anythin
 without a semconv equivalent lives under the ``litellm.*`` vendor namespace.
 """
 
+from collections.abc import Mapping
 from enum import Enum
+from types import MappingProxyType
 from typing import Final
 
 from litellm._logging import verbose_logger
@@ -30,6 +32,21 @@ class GenAIOperation(str, Enum):
     EXECUTE_TOOL = "execute_tool"  # MCP tool-call spans
     LITELLM_VECTOR_STORE_MANAGEMENT = "litellm.vector_store_management"
     LITELLM_VECTOR_STORE_FILE_MANAGEMENT = "litellm.vector_store_file_management"
+    LITELLM_MODERATION = "litellm.moderation"
+
+
+class GenAIOutputType(str, Enum):
+    """Values for ``gen_ai.output.type``, the modality the client asked for.
+
+    It is what separates the inference routes that share ``generate_content``:
+    image generation requests ``image``, speech requests ``speech``, and
+    transcription and OCR both request ``text``.
+    """
+
+    TEXT = "text"
+    JSON = "json"
+    IMAGE = "image"
+    SPEECH = "speech"
 
 
 class GenAIProvider(str, Enum):
@@ -130,9 +147,23 @@ class JsonRpc:
     """JSON-RPC keys carried on MCP spans. The error/status code lives in the
     ``rpc.*`` namespace per semconv, not ``jsonrpc.*``."""
 
+    SYSTEM: Final = "rpc.system"
     REQUEST_ID: Final = "jsonrpc.request.id"
     PROTOCOL_VERSION: Final = "jsonrpc.protocol.version"
     RESPONSE_STATUS_CODE: Final = "rpc.response.status_code"
+
+
+class RpcSystem(str, Enum):
+    """Well-known values for ``rpc.system``. MCP frames every message as JSON-RPC 2.0.
+
+    Naming the system also classifies the span: a CLIENT span carrying none of the
+    ``rpc.*``/``http.*``/``db.*``/``messaging.*`` families records no span type or
+    subtype in backends that derive those from the attribute family. It is emitted
+    only alongside ``server.address``/``server.port``, since a backend that reads it
+    as a downstream dependency names that dependency from the server address.
+    """
+
+    JSONRPC = "jsonrpc"
 
 
 class NetworkTransport(str, Enum):
@@ -224,7 +255,11 @@ class DB:
     """
 
     SYSTEM_NAME: Final = "db.system.name"
+    # Superseded by SYSTEM_NAME, dual-emitted because Datadog's OTLP intake
+    # still infers a span's database type from this key.
+    SYSTEM_LEGACY: Final = "db.system"
     OPERATION_NAME: Final = "db.operation.name"
+    NAMESPACE: Final = "db.namespace"
 
 
 class HTTP:
@@ -240,6 +275,11 @@ class LiteLLM:
     """Vendor-extension keys (no semconv equivalent). Always ``litellm.*``."""
 
     CALL_ID: Final = "litellm.call_id"
+    # The litellm route that produced the call. Needed because the convention maps
+    # several routes onto one operation: transcription and OCR are both
+    # ``generate_content`` with a ``text`` output type, so this is the only thing
+    # that tells them apart.
+    CALL_TYPE: Final = "litellm.call_type"
     COST_PREFIX: Final = "litellm.cost."
     METADATA_PREFIX: Final = "litellm.metadata."
     TEAM_ID: Final = "litellm.team.id"
@@ -302,7 +342,7 @@ class Metric:
 
 
 # litellm ``custom_llm_provider`` -> ``gen_ai.provider.name`` value.
-_PROVIDER_BY_LITELLM: dict[str, GenAIProvider] = {
+_PROVIDER_BY_LITELLM: Final[dict[str, GenAIProvider]] = {
     "openai": GenAIProvider.OPENAI,
     "text-completion-openai": GenAIProvider.OPENAI,
     "azure": GenAIProvider.AZURE_AI_OPENAI,
@@ -324,7 +364,7 @@ _PROVIDER_BY_LITELLM: dict[str, GenAIProvider] = {
 }
 
 # litellm ``call_type`` -> ``gen_ai.operation.name``.
-_OPERATION_BY_CALL_TYPE: dict[str, GenAIOperation] = {
+_OPERATION_BY_CALL_TYPE: Final[dict[str, GenAIOperation]] = {
     "completion": GenAIOperation.CHAT,
     "acompletion": GenAIOperation.CHAT,
     "completion_with_retries": GenAIOperation.CHAT,
@@ -334,6 +374,16 @@ _OPERATION_BY_CALL_TYPE: dict[str, GenAIOperation] = {
     "aembedding": GenAIOperation.EMBEDDINGS,
     "responses": GenAIOperation.CHAT,
     "aresponses": GenAIOperation.CHAT,
+    "image_generation": GenAIOperation.GENERATE_CONTENT,
+    "aimage_generation": GenAIOperation.GENERATE_CONTENT,
+    "moderation": GenAIOperation.LITELLM_MODERATION,
+    "amoderation": GenAIOperation.LITELLM_MODERATION,
+    "ocr": GenAIOperation.GENERATE_CONTENT,
+    "aocr": GenAIOperation.GENERATE_CONTENT,
+    "speech": GenAIOperation.GENERATE_CONTENT,
+    "aspeech": GenAIOperation.GENERATE_CONTENT,
+    "transcription": GenAIOperation.GENERATE_CONTENT,
+    "atranscription": GenAIOperation.GENERATE_CONTENT,
     "call_mcp_tool": GenAIOperation.EXECUTE_TOOL,
     "vector_store_search": GenAIOperation.RETRIEVAL,
     "avector_store_search": GenAIOperation.RETRIEVAL,
@@ -367,6 +417,23 @@ _OPERATION_BY_CALL_TYPE: dict[str, GenAIOperation] = {
 }
 
 
+# litellm ``call_type`` -> ``gen_ai.output.type``. Only the call types whose route
+# fixes the requested modality are listed; the attribute is conditionally required
+# on a request that asks for an output format, so anything else is left unstamped.
+_OUTPUT_TYPE_BY_CALL_TYPE: Final[Mapping[str, GenAIOutputType]] = MappingProxyType(
+    {
+        "image_generation": GenAIOutputType.IMAGE,
+        "aimage_generation": GenAIOutputType.IMAGE,
+        "speech": GenAIOutputType.SPEECH,
+        "aspeech": GenAIOutputType.SPEECH,
+        "transcription": GenAIOutputType.TEXT,
+        "atranscription": GenAIOutputType.TEXT,
+        "ocr": GenAIOutputType.TEXT,
+        "aocr": GenAIOutputType.TEXT,
+    }
+)
+
+
 def resolve_provider(custom_llm_provider: str | None) -> str:
     """Map a litellm provider string to a ``gen_ai.provider.name`` value.
 
@@ -375,7 +442,7 @@ def resolve_provider(custom_llm_provider: str | None) -> str:
     """
     if not custom_llm_provider:
         return ""
-    mapped = _PROVIDER_BY_LITELLM.get(custom_llm_provider.lower())
+    mapped: Final = _PROVIDER_BY_LITELLM.get(custom_llm_provider.lower())
     return mapped.value if mapped is not None else custom_llm_provider
 
 
@@ -389,7 +456,7 @@ def resolve_operation(call_type: str | None) -> GenAIOperation:
     """
     if not call_type:
         return GenAIOperation.CHAT
-    mapped = _OPERATION_BY_CALL_TYPE.get(call_type.lower())
+    mapped: Final = _OPERATION_BY_CALL_TYPE.get(call_type.lower())
     if mapped is not None:
         return mapped
     verbose_logger.debug(
@@ -398,3 +465,11 @@ def resolve_operation(call_type: str | None) -> GenAIOperation:
         GenAIOperation.CHAT.value,
     )
     return GenAIOperation.CHAT
+
+
+def resolve_output_type(call_type: str | None) -> GenAIOutputType | None:
+    """Map a litellm ``call_type`` to a ``gen_ai.output.type`` value, or ``None``
+    for a route that doesn't pin the output modality."""
+    if not call_type:
+        return None
+    return _OUTPUT_TYPE_BY_CALL_TYPE.get(call_type.lower())

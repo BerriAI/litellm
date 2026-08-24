@@ -47,7 +47,7 @@ def test_entra_token_used_when_no_api_key():
 
 
 def test_service_principal_token_is_requested_with_the_configured_scope():
-    with patch("litellm.llms.azure.common_utils.get_azure_ad_token_from_entra_id") as mock_entra_id:
+    with patch("litellm.llms.azure.common_utils.get_azure_ad_token_from_entra_id") as mock_entra_id:  # test-quality-ok: stubs the Entra token fetch to assert the SP credential+scope plumbing and the returned Bearer header; live SP path proven by the PR's Azure Foundry e2e QA
         mock_entra_id.return_value = lambda: "sp-token"
 
         headers = get_azure_ai_auth_headers(
@@ -70,7 +70,7 @@ def test_service_principal_token_is_requested_with_the_configured_scope():
 
 
 def test_error_mentions_both_credential_types_when_nothing_is_configured():
-    with pytest.raises(ValueError) as exc_info:
+    with pytest.raises(ValueError, match="AZURE_AI_API_KEY") as exc_info:
         get_azure_ai_auth_headers(api_key=None, litellm_params={})
 
     message = str(exc_info.value)
@@ -89,10 +89,10 @@ def test_ocr_authenticates_with_entra_token():
     assert headers["Authorization"] == "Bearer entra-token"
 
 
-def test_embedding_falls_back_to_entra_token_instead_of_openai_key(monkeypatch):
+def test_embedding_falls_back_to_entra_token_instead_of_openai_key(monkeypatch):  # test-quality-ok: asserts the embedding handler is authed with the Entra token, not the OpenAI key fallback; live path proven by the PR's Azure Foundry e2e QA
     monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-key")
 
-    with patch.object(litellm.main.azure_ai_embedding, "embedding") as mock_embedding:
+    with patch.object(litellm.main.azure_ai_embedding, "embedding") as mock_embedding:  # test-quality-ok: no injection seam for the embedding handler through the public embedding() API; live path proven by the PR's Azure Foundry e2e QA
         mock_embedding.return_value = litellm.EmbeddingResponse()
 
         litellm.embedding(
@@ -106,7 +106,7 @@ def test_embedding_falls_back_to_entra_token_instead_of_openai_key(monkeypatch):
 
 
 def test_image_generation_authenticates_with_entra_token():
-    with patch.object(litellm.images.main.azure_chat_completions, "image_generation") as mock_image_generation:
+    with patch.object(litellm.images.main.azure_chat_completions, "image_generation") as mock_image_generation:  # test-quality-ok: asserts image_generation forwards the computed Entra bearer header; no injection seam through the public API; live path proven by the PR's Azure Foundry e2e QA
         mock_image_generation.return_value = litellm.ImageResponse()
 
         litellm.image_generation(
@@ -123,7 +123,7 @@ def test_image_generation_authenticates_with_entra_token():
 
 @pytest.mark.parametrize("header_name", ["Authorization", "authorization", "api-key", "API-KEY"])
 def test_image_generation_keeps_caller_supplied_auth_header(header_name):
-    with patch.object(litellm.images.main.azure_chat_completions, "image_generation") as mock_image_generation:
+    with patch.object(litellm.images.main.azure_chat_completions, "image_generation") as mock_image_generation:  # test-quality-ok: asserts a caller-supplied auth header is preserved over Entra; no injection seam through the public API; live path proven by the PR's Azure Foundry e2e QA
         mock_image_generation.return_value = litellm.ImageResponse()
 
         litellm.image_generation(
@@ -139,7 +139,7 @@ def test_image_generation_keeps_caller_supplied_auth_header(header_name):
 
 
 def test_image_generation_still_uses_api_key_header():
-    with patch.object(litellm.images.main.azure_chat_completions, "image_generation") as mock_image_generation:
+    with patch.object(litellm.images.main.azure_chat_completions, "image_generation") as mock_image_generation:  # test-quality-ok: asserts the api-key header path still works alongside Entra; no injection seam through the public API; live path proven by the PR's Azure Foundry e2e QA
         mock_image_generation.return_value = litellm.ImageResponse()
 
         litellm.image_generation(

@@ -2,11 +2,10 @@
 
 from enum import Enum
 from functools import lru_cache
-from typing import Any, List
+from typing import Annotated, Any, Final
 
 from pydantic import AliasChoices, BaseModel, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
-from typing_extensions import Annotated
 
 from litellm.integrations.otel.model.baggage import (
     BAGGAGE_PROMOTED_KEYS,
@@ -15,7 +14,7 @@ from litellm.integrations.otel.model.baggage import (
 )
 
 #: Master feature-flag env var. The logger is inert until this is truthy.
-OTEL_V2_ENV = "LITELLM_OTEL_V2"
+OTEL_V2_ENV: Final = "LITELLM_OTEL_V2"
 
 
 class CaptureMessageContent(str):
@@ -40,6 +39,7 @@ class ExporterOwner(str, Enum):
     WEAVE_OTEL = "weave_otel"
     LEVO = "levo"
     AGENTOPS = "agentops"
+    NEWRELIC = "newrelic"
 
 
 class _OTelV2Flag(BaseSettings):
@@ -98,6 +98,15 @@ class ExporterSpec(BaseModel):
             "auto (Simple for console/in_memory, Batch otherwise)."
         ),
     )
+    requires_headers: bool = Field(
+        default=False,
+        description=(
+            "Skip this exporter when no headers are resolved. For destinations "
+            "that reject unauthenticated exports (e.g. New Relic), a spec kept "
+            "only as the per-request credential-stamping target would otherwise "
+            "export keyless traffic and produce a 4xx for every span batch."
+        ),
+    )
 
 
 class OpenTelemetryV2Config(BaseSettings):
@@ -151,7 +160,7 @@ class OpenTelemetryV2Config(BaseSettings):
         ),
     )
 
-    mapper_names: Annotated[List[str], NoDecode] = Field(
+    mapper_names: Annotated[list[str], NoDecode] = Field(
         default_factory=lambda: ["genai"],
         description=(
             "Ordered attribute vocabularies to emit. ``genai`` is the "
@@ -169,7 +178,7 @@ class OpenTelemetryV2Config(BaseSettings):
         ),
     )
 
-    baggage_promoted_keys: Annotated[List[str], NoDecode] = Field(
+    baggage_promoted_keys: Annotated[list[str], NoDecode] = Field(
         default_factory=lambda: list(BAGGAGE_PROMOTED_KEYS),
         validation_alias=AliasChoices("baggage_promoted_keys", "LITELLM_OTEL_BAGGAGE_PROMOTED_KEYS"),
         description=(
@@ -180,7 +189,7 @@ class OpenTelemetryV2Config(BaseSettings):
             "YAML list)."
         ),
     )
-    baggage_metadata_keys: Annotated[List[str], NoDecode] = Field(
+    baggage_metadata_keys: Annotated[list[str], NoDecode] = Field(
         default_factory=lambda: list(DEFAULT_BAGGAGE_METADATA_KEYS),
         validation_alias=AliasChoices("baggage_metadata_keys", "LITELLM_OTEL_BAGGAGE_METADATA_KEYS"),
         description=(
@@ -190,7 +199,7 @@ class OpenTelemetryV2Config(BaseSettings):
             "``callback_settings.otel.baggage_metadata_keys`` in config.yaml."
         ),
     )
-    baggage_team_metadata_keys: Annotated[List[str], NoDecode] = Field(
+    baggage_team_metadata_keys: Annotated[list[str], NoDecode] = Field(
         default_factory=lambda: list(DEFAULT_BAGGAGE_TEAM_METADATA_KEYS),
         validation_alias=AliasChoices("baggage_team_metadata_keys", "LITELLM_OTEL_BAGGAGE_TEAM_METADATA_KEYS"),
         description=(

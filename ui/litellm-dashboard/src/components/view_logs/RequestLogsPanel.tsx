@@ -6,7 +6,6 @@ import moment from "moment";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { AutoRouterModelGroupsProvider } from "@/components/shared/table_cells";
-import { internalUserRoles } from "../../utils/roles";
 import type { KeyResponse } from "../key_team_helpers/key_list";
 import { keyInfoV1Call, uiSpendLogsCall } from "../networking";
 import KeyInfoView from "../templates/key_info_view";
@@ -73,15 +72,12 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
     sessionStorage.setItem("isLiveTail", JSON.stringify(isLiveTail));
   }, [isLiveTail]);
 
-  const filterByCurrentUser = internalUserRoles.includes(userRole);
-
   const { logsQuery, filteredLogs, allTeams } = useLogFilterLogic({
     accessToken,
     token,
     userRole,
     userID,
     columnFilters,
-    filterByCurrentUser,
     activeTab: isActive ? "request logs" : "inactive",
     isLiveTail,
     startTime,
@@ -235,9 +231,13 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
   const handleRowClick = useCallback(
     (log: LogEntry) => {
       setSelectedLog(log);
-      openLog(log.request_id);
+      if (log.session_id && (log.session_total_count || 1) > 1) {
+        openSession(log.session_id, log.request_id);
+      } else {
+        openLog(log.request_id);
+      }
     },
-    [openLog],
+    [openLog, openSession],
   );
 
   const handleSessionClick = useCallback(
@@ -253,9 +253,9 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
   const handleSelectLog = useCallback(
     (log: LogEntry) => {
       setSelectedLog(log);
-      selectLog(log.request_id);
+      selectLog(log.request_id, displaySessionId);
     },
-    [selectLog],
+    [selectLog, displaySessionId],
   );
 
   const handleKeyHashClick = useCallback((keyHash: string) => {

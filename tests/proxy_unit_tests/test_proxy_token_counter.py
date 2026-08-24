@@ -5,7 +5,6 @@
 import json
 import logging
 import os
-import sys
 import tempfile
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -17,9 +16,6 @@ load_dotenv()
 
 # this file is to test litellm/proxy
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 
 from fastapi import HTTPException, Request
 

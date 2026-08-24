@@ -1,3 +1,7 @@
+import base64
+
+import pytest
+
 from litellm.litellm_core_utils.prompt_templates.factory import (
     convert_to_gemini_tool_call_result,
 )
@@ -782,6 +786,367 @@ def test_dummy_signature_with_function_call_mode():
         "utf-8"
     )
     assert gemini_parts[0]["thoughtSignature"] == expected_dummy
+
+
+def _parallel_tool_calls(*signatures):
+    return [
+        {
+            "id": f"call_{idx}",
+            "type": "function",
+            "function": {
+                "name": f"tool_{idx}",
+                "arguments": '{"location": "Paris"}',
+                **(
+                    {"provider_specific_fields": {"thought_signature": signature}}
+                    if signature is not None
+                    else {}
+                ),
+            },
+            "index": idx,
+        }
+        for idx, signature in enumerate(signatures)
+    ]
+
+
+def _parallel_tool_calls_signed_via_id(*signatures):
+    """Parallel tool calls in the shape LiteLLM actually hands back to clients.
+
+    The signature rides in the tool call id behind __thought__, which is what an
+    OpenAI-format client echoes back on the next turn.
+    """
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        _encode_tool_call_id_with_signature,
+    )
+
+    return [
+        {
+            "id": _encode_tool_call_id_with_signature(f"call_{idx}", signature),
+            "type": "function",
+            "function": {"name": f"tool_{idx}", "arguments": '{"location": "Paris"}'},
+            "index": idx,
+        }
+        for idx, signature in enumerate(signatures)
+    ]
+
+
+REAL_THOUGHT_SIGNATURE = "Co4CAdHtim/rWgXbz2Ghp4tShzLeMASrPw6JJyYIC3cbVyZnKzU3uv8/wVzyS2sKRPL2m8QQHHXbNQhEEz500G7n"
+PLACEHOLDER_SIGNATURE = base64.b64encode(b"skip_thought_signature_validator").decode(
+    "utf-8"
+)
+
+
+def test_dummy_signature_only_on_first_parallel_tool_call():
+    """Google documents the placeholder as a last resort that degrades quality, so an unsigned
+    parallel turn replayed to gemini-3 gets a budget of exactly one."""
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        convert_to_gemini_tool_call_invoke,
+    )
+
+    gemini_parts = convert_to_gemini_tool_call_invoke(
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": _parallel_tool_calls(None, None, None),
+        },
+        model="gemini-3-pro-preview",
+    )
+
+    assert len(gemini_parts) == 3
+    assert gemini_parts[0]["thoughtSignature"] == PLACEHOLDER_SIGNATURE
+    assert "thoughtSignature" not in gemini_parts[1]
+    assert "thoughtSignature" not in gemini_parts[2]
+
+
+def test_real_signature_on_first_parallel_tool_call_leaves_siblings_empty():
+    """Gemini signs only the first of N parallel function calls, so a faithful replay has
+    nothing to attach to the siblings."""
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        convert_to_gemini_tool_call_invoke,
+    )
+
+    gemini_parts = convert_to_gemini_tool_call_invoke(
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": _parallel_tool_calls(REAL_THOUGHT_SIGNATURE, None, None),
+        },
+        model="gemini-3-pro-preview",
+    )
+
+    assert len(gemini_parts) == 3
+    assert gemini_parts[0]["thoughtSignature"] == REAL_THOUGHT_SIGNATURE
+    assert "thoughtSignature" not in gemini_parts[1]
+    assert "thoughtSignature" not in gemini_parts[2]
+
+
+def test_real_signature_on_later_parallel_tool_call_is_preserved():
+    """Clients may reorder or drop calls, so a signature that lands on a non-first call is
+    still the model's own and must survive the round trip."""
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        convert_to_gemini_tool_call_invoke,
+    )
+
+    gemini_parts = convert_to_gemini_tool_call_invoke(
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": _parallel_tool_calls(None, REAL_THOUGHT_SIGNATURE),
+        },
+        model="gemini-3-pro-preview",
+    )
+
+    assert len(gemini_parts) == 2
+    assert gemini_parts[0]["thoughtSignature"] == PLACEHOLDER_SIGNATURE
+    assert gemini_parts[1]["thoughtSignature"] == REAL_THOUGHT_SIGNATURE
+
+
+def test_no_signatures_on_parallel_tool_calls_for_gemini_2_5():
+    """Non-gemini-3 models never get a placeholder signature, on any call."""
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        convert_to_gemini_tool_call_invoke,
+    )
+
+    gemini_parts = convert_to_gemini_tool_call_invoke(
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": _parallel_tool_calls(None, None),
+        },
+        model="gemini-2.5-flash",
+    )
+
+    assert len(gemini_parts) == 2
+    assert all("thoughtSignature" not in part for part in gemini_parts)
+
+
+def test_signature_embedded_in_tool_call_id_only_on_first_parallel_call():
+    """The production shape: the signature arrives inside the first call's id, siblings have bare ids."""
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        convert_to_gemini_tool_call_invoke,
+    )
+
+    gemini_parts = convert_to_gemini_tool_call_invoke(
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": _parallel_tool_calls_signed_via_id(
+                REAL_THOUGHT_SIGNATURE, None, None
+            ),
+        },
+        model="gemini-3-pro-preview",
+    )
+
+    assert len(gemini_parts) == 3
+    assert gemini_parts[0]["thoughtSignature"] == REAL_THOUGHT_SIGNATURE
+    assert "thoughtSignature" not in gemini_parts[1]
+    assert "thoughtSignature" not in gemini_parts[2]
+
+
+def test_tool_level_provider_specific_fields_signature_leaves_siblings_empty():
+    """A signature on the tool call itself, rather than on its function, behaves the same way."""
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        convert_to_gemini_tool_call_invoke,
+    )
+
+    tool_calls = _parallel_tool_calls(None, None)
+    tool_calls[0]["provider_specific_fields"] = {
+        "thought_signature": REAL_THOUGHT_SIGNATURE
+    }
+
+    gemini_parts = convert_to_gemini_tool_call_invoke(
+        {"role": "assistant", "content": None, "tool_calls": tool_calls},
+        model="gemini-3-pro-preview",
+    )
+
+    assert len(gemini_parts) == 2
+    assert gemini_parts[0]["thoughtSignature"] == REAL_THOUGHT_SIGNATURE
+    assert "thoughtSignature" not in gemini_parts[1]
+
+
+def test_placeholder_lands_on_first_emitted_part_not_first_tool_call_entry():
+    """A non-function entry (e.g. an OpenAI custom tool call) emits no part, so it must not
+    consume the one placeholder slot and leave the real first function call bare."""
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        convert_to_gemini_tool_call_invoke,
+    )
+
+    tool_calls = [
+        {"id": "call_custom", "type": "custom", "custom": {"name": "noop", "input": ""}}
+    ] + _parallel_tool_calls(None, None)
+
+    gemini_parts = convert_to_gemini_tool_call_invoke(
+        {"role": "assistant", "content": None, "tool_calls": tool_calls},
+        model="gemini-3-pro-preview",
+    )
+
+    assert len(gemini_parts) == 2
+    assert gemini_parts[0]["thoughtSignature"] == PLACEHOLDER_SIGNATURE
+    assert "thoughtSignature" not in gemini_parts[1]
+
+
+def test_no_placeholder_when_model_is_unknown():
+    """Without a model there is nothing to prove the target needs a placeholder, so none is added."""
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        convert_to_gemini_tool_call_invoke,
+    )
+
+    gemini_parts = convert_to_gemini_tool_call_invoke(
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": _parallel_tool_calls(None, None),
+        },
+    )
+
+    assert len(gemini_parts) == 2
+    assert all("thoughtSignature" not in part for part in gemini_parts)
+
+
+def test_real_signature_forwarded_to_gemini_2_5_without_placeholder_siblings():
+    """Older models still receive a real signature that a client replays, and still get no placeholder."""
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        convert_to_gemini_tool_call_invoke,
+    )
+
+    gemini_parts = convert_to_gemini_tool_call_invoke(
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": _parallel_tool_calls(REAL_THOUGHT_SIGNATURE, None),
+        },
+        model="gemini-2.5-flash",
+    )
+
+    assert len(gemini_parts) == 2
+    assert gemini_parts[0]["thoughtSignature"] == REAL_THOUGHT_SIGNATURE
+    assert "thoughtSignature" not in gemini_parts[1]
+
+
+def test_parallel_tool_call_history_replayed_through_full_message_conversion():
+    """End to end through the message-history converter, the path a real /chat/completions replay takes."""
+    from litellm.llms.vertex_ai.gemini.transformation import (
+        _gemini_convert_messages_with_history,
+    )
+
+    messages = [
+        {"role": "user", "content": "Weather in Paris, London and Tokyo?"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": _parallel_tool_calls_signed_via_id(
+                REAL_THOUGHT_SIGNATURE, None, None
+            ),
+        },
+    ]
+
+    contents = _gemini_convert_messages_with_history(
+        messages=messages, model="gemini-3-pro-preview"
+    )
+
+    model_parts = contents[1]["parts"]
+    assert len(model_parts) == 3
+    assert model_parts[0]["thoughtSignature"] == REAL_THOUGHT_SIGNATURE
+    assert "thoughtSignature" not in model_parts[1]
+    assert "thoughtSignature" not in model_parts[2]
+
+
+@pytest.mark.parametrize(
+    "model",
+    ["gemini-3.5-flash", "vertex_ai/gemini-3.5-flash", "gemini/gemini-3.5-flash"],
+)
+def test_natively_signed_parallel_turn_never_carries_a_placeholder(model):
+    """A native gemini-3.5 parallel turn replays with zero skip_thought_signature_validator parts.
+
+    Fabricating the placeholder alongside a real signature is what produced empty text responses
+    on gemini-3.5 parallel function calling, so the whole payload has to stay placeholder-free.
+    """
+    import json
+
+    from litellm.llms.vertex_ai.gemini.transformation import (
+        _gemini_convert_messages_with_history,
+    )
+
+    messages = [
+        {"role": "user", "content": "Weather in Paris, London and Tokyo?"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": _parallel_tool_calls_signed_via_id(
+                REAL_THOUGHT_SIGNATURE, None, None
+            ),
+        },
+    ]
+
+    contents = _gemini_convert_messages_with_history(messages=messages, model=model)
+
+    model_parts = contents[1]["parts"]
+    assert len(model_parts) == 3
+    assert model_parts[0]["thoughtSignature"] == REAL_THOUGHT_SIGNATURE
+    assert "thoughtSignature" not in model_parts[1]
+    assert "thoughtSignature" not in model_parts[2]
+    assert PLACEHOLDER_SIGNATURE not in json.dumps(contents)
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "gemini-3-pro-preview",
+        "gemini-3-flash-preview",
+        "gemini-3.1-pro-preview",
+        "gemini-3.5-flash",
+        "gemini-3.6-flash",
+        "gemini-3.7-flash",
+        "vertex_ai/gemini-3.5-flash",
+        "vertex_ai/gemini-3.7-flash",
+        "gemini/gemini-3.5-flash",
+        "gemini/gemini-3.7-flash",
+    ],
+)
+def test_placeholder_scoped_to_first_call_across_gemini_3_variants(model):
+    """The gemini-3 gate is a substring match, so every family member and prefix form has to
+    land on the same one-placeholder budget rather than only the versions we happened to try."""
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        convert_to_gemini_tool_call_invoke,
+    )
+
+    gemini_parts = convert_to_gemini_tool_call_invoke(
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": _parallel_tool_calls(None, None, None),
+        },
+        model=model,
+    )
+
+    assert len(gemini_parts) == 3
+    assert gemini_parts[0]["thoughtSignature"] == PLACEHOLDER_SIGNATURE
+    assert "thoughtSignature" not in gemini_parts[1]
+    assert "thoughtSignature" not in gemini_parts[2]
+
+
+def test_signed_text_part_survives_alongside_unsigned_parallel_tool_calls():
+    """Text-part and function-call signatures are collected by separate code paths, so scoping the
+    placeholder must not disturb a real signature that arrived on the text part."""
+    from litellm.llms.vertex_ai.gemini.transformation import (
+        _gemini_convert_messages_with_history,
+    )
+
+    msg = {
+        "role": "assistant",
+        "content": "Checking all three cities.",
+        "provider_specific_fields": {"thought_signatures": ["real_25_signature"]},
+        "tool_calls": _parallel_tool_calls(None, None, None),
+    }
+
+    parts = _gemini_convert_messages_with_history(
+        messages=[msg], model="gemini-3-pro-preview"
+    )[0]["parts"]
+
+    assert parts[0]["text"] == "Checking all three cities."
+    assert parts[0]["thoughtSignature"] == "real_25_signature"
+    assert parts[1]["thoughtSignature"] == PLACEHOLDER_SIGNATURE
+    assert "thoughtSignature" not in parts[2]
+    assert "thoughtSignature" not in parts[3]
 
 
 # Tests for media_resolution (detail parameter) handling - Issue #17084
@@ -2097,3 +2462,319 @@ def test_multi_turn_function_calling_roles():
                 assert (
                     content["role"] == "user"
                 ), f"Content block {i} with function_response has role='{content['role']}', expected 'user'"
+
+
+def test_gemini_thought_signature_preservation_real_response():
+    """Test that thought signatures are preserved on the text part if originally there, without dropping or duplicating (real response case)."""
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+    from litellm.llms.vertex_ai.gemini.transformation import (
+        _gemini_convert_messages_with_history,
+    )
+
+    real_candidate = {
+        "content": {
+            "parts": [
+                {
+                    "text": "I will explain and then list files.",
+                    "thoughtSignature": "mock_signature_from_text_part",
+                },
+                {
+                    "functionCall": {
+                        "name": "list_files",
+                        "args": {},
+                    }
+                },
+            ]
+        }
+    }
+
+    parts = real_candidate["content"]["parts"]
+
+    content, reasoning_content = (
+        VertexGeminiConfig().get_assistant_content_message(parts=parts)
+    )
+    thought_signatures = (
+        VertexGeminiConfig()._extract_thought_signatures_from_parts(
+            parts=parts
+        )
+    )
+    functions, tools, _ = VertexGeminiConfig._transform_parts(
+        parts=parts,
+        cumulative_tool_call_idx=0,
+        is_function_call=False,
+    )
+
+    msg: dict = {"role": "assistant"}
+    if content is not None:
+        msg["content"] = content
+    if tools:
+        msg["tool_calls"] = tools
+    if functions is not None:
+        msg["function_call"] = functions
+    if thought_signatures is not None:
+        msg["provider_specific_fields"] = {
+            "thought_signatures": thought_signatures
+        }
+
+    converted_real = _gemini_convert_messages_with_history(
+        messages=[msg],
+        model="gemini-2.5-pro",
+    )
+
+    assert len(converted_real) == 1
+    assert "parts" in converted_real[0]
+    parts_out = converted_real[0]["parts"]
+    assert len(parts_out) == 2
+    assert "text" in parts_out[0]
+    assert (
+        parts_out[0]["thoughtSignature"] == "mock_signature_from_text_part"
+    )
+    assert "function_call" in parts_out[1]
+    assert "thoughtSignature" not in parts_out[1]
+
+
+def test_gemini_thought_signature_deduplication_assumed_response():
+    """Test that thought signatures are deduplicated and not attached to the text part if already present in the tool call (assumed response case)."""
+    from litellm.llms.vertex_ai.gemini.transformation import (
+        _gemini_convert_messages_with_history,
+    )
+
+    pr_assumed_msg = {
+        "role": "assistant",
+        "content": "I will list the directory.",
+        "provider_specific_fields": {
+            "thought_signatures": ["mock_signature_63k"]
+        },
+        "tool_calls": [
+            {
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "list_files", "arguments": "{}"},
+                "provider_specific_fields": {
+                    "thought_signature": "mock_signature_63k"
+                },
+            }
+        ],
+    }
+
+    converted_pr = _gemini_convert_messages_with_history(
+        messages=[pr_assumed_msg],
+        model="gemini-2.5-pro",
+    )
+
+    assert len(converted_pr) == 1
+    assert "parts" in converted_pr[0]
+    parts_out = converted_pr[0]["parts"]
+    assert len(parts_out) == 2
+    assert "text" in parts_out[0]
+    assert "thoughtSignature" not in parts_out[0]
+    assert "function_call" in parts_out[1]
+    assert parts_out[1]["thoughtSignature"] == "mock_signature_63k"
+
+
+def test_gemini_thought_signature_pure_text():
+    """Test that thought signatures are preserved on the text part for responses with no tool calls."""
+    from litellm.llms.vertex_ai.gemini.transformation import (
+        _gemini_convert_messages_with_history,
+    )
+
+    msg = {
+        "role": "assistant",
+        "content": "Hello, I am a model.",
+        "provider_specific_fields": {
+            "thought_signatures": ["pure_text_signature"]
+        },
+    }
+
+    converted = _gemini_convert_messages_with_history(
+        messages=[msg],
+        model="gemini-2.5-pro",
+    )
+
+    assert len(converted) == 1
+    assert "parts" in converted[0]
+    parts_out = converted[0]["parts"]
+    assert len(parts_out) == 1
+    assert "text" in parts_out[0]
+    assert parts_out[0]["thoughtSignature"] == "pure_text_signature"
+
+
+def test_gemini_thought_signature_pure_tool_call():
+    """Test that thought signatures are preserved on the tool call for responses with no intermediate text."""
+    from litellm.llms.vertex_ai.gemini.transformation import (
+        _gemini_convert_messages_with_history,
+    )
+
+    msg = {
+        "role": "assistant",
+        "content": None,
+        "provider_specific_fields": {
+            "thought_signatures": ["pure_tool_signature"]
+        },
+        "tool_calls": [
+            {
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "list_files", "arguments": "{}"},
+                "provider_specific_fields": {
+                    "thought_signature": "pure_tool_signature"
+                },
+            }
+        ],
+    }
+
+    converted = _gemini_convert_messages_with_history(
+        messages=[msg],
+        model="gemini-2.5-pro",
+    )
+
+    assert len(converted) == 1
+    assert "parts" in converted[0]
+    parts_out = converted[0]["parts"]
+    assert len(parts_out) == 1
+    assert "function_call" in parts_out[0]
+    assert parts_out[0]["thoughtSignature"] == "pure_tool_signature"
+
+
+def test_gemini_distinct_text_and_tool_signatures_are_both_preserved():
+    """A text-part signature that differs from the tool-call signature must stay on the text part."""
+    from litellm.llms.vertex_ai.gemini.transformation import (
+        _gemini_convert_messages_with_history,
+    )
+
+    msg = {
+        "role": "assistant",
+        "content": "Some analysis.",
+        "provider_specific_fields": {
+            "thought_signatures": ["text_signature", "tool_signature"]
+        },
+        "tool_calls": [
+            {
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "list_files", "arguments": "{}"},
+                "provider_specific_fields": {"thought_signature": "tool_signature"},
+            }
+        ],
+    }
+
+    parts = _gemini_convert_messages_with_history(
+        messages=[msg], model="gemini-2.5-pro"
+    )[0]["parts"]
+
+    assert parts[0]["text"] == "Some analysis."
+    assert parts[0]["thoughtSignature"] == "text_signature"
+    assert "function_call" in parts[1]
+    assert parts[1]["thoughtSignature"] == "tool_signature"
+
+
+def test_gemini_25_text_signature_survives_replay_to_gemini_3():
+    """gemini-2.5 history (signed text, unsigned tool call) replayed to gemini-3 keeps the real
+    text signature; the dummy signature synthesized for the unsigned tool call must not suppress it."""
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        _get_dummy_thought_signature,
+    )
+    from litellm.llms.vertex_ai.gemini.transformation import (
+        _gemini_convert_messages_with_history,
+    )
+
+    msg = {
+        "role": "assistant",
+        "content": "I will list the directory.",
+        "provider_specific_fields": {"thought_signatures": ["real_25_signature"]},
+        "tool_calls": [
+            {
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "list_files", "arguments": "{}"},
+            }
+        ],
+    }
+
+    parts = _gemini_convert_messages_with_history(messages=[msg], model="gemini-3-pro")[
+        0
+    ]["parts"]
+
+    assert parts[0]["text"] == "I will list the directory."
+    assert parts[0]["thoughtSignature"] == "real_25_signature"
+    assert "function_call" in parts[1]
+    assert parts[1]["thoughtSignature"] == _get_dummy_thought_signature()
+
+
+def test_gemini_function_call_signature_round_trip_no_duplicate():
+    """End to end: a gemini-3-style response (unsigned text + signed functionCall) parsed and
+    re-serialized sends the signature exactly once, on the function-call part."""
+    from litellm.llms.vertex_ai.gemini.transformation import (
+        _gemini_convert_messages_with_history,
+    )
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+
+    response_parts = [
+        {"text": "I will calculate the result for you."},
+        {
+            "functionCall": {"name": "add_numbers", "args": {"a": 17, "b": 25}},
+            "thoughtSignature": "signature_from_function_call",
+        },
+    ]
+
+    config = VertexGeminiConfig()
+    content, _ = config.get_assistant_content_message(parts=response_parts)
+    thought_signatures = config._extract_thought_signatures_from_parts(
+        parts=response_parts
+    )
+    _, tools, _ = VertexGeminiConfig._transform_parts(
+        parts=response_parts, cumulative_tool_call_idx=0, is_function_call=False
+    )
+
+    msg = {
+        "role": "assistant",
+        "content": content,
+        "tool_calls": tools,
+        "provider_specific_fields": {"thought_signatures": thought_signatures},
+    }
+
+    parts = _gemini_convert_messages_with_history(messages=[msg], model="gemini-3-pro")[
+        0
+    ]["parts"]
+
+    signatures = [p["thoughtSignature"] for p in parts if "thoughtSignature" in p]
+    assert signatures == ["signature_from_function_call"]
+    assert "thoughtSignature" not in parts[0]
+    assert "function_call" in parts[1]
+
+
+def test_gemini_server_side_tool_signature_not_duplicated_on_text():
+    """A signature already re-injected on a server-side toolCall part is not attached to the text part again."""
+    from litellm.llms.vertex_ai.gemini.transformation import (
+        _gemini_convert_messages_with_history,
+    )
+
+    msg = {
+        "role": "assistant",
+        "content": "The weather in Buenos Aires is sunny.",
+        "provider_specific_fields": {
+            "thought_signatures": ["server_side_signature"],
+            "server_side_tool_invocations": [
+                {
+                    "tool_type": "GOOGLE_SEARCH_WEB",
+                    "id": "abc123",
+                    "args": {"queries": ["weather Buenos Aires"]},
+                    "response": {"weather": "Sunny"},
+                    "thought_signature": "server_side_signature",
+                }
+            ],
+        },
+    }
+
+    parts = _gemini_convert_messages_with_history(
+        messages=[msg], model="gemini-2.5-pro"
+    )[0]["parts"]
+
+    text_part = next(p for p in parts if "text" in p)
+    assert "thoughtSignature" not in text_part
+    tool_call_part = next(p for p in parts if "toolCall" in p)
+    assert tool_call_part["thoughtSignature"] == "server_side_signature"

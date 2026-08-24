@@ -1,11 +1,11 @@
 import { organizationKeys, useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import { useUserModels } from "@/app/(dashboard)/hooks/models/useModels";
-import { useOrgDetailRouting } from "@/app/(dashboard)/organizations/detailNavigation";
 import OrganizationFilters, { FilterState } from "@/app/(dashboard)/organizations/OrganizationFilters";
 import { useQueryClient } from "@tanstack/react-query";
+import { parseAsString, useQueryState } from "nuqs";
 import React, { useState } from "react";
 import DeleteResourceModal from "@/components/common_components/DeleteResourceModal";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { organizationDeleteCall } from "@/components/networking";
 import { OrgCreateDialog } from "@/components/organization/org-create/OrgCreateDialog";
 import OrganizationInfoView from "@/components/organization/organization_view";
@@ -20,7 +20,7 @@ interface OrganizationsPanelProps {
 }
 
 const OrganizationsPanel: React.FC<OrganizationsPanelProps> = ({ userRole, accessToken, premiumUser }) => {
-  const { orgId: selectedOrgId, openOrg, close: closeOrgDetail } = useOrgDetailRouting();
+  const [selectedOrgId, setSelectedOrgId] = useQueryState("org", parseAsString.withOptions({ history: "push" }));
   const [editOrg, setEditOrg] = useState(false);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [orgToDelete, setOrgToDelete] = useState<string | null>(null);
@@ -61,7 +61,7 @@ const OrganizationsPanel: React.FC<OrganizationsPanelProps> = ({ userRole, acces
     try {
       setIsDeleting(true);
       await organizationDeleteCall(accessToken, orgToDelete);
-      NotificationsManager.success("Organization deleted successfully");
+      toast.success("Organization deleted successfully");
 
       setIsDeleteModalOpen(false);
       setOrgToDelete(null);
@@ -109,7 +109,7 @@ const OrganizationsPanel: React.FC<OrganizationsPanelProps> = ({ userRole, acces
         <OrganizationInfoView
           organizationId={selectedOrgId}
           onClose={() => {
-            closeOrgDetail();
+            void setSelectedOrgId(null);
             setEditOrg(false);
           }}
           accessToken={accessToken}
@@ -135,10 +135,10 @@ const OrganizationsPanel: React.FC<OrganizationsPanelProps> = ({ userRole, acces
             searchActive={searchActive}
             onOrganizationClick={(organizationId) => {
               setEditOrg(false);
-              openOrg(organizationId);
+              void setSelectedOrgId(organizationId);
             }}
             onEditClick={(organizationId) => {
-              openOrg(organizationId);
+              void setSelectedOrgId(organizationId);
               setEditOrg(true);
             }}
             onDeleteClick={handleDelete}

@@ -1,5 +1,3 @@
-from typing import Optional, Union
-
 import httpx
 
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -10,9 +8,9 @@ class PredibaseError(BaseLLMException):
         self,
         status_code: int,
         message: str,
-        request: Optional[httpx.Request] = None,
-        response: Optional[httpx.Response] = None,
-        headers: Optional[Union[httpx.Headers, dict]] = None,
+        request: httpx.Request | None = None,
+        response: httpx.Response | None = None,
+        headers: httpx.Headers | dict | None = None,
     ):
         super().__init__(
             status_code=status_code,

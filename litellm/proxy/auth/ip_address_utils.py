@@ -7,7 +7,7 @@ External callers (public IPs) only see servers with available_on_public_internet
 
 import ipaddress
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Final
 
 from fastapi import Request
 from pydantic import TypeAdapter, ValidationError
@@ -27,7 +27,7 @@ _warned_xff_without_trusted_ranges = False
 # enabled, so a later rollback to disabled warns again.
 _warned_xff_present_but_disabled = False
 
-_NUM_TRUSTED_HOPS_ADAPTER = TypeAdapter(int)
+_NUM_TRUSTED_HOPS_ADAPTER: Final = TypeAdapter(int)
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,7 +45,7 @@ class _HopCount:
     value: int
 
 
-_HopCountSetting = Union[_HopCountUnset, _HopCountInvalid, _HopCount]
+_HopCountSetting = _HopCountUnset | _HopCountInvalid | _HopCount
 
 
 class IPAddressUtils:
@@ -62,12 +62,12 @@ class IPAddressUtils:
 
     @staticmethod
     def parse_internal_networks(
-        configured_ranges: Optional[List[str]],
-    ) -> List[Union[ipaddress.IPv4Network, ipaddress.IPv6Network]]:
+        configured_ranges: list[str] | None,
+    ) -> list[ipaddress.IPv4Network | ipaddress.IPv6Network]:
         """Parse configured CIDR ranges into network objects, falling back to defaults."""
         if not configured_ranges:
             return IPAddressUtils._DEFAULT_INTERNAL_NETWORKS
-        networks: List[Union[ipaddress.IPv4Network, ipaddress.IPv6Network]] = []
+        networks: Final[list[ipaddress.IPv4Network | ipaddress.IPv6Network]] = []
         for cidr in configured_ranges:
             try:
                 networks.append(ipaddress.ip_network(cidr, strict=False))
@@ -77,15 +77,15 @@ class IPAddressUtils:
 
     @staticmethod
     def parse_trusted_proxy_networks(
-        configured_ranges: Optional[List[str]],
-    ) -> List[Union[ipaddress.IPv4Network, ipaddress.IPv6Network]]:
+        configured_ranges: list[str] | None,
+    ) -> list[ipaddress.IPv4Network | ipaddress.IPv6Network]:
         """
         Parse trusted proxy CIDR ranges for XFF validation.
         Returns empty list if not configured (XFF will not be trusted).
         """
         if not configured_ranges:
             return []
-        networks: List[Union[ipaddress.IPv4Network, ipaddress.IPv6Network]] = []
+        networks: Final[list[ipaddress.IPv4Network | ipaddress.IPv6Network]] = []
         for cidr in configured_ranges:
             try:
                 networks.append(ipaddress.ip_network(cidr, strict=False))
@@ -95,22 +95,22 @@ class IPAddressUtils:
 
     @staticmethod
     def is_trusted_proxy(
-        proxy_ip: Optional[str],
-        trusted_networks: List[Union[ipaddress.IPv4Network, ipaddress.IPv6Network]],
+        proxy_ip: str | None,
+        trusted_networks: list[ipaddress.IPv4Network | ipaddress.IPv6Network],
     ) -> bool:
         """Check if the direct connection IP is from a trusted proxy."""
         if not proxy_ip or not trusted_networks:
             return False
         try:
-            addr = ipaddress.ip_address(proxy_ip.strip())
+            addr: Final = ipaddress.ip_address(proxy_ip.strip())
             return any(addr in network for network in trusted_networks)
         except ValueError:
             return False
 
     @staticmethod
     def is_internal_ip(
-        client_ip: Optional[str],
-        internal_networks: Optional[List[Union[ipaddress.IPv4Network, ipaddress.IPv6Network]]] = None,
+        client_ip: str | None,
+        internal_networks: list[ipaddress.IPv4Network | ipaddress.IPv6Network] | None = None,
     ) -> bool:
         """
         Check if a client IP is from an internal/private network.
@@ -125,10 +125,10 @@ class IPAddressUtils:
         if "," in client_ip:
             client_ip = client_ip.split(",")[0].strip()
 
-        networks = internal_networks or IPAddressUtils._DEFAULT_INTERNAL_NETWORKS
+        networks: Final = internal_networks or IPAddressUtils._DEFAULT_INTERNAL_NETWORKS
 
         try:
-            addr = ipaddress.ip_address(client_ip.strip())
+            addr: Final = ipaddress.ip_address(client_ip.strip())
         except ValueError:
             return False
 
@@ -137,7 +137,7 @@ class IPAddressUtils:
     @staticmethod
     def is_request_from_trusted_proxy(
         request: Request,
-        general_settings: Optional[Dict[str, Any]] = None,
+        general_settings: dict[str, Any] | None = None,
     ) -> bool:
         """
         Return True if X-Forwarded-* headers on this request should be trusted.
@@ -170,7 +170,7 @@ class IPAddressUtils:
         if not general_settings.get("use_x_forwarded_for", False):
             return False
 
-        trusted_ranges = general_settings.get("mcp_trusted_proxy_ranges")
+        trusted_ranges: Final = general_settings.get("mcp_trusted_proxy_ranges")
         if not trusted_ranges:
             global _warned_xff_without_trusted_ranges
             if not _warned_xff_without_trusted_ranges:
@@ -186,15 +186,15 @@ class IPAddressUtils:
                 _warned_xff_without_trusted_ranges = True
             return False
 
-        direct_ip = request.client.host if request.client else None
-        trusted_networks = IPAddressUtils.parse_trusted_proxy_networks(trusted_ranges)
+        direct_ip: Final = request.client.host if request.client else None
+        trusted_networks: Final = IPAddressUtils.parse_trusted_proxy_networks(trusted_ranges)
         return IPAddressUtils.is_trusted_proxy(direct_ip, trusted_networks)
 
     @staticmethod
     def extract_client_ip_from_xff_hops(
         xff_header: str,
         num_trusted_hops: int,
-    ) -> Optional[str]:
+    ) -> str | None:
         """
         Resolve the originating client IP from an X-Forwarded-For chain by
         counting ``num_trusted_hops`` entries from the right.
@@ -209,10 +209,10 @@ class IPAddressUtils:
         Returns None when the chain has fewer than ``num_trusted_hops`` entries
         or the selected entry is not a valid IP, so callers can fail closed.
         """
-        entries = tuple(part.strip() for part in xff_header.split(",") if part.strip())
+        entries: Final = tuple(part.strip() for part in xff_header.split(",") if part.strip())
         if num_trusted_hops < 1 or len(entries) < num_trusted_hops:
             return None
-        candidate = entries[-num_trusted_hops]
+        candidate: Final = entries[-num_trusted_hops]
         try:
             ipaddress.ip_address(candidate)
         except ValueError:
@@ -224,7 +224,7 @@ class IPAddressUtils:
         if raw_num_trusted_hops is None:
             return _HopCountUnset()
         try:
-            num_hops = _NUM_TRUSTED_HOPS_ADAPTER.validate_python(raw_num_trusted_hops)
+            num_hops: Final = _NUM_TRUSTED_HOPS_ADAPTER.validate_python(raw_num_trusted_hops)
         except ValidationError:
             verbose_proxy_logger.warning(
                 "Invalid mcp_xff_num_trusted_hops value %r; failing closed for "
@@ -247,8 +247,8 @@ class IPAddressUtils:
     @staticmethod
     def get_mcp_client_ip(
         request: Request,
-        general_settings: Optional[Dict[str, Any]] = None,
-    ) -> Optional[str]:
+        general_settings: dict[str, Any] | None = None,
+    ) -> str | None:
         """
         Extract client IP from a FastAPI request for MCP access control.
 
@@ -280,7 +280,7 @@ class IPAddressUtils:
         if general_settings is None:
             general_settings = {}
 
-        use_xff = general_settings.get("use_x_forwarded_for", False)
+        use_xff: Final = general_settings.get("use_x_forwarded_for", False)
 
         global _warned_xff_present_but_disabled
         if use_xff:
@@ -307,7 +307,7 @@ class IPAddressUtils:
         # If XFF is enabled, validate the request comes from a trusted proxy
         if use_xff and "x-forwarded-for" in request.headers:
             if not IPAddressUtils.is_request_from_trusted_proxy(request, general_settings=general_settings):
-                direct_ip = request.client.host if request.client else None
+                direct_ip: Final = request.client.host if request.client else None
                 if general_settings.get("mcp_trusted_proxy_ranges"):
                     # Direct connection isn't in any configured trusted CIDR.
                     verbose_proxy_logger.warning("XFF header from untrusted IP %s, ignoring", direct_ip)
@@ -321,7 +321,7 @@ class IPAddressUtils:
                 case _HopCountInvalid():
                     return ""
                 case _HopCount(value=num_trusted_hops):
-                    client_ip = IPAddressUtils.extract_client_ip_from_xff_hops(
+                    client_ip: Final = IPAddressUtils.extract_client_ip_from_xff_hops(
                         request.headers["x-forwarded-for"], num_trusted_hops
                     )
                     if client_ip is None:
