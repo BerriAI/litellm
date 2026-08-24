@@ -8,7 +8,7 @@ import { Logo } from "@/components/molecules/logo/Logo";
 import { toast } from "@/lib/toast";
 import { createSearchTool, fetchAvailableSearchProviders } from "@/components/networking";
 import { PasswordInput } from "@/components/shared/PasswordInput";
-import { FieldGroup } from "@/components/shared/form/field";
+import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { Button } from "@/components/ui/button";
 import {

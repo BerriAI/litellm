@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { z } from "zod/v4";
 import { toast } from "@/lib/toast";
 import { CircleHelp } from "lucide-react";
-import { FieldGroup } from "@/components/shared/form/field";
+import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
