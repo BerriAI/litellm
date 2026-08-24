@@ -549,17 +549,6 @@ async def test_run_model_health_check_skips_auto_router_deployment():
     assert result == {}
 
 
-# ---------------------------------------------------------------------------
-# model_info.health_check_params
-#
-# Some providers require a payload field litellm does not synthesize for a
-# probe. Bedrock TwelveLabs Pegasus rejects any Invoke body without a top-level
-# `mediaSource`, so every health check on such a deployment failed with
-# "Invalid JSON: $: required property 'mediaSource' not found". The config key
-# was accepted and then never read, so operators had no way to supply it.
-# ---------------------------------------------------------------------------
-
-
 def test_health_check_params_merge_into_probe_params():
     """health_check_params reach the probe request for the deployment that declares them."""
     media_source = {"s3Location": {"uri": "s3://my-bucket/clip.mp4"}}
@@ -640,7 +629,9 @@ def test_health_check_params_apply_to_non_chat_modes():
     assert "max_tokens" not in updated
 
 
-async def _pegasus_health_check_request_body(model_info: dict, monkeypatch) -> dict:
+async def _pegasus_health_check_request_body(
+    model_info: dict[str, object], monkeypatch: pytest.MonkeyPatch
+) -> dict[str, object]:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     litellm.in_memory_llm_clients_cache.flush_cache()
 
