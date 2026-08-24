@@ -2109,7 +2109,7 @@ class TestVideoEdit:
         """Verify JSON body with video.id for POST /videos/edits."""
         config = OpenAIVideoConfig()
 
-        url, data = config.transform_video_edit_request(
+        url, data, files = config.transform_video_edit_request(
             prompt="make it brighter",
             video_id="video_abc123",
             api_base="https://api.openai.com/v1/videos",
@@ -2120,12 +2120,13 @@ class TestVideoEdit:
         assert url == "https://api.openai.com/v1/videos/edits"
         assert data["prompt"] == "make it brighter"
         assert data["video"]["id"] == "video_abc123"
+        assert files is None
 
     def test_video_edit_transform_request_with_extra_body(self):
         """Extra body params are merged into request data."""
         config = OpenAIVideoConfig()
 
-        url, data = config.transform_video_edit_request(
+        url, data, files = config.transform_video_edit_request(
             prompt="darken it",
             video_id="video_abc123",
             api_base="https://api.openai.com/v1/videos",
@@ -2135,6 +2136,7 @@ class TestVideoEdit:
         )
 
         assert data["resolution"] == "1080p"
+        assert files is None
 
     def test_video_edit_mock_response(self):
         """video_edit returns VideoObject on mock_response."""
@@ -2160,7 +2162,7 @@ class TestVideoEdit:
         config = OpenAIVideoConfig()
 
         encoded_id = encode_video_id_with_provider("raw_video_id", "openai", None)
-        url, data = config.transform_video_edit_request(
+        url, data, files = config.transform_video_edit_request(
             prompt="test",
             video_id=encoded_id,
             api_base="https://api.openai.com/v1/videos",
@@ -2170,6 +2172,7 @@ class TestVideoEdit:
 
         # The video.id in the request body should be the raw ID, not the encoded one
         assert data["video"]["id"] == "raw_video_id"
+        assert files is None
 
 
 class TestVideoExtension:
