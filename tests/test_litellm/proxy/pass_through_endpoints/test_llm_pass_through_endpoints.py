@@ -553,10 +553,9 @@ class TestVertexAIPassThroughHandler:
     @pytest.mark.asyncio
     async def test_vertex_passthrough_with_no_default_credentials(self, monkeypatch):
         """
-        Test that when no default credentials are set, the request fails
-        """
-        """
-        Test that when passthrough credentials are set, they are correctly used in the request
+        With no Vertex credential matching the request, the only Authorization present
+        is the caller's own virtual key. It must not be forwarded to Google; the
+        request fails with a clean 401 instead (LIT-5997).
         """
         from litellm.proxy.pass_through_endpoints.passthrough_endpoint_router import (
             PassthroughEndpointRouter,
@@ -619,31 +618,25 @@ class TestVertexAIPassThroughHandler:
             mock_get_token.return_value = (test_token, "")
             mock_auth.return_value = MagicMock()
 
-            # Call the route
-            try:
+            with pytest.raises(HTTPException) as exc_info:
                 await vertex_proxy_route(
                     endpoint=endpoint,
                     request=mock_request,
                     fastapi_response=mock_response,
                 )
-            except Exception as e:
-                traceback.print_exc()
-                print(f"Error: {e}")
 
-            # Verify create_pass_through_route was called with correct arguments
-            mock_create_route.assert_called_once_with(
-                endpoint=endpoint,
-                target=f"https://{test_location}-aiplatform.googleapis.com/v1/projects/{test_project}/locations/{test_location}/publishers/google/models/gemini-1.5-flash:generateContent",
-                custom_headers={"authorization": f"Bearer {test_token}"},
-                is_streaming_request=False,
-            )
+            assert exc_info.value.status_code == 401
+            mock_create_route.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_async_vertex_proxy_route_api_key_auth(self):
         """
         Critical
 
-        This is how Vertex AI JS SDK will Auth to Litellm Proxy
+        This is how Vertex AI JS SDK will Auth to Litellm Proxy: the virtual key
+        arrives in x-litellm-api-key and must reach user_api_key_auth. With no Vertex
+        credential configured, that virtual key must not be forwarded to Google, so
+        the request fails with a clean 401 (LIT-5997).
         """
         # Mock dependencies
         mock_request = Mock()
@@ -663,14 +656,15 @@ class TestVertexAIPassThroughHandler:
                     return_value={"status": "success"}
                 )
 
-                # Call the function
-                result = await vertex_proxy_route(
-                    endpoint="v1/projects/test-project/locations/us-central1/publishers/google/models/gemini-1.5-pro:generateContent",
-                    request=mock_request,
-                    fastapi_response=mock_response,
-                )
+                with pytest.raises(HTTPException) as exc_info:
+                    await vertex_proxy_route(
+                        endpoint="v1/projects/test-project/locations/us-central1/publishers/google/models/gemini-1.5-pro:generateContent",
+                        request=mock_request,
+                        fastapi_response=mock_response,
+                    )
 
-                # Verify user_api_key_auth was called with the correct Bearer token
+                assert exc_info.value.status_code == 401
+                mock_pass_through.assert_not_called()
                 mock_auth.assert_called_once()
                 call_args = mock_auth.call_args[1]
                 assert call_args["api_key"] == "Bearer test-key-123"
@@ -1338,7 +1332,9 @@ class TestVertexAIDiscoveryPassThroughHandler:
     @pytest.mark.asyncio
     async def test_vertex_discovery_proxy_route_api_key_auth(self):
         """
-        Test that the route correctly handles API key authentication
+        The virtual key arrives in x-litellm-api-key and must reach user_api_key_auth.
+        With no Vertex credential configured, that virtual key must not be forwarded to
+        Google, so the request fails with a clean 401 (LIT-5997).
         """
         # Mock dependencies
         mock_request = Mock()
@@ -1358,14 +1354,15 @@ class TestVertexAIDiscoveryPassThroughHandler:
                     return_value={"status": "success"}
                 )
 
-                # Call the function
-                result = await vertex_discovery_proxy_route(
-                    endpoint="v1/projects/test-project/locations/us-central1/dataStores/default/servingConfigs/default:search",
-                    request=mock_request,
-                    fastapi_response=mock_response,
-                )
+                with pytest.raises(HTTPException) as exc_info:
+                    await vertex_discovery_proxy_route(
+                        endpoint="v1/projects/test-project/locations/us-central1/dataStores/default/servingConfigs/default:search",
+                        request=mock_request,
+                        fastapi_response=mock_response,
+                    )
 
-                # Verify user_api_key_auth was called with the correct Bearer token
+                assert exc_info.value.status_code == 401
+                mock_pass_through.assert_not_called()
                 mock_auth.assert_called_once()
                 call_args = mock_auth.call_args[1]
                 assert call_args["api_key"] == "Bearer test-key-123"
@@ -3312,7 +3309,10 @@ class TestVertexRawPredictStreamingClassification:
                 "type": "http",
                 "method": "POST",
                 "path": f"/vertex_ai/{endpoint}",
-                "headers": [(b"content-type", b"application/json")],
+                "headers": [
+                    (b"content-type", b"application/json"),
+                    (b"authorization", b"Bearer ya29.byo-google-oauth"),
+                ],
                 "query_string": b"",
             },
             receive=receive,
@@ -3443,6 +3443,128 @@ def test_is_passthrough_request_streaming_tolerates_non_object_bodies(request_bo
     )
 
     assert is_passthrough_request_streaming(request_body) is expected
+
+
+class TestVertexCredentiallessPassthroughVirtualKeyLeak:
+    """Regression coverage for LIT-5997.
+
+    With no Vertex credential configured, the passthrough took the
+    bring-your-own-credentials branch and forwarded the whole incoming header set
+    to Google, including whichever header carried the caller's LiteLLM virtual key
+    (``Authorization: Bearer <vkey>`` or ``x-litellm-api-key: <vkey>``). That leaked
+    the proxy's own secret to an upstream provider.
+
+    A credential-less request that carries no upstream Google credential must now
+    fail with a clean 401 and never reach ``create_pass_through_route``; a genuine
+    bring-your-own Google credential must still pass through, with the virtual key
+    stripped from what is forwarded.
+    """
+
+    VKEY = "sk-litellm-victim-key"
+    ENDPOINT = (
+        "v1/projects/my-proj/locations/us-central1/publishers/google/models/"
+        "gemini-2.5-flash:generateContent"
+    )
+
+    async def _run(
+        self, monkeypatch, headers: list[tuple[bytes, bytes]]
+    ) -> tuple[HTTPException | None, dict | None]:
+        from litellm.proxy.pass_through_endpoints.passthrough_endpoint_router import (
+            PassthroughEndpointRouter,
+        )
+
+        async def receive():
+            return {"type": "http.request", "body": b"{}", "more_body": False}
+
+        request = Request(
+            {
+                "type": "http",
+                "method": "POST",
+                "path": f"/vertex_ai/{self.ENDPOINT}",
+                "headers": headers,
+                "query_string": b"",
+            },
+            receive=receive,
+        )
+
+        captured: dict = {}
+
+        def fake_create_pass_through_route(**kwargs):
+            captured.update(kwargs)
+            return AsyncMock(return_value={"status": "success"})
+
+        mock_handler = Mock()
+        mock_handler.get_default_base_target_url.return_value = "https://us-central1-aiplatform.googleapis.com/"
+
+        module = "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints"
+        monkeypatch.setattr(f"{module}.passthrough_endpoint_router", PassthroughEndpointRouter())
+        raised: HTTPException | None = None
+        with (
+            mock.patch(f"{module}.create_pass_through_route", side_effect=fake_create_pass_through_route),
+            mock.patch(f"{module}.user_api_key_auth", new=AsyncMock(return_value=UserAPIKeyAuth(token="hashed"))),
+            mock.patch(f"{module}.get_vertex_pass_through_handler", return_value=mock_handler),
+        ):
+            try:
+                await vertex_proxy_route(
+                    endpoint=self.ENDPOINT,
+                    request=request,
+                    fastapi_response=Response(),
+                    user_api_key_dict=UserAPIKeyAuth(token="hashed"),
+                )
+            except HTTPException as exc:
+                raised = exc
+
+        return raised, (captured.get("custom_headers") if captured else None)
+
+    @pytest.mark.asyncio
+    async def test_authorization_bearer_virtual_key_is_rejected_not_forwarded(self, monkeypatch):
+        raised, forwarded = await self._run(
+            monkeypatch,
+            [(b"authorization", f"Bearer {self.VKEY}".encode()), (b"content-type", b"application/json")],
+        )
+        assert forwarded is None, "credential-less request must never reach the upstream forwarder"
+        assert raised is not None and raised.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_x_litellm_api_key_virtual_key_is_rejected_not_forwarded(self, monkeypatch):
+        raised, forwarded = await self._run(
+            monkeypatch,
+            [(b"x-litellm-api-key", self.VKEY.encode()), (b"content-type", b"application/json")],
+        )
+        assert forwarded is None, "credential-less request must never reach the upstream forwarder"
+        assert raised is not None and raised.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_byo_google_oauth_token_still_forwards_without_virtual_key(self, monkeypatch):
+        raised, forwarded = await self._run(
+            monkeypatch,
+            [
+                (b"x-litellm-api-key", self.VKEY.encode()),
+                (b"authorization", b"Bearer ya29.google-oauth-token"),
+                (b"content-type", b"application/json"),
+            ],
+        )
+        assert raised is None
+        assert forwarded is not None
+        assert forwarded.get("authorization") == "Bearer ya29.google-oauth-token"
+        assert "x-litellm-api-key" not in forwarded
+        assert self.VKEY not in " ".join(f"{name}:{value}" for name, value in forwarded.items())
+
+    @pytest.mark.asyncio
+    async def test_byo_x_goog_api_key_still_forwards_without_virtual_key(self, monkeypatch):
+        raised, forwarded = await self._run(
+            monkeypatch,
+            [
+                (b"x-litellm-api-key", self.VKEY.encode()),
+                (b"x-goog-api-key", b"AIza-google-api-key"),
+                (b"content-type", b"application/json"),
+            ],
+        )
+        assert raised is None
+        assert forwarded is not None
+        assert forwarded.get("x-goog-api-key") == "AIza-google-api-key"
+        assert "x-litellm-api-key" not in forwarded
+        assert self.VKEY not in " ".join(f"{name}:{value}" for name, value in forwarded.items())
 
 
 class TestGetAzureAISearchIndexFromEndpoint:
