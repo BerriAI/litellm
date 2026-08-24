@@ -1093,6 +1093,17 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             return Reasoning(effort="high", summary="detailed") if auto_summary_enabled else Reasoning(effort="high")
         elif reasoning_effort == "xhigh":
             return Reasoning(effort="xhigh", summary="detailed") if auto_summary_enabled else Reasoning(effort="xhigh")
+        elif reasoning_effort == "max":
+            return (
+                Reasoning(
+                    effort="max",  # pyright: ignore[reportArgumentType] - OpenAI SDK type omits supported max
+                    summary="detailed",
+                )
+                if auto_summary_enabled
+                else Reasoning(
+                    effort="max"  # pyright: ignore[reportArgumentType] - OpenAI SDK type omits supported max
+                )
+            )
         elif reasoning_effort == "medium":
             return (
                 Reasoning(effort="medium", summary="detailed") if auto_summary_enabled else Reasoning(effort="medium")

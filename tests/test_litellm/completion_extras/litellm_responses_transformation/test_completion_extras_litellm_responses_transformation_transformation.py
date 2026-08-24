@@ -1523,7 +1523,7 @@ def test_map_reasoning_effort_adds_summary_detailed(monkeypatch):
     handler = LiteLLMResponsesTransformationHandler()
 
     # Test all string effort levels - DEFAULT BEHAVIOR (no summary)
-    effort_levels = ["none", "low", "medium", "high", "xhigh", "minimal"]
+    effort_levels = ["none", "low", "medium", "high", "xhigh", "max", "minimal"]
 
     # Save original flag value
     original_flag = litellm.reasoning_auto_summary
