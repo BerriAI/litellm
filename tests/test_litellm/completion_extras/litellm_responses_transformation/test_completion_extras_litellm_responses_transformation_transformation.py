@@ -1523,7 +1523,10 @@ def test_map_reasoning_effort_adds_summary_detailed(monkeypatch):
     handler = LiteLLMResponsesTransformationHandler()
 
     # Test all string effort levels - DEFAULT BEHAVIOR (no summary)
-    effort_levels = ["none", "low", "medium", "high", "xhigh", "minimal"]
+    # "max" is included because LiteLLM supports it as a reasoning_effort value
+    # (used by Anthropic, OpenRouter, and OpenAI Responses API). It must round-trip
+    # through _map_reasoning_effort instead of being silently dropped (see issue #38084).
+    effort_levels = ["none", "low", "medium", "high", "xhigh", "max", "minimal"]
 
     # Save original flag value
     original_flag = litellm.reasoning_auto_summary
@@ -1596,6 +1599,65 @@ def test_map_reasoning_effort_adds_summary_detailed(monkeypatch):
 
     finally:
         # Restore original values
+        litellm.reasoning_auto_summary = original_flag
+        if original_env is not None:
+            monkeypatch.setenv("LITELLM_REASONING_AUTO_SUMMARY", original_env)
+        elif "LITELLM_REASONING_AUTO_SUMMARY" in os.environ:
+            del os.environ["LITELLM_REASONING_AUTO_SUMMARY"]
+
+
+def test_map_reasoning_effort_max_not_dropped():
+    """
+    Regression test for issue #38084: reasoning_effort="max" was silently dropped
+    when a request was converted to the Responses API.
+
+    LiteLLM supports "max" as a reasoning_effort value (used by Anthropic, OpenRouter,
+    and the OpenAI Responses API surface). _map_reasoning_effort must round-trip it
+    to Reasoning(effort="max") instead of returning None, otherwise the provider runs
+    at its default depth with no error or warning.
+    """
+    import litellm
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+
+    original_flag = litellm.reasoning_auto_summary
+    original_env = os.environ.get("LITELLM_REASONING_AUTO_SUMMARY")
+
+    try:
+        # Default behavior: effort=max must produce a Reasoning with effort="max"
+        # and no summary (matching the other effort levels).
+        litellm.reasoning_auto_summary = False
+        if "LITELLM_REASONING_AUTO_SUMMARY" in os.environ:
+            del os.environ["LITELLM_REASONING_AUTO_SUMMARY"]
+
+        result = handler._map_reasoning_effort("max")
+        assert result is not None, (
+            "reasoning_effort='max' must not be silently dropped; "
+            "expected Reasoning(effort='max'), got None (issue #38084)"
+        )
+        assert result["effort"] == "max", f"Expected effort='max', got {result['effort']!r}"
+        assert "summary" not in result, "Summary should NOT be present by default for effort='max'"
+
+        # With auto-summary enabled: summary='detailed' is added, matching other efforts.
+        litellm.reasoning_auto_summary = True
+        result = handler._map_reasoning_effort("max")
+        assert result is not None, "reasoning_effort='max' must not be dropped with auto-summary on"
+        assert result["effort"] == "max"
+        assert result["summary"] == "detailed"
+
+        # Dict input with effort='max' is passed through unchanged.
+        litellm.reasoning_auto_summary = False
+        dict_input = {"effort": "max", "summary": "concise"}
+        result_dict = handler._map_reasoning_effort(dict_input)
+        assert result_dict["effort"] == "max"
+        assert result_dict["summary"] == "concise"
+
+        print("✓ reasoning_effort='max' is preserved through Responses API conversion")
+
+    finally:
         litellm.reasoning_auto_summary = original_flag
         if original_env is not None:
             monkeypatch.setenv("LITELLM_REASONING_AUTO_SUMMARY", original_env)
