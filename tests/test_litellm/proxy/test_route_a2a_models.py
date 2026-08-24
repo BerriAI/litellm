@@ -78,11 +78,20 @@ async def test_route_a2a_model_uses_registered_provider():
         agent_id="test-agent-id",
         agent_name="test-agent",
         agent_card_params={"url": "http://agent.example.com"},
-        litellm_params={"custom_llm_provider": "pydantic_ai_agents"},
+        litellm_params={
+            "custom_llm_provider": "pydantic_ai_agents",
+            "guardrails": ["agent-guardrail"],
+        },
+        static_headers={"Authorization": "Bearer static"},
     )
     data = {
         "model": "a2a/test-agent",
         "messages": [{"role": "user", "content": "Hello"}],
+        "guardrails": ["request-guardrail"],
+        "max_tokens": 32,
+        "temperature": 0.2,
+        "timeout": 12.0,
+        "tools": [{"type": "function", "function": {"name": "lookup"}}],
     }
     bridge_response = {
         "jsonrpc": "2.0",
@@ -118,6 +127,55 @@ async def test_route_a2a_model_uses_registered_provider():
     bridge.assert_awaited_once()
     generic_completion.assert_not_called()
     assert response.choices[0].message.content == "Hello back"
+    bridge_kwargs = bridge.await_args.kwargs
+    assert bridge_kwargs["litellm_params"]["max_tokens"] == 32
+    assert bridge_kwargs["litellm_params"]["temperature"] == 0.2
+    assert bridge_kwargs["litellm_params"]["timeout"] == 12.0
+    assert bridge_kwargs["litellm_params"]["tools"] == data["tools"]
+    assert bridge_kwargs["litellm_params"]["guardrails"] == ["request-guardrail", "agent-guardrail"]
+    assert bridge_kwargs["litellm_params"]["extra_headers"] == {"Authorization": "Bearer static"}
+
+
+@pytest.mark.asyncio
+async def test_route_a2a_cardless_bedrock_agentcore_uses_registered_model():
+    from litellm.types.agents import AgentResponse
+
+    agent = AgentResponse(
+        agent_id="test-agent-id",
+        agent_name="test-agent",
+        agent_card_params={},
+        litellm_params={
+            "custom_llm_provider": "bedrock",
+            "model": "bedrock/agentcore/arn:aws:bedrock-agentcore:us-west-2:123:runtime/test",
+        },
+    )
+    bridge_response = {
+        "jsonrpc": "2.0",
+        "id": "request-id",
+        "result": {"kind": "message", "parts": [{"kind": "text", "text": "Hello back"}]},
+    }
+
+    with (
+        patch(
+            "litellm.proxy.common_utils.registry_read_through.get_agent_with_read_through",
+            AsyncMock(return_value=agent),
+        ),
+        patch(
+            "litellm.proxy.agent_endpoints.auth.agent_permission_handler.AgentRequestHandler.is_agent_allowed",
+            AsyncMock(return_value=True),
+        ),
+        patch(
+            "litellm.a2a_protocol.litellm_completion_bridge.handler.A2ACompletionBridgeHandler.handle_non_streaming",
+            AsyncMock(return_value=bridge_response),
+        ) as bridge,
+    ):
+        call = await route_a2a_agent_request(
+            {"model": "a2a/test-agent", "messages": [{"role": "user", "content": "Hello"}]},
+            "acompletion",
+        )
+        await call
+
+    assert bridge.await_args.kwargs["api_base"] is None
 
 
 @pytest.mark.asyncio

@@ -7,6 +7,7 @@ Looks up agents in the registry and injects their API base URL.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Awaitable, Mapping
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
@@ -18,6 +19,7 @@ from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.interactions.agents.utils import merge_agent_headers
 from litellm.llms.a2a.common_utils import A2AError, convert_messages_to_prompt, extract_text_from_a2a_response
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.types.llms.openai import AllMessageValues
@@ -29,6 +31,41 @@ if TYPE_CHECKING:
 _OBJECT_DICT_ADAPTER: Final = TypeAdapter(dict[str, object])
 _HEADERS_ADAPTER: Final = TypeAdapter(dict[str, str])
 _MESSAGES_ADAPTER: Final = TypeAdapter(list[AllMessageValues])
+_FORWARDED_REQUEST_PARAMS: Final = frozenset(
+    {
+        "audio",
+        "frequency_penalty",
+        "functions",
+        "function_call",
+        "include_server_side_tool_invocations",
+        "logit_bias",
+        "logprobs",
+        "guardrails",
+        "max_completion_tokens",
+        "max_tokens",
+        "modalities",
+        "n",
+        "parallel_tool_calls",
+        "prediction",
+        "presence_penalty",
+        "reasoning_effort",
+        "response_format",
+        "seed",
+        "service_tier",
+        "stop",
+        "store",
+        "temperature",
+        "thinking",
+        "timeout",
+        "tool_choice",
+        "tools",
+        "top_logprobs",
+        "top_p",
+        "user",
+        "verbosity",
+        "web_search_options",
+    }
+)
 
 
 class _A2ATextPart(TypedDict):
@@ -49,8 +86,9 @@ class _A2AParams(TypedDict):
 async def _route_registered_provider(
     data: Mapping[str, object],
     model_name: str,
-    api_base: str,
+    api_base: str | None,
     litellm_params: Mapping[str, object],
+    static_headers: Mapping[str, str] | None,
 ) -> ModelResponse | CustomStreamWrapper:
     from litellm.a2a_protocol.litellm_completion_bridge.handler import (
         A2ACompletionBridgeHandler,
@@ -70,12 +108,25 @@ async def _route_registered_provider(
             "messageId": str(uuid4()),
         }
     }
-    provider_params: Final = _OBJECT_DICT_ADAPTER.validate_python(litellm_params)
+    provider_params: Final = {
+        **_OBJECT_DICT_ADAPTER.validate_python(litellm_params),
+        **{
+            key: data[key]
+            for key in _FORWARDED_REQUEST_PARAMS
+            if key in data and data[key] is not None
+        },
+    }
     bridge_params: Final = _OBJECT_DICT_ADAPTER.validate_python(params)
     configured_headers: Final = litellm_params.get("extra_headers") or litellm_params.get("headers")
-    agent_extra_headers: Final = (
+    configured_headers_dict: Final = (
         _HEADERS_ADAPTER.validate_python(configured_headers) if isinstance(configured_headers, dict) else None
     )
+    agent_extra_headers: Final = merge_agent_headers(
+        dynamic_headers=configured_headers_dict,
+        static_headers=static_headers,
+    )
+    if agent_extra_headers:
+        provider_params["extra_headers"] = agent_extra_headers
 
     if stream:
         streaming_response: Final = A2ACompletionBridgeHandler.handle_streaming(
@@ -125,7 +176,61 @@ async def _route_registered_provider(
             Choices(finish_reason="stop", index=0, message=Message(content=text, role="assistant"))
         ],
     )
+    usage: Final = response.get("usage")
+    if usage is not None:
+        setattr(model_response, "usage", usage)
+
+    logging_obj: Final = data.get("litellm_logging_obj")
+    if isinstance(logging_obj, Logging):
+
+        def _enqueue_logging() -> None:
+            asyncio.create_task(
+                logging_obj.dispatch_success_handlers(
+                    model_response,
+                    cache_hit=False,
+                    prefer_async_handlers=True,
+                )
+            )
+
+        logging_obj._enqueue_deferred_logging = _enqueue_logging
+
     return model_response
+
+
+def _merge_agent_guardrails(
+    data: Mapping[str, object],
+    agent_guardrails: object,
+) -> Mapping[str, object]:
+    if not agent_guardrails:
+        return data
+
+    configured_guardrails: list[object] = (
+        agent_guardrails if isinstance(agent_guardrails, list) else [agent_guardrails]
+    )
+    metadata = data.get("metadata")
+    metadata_guardrails = metadata.get("guardrails") if isinstance(metadata, dict) else None
+    root_guardrails = data.get("guardrails")
+    existing_guardrails: list[object] = []
+    for value in (metadata_guardrails, root_guardrails):
+        if isinstance(value, list):
+            existing_guardrails.extend(value)
+        elif value:
+            existing_guardrails.append(value)
+
+    merged_guardrails = existing_guardrails + [
+        guardrail for guardrail in configured_guardrails if guardrail not in existing_guardrails
+    ]
+    if isinstance(data, dict):
+        data["guardrails"] = merged_guardrails
+        if isinstance(metadata, dict):
+            metadata["guardrails"] = merged_guardrails
+        return data
+
+    merged_data = dict(data)
+    merged_data["guardrails"] = merged_guardrails
+    if isinstance(metadata, dict):
+        merged_data["metadata"] = {**metadata, "guardrails": merged_guardrails}
+    return merged_data
 
 
 async def route_a2a_agent_request(
@@ -185,11 +290,6 @@ async def route_a2a_agent_request(
     # Get API base URL from agent config
     agent_card_params: Final = agent.agent_card_params
     agent_url: Final = agent_card_params.get("url") if agent_card_params else None
-    if not isinstance(agent_url, str) or not agent_url:
-        verbose_proxy_logger.error("[A2A] Agent '%s' has no URL configured", agent_name)
-        route_name = ROUTE_ENDPOINT_MAPPING.get(route_type, route_type)
-        raise ProxyModelNotFoundError(route=route_name, model_name=model_name, retryable_with_model_read_through=False)
-
     registered_params_value: Final = agent.litellm_params
     registered_provider_value: Final = (
         registered_params_value.get("custom_llm_provider") if registered_params_value else None
@@ -197,6 +297,19 @@ async def route_a2a_agent_request(
     registered_provider: Final = registered_provider_value if isinstance(registered_provider_value, str) else None
     configured_api_base: Final = registered_params_value.get("api_base") if registered_params_value else None
     api_base: Final = configured_api_base if isinstance(configured_api_base, str) else agent_url
+    registered_model: Final = registered_params_value.get("model") if registered_params_value else None
+    cardless_provider: Final = (
+        registered_provider == "bedrock" and isinstance(registered_model, str) and "agentcore" in registered_model
+    )
+    if (not isinstance(agent_url, str) or not agent_url) and not cardless_provider:
+        verbose_proxy_logger.error("[A2A] Agent '%s' has no URL configured", agent_name)
+        route_name = ROUTE_ENDPOINT_MAPPING.get(route_type, route_type)
+        raise ProxyModelNotFoundError(route=route_name, model_name=model_name, retryable_with_model_read_through=False)
+
+    routed_data: Final = _merge_agent_guardrails(
+        data=data,
+        agent_guardrails=registered_params_value.get("guardrails") if registered_params_value else None,
+    )
     if (
         registered_provider
         and registered_provider != "a2a"
@@ -205,12 +318,13 @@ async def route_a2a_agent_request(
     ):
         verbose_proxy_logger.debug("[A2A] Routing %s through %s", model_name, registered_provider)
         return _route_registered_provider(
-            data=data,
+            data=routed_data,
             model_name=model_name,
             api_base=api_base,
             litellm_params=registered_params_value,
+            static_headers=agent.static_headers,
         )
 
-    completion_data: Final = MappingProxyType({**data, "api_base": api_base})
+    completion_data: Final = MappingProxyType({**routed_data, "api_base": api_base})
     verbose_proxy_logger.debug("[A2A] Routing %s to %s", model_name, api_base)
     return getattr(litellm, f"{route_type}")(**completion_data)  # pyright: ignore[reportAny]  # dynamic SDK route

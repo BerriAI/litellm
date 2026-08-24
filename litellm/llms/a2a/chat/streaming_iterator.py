@@ -83,6 +83,13 @@ class A2AModelResponseIterator(BaseModelResponseIterator):
                 tool_use=None,
             )
 
+    def _handle_string_chunk(
+        self, str_line: str | dict
+    ) -> GenericStreamingChunk | ModelResponseStream:
+        if isinstance(str_line, dict):
+            return self.chunk_parser(chunk=str_line)
+        return super()._handle_string_chunk(str_line=str_line)
+
     def _get_finish_reason(self, chunk: dict) -> str | None:
         """Extract finish reason from A2A chunk"""
         result: Final = chunk.get("result", {})
