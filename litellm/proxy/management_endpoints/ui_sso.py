@@ -112,6 +112,7 @@ from litellm.proxy.management_endpoints.sso_helper_utils import (
 )
 from litellm.proxy.management_endpoints.team_endpoints import new_team, team_member_add
 from litellm.proxy.management_endpoints.types import (
+    ROLE_PRIVILEGE_ORDER,
     CustomOpenID,
     get_litellm_user_role,
     is_valid_litellm_user_role,
@@ -875,19 +876,11 @@ def determine_role_from_groups(
         # No role mappings configured, return default_role
         return role_mappings.default_role
 
-    # Role hierarchy (highest to lowest)
-    role_hierarchy: Final = [
-        LitellmUserRoles.PROXY_ADMIN,
-        LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
-        LitellmUserRoles.INTERNAL_USER,
-        LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
-    ]
-
     # Convert user_groups to a set for efficient lookup
     user_groups_set: Final = set(user_groups) if isinstance(user_groups, list) else set()
 
     # Find the highest privilege role the user belongs to
-    for role in role_hierarchy:
+    for role in ROLE_PRIVILEGE_ORDER:
         if role in role_mappings.roles:
             role_groups = role_mappings.roles[role]
             if isinstance(role_groups, list) and user_groups_set.intersection(set(role_groups)):
@@ -4279,15 +4272,9 @@ class MicrosoftSSOHandler:
         verbose_proxy_logger.debug("Extracted app roles from id_token: %s", app_roles)
 
         # Combine groups and app roles
-        user_role: LitellmUserRoles | None = None
-        if app_roles:
-            # Check if any app role is a valid LitellmUserRoles
-            for role_str in app_roles:
-                role = get_litellm_user_role(role_str)
-                if role is not None:
-                    user_role = role
-                    verbose_proxy_logger.debug("Found valid LitellmUserRoles '%s' in app_roles", role.value)
-                    break
+        user_role: Final = get_litellm_user_role(app_roles) if app_roles else None
+        if user_role is not None:
+            verbose_proxy_logger.debug("Resolved role '%s' from app_roles %s", user_role.value, app_roles)
 
         verbose_proxy_logger.debug("Combined team_ids (groups + app roles): %s", user_team_ids)
 

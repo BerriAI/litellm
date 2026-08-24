@@ -1,3 +1,4 @@
+import pytest
 import jwt
 
 from litellm.proxy.management_endpoints.ui_sso import MicrosoftSSOHandler
@@ -89,3 +90,26 @@ def test_defaults_to_internal_user_viewer_when_no_role():
     # Default role would be internal_user_viewer
     default_role = LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
     assert default_role.value == "internal_user_viewer"
+
+@pytest.mark.parametrize(
+    "app_roles",
+    [
+        ["proxy_admin_viewer", "internal_user"],
+        ["internal_user", "proxy_admin_viewer"],
+    ],
+)
+def test_multiple_app_roles_resolve_to_highest_privilege(app_roles):
+    """A user granted several app roles keeps the most privileged one, whatever order the token lists them in."""
+    payload = {
+        "sub": "user_multi_role",
+        "email": "multi@company.com",
+        "app_roles": app_roles,
+        "aud": "litellm-app",
+        "iss": "https://login.microsoftonline.com/tenant-id/v2.0",
+        "exp": 9999999999,
+    }
+
+    token = jwt.encode(payload, "secret", algorithm="HS256")
+    roles = MicrosoftSSOHandler.get_app_roles_from_id_token(token)
+
+    assert get_litellm_user_role(roles) == LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY
