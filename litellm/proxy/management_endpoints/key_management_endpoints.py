@@ -3675,11 +3675,11 @@ async def info_key_fn_v2(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail={"message": "Malformed request. No keys passed in."},
             )
-        requested_key_count: Final = len(data.keys or []) + len(data.key_aliases or [])
+        requested_key_count: Final = len(data.keys or ()) + len(data.key_aliases or ())
         if requested_key_count > MAX_KEY_INFO_KEYS_PER_REQUEST:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail={
+                detail={  # mutable-ok: one-shot HTTPException payload matching the sibling detail dict above; never mutated after construction
                     "message": (
                         f"Too many keys requested: {requested_key_count}. "
                         f"At most {MAX_KEY_INFO_KEYS_PER_REQUEST} keys and key_aliases combined per request."
