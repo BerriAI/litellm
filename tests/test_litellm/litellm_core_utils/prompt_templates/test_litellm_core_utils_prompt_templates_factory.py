@@ -3627,3 +3627,36 @@ def test_convert_gemini_tool_call_result_answers_tool_reference_only_result():
     )
 
     assert result == {"function_response": {"name": "ToolSearch", "response": {"content": ""}}}
+def test_anthropic_messages_pt_keeps_system_role_after_user_turn():
+    """Models flagged supports_mid_conversation_system accept role=system inside
+    messages; the converter must emit it as a system message with its text
+    blocks and cache_control intact instead of rejecting the role."""
+    messages = [
+        {"role": "user", "content": "First question"},
+        {
+            "role": "system",
+            "content": [{"type": "text", "text": "Answer in one word.", "cache_control": {"type": "ephemeral"}}],
+        },
+        {"role": "assistant", "content": "Yes"},
+        {"role": "user", "content": "Second question"},
+    ]
+
+    result = anthropic_messages_pt(messages=messages, model="claude-opus-4-8", llm_provider="anthropic")
+
+    assert [m["role"] for m in result] == ["user", "system", "assistant", "user"]
+    assert result[1] == {
+        "role": "system",
+        "content": [{"type": "text", "text": "Answer in one word.", "cache_control": {"type": "ephemeral"}}],
+    }
+
+
+def test_anthropic_messages_pt_system_string_content_becomes_text_block():
+    messages = [
+        {"role": "user", "content": "First question"},
+        {"role": "system", "content": "Answer in one word."},
+    ]
+
+    result = anthropic_messages_pt(messages=messages, model="claude-opus-4-8", llm_provider="anthropic")
+
+    assert result[1] == {"role": "system", "content": [{"type": "text", "text": "Answer in one word."}]}
+

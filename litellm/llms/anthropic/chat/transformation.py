@@ -75,6 +75,7 @@ from litellm.types.utils import Message as LitellmMessage
 from litellm.utils import (
     ModelResponse,
     Usage,
+    _supports_factory,
     add_dummy_tool,
     any_assistant_message_has_thinking_blocks,
     get_max_tokens,
@@ -90,6 +91,7 @@ from ..common_utils import (
     process_anthropic_headers,
     strip_advisor_blocks_from_messages,
 )
+from ..mid_conversation_system import place_mid_conversation_system, split_leading_system_run
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -1897,16 +1899,29 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         if _name_reverse_map and isinstance(litellm_params, dict):
             litellm_params[ANTHROPIC_TOOL_NAME_REVERSE_MAP_KEY] = _name_reverse_map
 
-        # Separate system prompt from rest of message
-        anthropic_system_message_list: Final = self.translate_system_message(messages=messages)
+        # Only the leading system run becomes the top-level system prompt. A later
+        # system message stays in the conversation: hoisting it rewrites the cached
+        # prefix and re-bills the whole history at cache-write pricing (#36559).
+        leading_system_run, later_messages = split_leading_system_run(messages)
+        anthropic_system_message_list: Final = self.translate_system_message(
+            messages=list(leading_system_run)  # mutable-ok: translate_system_message pops from the list it is given
+        )
         # Handling anthropic API Prompt Caching
         if len(anthropic_system_message_list) > 0:
             optional_params["system"] = anthropic_system_message_list
+        conversation: Final = place_mid_conversation_system(
+            later_messages,
+            supports_mid_conversation_system=_supports_factory(
+                model=model,
+                custom_llm_provider=self.custom_llm_provider,
+                key="supports_mid_conversation_system",
+            ),
+        )
         # Format rest of message according to anthropic guidelines
         try:
             anthropic_messages = anthropic_messages_pt(
                 model=model,
-                messages=messages,
+                messages=list(conversation),  # mutable-ok: anthropic_messages_pt rewrites entries in place
                 llm_provider=self._resolved_provider,
             )
         except Exception as e:

@@ -542,3 +542,51 @@ def test_output_format_removed_from_bedrock_invoke_request():
     assert (
         "output_format" not in result
     ), f"output_format should be removed for Bedrock Invoke, got keys: {result.keys()}"
+
+
+def _mid_conversation_system_conversation():
+    return [
+        {"role": "system", "content": [{"type": "text", "text": "You are terse.", "cache_control": {"type": "ephemeral"}}]},
+        {"role": "user", "content": "First question"},
+        {"role": "assistant", "content": "First answer"},
+        {"role": "user", "content": "Second question"},
+        {"role": "system", "content": "<system-reminder>Answer with exactly one word.</system-reminder>"},
+        {"role": "assistant", "content": "Second answer"},
+        {"role": "user", "content": "Third question"},
+    ]
+
+
+def test_chat_unflagged_model_converts_mid_conversation_system_instead_of_hoisting(local_model_cost_map):
+    """A hoisted reminder rewrites the top-level system block and invalidates the
+    prompt cache for the whole conversation (#36559)."""
+    result = AmazonAnthropicClaudeConfig().transform_request(
+        model="invoke/us.anthropic.claude-opus-4-7",
+        messages=_mid_conversation_system_conversation(),
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert result["system"] == [{"type": "text", "text": "You are terse.", "cache_control": {"type": "ephemeral"}}]
+    assert [m["role"] for m in result["messages"]] == ["user", "assistant", "user", "assistant", "user"]
+    texts = [b["text"] for b in result["messages"][2]["content"] if b.get("type") == "text"]
+    assert texts[0] == "Second question"
+    assert texts[-1] == "<system-reminder>Answer with exactly one word.</system-reminder>"
+
+
+def test_chat_flagged_model_keeps_mid_conversation_system_role_in_place(local_model_cost_map):
+    result = AmazonAnthropicClaudeConfig().transform_request(
+        model="invoke/us.anthropic.claude-opus-4-8",
+        messages=_mid_conversation_system_conversation(),
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert result["system"] == [{"type": "text", "text": "You are terse.", "cache_control": {"type": "ephemeral"}}]
+    assert [m["role"] for m in result["messages"]] == ["user", "assistant", "user", "system", "assistant", "user"]
+    assert result["messages"][3] == {
+        "role": "system",
+        "content": [{"type": "text", "text": "<system-reminder>Answer with exactly one word.</system-reminder>"}],
+    }
+
