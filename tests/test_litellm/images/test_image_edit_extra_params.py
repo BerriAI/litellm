@@ -76,6 +76,30 @@ def test_image_edit_extra_body_takes_precedence_over_kwargs():
     assert _multipart_text_fields(captured["content_type"], captured["body"])["seed"] == "7"
 
 
+def test_image_edit_flattens_nested_provider_params():
+    """A nested value in extra_body (or a nested unknown kwarg) must be
+    serialized as OpenAI-SDK bracket form fields (key[subkey]) rather than
+    handed to the httpx multipart encoder, which raises 'Invalid type for
+    value. Expected primitive type' on a dict and 500s the request."""
+    captured = {}
+    client = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_capture_image_edit_request(captured))))
+
+    litellm.image_edit(
+        model="openai/gpt-image-1",
+        image=PNG_BYTES,
+        prompt="add a hat",
+        api_key="sk-test",
+        api_base="https://edit.example/v1",
+        client=client,
+        extra_body={"generation_config": {"steps": 30, "guidance": True}},
+    )
+
+    fields = _multipart_text_fields(captured["content_type"], captured["body"])
+    assert fields["generation_config[steps]"] == "30"
+    assert fields["generation_config[guidance]"] == "true"
+    assert "generation_config" not in fields
+
+
 @pytest.mark.asyncio
 async def test_aimage_edit_forwards_extra_body():
     """aimage_edit used to drop extra_headers/extra_query/extra_body when

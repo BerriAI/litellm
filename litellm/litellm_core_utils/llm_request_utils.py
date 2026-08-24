@@ -27,6 +27,25 @@ def _flatten_form_field(key: str, value: object) -> tuple[tuple[str, str], ...]:
     return ((key, serialized),)
 
 
+def flatten_form_field_values(*sources: Mapping[str, object] | None) -> tuple[tuple[str, str], ...]:
+    """
+    Flatten JSON-shaped bodies into primitive ``(name, value)`` form fields the
+    way the OpenAI SDK serializes multipart bodies: dicts as ``key[subkey]``,
+    lists as ``key[]``, booleans lowercased, None and empty values dropped.
+    Sources are applied in order, so a later source wins on a key collision when
+    fed to ``dict.update``. Used to funnel provider-specific params into a
+    multipart request without handing the httpx encoder a nested value it
+    rejects with ``Invalid type for value``.
+    """
+    return tuple(
+        pair
+        for source in sources
+        if source is not None
+        for top_key, top_value in source.items()
+        for pair in _flatten_form_field(top_key, top_value)
+    )
+
+
 def serialize_multipart_form_fields(data: Mapping[str, object]) -> tuple[tuple[str, tuple[None, str]], ...]:
     """
     Encode a JSON-shaped body as httpx file-tuples so a request with no file

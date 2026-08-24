@@ -1,4 +1,7 @@
-from litellm.litellm_core_utils.llm_request_utils import serialize_multipart_form_fields
+from litellm.litellm_core_utils.llm_request_utils import (
+    flatten_form_field_values,
+    serialize_multipart_form_fields,
+)
 
 
 def test_serialize_multipart_form_fields_flattens_like_the_openai_sdk():
@@ -34,3 +37,28 @@ def test_serialize_multipart_form_fields_drops_empty_strings():
 
 def test_serialize_multipart_form_fields_empty_body():
     assert serialize_multipart_form_fields({}) == ()
+
+
+def test_flatten_form_field_values_flattens_nested_and_drops_empty():
+    assert flatten_form_field_values(
+        {
+            "seed": 42,
+            "hd": True,
+            "size": None,
+            "prompt": "",
+            "generation_config": {"steps": 30, "guidance": True},
+        }
+    ) == (
+        ("seed", "42"),
+        ("hd", "true"),
+        ("generation_config[steps]", "30"),
+        ("generation_config[guidance]", "true"),
+    )
+
+
+def test_flatten_form_field_values_later_source_wins_on_collision():
+    assert flatten_form_field_values({"seed": 1}, None, {"seed": 2}) == (
+        ("seed", "1"),
+        ("seed", "2"),
+    )
+    assert dict(flatten_form_field_values({"seed": 1}, {"seed": 2}))["seed"] == "2"
