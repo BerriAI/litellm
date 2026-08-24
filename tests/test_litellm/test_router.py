@@ -8565,28 +8565,47 @@ async def test_retry_breadcrumbs_do_not_carry_the_walk_state():
         assert "attempted_targets" not in breadcrumb
 
 
+_BREADCRUMB_CREDENTIAL_CANARY = "Bearer sk-ant-oat01-RETRY-BREADCRUMB-CANARY-doNotShip"
+
+
+@pytest.mark.parametrize(
+    "container_key, request_kwargs",
+    [
+        (
+            "provider_specific_header",
+            {
+                "provider_specific_header": {
+                    "custom_llm_provider": "openai",
+                    "extra_headers": {"authorization": _BREADCRUMB_CREDENTIAL_CANARY},
+                }
+            },
+        ),
+        (
+            "extra_headers",
+            {"extra_headers": {"authorization": _BREADCRUMB_CREDENTIAL_CANARY}},
+        ),
+        (
+            "api_key",
+            {"api_key": _BREADCRUMB_CREDENTIAL_CANARY},
+        ),
+    ],
+)
 @pytest.mark.asyncio
-async def test_retry_breadcrumbs_drop_forwarded_client_credentials():
-    """log_retry copies kwargs verbatim into previous_models, which reaches spend logs and logging
-    callbacks. provider_specific_header can carry a client's forwarded Authorization token, and a
-    breadcrumb has no diagnostic use for it, so the raw credential must never land in the breadcrumb."""
-    canary = "Bearer sk-ant-oat01-RETRY-BREADCRUMB-CANARY-doNotShip"
+async def test_retry_breadcrumbs_never_carry_a_forwarded_credential(container_key, request_kwargs):
+    """log_retry copies kwargs into previous_models, which reaches spend logs and logging callbacks.
+    Any of these kwargs can carry a client's forwarded Authorization token or a provider key, and a
+    breadcrumb has no diagnostic use for the raw secret. A denylist of key names is always one new
+    credential kwarg behind, so log_retry scrubs credential-named values by pattern instead: the
+    container still reaches the breadcrumb, but the raw secret never does, whatever key holds it."""
     router = _cyclic_fallback_router(num_retries=1)
     capture = _LogCapture(logging.ERROR)
 
-    await _drive_cyclic_fallback(
-        router,
-        capture,
-        provider_specific_header={
-            "custom_llm_provider": "openai",
-            "extra_headers": {"authorization": canary},
-        },
-    )
+    await _drive_cyclic_fallback(router, capture, **request_kwargs)
 
     assert router.previous_models, "no retry breadcrumbs were recorded"
-    for breadcrumb in router.previous_models:
-        assert "provider_specific_header" not in breadcrumb
-    assert canary not in json.dumps(router.previous_models, default=str)
+    dumped = json.dumps(router.previous_models, default=str)
+    assert container_key in dumped, "the credential-bearing kwarg never reached the breadcrumb, so this test cannot see the leak"
+    assert _BREADCRUMB_CREDENTIAL_CANARY not in dumped
 
 
 @pytest.mark.asyncio
