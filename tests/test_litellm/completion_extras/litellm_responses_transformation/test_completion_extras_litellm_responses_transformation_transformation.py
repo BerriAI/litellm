@@ -1523,7 +1523,7 @@ def test_map_reasoning_effort_adds_summary_detailed(monkeypatch):
     handler = LiteLLMResponsesTransformationHandler()
 
     # Test all string effort levels - DEFAULT BEHAVIOR (no summary)
-    effort_levels = ["none", "low", "medium", "high", "xhigh", "minimal"]
+    effort_levels = ["none", "low", "medium", "high", "xhigh", "minimal", "max"]
 
     # Save original flag value
     original_flag = litellm.reasoning_auto_summary
@@ -1585,10 +1585,16 @@ def test_map_reasoning_effort_adds_summary_detailed(monkeypatch):
         assert result_dict["summary"] == "custom_summary"
         print("✓ Dict input is passed through without modification")
 
-        # Test 5: None/unknown values return None
-        result_unknown = handler._map_reasoning_effort("unknown_value")
-        assert result_unknown is None
-        print("✓ Unknown reasoning_effort values return None")
+        # Test 5: Unrecognized but truthy strings pass through (forward-compatible)
+        result_future = handler._map_reasoning_effort("future_level")
+        assert result_future is not None
+        assert result_future["effort"] == "future_level"
+        print("✓ Unrecognized effort values pass through for forward compatibility")
+
+        # Test 6: Empty string returns None
+        result_empty = handler._map_reasoning_effort("")
+        assert result_empty is None
+        print("✓ Empty reasoning_effort returns None")
 
         print(
             "✓ All reasoning_effort behaviors work correctly with flag/env var control"
