@@ -5,6 +5,7 @@ A2A Streaming Response Iterator
 from typing import Final
 
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
+from litellm.types.llms.openai import ChatCompletionToolCallChunk
 from litellm.types.utils import GenericStreamingChunk, ModelResponseStream
 
 from ..common_utils import A2AError, extract_text_from_a2a_response
@@ -118,14 +119,16 @@ class A2AModelResponseIterator(BaseModelResponseIterator):
 
         return None
 
-    def _get_tool_calls(self, chunk: dict) -> list[dict] | None:
+    def _get_tool_calls(self, chunk: dict) -> ChatCompletionToolCallChunk | None:
         result: Final = chunk.get("result", {})
         if not isinstance(result, dict):
             return None
         tool_calls = result.get("tool_calls")
-        if isinstance(tool_calls, list):
-            return tool_calls
+        if isinstance(tool_calls, list) and tool_calls:
+            first_tool_call: Final = tool_calls[0]
+            return first_tool_call if isinstance(first_tool_call, dict) else None
         message = result.get("message")
-        if isinstance(message, dict) and isinstance(message.get("tool_calls"), list):
-            return message["tool_calls"]
+        if isinstance(message, dict) and isinstance(message.get("tool_calls"), list) and message["tool_calls"]:
+            first_tool_call = message["tool_calls"][0]
+            return first_tool_call if isinstance(first_tool_call, dict) else None
         return None

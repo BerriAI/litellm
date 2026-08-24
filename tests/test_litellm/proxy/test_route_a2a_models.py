@@ -195,6 +195,92 @@ async def test_route_a2a_cardless_bedrock_agentcore_uses_registered_model():
 
 
 @pytest.mark.asyncio
+async def test_route_a2a_registered_provider_uses_configured_api_base_without_card_url():
+    from litellm.types.agents import AgentResponse
+
+    agent = AgentResponse(
+        agent_id="test-agent-id",
+        agent_name="test-agent",
+        agent_card_params={},
+        litellm_params={
+            "custom_llm_provider": "langflow",
+            "model": "flow",
+            "api_base": "https://flow.example.com",
+        },
+    )
+    bridge_response = {
+        "jsonrpc": "2.0",
+        "id": "request-id",
+        "result": {"kind": "message", "parts": [{"kind": "text", "text": "Hello back"}]},
+    }
+
+    with (
+        patch(
+            "litellm.proxy.common_utils.registry_read_through.get_agent_with_read_through",
+            AsyncMock(return_value=agent),
+        ),
+        patch(
+            "litellm.proxy.agent_endpoints.auth.agent_permission_handler.AgentRequestHandler.is_agent_allowed",
+            AsyncMock(return_value=True),
+        ),
+        patch(
+            "litellm.a2a_protocol.litellm_completion_bridge.handler.A2ACompletionBridgeHandler.handle_non_streaming",
+            AsyncMock(return_value=bridge_response),
+        ) as bridge,
+    ):
+        call = await route_a2a_agent_request(
+            {"model": "a2a/test-agent", "messages": [{"role": "user", "content": "Hello"}]},
+            "acompletion",
+        )
+        await call
+
+    assert bridge.await_args.kwargs["api_base"] == "https://flow.example.com"
+
+
+@pytest.mark.asyncio
+async def test_registered_provider_response_preserves_multiple_choices():
+    from litellm.types.agents import AgentResponse
+
+    agent = AgentResponse(
+        agent_id="test-agent-id",
+        agent_name="test-agent",
+        agent_card_params={"url": "http://agent.example.com"},
+        litellm_params={"custom_llm_provider": "pydantic_ai_agents"},
+    )
+    bridge_response = {
+        "jsonrpc": "2.0",
+        "id": "request-id",
+        "choices": [
+            {"index": 0, "message": {"parts": [{"kind": "text", "text": "first"}]}},
+            {"index": 1, "message": {"parts": [{"kind": "text", "text": "second"}]}},
+        ],
+        "result": {},
+    }
+
+    with (
+        patch(
+            "litellm.proxy.common_utils.registry_read_through.get_agent_with_read_through",
+            AsyncMock(return_value=agent),
+        ),
+        patch(
+            "litellm.proxy.agent_endpoints.auth.agent_permission_handler.AgentRequestHandler.is_agent_allowed",
+            AsyncMock(return_value=True),
+        ),
+        patch(
+            "litellm.a2a_protocol.litellm_completion_bridge.handler.A2ACompletionBridgeHandler.handle_non_streaming",
+            AsyncMock(return_value=bridge_response),
+        ),
+    ):
+        call = await route_a2a_agent_request(
+            {"model": "a2a/test-agent", "messages": [{"role": "user", "content": "Hello"}]},
+            "acompletion",
+        )
+        response = await call
+
+    assert [choice.message.content for choice in response.choices] == ["first", "second"]
+
+
+@pytest.mark.asyncio
 async def test_route_a2a_cardless_watsonx_orchestrate_uses_registered_model():
     from litellm.types.agents import AgentResponse
 

@@ -44,7 +44,7 @@ async def test_async_iterator_preserves_tool_calls():
 
     chunk = await iterator.__aiter__().__anext__()
 
-    assert chunk["tool_use"] == tool_calls
+    assert chunk["tool_use"] == tool_calls[0]
     assert chunk["finish_reason"] == "tool_calls"
 
 

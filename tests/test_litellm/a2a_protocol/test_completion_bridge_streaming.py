@@ -222,8 +222,8 @@ async def test_handle_streaming_emits_proper_events():
         ):
             events.append(event)
 
-        # Should have 4 events: task, working, artifact, completed
-        assert len(events) == 4
+        # Should have 5 events: task, working, two artifacts, completed
+        assert len(events) == 5
 
         # Event 1: task submitted
         assert events[0]["result"]["kind"] == "task"
@@ -234,14 +234,18 @@ async def test_handle_streaming_emits_proper_events():
         assert events[1]["result"]["status"]["state"] == "working"
         assert events[1]["result"]["final"] is False
 
-        # Event 3: artifact update with accumulated content
+        # Event 3: first artifact update
         assert events[2]["result"]["kind"] == "artifact-update"
-        assert events[2]["result"]["artifact"]["parts"][0]["text"] == "Hello world"
+        assert events[2]["result"]["artifact"]["parts"][0]["text"] == "Hello"
 
-        # Event 4: status completed
-        assert events[3]["result"]["kind"] == "status-update"
-        assert events[3]["result"]["status"]["state"] == "completed"
-        assert events[3]["result"]["final"] is True
+        # Event 4: second artifact update
+        assert events[3]["result"]["kind"] == "artifact-update"
+        assert events[3]["result"]["artifact"]["parts"][0]["text"] == " world"
+
+        # Event 5: status completed
+        assert events[4]["result"]["kind"] == "status-update"
+        assert events[4]["result"]["status"]["state"] == "completed"
+        assert events[4]["result"]["final"] is True
 
 
 @pytest.mark.asyncio

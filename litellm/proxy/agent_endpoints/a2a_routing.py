@@ -213,14 +213,53 @@ async def _route_registered_provider(
     result_dict: Final = result if isinstance(result, Mapping) else {}
     nested_message: Final = result_dict.get("message")
     response_message: Final = nested_message if isinstance(nested_message, Mapping) else result_dict
-    tool_calls: Final = response_message.get("tool_calls")
-    normalized_tool_calls: Final = tool_calls if isinstance(tool_calls, list) else None
-    finish_reason: Final = response_message.get("finish_reason")
-    text: Final = extract_text_from_a2a_response(response)
-    model_response: Final = ModelResponse(
-        id=str(response.get("id") or request_id),
-        model=model_name,
-        choices=[  # mutable-ok: ModelResponse requires a choices list
+    response_choices: Final = response.get("choices")
+    choice_payloads: Final = (
+        response_choices
+        if isinstance(response_choices, list)
+        else result_dict.get("choices")
+    )
+    if isinstance(choice_payloads, list) and choice_payloads:
+        model_choices = [
+            Choices(
+                finish_reason=(
+                    choice.get("finish_reason")
+                    if isinstance(choice, Mapping) and isinstance(choice.get("finish_reason"), str)
+                    else choice.get("message", {}).get("finish_reason")
+                    if isinstance(choice, Mapping)
+                    and isinstance(choice.get("message"), Mapping)
+                    and isinstance(choice.get("message", {}).get("finish_reason"), str)
+                    else "stop"
+                ),
+                index=choice.get("index", choice_index)
+                if isinstance(choice, Mapping) and isinstance(choice.get("index", choice_index), int)
+                else choice_index,
+                message=Message(
+                    content=extract_text_from_a2a_response(
+                        {"result": choice.get("message", choice)}
+                        if isinstance(choice, Mapping)
+                        else {"result": {}}
+                    ),
+                    role="assistant",
+                    tool_calls=(
+                        choice.get("message", {}).get("tool_calls")
+                        if isinstance(choice, Mapping)
+                        and isinstance(choice.get("message"), Mapping)
+                        and isinstance(choice.get("message", {}).get("tool_calls"), list)
+                        else choice.get("tool_calls")
+                        if isinstance(choice, Mapping) and isinstance(choice.get("tool_calls"), list)
+                        else None
+                    ),
+                ),
+            )
+            for choice_index, choice in enumerate(choice_payloads)
+        ]
+    else:
+        tool_calls: Final = response_message.get("tool_calls")
+        normalized_tool_calls: Final = tool_calls if isinstance(tool_calls, list) else None
+        finish_reason: Final = response_message.get("finish_reason")
+        text: Final = extract_text_from_a2a_response(response)
+        model_choices = [
             Choices(
                 finish_reason=(
                     finish_reason
@@ -232,12 +271,16 @@ async def _route_registered_provider(
                 index=0,
                 message=Message(content=text, role="assistant", tool_calls=normalized_tool_calls),
             )
-        ],
+        ]
+    model_response: Final = ModelResponse(
+        id=str(response.get("id") or request_id),
+        model=model_name,
+        choices=model_choices,
     )
     raw_usage: Final = response.get("usage")
     usage: Final = litellm.Usage(**raw_usage) if isinstance(raw_usage, Mapping) else raw_usage
     if usage is not None:
-        setattr(model_response, "usage", usage)
+        model_response.usage = usage
         if isinstance(logging_obj, Logging):
             logging_obj.model_call_details["usage"] = usage
 
@@ -477,7 +520,8 @@ async def route_a2a_agent_request(
     cardless_provider: Final = registered_provider == "watsonx_orchestrate" or (
         registered_provider == "bedrock" and isinstance(registered_model, str) and "agentcore" in registered_model
     )
-    if (not isinstance(agent_url, str) or not agent_url) and not cardless_provider:
+    has_configured_api_base: Final = isinstance(configured_api_base, str) and bool(configured_api_base)
+    if (not isinstance(agent_url, str) or not agent_url) and not has_configured_api_base and not cardless_provider:
         verbose_proxy_logger.error("[A2A] Agent '%s' has no URL configured", agent_name)
         route_name = ROUTE_ENDPOINT_MAPPING.get(route_type, route_type)
         raise ProxyModelNotFoundError(route=route_name, model_name=model_name, retryable_with_model_read_through=False)

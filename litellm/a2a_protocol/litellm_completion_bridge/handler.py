@@ -155,14 +155,16 @@ class A2ACompletionBridgeHandler:
                 verbose_logger.info("A2A: Using provider config for %s", custom_llm_provider)
 
                 provider_params: Final = {key: value for key, value in params.items() if key != "messages"}
-                return await a2a_provider_config.handle_non_streaming(
-                    request_id=request_id,
-                    params=provider_params,
-                    api_base=api_base,
-                    timeout=litellm_params.get("timeout") or 60.0,
-                    litellm_params=litellm_params,
-                    agent_extra_headers=agent_extra_headers,
-                )
+                provider_kwargs: Final[dict[str, Any]] = {
+                    "request_id": request_id,
+                    "params": provider_params,
+                    "api_base": api_base,
+                    "litellm_params": litellm_params,
+                    "agent_extra_headers": agent_extra_headers,
+                }
+                if litellm_params.get("timeout") is not None:
+                    provider_kwargs["timeout"] = litellm_params["timeout"]
+                return await a2a_provider_config.handle_non_streaming(**provider_kwargs)
 
         completion_params: Final = A2ACompletionBridgeHandler._build_completion_params(
             params=params,
@@ -226,14 +228,16 @@ class A2ACompletionBridgeHandler:
                 verbose_logger.info("A2A: Using provider config for %s (streaming)", custom_llm_provider)
 
                 provider_params: Final = {key: value for key, value in params.items() if key != "messages"}
-                async for chunk in a2a_provider_config.handle_streaming(
-                    request_id=request_id,
-                    params=provider_params,
-                    api_base=api_base,
-                    timeout=litellm_params.get("timeout") or 60.0,
-                    litellm_params=litellm_params,
-                    agent_extra_headers=agent_extra_headers,
-                ):
+                provider_kwargs: Final[dict[str, Any]] = {
+                    "request_id": request_id,
+                    "params": provider_params,
+                    "api_base": api_base,
+                    "litellm_params": litellm_params,
+                    "agent_extra_headers": agent_extra_headers,
+                }
+                if litellm_params.get("timeout") is not None:
+                    provider_kwargs["timeout"] = litellm_params["timeout"]
+                async for chunk in a2a_provider_config.handle_streaming(**provider_kwargs):
                     yield chunk
 
                 return
@@ -268,8 +272,7 @@ class A2ACompletionBridgeHandler:
         # Call litellm.acompletion with streaming
         response: Final = await A2ACompletionBridgeHandler._acompletion(completion_params)
 
-        # 3. Accumulate content and emit artifact update
-        accumulated_text = ""
+        # 3. Forward content as artifact updates
         accumulated_tool_calls: Final[list[object]] = []  # mutable-ok: collect streaming tool-call deltas
         chunk_count = 0
         async for chunk in response:
@@ -286,15 +289,11 @@ class A2ACompletionBridgeHandler:
                         accumulated_tool_calls.extend(tool_calls)
 
             if content:
-                accumulated_text += content
-
-        # Emit artifact update with accumulated content
-        if accumulated_text:
-            artifact_event: Final = A2ACompletionBridgeTransformation.create_artifact_update_event(
-                ctx=ctx,
-                text=accumulated_text,
-            )
-            yield artifact_event
+                artifact_event: Final = A2ACompletionBridgeTransformation.create_artifact_update_event(
+                    ctx=ctx,
+                    text=content,
+                )
+                yield artifact_event
 
         # 4. Emit final status update (kind: "status-update", status: "completed", final: true)
         completed_event: Final = A2ACompletionBridgeTransformation.create_status_update_event(

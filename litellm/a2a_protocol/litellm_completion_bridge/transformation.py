@@ -166,41 +166,44 @@ class A2ACompletionBridgeTransformation:
         Returns:
             A2A SendMessageResponse dict
         """
-        # Extract content from response
-        content = ""
-        if hasattr(response, "choices") and response.choices:
-            choice: Final = response.choices[0]
-            if hasattr(choice, "message") and choice.message:
-                content = choice.message.content or ""
+        serialized_choices: list[dict[str, Any]] = []
+        raw_choices: Final = getattr(response, "choices", None)
+        if raw_choices:
+            for choice in raw_choices:
+                content: Final = (
+                    getattr(getattr(choice, "message", None), "content", None) or ""
+                )
+                message: Final = {
+                    "kind": "message",
+                    "role": "agent",
+                    "parts": [{"kind": "text", "text": content}],
+                    "messageId": uuid4().hex,
+                }
+                raw_tool_calls = getattr(getattr(choice, "message", None), "tool_calls", None)
+                if raw_tool_calls:
+                    message["tool_calls"] = [
+                        call.model_dump(exclude_none=True)
+                        if hasattr(call, "model_dump")
+                        else call.dict(exclude_none=True)
+                        if hasattr(call, "dict")
+                        else call
+                        for call in raw_tool_calls
+                    ]
+                finish_reason: Final = getattr(choice, "finish_reason", None)
+                if finish_reason:
+                    message["finish_reason"] = finish_reason
+                serialized_choices.append({"index": len(serialized_choices), "message": message})
 
-        tool_calls: list[Any] | None = None
-        finish_reason: str | None = None
-        if hasattr(response, "choices") and response.choices:
-            choice = response.choices[0]
-            finish_reason = getattr(choice, "finish_reason", None)
-            message = getattr(choice, "message", None)
-            raw_tool_calls = getattr(message, "tool_calls", None)
-            if raw_tool_calls:
-                tool_calls = [
-                    call.model_dump(exclude_none=True)
-                    if hasattr(call, "model_dump")
-                    else call.dict(exclude_none=True)
-                    if hasattr(call, "dict")
-                    else call
-                    for call in raw_tool_calls
-                ]
-
-        # Build A2A message
-        a2a_message: Final = {
-            "kind": "message",
-            "role": "agent",
-            "parts": [{"kind": "text", "text": content}],
-            "messageId": uuid4().hex,
-        }
-        if tool_calls:
-            a2a_message["tool_calls"] = tool_calls
-        if finish_reason:
-            a2a_message["finish_reason"] = finish_reason
+        a2a_message: Final = (
+            serialized_choices[0]["message"]
+            if serialized_choices
+            else {
+                "kind": "message",
+                "role": "agent",
+                "parts": [{"kind": "text", "text": ""}],
+                "messageId": uuid4().hex,
+            }
+        )
 
         usage: Final = getattr(response, "usage", None)
 
@@ -212,8 +215,10 @@ class A2ACompletionBridgeTransformation:
         }
         if usage is not None:
             a2a_response["usage"] = usage.model_dump(exclude_none=True) if hasattr(usage, "model_dump") else usage
+        if len(serialized_choices) > 1:
+            a2a_response["choices"] = serialized_choices
 
-        verbose_logger.debug("OpenAI -> A2A transform: content_length=%s", len(content))
+        verbose_logger.debug("OpenAI -> A2A transform: content_length=%s", len(a2a_message["parts"][0]["text"]))
 
         return a2a_response
 
