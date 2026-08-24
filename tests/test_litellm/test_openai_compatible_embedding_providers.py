@@ -5,7 +5,10 @@ import pytest
 import litellm
 
 
-@pytest.mark.parametrize("provider", ["byteplus", "digitalocean", "siliconflow"])
+@pytest.mark.parametrize(
+    "provider",
+    ["byteplus", "digitalocean", "siliconflow", "deepinfra", "nscale", "novita"],
+)
 def test_openai_compatible_provider_embedding_dispatch(provider):
     mock_response = MagicMock()
     mock_response.parse.return_value = MagicMock(
