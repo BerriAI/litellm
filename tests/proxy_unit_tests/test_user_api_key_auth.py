@@ -465,7 +465,7 @@ def test_is_api_route_allowed(route, user_role, expected_result):
 
 
 @pytest.mark.asyncio
-async def test_auth_not_connected_to_db():
+async def test_models_auth_uses_restricted_identity_when_not_connected_to_db():
     """
     ensure requests don't fail when `prisma_client` = None
     """
@@ -487,7 +487,7 @@ async def test_auth_not_connected_to_db():
     )
 
     request = Request(scope={"type": "http"})
-    request._url = URL(url="/chat/completions")
+    request._url = URL(url="/v1/models")
 
     valid_token = await user_api_key_auth(request=request, api_key="Bearer " + user_key)
     print("got valid token", valid_token)
