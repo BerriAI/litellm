@@ -1,5 +1,4 @@
 import os
-import sys
 
 import uvicorn
 from dotenv import load_dotenv
@@ -8,9 +7,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 load_dotenv()
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 # Set the SERVER_ROOT_PATH environment variable to match the custom mount path
 os.environ["SERVER_ROOT_PATH"] = "/my-custom-path"

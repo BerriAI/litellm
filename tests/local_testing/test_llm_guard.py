@@ -9,12 +9,10 @@ import traceback
 from dotenv import load_dotenv
 
 load_dotenv()
-import os
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 import pytest
+from fastapi import HTTPException
+
 import litellm
 from litellm_enterprise.enterprise_callbacks.llm_guard import _ENTERPRISE_LLMGuard
 from litellm import Router, mock_completion
@@ -128,7 +126,7 @@ async def test_llm_guard_error_raising():
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key)
     local_cache = DualCache()
 
-    try:
+    with pytest.raises(HTTPException) as exc_info:
         await llm_guard.async_moderation_hook(
             data={
                 "messages": [
@@ -141,9 +139,9 @@ async def test_llm_guard_error_raising():
             user_api_key_dict=user_api_key_dict,
             call_type="completion",
         )
-        pytest.fail(f"Should have failed - {str(e)}")
-    except Exception as e:
-        pass
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail == {"error": "Violated content safety policy"}
 
 
 def test_llm_guard_key_specific_mode():

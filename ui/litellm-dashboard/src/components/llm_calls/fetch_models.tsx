@@ -6,6 +6,15 @@ import { modelAvailableCall, modelHubCall } from "@/components/networking";
 export interface ModelGroup {
   model_group: string;
   mode?: string;
+  supports_reasoning?: boolean;
+}
+
+interface AvailableModel {
+  model_group?: string | null;
+  model_name?: string | null;
+  id?: string | null;
+  mode?: string | null;
+  supports_reasoning?: boolean | null;
 }
 
 export const fetchAvailableModelsForTeam = async (accessToken: string, teamId: string): Promise<ModelGroup[]> => {
@@ -25,14 +34,16 @@ export const fetchAvailableModels = async (accessToken: string): Promise<ModelGr
     const fetchedModels = await modelHubCall(accessToken);
 
     if (fetchedModels?.data.length > 0) {
-      const models: ModelGroup[] = fetchedModels.data.map((item: any) => ({
-        model_group: item.model_group, // Display the model_group to the user
-        mode: item?.mode, // Save the mode for auto-selection of endpoint type
-      }));
+      const models: ModelGroup[] = fetchedModels.data
+        .map((item: AvailableModel) => ({
+          model_group: item.model_group || item.id || item.model_name || "",
+          mode: item.mode || undefined,
+          supports_reasoning: item.supports_reasoning === true || undefined,
+        }))
+        .filter((model: ModelGroup) => model.model_group !== "");
 
-      // Sort models alphabetically by label
       models.sort((a, b) => a.model_group.localeCompare(b.model_group));
-      return models;
+      return Array.from(new Map(models.map((model) => [model.model_group, model])).values());
     }
     return [];
   } catch (error) {
