@@ -159,17 +159,22 @@ def test_transform_request_never_passes_thinking_as_top_level_kwarg():
     assert data["extra_body"]["thinking"] == {"type": "enabled", "budget_tokens": 1024}
 
 
-class TestMinimaxThinkingCoercion:
+class TestAdaptiveThinkingCoercion:
     """
-    MiniMax models on TokenHub only accept thinking.type "adaptive"/"disabled" —
-    "enabled" returns a 400. Ref: https://www.tencentcloud.com/document/product/1300/82345
+    Models flagged `supports_adaptive_thinking` in the cost map (e.g.
+    tencent/minimax-m3) only accept thinking.type "adaptive"/"disabled" —
+    "enabled" returns a 400 from TokenHub.
+    Ref: https://www.tencentcloud.com/document/product/1300/82345
     """
 
-    def test_reasoning_effort_maps_to_adaptive_for_minimax(self):
+    def test_reasoning_effort_maps_to_adaptive_for_adaptive_only_model(self):
         config = TencentChatConfig()
-        with patch(
-            "litellm.llms.tencent.chat.transformation.supports_reasoning",
-            return_value=True,
+        with (
+            patch(
+                "litellm.llms.tencent.chat.transformation.supports_reasoning",
+                return_value=True,
+            ),
+            patch.object(TencentChatConfig, "_is_adaptive_thinking_model", return_value=True),
         ):
             result = config.map_openai_params(
                 non_default_params={"reasoning_effort": "medium"},
@@ -180,26 +185,32 @@ class TestMinimaxThinkingCoercion:
 
         assert result["extra_body"]["thinking"] == {"type": "adaptive"}
 
-    def test_explicit_enabled_thinking_coerced_to_adaptive_for_minimax(self):
+    def test_explicit_enabled_thinking_coerced_to_adaptive(self):
         config = TencentChatConfig()
-        with patch(
-            "litellm.llms.tencent.chat.transformation.supports_reasoning",
-            return_value=True,
+        with (
+            patch(
+                "litellm.llms.tencent.chat.transformation.supports_reasoning",
+                return_value=True,
+            ),
+            patch.object(TencentChatConfig, "_is_adaptive_thinking_model", return_value=True),
         ):
             result = config.map_openai_params(
                 non_default_params={"thinking": {"type": "enabled", "budget_tokens": 4096}},
                 optional_params={},
-                model="minimax-m3",
+                model="tencent/minimax-m3",
                 drop_params=False,
             )
 
         assert result["extra_body"]["thinking"] == {"type": "adaptive", "budget_tokens": 4096}
 
-    def test_disabled_thinking_kept_for_minimax(self):
+    def test_disabled_thinking_kept_for_adaptive_only_model(self):
         config = TencentChatConfig()
-        with patch(
-            "litellm.llms.tencent.chat.transformation.supports_reasoning",
-            return_value=True,
+        with (
+            patch(
+                "litellm.llms.tencent.chat.transformation.supports_reasoning",
+                return_value=True,
+            ),
+            patch.object(TencentChatConfig, "_is_adaptive_thinking_model", return_value=True),
         ):
             result = config.map_openai_params(
                 non_default_params={"thinking": {"type": "disabled"}},
@@ -210,11 +221,14 @@ class TestMinimaxThinkingCoercion:
 
         assert result["extra_body"]["thinking"] == {"type": "disabled"}
 
-    def test_none_reasoning_effort_disables_thinking_for_minimax(self):
+    def test_none_reasoning_effort_disables_thinking_for_adaptive_only_model(self):
         config = TencentChatConfig()
-        with patch(
-            "litellm.llms.tencent.chat.transformation.supports_reasoning",
-            return_value=True,
+        with (
+            patch(
+                "litellm.llms.tencent.chat.transformation.supports_reasoning",
+                return_value=True,
+            ),
+            patch.object(TencentChatConfig, "_is_adaptive_thinking_model", return_value=True),
         ):
             result = config.map_openai_params(
                 non_default_params={"reasoning_effort": "none"},
@@ -225,11 +239,14 @@ class TestMinimaxThinkingCoercion:
 
         assert result["extra_body"]["thinking"] == {"type": "disabled"}
 
-    def test_non_minimax_model_keeps_enabled(self):
+    def test_non_adaptive_model_keeps_enabled(self):
         config = TencentChatConfig()
-        with patch(
-            "litellm.llms.tencent.chat.transformation.supports_reasoning",
-            return_value=True,
+        with (
+            patch(
+                "litellm.llms.tencent.chat.transformation.supports_reasoning",
+                return_value=True,
+            ),
+            patch.object(TencentChatConfig, "_is_adaptive_thinking_model", return_value=False),
         ):
             result = config.map_openai_params(
                 non_default_params={"reasoning_effort": "high"},
@@ -239,6 +256,28 @@ class TestMinimaxThinkingCoercion:
             )
 
         assert result["extra_body"]["thinking"] == {"type": "enabled"}
+
+    def test_unmapped_model_keeps_enabled(self):
+        """Models absent from the cost map never get coerced."""
+        config = TencentChatConfig()
+        assert config._is_adaptive_thinking_model("tencent/no-such-model") is False
+
+
+def test_minimax_m3_cost_map_entry_marks_adaptive_thinking():
+    """The capability flag driving the coercion must exist in the cost map
+    (and its backup, which is shipped with the package)."""
+    import json
+    from pathlib import Path
+
+    repo_root = Path(__file__).parents[5]
+    for filename in ("model_prices_and_context_window.json", "litellm/model_prices_and_context_window_backup.json"):
+        with open(repo_root / filename) as f:
+            entry = json.load(f).get("tencent/minimax-m3")
+
+        assert entry is not None, f"tencent/minimax-m3 not found in {filename}"
+        assert entry["litellm_provider"] == "tencent"
+        assert entry.get("supports_adaptive_thinking") is True
+        assert entry.get("supports_reasoning") is True
 
 
 def test_get_complete_url_default():
