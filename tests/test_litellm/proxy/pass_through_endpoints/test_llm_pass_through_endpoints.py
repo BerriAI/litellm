@@ -3582,6 +3582,20 @@ class TestVertexCredentiallessPassthroughVirtualKeyLeak:
         assert self.VKEY not in " ".join(f"{name}:{value}" for name, value in forwarded.items())
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("scheme", ["Bearer", "bearer", "Basic"])
+    async def test_virtual_key_echoed_in_authorization_with_any_scheme_is_stripped(self, monkeypatch, scheme):
+        raised, forwarded = await self._run(
+            monkeypatch,
+            [
+                (b"x-litellm-api-key", self.VKEY.encode()),
+                (b"authorization", f"{scheme} {self.VKEY}".encode()),
+                (b"content-type", b"application/json"),
+            ],
+        )
+        assert forwarded is None, f"a virtual key echoed as '{scheme} <key>' in Authorization must be stripped, not forwarded"
+        assert raised is not None and raised.status_code == 401
+
+    @pytest.mark.asyncio
     async def test_byo_x_goog_api_key_still_forwards_without_virtual_key(self, monkeypatch):
         raised, forwarded = await self._run(
             monkeypatch,

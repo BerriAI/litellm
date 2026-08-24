@@ -29,7 +29,11 @@ from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.proxy._types import *
 from litellm.proxy.auth.route_checks import RouteChecks
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth, user_api_key_auth_websocket
+from litellm.proxy.auth.user_api_key_auth import (
+    _get_bearer_token,
+    user_api_key_auth,
+    user_api_key_auth_websocket,
+)
 from litellm.proxy.common_utils.http_parsing_utils import (
     _read_request_body,
     _safe_get_request_headers,
@@ -1735,11 +1739,18 @@ _CREDENTIALLESS_VERTEX_MISSING_CREDENTIAL_DETAIL: Final = (
 )
 
 
-def _bearer_stripped(value: str) -> str:
-    parts: Final = value.split(None, 1)
-    if len(parts) == 2 and parts[0].lower() == "bearer":
-        return parts[1]
-    return value
+def _normalize_credential_value(value: str) -> str:
+    """Reduce a header value to the bare token, matching how ``user_api_key_auth``
+    reads a caller's key.
+
+    Reuses the auth module's ``_get_bearer_token`` so the caller-key comparison
+    strips exactly the schemes authentication accepts (``Bearer`` / ``bearer`` /
+    ``Basic`` / ``AWS4-HMAC-SHA256`` credential), rather than re-deriving a
+    narrower normalization here. ``_get_bearer_token`` returns ``""`` for a value
+    with no recognized scheme prefix, so a bare token (or a real Google
+    credential that carries no scheme) falls back to its own value.
+    """
+    return _get_bearer_token(value) or value
 
 
 _VERTEX_UPSTREAM_CREDENTIAL_HEADERS: Final = frozenset({"authorization", "x-goog-api-key"})
@@ -1780,7 +1791,7 @@ def _authenticated_caller_key_values(request: Request) -> frozenset[str]:
     ) + _VERTEX_CALLER_KEY_HEADER_PRECEDENCE
     present_values: Final = (incoming[name] for name in ordered_names if incoming.get(name))
     authenticated_key: Final = next(
-        (stripped for value in present_values if (stripped := _bearer_stripped(value))),
+        (stripped for value in present_values if (stripped := _normalize_credential_value(value))),
         "",
     )
     return frozenset({authenticated_key}) if authenticated_key else frozenset()
@@ -1801,7 +1812,7 @@ def _forwarded_headers_for_credentialless_vertex_passthrough(request: Request) -
     name. ``Authorization`` and ``x-goog-api-key`` may instead carry a genuine
     bring-your-own Google credential, so they are kept unless their value is the
     caller's authenticated LiteLLM key, which is dropped by value (normalizing any
-    ``Bearer`` prefix). Because the value that authenticated is resolved by the
+    ``Bearer`` / ``Basic`` / ``AWS4`` auth-scheme prefix the same way authentication does). Because the value that authenticated is resolved by the
     same precedence ``user_api_key_auth`` uses, a virtual key sent only in
     ``x-goog-api-key`` (or in the operator-configured ``litellm_key_header_name``)
     is dropped too, while a real Google key in ``x-goog-api-key`` alongside a
@@ -1815,7 +1826,8 @@ def _forwarded_headers_for_credentialless_vertex_passthrough(request: Request) -
         {
             name: value
             for name, value in incoming.items()
-            if name not in _HEADERS_NEVER_FORWARDED_TO_VERTEX and _bearer_stripped(value) not in caller_key_values
+            if name not in _HEADERS_NEVER_FORWARDED_TO_VERTEX
+            and _normalize_credential_value(value) not in caller_key_values
         }
     )
     if "authorization" not in forwarded and "x-goog-api-key" not in forwarded:
