@@ -28,6 +28,27 @@ async def test_async_iterator_accepts_decoded_a2a_events():
 
 
 @pytest.mark.asyncio
+async def test_async_iterator_preserves_tool_calls():
+    tool_calls = [
+        {
+            "id": "call-1",
+            "type": "function",
+            "function": {"name": "lookup", "arguments": "{}"},
+        }
+    ]
+
+    async def _events():
+        yield {"jsonrpc": "2.0", "result": {"tool_calls": tool_calls}}
+
+    iterator = A2AModelResponseIterator(streaming_response=_events(), sync_stream=False)
+
+    chunk = await iterator.__aiter__().__anext__()
+
+    assert chunk["tool_use"] == tool_calls
+    assert chunk["finish_reason"] == "tool_calls"
+
+
+@pytest.mark.asyncio
 async def test_async_iterator_propagates_jsonrpc_errors():
     async def _events():
         yield {"jsonrpc": "2.0", "error": {"code": -32000, "message": "agent failed"}}

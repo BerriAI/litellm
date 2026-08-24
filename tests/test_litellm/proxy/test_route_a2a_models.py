@@ -291,6 +291,58 @@ async def test_route_a2a_registered_provider_preserves_identity_headers():
 
 
 @pytest.mark.asyncio
+async def test_route_a2a_registered_provider_preserves_messages_and_session():
+    from litellm.a2a_protocol.litellm_completion_bridge.handler import A2A_USER_API_KEY_HASH_PARAM
+    from litellm.types.agents import AgentResponse
+
+    agent = AgentResponse(
+        agent_id="test-agent-id",
+        agent_name="test-agent",
+        agent_card_params={"url": "http://agent.example.com"},
+        litellm_params={"custom_llm_provider": "langflow", "model": "flow"},
+    )
+    data = {
+        "model": "a2a/test-agent",
+        "messages": [
+            {"role": "system", "content": "Be concise"},
+            {"role": "user", "content": "Hello"},
+        ],
+        "litellm_session_id": "session-1",
+    }
+    bridge_response = {
+        "jsonrpc": "2.0",
+        "id": "request-id",
+        "result": {"kind": "message", "parts": [{"kind": "text", "text": "Hello back"}]},
+    }
+
+    with (
+        patch(
+            "litellm.proxy.common_utils.registry_read_through.get_agent_with_read_through",
+            AsyncMock(return_value=agent),
+        ),
+        patch(
+            "litellm.proxy.agent_endpoints.auth.agent_permission_handler.AgentRequestHandler.is_agent_allowed",
+            AsyncMock(return_value=True),
+        ),
+        patch(
+            "litellm.a2a_protocol.litellm_completion_bridge.handler.A2ACompletionBridgeHandler.handle_non_streaming",
+            AsyncMock(return_value=bridge_response),
+        ) as bridge,
+    ):
+        call = await route_a2a_agent_request(
+            data,
+            "acompletion",
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        )
+        await call
+
+    bridge_kwargs = bridge.await_args.kwargs
+    assert bridge_kwargs["params"]["messages"] == data["messages"]
+    assert bridge_kwargs["params"]["message"]["contextId"] == "session-1"
+    assert bridge_kwargs["litellm_params"][A2A_USER_API_KEY_HASH_PARAM] == "hashed-key"
+
+
+@pytest.mark.asyncio
 async def test_route_a2a_requires_inbound_trace_id():
     from litellm.types.agents import AgentResponse
 

@@ -202,12 +202,16 @@ class A2ACompletionBridgeTransformation:
         if finish_reason:
             a2a_message["finish_reason"] = finish_reason
 
+        usage: Final = getattr(response, "usage", None)
+
         # Build A2A response
         a2a_response: Final = {
             "jsonrpc": "2.0",
             "id": request_id,
             "result": a2a_message,
         }
+        if usage is not None:
+            a2a_response["usage"] = usage.model_dump(exclude_none=True) if hasattr(usage, "model_dump") else usage
 
         verbose_logger.debug("OpenAI -> A2A transform: content_length=%s", len(content))
 

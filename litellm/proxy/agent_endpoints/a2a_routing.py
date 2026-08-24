@@ -80,9 +80,7 @@ def _get_agent_request_headers(data: Mapping[str, object]) -> dict[str, str]:
             metadata = data.get("litellm_metadata")
         raw_headers = metadata.get("headers") if isinstance(metadata, Mapping) else None
     return (
-        {str(key).lower(): str(value) for key, value in raw_headers.items()}
-        if isinstance(raw_headers, Mapping)
-        else {}
+        {str(key).lower(): str(value) for key, value in raw_headers.items()} if isinstance(raw_headers, Mapping) else {}
     )
 
 
@@ -95,10 +93,12 @@ class _A2AMessage(TypedDict):
     role: ReadOnly[str]
     parts: ReadOnly[tuple[_A2ATextPart, ...]]
     messageId: ReadOnly[str]
+    contextId: ReadOnly[str | None]
 
 
 class _A2AParams(TypedDict):
     message: ReadOnly[_A2AMessage]
+    messages: ReadOnly[list[AllMessageValues]]
 
 
 async def _route_registered_provider(
@@ -120,20 +120,27 @@ async def _route_registered_provider(
     messages: Final = _MESSAGES_ADAPTER.validate_python(raw_messages)
     stream: Final = data.get("stream") is True
     request_id: Final = str(uuid4())
+    raw_session_id: Final = data.get("litellm_session_id")
+    metadata: Final = data.get("metadata")
+    session_id: Final = (
+        raw_session_id
+        if isinstance(raw_session_id, str)
+        else metadata.get("session_id")
+        if isinstance(metadata, Mapping) and isinstance(metadata.get("session_id"), str)
+        else None
+    )
     params: Final[_A2AParams] = {
         "message": {
             "role": "user",
             "parts": ({"kind": "text", "text": convert_messages_to_prompt(messages)},),
             "messageId": str(uuid4()),
-        }
+            "contextId": session_id,
+        },
+        "messages": messages,
     }
     provider_params: Final = {
         **_OBJECT_DICT_ADAPTER.validate_python(litellm_params),
-        **{
-            key: data[key]
-            for key in _FORWARDED_REQUEST_PARAMS
-            if key in data and data[key] is not None
-        },
+        **{key: data[key] for key in _FORWARDED_REQUEST_PARAMS if key in data and data[key] is not None},
     }
     bridge_params: Final = _OBJECT_DICT_ADAPTER.validate_python(params)
     configured_headers: Final = litellm_params.get("extra_headers") or litellm_params.get("headers")
@@ -161,6 +168,7 @@ async def _route_registered_provider(
             logging_obj.litellm_params.update(pricing_params)
             logging_obj.model_call_details["litellm_params"].update(pricing_params)
             logging_obj.custom_pricing = True
+            provider_params["no-log"] = True
 
     if stream:
         streaming_response: Final = A2ACompletionBridgeHandler.handle_streaming(
@@ -226,9 +234,12 @@ async def _route_registered_provider(
             )
         ],
     )
-    usage: Final = response.get("usage")
+    raw_usage: Final = response.get("usage")
+    usage: Final = litellm.Usage(**raw_usage) if isinstance(raw_usage, Mapping) else raw_usage
     if usage is not None:
         setattr(model_response, "usage", usage)
+        if isinstance(logging_obj, Logging):
+            logging_obj.model_call_details["usage"] = usage
 
     if isinstance(logging_obj, Logging):
 
@@ -253,9 +264,7 @@ def _merge_agent_guardrails(
     if not agent_guardrails:
         return data
 
-    configured_guardrails: list[object] = (
-        agent_guardrails if isinstance(agent_guardrails, list) else [agent_guardrails]
-    )
+    configured_guardrails: list[object] = agent_guardrails if isinstance(agent_guardrails, list) else [agent_guardrails]
     metadata_key: Final = "litellm_metadata" if "litellm_metadata" in data else "metadata"
     metadata = data.get(metadata_key)
     metadata_guardrails = metadata.get("guardrails") if isinstance(metadata, dict) else None
@@ -294,6 +303,49 @@ async def merge_a2a_agent_guardrails_before_hooks(data: Mapping[str, object]) ->
     if agent is None or not agent.litellm_params:
         return data
     return _merge_agent_guardrails(data, agent.litellm_params.get("guardrails"))
+
+
+async def authorize_a2a_agent_before_hooks(
+    data: Mapping[str, object],
+    user_api_key_dict: UserAPIKeyAuth | None,
+) -> Mapping[str, object]:
+    model_name: Final = data.get("model")
+    if not isinstance(model_name, str) or not model_name.startswith("a2a/"):
+        return data
+
+    from litellm.proxy.agent_endpoints.auth.agent_permission_handler import AgentRequestHandler
+    from litellm.proxy.common_utils.registry_read_through import get_agent_with_read_through
+
+    agent = await get_agent_with_read_through(model_name[4:])
+    if agent is None:
+        return data
+
+    is_admin: Final = user_api_key_dict is not None and (
+        user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
+        or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
+    )
+    if not is_admin:
+        is_allowed: Final = await AgentRequestHandler.is_agent_allowed(
+            agent_id=agent.agent_id,
+            user_api_key_auth=user_api_key_dict,
+        )
+        if not is_allowed:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Agent '{agent.agent_name}' is not allowed for your key/team. Contact proxy admin for access.",
+            )
+
+    if (agent.litellm_params or {}).get("require_trace_id_on_calls_to_agent"):
+        _enforce_inbound_trace_id(data, agent.agent_id)
+
+    if isinstance(data, dict):
+        data["agent_id"] = agent.agent_id
+        metadata = data.get("metadata")
+        if not isinstance(metadata, dict):
+            metadata = {}
+            data["metadata"] = metadata
+        metadata["agent_id"] = agent.agent_id
+    return data
 
 
 def _get_agent_dynamic_headers(
@@ -409,6 +461,16 @@ async def route_a2a_agent_request(
         registered_params_value.get("custom_llm_provider") if registered_params_value else None
     )
     registered_provider: Final = registered_provider_value if isinstance(registered_provider_value, str) else None
+    from litellm.a2a_protocol.litellm_completion_bridge.handler import A2A_USER_API_KEY_HASH_PARAM
+
+    registered_params_for_route: Final[Mapping[str, object]] = (
+        {
+            **registered_params_value,
+            A2A_USER_API_KEY_HASH_PARAM: user_api_key_dict.api_key,
+        }
+        if registered_params_value and user_api_key_dict is not None and user_api_key_dict.api_key
+        else registered_params_value or {}
+    )
     configured_api_base: Final = registered_params_value.get("api_base") if registered_params_value else None
     api_base: Final = configured_api_base if isinstance(configured_api_base, str) else agent_url
     registered_model: Final = registered_params_value.get("model") if registered_params_value else None
@@ -454,7 +516,7 @@ async def route_a2a_agent_request(
             data=routed_data,
             model_name=model_name,
             api_base=api_base,
-            litellm_params=registered_params_value,
+            litellm_params=registered_params_for_route,
             static_headers=registered_static_headers,
             dynamic_headers=registered_dynamic_headers,
         )

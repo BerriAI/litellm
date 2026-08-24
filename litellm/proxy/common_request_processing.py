@@ -1836,6 +1836,16 @@ class ProxyBaseLLMRequestProcessing:
 
         ## LOGGING OBJECT ## - initialize logging object for logging success/failure events for call
         ## IMPORTANT Note: - initialize this before running pre-call checks. Ensures we log rejected requests to langfuse.
+        from litellm.proxy.agent_endpoints.a2a_routing import (
+            authorize_a2a_agent_before_hooks,
+            merge_a2a_agent_guardrails_before_hooks,
+        )
+
+        self.data = await authorize_a2a_agent_before_hooks(
+            data=self.data,
+            user_api_key_dict=user_api_key_dict,
+        )
+
         logging_obj, self.data = litellm.utils.function_setup(
             original_function=route_type,
             rules_obj=litellm.utils.Rules(),
@@ -1844,10 +1854,6 @@ class ProxyBaseLLMRequestProcessing:
         )
 
         self.data["litellm_logging_obj"] = logging_obj
-
-        from litellm.proxy.agent_endpoints.a2a_routing import (
-            merge_a2a_agent_guardrails_before_hooks,
-        )
 
         self.data = await merge_a2a_agent_guardrails_before_hooks(self.data)
 

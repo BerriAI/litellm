@@ -59,7 +59,12 @@ class A2ACompletionBridgeHandler:
         message: Final = params.get("message", {})
 
         # Transform A2A message to OpenAI format
-        openai_messages: Final = A2ACompletionBridgeTransformation.a2a_message_to_openai_messages(message)
+        supplied_messages: Final = params.get("messages")
+        openai_messages: Final = (
+            supplied_messages
+            if isinstance(supplied_messages, list)
+            else A2ACompletionBridgeTransformation.a2a_message_to_openai_messages(message)
+        )
 
         # Get completion params
         custom_llm_provider: Final = litellm_params.get("custom_llm_provider")
@@ -149,10 +154,12 @@ class A2ACompletionBridgeHandler:
             if a2a_provider_config is not None:
                 verbose_logger.info("A2A: Using provider config for %s", custom_llm_provider)
 
+                provider_params: Final = {key: value for key, value in params.items() if key != "messages"}
                 return await a2a_provider_config.handle_non_streaming(
                     request_id=request_id,
-                    params=params,
+                    params=provider_params,
                     api_base=api_base,
+                    timeout=litellm_params.get("timeout") or 60.0,
                     litellm_params=litellm_params,
                     agent_extra_headers=agent_extra_headers,
                 )
@@ -218,10 +225,12 @@ class A2ACompletionBridgeHandler:
             if a2a_provider_config is not None:
                 verbose_logger.info("A2A: Using provider config for %s (streaming)", custom_llm_provider)
 
+                provider_params: Final = {key: value for key, value in params.items() if key != "messages"}
                 async for chunk in a2a_provider_config.handle_streaming(
                     request_id=request_id,
-                    params=params,
+                    params=provider_params,
                     api_base=api_base,
+                    timeout=litellm_params.get("timeout") or 60.0,
                     litellm_params=litellm_params,
                     agent_extra_headers=agent_extra_headers,
                 ):
@@ -261,6 +270,7 @@ class A2ACompletionBridgeHandler:
 
         # 3. Accumulate content and emit artifact update
         accumulated_text = ""
+        accumulated_tool_calls: Final[list[object]] = []  # mutable-ok: collect streaming tool-call deltas
         chunk_count = 0
         async for chunk in response:
             chunk_count += 1
@@ -271,6 +281,9 @@ class A2ACompletionBridgeHandler:
                 choice = chunk.choices[0]
                 if hasattr(choice, "delta") and choice.delta:
                     content = choice.delta.content or ""
+                    tool_calls = getattr(choice.delta, "tool_calls", None)
+                    if isinstance(tool_calls, (list, tuple)):
+                        accumulated_tool_calls.extend(tool_calls)
 
             if content:
                 accumulated_text += content
@@ -289,6 +302,8 @@ class A2ACompletionBridgeHandler:
             state="completed",
             final=True,
         )
+        if accumulated_tool_calls:
+            completed_event["result"]["tool_calls"] = accumulated_tool_calls
         yield completed_event
 
         verbose_logger.info(

@@ -37,9 +37,7 @@ async def append_agents_to_model_group(
                     if agent is not None:
                         agent_params: Final = agent.litellm_params
                         provider_value: Final = agent_params.get("custom_llm_provider") if agent_params else None
-                        custom_llm_provider: Final = (
-                            provider_value if isinstance(provider_value, str) else "a2a"
-                        )
+                        custom_llm_provider: Final = provider_value if isinstance(provider_value, str) else "a2a"
                         model_groups.append(
                             ModelGroupInfoProxy(
                                 model_group=f"a2a/{agent.agent_name}",
@@ -79,9 +77,7 @@ async def append_agents_to_model_info(
                     if agent is not None:
                         agent_params: Final = agent.litellm_params
                         provider_value: Final = agent_params.get("custom_llm_provider") if agent_params else None
-                        custom_llm_provider: Final = (
-                            provider_value if isinstance(provider_value, str) else "a2a"
-                        )
+                        custom_llm_provider: Final = provider_value if isinstance(provider_value, str) else "a2a"
                         models.append(
                             {
                                 "model_name": f"a2a/{agent.agent_name}",

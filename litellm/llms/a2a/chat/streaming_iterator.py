@@ -71,15 +71,16 @@ class A2AModelResponseIterator(BaseModelResponseIterator):
 
             # Determine finish reason
             finish_reason: Final = self._get_finish_reason(chunk)
+            tool_calls: Final = self._get_tool_calls(chunk)
 
             # Return generic streaming chunk
             return GenericStreamingChunk(
                 text=text,
-                is_finished=bool(finish_reason),
-                finish_reason=finish_reason or "",
+                is_finished=bool(finish_reason or tool_calls),
+                finish_reason=finish_reason or ("tool_calls" if tool_calls else ""),
                 usage=None,
                 index=0,
-                tool_use=None,
+                tool_use=tool_calls,
             )
         except Exception:
             # Return empty chunk on parse error
@@ -92,9 +93,7 @@ class A2AModelResponseIterator(BaseModelResponseIterator):
                 tool_use=None,
             )
 
-    def _handle_string_chunk(
-        self, str_line: str | dict
-    ) -> GenericStreamingChunk | ModelResponseStream:
+    def _handle_string_chunk(self, str_line: str | dict) -> GenericStreamingChunk | ModelResponseStream:
         if isinstance(str_line, dict):
             return self.chunk_parser(chunk=str_line)
         return super()._handle_string_chunk(str_line=str_line)
@@ -117,4 +116,16 @@ class A2AModelResponseIterator(BaseModelResponseIterator):
         if chunk.get("done") is True:
             return "stop"
 
+        return None
+
+    def _get_tool_calls(self, chunk: dict) -> list[dict] | None:
+        result: Final = chunk.get("result", {})
+        if not isinstance(result, dict):
+            return None
+        tool_calls = result.get("tool_calls")
+        if isinstance(tool_calls, list):
+            return tool_calls
+        message = result.get("message")
+        if isinstance(message, dict) and isinstance(message.get("tool_calls"), list):
+            return message["tool_calls"]
         return None
