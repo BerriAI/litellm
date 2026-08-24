@@ -437,6 +437,18 @@ class TestStoredRoutines:
         sql = self.DEFINITION + 'SELECT "backfill" ();\n'
         assert _keywords(tmp_path, sql) == ("UPDATE",)
 
+    def test_a_quoted_call_with_a_block_comment_before_its_parenthesis_still_counts(self, tmp_path):
+        sql = self.DEFINITION + 'SELECT "backfill" /* reason */ ();\n'
+        assert _keywords(tmp_path, sql) == ("UPDATE",)
+
+    def test_a_quoted_call_with_a_line_comment_before_its_parenthesis_still_counts(self, tmp_path):
+        sql = self.DEFINITION + 'SELECT "backfill" -- run it\n();\n'
+        assert _keywords(tmp_path, sql) == ("UPDATE",)
+
+    def test_a_quoted_column_followed_by_a_comment_is_still_not_a_call(self, tmp_path):
+        sql = self.DEFINITION + 'ALTER TABLE "Foo" ADD COLUMN "backfill" /* note */ int;\n'
+        assert _keywords(tmp_path, sql) == ()
+
     def test_a_trigger_wiring_the_function_up_counts_as_a_call(self, tmp_path):
         sql = self.DEFINITION + 'CREATE TRIGGER t AFTER INSERT ON "Foo" EXECUTE FUNCTION backfill();\n'
         assert _keywords(tmp_path, sql) == ("UPDATE",)

@@ -267,8 +267,11 @@ def mask(
     hold SQL: dollar-quoted bodies, and the single-quoted literals `EXECUTE` runs. Also locate
     the double-quoted identifiers that open a call (`"backfill"(`), so a routine invoked through
     one can be found by name even though the call is blanked here the way every other quoted run
-    of text is. A double-quoted identifier that is not a call site, a column, table, index, or
-    constraint name, is left out, so it never masquerades as a call to a like-named routine."""
+    of text is. Whether an identifier opens a call is read from the masked text rather than the
+    raw SQL, so a comment sitting between the name and its parenthesis, blanked to spaces here, is
+    skipped exactly as whitespace is. A double-quoted identifier that opens no call, a column,
+    table, index, or constraint name, is left out, so it never masquerades as a call to a
+    like-named routine."""
     chunks: list[str] = []
     bodies: list[tuple[int, int]] = []
     literals: list[tuple[int, int]] = []
@@ -299,7 +302,7 @@ def mask(
             if character == "'":
                 closed = sql[stop - 1 : stop] == character
                 literals.append((index + 1, max(index + 1, stop - 1 if closed else stop)))
-            elif OPENS_A_CALL.match(sql, stop):
+            else:
                 identifiers.append((index, stop))
             chunks.append(blank(sql[index:stop]))
             index = stop
@@ -319,7 +322,9 @@ def mask(
         chunks.append(character)
         index += 1
 
-    return "".join(chunks), tuple(bodies), tuple(literals), tuple(identifiers)
+    masked = "".join(chunks)
+    calls = tuple((start, end) for start, end in identifiers if OPENS_A_CALL.match(masked, end))
+    return masked, tuple(bodies), tuple(literals), calls
 
 
 def skip_block_comment(sql: str, start: int) -> int:
