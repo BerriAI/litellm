@@ -1768,6 +1768,8 @@ _VERTEX_CALLER_KEY_HEADER_PRECEDENCE: Final = (
     SpecialHeaders.azure_apim_authorization.value.lower(),
 )
 
+_MAPPED_ROUTE_CALLER_KEY_HEADER: Final = "litellm_user_api_key"
+
 
 def _operator_configured_caller_key_header_names() -> tuple[tuple[str, ...], tuple[str, ...]]:
     """Operator-configured caller-key header names, as (override, pass_through).
@@ -1802,20 +1804,26 @@ def _authenticated_caller_key_values(request: Request) -> frozenset[str]:
     """The value ``user_api_key_auth`` would accept as this caller's LiteLLM key.
 
     The Vertex route authenticates through ``Depends(user_api_key_auth)``, which
-    resolves the key from the first present of the credential headers in
-    ``get_api_key``'s precedence order. That precedence is matched here exactly: an
-    operator ``litellm_key_header_name`` overrides everything so it comes first,
-    then the built-in headers in ``get_api_key`` order, then a
-    ``pass_through_endpoints`` ``litellm_user_api_key`` header which ``get_api_key``
-    checks last. Some of those headers (``Authorization``, ``x-goog-api-key``) are
-    also kept as genuine bring-your-own Google credentials, so returning only the
-    value that actually authenticated lets the filter strip that value wherever it
-    appears while leaving a real Google credential in place. An empty set means no
-    caller key was found, so nothing is value-stripped.
+    resolves the key by precedence, matched here exactly. The ``/vertex_ai`` route
+    is a mapped pass-through route, so a header literally named
+    ``litellm_user_api_key`` overrides every other source (``user_api_key_auth``
+    applies it last), making it highest precedence. Then an operator
+    ``litellm_key_header_name``, then the built-in headers in ``get_api_key`` order,
+    then a ``pass_through_endpoints`` ``litellm_user_api_key`` header which
+    ``get_api_key`` checks last. Some of those headers (``Authorization``,
+    ``x-goog-api-key``) are also kept as genuine bring-your-own Google credentials,
+    so returning only the value that actually authenticated lets the filter strip
+    that value wherever it appears while leaving a real Google credential in place.
+    An empty set means no caller key was found, so nothing is value-stripped.
     """
     incoming: Final = _safe_get_request_headers(request)
     override_headers, pass_through_headers = _operator_configured_caller_key_header_names()
-    ordered_names: Final = override_headers + _VERTEX_CALLER_KEY_HEADER_PRECEDENCE + pass_through_headers
+    ordered_names: Final = (
+        (_MAPPED_ROUTE_CALLER_KEY_HEADER,)
+        + override_headers
+        + _VERTEX_CALLER_KEY_HEADER_PRECEDENCE
+        + pass_through_headers
+    )
     present_values: Final = (incoming[name] for name in ordered_names if incoming.get(name))
     authenticated_key: Final = next(
         (stripped for value in present_values if (stripped := _normalize_credential_value(value))),
@@ -1835,9 +1843,10 @@ def _forwarded_headers_for_credentialless_vertex_passthrough(request: Request) -
     authenticates with an OAuth token in ``Authorization`` or an API key in
     ``x-goog-api-key``. So the proxy-only auth headers Google never consumes
     (everything in that set except those two, e.g. ``x-litellm-api-key`` /
-    ``api-key`` / ``x-api-key`` / ``Ocp-Apim-Subscription-Key``, plus any
-    operator-configured ``litellm_key_header_name`` / ``pass_through_endpoints``
-    key header) are dropped by name. ``Authorization`` and ``x-goog-api-key`` may
+    ``api-key`` / ``x-api-key`` / ``Ocp-Apim-Subscription-Key``, plus the mapped
+    pass-through ``litellm_user_api_key`` header and any operator-configured
+    ``litellm_key_header_name`` / ``pass_through_endpoints`` key header) are dropped
+    by name. ``Authorization`` and ``x-goog-api-key`` may
     instead carry a genuine bring-your-own Google credential, so they are kept
     unless their value is the caller's authenticated LiteLLM key, which is dropped
     by value (normalizing any ``Bearer`` / ``Basic`` / ``AWS4`` auth-scheme prefix
@@ -1852,7 +1861,11 @@ def _forwarded_headers_for_credentialless_vertex_passthrough(request: Request) -
     incoming: Final = _safe_get_request_headers(request)
     caller_key_values: Final = _authenticated_caller_key_values(request)
     override_headers, pass_through_headers = _operator_configured_caller_key_header_names()
-    never_forwarded: Final = _HEADERS_NEVER_FORWARDED_TO_VERTEX.union(override_headers).union(pass_through_headers)
+    never_forwarded: Final = (
+        _HEADERS_NEVER_FORWARDED_TO_VERTEX.union((_MAPPED_ROUTE_CALLER_KEY_HEADER,))
+        .union(override_headers)
+        .union(pass_through_headers)
+    )
     forwarded: Final = MappingProxyType(
         {
             name: value
