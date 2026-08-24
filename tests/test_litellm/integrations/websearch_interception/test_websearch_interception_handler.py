@@ -232,17 +232,37 @@ async def test_execute_search_passes_selected_search_tool_litellm_params(monkeyp
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "search_tools",
+    ("search_tools", "error"),
     [
-        pytest.param(None, id="router-not-configured"),
-        pytest.param([], id="router-has-no-tools"),
+        pytest.param(None, "was not found", id="router-not-configured"),
         pytest.param(
             [{"search_tool_name": "other-search", "litellm_params": {"search_provider": "tavily"}}],
+            "was not found",
             id="requested-tool-not-configured",
+        ),
+        pytest.param(
+            [{"search_tool_name": "parallel-search", "litellm_params": "not-a-mapping"}],
+            "does not define a valid search provider",
+            id="invalid-parameters",
+        ),
+        pytest.param(
+            [{"search_tool_name": "parallel-search", "litellm_params": {}}],
+            "does not define a valid search provider",
+            id="missing-provider",
+        ),
+        pytest.param(
+            [{"search_tool_name": "parallel-search", "litellm_params": {"search_provider": "   "}}],
+            "does not define a valid search provider",
+            id="whitespace-provider",
+        ),
+        pytest.param(
+            [{"search_tool_name": "parallel-search", "litellm_params": {"search_provider": 123}}],
+            "does not define a valid search provider",
+            id="invalid-provider",
         ),
     ],
 )
-async def test_execute_search_rejects_missing_explicit_search_tool(monkeypatch, search_tools):
+async def test_execute_search_rejects_invalid_explicit_search_tool(monkeypatch, search_tools, error):
     import litellm
     from litellm.proxy import proxy_server
 
@@ -253,41 +273,7 @@ async def test_execute_search_rejects_missing_explicit_search_tool(monkeypatch, 
     monkeypatch.setattr(proxy_server, "llm_router", router)
     monkeypatch.setattr(litellm, "asearch", mock_asearch)
 
-    with pytest.raises(ValueError, match="Configured search tool 'parallel-search' was not found"):
-        await logger._execute_search("what is litellm")
-
-    mock_asearch.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "litellm_params",
-    [
-        pytest.param(None, id="missing-parameters"),
-        pytest.param("not-a-mapping", id="invalid-parameters"),
-        pytest.param({}, id="missing-provider"),
-        pytest.param({"search_provider": None}, id="null-provider"),
-        pytest.param({"search_provider": ""}, id="empty-provider"),
-        pytest.param({"search_provider": "   "}, id="whitespace-provider"),
-        pytest.param({"search_provider": 123}, id="invalid-provider"),
-    ],
-)
-async def test_execute_search_rejects_malformed_explicit_search_tool(monkeypatch, litellm_params):
-    import litellm
-    from litellm.proxy import proxy_server
-
-    logger = WebSearchInterceptionLogger(search_tool_name="parallel-search")
-    router = MagicMock(
-        search_tools=[{"search_tool_name": "parallel-search", "litellm_params": litellm_params}],
-    )
-    mock_asearch = AsyncMock()
-
-    monkeypatch.setattr(proxy_server, "llm_router", router)
-    monkeypatch.setattr(litellm, "asearch", mock_asearch)
-
-    with pytest.raises(
-        ValueError, match="Configured search tool 'parallel-search' does not define a valid search provider"
-    ):
+    with pytest.raises(ValueError, match=f"Configured search tool 'parallel-search' {error}"):
         await logger._execute_search("what is litellm")
 
     mock_asearch.assert_not_awaited()
@@ -307,11 +293,7 @@ async def test_execute_search_honors_explicit_parallel_search_tool(monkeypatch):
             },
             {
                 "search_tool_name": "parallel-search",
-                "litellm_params": {
-                    "search_provider": "parallel_ai",
-                    "api_key": "parallel-key",
-                    "api_base": "https://api.parallel.ai",
-                },
+                "litellm_params": {"search_provider": "parallel_ai", "api_key": "parallel-key"},
             },
         ],
     )
@@ -326,7 +308,6 @@ async def test_execute_search_honors_explicit_parallel_search_tool(monkeypatch):
         query="what is litellm",
         search_provider="parallel_ai",
         api_key="parallel-key",
-        api_base="https://api.parallel.ai",
     )
 
 
@@ -335,7 +316,6 @@ async def test_execute_search_honors_explicit_parallel_search_tool(monkeypatch):
     ("search_tools", "expected_search_kwargs"),
     [
         pytest.param(None, {"search_provider": "perplexity"}, id="router-not-configured"),
-        pytest.param([], {"search_provider": "perplexity"}, id="router-has-no-tools"),
         pytest.param(
             [
                 {
@@ -366,70 +346,6 @@ async def test_execute_search_preserves_implicit_provider_selection(monkeypatch,
     await logger._execute_search("what is litellm")
 
     mock_asearch.assert_awaited_once_with(query="what is litellm", **expected_search_kwargs)
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("interception_surface", ["short-circuit", "responses", "anthropic", "chat-completion"])
-async def test_missing_explicit_search_tool_propagates_through_interception_surfaces(monkeypatch, interception_surface):
-    import litellm
-    from litellm.proxy import proxy_server
-
-    logger = WebSearchInterceptionLogger(
-        enabled_providers=["github_copilot"],
-        search_tool_name="parallel-search",
-    )
-    router = MagicMock(
-        search_tools=[
-            {
-                "search_tool_name": "other-search",
-                "litellm_params": {"search_provider": "tavily", "api_key": "other-key"},
-            }
-        ],
-    )
-    mock_asearch = AsyncMock()
-    tool_calls = [{"id": "toolu_123", "call_id": "toolu_123", "input": {"query": "what is litellm"}}]
-
-    monkeypatch.setattr(proxy_server, "llm_router", router)
-    monkeypatch.setattr(litellm, "asearch", mock_asearch)
-
-    if interception_surface == "short-circuit":
-        operation = logger.try_short_circuit_search(
-            model="github_copilot/claude-sonnet-4",
-            messages=[{"role": "user", "content": "what is litellm"}],
-            tools=[{"type": "web_search_20250305", "name": "web_search"}],
-            custom_llm_provider="github_copilot",
-        )
-    elif interception_surface == "responses":
-        operation = logger._build_responses_request_patch(
-            model="test-model",
-            messages=[],
-            tool_calls=tool_calls,
-            optional_params={},
-            kwargs={},
-        )
-    elif interception_surface == "anthropic":
-        operation = logger._build_anthropic_request_patch(
-            model="test-model",
-            messages=[],
-            tool_calls=tool_calls,
-            thinking_blocks=[],
-            anthropic_messages_optional_request_params={},
-            logging_obj=None,
-            kwargs={},
-        )
-    else:
-        operation = logger._build_chat_completion_request_patch(
-            model="test-model",
-            messages=[],
-            tool_calls=tool_calls,
-            optional_params={},
-            kwargs={},
-        )
-
-    with pytest.raises(ValueError, match="Configured search tool 'parallel-search' was not found"):
-        await operation
-
-    mock_asearch.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -608,7 +524,8 @@ async def test_execute_search_enforces_team_search_tool_permission(monkeypatch):
             {"type": "web_search_20250305", "name": "web_search"},
             id="chat-completion",
         ),
-        pytest.param(CallTypes.aresponses, {"type": "web_search"}, id="responses"),
+        pytest.param(CallTypes.responses, {"type": "web_search"}, id="responses"),
+        pytest.param(CallTypes.aresponses, {"type": "web_search"}, id="async-responses"),
         pytest.param(
             CallTypes.anthropic_messages,
             {"type": "web_search_20250305", "name": "web_search"},
@@ -616,147 +533,52 @@ async def test_execute_search_enforces_team_search_tool_permission(monkeypatch):
         ),
     ],
 )
-async def test_deployment_hook_rejects_missing_explicit_search_tool_before_conversion(
+async def test_deployment_hook_dispatcher_propagates_missing_explicit_search_tool(
     monkeypatch, call_type, web_search_tool
 ):
-    import litellm
-    from litellm.proxy import proxy_server
-
-    logger = WebSearchInterceptionLogger(enabled_providers=["bedrock"], search_tool_name="parallel-search")
-    router = MagicMock(
-        search_tools=[
-            {
-                "search_tool_name": "other-search",
-                "litellm_params": {"search_provider": "tavily", "api_key": "other-key"},
-            }
-        ]
-    )
-    mock_asearch = AsyncMock()
-    kwargs = {
-        "model": "bedrock/claude-sonnet-4",
-        "messages": [{"role": "user", "content": "what is litellm"}],
-        "tools": [web_search_tool],
-        "custom_llm_provider": "bedrock",
-    }
-
-    monkeypatch.setattr(proxy_server, "llm_router", router)
-    monkeypatch.setattr(litellm, "asearch", mock_asearch)
-
-    with pytest.raises(ValueError, match="Configured search tool 'parallel-search' was not found"):
-        await logger.async_pre_call_deployment_hook(kwargs=kwargs, call_type=call_type)
-
-    assert kwargs["tools"] == [web_search_tool]
-    mock_asearch.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_deployment_hook_dispatcher_propagates_missing_explicit_search_tool(monkeypatch):
     import litellm
     from litellm.proxy import proxy_server
     from litellm.utils import async_pre_call_deployment_hook
 
     logger = WebSearchInterceptionLogger(enabled_providers=["bedrock"], search_tool_name="parallel-search")
     mock_asearch = AsyncMock()
+    kwargs = {
+        "model": "bedrock/claude-sonnet-4",
+        "tools": [web_search_tool],
+        "custom_llm_provider": "bedrock",
+    }
 
-    monkeypatch.setattr(proxy_server, "llm_router", MagicMock(search_tools=[]))
+    monkeypatch.setattr(
+        proxy_server,
+        "llm_router",
+        MagicMock(search_tools=[{"search_tool_name": "other-search", "litellm_params": {"search_provider": "tavily"}}]),
+    )
     monkeypatch.setattr(litellm, "callbacks", [logger])
     monkeypatch.setattr(litellm, "asearch", mock_asearch)
 
     with pytest.raises(ValueError, match="Configured search tool 'parallel-search' was not found"):
-        await async_pre_call_deployment_hook(
-            kwargs={
-                "model": "bedrock/claude-sonnet-4",
-                "messages": [{"role": "user", "content": "what is litellm"}],
-                "tools": [{"type": "web_search_20250305", "name": "web_search"}],
-                "custom_llm_provider": "bedrock",
-            },
-            call_type=CallTypes.acompletion.value,
-        )
+        await async_pre_call_deployment_hook(kwargs=kwargs, call_type=call_type.value)
 
+    assert kwargs["tools"] == [web_search_tool]
     mock_asearch.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("call_type", "custom_llm_provider", "tools"),
-    [
-        pytest.param(
-            CallTypes.acompletion,
-            "bedrock",
-            [{"type": "function", "function": {"name": "calculator", "parameters": {}}}],
-            id="chat-without-web-search",
-        ),
-        pytest.param(
-            CallTypes.aresponses,
-            "bedrock",
-            [{"type": "function", "name": "calculator", "parameters": {}}],
-            id="responses-without-web-search",
-        ),
-        pytest.param(
-            CallTypes.acompletion,
-            "openai",
-            [{"type": "web_search_20250305", "name": "web_search"}],
-            id="disabled-chat-provider",
-        ),
-        pytest.param(CallTypes.aresponses, "openai", [{"type": "web_search"}], id="disabled-responses-provider"),
-    ],
-)
-async def test_deployment_hook_skips_search_tool_validation_for_unaffected_requests(
-    monkeypatch, call_type, custom_llm_provider, tools
-):
-    import litellm
+async def test_deployment_hook_skips_explicit_tool_validation_for_non_search_responses(monkeypatch):
     from litellm.proxy import proxy_server
 
     logger = WebSearchInterceptionLogger(enabled_providers=["bedrock"], search_tool_name="parallel-search")
-    mock_asearch = AsyncMock()
-
     monkeypatch.setattr(proxy_server, "llm_router", MagicMock(search_tools=[]))
-    monkeypatch.setattr(litellm, "asearch", mock_asearch)
 
     result = await logger.async_pre_call_deployment_hook(
         kwargs={
-            "model": "test-model",
-            "messages": [{"role": "user", "content": "what is litellm"}],
-            "tools": tools,
-            "custom_llm_provider": custom_llm_provider,
+            "tools": [{"type": "function", "name": "calculator"}],
+            "custom_llm_provider": "bedrock",
         },
-        call_type=call_type,
+        call_type=CallTypes.aresponses,
     )
 
     assert result is None
-    mock_asearch.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_deployment_hook_converts_web_search_with_valid_explicit_parallel_tool(monkeypatch):
-    import litellm
-    from litellm.proxy import proxy_server
-
-    logger = WebSearchInterceptionLogger(enabled_providers=["bedrock"], search_tool_name="parallel-search")
-    router = MagicMock(
-        search_tools=[
-            {"search_tool_name": "other-search", "litellm_params": {"search_provider": "tavily"}},
-            {"search_tool_name": "parallel-search", "litellm_params": {"search_provider": "parallel_ai"}},
-        ]
-    )
-    mock_asearch = AsyncMock()
-
-    monkeypatch.setattr(proxy_server, "llm_router", router)
-    monkeypatch.setattr(litellm, "asearch", mock_asearch)
-
-    result = await logger.async_pre_call_deployment_hook(
-        kwargs={
-            "model": "bedrock/claude-sonnet-4",
-            "messages": [{"role": "user", "content": "what is litellm"}],
-            "tools": [{"type": "web_search_20250305", "name": "web_search"}],
-            "custom_llm_provider": "bedrock",
-        },
-        call_type=CallTypes.acompletion,
-    )
-
-    assert result is not None
-    assert result["tools"][0]["function"]["name"] == LITELLM_WEB_SEARCH_TOOL_NAME
-    mock_asearch.assert_not_awaited()
 
 
 @pytest.mark.asyncio

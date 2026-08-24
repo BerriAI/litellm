@@ -95,10 +95,6 @@ class _SearchToolConfig(TypedDict, total=False):
     litellm_params: Mapping[str, object] | None
 
 
-class _SearchToolConfigurationError(ValueError):
-    """An explicitly configured search tool cannot be safely executed."""
-
-
 class _DeploymentKwargsView(TypedDict):
     """Typed reads of the untyped request kwargs seen by the deployment hook."""
 
@@ -256,8 +252,6 @@ class WebSearchInterceptionLogger(CustomLogger):
                 search_result_text, structured = await self._execute_search(query)
             else:
                 search_result_text, structured = await self._execute_search(query, kwargs=kwargs)
-        except _SearchToolConfigurationError:
-            raise
         except Exception as e:
             verbose_logger.error("WebSearchInterception: Short-circuit search failed: %s", e)
             search_result_text, structured = f"Search failed: {e}", None
@@ -1164,8 +1158,6 @@ class WebSearchInterceptionLogger(CustomLogger):
 
     @staticmethod
     def _extract_search_text(result: object) -> str:
-        if isinstance(result, _SearchToolConfigurationError):
-            raise result
         if isinstance(result, Exception):
             verbose_logger.error("WebSearchInterception: Responses search failed with error: %s", result)
             return f"Search failed: {result}"
@@ -1322,8 +1314,6 @@ class WebSearchInterceptionLogger(CustomLogger):
         final_search_results: Final[list[str]] = []
         structured_results: Final[list[SearchResponse | None]] = []
         for i, result in enumerate(search_results):
-            if isinstance(result, _SearchToolConfigurationError):
-                raise result
             if isinstance(result, Exception):
                 verbose_logger.error("WebSearchInterception: Search %s failed with error: %s", i, result)
                 final_search_results.append(f"Search failed: {result}")
@@ -1559,9 +1549,7 @@ class WebSearchInterceptionLogger(CustomLogger):
         return None
 
     def _select_search_tool_from_router(self, llm_router: object) -> "_SearchToolConfig | None":
-        if llm_router is None or not hasattr(llm_router, "search_tools"):
-            return self._select_search_tool_from_list(search_tools=[], source="router")
-        search_tools: Final = list(getattr(llm_router, "search_tools") or [])
+        search_tools: Final = list(getattr(llm_router, "search_tools", []) or [])
         return self._select_search_tool_from_list(search_tools=search_tools, source="router")
 
     def _select_search_tool_from_list(
@@ -1570,13 +1558,9 @@ class WebSearchInterceptionLogger(CustomLogger):
         source: str,
     ) -> "_SearchToolConfig | None":
         if self.search_tool_name:
-            matching_tools = [
-                tool
-                for tool in search_tools
-                if isinstance(tool, Mapping) and tool.get("search_tool_name") == self.search_tool_name
-            ]
+            matching_tools = [tool for tool in search_tools if tool.get("search_tool_name") == self.search_tool_name]
             if not matching_tools:
-                raise _SearchToolConfigurationError(f"Configured search tool '{self.search_tool_name}' was not found")
+                raise ValueError(f"Configured search tool '{self.search_tool_name}' was not found")
 
             selected_tool: Final = matching_tools[0]
             litellm_params: Final = selected_tool.get("litellm_params")
@@ -1584,7 +1568,7 @@ class WebSearchInterceptionLogger(CustomLogger):
                 litellm_params.get("search_provider") if isinstance(litellm_params, Mapping) else None
             )
             if not isinstance(selected_search_provider, str) or not selected_search_provider.strip():
-                raise _SearchToolConfigurationError(
+                raise ValueError(
                     f"Configured search tool '{self.search_tool_name}' does not define a valid search provider"
                 )
 
@@ -1681,8 +1665,6 @@ class WebSearchInterceptionLogger(CustomLogger):
         # has no equivalent of Anthropic's web_search_tool_result block.
         final_search_results: Final[list[str]] = []
         for i, result in enumerate(search_results):
-            if isinstance(result, _SearchToolConfigurationError):
-                raise result
             if isinstance(result, Exception):
                 verbose_logger.error("WebSearchInterception: Search %s failed with error: %s", i, result)
                 final_search_results.append(f"Search failed: {result}")
