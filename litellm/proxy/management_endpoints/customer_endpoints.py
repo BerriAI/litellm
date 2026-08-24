@@ -19,10 +19,9 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, TypeAdapter
 
 if TYPE_CHECKING:
+    from litellm.proxy.utils import PrismaClient
     from prisma.models import LiteLLM_BudgetTable as PrismaBudgetRow
     from prisma.models import LiteLLM_EndUserTable as PrismaEndUserRow
-
-    from litellm.proxy.utils import PrismaClient
 
 import litellm
 from litellm._logging import verbose_proxy_logger
