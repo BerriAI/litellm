@@ -258,6 +258,12 @@ def perform_redaction(model_call_details: dict, result, redact_streaming_respons
             # For async objects, return a simple redacted response without deepcopy
             return {"text": "redacted-by-litellm"}
 
+        if not (
+            isinstance(result, (litellm.ModelResponse, litellm.ResponsesAPIResponse, litellm.EmbeddingResponse))
+            or (isinstance(result, dict) and ("choices" in result or "output" in result))
+        ):
+            return {"text": "redacted-by-litellm"}
+
         _result: Final = copy.deepcopy(result)
         if isinstance(_result, litellm.ModelResponse):
             if hasattr(_result, "choices") and _result.choices is not None:

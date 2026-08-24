@@ -19,7 +19,7 @@ from litellm.proxy.video_endpoints.utils import (
     encode_character_id_in_response,
     extract_model_from_target_model_names,
     get_custom_provider_from_data,
-    pop_video_reference_to_video_id,
+    video_reference_to_id,
 )
 from litellm.types.videos.utils import (
     decode_character_id_with_provider,
@@ -759,7 +759,7 @@ async def video_edit(
     )
 
     data: Final = await _read_request_body(request=request)
-    pop_video_reference_to_video_id(data)
+    data["video_id"] = video_reference_to_id(data.pop("video", None))
 
     decoded: Final = decode_video_id_with_provider(data["video_id"])
     provider_from_id: Final = decoded.get("custom_llm_provider")
@@ -854,7 +854,7 @@ async def video_extension(
     )
 
     data: Final = await _read_request_body(request=request)
-    pop_video_reference_to_video_id(data)
+    data["video_id"] = video_reference_to_id(data.pop("video", None))
 
     decoded: Final = decode_video_id_with_provider(data["video_id"])
     provider_from_id: Final = decoded.get("custom_llm_provider")

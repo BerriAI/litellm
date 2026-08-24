@@ -2,7 +2,8 @@ import openai from "openai";
 import { MessageType } from "../chat_ui/types";
 import { TokenUsage } from "../chat_ui/ResponseMetrics";
 import { getProxyBaseUrl } from "@/components/networking";
-import NotificationManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
+import { extractPromptCacheTokens } from "@/utils/promptCacheUsage";
 import type { MCPEvent } from "@/components/mcp_tools/types";
 import { MCPServer, MCPToolset } from "@/components/mcp_tools/types";
 import {
@@ -290,11 +291,16 @@ export async function makeOpenAIResponsesRequest(
               completionTokens: usage.output_tokens,
               promptTokens: usage.input_tokens,
               totalTokens: usage.total_tokens,
+              ...extractPromptCacheTokens(usage),
             };
 
             // Add reasoning tokens if available
             if (usage.completion_tokens_details?.reasoning_tokens) {
               usageData.reasoningTokens = usage.completion_tokens_details.reasoning_tokens;
+            }
+
+            if (usage.cost !== undefined && usage.cost !== null) {
+              usageData.cost = Number(usage.cost);
             }
 
             onUsageData(usageData, mcpToolUsed);
@@ -311,9 +317,7 @@ export async function makeOpenAIResponsesRequest(
   } catch (error) {
     if (signal?.aborted) {
     } else {
-      NotificationManager.fromBackend(
-        `Error occurred while generating model response. Please try again. Error: ${error}`,
-      );
+      toast.fromError(`Error occurred while generating model response. Please try again. Error: ${error}`);
     }
     throw error; // Re-throw to allow the caller to handle the error
   }

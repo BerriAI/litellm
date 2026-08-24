@@ -29,6 +29,20 @@ def get_fireworks_session_id(litellm_params: dict) -> str | None:
     return None
 
 
+AZURE_FOUNDRY_FIREWORKS_MODEL_ID_PREFIX: Final = "FW-"
+
+
+def resolve_fireworks_resource_name(model: str) -> str:
+    stripped: Final = model.removeprefix("fireworks_ai/")
+    if stripped.startswith(("accounts/", AZURE_FOUNDRY_FIREWORKS_MODEL_ID_PREFIX)) or "#" in stripped:
+        return stripped
+    if stripped.startswith(("routers/", "models/")):
+        return f"accounts/fireworks/{stripped}"
+    if stripped.endswith("-fast"):
+        return f"accounts/fireworks/routers/{stripped}"
+    return f"accounts/fireworks/models/{stripped}"
+
+
 class FireworksAIMixin:
     """
     Common Base Config functions across Fireworks AI Endpoints

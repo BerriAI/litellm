@@ -121,6 +121,7 @@ class SlackAlertingCacheKeys(Enum):
     failed_requests_key = "failed_requests_daily_metrics"
     latency_key = "latency_daily_metrics"
     report_sent_key = "daily_metrics_report_sent"
+    deprecation_alert_sent_key = "model_deprecation_alert_sent"
 
 
 class AlertType(str, Enum):
@@ -147,6 +148,7 @@ class AlertType(str, Enum):
     # Deployment alerts
     cooldown_deployment = "cooldown_deployment"
     new_model_added = "new_model_added"
+    model_deprecation_warnings = "model_deprecation_warnings"
 
     # Outage alerts
     outage_alerts = "outage_alerts"
@@ -187,6 +189,7 @@ DEFAULT_ALERT_TYPES: Final[list[AlertType]] = [
     # Deployment alerts
     AlertType.cooldown_deployment,
     AlertType.new_model_added,
+    AlertType.model_deprecation_warnings,
     # Outage alerts
     AlertType.outage_alerts,
     AlertType.region_outage_alerts,

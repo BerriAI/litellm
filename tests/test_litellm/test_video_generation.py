@@ -2,14 +2,10 @@ import asyncio
 import io
 import json
 import os
-import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 
 import litellm
 from litellm.cost_calculator import default_video_cost_calculator
@@ -151,7 +147,7 @@ class TestVideoGeneration:
             "video_generation_handler",
             side_effect=Exception("API Error"),
         ):
-            with pytest.raises(Exception):
+            with pytest.raises(litellm.APIConnectionError):
                 video_generation(prompt="Test video", model="sora-2")
 
     def test_video_generation_provider_config(self):
@@ -242,7 +238,6 @@ class TestVideoGeneration:
     def test_video_generation_cost_calculation(self):
         """Test video generation cost calculation."""
         import json
-        import os
 
         # Try to load the local model cost map, skip if not found
         cost_map_path = "model_prices_and_context_window.json"
@@ -739,7 +734,7 @@ class TestVideoGeneration:
             "video_status_handler",
             side_effect=Exception("API Error"),
         ):
-            with pytest.raises(Exception):
+            with pytest.raises(litellm.APIConnectionError):
                 video_status(video_id="test_video_id", model="sora-2")
 
     def test_video_status_request_transformation(self):
@@ -2321,51 +2316,70 @@ def test_edit_and_extension_support_custom_provider_from_extra_body(
     assert captured_data["custom_llm_provider"] == "vertex_ai"
 
 
-@pytest.mark.parametrize("endpoint", ["/v1/videos/edits", "/v1/videos/extensions"])
-def test_edit_and_extension_accept_form_encoded_after_auth_reads_body(
-    video_proxy_test_client, endpoint
+@pytest.mark.parametrize(
+    "handler_name, path, form",
+    [
+        (
+            "video_edit",
+            "/v1/videos/edits",
+            {"model": "my-video-model", "prompt": "brighter", "video": "video_123"},
+        ),
+        (
+            "video_extension",
+            "/v1/videos/extensions",
+            {"model": "my-video-model", "prompt": "continue", "seconds": "4", "video": "video_123"},
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_edit_and_extension_read_cached_body_after_auth_consumes_stream(
+    handler_name, path, form
 ):
-    from fastapi import Request
-    from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+    from urllib.parse import urlencode
+
+    from fastapi import Response
+    from starlette.requests import Request
+
+    import litellm.proxy.video_endpoints.endpoints as endpoints
+    from litellm.proxy._types import ProxyException, UserAPIKeyAuth
     from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
-    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
-    captured_data = {}
+    body = urlencode(form).encode()
+    stream = {"sent": False}
 
-    async def _mock_base_process(self, **kwargs):
-        captured_data.update(self.data)
-        return {
-            "id": "video_resp_123",
-            "object": "video",
-            "status": "queued",
-            "created_at": 1712697600,
-        }
+    async def receive():
+        if stream["sent"]:
+            return {"type": "http.request", "body": b"", "more_body": False}
+        stream["sent"] = True
+        return {"type": "http.request", "body": body, "more_body": False}
 
-    async def auth_that_reads_body_first(request: Request):
-        await _read_request_body(request=request)
-        return MagicMock()
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": path,
+            "headers": [
+                (b"content-type", b"application/x-www-form-urlencoded"),
+                (b"content-length", str(len(body)).encode()),
+            ],
+            "query_string": b"",
+        },
+        receive,
+    )
 
-    app = video_proxy_test_client.app
-    app.dependency_overrides[user_api_key_auth] = auth_that_reads_body_first
+    await _read_request_body(request=request)
 
-    with patch.object(
-        ProxyBaseLLMRequestProcessing,
-        "base_process_llm_request",
-        new=_mock_base_process,
-    ):
-        response = video_proxy_test_client.post(
-            endpoint,
-            headers={"Authorization": "Bearer sk-1234"},
-            data={
-                "model": "my-video-model",
-                "prompt": "brighter",
-                "video": "video_123",
-            },
+    handler = getattr(endpoints, handler_name)
+    with pytest.raises(ProxyException) as exc_info:
+        await handler(
+            request=request,
+            fastapi_response=Response(),
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-1234"),
         )
 
-    assert response.status_code == 200, response.text
-    assert captured_data["video_id"] == "video_123"
-    assert captured_data["prompt"] == "brighter"
+    message = str(exc_info.value)
+    assert "Stream consumed" not in message
+    assert "my-video-model" in message
 
 
 @pytest.mark.parametrize("endpoint", ["/v1/videos/edits", "/v1/videos/extensions"])

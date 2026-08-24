@@ -22,10 +22,10 @@ import pytest
 from pydantic import BaseModel, Field, RootModel
 
 from e2e_config import unique_marker
-from e2e_http import NoBody, Success, UnauthorizedError, UnknownApiError, unwrap
+from e2e_http import NoBody, Success, UnauthorizedError, UnknownApiError, is_ok, unwrap
 from lifecycle import ResourceManager
 from management_client import ManagementClient
-from models import KeyGenerateBody, OrgInfoParams, OrgNewBody, UserNewBody
+from models import KeyGenerateBody, ModelBudgetEntry, OrgInfoParams, OrgNewBody, UserNewBody
 
 pytestmark = pytest.mark.e2e
 
@@ -57,7 +57,8 @@ class BudgetNewResponse(BaseModel):
 
 class BudgetUpdateBody(BaseModel):
     budget_id: str
-    max_budget: float
+    max_budget: float | None = None
+    model_max_budget: dict[str, ModelBudgetEntry] | None = None
 
 
 class BudgetInfoBody(BaseModel):
@@ -68,6 +69,7 @@ class BudgetRow(BaseModel):
     budget_id: str | None = None
     max_budget: float | None = None
     soft_budget: float | None = None
+    model_max_budget: dict[str, ModelBudgetEntry] | None = None
 
 
 class BudgetInfoResponse(RootModel[list[BudgetRow]]):
@@ -118,6 +120,17 @@ def _budget_rows(client: ManagementClient, budget_id: str) -> tuple[BudgetRow, .
     )
 
 
+def _stored_model_budget(
+    client: ManagementClient, budget_id: str, model_name: str
+) -> ModelBudgetEntry | None:
+    row = next(
+        (r for r in _budget_rows(client, budget_id) if r.budget_id == budget_id), None
+    )
+    if row is None or row.model_max_budget is None:
+        return None
+    return row.model_max_budget.get(model_name)
+
+
 def _budget_list_ids(client: ManagementClient) -> tuple[str, ...]:
     return tuple(
         row.budget_id
@@ -148,6 +161,61 @@ class TestBudgetManagement:
             client,
             lambda: budget_id if budget_id in _budget_list_ids(client) else None,
             f"/budget/list never included the created budget {budget_id}",
+        )
+
+    @pytest.mark.skip(
+        reason=(
+            "stage red: product gap, /budget/update 500s on any model_max_budget "
+            "(prisma Json arg + unquoted GraphQL interpolation)"
+        )
+    )
+    @pytest.mark.covers("mgmt.budget.update.accepts_model_max_budget")
+    def test_update_accepts_per_model_budgets_including_punctuated_names(
+        self, client: ManagementClient, resources: ResourceManager
+    ) -> None:
+        """/budget/update must accept per-model caps on an existing budget.
+
+        model_max_budget keys are model ids, which routinely carry dots and
+        hyphens (glm-5.2). Both a plain and a punctuated id are exercised so a
+        failure says whether per-model budgets break outright or only for
+        punctuated ids.
+        """
+        for model_name in ("gpt4o", "glm-5.2"):
+            self._assert_model_budget_round_trips(client, resources, model_name)
+
+    @staticmethod
+    def _assert_model_budget_round_trips(
+        client: ManagementClient, resources: ResourceManager, model_name: str
+    ) -> None:
+        budget_id = _create_budget(
+            client, resources, BudgetNewBody(max_budget=_INITIAL_MAX_BUDGET)
+        )
+        expected = ModelBudgetEntry(budget_limit=5.0, time_period="1d")
+
+        result = client.proxy.transport.post(
+            "/budget/update",
+            headers=client.proxy.transport.master,
+            json=BudgetUpdateBody(
+                budget_id=budget_id,
+                model_max_budget={model_name: expected},
+            ),
+            response_type=NoBody,
+        )
+
+        assert is_ok(result), (
+            f"/budget/update rejected a per-model budget for {model_name!r}: {result}; "
+            f"a customer cannot cap spend per model on an existing budget"
+        )
+
+        def persisted() -> ModelBudgetEntry | None:
+            stored = _stored_model_budget(client, budget_id, model_name)
+            return stored if stored == expected else None
+
+        _ = _poll(
+            client,
+            persisted,
+            f"/budget/info never reported {expected.model_dump()} for "
+            f"model_max_budget[{model_name!r}] on budget {budget_id}",
         )
 
     @pytest.mark.covers("mgmt.budget.update.persists")

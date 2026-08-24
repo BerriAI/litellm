@@ -3,14 +3,11 @@ Unit tests for text_completion with token IDs (list of integers) as prompt.
 Tests the fix for https://github.com/BerriAI/litellm/issues/17118
 """
 
-import os
-import sys
 
 import pytest
 import respx
 from httpx import Response
 
-sys.path.insert(0, os.path.abspath("../../../../.."))
 
 import litellm
 from litellm import text_completion

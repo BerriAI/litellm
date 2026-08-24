@@ -5246,10 +5246,13 @@ def test_mid_stream_429_error_raises_during_iteration():
 
     # Iterate the stream: first chunks should succeed, then 429 error should be raised
     results = []
-    with pytest.raises(VertexAIError) as exc_info:
+    def _drain():
         for chunk in streaming_obj:
             if chunk is not None:
                 results.append(chunk)
+
+    with pytest.raises(VertexAIError) as exc_info:
+        _drain()
 
     # Verify: received normal chunks before the error
     assert (
@@ -5270,7 +5273,6 @@ class TestModelResponseIteratorCleanup:
         return obj
 
     def test_aclose_closes_iterator_and_response(self):
-        import asyncio
         from unittest.mock import AsyncMock, MagicMock
 
         from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
@@ -5320,7 +5322,6 @@ class TestModelResponseIteratorCleanup:
         mock_response.close.assert_called_once()
 
     def test_aclose_without_response_does_not_raise(self):
-        import asyncio
         from unittest.mock import AsyncMock, MagicMock
 
         from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
@@ -5342,7 +5343,6 @@ class TestModelResponseIteratorCleanup:
         mock_iterator.aclose.assert_awaited_once()
 
     def test_aclose_tolerates_iterator_error(self):
-        import asyncio
         from unittest.mock import AsyncMock, MagicMock
 
         from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
@@ -5369,7 +5369,6 @@ class TestModelResponseIteratorCleanup:
 
     def test_custom_stream_wrapper_aclose_triggers_model_response_iterator_aclose(self):
         """CustomStreamWrapper.aclose() must propagate to ModelResponseIterator.aclose()."""
-        import asyncio
         from unittest.mock import AsyncMock, MagicMock
 
         from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper

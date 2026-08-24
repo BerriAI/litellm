@@ -1,4 +1,5 @@
 import json
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -12,11 +13,12 @@ from litellm._redis import (
     get_redis_connection_pool,
     get_redis_url_from_environment,
 )
-from litellm.constants import REDIS_CLUSTER_HEALTH_CHECK_INTERVAL
 from litellm._redis_credential_provider import (
+    AzureADCredentialProvider,
     GCPIAMCredentialProvider,
     _token_cache,
 )
+from litellm.constants import REDIS_CLUSTER_HEALTH_CHECK_INTERVAL
 
 
 @pytest.fixture(autouse=True)
@@ -129,14 +131,11 @@ def test_get_redis_url_from_environment_missing_host_port(monkeypatch):
     monkeypatch.delenv("REDIS_PORT", raising=False)
 
     # Call the function and expect a ValueError
-    with pytest.raises(ValueError) as excinfo:
+    with pytest.raises(ValueError, match="Either 'REDIS_URL' or both 'REDIS_HOST' and 'REDIS_PORT") as excinfo:
         get_redis_url_from_environment()
 
     # Check the error message
-    assert (
-        "Either 'REDIS_URL' or both 'REDIS_HOST' and 'REDIS_PORT' must be specified"
-        in str(excinfo.value)
-    )
+    assert "Either 'REDIS_URL' or both 'REDIS_HOST' and 'REDIS_PORT' must be specified" in str(excinfo.value)
 
 
 def test_get_redis_url_from_environment_missing_port(monkeypatch):
@@ -147,22 +146,17 @@ def test_get_redis_url_from_environment_missing_port(monkeypatch):
     monkeypatch.setenv("REDIS_HOST", "redis-server")
 
     # Call the function and expect a ValueError
-    with pytest.raises(ValueError) as excinfo:
+    with pytest.raises(ValueError, match="Either 'REDIS_URL' or both 'REDIS_HOST' and 'REDIS_PORT") as excinfo:
         get_redis_url_from_environment()
 
     # Check the error message
-    assert (
-        "Either 'REDIS_URL' or both 'REDIS_HOST' and 'REDIS_PORT' must be specified"
-        in str(excinfo.value)
-    )
+    assert "Either 'REDIS_URL' or both 'REDIS_HOST' and 'REDIS_PORT' must be specified" in str(excinfo.value)
 
 
 def test_max_connections_in_cluster_kwargs():
     """Test that max_connections is included in Redis cluster kwargs"""
     kwargs = _get_redis_cluster_kwargs()
-    assert (
-        "max_connections" in kwargs
-    ), "max_connections should be in available Redis cluster kwargs"
+    assert "max_connections" in kwargs, "max_connections should be in available Redis cluster kwargs"
 
 
 def test_socket_timeouts_in_cluster_kwargs():
@@ -180,14 +174,15 @@ def test_reconnect_kwargs_in_cluster_kwargs():
     assert "socket_keepalive" in kwargs
 
 
-@patch("litellm._redis.async_redis.RedisCluster")
-def test_async_cluster_sets_reconnect_defaults(mock_cluster_cls):
+@patch("litellm.caching.redis_cluster_node_isolation.get_litellm_async_redis_cluster_class")
+def test_async_cluster_sets_reconnect_defaults(mock_get_cluster_class):
     """
     The async RedisCluster client must be built with a periodic health check and
     TCP keepalive so a connection silently dropped by a cluster restart (e.g.
     ElastiCache Serverless maintenance) is revalidated and reconnected before
     reuse instead of stalling in re-initialization. Regression for LIT-4083.
     """
+    mock_cluster_cls = mock_get_cluster_class.return_value
     get_redis_async_client(startup_nodes=[{"host": "cluster-node", "port": 6379}])
 
     mock_cluster_cls.assert_called_once()
@@ -197,10 +192,11 @@ def test_async_cluster_sets_reconnect_defaults(mock_cluster_cls):
     assert call_kwargs["socket_keepalive"] is True
 
 
-@patch("litellm._redis.async_redis.RedisCluster")
-def test_async_cluster_reconnect_defaults_are_overridable(mock_cluster_cls):
+@patch("litellm.caching.redis_cluster_node_isolation.get_litellm_async_redis_cluster_class")
+def test_async_cluster_reconnect_defaults_are_overridable(mock_get_cluster_class):
     """An explicit health_check_interval / socket_keepalive from config must win
     over the built-in reconnect defaults."""
+    mock_cluster_cls = mock_get_cluster_class.return_value
     get_redis_async_client(
         startup_nodes=[{"host": "cluster-node", "port": 6379}],
         health_check_interval=7,
@@ -222,7 +218,6 @@ def test_get_redis_async_client_with_connection_pool():
         patch("litellm._redis.async_redis.Redis") as mock_redis,
         patch("litellm._redis._get_redis_client_logic") as mock_logic,
     ):
-
         # Configure mock to return basic redis kwargs
         mock_logic.return_value = {"host": "localhost", "port": 6379, "db": 0}
 
@@ -231,12 +226,8 @@ def test_get_redis_async_client_with_connection_pool():
 
         # Verify Redis was called with connection_pool in kwargs
         call_kwargs = mock_redis.call_args[1]
-        assert (
-            "connection_pool" in call_kwargs
-        ), "connection_pool should be passed to Redis client"
-        assert (
-            call_kwargs["connection_pool"] == mock_pool
-        ), "connection_pool should match the provided pool"
+        assert "connection_pool" in call_kwargs, "connection_pool should be passed to Redis client"
+        assert call_kwargs["connection_pool"] == mock_pool, "connection_pool should match the provided pool"
 
 
 def test_get_redis_async_client_without_connection_pool():
@@ -245,7 +236,6 @@ def test_get_redis_async_client_without_connection_pool():
         patch("litellm._redis.async_redis.Redis") as mock_redis,
         patch("litellm._redis._get_redis_client_logic") as mock_logic,
     ):
-
         # Configure mock to return basic redis kwargs
         mock_logic.return_value = {"host": "localhost", "port": 6379, "db": 0}
 
@@ -254,9 +244,7 @@ def test_get_redis_async_client_without_connection_pool():
 
         # Verify Redis was called without connection_pool in kwargs
         call_kwargs = mock_redis.call_args[1]
-        assert (
-            "connection_pool" not in call_kwargs
-        ), "connection_pool should not be in kwargs when not provided"
+        assert "connection_pool" not in call_kwargs, "connection_pool should not be in kwargs when not provided"
 
 
 def test_gcp_iam_credential_provider_get_credentials():
@@ -328,9 +316,7 @@ def test_gcp_iam_credential_provider_cache_shared_across_instances():
     share one cached token so concurrent Redis connections don't each trigger
     a blocking IAM round-trip.
     """
-    service_account = (
-        "projects/-/serviceAccounts/shared@project.iam.gserviceaccount.com"
-    )
+    service_account = "projects/-/serviceAccounts/shared@project.iam.gserviceaccount.com"
 
     with patch(
         "litellm._redis_credential_provider._generate_gcp_iam_access_token",
@@ -355,9 +341,7 @@ def test_get_redis_async_client_gcp_cluster_uses_credential_provider():
     startup_nodes = [{"host": "redis-node-1", "port": 6379}]
 
     mock_connect_func = MagicMock()
-    mock_connect_func._gcp_service_account = (
-        "projects/-/serviceAccounts/sa@project.iam.gserviceaccount.com"
-    )
+    mock_connect_func._gcp_service_account = "projects/-/serviceAccounts/sa@project.iam.gserviceaccount.com"
 
     redis_kwargs = {
         "startup_nodes": startup_nodes,
@@ -365,24 +349,23 @@ def test_get_redis_async_client_gcp_cluster_uses_credential_provider():
     }
 
     with (
-        patch("litellm._redis.async_redis.RedisCluster") as mock_cluster,
+        patch(
+            "litellm.caching.redis_cluster_node_isolation.get_litellm_async_redis_cluster_class"
+        ) as mock_get_cluster_class,
         patch("litellm._redis._get_redis_client_logic", return_value=redis_kwargs),
     ):
+        mock_cluster = mock_get_cluster_class.return_value
         get_redis_async_client()
 
     assert mock_cluster.called
     cluster_call_kwargs = mock_cluster.call_args[1]
 
     # Must use credential_provider, not a static password
-    assert (
-        "credential_provider" in cluster_call_kwargs
-    ), "async GCP cluster must use credential_provider for per-connection token refresh"
-    assert isinstance(
-        cluster_call_kwargs["credential_provider"], GCPIAMCredentialProvider
+    assert "credential_provider" in cluster_call_kwargs, (
+        "async GCP cluster must use credential_provider for per-connection token refresh"
     )
-    assert (
-        "password" not in cluster_call_kwargs
-    ), "async GCP cluster must not use a static password (expires after 1h)"
+    assert isinstance(cluster_call_kwargs["credential_provider"], GCPIAMCredentialProvider)
+    assert "password" not in cluster_call_kwargs, "async GCP cluster must not use a static password (expires after 1h)"
 
 
 @patch("litellm._redis.init_redis_cluster")
@@ -399,17 +382,16 @@ def test_sync_client_prefers_cluster_over_url(mock_init_cluster, monkeypatch):
 
     mock_init_cluster.assert_called_once()
     call_kwargs = mock_init_cluster.call_args[0][0]
-    assert (
-        "startup_nodes" in call_kwargs
-    ), "startup_nodes must be forwarded to init_redis_cluster"
+    assert "startup_nodes" in call_kwargs, "startup_nodes must be forwarded to init_redis_cluster"
 
 
-@patch("litellm._redis.async_redis.RedisCluster")
-def test_async_client_prefers_cluster_over_url(mock_cluster_cls, monkeypatch):
+@patch("litellm.caching.redis_cluster_node_isolation.get_litellm_async_redis_cluster_class")
+def test_async_client_prefers_cluster_over_url(mock_get_cluster_class, monkeypatch):
     """
     Test (1) get_redis_async_client returns async RedisCluster when startup_nodes is present
     even if REDIS_URL is also set and (2) startup_nodes is forwarded to RedisCluster.
     """
+    mock_cluster_cls = mock_get_cluster_class.return_value
     monkeypatch.setenv("REDIS_URL", "redis://fallback-host:6379")
 
     startup_nodes = [{"host": "cluster-node.example.com", "port": 6379}]
@@ -417,22 +399,17 @@ def test_async_client_prefers_cluster_over_url(mock_cluster_cls, monkeypatch):
 
     mock_cluster_cls.assert_called_once()
     call_kwargs = mock_cluster_cls.call_args[1]
-    assert (
-        "startup_nodes" in call_kwargs
-    ), "startup_nodes must be forwarded to async RedisCluster"
-    assert (
-        len(call_kwargs["startup_nodes"]) == 1
-    ), "should forward exactly 1 cluster node"
+    assert "startup_nodes" in call_kwargs, "startup_nodes must be forwarded to async RedisCluster"
+    assert len(call_kwargs["startup_nodes"]) == 1, "should forward exactly 1 cluster node"
 
 
-@patch("litellm._redis.async_redis.RedisCluster")
-def test_async_client_prefers_cluster_over_url_via_env_var(
-    mock_cluster_cls, monkeypatch
-):
+@patch("litellm.caching.redis_cluster_node_isolation.get_litellm_async_redis_cluster_class")
+def test_async_client_prefers_cluster_over_url_via_env_var(mock_get_cluster_class, monkeypatch):
     """
     Test get_redis_async_client returns async RedisCluster when REDIS_CLUSTER_NODES is set
     even if REDIS_URL is also set.
     """
+    mock_cluster_cls = mock_get_cluster_class.return_value
     monkeypatch.setenv("REDIS_URL", "redis://fallback-host:6379")
     monkeypatch.setenv(
         "REDIS_CLUSTER_NODES",
@@ -443,15 +420,11 @@ def test_async_client_prefers_cluster_over_url_via_env_var(
 
     mock_cluster_cls.assert_called_once()
     call_kwargs = mock_cluster_cls.call_args[1]
-    assert (
-        "startup_nodes" in call_kwargs
-    ), "startup_nodes must be forwarded to async RedisCluster"
+    assert "startup_nodes" in call_kwargs, "startup_nodes must be forwarded to async RedisCluster"
 
 
 @patch("litellm._redis.init_redis_cluster")
-def test_sync_client_prefers_cluster_over_url_via_env_var(
-    mock_init_cluster, monkeypatch
-):
+def test_sync_client_prefers_cluster_over_url_via_env_var(mock_init_cluster, monkeypatch):
     """
     Test get_redis_client returns RedisCluster when REDIS_CLUSTER_NODES is set even if
     REDIS_URL is also set.
@@ -467,9 +440,7 @@ def test_sync_client_prefers_cluster_over_url_via_env_var(
 
     mock_init_cluster.assert_called_once()
     call_kwargs = mock_init_cluster.call_args[0][0]
-    assert (
-        "startup_nodes" in call_kwargs
-    ), "startup_nodes must be forwarded to init_redis_cluster"
+    assert "startup_nodes" in call_kwargs, "startup_nodes must be forwarded to init_redis_cluster"
     assert len(call_kwargs["startup_nodes"]) == 1
 
 
@@ -588,9 +559,7 @@ def test_async_sentinel_uses_sentinel_password_and_master_password(
 
 
 @patch("litellm._redis.init_redis_cluster")
-def test_sync_client_preserves_password_for_cluster_when_url_also_set(
-    mock_init_cluster, monkeypatch
-):
+def test_sync_client_preserves_password_for_cluster_when_url_also_set(mock_init_cluster, monkeypatch):
     """
     Test _get_redis_client_logic does not strip password from redis_kwargs when
     startup_nodes is present even if REDIS_URL is also set.
@@ -604,9 +573,7 @@ def test_sync_client_preserves_password_for_cluster_when_url_also_set(
 
     mock_init_cluster.assert_called_once()
     call_kwargs = mock_init_cluster.call_args[0][0]
-    assert (
-        "password" in call_kwargs
-    ), "password must not be stripped when routing to cluster"
+    assert "password" in call_kwargs, "password must not be stripped when routing to cluster"
     assert call_kwargs["password"] == "secret"
 
 
@@ -864,3 +831,203 @@ def test_redis_uses_the_hiredis_response_parser():
     client = get_redis_client(host="redis-host", port=6379)
     connection = client.connection_pool.make_connection()
     assert isinstance(connection._parser, _HiredisParser)
+
+
+def test_init_arg_names_sees_through_decorated_inits():
+    """redis-py >= 7.4 wraps AbstractConnection.__init__ with @deprecated_args, whose
+    wrapper is declared (self, *args, **kwargs). Introspecting the wrapper directly
+    yields no real parameters, which silently emptied the from_url allowlist and
+    dropped socket_timeout from url-configured connections. The MRO walk must follow
+    __wrapped__ to the true signature.
+    """
+    import functools
+
+    from litellm._redis import _init_arg_names
+
+    def deprecating(fn):
+        @functools.wraps(fn)
+        def wrapper(self, *args, **kwargs):
+            return fn(self, *args, **kwargs)
+
+        return wrapper
+
+    class Base:
+        @deprecating
+        def __init__(self, socket_timeout=None, socket_connect_timeout=None):
+            pass
+
+    class Concrete(Base):
+        def __init__(self, host=None, **kwargs):
+            super().__init__(**kwargs)
+
+    names = _init_arg_names(Concrete)
+    assert "socket_timeout" in names
+    assert "socket_connect_timeout" in names
+    assert "host" in names
+
+
+def test_url_allowlist_always_carries_socket_timeouts():
+    """The load-bearing invariant behind test_url_config_* against the INSTALLED
+    redis-py, whatever its version: if a redis-py release changes how its __init__
+    signatures are declared (7.4 did, via @deprecated_args), this is the first
+    assertion that goes red.
+    """
+    from litellm._redis import _get_redis_url_kwargs
+
+    allowed = _get_redis_url_kwargs()
+    assert "socket_timeout" in allowed
+    assert "socket_connect_timeout" in allowed
+
+
+AZURE_AD_CONNECT_FUNC = {"_azure_credential": object()}
+GCP_IAM_CONNECT_FUNC = {"_gcp_service_account": "projects/-/serviceAccounts/sa@project.iam.gserviceaccount.com"}
+
+
+@pytest.mark.parametrize(
+    "markers, provider_cls",
+    [
+        (AZURE_AD_CONNECT_FUNC, AzureADCredentialProvider),
+        (GCP_IAM_CONNECT_FUNC, GCPIAMCredentialProvider),
+    ],
+    ids=["azure_ad", "gcp_iam"],
+)
+def test_async_url_client_authenticates_through_credential_provider(markers, provider_cls):
+    """A REDIS_URL config with Azure AD or GCP IAM must still reach the server with a credential.
+
+    The url branch forwards redis_connect_func straight to the async connection, which runs
+    its AUTH exchange with the blocking client API and dies, so the branch has to hand the
+    connection a CredentialProvider instead.
+    """
+    redis_kwargs = {
+        "url": "rediss://redis-host:6380",
+        "redis_connect_func": SimpleNamespace(**markers),
+    }
+
+    with patch("litellm._redis._get_redis_client_logic", return_value=redis_kwargs):
+        client = get_redis_async_client()
+
+    connection_kwargs = client.connection_pool.connection_kwargs
+    assert isinstance(connection_kwargs.get("credential_provider"), provider_cls)
+    assert "redis_connect_func" not in connection_kwargs
+
+
+@pytest.mark.parametrize(
+    "markers, provider_cls",
+    [
+        (AZURE_AD_CONNECT_FUNC, AzureADCredentialProvider),
+        (GCP_IAM_CONNECT_FUNC, GCPIAMCredentialProvider),
+    ],
+    ids=["azure_ad", "gcp_iam"],
+)
+def test_async_url_connection_pool_authenticates_through_credential_provider(markers, provider_cls):
+    """Same for the pool-based path: every connection the pool hands out needs the provider."""
+    redis_kwargs = {
+        "url": "rediss://redis-host:6380",
+        "redis_connect_func": SimpleNamespace(**markers),
+    }
+
+    with patch("litellm._redis._get_redis_client_logic", return_value=redis_kwargs):
+        pool = get_redis_connection_pool()
+
+    assert isinstance(pool.connection_kwargs.get("credential_provider"), provider_cls)
+    assert "redis_connect_func" not in pool.connection_kwargs
+
+
+def test_async_url_client_drops_username_alongside_credential_provider():
+    """redis-py refuses a connection given both a username and a credential_provider, and
+    AzureADCredentialProvider already carries REDIS_USERNAME, so the username must be dropped.
+    """
+    redis_kwargs = {
+        "url": "rediss://redis-host:6380",
+        "username": "redis-user",
+        "redis_connect_func": SimpleNamespace(**AZURE_AD_CONNECT_FUNC),
+    }
+
+    with patch("litellm._redis._get_redis_client_logic", return_value=redis_kwargs):
+        client = get_redis_async_client()
+
+    pool = client.connection_pool
+    assert "username" not in pool.connection_kwargs
+    pool.connection_class(**pool.connection_kwargs)
+
+
+@pytest.mark.parametrize("build_pool", [False, True], ids=["client", "pool"])
+def test_async_url_keeps_a_coroutine_connect_func(build_pool):
+    """redis-py awaits a coroutine redis_connect_func on an async connection, so one we cannot
+    turn into a credential provider has to be left where it is rather than dropped.
+    """
+
+    async def connect(connection):
+        return None
+
+    redis_kwargs = {
+        "url": "rediss://redis-host:6380",
+        "redis_connect_func": connect,
+    }
+
+    with patch("litellm._redis._get_redis_client_logic", return_value=redis_kwargs):
+        pool = get_redis_connection_pool() if build_pool else get_redis_async_client().connection_pool
+
+    assert pool.connection_kwargs["redis_connect_func"] is connect
+    assert "credential_provider" not in pool.connection_kwargs
+
+
+def test_async_cluster_drops_a_connect_func_it_cannot_pass_on():
+    """redis-py's async RedisCluster has no redis_connect_func parameter, so a connect func that
+    is not translated into a credential provider has to be dropped rather than forwarded.
+    """
+
+    async def connect(connection):
+        return None
+
+    redis_kwargs = {
+        "startup_nodes": [{"host": "cluster-node", "port": 6379}],
+        "redis_connect_func": connect,
+    }
+
+    with patch("litellm._redis._get_redis_client_logic", return_value=redis_kwargs):
+        client = get_redis_async_client()
+
+    assert isinstance(client, async_redis.RedisCluster)
+
+
+@pytest.mark.parametrize(
+    "markers, provider_cls",
+    [
+        (AZURE_AD_CONNECT_FUNC, AzureADCredentialProvider),
+        (GCP_IAM_CONNECT_FUNC, GCPIAMCredentialProvider),
+    ],
+    ids=["azure_ad", "gcp_iam"],
+)
+@pytest.mark.parametrize(
+    "sentinel_password",
+    [None, "sentinel-secret"],
+    ids=["unauthenticated_monitors", "password_protected_monitors"],
+)
+def test_async_sentinel_keeps_the_credential_provider_off_the_monitors(markers, provider_cls, sentinel_password):
+    """The Sentinel monitors are separate servers with their own password, so the data node's token
+    never belongs on them: redis-py refuses it next to a Sentinel password, and sends it to an
+    unauthenticated monitor as an AUTH the monitor rejects.
+    """
+    redis_kwargs = {
+        "sentinel_nodes": [("sentinel-1", 26379)],
+        "sentinel_password": sentinel_password,
+        "service_name": "mymaster",
+        "redis_connect_func": SimpleNamespace(**markers),
+    }
+
+    with patch("litellm._redis.async_redis.Sentinel") as mock_sentinel_cls:
+        with patch("litellm._redis._get_redis_client_logic", return_value=redis_kwargs):
+            get_redis_async_client()
+
+    sentinel_kwargs = mock_sentinel_cls.call_args[1]["sentinel_kwargs"]
+    assert sentinel_kwargs["password"] == sentinel_password
+    assert "credential_provider" not in sentinel_kwargs
+
+    monitor_connection = async_redis.Connection(host="sentinel-1", port=26379, **sentinel_kwargs)
+    assert monitor_connection.credential_provider is None
+    assert bool(monitor_connection.username or monitor_connection.password) is bool(sentinel_password)
+
+    master_kwargs = mock_sentinel_cls.return_value.master_for.call_args[1]
+    assert isinstance(master_kwargs["credential_provider"], provider_cls)
+    assert "password" not in master_kwargs

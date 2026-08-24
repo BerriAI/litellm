@@ -9,13 +9,10 @@ Bug Fixed: Key alias was not passed during auto-rotation, causing
 secrets to be created at a new location instead of updating in-place.
 """
 
-import os
-import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../.."))
 
 from litellm.proxy._types import (
     GenerateKeyResponse,
@@ -23,6 +20,11 @@ from litellm.proxy._types import (
     RegenerateKeyRequest,
 )
 from litellm.proxy.common_utils.key_rotation_manager import KeyRotationManager
+
+
+@pytest.fixture
+def disable_audit_logging_for_mocked_key(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr("litellm.store_audit_logs", False)
 
 
 class TestKeyRotationManagerPassesKeyAlias:
@@ -155,7 +157,10 @@ class TestKeyRotationSecretNamingStability:
     """
 
     @pytest.mark.asyncio
-    async def test_rotation_hook_uses_initial_secret_name_fallback(self):
+    async def test_rotation_hook_uses_initial_secret_name_fallback(
+        self,
+        disable_audit_logging_for_mocked_key,
+    ):
         """
         GIVEN: A key WITHOUT an alias (has an initial_secret_name based on token ID)
         WHEN: The key is rotated
@@ -206,7 +211,10 @@ class TestKeyRotationSecretNamingStability:
             ), f"Secret name drift! Expected {initial_secret_name}, got {call_kwargs['new_secret_name']}. This causes secret sprawl."
 
     @pytest.mark.asyncio
-    async def test_rotation_hook_pre_rotation_alias_consistency(self):
+    async def test_rotation_hook_pre_rotation_alias_consistency(
+        self,
+        disable_audit_logging_for_mocked_key,
+    ):
         """
         GIVEN: A key WITH an alias
         WHEN: The key is rotated

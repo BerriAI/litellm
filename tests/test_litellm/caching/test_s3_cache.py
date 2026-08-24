@@ -1,5 +1,3 @@
-import os
-import sys
 from unittest.mock import MagicMock, patch
 import json
 import datetime
@@ -7,9 +5,6 @@ import asyncio
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 from litellm.caching.s3_cache import S3Cache
 
