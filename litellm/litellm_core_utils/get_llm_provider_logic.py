@@ -319,6 +319,9 @@ def get_llm_provider(
                     elif endpoint == "https://nano-gpt.com/api/v1":
                         custom_llm_provider = "nano-gpt"
                         dynamic_api_key = get_secret_str("NANOGPT_API_KEY")
+                    elif endpoint == "https://api.llmtech.eu/v1":
+                        custom_llm_provider = "llmtech"
+                        dynamic_api_key = get_secret_str("LLMTECH_API_KEY")
                     elif endpoint == "https://api.poe.com/v1":
                         custom_llm_provider = "poe"
                         dynamic_api_key = get_secret_str("POE_API_KEY")

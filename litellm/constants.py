@@ -768,6 +768,7 @@ openai_compatible_endpoints: Final[list] = [
     "https://serverless.tensormesh.ai/v1",
     "https://api.stima.tech/v1",
     "https://nano-gpt.com/api/v1",
+    "https://api.llmtech.eu/v1",
     "https://api.poe.com/v1",
     "https://llm.chutes.ai/v1/",
     "https://api.v0.dev/v1",
@@ -825,6 +826,7 @@ openai_compatible_providers: Final[list] = [
     "tensormesh",  # Tensormesh - JSON-configured provider
     "apertis",  # Apertis - JSON-configured provider
     "nano-gpt",  # Nano-GPT - JSON-configured provider
+    "llmtech",  # LLM Tech - JSON-configured provider
     "poe",  # Poe - JSON-configured provider
     "chutes",  # Chutes - JSON-configured provider
     "parasail",  # Parasail - JSON-configured provider
@@ -870,6 +872,7 @@ openai_text_completion_compatible_providers: Final[list] = [  # providers that s
     "tensormesh",
     "apertis",
     "nano-gpt",
+    "llmtech",
     "poe",
     "chutes",
     "v0",

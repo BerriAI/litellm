@@ -529,3 +529,54 @@ if __name__ == "__main__":
     print("\n" + "=" * 50)
     print("✓ All tests passed!")
     print("=" * 50)
+
+class TestLLMTech:
+    """Tests for LLM Tech JSON-configured provider"""
+
+    def test_llmtech_json_config_exists(self):
+        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+        provider = JSONProviderRegistry.get("llmtech")
+        assert provider is not None
+        assert provider.base_url == "https://api.llmtech.eu/v1"
+        assert provider.api_key_env == "LLMTECH_API_KEY"
+        assert provider.api_base_env == "LLMTECH_API_BASE"
+
+    def test_llmtech_provider_resolution(self):
+        from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+
+        model, provider, api_key, api_base = get_llm_provider(
+            model="llmtech/unsloth/Qwen3.8-27B-NVFP4",
+            custom_llm_provider=None,
+            api_base=None,
+            api_key=None,
+        )
+
+        assert model == "unsloth/Qwen3.8-27B-NVFP4"
+        assert provider == "llmtech"
+        assert api_base == "https://api.llmtech.eu/v1"
+
+    def test_llmtech_endpoint_detection(self):
+        from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+
+        model, provider, api_key, api_base = get_llm_provider(
+            model="unsloth/Qwen3.8-27B-NVFP4",
+            custom_llm_provider=None,
+            api_base="https://api.llmtech.eu/v1",
+            api_key=None,
+        )
+
+        assert provider == "llmtech"
+        assert api_base == "https://api.llmtech.eu/v1"
+
+    def test_llmtech_dynamic_config(self):
+        from litellm.llms.openai_like.dynamic_config import create_config_class
+        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+        provider = JSONProviderRegistry.get("llmtech")
+        config_class = create_config_class(provider)
+        config = config_class()
+
+        api_base, api_key = config._get_openai_compatible_provider_info(None, None)
+        assert api_base == "https://api.llmtech.eu/v1"
+
