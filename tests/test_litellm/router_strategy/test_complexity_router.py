@@ -5989,6 +5989,77 @@ class TestContextAwareClassifier:
         assert _strip_reminder_blocks(text, pairs) == "<<<begin_main>>> why is my tag stripped?"
 
     @pytest.mark.parametrize(
+        "text,limit,expected",
+        [
+            pytest.param("short", 10, "short", id="under-the-limit-is-untouched"),
+            pytest.param("exact", 5, "exact", id="exactly-the-limit-is-untouched"),
+            pytest.param(
+                "Second request with more details and longer text",
+                30,
+                "Second re...tails and longer text",
+                id="over-the-limit-keeps-both-ends",
+            ),
+            pytest.param("abcdefghij", 4, "a...hij", id="tiny-limit-still-splits"),
+            pytest.param("abcdefghij", 1, "...j", id="limit-too-small-for-a-head-keeps-the-tail"),
+            pytest.param("abcdefghij", 0, "...", id="zero-limit-quotes-nothing"),
+            pytest.param("日本語のテキストと最後の質問", 6, "日...最後の質問", id="cjk-slices-by-character"),
+        ],
+    )
+    def test_truncate_keeps_the_end_of_an_over_long_turn(self, text, limit, expected):
+        """A cut turn keeps its tail, because that is where a chat turn puts its ask.
+
+        Head-only truncation was the shipped behavior and it discarded exactly the part that carries
+        the difficulty. The degenerate limits are here because the budget hands this function whatever
+        space is left rather than a configured constant, so it must stay total: a limit too small to
+        hold a head degrades to tail-only rather than raising or slicing with a negative index.
+        """
+        from litellm.router_strategy.complexity_router.complexity_router import _truncate
+
+        assert _truncate(text, limit) == expected
+
+    def test_truncate_holds_its_length_budget(self):
+        """Cutting to N spends N characters plus the marker, at every N including the degenerate ones.
+
+        The marker is the cost of having cut at all, so it is charged uniformly rather than only once
+        the limit is large enough to hold a head; a caller sizing a cut against a remaining budget can
+        therefore price it as limit plus marker without special-casing the small end.
+        """
+        from litellm.router_strategy.complexity_router.complexity_router import _TRUNCATION_MARKER, _truncate
+
+        text = "x" * 500
+
+        assert all(
+            len(_truncate(text, limit)) == limit + len(_TRUNCATION_MARKER) for limit in (0, 1, 2, 4, 30, 200, 499)
+        )
+
+    def test_clipped_prior_turn_still_carries_the_ask_it_closes_on(self):
+        """The reported defect, at the level the classifier sees it.
+
+        A prior turn that opens with an incident report and closes with the request routed to the
+        cheapest tier, because the 200-character cut kept the report and dropped the request. The
+        quoted turn must carry both ends.
+        """
+        from litellm.router_strategy.complexity_router.complexity_router import _extract_prior_turns
+
+        turn = (
+            "We run a multi-region gateway and last night the eu-west pod returned 502s on the "
+            "streaming path only, for thirty minutes, while non-streaming stayed healthy the whole "
+            "window and the cooldown map was mid-failover. " + "Filler sentence to push past the cap. " * 4
+            + "Now rewrite the streaming retry path and prove it cannot livelock."
+        )
+
+        quoted = _extract_prior_turns(
+            [{"role": "user", "content": turn}, {"role": "user", "content": "go ahead"}],
+            "go ahead",
+            3,
+            200,
+            False,
+        )
+
+        assert "multi-region gateway" in quoted[0][1]
+        assert "prove it cannot livelock" in quoted[0][1]
+
+    @pytest.mark.parametrize(
         "messages,current_ask,window,per_turn_chars,include_assistant,expected",
         [
             pytest.param(
@@ -6002,7 +6073,7 @@ class TestContextAwareClassifier:
                 2,
                 30,
                 False,
-                (("user", "First request"), ("user", "Second request with more detai...")),
+                (("user", "First request"), ("user", "Second re...tails and longer text")),
                 id="current-ask-excluded-and-long-turn-marked-as-clipped",
             ),
             pytest.param(
@@ -6111,7 +6182,7 @@ class TestContextAwareClassifier:
                 1,
                 20,
                 True,
-                (("assistant", "a very long plan tha..."),),
+                (("assistant", "a very...l past the cap"),),
                 id="assistant-reply-is-clipped-at-per-turn-chars",
             ),
             pytest.param(
@@ -6134,7 +6205,8 @@ class TestContextAwareClassifier:
 
         The current ask is excluded by matching it rather than by position, since `aclassify` takes
         `prompt` and `messages` separately and a caller may classify other than the newest turn. A turn
-        cut at per_turn_chars is marked so a clip does not read as an abandoned thought.
+        over per_turn_chars keeps both ends with its middle elided, so the ask it closes on survives the
+        cut and the marker does not read as an abandoned thought.
 
         With assistant turns enabled the window is the last N turns of the conversation rather than the
         last N asks, which is what makes a plan the assistant called complex visible under a bare "yes".

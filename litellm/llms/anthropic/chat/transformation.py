@@ -1,7 +1,8 @@
 import json
 import re
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Final, NoReturn, cast
 
 import httpx
@@ -121,6 +122,32 @@ else:
 # response side.
 _ANTHROPIC_TOOL_NAME_INVALID_CHARS: Final = re.compile(r"[^a-zA-Z0-9_-]")
 _ANTHROPIC_TOOL_NAME_MAX_LEN: Final = 128
+
+_ENUM_TYPE_CHECKS: Final[Mapping[str, Callable[[Any], bool]]] = MappingProxyType(
+    {
+        "null": lambda v: v is None,
+        "boolean": lambda v: isinstance(v, bool),
+        "integer": lambda v: isinstance(v, int) and not isinstance(v, bool),
+        "number": lambda v: isinstance(v, (int, float)) and not isinstance(v, bool),
+        "string": lambda v: isinstance(v, str),
+        "array": lambda v: isinstance(v, list),
+        "object": lambda v: isinstance(v, dict),
+    }
+)
+
+
+def _enum_conflicts_with_declared_type(schema: Mapping[str, Any]) -> bool:
+    """Whether ``schema``'s ``enum`` cannot match its declared ``type``."""
+    enum_values: Final = schema.get("enum")
+    declared_type: Final = schema.get("type")
+    if not isinstance(enum_values, list) or declared_type is None:
+        return False
+    if isinstance(declared_type, list):
+        return True
+    check: Final = _ENUM_TYPE_CHECKS.get(declared_type)
+    return check is not None and not all(check(value) for value in enum_values)
+
+
 # Single, internal-only key on ``litellm_params`` used to thread the per-
 # request reverse map (sanitized -> original) from request build to response
 # parsing. ``litellm_params`` is never serialized to a provider; ``optional_
@@ -567,8 +594,12 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             else:
                 result["description"] = constraint_note
 
+        drops_conflicting_type: Final = _enum_conflicts_with_declared_type(schema)
+
         for key, value in schema.items():
             if key in unsupported_fields:
+                continue
+            if key == "type" and drops_conflicting_type:
                 continue
             if key == "description" and "description" in result:
                 # Already handled above

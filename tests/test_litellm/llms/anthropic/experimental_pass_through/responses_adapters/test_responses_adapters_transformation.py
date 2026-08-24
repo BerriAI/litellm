@@ -486,8 +486,8 @@ class TestTranslateMessagesToResponsesInput:
             }
         ]
 
-    def test_assistant_thinking_block_becomes_output_text(self):
-        """Assistant thinking block text is included as output_text."""
+    def test_assistant_thinking_block_becomes_reasoning_item(self):
+        """Assistant thinking block becomes a reasoning item, never visible assistant prose."""
         messages = [
             {
                 "role": "assistant",
@@ -495,7 +495,77 @@ class TestTranslateMessagesToResponsesInput:
             }
         ]
         result = _translate_messages(messages)
-        assert result[0]["content"] == [{"type": "output_text", "text": "Let me reason step by step."}]
+        assert result == [
+            {
+                "type": "reasoning",
+                "summary": [{"type": "summary_text", "text": "Let me reason step by step."}],
+            }
+        ]
+
+    def test_reasoning_item_carries_no_id(self):
+        """A fabricated reasoning id 404s upstream, so the item must go out without one."""
+        messages = [
+            {
+                "role": "assistant",
+                "content": [{"type": "thinking", "thinking": "Private reasoning.", "signature": "rs_abc123"}],
+            }
+        ]
+        result = _translate_messages(messages)
+        assert "id" not in result[0]
+
+    def test_consecutive_thinking_blocks_become_one_reasoning_item(self):
+        """Summary parts of one upstream reasoning item are regrouped into that item."""
+        messages = [
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": "First part."},
+                    {"type": "thinking", "thinking": "Second part."},
+                ],
+            }
+        ]
+        result = _translate_messages(messages)
+        assert result == [
+            {
+                "type": "reasoning",
+                "summary": [
+                    {"type": "summary_text", "text": "First part."},
+                    {"type": "summary_text", "text": "Second part."},
+                ],
+            }
+        ]
+
+    def test_a_tool_call_splits_the_reasoning_items_around_it(self):
+        """Thinking on either side of a tool call belongs to two different reasoning items."""
+        messages = [
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": "Before the call."},
+                    {"type": "tool_use", "id": "call_1", "name": "get_weather", "input": {"city": "Denver"}},
+                    {"type": "thinking", "thinking": "After the call."},
+                ],
+            }
+        ]
+        result = _translate_messages(messages)
+        assert [item["type"] for item in result] == ["reasoning", "function_call", "reasoning"]
+        assert result[0]["summary"] == [{"type": "summary_text", "text": "Before the call."}]
+        assert result[2]["summary"] == [{"type": "summary_text", "text": "After the call."}]
+
+    def test_thinking_and_text_stay_separate(self):
+        """The visible answer stays the only thing in the assistant message."""
+        messages = [
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": "The user wants Denver."},
+                    {"type": "text", "text": "Denver is the best pick."},
+                ],
+            }
+        ]
+        result = _translate_messages(messages)
+        assert [item["type"] for item in result] == ["reasoning", "message"]
+        assert result[1]["content"] == [{"type": "output_text", "text": "Denver is the best pick."}]
 
     def test_assistant_empty_thinking_block_skipped(self):
         """Assistant thinking block with empty thinking text is skipped."""
@@ -1094,7 +1164,7 @@ def _make_function_call_item(call_id: str, name: str, arguments: str) -> MagicMo
     return item
 
 
-def _make_reasoning_item(summaries: List[str]) -> MagicMock:
+def _make_reasoning_item(summaries: List[str], item_id: str = "rs_test_1") -> MagicMock:
     """Build a mock ResponseReasoningItem."""
     from openai.types.responses import ResponseReasoningItem  # type: ignore[import]
 
@@ -1105,6 +1175,7 @@ def _make_reasoning_item(summaries: List[str]) -> MagicMock:
         summary_mocks.append(s)
 
     item = MagicMock(spec=ResponseReasoningItem)
+    item.id = item_id
     item.summary = summary_mocks
     return item
 
@@ -1177,6 +1248,53 @@ class TestTranslateResponse:
         response = _make_mock_response(output=[reasoning])
         result: Any = _ADAPTER.translate_response(response)
         assert result["content"] == []
+
+    def test_null_summary_text_skipped_rather_than_stringified(self):
+        """A summary part whose text is null must not reach the client as the word "None"."""
+        response = _make_mock_response(
+            output=[
+                {
+                    "type": "reasoning",
+                    "id": "rs_null_1",
+                    "summary": [{"type": "summary_text", "text": None}],
+                }
+            ]
+        )
+        result: Any = _ADAPTER.translate_response(response)
+        assert result["content"] == []
+
+    def test_reasoning_item_id_never_becomes_a_thinking_signature(self):
+        """Only Anthropic can sign a thinking block, so a stand-in signature is never invented."""
+        reasoning = _make_reasoning_item(["Part one.", "Part two."], item_id="rs_abc123")
+        response = _make_mock_response(output=[reasoning])
+        result: Any = _ADAPTER.translate_response(response)
+        assert [block["signature"] for block in result["content"]] == [None, None]
+
+    def test_dict_reasoning_item_becomes_thinking_block(self):
+        """A reasoning item arriving as a plain dict is kept, not dropped."""
+        response = _make_mock_response(
+            output=[
+                {
+                    "type": "reasoning",
+                    "id": "rs_dict_1",
+                    "summary": [{"type": "summary_text", "text": "Weighing the options."}],
+                }
+            ]
+        )
+        result: Any = _ADAPTER.translate_response(response)
+        assert result["content"] == [
+            {"type": "thinking", "thinking": "Weighing the options.", "signature": None}
+        ]
+
+    def test_thinking_blocks_are_dropped_when_replayed_to_anthropic(self):
+        """Replaying this turn to an Anthropic model must not send a signature it cannot verify."""
+        from litellm.litellm_core_utils.prompt_templates.factory import (
+            _drop_unsignable_thinking_blocks,
+        )
+
+        response = _make_mock_response(output=[_make_reasoning_item(["Part one."], item_id="rs_abc123")])
+        result: Any = _ADAPTER.translate_response(response)
+        assert _drop_unsignable_thinking_blocks(result["content"]) == []
 
     def test_usage_mapped_correctly(self):
         """Input/output tokens from ResponseAPIUsage are mapped to AnthropicUsage."""
