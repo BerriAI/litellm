@@ -1829,3 +1829,104 @@ def test_a_dispatched_failure_lifts_the_four_fields_the_spend_log_needs():
     assert lifted["response_cost"] == 0.0
     assert lifted["combined_usage_object"].prompt_tokens > 0
     assert lifted["standard_logging_object"] == {"id": "log-1"}
+
+
+@pytest.mark.asyncio
+async def test_proxy_only_error_expected_4xx_skips_traceback_and_sync_thread(monkeypatch):
+    """Regression for LIT-6043: an expected 4xx must not format a traceback and
+    must not spawn the sync failure-handler thread when no sync-only failure
+    callbacks are configured."""
+    import asyncio
+
+    import litellm
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    monkeypatch.setattr(litellm, "failure_callback", [])
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+    captured = {}
+
+    async def fake_async_failure(self, exception, traceback_exception, *args, **kwargs):
+        captured["async_traceback"] = traceback_exception
+
+    def fake_sync_failure(self, *args, **kwargs):
+        captured["sync_ran"] = True
+
+    orig_async_failure = Logging.async_failure_handler
+    orig_sync_failure = Logging.failure_handler
+    Logging.async_failure_handler = fake_async_failure
+    Logging.failure_handler = fake_sync_failure
+    try:
+        try:
+            raise HTTPException(status_code=400, detail="Invalid model name passed in")
+        except HTTPException as exc:
+            await proxy_logging_obj._handle_logging_proxy_only_error(
+                request_data={
+                    "model": "does-not-exist",
+                    "messages": [{"role": "user", "content": "hi"}],
+                },
+                user_api_key_dict=UserAPIKeyAuth(
+                    api_key="sk-1234", request_route="/v1/chat/completions"
+                ),
+                route="/v1/chat/completions",
+                original_exception=exc,
+            )
+        await asyncio.sleep(0.2)
+    finally:
+        Logging.async_failure_handler = orig_async_failure
+        Logging.failure_handler = orig_sync_failure
+
+    assert captured["async_traceback"] == ""
+    assert "sync_ran" not in captured
+
+
+@pytest.mark.asyncio
+async def test_proxy_only_error_5xx_keeps_traceback_and_runs_sync_callbacks(monkeypatch):
+    """Unexpected (5xx) errors keep the full traceback, and a configured
+    sync-only failure callback still gets its threaded handler."""
+    import asyncio
+
+    import litellm
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    def _custom_sync_callback(kwargs, completion_response, start_time, end_time):
+        pass
+
+    monkeypatch.setattr(litellm, "failure_callback", [_custom_sync_callback])
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+    captured = {}
+    sync_ran = asyncio.Event()
+    loop = asyncio.get_running_loop()
+
+    async def fake_async_failure(self, exception, traceback_exception, *args, **kwargs):
+        captured["async_traceback"] = traceback_exception
+
+    def fake_sync_failure(self, *args, **kwargs):
+        loop.call_soon_threadsafe(sync_ran.set)
+
+    orig_async_failure = Logging.async_failure_handler
+    orig_sync_failure = Logging.failure_handler
+    Logging.async_failure_handler = fake_async_failure
+    Logging.failure_handler = fake_sync_failure
+    try:
+        try:
+            raise HTTPException(status_code=500, detail="internal error")
+        except HTTPException as exc:
+            await proxy_logging_obj._handle_logging_proxy_only_error(
+                request_data={
+                    "model": "gpt-4o",
+                    "messages": [{"role": "user", "content": "hi"}],
+                },
+                user_api_key_dict=UserAPIKeyAuth(
+                    api_key="sk-1234", request_route="/v1/chat/completions"
+                ),
+                route="/v1/chat/completions",
+                original_exception=exc,
+            )
+        await asyncio.wait_for(sync_ran.wait(), timeout=5)
+    finally:
+        Logging.async_failure_handler = orig_async_failure
+        Logging.failure_handler = orig_sync_failure
+
+    assert "test_proxy_utils" in captured["async_traceback"]
