@@ -6,7 +6,8 @@ import pytest
 
 import litellm
 from litellm.llms.azure.cost_calculation import cost_per_token
-from litellm.types.utils import Usage
+from litellm.types.utils import PromptTokensDetailsWrapper, Usage
+from litellm.utils import get_model_info
 
 
 # Register a test model with tier-specific pricing
@@ -73,3 +74,25 @@ class TestAzureServiceTierCostCalculation:
 
         assert abs(none_prompt - standard_prompt) < 1e-10
         assert abs(none_completion - standard_completion) < 1e-10
+
+
+@pytest.mark.parametrize(
+    "model",
+    ["azure/us/gpt-4o-2024-11-20", "azure/eu/gpt-4o-2024-11-20"],
+)
+def test_gpt4o_2024_11_20_data_zone_cache_read_cost(model, local_model_cost_map):
+    model_info = get_model_info(model=model, custom_llm_provider="azure")
+    assert model_info["cache_read_input_token_cost"] == 1.375e-06
+    assert model_info["input_cost_per_token"] == 2.75e-06
+    assert model_info["output_cost_per_token"] == 1.1e-05
+
+    usage = Usage(
+        prompt_tokens=6000,
+        completion_tokens=10,
+        total_tokens=6010,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=5000),
+    )
+    prompt_cost, completion_cost = cost_per_token(model=model, usage=usage)
+
+    assert prompt_cost == pytest.approx((1000 * 2.75e-06) + (5000 * 1.375e-06))
+    assert completion_cost == pytest.approx(10 * 1.1e-05)
