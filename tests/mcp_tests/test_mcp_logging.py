@@ -28,7 +28,17 @@ class TestMCPLogger(CustomLogger):
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         print("success event")
-        self.standard_logging_payload = kwargs.get("standard_logging_object", None)
+        payload = kwargs.get("standard_logging_object", None)
+        # Only capture MCP tool call events. litellm.callbacks is a process-wide
+        # global, so when xdist runs other MCP tests in parallel (e.g.
+        # test_mcp_chat_completions which issues an acompletion call), those
+        # success events are also routed to this logger. Without filtering by
+        # call_type, the acompletion payload (response_cost ~1e-05) overwrites
+        # the MCP payload (response_cost = 1.2) and the cost-tracking assertion
+        # fails non-deterministically.
+        if payload is not None and payload.get("call_type") != "call_mcp_tool":
+            return
+        self.standard_logging_payload = payload
         print(f"Captured standard_logging_payload: {self.standard_logging_payload}")
 
 
@@ -336,7 +346,13 @@ class MCPLoggerHook(CustomLogger):
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         print("success event")
-        self.standard_logging_payload = kwargs.get("standard_logging_object", None)
+        payload = kwargs.get("standard_logging_object", None)
+        # Only capture MCP tool call events; see TestMCPLogger for the rationale.
+        # Without this filter, acompletion events from parallel xdist workers
+        # overwrite the MCP payload and the response_cost assertion fails.
+        if payload is not None and payload.get("call_type") != "call_mcp_tool":
+            return
+        self.standard_logging_payload = payload
         print(f"Captured standard_logging_payload: {self.standard_logging_payload}")
 
     async def async_post_mcp_tool_call_hook(
