@@ -42,6 +42,7 @@ from capabilities import (
     BATCH_ID_SHAPE,
     CAPABILITIES,
     FILE_ID_SHAPE,
+    OPENAI_BATCH_BACKEND,
     OPENAI_BATCH_MODEL,
     PROVIDERS,
     Capability,
@@ -51,6 +52,7 @@ from capabilities import (
     decoded_model_from_id,
     is_managed_id,
     matches_id_shape,
+    openai_batch_params,
     raw_id_matches_provider,
 )
 from e2e_http import (
@@ -479,8 +481,6 @@ def test_rate_limited_batch_create_leaves_no_unattributed_spend_row(
     )
 
 
-OPENAI_FILE_CONTENT_BACKEND = "gpt-4o-mini"
-
 FILE_CONTENT_CELLS = {
     "azure": "llm.files.azure_openai.content.nonstream.works",
     "vertex_ai": "llm.files.vertex.content.nonstream.works",
@@ -506,17 +506,11 @@ class TestBatchFileContent:
         self, client: BatchClient, resources: ResourceManager
     ) -> None:
         proxy_name = f"e2e-file-content-{unique_marker()}"
-        model_id = client.create_model(
-            proxy_name,
-            LiteLLMParamsBody(
-                model=f"openai/{OPENAI_FILE_CONTENT_BACKEND}",
-                api_key="os.environ/OPENAI_API_KEY",
-            ),
-        )
+        model_id = client.create_model(proxy_name, openai_batch_params())
         resources.defer(lambda: client.delete_model(model_id))
         key = resources.key()
 
-        payload = render_jsonl(OPENAI_FILE_CONTENT_BACKEND)
+        payload = render_jsonl(OPENAI_BATCH_BACKEND)
         file = unwrap(
             client.upload_file(
                 content=payload,

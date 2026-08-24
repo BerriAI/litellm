@@ -36,6 +36,10 @@
 #         `re.search`, so a `.` copied out of an error message is a wildcard and the block
 #         accepts messages the author never meant to accept. Mark a real regex raw, wrap a
 #         literal message in `re.escape`, and the pattern says which one it is
+# F823    a module-level name read inside a function that also binds it lower down. The
+#         later binding makes the name local for the whole body, so the read raises
+#         UnboundLocalError, and in an autouse fixture that takes every test in the
+#         directory down with it
 # F601    the same key literal twice in one dict. Python keeps the last value, so the
 #         first is dropped before the test ever runs, and a fixture that looks like it
 #         covers two cases covers one
@@ -69,6 +73,7 @@ lint.select = [
     "PLR0133",
     "PLW0127",
     "RUF043",
+    "F823",
     "F601",
     "B023",
     "B025",
