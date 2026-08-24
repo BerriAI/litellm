@@ -5,6 +5,7 @@ from typing import Any, Final, cast
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import BACKGROUND_INTERACTION_COST_POLLING_ENABLED
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import (
     _get_parent_otel_span_from_kwargs,
@@ -318,6 +319,21 @@ class _ProxyDBLogger(CustomLogger):
                 elif budget_reservation is not None:
                     await _release_budget_reservation(budget_reservation=budget_reservation)
             else:
+                if _is_unbilled_interaction_response(completion_response):
+                    if BACKGROUND_INTERACTION_COST_POLLING_ENABLED and _is_unbilled_in_progress_interaction(
+                        completion_response
+                    ):
+                        verbose_proxy_logger.debug(
+                            "Cost tracking deferred for in-progress background interaction; "
+                            "the budget reservation stays open until the poll task logs the final usage"
+                        )
+                        return
+                    await _release_budget_reservation(budget_reservation=budget_reservation)
+                    verbose_proxy_logger.debug(
+                        "Released the budget reservation for an interaction create with no usage "
+                        "that no poll task will settle"
+                    )
+                    return
                 await _release_budget_reservation(budget_reservation=budget_reservation)
                 # Non-model call types (health checks, afile_delete) have no model or standard_logging_object.
                 # Use .get() for "stream" to avoid KeyError on health checks.
@@ -461,6 +477,24 @@ def _write_spend_metadata_to_kwargs(kwargs: dict, metadata: dict) -> None:
             for key, value in patch.items():
                 if bucket.get(key) is None:
                     bucket[key] = value
+
+
+def _is_unbilled_interaction_response(completion_response: object) -> bool:
+    from litellm.interactions.background_cost_polling import missing_usage_is_expected
+    from litellm.types.interactions import InteractionsAPIResponse
+
+    if not isinstance(completion_response, InteractionsAPIResponse):
+        return False
+    return completion_response.usage is None and missing_usage_is_expected(completion_response)
+
+
+def _is_unbilled_in_progress_interaction(completion_response: object) -> bool:
+    from litellm.interactions.background_cost_polling import is_pollable_background_interaction
+    from litellm.types.interactions import InteractionsAPIResponse
+
+    if not isinstance(completion_response, InteractionsAPIResponse):
+        return False
+    return completion_response.usage is None and is_pollable_background_interaction(completion_response)
 
 
 def _should_track_cost_callback(

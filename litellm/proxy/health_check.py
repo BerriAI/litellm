@@ -18,6 +18,7 @@ from litellm.constants import (
     DEFAULT_HEALTH_CHECK_PROMPT,
     HEALTH_CHECK_TIMEOUT_SECONDS,
 )
+from litellm.router_utils.auto_router_model_naming import classify_strategy_router_model
 
 ILLEGAL_DISPLAY_PARAMS: Final = [
     "messages",
@@ -182,30 +183,17 @@ async def run_with_timeout(task, timeout):
         return {"error": "Timeout exceeded", "exception": timeout_exception}
 
 
-def _is_semantic_auto_router_deployment(litellm_params: dict) -> bool:
-    """
-    True for semantic auto_router deployments (auto_router/<name>) that are not
-    sub-strategies (complexity_router, adaptive_router, quality_router).
-
-    These are meta-routers that select among real LLM deployments at request time;
-    they have no LLM endpoint to health-check.
-    """
+def _is_strategy_router_deployment(litellm_params: dict) -> bool:
+    """True for strategy-router deployments."""
     model: Final[object] = litellm_params.get("model", "")
-    if not isinstance(model, str):
-        return False
-    if not model.startswith("auto_router/"):
-        return False
-    for sub_strategy in ("complexity_router", "adaptive_router", "quality_router"):
-        if model.startswith(f"auto_router/{sub_strategy}"):
-            return False
-    return True
+    return isinstance(model, str) and classify_strategy_router_model(model) is not None
 
 
 async def _run_model_health_check(model: dict):
     litellm_params = model["litellm_params"]
     model_info: Final = model.get("model_info", {})
 
-    if _is_semantic_auto_router_deployment(litellm_params):
+    if _is_strategy_router_deployment(litellm_params):
         return {}
 
     mode: Final = _resolve_health_check_mode(
