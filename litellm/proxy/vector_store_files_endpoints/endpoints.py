@@ -17,6 +17,7 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
     handle_model_based_routing,
     prepare_data_with_credentials,
 )
+from litellm.proxy.rag_endpoints.upload_security import safe_download_headers
 from litellm.proxy.vector_store_endpoints.utils import (
     assert_user_can_access_vector_store_id,
     is_allowed_to_call_vector_store_files_endpoint,
@@ -884,6 +885,9 @@ async def vector_store_file_content(
         # Replace provider file ID with original managed file ID in response
         if original_managed_file_id:
             response = _replace_file_id_in_response(response, original_managed_file_id)
+
+        for header_name, header_value in safe_download_headers(file_id).items():
+            fastapi_response.headers[header_name] = header_value
 
         return response
     except Exception as e:  # noqa: BLE001
