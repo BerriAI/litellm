@@ -439,6 +439,28 @@ def test_get_model_from_request_includes_file_endpoint_header_model():
     )
 
 
+def test_get_model_from_request_extracts_vllm_query_model():
+    """vLLM GET passthrough selects models via ?model=; auth must see that model."""
+    assert (
+        get_model_from_request(
+            request_data={},
+            route="/vllm/v1/models",
+            request_query_params={"model": "restricted-vllm-model"},
+        )
+        == "restricted-vllm-model"
+    )
+
+
+def test_get_model_from_request_vllm_prefers_body_and_includes_query():
+    models = get_model_from_request(
+        request_data={"model": "body-vllm-model"},
+        route="/vllm/chat/completions",
+        request_query_params={"model": "query-vllm-model"},
+    )
+    assert isinstance(models, list)
+    assert set(models) == {"body-vllm-model", "query-vllm-model"}
+
+
 def test_get_model_from_request_ignores_routing_header_on_standard_llm_routes():
     assert (
         get_model_from_request(
