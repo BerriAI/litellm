@@ -4,6 +4,7 @@ Translates from Cohere's `/v1/rerank` input format to Bedrock's `/rerank` input 
 Why separate file? Make it easy to see how transformation works
 """
 
+from collections.abc import Mapping, Sequence
 from typing import Final
 
 from litellm._uuid import uuid
@@ -79,15 +80,39 @@ class BedrockRerankConfig:
         )
 
     @staticmethod
-    def _document_text(document: str | dict) -> str | None:
-        """Text of an input document, in either shape the API accepts."""
+    def _document_text(documents: Sequence[str | Mapping[str, object]] | None, index: object) -> str | None:
+        """
+        Text of the input document at `index`, in either shape the API accepts.
+
+        Returns None when there is nothing to back-fill from: no documents, a
+        non-integer or out-of-range index, or a document carrying no text.
+        """
+        if documents is None or not isinstance(index, int) or not 0 <= index < len(documents):
+            return None
+        document: Final = documents[index]
         if isinstance(document, str):
             return document
         if isinstance(document, dict):
-            text = document.get("text")
+            text: Final = document.get("text")
             if isinstance(text, str):
                 return text
         return None
+
+    @classmethod
+    def _transform_result(
+        cls, result: Mapping[str, object], documents: Sequence[str | Mapping[str, object]] | None
+    ) -> RerankResponseResult:
+        """One Bedrock result, with `document` back-filled when available."""
+        index: Final = result.get("index")
+        relevance_score: Final = result.get("relevanceScore")
+        text: Final = cls._document_text(documents, index)
+        if text is None:
+            return RerankResponseResult(index=index, relevance_score=relevance_score)
+        return RerankResponseResult(
+            index=index,
+            relevance_score=relevance_score,
+            document=RerankResponseDocument(text=text),
+        )
 
     def _transform_response(self, response: dict, request_data: RerankRequest | None = None) -> RerankResponse:
         """
@@ -111,21 +136,15 @@ class BedrockRerankConfig:
         bedrock_results: Final = response.get("results")
         if bedrock_results:
             # Cohere-compatible default: back-fill unless the caller opted out.
-            should_return_documents: Final = request_data is not None and request_data.return_documents is not False
-            original_documents: Final = request_data.documents if request_data is not None else []
+            # None documents means "nothing to back-fill from", which covers
+            # both an opt-out and a caller that passed no request at all.
+            documents: Final = (
+                request_data.documents
+                if request_data is not None and request_data.return_documents is not False
+                else None
+            )
 
-            _results = []
-            for result in bedrock_results:
-                index = result.get("index")
-                _result = RerankResponseResult(
-                    index=index,
-                    relevance_score=result.get("relevanceScore"),
-                )
-                if should_return_documents and isinstance(index, int) and 0 <= index < len(original_documents):
-                    text = self._document_text(original_documents[index])
-                    if text is not None:
-                        _result["document"] = RerankResponseDocument(text=text)
-                _results.append(_result)
+            _results = [self._transform_result(result, documents) for result in bedrock_results]
 
         if _results is None:
             raise ValueError(f"No results found in the response={response}")
