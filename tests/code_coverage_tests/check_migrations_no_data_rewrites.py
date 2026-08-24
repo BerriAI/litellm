@@ -625,6 +625,7 @@ def scan_region(
     reports its real file line and lines up with the markers read from that file."""
     masked, bodies, literals = mask(region)
     executed = executed_names(masked)
+    runnable = executed_literals(masked, literals, executed)
 
     for match in STATEMENT.finditer(masked):
         exempt = markers.exempt(offset + statement_start(match), offset + match.end())
@@ -642,14 +643,37 @@ def scan_region(
             yield Violation(migration, line_of(document, offset + keyword_start(clause, base)), keyword)
 
     for body in bodies:
-        if not runs_when_applied(masked, region, bodies, body):
+        if not runs_when_applied(masked, region, bodies, runnable, body):
             continue
         start, end = body
         yield from scan_region(document, region[start:end], migration, markers, offset + start)
 
 
+def executed_literals(
+    masked: str, literals: tuple[tuple[int, int], ...], executed: frozenset[str]
+) -> tuple[tuple[int, int], ...]:
+    """The single-quoted literals a region runs as SQL, where a call to a routine the same
+    migration defines is as real as one written in the open. `DO '...'` runs its body and
+    `EXECUTE` runs the string it is handed, so a definition named inside one of those is called,
+    while a name in a message string or any literal nothing executes stays text. These are the
+    spans the direct scan already recurses into, read here so a call written in one is found when
+    the migration is searched for the routine's name."""
+    return tuple(
+        (start, end)
+        for match in STATEMENT.finditer(masked)
+        for clause, base in clauses(match.group(), match.start())
+        if hands_off_sql(clause, executed)
+        for start, end in literals
+        if base <= start and end <= base + bind_values_start(clause)
+    )
+
+
 def runs_when_applied(
-    masked: str, region: str, bodies: tuple[tuple[int, int], ...], body: tuple[int, int]
+    masked: str,
+    region: str,
+    bodies: tuple[tuple[int, int], ...],
+    runnable: tuple[tuple[int, int], ...],
+    body: tuple[int, int],
 ) -> bool:
     """Whether a dollar-quoted body runs while the migration is being applied. A `DO` block runs
     where it is written, and so does every other use of this quoting. A `CREATE FUNCTION` or a
@@ -671,22 +695,28 @@ def runs_when_applied(
     named = ROUTINE_NAME.match(region, defined.end(), start)
     if named is None or named.group(1).startswith('"'):
         return True
-    return contains(outside_definition(masked, region, bodies, opens, end), re.escape(named.group(1)))
+    return contains(outside_definition(masked, region, bodies, runnable, opens, end), re.escape(named.group(1)))
 
 
 def outside_definition(
-    masked: str, region: str, bodies: tuple[tuple[int, int], ...], opens: int, closes: int
+    masked: str,
+    region: str,
+    bodies: tuple[tuple[int, int], ...],
+    runnable: tuple[tuple[int, int], ...],
+    opens: int,
+    closes: int,
 ) -> str:
-    """The migration's text with one routine definition blanked out and every dollar-quoted body
-    put back. Masking blanks the bodies alike, and a `DO` block is the ordinary way a migration
-    runs a routine it has just defined, so a call written inside one has to stay readable. Each
-    body comes back with its comments blanked, since a name written in a comment is
-    documentation rather than a call, while its string literals stay readable because `EXECUTE`
+    """The migration's text with one routine definition blanked out and every runnable body put
+    back: the dollar-quoted bodies and the single-quoted literals `DO` and `EXECUTE` run as SQL.
+    Masking blanks all of them alike, and a `DO` block, dollar-quoted or single-quoted, is the
+    ordinary way a migration runs a routine it has just defined, so a call written inside one has
+    to stay readable. Each comes back with its comments blanked, since a name written in a comment
+    is documentation rather than a call, while its string literals stay readable because `EXECUTE`
     runs one as SQL and the call can be written inside it. The definition is blanked after they
     are restored, which takes its own body with it, so a routine that names itself recursively
     does not thereby count as called."""
     text = list(masked)
-    for start, end in bodies:
+    for start, end in (*bodies, *runnable):
         text[start:end] = without_comments(region[start:end])
     text[opens:closes] = blank(region[opens:closes])
     return "".join(text)

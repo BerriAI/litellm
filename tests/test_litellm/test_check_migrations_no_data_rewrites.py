@@ -452,6 +452,26 @@ class TestStoredRoutines:
         sql = self.DEFINITION + "DO $$ BEGIN RAISE NOTICE '--'; PERFORM backfill(); END; $$;\n"
         assert _keywords(tmp_path, sql) == ("UPDATE",)
 
+    def test_a_call_from_inside_a_single_quoted_do_block_still_counts(self, tmp_path):
+        sql = self.DEFINITION + "DO 'BEGIN PERFORM backfill(); END';\n"
+        assert _keywords(tmp_path, sql) == ("UPDATE",)
+
+    def test_an_executed_literal_inside_a_single_quoted_do_counts_as_a_call(self, tmp_path):
+        sql = self.DEFINITION + "DO 'BEGIN EXECUTE ''SELECT backfill()''; END';\n"
+        assert _keywords(tmp_path, sql) == ("UPDATE",)
+
+    def test_a_variable_run_by_execute_in_a_single_quoted_do_counts_as_a_call(self, tmp_path):
+        sql = self.DEFINITION + "DO 'DECLARE q text; BEGIN q := ''SELECT backfill()''; EXECUTE q; END';\n"
+        assert _keywords(tmp_path, sql) == ("UPDATE",)
+
+    def test_the_name_written_only_in_a_single_quoted_do_comment_is_not_a_call(self, tmp_path):
+        sql = self.DEFINITION + "DO 'BEGIN\n-- backfill() runs later\nPERFORM 1; END';\n"
+        assert _keywords(tmp_path, sql) == ()
+
+    def test_the_name_written_only_in_a_non_runnable_string_is_not_a_call(self, tmp_path):
+        sql = self.DEFINITION + "SELECT 'backfill() runs after the deploy';\n"
+        assert _keywords(tmp_path, sql) == ()
+
     def test_a_recursive_call_does_not_count_as_the_migration_calling_it(self, tmp_path):
         sql = (
             "CREATE FUNCTION backfill(n int) RETURNS void AS $$\n"
