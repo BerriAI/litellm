@@ -737,9 +737,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 else model_id_deployment
             )
             candidate_deployments: Final = (
-                [model_id_deployment_row]
-                if model_id_deployment_row is not None
-                else team_filtered_deployments
+                [model_id_deployment_row] if model_id_deployment_row is not None else team_filtered_deployments
             )
 
             filter_deployments: Final = getattr(llm_router, "_filter_deployments_by_model_access_groups", None)
@@ -771,6 +769,37 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             if blocked is not True:
                 active_deployments.append(deployment)
         if not active_deployments:
+            router_settings = getattr(llm_router, "router_general_settings", None)
+            if getattr(router_settings, "pass_through_all_models", False) is True:
+                provider = request_data.get("custom_llm_provider")
+                if not isinstance(provider, str):
+                    provider = BedrockGuardrail._resolve_model_provider(model) if isinstance(model, str) else None
+                return provider in ("bedrock", "bedrock_converse") if isinstance(provider, str) else None
+
+            default_deployment = getattr(llm_router, "default_deployment", None)
+            if default_deployment is not None:
+                default_params: object = (
+                    default_deployment.get("litellm_params")
+                    if isinstance(default_deployment, Mapping)
+                    else getattr(default_deployment, "litellm_params", None)
+                )
+                provider: object = (
+                    default_params.get("custom_llm_provider")
+                    if isinstance(default_params, Mapping)
+                    else getattr(default_params, "custom_llm_provider", None)
+                )
+                if not isinstance(provider, str):
+                    default_model: object = (
+                        default_params.get("model")
+                        if isinstance(default_params, Mapping)
+                        else getattr(default_params, "model", None)
+                    )
+                    provider = (
+                        BedrockGuardrail._resolve_model_provider(default_model)
+                        if isinstance(default_model, str)
+                        else None
+                    )
+                return provider in ("bedrock", "bedrock_converse") if isinstance(provider, str) else None
             return False
 
         providers: list[str] = []
@@ -808,11 +837,14 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         if not isinstance(api_key, str):
             return None
 
+        explicit_provider: Final[object | None] = request_data.get("custom_llm_provider")
+        if isinstance(explicit_provider, str) and explicit_provider not in ("bedrock", "bedrock_converse"):
+            return None
+
         router_allows_bedrock: Final = BedrockGuardrail._router_allows_bedrock(request_data)
         if router_allows_bedrock is not None:
             return api_key if router_allows_bedrock else None
 
-        explicit_provider: Final[object | None] = request_data.get("custom_llm_provider")
         if isinstance(explicit_provider, str):
             return api_key if explicit_provider in ("bedrock", "bedrock_converse") else None
 

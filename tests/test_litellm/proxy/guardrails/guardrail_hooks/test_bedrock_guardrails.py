@@ -82,6 +82,57 @@ def test_bedrock_guardrail_resolves_router_model_id():
     deployment.model_dump.assert_called_once_with(exclude_none=True)
 
 
+def test_bedrock_guardrail_accepts_pass_through_bedrock_provider(monkeypatch: pytest.MonkeyPatch):
+    from litellm.proxy import proxy_server
+
+    router = MagicMock()
+    router.get_model_list.return_value = []
+    router.router_general_settings.pass_through_all_models = True
+    router.default_deployment = None
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+
+    request_data = {
+        "model": "amazon.nova-lite-v1:0",
+        "custom_llm_provider": "bedrock",
+        "api_key": "bedrock-key",
+    }
+    assert BedrockGuardrail._router_allows_bedrock(request_data) is True
+    assert BedrockGuardrail._get_bedrock_api_key(request_data) == "bedrock-key"
+
+
+def test_bedrock_guardrail_accepts_bedrock_default_deployment(monkeypatch: pytest.MonkeyPatch):
+    from litellm.proxy import proxy_server
+
+    router = MagicMock()
+    router.get_model_list.return_value = []
+    router.router_general_settings.pass_through_all_models = False
+    router.default_deployment = {"litellm_params": {"custom_llm_provider": "bedrock"}}
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+
+    assert BedrockGuardrail._router_allows_bedrock({"model": "unlisted-model"}) is True
+
+
+def test_bedrock_guardrail_explicit_non_bedrock_provider_wins_alias(monkeypatch: pytest.MonkeyPatch):
+    from litellm.proxy import proxy_server
+
+    router = MagicMock()
+    router.get_model_list.return_value = [
+        {"litellm_params": {"custom_llm_provider": "bedrock"}, "model_info": {}}
+    ]
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+
+    assert (
+        BedrockGuardrail._get_bedrock_api_key(
+            {
+                "model": "bedrock-alias",
+                "custom_llm_provider": "openai",
+                "api_key": "openai-key",
+            }
+        )
+        is None
+    )
+
+
 def test_bedrock_guardrail_filters_access_group_deployments():
     router = MagicMock()
     router.get_model_list.return_value = [
