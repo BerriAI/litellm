@@ -275,9 +275,7 @@ async def get_form_data(request: Request) -> dict[str, Any]:
     """
     form: Final = await request.form()
     parsed_form_data: Final[dict[str, Any]] = {}
-    # multi_items(), not dict(form): a dict drops every value but the last of a repeated key,
-    # which is the whole array this function exists to rebuild
-    for key, value in form.multi_items():
+    for key, value in form.multi_items():  # not dict(form), which keeps only the last repeat
         if key.endswith("[]"):
             clean_key = key[:-2]
             parsed_form_data.setdefault(clean_key, []).append(value)
