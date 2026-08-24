@@ -5,7 +5,7 @@ import asyncio
 import atexit
 import contextvars
 import logging
-from collections.abc import Coroutine
+from collections.abc import Coroutine, Iterator
 from typing import Final
 
 from typing_extensions import TypedDict
@@ -61,6 +61,19 @@ class LoggingWorker:
         # Register cleanup handler to flush remaining events on exit
         atexit.register(self._flush_on_exit)
 
+    @staticmethod
+    def _drain_pending(queue: "asyncio.Queue[LoggingTask]") -> tuple[LoggingTask, ...]:
+        """Pop every task still queued, without awaiting them, so they can be moved to another queue."""
+
+        def _pop_until_empty() -> Iterator[LoggingTask]:
+            while True:
+                try:
+                    yield queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    return
+
+        return tuple(_pop_until_empty())
+
     def _ensure_queue(self) -> None:
         """Initialize the queue if it doesn't exist or if event loop has changed."""
         try:
@@ -69,14 +82,27 @@ class LoggingWorker:
             # No running loop, can't initialize
             return
 
-        # Check if we need to reinitialize due to event loop change
+        # The queue, semaphore and worker task are all bound to the loop that created them. On a
+        # loop change we hand the still-pending tasks to a fresh queue instead of dropping them,
+        # so queued spend-logging coroutines are not silently discarded (and never left un-awaited).
         if self._queue is not None and self._bound_loop is not current_loop:
-            verbose_logger.debug("LoggingWorker: Event loop changed, reinitializing queue and worker")
-            # Clear old state - these are bound to the old loop
-            self._queue = None
+            carried_over: Final = self._drain_pending(self._queue)
+            new_queue: Final[asyncio.Queue[LoggingTask]] = asyncio.Queue(maxsize=self.max_queue_size)
+            for carried_task in carried_over:
+                new_queue.put_nowait(carried_task)
+            if carried_over:
+                verbose_logger.warning(
+                    "LoggingWorker: event loop changed; carried %d pending logging task(s) onto the new loop",
+                    len(carried_over),
+                )
+            else:
+                verbose_logger.debug("LoggingWorker: Event loop changed, reinitializing queue and worker")
             self._sem = None
             self._worker_task = None
             self._running_tasks.clear()
+            self._queue = new_queue
+            self._bound_loop = current_loop
+            return
 
         if self._queue is None:
             self._queue = asyncio.Queue(maxsize=self.max_queue_size)

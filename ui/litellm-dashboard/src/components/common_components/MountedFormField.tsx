@@ -9,7 +9,7 @@ import {
   type UseFormGetValues,
 } from "react-hook-form";
 
-import { Field, FieldDescription, FieldError, FieldLabel } from "@/components/shared/form/field";
+import { Field, FieldDescription, FieldError, FieldLabel } from "@/components/ui/field";
 
 export type MountedFormValues = Record<string, unknown>;
 
