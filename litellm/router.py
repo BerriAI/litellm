@@ -80,6 +80,7 @@ from litellm.litellm_core_utils.request_timeout_resolver import (
 from litellm.litellm_core_utils.secret_redaction import redact_string
 from litellm.litellm_core_utils.sensitive_data_masker import (
     SensitiveDataMasker,
+    mask_credentials_in_payload,
     mask_sensitive_structure,
 )
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
@@ -375,18 +376,15 @@ def _replay_live_router_model_cost() -> None:
 set_live_deployment_replay(_replay_live_router_model_cost)
 
 
-# Kwargs that log_retry must not copy into a retry breadcrumb. The breadcrumbs reach spend
-# logs and logging callbacks, so they must never carry the request payload, router-internal
-# walk state, or transport credentials: provider_specific_header / headers / api_key can hold a
-# client's forwarded Authorization or a provider key, none of which identify the failed attempt.
+# Kwargs that carry no signal about the failed attempt, so log_retry drops them from a
+# breadcrumb entirely: the request payload and the router-internal walk state. Credentials are
+# handled separately by mask_credentials_in_payload, which scrubs credential-named values from
+# whatever kwargs remain rather than trying to enumerate every credential-bearing key here.
 RETRY_BREADCRUMB_EXCLUDED_KWARGS: Final = frozenset(
     (
         "messages",
         "original_function",
         "attempted_targets",
-        "provider_specific_header",
-        "headers",
-        "api_key",
     )
 )
 
@@ -7357,7 +7355,8 @@ class Router:
             if len(self.previous_models) > 3:
                 self.previous_models.pop(0)
 
-            self.previous_models.append(previous_model)
+            scrubbed_previous_model: Final = mask_credentials_in_payload(previous_model)
+            self.previous_models.append(scrubbed_previous_model)
             kwargs[_metadata_var]["previous_models"] = self.previous_models
             return kwargs
         except Exception as e:
