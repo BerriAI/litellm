@@ -51,6 +51,10 @@ def pytest_configure(config: pytest.Config) -> None:
         "markers",
         "weekly: real-provider anomaly load test that spends real money; deselected unless E2E_WEEKLY_ANOMALY is set",
     )
+    config.addinivalue_line(
+        "markers",
+        "managed_files: needs a proxy running with require_managed_files enabled; deselected unless E2E_MANAGED_FILES_STACK is set",
+    )
 
 
 def pytest_sessionstart(session: pytest.Session) -> None:
