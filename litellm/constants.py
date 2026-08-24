@@ -69,8 +69,6 @@ DEFAULT_IMAGE_HEIGHT: Final = int(os.getenv("DEFAULT_IMAGE_HEIGHT", 300))
 # Maps to OpenAI's 50 MB payload limit - requests with images exceeding this size will be rejected
 # Set MAX_IMAGE_URL_DOWNLOAD_SIZE_MB=0 to disable image URL handling entirely
 MAX_IMAGE_URL_DOWNLOAD_SIZE_MB: Final = float(os.getenv("MAX_IMAGE_URL_DOWNLOAD_SIZE_MB", 50))
-MAX_VIDEO_MEDIA_URLS_PER_REQUEST: Final = get_env_int("MAX_VIDEO_MEDIA_URLS_PER_REQUEST", 10)
-MAX_VIDEO_MEDIA_URL_TOTAL_DOWNLOAD_SIZE_MB: Final = float(os.getenv("MAX_VIDEO_MEDIA_URL_TOTAL_DOWNLOAD_SIZE_MB", 100))
 MAX_SIZE_PER_ITEM_IN_MEMORY_CACHE_IN_KB: Final = int(
     os.getenv("MAX_SIZE_PER_ITEM_IN_MEMORY_CACHE_IN_KB", 1024)
 )  # 1MB = 1024KB
