@@ -195,6 +195,24 @@ def test_transform_search_request_connection_mode_omits_count_without_max_result
     assert body["tools"][0]["bing_grounding"]["search_configurations"] == [{"project_connection_id": "conn-id"}]
 
 
+@pytest.mark.parametrize("max_results", [True, False, 0, -1])
+def test_transform_search_request_connection_mode_omits_count_for_invalid_max_results(
+    monkeypatch: pytest.MonkeyPatch, max_results: object
+):
+    monkeypatch.setenv("BING_GROUNDING_MODEL", "gpt-4.1")
+    monkeypatch.setenv("BING_GROUNDING_CONNECTION_ID", "conn-id")
+    body = _config().transform_search_request("q", {"max_results": max_results})
+    assert body["tools"][0]["bing_grounding"]["search_configurations"] == [{"project_connection_id": "conn-id"}]
+
+
+def test_transform_search_response_ignores_invalid_max_results_cap():
+    annotations = [_citation(f"https://example.com/{i}", f"T{i}", 0, 5) for i in range(3)]
+    resp = _config().transform_search_response(
+        _resp(_message_response("claim", annotations)), logging_obj=Mock(), optional_params={"max_results": True}
+    )
+    assert [r.url for r in resp.results] == [f"https://example.com/{i}" for i in range(3)]
+
+
 def test_transform_search_request_joins_list_query(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("BING_GROUNDING_MODEL", "gpt-4.1")
     assert _config().transform_search_request(["foo", "bar"], {})["input"] == "foo bar"
