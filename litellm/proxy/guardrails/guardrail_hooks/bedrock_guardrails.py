@@ -667,16 +667,13 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
         return merged_messages
 
-    # NOTE: Consider moving these helpers to CustomGuardrail when the filtering
-    # logic becomes shared across providers.
-
     #### CALL HOOKS - proxy only ####
     @staticmethod
     def _resolve_model_provider(model: str) -> str | None:
         try:
             _, custom_llm_provider, _, _ = litellm.get_llm_provider(model=model)
             return custom_llm_provider
-        except Exception:
+        except Exception:  # noqa: BLE001  # provider resolution has a safe prefix fallback
             return model.partition("/")[0]
 
     @staticmethod
@@ -709,9 +706,29 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 )
                 or []
             )
+            model_group_aliases: Final = getattr(llm_router, "model_group_alias", None)
+            team_filtered_deployments: Final = (
+                [
+                    deployment
+                    for deployment in listed_deployments
+                    if (
+                        (
+                            deployment.get("model_info")
+                            if isinstance(deployment, Mapping)
+                            else getattr(deployment, "model_info", None)
+                        )
+                        or {}
+                    ).get("team_id")
+                    in (None, resolved_team_id)
+                ]
+                if resolved_team_id is not None
+                and isinstance(model_group_aliases, Mapping)
+                and model in model_group_aliases
+                else listed_deployments
+            )
             model_id_deployment: Final = (
                 llm_router.get_deployment(model_id=model)
-                if not listed_deployments and llm_router.has_model_id(model) is True
+                if not team_filtered_deployments and llm_router.has_model_id(model) is True
                 else None
             )
             model_id_deployment_row: Final = (
@@ -720,7 +737,9 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 else model_id_deployment
             )
             candidate_deployments: Final = (
-                [model_id_deployment_row] if model_id_deployment_row is not None else listed_deployments
+                [model_id_deployment_row]
+                if model_id_deployment_row is not None
+                else team_filtered_deployments
             )
 
             filter_deployments: Final = getattr(llm_router, "_filter_deployments_by_model_access_groups", None)
@@ -737,7 +756,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             deployments: Final = (
                 filtered_deployments if isinstance(filtered_deployments, list) else candidate_deployments
             )
-        except Exception:
+        except Exception:  # noqa: BLE001  # optional router state must not break guardrail auth
             return False
         active_deployments = []
         for deployment in deployments:
@@ -792,6 +811,10 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         router_allows_bedrock: Final = BedrockGuardrail._router_allows_bedrock(request_data)
         if router_allows_bedrock is not None:
             return api_key if router_allows_bedrock else None
+
+        explicit_provider: Final[object | None] = request_data.get("custom_llm_provider")
+        if isinstance(explicit_provider, str):
+            return api_key if explicit_provider in ("bedrock", "bedrock_converse") else None
 
         model: Final[object | None] = request_data.get("model")
         model_provider: Final[str | None] = (
