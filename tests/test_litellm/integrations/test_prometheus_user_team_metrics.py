@@ -372,7 +372,7 @@ async def test_assemble_team_object_uses_db_spend_when_metadata_is_none(
     db_team.spend = 902.60
     db_team.budget_reset_at = None
 
-    with patch("litellm.proxy.auth.auth_checks.get_team_object") as mock_get_team:
+    with patch("litellm.proxy.auth.auth_checks.get_team_object") as mock_get_team:  # test-quality-ok: stubbing the DB fetch, same pattern as the sibling max_budget fallback tests above
         mock_get_team.return_value = db_team
         team_object = await prometheus_logger._assemble_team_object(
             team_id="team-1",
@@ -399,7 +399,7 @@ async def test_assemble_team_object_does_not_override_metadata_spend(
     db_team.spend = 9999.0
     db_team.budget_reset_at = None
 
-    with patch("litellm.proxy.auth.auth_checks.get_team_object") as mock_get_team:
+    with patch("litellm.proxy.auth.auth_checks.get_team_object") as mock_get_team:  # test-quality-ok: stubbing the DB fetch, same pattern as the sibling max_budget fallback tests above
         mock_get_team.return_value = db_team
         team_object = await prometheus_logger._assemble_team_object(
             team_id="team-1",
