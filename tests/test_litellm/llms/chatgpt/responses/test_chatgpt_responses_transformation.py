@@ -156,6 +156,97 @@ class TestChatGPTResponsesAPITransformation:
         }
 
     @pytest.mark.parametrize(
+        "model_name",
+        [
+            "chatgpt/gpt-5.4",
+            "chatgpt/gpt-5.3-codex",
+        ],
+    )
+    def test_chatgpt_preserves_text_for_structured_output(self, model_name):
+        """text carries the schema, so dropping it loses structured output.
+
+        The chat-to-responses bridge turns response_format into text.format,
+        so an allowlist without "text" silently discards strict schemas and
+        the backend answers with prose.
+        """
+        config = ChatGPTResponsesAPIConfig()
+        text_param = {
+            "format": {
+                "type": "json_schema",
+                "name": "ExtractedEntities",
+                "strict": True,
+                "schema": {
+                    "type": "object",
+                    "properties": {"name": {"type": "string"}},
+                    "required": ["name"],
+                    "additionalProperties": False,
+                },
+            }
+        }
+
+        request = config.transform_responses_api_request(
+            model=model_name,
+            input="hi",
+            response_api_optional_request_params={"text": text_param},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert request["text"] == text_param
+        assert request["text"]["format"]["type"] == "json_schema"
+        assert request["text"]["format"]["strict"] is True
+
+    @pytest.mark.parametrize(
+        "model_name",
+        [
+            "chatgpt/gpt-5.4",
+            "chatgpt/gpt-5.3-codex",
+        ],
+    )
+    def test_chatgpt_coerces_string_input_to_list(self, model_name):
+        """The backend rejects a string input with "Input must be a list".
+
+        The Responses API itself accepts either, so the string has to be
+        wrapped before it reaches this backend.
+        """
+        config = ChatGPTResponsesAPIConfig()
+
+        request = config.transform_responses_api_request(
+            model=model_name,
+            input="say hi",
+            response_api_optional_request_params={},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert isinstance(request["input"], list)
+        assert request["input"] == [{"role": "user", "content": "say hi"}]
+
+    @pytest.mark.parametrize(
+        "model_name",
+        [
+            "chatgpt/gpt-5.4",
+        ],
+    )
+    def test_chatgpt_leaves_list_input_untouched(self, model_name):
+        """Only a bare string needs wrapping; a list must pass through."""
+        config = ChatGPTResponsesAPIConfig()
+        original = [
+            {"role": "system", "content": "be brief"},
+            {"role": "user", "content": "say hi"},
+        ]
+
+        request = config.transform_responses_api_request(
+            model=model_name,
+            input=list(original),
+            response_api_optional_request_params={},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert request["input"] == original
+
+    @pytest.mark.parametrize(
         ("model_name", "response_model"),
         [
             ("chatgpt/gpt-5.2-codex", "gpt-5.2-codex"),

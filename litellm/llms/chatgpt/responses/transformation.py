@@ -66,6 +66,10 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
         litellm_params: GenericLiteLLMParams,
         headers: dict,
     ) -> dict:
+        # The Responses API accepts a string or a list, but this backend
+        # rejects a string with {"detail": "Input must be a list"}.
+        if isinstance(input, str):
+            input = [{"role": "user", "content": input}]
         request: Final = super().transform_responses_api_request(
             model,
             input,
@@ -99,6 +103,9 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
             "reasoning",
             "previous_response_id",
             "truncation",
+            # The chat-to-responses bridge translates response_format into
+            # "text"; dropping it here discards strict schemas silently.
+            "text",
         }
 
         return {k: v for k, v in request.items() if k in allowed_keys}
