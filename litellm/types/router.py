@@ -189,7 +189,7 @@ class TagRateLimitScope(BaseModel):
         # is silently ignored when constructing via __init__ (only takes
         # effect via model_validate), so mutating in place is the only way
         # this normalization reliably applies regardless of construction path.
-        object.__setattr__(self, "values", tuple(sorted(set(self.values))))
+        object.__setattr__(self, "values", tuple(sorted(set(self.values))))  # mutable-ok: frozen before escaping
         return self
 
 
@@ -299,11 +299,11 @@ class TagRateLimitEntry(BaseModel):
         # unsorted tuple would make config-order alone decide whether two
         # deployments' entries dedup to one shared bucket.
         if self.included_values is not None:
-            self.included_values = tuple(sorted(set(self.included_values)))
+            self.included_values = tuple(sorted(set(self.included_values)))  # mutable-ok: frozen before escaping
         if self.excluded_values is not None:
-            self.excluded_values = tuple(sorted(set(self.excluded_values)))
+            self.excluded_values = tuple(sorted(set(self.excluded_values)))  # mutable-ok: frozen before escaping
         if self.apply_to_key_alias is not None:
-            self.apply_to_key_alias = tuple(sorted(set(self.apply_to_key_alias)))
+            self.apply_to_key_alias = tuple(sorted(set(self.apply_to_key_alias)))  # mutable-ok: frozen before escaping
         return self
 
 

@@ -242,12 +242,12 @@ def _entry_applies(entry: TagRateLimitEntry, tag_value: str, tags: Sequence[str]
     if entry.included_values is not None and tag_value not in entry.included_values:
         return False
     if entry.disabled_for is not None:
-        gate_value = _extract_identity(tags, entry.disabled_for.tag_id)
-        if gate_value is not None and gate_value in entry.disabled_for.values:
+        disabled_gate_value: Final = _extract_identity(tags, entry.disabled_for.tag_id)
+        if disabled_gate_value is not None and disabled_gate_value in entry.disabled_for.values:
             return False
     if entry.enabled_for is not None:
-        gate_value = _extract_identity(tags, entry.enabled_for.tag_id)
-        if gate_value is None or gate_value not in entry.enabled_for.values:
+        enabled_gate_value: Final = _extract_identity(tags, entry.enabled_for.tag_id)
+        if enabled_gate_value is None or enabled_gate_value not in entry.enabled_for.values:
             return False
     if entry.apply_to_key_alias is None:
         return True
@@ -901,9 +901,9 @@ def _queue_pending_concurrency_reservations(
     model_call_details: Final = getattr(logging_obj, "model_call_details", None)
     if not isinstance(model_call_details, dict):
         return
-    pending = model_call_details.get(_PENDING_CONCURRENCY_KEYS_FIELD)
+    pending = model_call_details.get(_PENDING_CONCURRENCY_KEYS_FIELD)  # rebind-ok: lazily initialized below when absent
     if pending is None:
-        pending = []  # mutable-ok: shared, request-scoped accumulator; see field's own docstring
+        pending = []  # mutable-ok: shared, request-scoped accumulator; see field's own docstring  # rebind-ok: lazily initialized only when absent
         model_call_details[_PENDING_CONCURRENCY_KEYS_FIELD] = pending
     pending.extend(reservations)  # mutable-ok: see comment above
 

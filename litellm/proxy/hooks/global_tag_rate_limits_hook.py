@@ -155,9 +155,9 @@ _request_stash: Final[ContextVar[_GlobalTagRateLimitStash | None]] = ContextVar(
 
 
 def _claim_stash_for_data(data: Mapping[str, object]) -> _GlobalTagRateLimitStash:
-    stash = _request_stash.get()
+    stash = _request_stash.get()  # rebind-ok: lazily initialized below if this ContextVar has never been set
     if stash is None:
-        stash = _GlobalTagRateLimitStash()
+        stash = _GlobalTagRateLimitStash()  # rebind-ok: see above
         _request_stash.set(stash)
     owner_call_id: Final = data.get("litellm_call_id")
     if isinstance(owner_call_id, str):
@@ -174,9 +174,7 @@ def _stash_for_call(litellm_call_id: str | None) -> _GlobalTagRateLimitStash | N
     return stash if litellm_call_id == stash.owner_litellm_call_id else None
 
 
-def _call_id_from_kwargs(kwargs: object) -> str | None:
-    if not isinstance(kwargs, dict):
-        return None
+def _call_id_from_kwargs(kwargs: Mapping[str, object]) -> str | None:
     call_id: Final = kwargs.get("litellm_call_id")
     return call_id if isinstance(call_id, str) else None
 
@@ -507,7 +505,7 @@ class _PROXY_GlobalTagRateLimitsHook(  # pyright: ignore[reportUnusedClass]  # o
         return data
 
     async def async_release_disconnect_state_hook(self, request_data: Mapping[str, object]) -> None:
-        stash: Final = _stash_for_call(_call_id_from_kwargs(dict(request_data)))
+        stash: Final = _stash_for_call(_call_id_from_kwargs(request_data))
         if stash is None or not stash.pending_concurrency_keys:
             return
         release_keys: Final = tuple(stash.pending_concurrency_keys)

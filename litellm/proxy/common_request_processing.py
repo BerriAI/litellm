@@ -2413,7 +2413,9 @@ class ProxyBaseLLMRequestProcessing:
 
         try:
             if general_settings.get("cancel_on_disconnect", False):
-                responses = await _await_llm_call_cancelling_on_disconnect(request, llm_responses, self.data)
+                responses = await _await_llm_call_cancelling_on_disconnect(  # rebind-ok: assigned in exactly one of these two mutually exclusive branches
+                    request, llm_responses, self.data
+                )
             else:
                 responses = await llm_responses
         finally:

@@ -36246,6 +36246,8 @@ export interface components {
         };
         /** TagRateLimitEntry */
         TagRateLimitEntry: {
+            /** Apply To Key Alias */
+            apply_to_key_alias?: string[] | null;
             disabled_for?: components["schemas"]["TagRateLimitScope"] | null;
             enabled_for?: components["schemas"]["TagRateLimitScope"] | null;
             /** Excluded Values */
